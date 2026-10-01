@@ -13,30 +13,43 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     #[serde(default)]
     pub soundfonts: Vec<PathBuf>,
-    /// Folder the file browser opens in. Edit this in `soundfonts.json` to
-    /// point somewhere else; if unset or missing, falls back to
-    /// `<Downloads>/Music`, then the home directory, then the working directory.
+    /// Folder the file browser opens in, set via the "Set as default" button
+    /// in the Songs panel (or by editing `soundfonts.json` directly). If
+    /// unset or no longer a directory, falls back to the home directory, then
+    /// the working directory.
     #[serde(default)]
     pub browse_dir: Option<PathBuf>,
+    /// Which sections are shown, toggled from the top bar. Remembered so the
+    /// app reopens the way you left it.
+    #[serde(default)]
+    pub panels: Panels,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Panels {
+    pub songs: bool,
+    pub soundfonts: bool,
+    pub playlists: bool,
+    pub visualizer: bool,
+    pub editor: bool,
+}
+
+impl Default for Panels {
+    fn default() -> Self {
+        Self { songs: true, soundfonts: true, playlists: false, visualizer: true, editor: false }
+    }
 }
 
 impl Config {
     fn file_path() -> Result<PathBuf> {
-        let dirs = ProjectDirs::from("", "", "synththing")
-            .context("could not determine a config directory for this platform")?;
-        Ok(dirs.config_dir().join("soundfonts.json"))
+        Ok(config_dir()?.join("soundfonts.json"))
     }
 
     pub fn load() -> Result<Self> {
         let path = Self::file_path()?;
         if !path.exists() {
-            // Seed the file so the resolved default folder is visible for editing.
-            let config = Self {
-                browse_dir: default_music_dir(),
-                ..Self::default()
-            };
-            let _ = config.save();
-            return Ok(config);
+            return Ok(Self::default());
         }
         let data = fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
@@ -50,15 +63,16 @@ impl Config {
         {
             return dir.clone();
         }
-        if let Some(dir) = default_music_dir()
-            && dir.is_dir()
-        {
-            return dir;
-        }
         if let Some(dirs) = UserDirs::new() {
             return dirs.home_dir().to_path_buf();
         }
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    }
+
+    /// Persist `dir` as the folder the song browser opens in from now on.
+    pub fn set_browse_dir(&mut self, dir: PathBuf) -> Result<()> {
+        self.browse_dir = Some(dir);
+        self.save()
     }
 
     pub fn save(&self) -> Result<()> {
@@ -83,6 +97,19 @@ impl Config {
     }
 }
 
+/// The platform config directory for synththing (e.g. `%APPDATA%\synththing\config`),
+/// shared by the soundfont list and the Lua visualizer script folder.
+pub fn config_dir() -> Result<PathBuf> {
+    let dirs = ProjectDirs::from("", "", "synththing")
+        .context("could not determine a config directory for this platform")?;
+    Ok(dirs.config_dir().to_path_buf())
+}
+
+/// Where saved playlists live, one JSON file each.
+pub fn playlists_dir() -> Result<PathBuf> {
+    Ok(config_dir()?.join("playlists"))
+}
+
 /// Append `path` (canonicalised) to `list` unless it's already there. Returns
 /// `true` if it was added. Shared by the persistent soundfont list and the
 /// session-only song list.
@@ -93,16 +120,6 @@ pub fn push_unique(list: &mut Vec<PathBuf>, path: &Path) -> bool {
     }
     list.push(path);
     true
-}
-
-/// `<Downloads>/Music`, resolving the real Downloads folder for the platform.
-fn default_music_dir() -> Option<PathBuf> {
-    let dirs = UserDirs::new()?;
-    let downloads = dirs
-        .download_dir()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| dirs.home_dir().join("Downloads"));
-    Some(downloads.join("Music"))
 }
 
 /// Display name for a soundfont/MIDI path: the file stem, or the full path if

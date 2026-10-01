@@ -1,47 +1,58 @@
-//! Audio engine: owns the rustysynth sequencer and exposes a rodio `Source`.
-//!
-//! The rodio mixer pulls samples from [`SynthSource`] on the audio thread. All
-//! mutable playback state lives in [`Engine`] behind an `Arc<Mutex<_>>`; the UI
-//! thread locks it to apply commands (play/pause/seek/speed/swap soundfont) and
-//! the audio thread `try_lock`s it to render — if a command is mid-flight the
-//! audio thread just emits a few milliseconds of silence instead of blocking.
+//! The playback engine: either a rustysynth MIDI sequencer or a decoded plain
+//! audio file, turning commands (play/pause/seek/speed/swap soundfont/mute
+//! channel) into rendered audio. It runs entirely on the dedicated render
+//! thread (`audio.rs`) — no locking, since nothing else touches it.
 
-use std::num::{NonZeroU16, NonZeroU32};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use rodio::Source;
 use rustysynth::{MidiFile, MidiFileSequencer, SoundFont, Synthesizer, SynthesizerSettings};
 
-use crate::visualizer::SampleTap;
+use crate::visualizer::{ActiveNote, NoteChange, NotesSnapshot, StereoFrame};
 
 pub const MIN_SPEED: f64 = 0.10;
 pub const MAX_SPEED: f64 = 4.00;
 
-/// How many stereo frames the [`SynthSource`] renders per lock of the engine.
-/// 1024 frames ≈ 23 ms at 44.1 kHz, which bounds how stale pause/seek feels.
-const CHUNK_FRAMES: usize = 1024;
+/// How far ahead `notes_snapshot` reports upcoming note changes.
+pub const NOTE_LOOKAHEAD_SECS: f64 = 4.0;
 
-/// A immutable snapshot of the engine, taken under lock for rendering the UI.
+/// A whole plain audio file (wav/mp3/ogg/flac/...), decoded up front. Seeking
+/// and speed are then just arithmetic on an index into `samples` — no
+/// re-decoding needed.
+pub struct DecodedAudio {
+    pub samples: Vec<StereoFrame>,
+    pub sample_rate: u32,
+}
+
+/// Playback head into a [`DecodedAudio`].
+struct AudioFilePlayback {
+    data: Arc<DecodedAudio>,
+    /// Fractional index into `data.samples`, in source-sample units.
+    position: f64,
+}
+
+/// A cloneable snapshot of playback state, published to the GUI each tick.
 #[derive(Clone, Default)]
 pub struct EngineView {
-    pub midi_name: Option<String>,
+    pub track_name: Option<String>,
     pub soundfont_name: Option<String>,
     pub has_midi: bool,
+    pub has_audio_file: bool,
     pub has_soundfont: bool,
     pub position: f64,
     pub length: f64,
     pub speed: f64,
     pub paused: bool,
     pub finished: bool,
+    pub loop_enabled: bool,
 }
 
 pub struct Engine {
     sample_rate: u32,
     seq: Option<MidiFileSequencer>,
     midi: Option<Arc<MidiFile>>,
-    midi_name: Option<String>,
+    audio_file: Option<AudioFilePlayback>,
+    track_name: Option<String>,
     soundfont_name: Option<String>,
     length: f64,
     speed: f64,
@@ -49,6 +60,13 @@ pub struct Engine {
     finished: bool,
     scratch_l: Vec<f32>,
     scratch_r: Vec<f32>,
+    /// Channels the current MIDI uses, sorted; empty for a plain audio file.
+    detected_channels: Vec<u8>,
+    /// Per-channel visual enable flag (index = channel). Purely a hint for
+    /// visualizer scripts — disabled channels still play.
+    channels_enabled: [bool; 16],
+    /// Restart from the top instead of finishing, when the track runs out.
+    loop_enabled: bool,
 }
 
 impl Engine {
@@ -57,7 +75,8 @@ impl Engine {
             sample_rate,
             seq: None,
             midi: None,
-            midi_name: None,
+            audio_file: None,
+            track_name: None,
             soundfont_name: None,
             length: 0.0,
             speed: 1.0,
@@ -65,29 +84,85 @@ impl Engine {
             finished: false,
             scratch_l: Vec::new(),
             scratch_r: Vec::new(),
+            detected_channels: Vec::new(),
+            channels_enabled: [true; 16],
+            loop_enabled: false,
         }
+    }
+
+    pub fn set_loop_enabled(&mut self, enabled: bool) {
+        self.loop_enabled = enabled;
     }
 
     pub fn view(&self) -> EngineView {
         EngineView {
-            midi_name: self.midi_name.clone(),
+            track_name: self.track_name.clone(),
             soundfont_name: self.soundfont_name.clone(),
             has_midi: self.midi.is_some(),
+            has_audio_file: self.audio_file.is_some(),
             has_soundfont: self.seq.is_some(),
             position: self.position().clamp(0.0, self.length.max(0.0)),
             length: self.length,
             speed: self.speed,
             paused: self.paused,
             finished: self.finished,
+            loop_enabled: self.loop_enabled,
         }
     }
 
     fn position(&self) -> f64 {
+        if let Some(audio) = &self.audio_file {
+            return audio.position / audio.data.sample_rate as f64;
+        }
         self.seq.as_ref().map(|s| s.get_position()).unwrap_or(0.0)
     }
 
+    /// Which MIDI notes the score holds down right now, plus the note-on/off
+    /// changes coming within the next [`NOTE_LOOKAHEAD_SECS`] seconds. Always
+    /// empty for a plain audio file — there's no score to read.
+    pub fn notes_snapshot(&self) -> NotesSnapshot {
+        let base = NotesSnapshot {
+            detected_channels: self.detected_channels.clone(),
+            enabled_channels: self.channels_enabled,
+            ..NotesSnapshot::default()
+        };
+
+        let Some(seq) = &self.seq else {
+            return base;
+        };
+        if self.midi.is_none() {
+            return base;
+        }
+
+        NotesSnapshot {
+            active: seq
+                .active_notes()
+                .into_iter()
+                .map(|n| ActiveNote {
+                    channel: n.channel as u8,
+                    key: n.key as u8,
+                    velocity: n.velocity as u8,
+                })
+                .collect(),
+            upcoming: seq
+                .upcoming_notes(NOTE_LOOKAHEAD_SECS)
+                .into_iter()
+                .map(|e| NoteChange {
+                    channel: e.channel as u8,
+                    key: e.key as u8,
+                    velocity: e.velocity as u8,
+                    on: e.on,
+                    seconds_until: e.time_until as f32,
+                })
+                .collect(),
+            ..base
+        }
+    }
+
     /// Swap in a new soundfont, rebuilding the synthesizer while keeping the
-    /// current MIDI file, playback position, speed and pause state.
+    /// current MIDI file, playback position, speed and pause state. A no-op
+    /// while a plain audio file is loaded (it has nothing to do with one),
+    /// beyond remembering the name for whenever a MIDI is loaded next.
     pub fn set_soundfont(&mut self, soundfont: Arc<SoundFont>, name: String) -> Result<()> {
         let settings = SynthesizerSettings::new(self.sample_rate as i32);
         let synth = Synthesizer::new(&soundfont, &settings).map_err(|e| anyhow!("{e}"))?;
@@ -99,6 +174,7 @@ impl Engine {
             seq.play(midi, false);
             fast_forward(&mut seq, target, self.sample_rate);
         }
+        seq.set_channel_mask(self.channel_mask());
 
         self.seq = Some(seq);
         self.soundfont_name = Some(name);
@@ -107,20 +183,99 @@ impl Engine {
 
     /// Load a MIDI file and start playing it from the top (if a soundfont is loaded).
     pub fn load_midi(&mut self, midi: Arc<MidiFile>, name: String) {
+        self.audio_file = None;
         self.length = midi.get_length();
-        self.midi_name = Some(name);
+        self.track_name = Some(name);
         self.finished = false;
         self.paused = false;
+        self.detected_channels = midi.note_channels();
+        self.channels_enabled = [true; 16];
 
         if let Some(seq) = &mut self.seq {
             seq.play(&midi, false);
             seq.set_speed(self.speed);
+            seq.set_channel_mask(0xFFFF);
         }
         self.midi = Some(midi);
     }
 
+    /// Load a plain audio file (already decoded) and start playing it from the
+    /// top. No soundfont needed — there's nothing to synthesize.
+    pub fn load_audio_file(&mut self, data: Arc<DecodedAudio>, name: String) {
+        self.midi = None;
+        self.length = data.samples.len() as f64 / data.sample_rate as f64;
+        self.track_name = Some(name);
+        self.finished = false;
+        self.paused = false;
+        self.detected_channels.clear();
+        self.channels_enabled = [true; 16];
+        self.audio_file = Some(AudioFilePlayback { data, position: 0.0 });
+    }
+
+    /// Bit N set = channel N audible / visually enabled.
+    fn channel_mask(&self) -> u16 {
+        (0..16)
+            .filter(|&i| self.channels_enabled[i])
+            .map(|i| 1u16 << i)
+            .sum()
+    }
+
+    /// Flip a channel's enable flag. This drives both the visualizer (through
+    /// [`notes_snapshot`](Self::notes_snapshot)) and playback — a disabled
+    /// channel's note-ons are dropped and its ringing voices released. No
+    /// effect while a plain audio file is loaded (it has no channels).
+    ///
+    /// Refuses to disable the one remaining enabled channel — silence isn't
+    /// a useful state to land in by toggling, and the GUI mirrors this by
+    /// graying out that channel's checkbox.
+    pub fn set_channel_enabled(&mut self, channel: u8, enabled: bool) {
+        if !enabled && self.is_last_enabled_detected_channel(channel) {
+            return;
+        }
+        if let Some(slot) = self.channels_enabled.get_mut(channel as usize) {
+            *slot = enabled;
+        }
+        self.apply_channel_mask();
+    }
+
+    /// Enable every channel.
+    pub fn enable_all_channels(&mut self) {
+        self.channels_enabled = [true; 16];
+        self.apply_channel_mask();
+    }
+
+    /// Enable only `channel`, disabling every other channel.
+    pub fn solo_channel(&mut self, channel: u8) {
+        for (i, slot) in self.channels_enabled.iter_mut().enumerate() {
+            *slot = i == channel as usize;
+        }
+        self.apply_channel_mask();
+    }
+
+    fn is_last_enabled_detected_channel(&self, channel: u8) -> bool {
+        !self.detected_channels.is_empty()
+            && self.channels_enabled.get(channel as usize).copied().unwrap_or(false)
+            && self
+                .detected_channels
+                .iter()
+                .filter(|&&c| self.channels_enabled[c as usize])
+                .count()
+                <= 1
+    }
+
+    fn apply_channel_mask(&mut self) {
+        let mask = self.channel_mask();
+        if let Some(seq) = &mut self.seq {
+            seq.set_channel_mask(mask);
+        }
+    }
+
+    fn has_track(&self) -> bool {
+        self.midi.is_some() || self.audio_file.is_some()
+    }
+
     pub fn toggle_pause(&mut self) {
-        if self.midi.is_none() {
+        if !self.has_track() {
             return;
         }
         if self.finished {
@@ -143,16 +298,24 @@ impl Engine {
         self.set_speed(self.speed + delta);
     }
 
-    /// Seek to an absolute position in seconds. rustysynth has no seek, so we
-    /// restart the sequence and fast-forward through it silently.
+    /// Seek to an absolute position in seconds. For MIDI, rustysynth has no
+    /// seek, so we restart the sequence and fast-forward through it silently;
+    /// for a decoded audio file it's just moving the read head.
     pub fn seek(&mut self, target: f64) {
+        let target = target.clamp(0.0, self.length.max(0.0));
+
+        if let Some(audio) = &mut self.audio_file {
+            audio.position = target * audio.data.sample_rate as f64;
+            self.finished = !self.loop_enabled && audio.position >= audio.data.samples.len() as f64;
+            return;
+        }
+
         let Some(midi) = self.midi.clone() else {
             return;
         };
         let Some(seq) = self.seq.as_mut() else {
             return;
         };
-        let target = target.clamp(0.0, self.length.max(0.0));
         seq.play(&midi, false);
         seq.set_speed(self.speed);
         fast_forward(seq, target, self.sample_rate);
@@ -163,10 +326,25 @@ impl Engine {
         self.seek(self.position() + delta);
     }
 
-    /// Fill an interleaved stereo buffer. Called on the audio thread.
-    fn render_into(&mut self, out: &mut [f32]) {
-        let silent = self.paused || self.finished || self.midi.is_none() || self.seq.is_none();
-        if silent {
+    /// Fill an interleaved stereo buffer. Called on the render thread (see
+    /// `audio.rs`), never on the audio callback itself.
+    pub fn render_into(&mut self, out: &mut [f32]) {
+        if self.paused || self.finished {
+            out.fill(0.0);
+            return;
+        }
+
+        if let Some(audio) = self.audio_file.as_mut() {
+            let reached_end =
+                render_audio_file(audio, self.speed, self.sample_rate, self.loop_enabled, out);
+            if reached_end && !self.loop_enabled {
+                self.finished = true;
+                self.paused = true;
+            }
+            return;
+        }
+
+        if self.midi.is_none() || self.seq.is_none() {
             out.fill(0.0);
             return;
         }
@@ -183,10 +361,59 @@ impl Engine {
         }
 
         if seq.end_of_sequence() {
-            self.finished = true;
-            self.paused = true;
+            if self.loop_enabled {
+                self.seek(0.0);
+            } else {
+                self.finished = true;
+                self.paused = true;
+            }
         }
     }
+}
+
+/// Linear-interpolation resample from `audio`'s native sample rate into
+/// `output_rate`, advancing the read head by `speed` extra — folding "play
+/// faster" and "convert sample rate" into the same step (speed changes pitch,
+/// same as speeding up a tape, since there's no time-stretching here).
+///
+/// When `looped`, the read head wraps back to the start as soon as it passes
+/// the end, mid-block if needed, so the loop is sample-accurate with no gap
+/// of silence at the seam. Returns whether the read head reached (or passed)
+/// the end of the data during this call.
+fn render_audio_file(
+    audio: &mut AudioFilePlayback,
+    speed: f64,
+    output_rate: u32,
+    looped: bool,
+    out: &mut [f32],
+) -> bool {
+    let samples = &audio.data.samples;
+    let step = (audio.data.sample_rate as f64 / output_rate as f64) * speed;
+    let frames = out.len() / 2;
+    let mut reached_end = false;
+
+    for i in 0..frames {
+        let index = audio.position;
+        let base = index.floor() as usize;
+        if base >= samples.len() {
+            out[2 * i] = 0.0;
+            out[2 * i + 1] = 0.0;
+            reached_end = true;
+        } else {
+            let frac = (index - base as f64) as f32;
+            let (l0, r0) = samples[base];
+            let (l1, r1) = samples.get(base + 1).copied().unwrap_or((l0, r0));
+            out[2 * i] = l0 + (l1 - l0) * frac;
+            out[2 * i + 1] = r0 + (r1 - r0) * frac;
+        }
+
+        audio.position += step;
+        if looped && !samples.is_empty() {
+            audio.position = audio.position.rem_euclid(samples.len() as f64);
+        }
+    }
+
+    reached_end
 }
 
 /// Restart-and-scan seek helper. Renders the sequence into a throwaway buffer at
@@ -221,69 +448,4 @@ fn fast_forward(seq: &mut MidiFileSequencer, target: f64, _sample_rate: u32) {
     }
 
     seq.set_speed(saved);
-}
-
-/// The rodio `Source` handed to the mixer. Never ends: emits silence when idle.
-pub struct SynthSource {
-    engine: Arc<Mutex<Engine>>,
-    sample_rate: u32,
-    buf: Vec<f32>,
-    pos: usize,
-    /// Optional tap that a visualizer window drains from; see `visualizer.rs`.
-    tap: Option<SampleTap>,
-}
-
-impl SynthSource {
-    pub fn new(engine: Arc<Mutex<Engine>>, sample_rate: u32) -> Self {
-        Self {
-            engine,
-            sample_rate,
-            buf: Vec::new(),
-            pos: 0,
-            tap: None,
-        }
-    }
-
-    /// Mirror every rendered chunk (including silence) into `tap`, so a
-    /// visualizer can see exactly what's playing.
-    pub fn with_tap(mut self, tap: SampleTap) -> Self {
-        self.tap = Some(tap);
-        self
-    }
-}
-
-impl Iterator for SynthSource {
-    type Item = f32;
-
-    fn next(&mut self) -> Option<f32> {
-        if self.pos >= self.buf.len() {
-            self.buf.resize(CHUNK_FRAMES * 2, 0.0);
-            match self.engine.try_lock() {
-                Ok(mut engine) => engine.render_into(&mut self.buf),
-                Err(_) => self.buf.fill(0.0),
-            }
-            if let Some(tap) = &self.tap {
-                tap.push(&self.buf);
-            }
-            self.pos = 0;
-        }
-        let sample = self.buf[self.pos];
-        self.pos += 1;
-        Some(sample)
-    }
-}
-
-impl Source for SynthSource {
-    fn current_span_len(&self) -> Option<usize> {
-        None
-    }
-    fn channels(&self) -> rodio::ChannelCount {
-        NonZeroU16::new(2).expect("2 is nonzero")
-    }
-    fn sample_rate(&self) -> rodio::SampleRate {
-        NonZeroU32::new(self.sample_rate).expect("sample rate is nonzero")
-    }
-    fn total_duration(&self) -> Option<Duration> {
-        None
-    }
 }

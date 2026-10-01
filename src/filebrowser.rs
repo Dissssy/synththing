@@ -1,47 +1,25 @@
-//! A minimal file browser. Used two ways:
-//! * inline as the always-visible song panel (`render_inline`), where picking a
-//!   `.mid` plays it and marks it with a dot;
-//! * as a modal popup for adding a soundfont to the retained list (`render`).
+//! A minimal file browser widget. Used two ways: inline as the always-visible
+//! song panel, where clicking a `.mid` plays it and marks it with a dot, and
+//! inside a modal `egui::Window` for adding a soundfont to the retained list.
+//! Both just call [`FileBrowser::ui`] — it returns `Some(path)` when a *file*
+//! row is clicked; clicking a directory navigates into it internally.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
-use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph};
-use ratatui::Frame;
+use eframe::egui;
 
-/// How many files a `/` search scans below the current directory before giving up.
+/// How many files a search scans below the current directory before giving up.
 const MAX_SEARCH_CANDIDATES: usize = 4000;
-/// How many subdirectory levels a `/` search descends into.
+/// How many subdirectory levels a search descends into.
 const MAX_SEARCH_DEPTH: u32 = 12;
 /// How many ranked matches are kept (and shown) for a query.
 const MAX_SEARCH_RESULTS: usize = 200;
-
-pub enum Outcome {
-    /// Still browsing.
-    Pending,
-    /// User pressed Esc (only meaningful for the modal use).
-    Cancelled,
-    /// User chose a file.
-    Picked(PathBuf),
-}
 
 struct Entry {
     label: String,
     path: PathBuf,
     is_dir: bool,
-}
-
-/// Live fuzzy-search state: the typed query plus every matching file found
-/// under the directory the search started in (gathered once, re-scored on
-/// every keystroke rather than re-walking the disk).
-struct SearchState {
-    query: String,
-    /// (path relative to the search root, displayed with '/' separators; path)
-    candidates: Vec<(String, PathBuf)>,
 }
 
 pub struct FileBrowser {
@@ -50,32 +28,31 @@ pub struct FileBrowser {
     extensions: Vec<String>,
     cwd: PathBuf,
     entries: Vec<Entry>,
-    state: ListState,
     show_hidden: bool,
     error: Option<String>,
     /// Path currently marked with a dot (the playing file), if any.
     active: Option<PathBuf>,
-    /// `Some` while a `/` fuzzy search is in progress; `entries` then holds
-    /// ranked search results instead of the current directory's listing.
-    search: Option<SearchState>,
+    /// Live text in the search box; empty means "just show `entries`".
+    search_query: String,
+    /// Every matching file under the directory the search started in, built
+    /// once when the query goes from empty to non-empty and re-scored on
+    /// every keystroke rather than re-walking the disk each time.
+    search_candidates: Option<Vec<(String, PathBuf)>>,
 }
 
 impl FileBrowser {
     pub fn new(title: impl Into<String>, start_dir: PathBuf, extensions: &[&str]) -> Self {
-        let cwd = start_dir
-            .canonicalize()
-            .unwrap_or(start_dir)
-            .to_path_buf();
+        let cwd = start_dir.canonicalize().unwrap_or(start_dir);
         let mut browser = Self {
             title: title.into(),
             extensions: extensions.iter().map(|e| e.to_lowercase()).collect(),
             cwd,
             entries: Vec::new(),
-            state: ListState::default(),
             show_hidden: false,
             error: None,
             active: None,
-            search: None,
+            search_query: String::new(),
+            search_candidates: None,
         };
         browser.refresh();
         browser
@@ -85,8 +62,33 @@ impl FileBrowser {
         self.active = path;
     }
 
-    pub fn is_searching(&self) -> bool {
-        self.search.is_some()
+    /// The directory currently being listed.
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+
+    /// Jump straight to `dir` (e.g. from the native folder dialog or a saved
+    /// default), clearing any in-progress search.
+    pub fn navigate_to(&mut self, dir: PathBuf) {
+        self.cwd = dir.canonicalize().unwrap_or(dir);
+        self.search_query.clear();
+        self.search_candidates = None;
+        self.refresh();
+    }
+
+    /// Open the OS's native folder-picker (drives, network shares, everything
+    /// the system browser can reach) and jump there if the user picks one.
+    fn browse_dialog(&mut self) {
+        // Point the dialog at the *parent* of the current directory, not the
+        // current directory itself. `set_directory` opens straight into that
+        // folder's contents, so starting it at `self.cwd` left the current
+        // folder with nothing in the list to click "Select Folder" on —
+        // starting one level up puts it in the list as a normal, selectable
+        // entry instead.
+        let start = self.cwd.parent().unwrap_or(&self.cwd);
+        if let Some(dir) = rfd::FileDialog::new().set_directory(start).pick_folder() {
+            self.navigate_to(dir);
+        }
     }
 
     fn accepts(&self, path: &Path) -> bool {
@@ -103,10 +105,10 @@ impl FileBrowser {
         self.entries.clear();
         self.error = None;
 
-        if self.cwd.parent().is_some() {
+        if let Some(parent) = self.cwd.parent() {
             self.entries.push(Entry {
                 label: "..".to_string(),
-                path: self.cwd.parent().unwrap().to_path_buf(),
+                path: parent.to_path_buf(),
                 is_dir: true,
             });
         }
@@ -145,40 +147,6 @@ impl FileBrowser {
                 self.error = Some(format!("Cannot read {}: {e}", self.cwd.display()));
             }
         }
-
-        let selection = if self.entries.is_empty() { None } else { Some(0) };
-        self.state.select(selection);
-    }
-
-    fn move_selection(&mut self, delta: isize) {
-        if self.entries.is_empty() {
-            return;
-        }
-        let len = self.entries.len() as isize;
-        let current = self.state.selected().unwrap_or(0) as isize;
-        let next = (current + delta).rem_euclid(len);
-        self.state.select(Some(next as usize));
-    }
-
-    fn go_parent(&mut self) {
-        if let Some(parent) = self.cwd.parent() {
-            self.cwd = parent.to_path_buf();
-            self.refresh();
-        }
-    }
-
-    fn start_search(&mut self) {
-        let candidates = self.collect_candidates();
-        self.search = Some(SearchState {
-            query: String::new(),
-            candidates,
-        });
-        self.apply_search();
-    }
-
-    fn cancel_search(&mut self) {
-        self.search = None;
-        self.refresh();
     }
 
     /// Breadth-first walk from `self.cwd`, collecting every accepted file
@@ -223,251 +191,126 @@ impl FileBrowser {
         out
     }
 
-    /// Re-rank `search`'s candidates against the current query and refresh
-    /// `entries`/`state` from the top matches.
-    fn apply_search(&mut self) {
-        let Some(search) = &self.search else {
-            return;
-        };
+    /// Draw the browser (search box + scrollable list) into `ui`. Returns
+    /// `Some(path)` the frame a file row is clicked; clicking a directory row
+    /// navigates into it internally and returns `None`.
+    pub fn ui(&mut self, ui: &mut egui::Ui) -> Option<PathBuf> {
+        ui.weak(display_dir(&self.cwd));
 
-        let mut scored: Vec<(i32, usize)> = search
-            .candidates
-            .iter()
-            .enumerate()
-            .filter_map(|(i, (label, _))| fuzzy_score(label, &search.query).map(|score| (score, i)))
-            .collect();
-        // Stable sort: ties keep the walk order, which groups by folder.
-        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-        scored.truncate(MAX_SEARCH_RESULTS);
+        let mut hidden_changed = false;
+        ui.horizontal(|ui| {
+            // Fixed-size widgets first, then the text edit last with
+            // `desired_width(INFINITY)` to soak up whatever's left — sizing it
+            // from `ui.available_width()` instead fed back into the layout
+            // and made the row (and its containing panel) grow every frame.
+            if ui.button("Browse...").clicked() {
+                self.browse_dialog();
+            }
+            hidden_changed = ui.checkbox(&mut self.show_hidden, "hidden").changed();
 
-        let entries: Vec<Entry> = scored
-            .into_iter()
-            .map(|(_, i)| {
-                let (label, path) = &search.candidates[i];
-                Entry {
-                    label: label.clone(),
-                    path: path.clone(),
-                    is_dir: false,
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.search_query)
+                    .hint_text("fuzzy search...")
+                    .desired_width(f32::INFINITY),
+            );
+            if response.changed() {
+                if self.search_query.trim().is_empty() {
+                    self.search_candidates = None;
+                } else if self.search_candidates.is_none() {
+                    self.search_candidates = Some(self.collect_candidates());
                 }
-            })
-            .collect();
-
-        self.entries = entries;
-        self.state
-            .select(if self.entries.is_empty() { None } else { Some(0) });
-    }
-
-    fn activate(&mut self) -> Outcome {
-        let Some(index) = self.state.selected() else {
-            return Outcome::Pending;
-        };
-        let Some(entry) = self.entries.get(index) else {
-            return Outcome::Pending;
-        };
-        if entry.is_dir {
-            self.cwd = entry.path.clone();
+            }
+        });
+        if hidden_changed {
             self.refresh();
-            Outcome::Pending
-        } else {
-            Outcome::Picked(entry.path.clone())
+            if !self.search_query.trim().is_empty() {
+                self.search_candidates = Some(self.collect_candidates());
+            }
         }
-    }
 
-    /// Handle a key. While a `/` search is active, this owns the keyboard
-    /// almost entirely (letters are query text) — callers should route every
-    /// key here rather than intercepting shortcuts themselves; check
-    /// [`is_searching`](Self::is_searching) if a hard override (e.g. Ctrl+C)
-    /// is needed.
-    pub fn on_key(&mut self, key: KeyEvent) -> Outcome {
-        if self.search.is_some() {
-            return self.on_search_key(key);
+        if let Some(err) = &self.error {
+            ui.colored_label(egui::Color32::from_rgb(220, 90, 90), err);
         }
-        match key.code {
-            KeyCode::Esc => Outcome::Cancelled,
-            KeyCode::Up => {
-                self.move_selection(-1);
-                Outcome::Pending
-            }
-            KeyCode::Down => {
-                self.move_selection(1);
-                Outcome::Pending
-            }
-            KeyCode::PageUp => {
-                self.move_selection(-10);
-                Outcome::Pending
-            }
-            KeyCode::PageDown => {
-                self.move_selection(10);
-                Outcome::Pending
-            }
-            KeyCode::Enter | KeyCode::Right => self.activate(),
-            KeyCode::Left | KeyCode::Backspace => {
-                self.go_parent();
-                Outcome::Pending
-            }
-            KeyCode::Char('h') => {
-                self.show_hidden = !self.show_hidden;
+
+        let query = self.search_query.trim().to_string();
+        let mut clicked: Option<(PathBuf, bool)> = None;
+        egui::ScrollArea::vertical()
+            .id_salt(&self.title)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if query.is_empty() {
+                    for entry in &self.entries {
+                        if row(ui, entry, self.active.as_deref()) {
+                            clicked = Some((entry.path.clone(), entry.is_dir));
+                        }
+                    }
+                } else if let Some(candidates) = &self.search_candidates {
+                    for entry in ranked_matches(candidates, &query) {
+                        if row(ui, &entry, self.active.as_deref()) {
+                            clicked = Some((entry.path.clone(), entry.is_dir));
+                        }
+                    }
+                }
+            });
+
+        match clicked {
+            Some((path, true)) => {
+                self.cwd = path;
+                self.search_query.clear();
+                self.search_candidates = None;
                 self.refresh();
-                Outcome::Pending
+                None
             }
-            KeyCode::Char('/') => {
-                self.start_search();
-                Outcome::Pending
-            }
-            _ => Outcome::Pending,
+            Some((path, false)) => Some(path),
+            None => None,
         }
     }
+}
 
-    fn on_search_key(&mut self, key: KeyEvent) -> Outcome {
-        match key.code {
-            KeyCode::Esc => {
-                self.cancel_search();
-                Outcome::Pending
-            }
-            KeyCode::Enter => self.activate(),
-            KeyCode::Up => {
-                self.move_selection(-1);
-                Outcome::Pending
-            }
-            KeyCode::Down => {
-                self.move_selection(1);
-                Outcome::Pending
-            }
-            KeyCode::PageUp => {
-                self.move_selection(-10);
-                Outcome::Pending
-            }
-            KeyCode::PageDown => {
-                self.move_selection(10);
-                Outcome::Pending
-            }
-            KeyCode::Backspace => {
-                if let Some(search) = &mut self.search {
-                    search.query.pop();
-                }
-                self.apply_search();
-                Outcome::Pending
-            }
-            KeyCode::Char(c) => {
-                if let Some(search) = &mut self.search {
-                    search.query.push(c);
-                }
-                self.apply_search();
-                Outcome::Pending
-            }
-            _ => Outcome::Pending,
-        }
+/// Drag-and-drop payload for a file row dragged out of the browser (e.g.
+/// onto a playlist).
+pub struct DraggedFile(pub PathBuf);
+
+/// Draw one clickable row; returns `true` if it was clicked this frame. File
+/// rows can also be dragged out, carrying a [`DraggedFile`].
+fn row(ui: &mut egui::Ui, entry: &Entry, active: Option<&Path>) -> bool {
+    // Directories already carry a trailing "/" from `refresh`, so the label
+    // alone distinguishes them; the active file gets egui's own highlighted
+    // "selected" look rather than a marker glyph (icon fonts are a common
+    // source of missing-glyph boxes, so plain text + native styling wins).
+    let is_active = active == Some(entry.path.as_path());
+    if entry.is_dir {
+        return ui.selectable_label(is_active, &entry.label).clicked();
     }
+    let response = ui.add(
+        egui::Button::selectable(is_active, &entry.label).sense(egui::Sense::click_and_drag()),
+    );
+    response.dnd_set_drag_payload(DraggedFile(entry.path.clone()));
+    response.clicked()
+}
 
-    fn entry_items(&self) -> Vec<ListItem<'static>> {
-        self.entries
-            .iter()
-            .map(|e| {
-                let dot = if self.active.as_deref() == Some(e.path.as_path()) {
-                    "● "
-                } else {
-                    "  "
-                };
-                let prefix = if e.is_dir { "▸ " } else { "  " };
-                ListItem::new(format!("{dot}{prefix}{}", e.label))
-            })
-            .collect()
-    }
+/// Re-rank `candidates` against `query` and return the top matches as `Entry`s.
+fn ranked_matches(candidates: &[(String, PathBuf)], query: &str) -> Vec<Entry> {
+    let mut scored: Vec<(i32, usize)> = candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (label, _))| fuzzy_score(label, query).map(|score| (score, i)))
+        .collect();
+    // Stable sort: ties keep the walk order, which groups by folder.
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    scored.truncate(MAX_SEARCH_RESULTS);
 
-    fn head_line(&self) -> Line<'static> {
-        if let Some(search) = &self.search {
-            return Line::from(format!("/{}│", search.query))
-                .style(Style::default().add_modifier(Modifier::BOLD));
-        }
-        match &self.error {
-            Some(err) => Line::from(err.clone()).style(Style::default().add_modifier(Modifier::BOLD)),
-            None => Line::from(display_dir(&self.cwd))
-                .style(Style::default().add_modifier(Modifier::DIM)),
-        }
-    }
-
-    fn panel_title(&self) -> String {
-        match &self.search {
-            Some(_) => {
-                let n = self.entries.len();
-                format!("{} — {n} match{}", self.title, if n == 1 { "" } else { "es" })
+    scored
+        .into_iter()
+        .map(|(_, i)| {
+            let (label, path) = &candidates[i];
+            Entry {
+                label: label.clone(),
+                path: path.clone(),
+                is_dir: false,
             }
-            None => self.title.clone(),
-        }
-    }
-
-    /// Draw the browser directly into `area` as the always-visible song panel.
-    pub fn render_inline(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
-        let subtitle = self.panel_title();
-        let (border_style, title, highlight_style, symbol) = if focused {
-            (
-                Style::default(),
-                format!(" ▶ {subtitle} "),
-                Style::default().add_modifier(Modifier::REVERSED),
-                "» ",
-            )
-        } else {
-            (
-                Style::default().add_modifier(Modifier::DIM),
-                format!("   {subtitle} "),
-                Style::default().add_modifier(Modifier::DIM | Modifier::BOLD),
-                "  ",
-            )
-        };
-
-        let block = Block::bordered().border_style(border_style).title(title);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner);
-        frame.render_widget(Paragraph::new(self.head_line()), rows[0]);
-
-        let list = List::new(self.entry_items())
-            .highlight_style(highlight_style)
-            .highlight_symbol(symbol);
-        frame.render_stateful_widget(list, rows[1], &mut self.state);
-    }
-
-    /// Draw the browser as a centred modal popup (used for adding a soundfont).
-    pub fn render(&mut self, frame: &mut Frame, area: Rect) {
-        let popup = centered_rect(80, 80, area);
-        frame.render_widget(Clear, popup);
-
-        let block = Block::bordered().title(format!(" {} ", self.panel_title()));
-        let inner = block.inner(popup);
-        frame.render_widget(block, popup);
-
-        let rows = Layout::vertical([
-            Constraint::Length(1), // cwd
-            Constraint::Min(1),    // list
-            Constraint::Length(1), // error / count
-            Constraint::Length(1), // keys
-        ])
-        .split(inner);
-
-        frame.render_widget(Paragraph::new(self.head_line()), rows[0]);
-
-        let list = List::new(self.entry_items())
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-            .highlight_symbol("");
-        frame.render_stateful_widget(list, rows[1], &mut self.state);
-
-        frame.render_widget(
-            Paragraph::new(Line::from(format!("{} item(s)", self.entries.len())))
-                .style(Style::default().add_modifier(Modifier::DIM)),
-            rows[2],
-        );
-
-        let keys = if self.search.is_some() {
-            "↑↓ move   ⏎ open   ⌫ delete   type to search   Esc cancel search"
-        } else {
-            "↑↓ move   ⏎ open   ⌫ up a dir   h toggle hidden   / search   Esc cancel"
-        };
-        frame.render_widget(
-            Paragraph::new(Line::from(keys)).style(Style::default().add_modifier(Modifier::DIM)),
-            rows[3],
-        );
-    }
+        })
+        .collect()
 }
 
 /// Case-insensitive fuzzy match. A query with spaces is split into terms
@@ -527,19 +370,4 @@ fn fuzzy_score_term(haystack: &str, needle: &str) -> Option<i32> {
 fn display_dir(path: &Path) -> String {
     let s = path.display().to_string();
     s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s)
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .split(area);
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .split(vertical[1])[1]
 }

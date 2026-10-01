@@ -1,0 +1,174 @@
+# Ordered by importance/difficulty (quick high-value wins first, big/risky
+# rewrites last). Tags: [S/M/L] = difficulty, [!!/!/.] = importance.
+
+## Tier 1 - quick wins
+
+[S/M][!] enable current folder in browse as valid selection, when selecting if
+    you just click select while in a folder it doesnt work properly?
+    Was about the rfd "Browse..." folder dialog - tried pointing it at the
+    parent directory instead of the folder itself (the standard workaround
+    for this exact native-dialog quirk) as a best-effort fix. Still needs
+    your confirmation it actually resolved it; couldn't verify a real OS
+    dialog's click behavior from here.
+
+## Tier 2 - solid value, moderate effort
+
+[M][.] ability to name/rename custom scripts (and non custom ones?)
+    Filesystem rename + updating whatever currently holds the old path
+    (active script pointer, editor state). ("New" choosing from a template
+    list is done - it now offers Blank plus every script under
+    assets/visualizers/{dropped,undropped}, auto-discovered by build.rs.)
+
+[S][.] fuzzy search should index subdirectories as well
+    Already does this - `collect_candidates` walks up to 12 levels deep from
+    the current directory and indexes every matching file in the tree, not
+    just the current folder. If something's still missing, it's likely that
+    *folders themselves* aren't searchable/clickable results (only files
+    are) - worth confirming which of these you actually meant.
+
+## Tier 3 - bigger undertakings
+
+[L][!] playlists - v1 DONE, follow-ups below
+    Saved, named, ordered lists (one JSON file each in
+    <config dir>/playlists/), in a Playlists section. New > Blank, or New >
+    From current folder (songs directly in the folder the Songs browser is
+    showing). Drag songs from Songs into the list (between rows to insert,
+    anywhere else in the panel to append; with no playlist yet, one gets
+    made). Drag rows to reorder. Drag a soundfont from Soundfonts onto a
+    MIDI row to give it an override ("SF: name" chip on the row; click it to
+    clear). Right-click a row: play, use selected soundfont, clear override,
+    show in Songs, remove. Rename / delete (click twice to confirm).
+    Files dragged in from Explorer: songs (or whole folders) go into the
+    shown playlist, .sf2 files join the Soundfonts list.
+    Bottom bar: Previous (restarts if >3s in), Next, Shuffle (each entry
+    once per pass, never the same track twice in a row across passes), and
+    Loop cycles Off -> All (wrap the playlist) -> One (repeat this track,
+    gaplessly in the engine). N / P keys for next/previous.
+    Overrides swap back to the selected soundfont for entries without one;
+    the last 3 parsed soundfonts stay cached so switching is instant after
+    the first time.
+
+    Follow-ups, not built yet:
+    - [M][!] Load songs/soundfonts off the UI thread. Decoding a long mp3
+      or parsing a big .sf2 freezes the window for a moment, now
+      noticeable at every auto-advance, not just on clicks.
+    - [S][.] Remember loop/shuffle mode between launches (the open panels
+      are remembered already).
+    - [M][.] Multi-select rows (shift/ctrl-click) to move/remove several at
+      once; drag a folder from Songs to add all of it.
+    - [S][.] Show track lengths and a total (needs reading each file's
+      length).
+    - [S][.] Import/export .m3u.
+    - Needs your hands-on check: drag-and-drop feel (drop line placement,
+      the label that follows the cursor), and that auto-advance fires
+      reliably with the window in the background.
+
+[M][!] panel layout rework - DONE
+    Top bar toggles every section: Songs, Soundfonts, Playlists,
+    Visualizer, Script Editor, Script Settings, Docs. Which ones are open is
+    saved in the config and restored at launch. No more auto-hiding:
+    Soundfonts no longer hides for audio files, the editor no longer needs
+    the visualizer open (the script picker moves to the editor when the
+    visualizer is off). Songs + Soundfonts share a left column with a
+    draggable divider; playlists and the editor sit on the right; the
+    visualizer is in the middle. With the visualizer off, the next open
+    section takes the middle instead of leaving a gap; with nothing open, a
+    note points at the top bar. Playback controls are always shown.
+    Went with egui's own panels rather than a docking crate (egui_dock) -
+    sections have fixed homes, they don't drag around into tabs. If you
+    want free rearranging/tabbing later, egui_dock is the thing to add.
+
+[L][.] auto updating system of some kind to help deploy to testers easier?
+    Packaging/distribution infrastructure (versioning, update checks,
+    downloading + replacing the running binary, Windows signing
+    considerations), not an app feature per se. Valuable for your testing
+    cadence but orthogonal to everything else on this list - lowest
+    coupling to the rest, so it can slot in whenever without blocking
+    anything above it.
+
+## Additional/unsorted
+
+[M][.] expose cursor position, click info, and maybe keyboard state to the
+    lua interpreter
+    Deliberately deferred in favor of fullscreen + the VLC-style bottom bar.
+    Needs plumbing mouse position/clicks (and possibly key state) from the
+    visualizer panel's egui::Response through to LuaVisualizer::render, plus
+    new host functions (mouse(), mouse_down()/clicked(), maybe key_down(k)) -
+    similar shape to the playback()/settings additions, just a new kind of
+    per-frame input rather than new output.
+
+[S][.] a real doc system for the lua scripting API - DONE
+    Went with the lighter option rather than a hosted/multi-page wiki: a
+    single embedded reference page (lua_docs.rs), reachable from a "Docs"
+    button next to Settings. Structured Rust data (Section/Block), not
+    parsed markdown - rendered directly with egui's own heading/label/code
+    widgets, so there's no markdown renderer to maintain for formatting this
+    didn't need. Hand-written, not auto-generated from the module doc
+    comment (that comment stays the terse code-adjacent version for reading
+    the source; the docs page is the prose version for using the app).
+
+[S][.] lua language server / vscode-like script editor - DONE for the scoped
+    v1, rest intentionally parked below
+    Full LSP (external lua-language-server process, JSON-RPC client) turned
+    out to be the wrong tool anyway — a generic Lua LSP has no idea about our
+    custom globals (clear, setting_int, playback, ...) without custom
+    annotations it doesn't have. What shipped instead:
+    - Syntax highlighting (lua_highlight.rs) via TextEdit::layouter, a
+      hand-rolled tokenizer (keywords/strings/comments/numbers, plus our own
+      host functions colored distinctly) — no tokenizer crate needed, Lua's
+      lexical grammar is small.
+    - A small "internal LSP" (lua_completion.rs): a background thread per
+      script-change request, discarding a result if a newer request has
+      since been made (generation counter, not real cancellation — today's
+      analysis is instant anyway, but the shape is there for when it isn't).
+      Feeds a "Functions" dropdown in the editor that inserts the picked
+      name at the text cursor (via TextEditState's documented cursor
+      load/store API).
+    - Hover info: mouse-hovering a known identifier, or pressing F1 at the
+      text cursor, looks it up against the same host-API table and shows
+      its one-line doc above the editor. Cursor->word mapping goes through
+      the galley (Galley::cursor_from_pos) for the mouse case and
+      TextEditOutput::cursor_range for the F1 case.
+
+    Deliberately NOT built (parked per your "park that for now" call):
+    - Real source parsing: the completion/hover analysis is still just the
+      static HOST_API table, blind to the actual script. `analyze()` in
+      lua_completion.rs already takes the source string for exactly this —
+      next step would be finding locals in scope at the cursor and the
+      variable's inferred kind (e.g. "this came from setting_color, so it's
+      a color").
+    - Lua stdlib completion/hover: math.*/string.*/table.* members aren't in
+      HOST_API at all right now, only our own host functions.
+    - Inline error-line highlighting: mlua's compile/runtime errors already
+      carry a line number (visible in the error banner text) that isn't yet
+      used to underline/mark that line in the editor — the one piece from
+      the original three-piece plan that's still outstanding.
+
+[S][.] debug variable inspector in the Settings popup - DONE
+    Not a `lua.globals()` dump — every bundled script correctly uses `local`
+    for its state, which globals() can't see at all (locals aren't a Lua
+    *value* reachable through any table, just stack slots in a running
+    frame), so that would've shown almost nothing. Went with your
+    alternative instead: a `debug_locals([label])` host function a script
+    calls at whatever specific point it wants a snapshot from. Reads real
+    locals via the debug *C* API (lua_getstack + lua_getlocal on the calling
+    frame, through mlua's exec_raw_lua escape hatch) — a small, bounded
+    unsafe block, verified by a real test (not just "it compiled"). Does NOT
+    grant scripts Lua's own `debug` library; StdLib::DEBUG stays excluded
+    from the sandbox, this is the host using the C API on itself. Shows as a
+    nested CollapsingHeader tree in Settings, between the settings grid and
+    the log, capped in depth/breadth so a huge table (snake.lua's `occ`,
+    say) can't make one call expensive. Only sees true locals/parameters,
+    not module-level `local`s outside the calling function (those are
+    upvalues, a different thing) — called from inside render(), it won't
+    see e.g. waveform.lua's `history`, only whatever render() itself
+    declares or receives as a parameter.
+
+    A clickable line-number gutter (click a line to mark it, injecting
+    `debug_locals()` there automatically instead of typing it) was tried and
+    reverted — a button per source line added real lag, and lining a
+    hand-rolled gutter up pixel-for-pixel with TextEdit's own line layout
+    wasn't worth what it bought. Settled on documenting the function
+    properly instead: it's now in lua_completion::HOST_API (autocomplete,
+    hover info, syntax highlighting, the works) and has its own section on
+    the Docs page. Calling it by hand is the whole interface.
