@@ -17,3 +17,4 @@ serde_json = "1.0.151"
 rustfft = "6.4.1"
 mlua = { version = "0.12.1", features = ["lua54", "vendored"] }
 rfd = "0.15"                                             # native folder-picker dialog
+egui_dock = { version = "0.21.1", features = ["serde"] }      # dockable, rearrangeable tab layout

@@ -13,6 +13,7 @@ use crate::audio::AudioCommand;
 use crate::config::nice_name;
 use crate::engine::EngineView;
 use crate::filebrowser::DraggedFile;
+use crate::layout::Section;
 use crate::playlist::{self, LoopMode, NowPlaying, PlaylistEntry};
 
 /// Drag-and-drop payload for a playlist row being dragged to reorder it.
@@ -320,7 +321,7 @@ impl App {
         if songs.is_empty() {
             return;
         }
-        match self.viewed_playlist.filter(|_| self.config.panels.playlists) {
+        match self.viewed_playlist.filter(|_| self.is_open(Section::Playlists)) {
             Some(list) => {
                 let at = self.playlists.lists.get(list).map_or(0, |l| l.playlist.entries.len());
                 let count = songs.len();
@@ -337,8 +338,7 @@ impl App {
         let panel_rect = ui.max_rect();
 
         ui.horizontal(|ui| {
-            ui.heading("Playlists");
-            ui.menu_button("New", |ui| {
+            ui.menu_button("New playlist", |ui| {
                 if ui.button("Blank").clicked() {
                     let name = self.unique_playlist_name("New playlist");
                     self.create_playlist(&name, Vec::new());
@@ -427,8 +427,7 @@ impl App {
                 let dir = self.playlists.lists[list].playlist.entries[idx].path.parent().map(Path::to_path_buf);
                 if let Some(dir) = dir {
                     self.browser.navigate_to(dir);
-                    self.config.panels.songs = true;
-                    self.save_panels();
+                    self.set_open(Section::Songs, true);
                 }
             }
             None => {}

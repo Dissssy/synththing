@@ -2,11 +2,10 @@
 //! (`audio.rs`) over a command channel and reads playback state back from a
 //! shared snapshot — it never touches the engine or audio directly.
 //!
-//! Layout: a top bar of section toggles, the playback controls always at the
-//! bottom, and whichever sections are switched on in between — songs +
-//! soundfonts on the left, playlists then the script editor on the right,
-//! the visualizer in the middle. Whichever open section is "most central"
-//! takes the middle when the visualizer is off, so nothing leaves a gap.
+//! Layout: a menu bar on top, the playback controls always at the bottom,
+//! and the sections in between as dockable tabs (egui_dock) — drag them
+//! around, split, float them out into windows. Closing a tab only hides that
+//! section; the View menu brings it back (see `layout.rs` for where).
 
 mod playlist_panel;
 
@@ -19,6 +18,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use eframe::{egui, Frame};
+use egui_dock::tab_viewer::OnCloseResponse;
+use egui_dock::{DockArea, DockState, TabViewer};
 use rodio::Source as _;
 use rustysynth::{MidiFile, SoundFont};
 
@@ -26,6 +27,7 @@ use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_M
 use crate::config::{self, nice_name, Config};
 use crate::engine::{DecodedAudio, EngineView, MAX_SPEED, MIN_SPEED};
 use crate::filebrowser::{DraggedFile, FileBrowser};
+use crate::layout::{self, Section};
 use crate::lua_completion::{self, CompletionWorker};
 use crate::lua_docs;
 use crate::lua_highlight;
@@ -57,15 +59,9 @@ const PREVIOUS_RESTARTS_AFTER_SECS: f64 = 3.0;
 /// a playlist entry, to set its override).
 struct DraggedSoundfont(PathBuf);
 
-/// Where a section of the main layout is being drawn — see `sections_ui`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Section {
-    Library,
-    Playlists,
-    Editor,
-    Visualizer,
-    Empty,
-}
+/// How often (seconds) the dock layout is checked for changes to save —
+/// dragging a tab or a divider doesn't announce itself, so it's polled.
+const LAYOUT_AUTOSAVE_SECS: f64 = 1.0;
 
 /// Fixed so the "Functions" dropdown's insert-at-cursor can load/store the
 /// text cursor from a widget it hasn't drawn yet this frame.
@@ -93,8 +89,9 @@ pub struct App {
     /// by the mouse hovering a known identifier or by F1 at the text
     /// cursor's position; same display either way.
     editor_hover_info: Option<(String, String)>,
-    settings_open: bool,
-    docs_open: bool,
+    /// The editor has been opened at least once this run — the first time,
+    /// the scripting reference comes along as a tab next to it.
+    editor_opened_this_run: bool,
     /// Output gain, 0.0..=1.0. Mirrored on the render thread; not applied to
     /// the visualizer tap.
     volume: f32,
@@ -131,6 +128,20 @@ pub struct App {
     playlist_rename: Option<String>,
     /// Delete was clicked once; the next click confirms.
     confirm_delete_playlist: bool,
+    /// The section layout. Moved out into a local while `DockArea` draws it
+    /// (it needs `&mut` to both the layout and the app) — see `dock_ui`.
+    dock: DockState<Section>,
+    /// True while `dock` is moved out; show/hide requests made meanwhile
+    /// (e.g. "Show in Songs" from inside the Playlists tab) queue up in
+    /// `pending_layout` and apply right after.
+    dock_in_use: bool,
+    pending_layout: Vec<(Section, bool)>,
+    /// Which sections are open, refreshed after every layout change — so
+    /// `is_open` still answers correctly while `dock` is moved out.
+    open_sections: Vec<Section>,
+    /// The layout as last saved, to tell when it's changed.
+    saved_layout_json: String,
+    last_layout_check: f64,
 }
 
 impl App {
@@ -155,6 +166,8 @@ impl App {
         let (playlists, playlist_errors) =
             Library::load(config::playlists_dir().unwrap_or_else(|_| PathBuf::from("playlists")));
         let viewed_playlist = (!playlists.lists.is_empty()).then_some(0);
+        let dock = config.layout.clone().map(layout::sanitize).unwrap_or_else(layout::default_layout);
+        let saved_layout_json = serde_json::to_string(&dock).unwrap_or_default();
         let status = match playlist_errors.first() {
             Some(e) => format!("Couldn't read a playlist ({e})"),
             None => "Click a song to play it, click a soundfont to load it.".to_string(),
@@ -178,8 +191,7 @@ impl App {
             editor_text: source,
             completion: CompletionWorker::new(),
             editor_hover_info: None,
-            settings_open: false,
-            docs_open: false,
+            editor_opened_this_run: false,
             volume: 1.0,
             buffer_ms: DEFAULT_BUFFER_MS,
             loop_mode: LoopMode::Off,
@@ -196,6 +208,12 @@ impl App {
             rng: Rng::from_time(),
             playlist_rename: None,
             confirm_delete_playlist: false,
+            open_sections: Section::ALL.into_iter().filter(|&s| layout::is_open(&dock, s)).collect(),
+            dock,
+            dock_in_use: false,
+            pending_layout: Vec::new(),
+            saved_layout_json,
+            last_layout_check: 0.0,
         }
     }
 
@@ -211,31 +229,69 @@ impl App {
         }
     }
 
-    /// Force the visualizer panel open or closed, e.g. from a `--visualizer`
+    /// Force the visualizer open or closed, e.g. from a `--visualizer`
     /// startup flag.
     pub fn set_visualizer_open(&mut self, open: bool) {
-        self.config.panels.visualizer = open;
-        self.save_panels();
+        self.set_open(Section::Visualizer, open);
     }
 
-    /// Persist which sections are open. Failure only costs remembering the
-    /// layout next launch, so it's reported but not fatal.
-    fn save_panels(&mut self) {
+    fn is_open(&self, section: Section) -> bool {
+        self.open_sections.contains(&section)
+    }
+
+    /// Show (near its home spot) or hide a section's tab.
+    fn set_open(&mut self, section: Section, open: bool) {
+        if self.dock_in_use {
+            self.pending_layout.push((section, open));
+            return;
+        }
+        if open {
+            layout::show(&mut self.dock, section);
+            if section == Section::Editor && !self.editor_opened_this_run {
+                self.editor_opened_this_run = true;
+                layout::tab_alongside(&mut self.dock, Section::Reference, Section::Editor, false);
+            }
+        } else {
+            layout::hide(&mut self.dock, section);
+        }
+        self.refresh_open_sections();
+        self.save_layout();
+    }
+
+    fn refresh_open_sections(&mut self) {
+        self.open_sections =
+            Section::ALL.into_iter().filter(|&s| layout::is_open(&self.dock, s)).collect();
+    }
+
+    /// Persist the layout. Failure only costs remembering it next launch,
+    /// so it's reported but not fatal.
+    fn save_layout(&mut self) {
+        self.saved_layout_json = serde_json::to_string(&self.dock).unwrap_or_default();
+        self.config.layout = Some(self.dock.clone());
         if let Err(e) = self.config.save() {
             self.status = format!("Couldn't save layout: {e}");
         }
     }
 
-    /// Enter or leave true OS fullscreen. Entering always shows the
-    /// visualizer (there'd be nothing to see otherwise); the editor and
-    /// songs/soundfonts panels just hide for the duration rather than losing
-    /// their state, so leaving fullscreen restores whatever was open before.
+    /// Save the layout if it's changed (tabs dragged, dividers moved) —
+    /// checked about once a second, and never mid-drag.
+    fn autosave_layout(&mut self, ctx: &egui::Context) {
+        let (now, dragging) = ctx.input(|i| (i.time, i.pointer.any_down()));
+        if dragging || now - self.last_layout_check < LAYOUT_AUTOSAVE_SECS {
+            return;
+        }
+        self.last_layout_check = now;
+        if serde_json::to_string(&self.dock).unwrap_or_default() != self.saved_layout_json {
+            self.save_layout();
+        }
+    }
+
+    /// Enter or leave true OS fullscreen. Fullscreen always shows the
+    /// visualizer, open in the layout or not; the tabs just aren't drawn for
+    /// the duration, so leaving fullscreen restores the layout untouched.
     fn set_fullscreen(&mut self, ctx: &egui::Context, fullscreen: bool) {
         self.fullscreen = fullscreen;
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
-        if fullscreen && !self.config.panels.visualizer {
-            self.set_visualizer_open(true);
-        }
     }
 
     // --- actions -------------------------------------------------------
@@ -425,8 +481,7 @@ impl App {
                 self.available_scripts = lua_visualizer::list_scripts(&self.scripts_dir);
                 if let Some(idx) = self.available_scripts.iter().position(|p| *p == path) {
                     self.load_script(idx);
-                    self.config.panels.editor = true;
-                    self.save_panels();
+                    self.set_open(Section::Editor, true);
                 }
             }
             Err(e) => self.status = format!("Failed to create script: {e}"),
@@ -512,14 +567,15 @@ impl App {
                 let ctx = ui.ctx().clone();
                 self.set_fullscreen(&ctx, !self.fullscreen);
             }
-            if ui.selectable_label(self.config.panels.visualizer, "Visualizer").clicked() {
-                self.set_visualizer_open(!self.config.panels.visualizer);
-            }
-            if !self.fullscreen
-                && ui.selectable_label(self.config.panels.playlists, "Playlist").clicked()
-            {
-                self.config.panels.playlists = !self.config.panels.playlists;
-                self.save_panels();
+            if !self.fullscreen {
+                let visualizer = self.is_open(Section::Visualizer);
+                if ui.selectable_label(visualizer, "Visualizer").clicked() {
+                    self.set_open(Section::Visualizer, !visualizer);
+                }
+                let playlists = self.is_open(Section::Playlists);
+                if ui.selectable_label(playlists, "Playlist").clicked() {
+                    self.set_open(Section::Playlists, !playlists);
+                }
             }
             if ui
                 .selectable_label(self.loop_mode != LoopMode::Off, self.loop_mode.label())
@@ -589,8 +645,7 @@ impl App {
 
     fn soundfont_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading("Soundfonts");
-            if ui.button("Add").clicked() {
+            if ui.button("Add soundfont...").clicked() {
                 self.open_soundfont_browser();
             }
         });
@@ -639,83 +694,74 @@ impl App {
     /// be shown is switched on and off from one place.
     fn top_bar_ui(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
-            let before = self.config.panels;
+            let mut toggled = Vec::new();
             ui.menu_button("View", |ui| {
-                let panels = &mut self.config.panels;
-                ui.checkbox(&mut panels.songs, "Songs");
-                ui.checkbox(&mut panels.soundfonts, "Soundfonts");
-                ui.checkbox(&mut panels.playlists, "Playlists");
+                let mut section_checkbox = |ui: &mut egui::Ui, section: Section| {
+                    let mut open = self.open_sections.contains(&section);
+                    if ui.checkbox(&mut open, section.title()).changed() {
+                        toggled.push((section, open));
+                    }
+                };
+                section_checkbox(ui, Section::Songs);
+                section_checkbox(ui, Section::Soundfonts);
+                section_checkbox(ui, Section::Playlists);
                 ui.separator();
-                ui.checkbox(&mut panels.visualizer, "Visualizer");
-                ui.checkbox(&mut panels.editor, "Script Editor");
-                ui.checkbox(&mut self.settings_open, "Script Settings");
-                ui.checkbox(&mut self.docs_open, "Scripting Reference");
+                section_checkbox(ui, Section::Visualizer);
+                section_checkbox(ui, Section::Editor);
+                section_checkbox(ui, Section::Settings);
+                section_checkbox(ui, Section::Reference);
             });
-            if self.config.panels != before {
-                self.save_panels();
+            for (section, open) in toggled {
+                self.set_open(section, open);
             }
         });
     }
 
-    /// Lay out whichever sections are on. Each has a home — library column
-    /// left, playlists then editor right, visualizer center — but the center
-    /// is always filled by *something* open: with the visualizer off, the
-    /// next most central open section takes its place rather than leaving a
-    /// hole, and with nothing open at all, a short hint instead.
-    fn sections_ui(&mut self, ui: &mut egui::Ui, shared: &PlaybackShared) {
-        let panels = self.config.panels;
-        let library = panels.songs || panels.soundfonts;
-        let center = if panels.visualizer {
-            Section::Visualizer
-        } else if panels.editor {
-            Section::Editor
-        } else if panels.playlists {
-            Section::Playlists
-        } else if library {
-            Section::Library
-        } else {
-            Section::Empty
-        };
-
-        if library && center != Section::Library {
-            egui::Panel::left("library_panel")
-                .default_size(340.0)
-                .show(ui, |ui| self.library_ui(ui));
-        }
-        if panels.playlists && center != Section::Playlists {
-            egui::Panel::right("playlists_panel")
-                .default_size(340.0)
-                .show(ui, |ui| self.playlist_panel_ui(ui));
-        }
-        if panels.editor && center != Section::Editor {
-            egui::Panel::right("editor_panel")
-                .default_size(ui.available_width() * 0.45)
-                .show(ui, |ui| self.editor_section_ui(ui));
-        }
-
-        egui::CentralPanel::default().show(ui, |ui| match center {
-            Section::Visualizer => {
-                self.visualizer_preview_ui(ui, shared.notes.clone(), shared.view.clone());
-            }
-            Section::Editor => self.editor_section_ui(ui),
-            Section::Playlists => self.playlist_panel_ui(ui),
-            Section::Library => self.library_ui(ui),
-            Section::Empty => {
+    /// The section tabs, filling everything between the menu bar and the
+    /// controls. With every tab closed, a pointer to the View menu instead.
+    fn dock_ui(&mut self, ui: &mut egui::Ui, shared: &PlaybackShared) {
+        if self.open_sections.is_empty() {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.centered_and_justified(|ui| {
                     ui.weak(
                         "Nothing open. Use the View menu at the top to show Songs (pick something \
                          to play), Playlists, the Visualizer, and more.",
                     );
                 });
-            }
+            });
+            return;
+        }
+
+        // DockArea needs `&mut` to the layout while the tabs it draws need
+        // `&mut self` — so the layout is moved out for the duration.
+        let mut dock = std::mem::replace(&mut self.dock, DockState::new(Vec::new()));
+        self.dock_in_use = true;
+        let mut tabs = SectionTabs { app: self, shared, closed: false };
+        egui::CentralPanel::default().show(ui, |ui| {
+            DockArea::new(&mut dock)
+                .id(egui::Id::new("section_dock"))
+                .show_add_buttons(false)
+                .show_leaf_close_all_buttons(false)
+                .show_leaf_collapse_buttons(false)
+                .show_inside(ui, &mut tabs);
         });
+        let closed = tabs.closed;
+        self.dock_in_use = false;
+        self.dock = dock;
+
+        self.refresh_open_sections();
+        if closed {
+            self.save_layout();
+        }
+        for (section, open) in std::mem::take(&mut self.pending_layout) {
+            self.set_open(section, open);
+        }
     }
 
-    /// The editor as its own section: heading, plus the script picker when
-    /// the visualizer (which normally hosts it) is off.
+    /// The editor tab: plus the script picker when the visualizer (which
+    /// normally hosts it) is closed.
     fn editor_section_ui(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Script Editor");
-        if !self.config.panels.visualizer {
+        if !self.is_open(Section::Visualizer) {
             self.script_picker_ui(ui);
             if let Some(error) = self.visualizer.visualizer().error() {
                 ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
@@ -724,27 +770,13 @@ impl App {
         self.visualizer_editor_ui(ui);
     }
 
-    /// The library column: Songs over Soundfonts, either or both, split by a
-    /// draggable divider when both are on.
-    fn library_ui(&mut self, ui: &mut egui::Ui) {
-        let panels = self.config.panels;
-        if panels.songs && panels.soundfonts {
-            egui::Panel::bottom("soundfonts_subpanel")
-                .default_size(180.0)
-                .resizable(true)
-                .show(ui, |ui| self.soundfont_ui(ui));
-            egui::CentralPanel::default().show(ui, |ui| self.songs_ui(ui));
-        } else if panels.songs {
-            self.songs_ui(ui);
-        } else {
-            self.soundfont_ui(ui);
-        }
-    }
-
     fn songs_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading("Songs");
-            if ui.button("Set as default").clicked() {
+            if ui
+                .button("Set as default")
+                .on_hover_text("Open the song browser in this folder from now on")
+                .clicked()
+            {
                 let dir = self.browser.cwd().to_path_buf();
                 self.status = match self.config.set_browse_dir(dir) {
                     Ok(()) => "Default song folder updated.".to_string(),
@@ -764,7 +796,6 @@ impl App {
         mut notes: NotesSnapshot,
         playback: EngineView,
     ) {
-        ui.heading("Visualizer");
         self.script_picker_ui(ui);
 
         if let Some(path) = self.visualizer.visualizer().path() {
@@ -1025,22 +1056,17 @@ impl App {
         self.visualizer.visualizer_mut().set_source_and_save(self.editor_text.clone());
     }
 
-    /// The active script's settings widgets plus its log/error history,
-    /// hideable since most scripts register nothing and it'd just be clutter.
-    fn settings_window_ui(&mut self, ctx: &egui::Context) {
-        if !self.settings_open {
-            return;
-        }
-
+    /// The active script's settings widgets, its `debug_locals()` snapshot,
+    /// and its log/error history.
+    fn settings_ui(&mut self, ui: &mut egui::Ui) {
         let descriptors = self.visualizer.visualizer().settings();
         let mut changed: Option<(String, SettingValue)> = None;
         let mut clear_log = false;
-        let mut open = self.settings_open;
 
-        egui::Window::new("Visualizer Settings")
-            .open(&mut open)
-            .default_size([360.0, 420.0])
-            .show(ctx, |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("visualizer_settings_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
                 if descriptors.is_empty() {
                     ui.weak("This script hasn't registered any settings.");
                 } else {
@@ -1117,52 +1143,38 @@ impl App {
         if clear_log {
             self.visualizer.visualizer_mut().clear_log();
         }
-        self.settings_open = open;
     }
 
     /// The scripting-API reference: one embedded, structured page (see
     /// `lua_docs.rs`) rather than a hosted wiki — the whole API is a few
     /// dozen functions, not a sprawling product.
-    fn docs_window_ui(&mut self, ctx: &egui::Context) {
-        if !self.docs_open {
-            return;
-        }
-        let mut open = self.docs_open;
-        egui::Window::new("Scripting Reference")
-            .open(&mut open)
-            .default_size([460.0, 560.0])
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical().id_salt("docs_scroll").auto_shrink([false, false]).show(
-                    ui,
-                    |ui| {
-                        for section in lua_docs::sections() {
-                            ui.heading(section.title);
-                            for block in section.blocks {
-                                match block {
-                                    lua_docs::Block::P(text) => {
-                                        ui.label(*text);
-                                        ui.add_space(4.0);
-                                    }
-                                    lua_docs::Block::Code(code) => {
-                                        ui.code(*code);
-                                        ui.add_space(4.0);
-                                    }
-                                    lua_docs::Block::Bullets(items) => {
-                                        for item in *items {
-                                            ui.horizontal_wrapped(|ui| {
-                                                ui.label(format!("- {item}"));
-                                            });
-                                        }
-                                        ui.add_space(4.0);
-                                    }
-                                }
-                            }
-                            ui.separator();
+    fn docs_ui(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical().id_salt("docs_scroll").auto_shrink([false, false]).show(ui, |ui| {
+            for section in lua_docs::sections() {
+                ui.heading(section.title);
+                for block in section.blocks {
+                    match block {
+                        lua_docs::Block::P(text) => {
+                            ui.label(*text);
+                            ui.add_space(4.0);
                         }
-                    },
-                );
-            });
-        self.docs_open = open;
+                        lua_docs::Block::Code(code) => {
+                            ui.code(*code);
+                            ui.add_space(4.0);
+                        }
+                        lua_docs::Block::Bullets(items) => {
+                            for item in *items {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(format!("- {item}"));
+                                });
+                            }
+                            ui.add_space(4.0);
+                        }
+                    }
+                }
+                ui.separator();
+            }
+        });
     }
 }
 
@@ -1303,7 +1315,7 @@ impl eframe::App for App {
             self.set_fullscreen(&ctx, !self.fullscreen);
         }
         if toggle_visualizer {
-            self.set_visualizer_open(!self.config.panels.visualizer);
+            self.set_open(Section::Visualizer, !self.is_open(Section::Visualizer));
         }
         if next && self.now_playing.is_some() {
             self.next_track();
@@ -1326,7 +1338,7 @@ impl eframe::App for App {
         });
 
         if self.fullscreen {
-            if self.config.panels.editor {
+            if self.is_open(Section::Editor) {
                 // No room for a side panel in fullscreen (and nothing to
                 // split it from besides the visualizer) — a floating,
                 // movable/resizable window instead, so the editor stays
@@ -1339,26 +1351,99 @@ impl eframe::App for App {
                         self.visualizer_editor_ui(ui);
                     });
             }
+            // Same for the other script tabs; closing one of these windows
+            // closes (hides) its tab too.
+            for (section, size) in [(Section::Settings, [360.0, 420.0]), (Section::Reference, [460.0, 560.0])] {
+                if !self.is_open(section) {
+                    continue;
+                }
+                let mut open = true;
+                egui::Window::new(section.title())
+                    .open(&mut open)
+                    .default_size(size)
+                    .show(&ctx, |ui| match section {
+                        Section::Settings => self.settings_ui(ui),
+                        _ => self.docs_ui(ui),
+                    });
+                if !open {
+                    self.set_open(section, false);
+                }
+            }
             egui::CentralPanel::default().show(ui, |ui| {
                 self.visualizer_preview_ui(ui, shared.notes.clone(), shared.view.clone());
             });
         } else {
-            self.sections_ui(ui, &shared);
+            self.dock_ui(ui, &shared);
+            self.autosave_layout(&ctx);
         }
 
-        self.settings_window_ui(&ctx);
-        self.docs_window_ui(&ctx);
         drag_ghost_ui(&ctx);
 
         // Keep the progress slider and visualizer animating without input;
         // stay fully idle otherwise. While a playlist is playing, keep
         // polling too, so the end of a track is noticed and the next one
         // starts even with the window idle in the background.
-        if self.config.panels.visualizer {
+        if self.fullscreen || self.is_open(Section::Visualizer) {
             ctx.request_repaint_after(Duration::from_millis(16));
         } else if !view.paused && (view.has_midi || view.has_audio_file) {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
+    }
+
+    /// Last chance to save a layout change the once-a-second autosave
+    /// hasn't caught yet.
+    fn on_exit(&mut self) {
+        if serde_json::to_string(&self.dock).unwrap_or_default() != self.saved_layout_json {
+            self.save_layout();
+        }
+    }
+}
+
+/// Draws each section's tab for `DockArea`.
+struct SectionTabs<'a> {
+    app: &'a mut App,
+    shared: &'a PlaybackShared,
+    /// A tab was closed this frame, so the layout should be saved.
+    closed: bool,
+}
+
+impl TabViewer for SectionTabs<'_> {
+    type Tab = Section;
+
+    fn id(&mut self, tab: &mut Section) -> egui::Id {
+        egui::Id::new(("section_tab", *tab))
+    }
+
+    fn title(&mut self, tab: &mut Section) -> egui::WidgetText {
+        tab.title().into()
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Section) {
+        let app = &mut *self.app;
+        match tab {
+            Section::Songs => app.songs_ui(ui),
+            Section::Soundfonts => app.soundfont_ui(ui),
+            Section::Playlists => app.playlist_panel_ui(ui),
+            Section::Visualizer => {
+                app.visualizer_preview_ui(ui, self.shared.notes.clone(), self.shared.view.clone());
+            }
+            Section::Editor => app.editor_section_ui(ui),
+            Section::Settings => app.settings_ui(ui),
+            Section::Reference => app.docs_ui(ui),
+        }
+    }
+
+    /// Closing a tab just hides the section — all its state lives in `App`,
+    /// not the tab, and View brings it back.
+    fn on_close(&mut self, _tab: &mut Section) -> OnCloseResponse {
+        self.closed = true;
+        OnCloseResponse::Close
+    }
+
+    /// Every section scrolls its own content where it needs to; a second,
+    /// outer scroll area from the dock would just fight it.
+    fn scroll_bars(&self, _tab: &Section) -> [bool; 2] {
+        [false, false]
     }
 }
 

@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use directories::{ProjectDirs, UserDirs};
+use egui_dock::DockState;
 use serde::{Deserialize, Serialize};
+
+use crate::layout::Section;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -19,26 +22,11 @@ pub struct Config {
     /// the working directory.
     #[serde(default)]
     pub browse_dir: Option<PathBuf>,
-    /// Which sections are shown, toggled from the top bar. Remembered so the
-    /// app reopens the way you left it.
+    /// The dock layout — which sections are open and how they're arranged.
+    /// Remembered so the app reopens the way you left it; `None` (first
+    /// launch) means `layout::default_layout()`.
     #[serde(default)]
-    pub panels: Panels,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Panels {
-    pub songs: bool,
-    pub soundfonts: bool,
-    pub playlists: bool,
-    pub visualizer: bool,
-    pub editor: bool,
-}
-
-impl Default for Panels {
-    fn default() -> Self {
-        Self { songs: true, soundfonts: true, playlists: false, visualizer: true, editor: false }
-    }
+    pub layout: Option<DockState<Section>>,
 }
 
 impl Config {

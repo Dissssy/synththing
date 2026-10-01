@@ -11,6 +11,7 @@ mod audio;
 mod config;
 mod engine;
 mod filebrowser;
+mod layout;
 mod lua_completion;
 mod lua_docs;
 mod lua_highlight;

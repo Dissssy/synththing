@@ -63,20 +63,26 @@
       the label that follows the cursor), and that auto-advance fires
       reliably with the window in the background.
 
-[M][!] panel layout rework - DONE
-    Top bar toggles every section: Songs, Soundfonts, Playlists,
-    Visualizer, Script Editor, Script Settings, Docs. Which ones are open is
-    saved in the config and restored at launch. No more auto-hiding:
-    Soundfonts no longer hides for audio files, the editor no longer needs
-    the visualizer open (the script picker moves to the editor when the
-    visualizer is off). Songs + Soundfonts share a left column with a
-    draggable divider; playlists and the editor sit on the right; the
-    visualizer is in the middle. With the visualizer off, the next open
-    section takes the middle instead of leaving a gap; with nothing open, a
-    note points at the top bar. Playback controls are always shown.
-    Went with egui's own panels rather than a docking crate (egui_dock) -
-    sections have fixed homes, they don't drag around into tabs. If you
-    want free rearranging/tabbing later, egui_dock is the thing to add.
+[M][!] panel layout rework - DONE (egui_dock)
+    Sections (Songs, Soundfonts, Playlists, Visualizer, Script Editor,
+    Script Settings, Scripting Reference) are dockable tabs: drag them next
+    to each other, split any side, float them out into their own windows,
+    resize. Closing a tab only hides it; View menu (top menu bar) brings it
+    back. First launch opens Songs | Playlists only. The first time the
+    editor is opened each run, the reference joins it as a tab in the same
+    group (editor stays in front); Settings reappears below the visualizer.
+    The arrangement is saved to the config (on show/hide, about once a
+    second after any drag, and on exit) and restored at launch.
+    A re-shown section goes back near its usual spot without disturbing
+    the rest of a custom layout (layout.rs): next to its partner if that's
+    open (Songs above Soundfonts, Visualizer left of the Editor), else the
+    left/right edge for side sections, or carved out of the widest side
+    leaf for the middle ones. Fullscreen skips the dock entirely and just
+    shows the visualizer (plus the editor as a floating window if open).
+    Playback controls stay pinned at the bottom, outside the dock.
+    Needs your hands-on check: where re-shown tabs land, and that dragging
+    tabs and dragging songs/soundfonts into playlists don't trip each
+    other up.
 
 [L][.] auto updating system of some kind to help deploy to testers easier?
     Packaging/distribution infrastructure (versioning, update checks,
