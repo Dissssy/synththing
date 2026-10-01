@@ -5,7 +5,7 @@
 -- grow from the bottom of the window; a channel at full scale reaches row 0
 -- (the very top).
 --
--- fft_left/fft_right do the actual FFT in Rust (see spectrum.rs) — a script
+-- fft_left/fft_right do the actual FFT in Rust (see spectrum.rs), a script
 -- doing its own 1024-point FFT in interpreted Lua at 60fps would eat the
 -- entire frame budget by itself. This script only loops per display column
 -- (width iterations, not per audio sample or per FFT bin), which is cheap.

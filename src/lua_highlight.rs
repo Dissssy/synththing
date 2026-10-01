@@ -1,5 +1,5 @@
 //! Hand-rolled Lua syntax highlighting for the script editor, via
-//! `TextEdit::layouter` — egui's own hook for exactly this. Lua's lexical
+//! `TextEdit::layouter`, egui's own hook for exactly this. Lua's lexical
 //! grammar is small enough that a dedicated tokenizer crate would be more
 //! machinery than the problem needs; this one scans byte-at-a-time and
 //! never has to understand anything above the token level (no parsing, no
@@ -42,7 +42,7 @@ fn color_for(kind: Kind, visuals: &egui::Visuals) -> Color32 {
 
 /// The `TextEdit::layouter` callback: tokenizes `source` and returns a
 /// colored galley at `wrap_width`. Called every frame the editor is drawn
-/// (egui caches nothing here, so this has to stay cheap — a single linear
+/// (egui caches nothing here, so this has to stay cheap, a single linear
 /// scan plus one `HOST_API` lookup per identifier easily does).
 pub fn layout(ui: &Ui, source: &str, wrap_width: f32) -> Arc<Galley> {
     let mut job = LayoutJob::default();
@@ -128,7 +128,7 @@ fn tokenize(source: &str) -> Vec<(&str, Kind)> {
         // span rather than one per character. None of the "stop" checks
         // below ever match a UTF-8 continuation byte (they're all ASCII,
         // which continuation bytes never equal), so `i` always lands back
-        // on a char boundary when the loop exits — safe to slice.
+        // on a char boundary when the loop exits, safe to slice.
         while i < bytes.len() {
             let c = bytes[i];
             let starts_comment = c == b'-' && bytes.get(i + 1) == Some(&b'-');

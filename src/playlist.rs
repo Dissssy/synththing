@@ -126,7 +126,7 @@ impl Library {
     }
 }
 
-/// A filesystem-safe file stem for a playlist name — anything outside
+/// A filesystem-safe file stem for a playlist name, anything outside
 /// `[A-Za-z0-9 _-]` becomes `_`, so names like "a/b: c?" can't escape the
 /// playlists folder or trip Windows' reserved characters.
 fn file_stem_for(name: &str) -> String {
@@ -139,7 +139,7 @@ fn file_stem_for(name: &str) -> String {
 }
 
 /// Every file directly in `dir` (not subfolders) whose extension is in
-/// `extensions`, sorted case-insensitively by file name — the "new playlist
+/// `extensions`, sorted case-insensitively by file name, the "new playlist
 /// from current folder" contents.
 pub fn songs_in_folder(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     let Ok(read_dir) = fs::read_dir(dir) else {
@@ -284,7 +284,7 @@ pub fn index_after_remove(idx: usize, removed: usize) -> Option<usize> {
     }
 }
 
-/// Small xorshift for shuffle — not worth a `rand` dependency for picking
+/// Small xorshift for shuffle, not worth a `rand` dependency for picking
 /// the next song.
 pub struct Rng(u64);
 

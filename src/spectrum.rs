@@ -1,5 +1,5 @@
 //! Windowed-FFT spectrum analysis. Used to back the `fft_left`/`fft_right`
-//! functions exposed to visualizer scripts (see `lua_visualizer.rs`) — the
+//! functions exposed to visualizer scripts (see `lua_visualizer.rs`), the
 //! accelerated part of the "global Rust accel functions" a script can call
 //! instead of doing heavy per-sample math in interpreted Lua.
 

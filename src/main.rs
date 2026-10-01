@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-//! synththing — a small GUI MIDI player built on rustysynth + rodio + egui.
+//! synththing, a small GUI MIDI player built on rustysynth + rodio + egui.
 //!
 //! Play/pause, seek, and playback-speed control for a MIDI file, a Lua-scripted
 //! visualizer, and a hot-swappable list of soundfonts retained between runs.
@@ -49,14 +49,14 @@ fn main() -> Result<()> {
     let shared = Arc::new(Mutex::new(PlaybackShared::default()));
     let (command_tx, command_rx) = mpsc::channel();
 
-    // Audio output — a pure consumer of the ring.
+    // Audio output, a pure consumer of the ring.
     let stream = rodio::DeviceSinkBuilder::open_default_sink()
         .map_err(|e| anyhow!("could not open an audio output device: {e}"))?;
     stream
         .mixer()
         .add(SynthSource::new(ring.clone(), Arc::clone(&flush), sample_rate));
 
-    // Render thread — owns the engine, produces into the ring.
+    // Render thread, owns the engine, produces into the ring.
     let audio = AudioEngine::new(
         engine,
         tap.clone(),

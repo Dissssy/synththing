@@ -116,16 +116,16 @@
 [S][.] lua language server / vscode-like script editor - DONE for the scoped
     v1, rest intentionally parked below
     Full LSP (external lua-language-server process, JSON-RPC client) turned
-    out to be the wrong tool anyway — a generic Lua LSP has no idea about our
+    out to be the wrong tool anyway, a generic Lua LSP has no idea about our
     custom globals (clear, setting_int, playback, ...) without custom
     annotations it doesn't have. What shipped instead:
     - Syntax highlighting (lua_highlight.rs) via TextEdit::layouter, a
       hand-rolled tokenizer (keywords/strings/comments/numbers, plus our own
-      host functions colored distinctly) — no tokenizer crate needed, Lua's
+      host functions colored distinctly), no tokenizer crate needed, Lua's
       lexical grammar is small.
     - A small "internal LSP" (lua_completion.rs): a background thread per
       script-change request, discarding a result if a newer request has
-      since been made (generation counter, not real cancellation — today's
+      since been made (generation counter, not real cancellation, today's
       analysis is instant anyway, but the shape is there for when it isn't).
       Feeds a "Functions" dropdown in the editor that inserts the picked
       name at the text cursor (via TextEditState's documented cursor
@@ -147,18 +147,18 @@
       HOST_API at all right now, only our own host functions.
     - Inline error-line highlighting: mlua's compile/runtime errors already
       carry a line number (visible in the error banner text) that isn't yet
-      used to underline/mark that line in the editor — the one piece from
+      used to underline/mark that line in the editor, the one piece from
       the original three-piece plan that's still outstanding.
 
 [S][.] debug variable inspector in the Settings popup - DONE
-    Not a `lua.globals()` dump — every bundled script correctly uses `local`
+    Not a `lua.globals()` dump, every bundled script correctly uses `local`
     for its state, which globals() can't see at all (locals aren't a Lua
     *value* reachable through any table, just stack slots in a running
     frame), so that would've shown almost nothing. Went with your
     alternative instead: a `debug_locals([label])` host function a script
     calls at whatever specific point it wants a snapshot from. Reads real
     locals via the debug *C* API (lua_getstack + lua_getlocal on the calling
-    frame, through mlua's exec_raw_lua escape hatch) — a small, bounded
+    frame, through mlua's exec_raw_lua escape hatch), a small, bounded
     unsafe block, verified by a real test (not just "it compiled"). Does NOT
     grant scripts Lua's own `debug` library; StdLib::DEBUG stays excluded
     from the sandbox, this is the host using the C API on itself. Shows as a
@@ -166,13 +166,13 @@
     the log, capped in depth/breadth so a huge table (snake.lua's `occ`,
     say) can't make one call expensive. Only sees true locals/parameters,
     not module-level `local`s outside the calling function (those are
-    upvalues, a different thing) — called from inside render(), it won't
+    upvalues, a different thing), called from inside render(), it won't
     see e.g. waveform.lua's `history`, only whatever render() itself
     declares or receives as a parameter.
 
     A clickable line-number gutter (click a line to mark it, injecting
     `debug_locals()` there automatically instead of typing it) was tried and
-    reverted — a button per source line added real lag, and lining a
+    reverted, a button per source line added real lag, and lining a
     hand-rolled gutter up pixel-for-pixel with TextEdit's own line layout
     wasn't worth what it bought. Settled on documenting the function
     properly instead: it's now in lua_completion::HOST_API (autocomplete,

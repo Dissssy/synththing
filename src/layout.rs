@@ -2,7 +2,7 @@
 //! first-launch arrangement, and where a hidden section goes when it's shown
 //! again from the View menu.
 //!
-//! Every section has a home column — songs/soundfonts on the left, the
+//! Every section has a home column, songs/soundfonts on the left, the
 //! visualizer, script editor, script settings and scripting reference in the
 //! middle, playlists on the right. The
 //! user can drag tabs anywhere afterwards; homes only decide where a section
@@ -76,7 +76,7 @@ enum Column {
 /// Share of the window a side column gets when it's (re)created.
 const SIDE_SHARE: f32 = 0.25;
 
-/// First launch: song browser on the left, playlists on the right — the
+/// First launch: song browser on the left, playlists on the right, the
 /// two sections needed to start listening. Everything else is a View menu
 /// click away.
 pub fn default_layout() -> DockState<Section> {
@@ -127,8 +127,8 @@ pub fn show(dock: &mut DockState<Section>, section: Section) {
         return;
     }
 
-    // Settings below whatever it's tweaking — the visualizer, so changes are
-    // visible as they're made — else below the editor.
+    // Settings below whatever it's tweaking, the visualizer, so changes are
+    // visible as they're made, else below the editor.
     if section == Section::Settings
         && let Some((node, _)) =
             tree.find_tab(&Section::Visualizer).or_else(|| tree.find_tab(&Section::Editor))
@@ -138,7 +138,7 @@ pub fn show(dock: &mut DockState<Section>, section: Section) {
     }
 
     // Next to the other section from the same column, if it's open (on the
-    // main surface — a partner floating in its own window doesn't count).
+    // main surface, a partner floating in its own window doesn't count).
     if let Some(partner) = section.partner()
         && let Some((node, _)) = tree.find_tab(&partner)
     {
@@ -162,7 +162,7 @@ pub fn show(dock: &mut DockState<Section>, section: Section) {
     }
 }
 
-/// Add `section` as another tab in the same group as `host` — what dropping
+/// Add `section` as another tab in the same group as `host`, what dropping
 /// a tab on the middle of another one does. `focus` picks which of the two
 /// ends up the visible tab. False (nothing changed) if `host` isn't open or
 /// `section` already is.
@@ -203,7 +203,7 @@ fn show_center(tree: &mut Tree<Section>, section: Section) {
         return;
     };
     // The leaf keeps roughly a side column's share; the rest is the new
-    // middle. Rects come from the last frame drawn — before the first one,
+    // middle. Rects come from the last frame drawn, before the first one,
     // there's nothing to measure, so just halve it.
     let keep = if total_width > 0.0 && width > 0.0 {
         (SIDE_SHARE * total_width / width).clamp(0.2, 0.8)

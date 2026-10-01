@@ -3,7 +3,7 @@
 -- per sample.
 --
 -- History is kept in a fixed-size ring buffer (CAPACITY slots, a write
--- cursor, a count) rather than a growing/shrinking array — inserting or
+-- cursor, a count) rather than a growing/shrinking array, inserting or
 -- removing from the front of a plain Lua array is O(n) per call, and doing
 -- that every frame is the easiest way to blow a 60fps budget. Pushing into a
 -- ring buffer is O(1) no matter how long the visualizer has been running.
@@ -23,7 +23,7 @@ end
 
 function render(width, height, left, right)
     -- Nothing new arrives while paused (the tap only has samples that
-    -- actually played), so this loop is naturally a no-op then — the
+    -- actually played), so this loop is naturally a no-op then, the
     -- buffer just stops scrolling on its own, no pause check needed here.
     for i = 1, #left do
         push((left[i] + right[i]) * 0.5)

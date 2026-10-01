@@ -1,10 +1,10 @@
 //! Scaffolding for an embedded audio visualizer, drawn as a plain pixel
 //! buffer (the same shape a minifb window would want) and blitted into an
-//! egui texture each frame — no separate OS window, it lives inside the app.
+//! egui texture each frame, no separate OS window, it lives inside the app.
 //!
-//! Implement [`Visualizer`] on your own type — it gets `&mut self`, so it can
+//! Implement [`Visualizer`] on your own type, it gets `&mut self`, so it can
 //! keep whatever state it wants between frames (rolling history, smoothed
-//! levels, a copy of the previous frame for trails, ...) — and show it with
+//! levels, a copy of the previous frame for trails, ...), and show it with
 //! [`VisualizerPanel`]. Either way it needs a [`SampleTap`], which is also
 //! wired into the audio path (see `SynthSource::with_tap` in `engine.rs`).
 
@@ -16,7 +16,7 @@ use eframe::egui;
 use crate::engine::EngineView;
 
 /// One stereo sample: `.0` is left, `.1` is right. A plain tuple rather than a
-/// named-field struct — same layout as two adjacent `f32`s (no padding, no
+/// named-field struct, same layout as two adjacent `f32`s (no padding, no
 /// indirection), so this costs nothing over the raw interleaved form.
 pub type StereoFrame = (f32, f32);
 
@@ -33,7 +33,7 @@ pub struct SampleTap {
 }
 
 impl SampleTap {
-    /// `capacity` is in stereo frames (one `(left, right)` pair each) — e.g.
+    /// `capacity` is in stereo frames (one `(left, right)` pair each), e.g.
     /// `sample_rate` caps it at one second.
     pub fn new(capacity: usize) -> Self {
         Self {
@@ -104,15 +104,15 @@ pub struct NotesSnapshot {
 /// Implement this to draw one frame of a visualizer.
 ///
 /// * `buffer` is `width * height` pixels, row-major from the top-left, in
-///   `0x00RRGGBB` format — write it in full each call (there's no double
+///   `0x00RRGGBB` format, write it in full each call (there's no double
 ///   buffering to inherit stale pixels from).
 /// * `samples` are the `(left, right)` pairs rendered since the previous call
 ///   to `render`, oldest first. Empty when nothing new has played (paused, no
 ///   soundfont, or the render thread simply beat the audio thread to the
-///   punch this tick) — that's a normal frame, not an error.
+///   punch this tick), that's a normal frame, not an error.
 /// * `notes` is which MIDI notes are held right now plus the note-on/off
 ///   changes coming up within the engine's look-ahead window.
-/// * `playback` is transport state (position, length, paused, ...) — the same
+/// * `playback` is transport state (position, length, paused, ...), the same
 ///   thing the GUI's own transport bar reads.
 pub trait Visualizer {
     fn render(
@@ -140,7 +140,7 @@ const MAX_VISUALIZER_PIXELS: f32 = 1280.0 * 720.0;
 /// Owns a fixed-size pixel buffer, a `V`, and the egui texture that mirrors
 /// them, and draws it all as one `ui.image(...)` each time [`show`](Self::show)
 /// is called. The buffer's own resolution can be smaller than the panel it's
-/// displayed in — see [`MAX_VISUALIZER_PIXELS`].
+/// displayed in, see [`MAX_VISUALIZER_PIXELS`].
 pub struct VisualizerPanel<V> {
     visualizer: V,
     pixels: Vec<u32>,
@@ -171,7 +171,7 @@ impl<V: Visualizer> VisualizerPanel<V> {
     }
 
     /// Render one frame from whatever's been pushed to `tap` since the last
-    /// call, and draw it into `ui` — filling whatever space `ui` currently
+    /// call, and draw it into `ui`, filling whatever space `ui` currently
     /// has available, growing or shrinking the pixel buffer to match (e.g. as
     /// the visualizer panel is resized or the editor is toggled beside it).
     pub fn show(
@@ -217,7 +217,7 @@ impl<V: Visualizer> VisualizerPanel<V> {
 
         if let Some(texture) = &self.texture {
             // Explicit target size rather than the `ui.image(...)` shorthand
-            // (which draws at the texture's own native size) — the texture
+            // (which draws at the texture's own native size), the texture
             // can be smaller than `available` by design, and still needs to
             // fill it.
             ui.add(egui::Image::new((texture.id(), texture.size_vec2())).fit_to_exact_size(available));
@@ -239,7 +239,7 @@ impl<V: Visualizer> VisualizerPanel<V> {
 }
 
 /// `available` scaled down (preserving aspect ratio) so its area fits within
-/// [`MAX_VISUALIZER_PIXELS`] — a no-op (1:1 with the panel) for ordinary
+/// [`MAX_VISUALIZER_PIXELS`], a no-op (1:1 with the panel) for ordinary
 /// windowed sizes, which is already comfortably under budget.
 fn logical_buffer_size(available: egui::Vec2) -> (usize, usize) {
     let w = available.x.max(1.0);

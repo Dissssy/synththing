@@ -22,7 +22,7 @@ pub struct Config {
     /// the working directory.
     #[serde(default)]
     pub browse_dir: Option<PathBuf>,
-    /// The dock layout — which sections are open and how they're arranged.
+    /// The dock layout, which sections are open and how they're arranged.
     /// Remembered so the app reopens the way you left it; `None` (first
     /// launch) means `layout::default_layout()`.
     #[serde(default)]

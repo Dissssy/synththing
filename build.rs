@@ -2,7 +2,7 @@
 //! `DROPPED_SCRIPTS` and `UNDROPPED_SCRIPTS`, listing every `.lua` file in
 //! `assets/visualizers/dropped` and `assets/visualizers/undropped`
 //! respectively, each paired with an `include_str!` of its contents. Adding
-//! or removing a bundled script is then just a file move — nothing in
+//! or removing a bundled script is then just a file move, nothing in
 //! `src/` needs editing to pick it up.
 //!
 //! "Dropped" scripts get auto-seeded into the user's script folder on first
@@ -59,7 +59,7 @@ fn list_scripts(manifest_dir: &str, subdir: &str) -> Vec<(String, String)> {
 }
 
 /// Emits `pub static {const_name}: &[(&str, &str)] = &[("name.lua",
-/// include_str!("/abs/path/name.lua")), ...];` — `{:?}`-formatting each
+/// include_str!("/abs/path/name.lua")), ...];`, `{:?}`-formatting each
 /// string produces a properly escaped Rust string literal, backslashes in
 /// Windows paths included.
 fn write_array(out: &mut String, const_name: &str, scripts: &[(String, String)]) {

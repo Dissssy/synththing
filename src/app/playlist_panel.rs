@@ -614,9 +614,9 @@ impl App {
     }
 }
 
-/// Highlight a row while something droppable hovers it — an insertion line
+/// Highlight a row while something droppable hovers it, an insertion line
 /// above/below for songs and reordering, an outline for a soundfont onto a
-/// MIDI row — and report the drop on release.
+/// MIDI row, and report the drop on release.
 fn row_drop_ui(ui: &egui::Ui, row: &egui::Response, list: usize, idx: usize, is_midi: bool) -> Option<RowDrop> {
     if !row.contains_pointer() {
         return None;

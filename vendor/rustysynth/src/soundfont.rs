@@ -63,8 +63,8 @@ impl SoundFont {
 
         // LOCAL PATCH (synththing): upstream rejects the whole SoundFont if any
         // instrument region has out-of-range sample/loop points (see rustysynth
-        // issues #22, #33, PR #51). Plenty of real-world soundfonts — e.g. the
-        // "Ultimate Earthbound" font — trip this even though FluidSynth plays
+        // issues #22, #33, PR #51). Plenty of real-world soundfonts, e.g. the
+        // "Ultimate Earthbound" font, trip this even though FluidSynth plays
         // them fine. Instead of failing, clamp the offending regions to a safe,
         // self-consistent range so the oscillator can never index out of bounds.
         sound_font.repair_regions();

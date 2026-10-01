@@ -1,10 +1,10 @@
--- Settings API demo. Not a music visualizer — it exercises every setting
+-- Settings API demo. Not a music visualizer, it exercises every setting
 -- type the host supports and logs what it's doing, as a reference for
 -- writing your own settings-driven script. Open the Settings popup (the
 -- "Settings" button next to the script picker) to see the widgets and the
 -- log output underneath them.
 --
--- Not auto-installed like the real visualizers — create it from the "New"
+-- Not auto-installed like the real visualizers, create it from the "New"
 -- button's template list when you want to poke at it.
 
 local frame = 0
@@ -14,7 +14,7 @@ function render(width, height, left, right)
 
     -- bool / int / float / color / string: each call both declares the
     -- setting (default + range, first call only) and returns its current
-    -- live value — call it every frame, it's cheap, and a slider drag in
+    -- live value, call it every frame, it's cheap, and a slider drag in
     -- the Settings popup shows up on the very next frame.
     local enabled = setting_bool("enabled", true)
     local count = setting_int("count", 5, 0, 10)
@@ -23,7 +23,7 @@ function render(width, height, left, right)
     local label = setting_string("label", "hello")
 
     -- selection: pick up to `max_selections` of a fixed option list. Here,
-    -- at most 2 of 4 fruits — picking a 3rd evicts whichever was picked
+    -- at most 2 of 4 fruits, picking a 3rd evicts whichever was picked
     -- longest ago, so there's no "disabled checkbox" state to design around.
     local fruits = setting_selection(
         "fruits",
@@ -53,7 +53,7 @@ function render(width, height, left, right)
     local p = playback()
 
     -- log() dedupes identical consecutive messages (shown as "message (xN)")
-    -- instead of flooding the pane — safe to call every single frame.
+    -- instead of flooding the pane, safe to call every single frame.
     log(string.format(
         "label=%q count=%d gain=%.2f tint={%d,%d,%d} fruits={%s}",
         label, count, gain, tint.r, tint.g, tint.b, table.concat(fruits, ", ")

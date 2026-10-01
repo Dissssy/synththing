@@ -1,7 +1,7 @@
 //! A minimal file browser widget. Used two ways: inline as the always-visible
 //! song panel, where clicking a `.mid` plays it and marks it with a dot, and
 //! inside a modal `egui::Window` for adding a soundfont to the retained list.
-//! Both just call [`FileBrowser::ui`] — it returns `Some(path)` when a *file*
+//! Both just call [`FileBrowser::ui`], it returns `Some(path)` when a *file*
 //! row is clicked; clicking a directory navigates into it internally.
 
 use std::collections::VecDeque;
@@ -200,7 +200,7 @@ impl FileBrowser {
         let mut hidden_changed = false;
         ui.horizontal(|ui| {
             // Fixed-size widgets first, then the text edit last with
-            // `desired_width(INFINITY)` to soak up whatever's left — sizing it
+            // `desired_width(INFINITY)` to soak up whatever's left, sizing it
             // from `ui.available_width()` instead fed back into the layout
             // and made the row (and its containing panel) grow every frame.
             if ui.button("Browse...").clicked() {
@@ -315,7 +315,7 @@ fn ranked_matches(candidates: &[(String, PathBuf)], query: &str) -> Vec<Entry> {
 
 /// Case-insensitive fuzzy match. A query with spaces is split into terms
 /// (e.g. "chrono corridor") and every term must independently subsequence-match
-/// `haystack` — this catches concatenated names like "ChronoTrigger/Corridor..."
+/// `haystack`, this catches concatenated names like "ChronoTrigger/Corridor..."
 /// that contain no literal space. Returns `None` if any term fails to match,
 /// otherwise a score where higher is better.
 fn fuzzy_score(haystack: &str, needle: &str) -> Option<i32> {

@@ -1,9 +1,9 @@
 //! GUI state and layout, built on eframe/egui. Talks to the render thread
 //! (`audio.rs`) over a command channel and reads playback state back from a
-//! shared snapshot — it never touches the engine or audio directly.
+//! shared snapshot, it never touches the engine or audio directly.
 //!
 //! Layout: a menu bar on top, the playback controls always at the bottom,
-//! and the sections in between as dockable tabs (egui_dock) — drag them
+//! and the sections in between as dockable tabs (egui_dock), drag them
 //! around, split, float them out into windows. Closing a tab only hides that
 //! section; the View menu brings it back (see `layout.rs` for where).
 
@@ -42,7 +42,7 @@ const VISUALIZER_HEIGHT: usize = 320;
 
 /// Extensions the song browser lists. MIDI files drive the synth; everything
 /// else is decoded as plain audio (rodio/symphonia figure out the actual
-/// format themselves — this list is just what shows up in the picker).
+/// format themselves, this list is just what shows up in the picker).
 const SONG_EXTENSIONS: &[&str] = &["mid", "midi", "wav", "mp3", "ogg", "flac", "m4a", "aac"];
 const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 
@@ -52,7 +52,7 @@ const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 const SOUNDFONT_CACHE_SIZE: usize = 3;
 
 /// "Previous" restarts the current track instead of going back a track
-/// once it's been playing longer than this — the usual player behavior.
+/// once it's been playing longer than this, the usual player behavior.
 const PREVIOUS_RESTARTS_AFTER_SECS: f64 = 3.0;
 
 /// Drag-and-drop payload for a row dragged out of the Soundfonts list (onto
@@ -85,11 +85,11 @@ pub struct App {
     editor_text: String,
     /// Background-computed autocomplete suggestions for the editor.
     completion: CompletionWorker,
-    /// The word currently shown as "hover info" in the editor — set either
+    /// The word currently shown as "hover info" in the editor, set either
     /// by the mouse hovering a known identifier or by F1 at the text
     /// cursor's position; same display either way.
     editor_hover_info: Option<(String, String)>,
-    /// The editor has been opened at least once this run — the first time,
+    /// The editor has been opened at least once this run, the first time,
     /// the scripting reference comes along as a tab next to it.
     editor_opened_this_run: bool,
     /// Output gain, 0.0..=1.0. Mirrored on the render thread; not applied to
@@ -99,15 +99,15 @@ pub struct App {
     buffer_ms: u32,
     loop_mode: LoopMode,
     shuffle: bool,
-    /// What the engine was last told about looping the current track — see
+    /// What the engine was last told about looping the current track, see
     /// `sync_engine_loop`.
     engine_loop: bool,
     status: String,
-    /// True OS fullscreen, visualizer-only — the rest of the layout (songs,
+    /// True OS fullscreen, visualizer-only, the rest of the layout (songs,
     /// soundfonts, editor) hides and only the visualizer plus the controls
     /// bar remain.
     fullscreen: bool,
-    /// Path of the soundfont the engine currently has loaded — the selected
+    /// Path of the soundfont the engine currently has loaded, the selected
     /// one (`active_sf`), or a playlist entry's override.
     loaded_sf: Option<PathBuf>,
     /// Most recently used first.
@@ -120,7 +120,7 @@ pub struct App {
     /// from the browser.
     now_playing: Option<NowPlaying>,
     /// Becomes true once the current playlist track is seen playing (not
-    /// finished), so the "finished" that ends it advances exactly once — not
+    /// finished), so the "finished" that ends it advances exactly once, not
     /// again on a stale snapshot from before the next track loaded.
     advance_armed: bool,
     rng: Rng,
@@ -129,14 +129,14 @@ pub struct App {
     /// Delete was clicked once; the next click confirms.
     confirm_delete_playlist: bool,
     /// The section layout. Moved out into a local while `DockArea` draws it
-    /// (it needs `&mut` to both the layout and the app) — see `dock_ui`.
+    /// (it needs `&mut` to both the layout and the app), see `dock_ui`.
     dock: DockState<Section>,
     /// True while `dock` is moved out; show/hide requests made meanwhile
     /// (e.g. "Show in Songs" from inside the Playlists tab) queue up in
     /// `pending_layout` and apply right after.
     dock_in_use: bool,
     pending_layout: Vec<(Section, bool)>,
-    /// Which sections are open, refreshed after every layout change — so
+    /// Which sections are open, refreshed after every layout change, so
     /// `is_open` still answers correctly while `dock` is moved out.
     open_sections: Vec<Section>,
     /// The layout as last saved, to tell when it's changed.
@@ -296,7 +296,7 @@ impl App {
 
     // --- actions -------------------------------------------------------
 
-    /// A song picked straight from the browser — leaves any playlist.
+    /// A song picked straight from the browser, leaves any playlist.
     fn play_path(&mut self, path: PathBuf) {
         self.now_playing = None;
         self.play_song(&path, None);
@@ -305,7 +305,7 @@ impl App {
     /// Load and start `path`. MIDI gets `soundfont_override` if given,
     /// otherwise the selected soundfont (swapping back to it if an earlier
     /// playlist entry's override is still loaded). Returns whether the song
-    /// itself loaded — a soundfont problem is only reported in the status.
+    /// itself loaded, a soundfont problem is only reported in the status.
     fn play_song(&mut self, path: &Path, soundfont_override: Option<&Path>) -> bool {
         let name = nice_name(path);
         if is_midi_path(path) {
@@ -324,7 +324,7 @@ impl App {
             self.status = match sf_error {
                 Some(e) => format!("Playing {name}, but {e}"),
                 None if self.loaded_sf.is_none() => {
-                    format!("Loaded {name} — pick a soundfont to hear it.")
+                    format!("Loaded {name}, pick a soundfont to hear it.")
                 }
                 None => format!("Playing: {name}"),
             };
@@ -733,7 +733,7 @@ impl App {
         }
 
         // DockArea needs `&mut` to the layout while the tabs it draws need
-        // `&mut self` — so the layout is moved out for the duration.
+        // `&mut self`, so the layout is moved out for the duration.
         let mut dock = std::mem::replace(&mut self.dock, DockState::new(Vec::new()));
         self.dock_in_use = true;
         let mut tabs = SectionTabs { app: self, shared, closed: false };
@@ -811,7 +811,7 @@ impl App {
         self.visualizer.show(ui, &self.tap, &notes, &playback);
 
         // A script can ask to mute/unmute a channel itself (e.g. a game
-        // script silencing a dead player's channel) — same command the GUI's
+        // script silencing a dead player's channel), same command the GUI's
         // own checkboxes send, so it's subject to the same "never disable
         // the last channel" rule.
         for (channel, enabled) in self.visualizer.visualizer_mut().take_channel_requests() {
@@ -893,7 +893,7 @@ impl App {
             let mut solo: Option<u8> = None;
             let mut enable_all = false;
 
-            // At least one channel always has to stay enabled — muting the
+            // At least one channel always has to stay enabled, muting the
             // last one is never useful, just confusing silence.
             let enabled_count = notes
                 .detected_channels
@@ -943,7 +943,7 @@ impl App {
     /// The script source editor: syntax-highlighted, scrollable so a long
     /// script doesn't just keep growing the panel, with a "Functions"
     /// insert-at-cursor list and hover/F1 lookup info against the same host
-    /// API table (see `lua_completion`) — including `debug_locals()` itself
+    /// API table (see `lua_completion`), including `debug_locals()` itself
     /// now; calling it by hand, from wherever in the script you want a
     /// snapshot, is the whole interface. (An earlier version added a gutter
     /// with clickable per-line markers to inject the call automatically —
@@ -1013,7 +1013,7 @@ impl App {
                     }
                 }
 
-                // F1 at the text (writing) cursor's position — same display,
+                // F1 at the text (writing) cursor's position, same display,
                 // different trigger, for when the mouse isn't the one doing
                 // the pointing.
                 if output.response.has_focus()
@@ -1028,7 +1028,7 @@ impl App {
     }
 
     /// Splice `text` into the editor at the text cursor's last-known
-    /// position (from the previous frame — the editor widget itself hasn't
+    /// position (from the previous frame, the editor widget itself hasn't
     /// drawn yet this frame when "Functions" is above it) and leave the
     /// cursor right after the inserted text.
     fn insert_at_editor_cursor(&mut self, ctx: &egui::Context, editor_id: egui::Id, text: &str) {
@@ -1146,7 +1146,7 @@ impl App {
     }
 
     /// The scripting-API reference: one embedded, structured page (see
-    /// `lua_docs.rs`) rather than a hosted wiki — the whole API is a few
+    /// `lua_docs.rs`) rather than a hosted wiki, the whole API is a few
     /// dozen functions, not a sprawling product.
     fn docs_ui(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().id_salt("docs_scroll").auto_shrink([false, false]).show(ui, |ui| {
@@ -1249,8 +1249,8 @@ fn settings_row_ui(ui: &mut egui::Ui, d: &SettingDescriptor, changed: &mut Optio
                 }
             });
         }
-        // Descriptor/value kind mismatch can't happen — both always come
-        // from the same `SettingsStore` entry — but match exhaustively
+        // Descriptor/value kind mismatch can't happen, both always come
+        // from the same `SettingsStore` entry, but match exhaustively
         // rather than unwrap.
         _ => {
             ui.weak("(unsupported setting type)");
@@ -1264,7 +1264,7 @@ impl eframe::App for App {
         let shared = self.shared.lock().unwrap().clone();
         let view = &shared.view;
 
-        // The OS is the final authority on fullscreen state — e.g. the user
+        // The OS is the final authority on fullscreen state, e.g. the user
         // could leave it some way other than our own button/key.
         if let Some(actual) = ctx.input(|i| i.viewport().fullscreen) {
             self.fullscreen = actual;
@@ -1309,7 +1309,7 @@ impl eframe::App for App {
             });
         }
         // `send_viewport_cmd` (inside `set_fullscreen`) takes the same lock
-        // `ctx.input` holds for the duration of its closure above — calling
+        // `ctx.input` holds for the duration of its closure above, calling
         // it from in there deadlocks, so it has to happen out here instead.
         if toggle_fullscreen {
             self.set_fullscreen(&ctx, !self.fullscreen);
@@ -1328,7 +1328,7 @@ impl eframe::App for App {
         self.playlist_tick(view);
 
         // Fullscreen hides everything but the visualizer and the controls
-        // bar below it — the top bar and every other section.
+        // bar below it, the top bar and every other section.
         if !self.fullscreen {
             egui::Panel::top("top_bar").show(ui, |ui| self.top_bar_ui(ui));
         }
@@ -1340,7 +1340,7 @@ impl eframe::App for App {
         if self.fullscreen {
             if self.is_open(Section::Editor) {
                 // No room for a side panel in fullscreen (and nothing to
-                // split it from besides the visualizer) — a floating,
+                // split it from besides the visualizer), a floating,
                 // movable/resizable window instead, so the editor stays
                 // reachable without leaving fullscreen just to use it.
                 egui::Window::new("Script Editor")
@@ -1433,7 +1433,7 @@ impl TabViewer for SectionTabs<'_> {
         }
     }
 
-    /// Closing a tab just hides the section — all its state lives in `App`,
+    /// Closing a tab just hides the section, all its state lives in `App`,
     /// not the tab, and View brings it back.
     fn on_close(&mut self, _tab: &mut Section) -> OnCloseResponse {
         self.closed = true;
@@ -1448,7 +1448,7 @@ impl TabViewer for SectionTabs<'_> {
 }
 
 /// While something is being dragged, a small label following the pointer
-/// saying what — egui's drag-and-drop carries a payload but draws nothing
+/// saying what, egui's drag-and-drop carries a payload but draws nothing
 /// for it on its own.
 fn drag_ghost_ui(ctx: &egui::Context) {
     use egui::DragAndDrop;
@@ -1476,7 +1476,7 @@ fn drag_ghost_ui(ctx: &egui::Context) {
 }
 
 /// The identifier (letters/digits/underscore) touching char offset
-/// `char_index` into `source` — preferring the word starting at/after that
+/// `char_index` into `source`, preferring the word starting at/after that
 /// offset, falling back to the one ending at/before it (covers landing just
 /// past the last character of a word). `None` if neither side is an
 /// identifier character at all (whitespace, punctuation, ...).
@@ -1558,11 +1558,11 @@ fn probe_soundfont(path: &Path) -> Result<SoundFontProbe> {
 
 /// Turn a rustysynth parse failure into something actionable. The common case
 /// for "valid" soundfonts that fail here is a compressed SF3 (Ogg/FLAC sample
-/// data), which rustysynth does not support — FluidSynth does, which is why it
+/// data), which rustysynth does not support, FluidSynth does, which is why it
 /// plays elsewhere.
 fn describe_soundfont_error(base: &str, bytes: &[u8]) -> String {
     if contains_bytes(bytes, b"OggS") || contains_bytes(bytes, b"fLaC") {
-        "it's a compressed SF3 soundfont. rustysynth only plays uncompressed SF2 — \
+        "it's a compressed SF3 soundfont. rustysynth only plays uncompressed SF2, \
          convert it with Polyphone (File > Save as... > .sf2) and add that file."
             .to_string()
     } else {
@@ -1587,7 +1587,7 @@ fn load_midi(path: &Path) -> Result<Arc<MidiFile>> {
 }
 
 /// Decode a plain audio file (wav/mp3/ogg/flac/...) fully into memory up
-/// front — seeking and speed then just become arithmetic on an index, no
+/// front, seeking and speed then just become arithmetic on an index, no
 /// re-decoding needed. Mono is duplicated to stereo; anything beyond stereo
 /// keeps only its first two channels.
 fn load_audio_file(path: &Path) -> Result<Arc<DecodedAudio>> {

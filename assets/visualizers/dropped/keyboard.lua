@@ -1,7 +1,7 @@
 -- Piano keyboard visualizer.
 --
 -- Bottom strip: an 88-key keyboard (MIDI 21..108). A key fills with its
--- channel's color while it's held (active_notes()) — but only if that channel
+-- channel's color while it's held (active_notes()), but only if that channel
 -- is enabled in the GUI. Disabled channels never light up the keys.
 -- Above it: a "falling notes" lane. Upcoming note-ons (upcoming_notes())
 -- descend toward their key; a bar's length is the note's duration, found by
@@ -107,7 +107,7 @@ function render(width, height, left, right)
     local active = active_notes()
     local upcoming = upcoming_notes()
 
-    -- Which keys are held right now — enabled channels only.
+    -- Which keys are held right now, enabled channels only.
     local held = {}
     for _, note in ipairs(active) do
         if channel_enabled(note.channel) then

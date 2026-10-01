@@ -6,7 +6,7 @@
 //! * [`AudioEngine::run`] is the render-thread loop. It owns the [`Engine`],
 //!   applies [`AudioCommand`]s from the GUI, keeps the [`AudioRing`] filled to
 //!   `buffer_ms` of audio, and publishes playback state into [`PlaybackShared`].
-//! * [`SynthSource`] is what rodio pulls from — a pure ring-buffer consumer.
+//! * [`SynthSource`] is what rodio pulls from, a pure ring-buffer consumer.
 //! * The visualizer tap is fed with the *pre-volume* signal, so the volume
 //!   slider changes what you hear without changing what the visualizer sees.
 

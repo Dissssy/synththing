@@ -1,7 +1,7 @@
 //! The playback engine: either a rustysynth MIDI sequencer or a decoded plain
 //! audio file, turning commands (play/pause/seek/speed/swap soundfont/mute
 //! channel) into rendered audio. It runs entirely on the dedicated render
-//! thread (`audio.rs`) — no locking, since nothing else touches it.
+//! thread (`audio.rs`), no locking, since nothing else touches it.
 
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ pub const MAX_SPEED: f64 = 4.00;
 pub const NOTE_LOOKAHEAD_SECS: f64 = 4.0;
 
 /// A whole plain audio file (wav/mp3/ogg/flac/...), decoded up front. Seeking
-/// and speed are then just arithmetic on an index into `samples` — no
+/// and speed are then just arithmetic on an index into `samples`, no
 /// re-decoding needed.
 pub struct DecodedAudio {
     pub samples: Vec<StereoFrame>,
@@ -63,7 +63,7 @@ pub struct Engine {
     /// Channels the current MIDI uses, sorted; empty for a plain audio file.
     detected_channels: Vec<u8>,
     /// Per-channel visual enable flag (index = channel). Purely a hint for
-    /// visualizer scripts — disabled channels still play.
+    /// visualizer scripts, disabled channels still play.
     channels_enabled: [bool; 16],
     /// Restart from the top instead of finishing, when the track runs out.
     loop_enabled: bool,
@@ -119,7 +119,7 @@ impl Engine {
 
     /// Which MIDI notes the score holds down right now, plus the note-on/off
     /// changes coming within the next [`NOTE_LOOKAHEAD_SECS`] seconds. Always
-    /// empty for a plain audio file — there's no score to read.
+    /// empty for a plain audio file, there's no score to read.
     pub fn notes_snapshot(&self) -> NotesSnapshot {
         let base = NotesSnapshot {
             detected_channels: self.detected_channels.clone(),
@@ -200,7 +200,7 @@ impl Engine {
     }
 
     /// Load a plain audio file (already decoded) and start playing it from the
-    /// top. No soundfont needed — there's nothing to synthesize.
+    /// top. No soundfont needed, there's nothing to synthesize.
     pub fn load_audio_file(&mut self, data: Arc<DecodedAudio>, name: String) {
         self.midi = None;
         self.length = data.samples.len() as f64 / data.sample_rate as f64;
@@ -221,11 +221,11 @@ impl Engine {
     }
 
     /// Flip a channel's enable flag. This drives both the visualizer (through
-    /// [`notes_snapshot`](Self::notes_snapshot)) and playback — a disabled
+    /// [`notes_snapshot`](Self::notes_snapshot)) and playback, a disabled
     /// channel's note-ons are dropped and its ringing voices released. No
     /// effect while a plain audio file is loaded (it has no channels).
     ///
-    /// Refuses to disable the one remaining enabled channel — silence isn't
+    /// Refuses to disable the one remaining enabled channel, silence isn't
     /// a useful state to land in by toggling, and the GUI mirrors this by
     /// graying out that channel's checkbox.
     pub fn set_channel_enabled(&mut self, channel: u8, enabled: bool) {
@@ -372,7 +372,7 @@ impl Engine {
 }
 
 /// Linear-interpolation resample from `audio`'s native sample rate into
-/// `output_rate`, advancing the read head by `speed` extra — folding "play
+/// `output_rate`, advancing the read head by `speed` extra, folding "play
 /// faster" and "convert sample rate" into the same step (speed changes pitch,
 /// same as speeding up a tape, since there's no time-stretching here).
 ///

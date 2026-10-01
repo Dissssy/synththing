@@ -8,31 +8,31 @@
 //! the same request/background/discard-stale-result machinery real analysis
 //! will eventually need (parsing locals in scope at the cursor, listing Lua
 //! stdlib members, ...) so that becoming slower later is a change to
-//! `analyze`, not a rewrite of how the editor talks to it — see the repo
+//! `analyze`, not a rewrite of how the editor talks to it, see the repo
 //! TODO for what's deliberately not built yet.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-/// name, one-line description — the single source of truth for both the
+/// name, one-line description, the single source of truth for both the
 /// suggestion list and hover lookups, and also consulted by `lua_highlight`
 /// to color host-function calls distinctly from ordinary identifiers.
 pub const HOST_API: &[(&str, &str)] = &[
-    ("clear", "clear({r,g,b}) — fill the whole frame with a color"),
-    ("line", "line(x0,y0,x1,y1,{r,g,b,a}) — draw a line"),
-    ("rect", "rect(x0,y0,x1,y1,{r,g,b,a}) — fill an axis-aligned rectangle"),
-    ("pixel", "pixel(x,y,{r,g,b,a}) — set one pixel"),
-    ("fft_left", "fft_left(samples) -> spectrum — left channel's magnitude spectrum"),
-    ("fft_right", "fft_right(samples) -> spectrum — right channel's magnitude spectrum"),
-    ("active_notes", "active_notes() -> notes — MIDI notes held right now"),
-    ("upcoming_notes", "upcoming_notes() -> notes — note on/off changes within NOTE_LOOKAHEAD"),
-    ("midi_channels", "midi_channels() -> channels — channels the current file uses"),
-    ("channel_enabled", "channel_enabled(channel) -> bool — is this channel enabled"),
-    ("set_channel_enabled", "set_channel_enabled(channel, enabled) — mute/unmute a channel"),
+    ("clear", "clear({r,g,b}), fill the whole frame with a color"),
+    ("line", "line(x0,y0,x1,y1,{r,g,b,a}), draw a line"),
+    ("rect", "rect(x0,y0,x1,y1,{r,g,b,a}), fill an axis-aligned rectangle"),
+    ("pixel", "pixel(x,y,{r,g,b,a}), set one pixel"),
+    ("fft_left", "fft_left(samples) -> spectrum, left channel's magnitude spectrum"),
+    ("fft_right", "fft_right(samples) -> spectrum, right channel's magnitude spectrum"),
+    ("active_notes", "active_notes() -> notes, MIDI notes held right now"),
+    ("upcoming_notes", "upcoming_notes() -> notes, note on/off changes within NOTE_LOOKAHEAD"),
+    ("midi_channels", "midi_channels() -> channels, channels the current file uses"),
+    ("channel_enabled", "channel_enabled(channel) -> bool, is this channel enabled"),
+    ("set_channel_enabled", "set_channel_enabled(channel, enabled), mute/unmute a channel"),
     ("playback", "playback() -> {position,length,speed,paused,finished,loop_enabled}"),
-    ("log", "log(message) — append to this script's log (identical repeats collapse)"),
-    ("debug_locals", "debug_locals([label]) — snapshot the locals in scope right here, shown in Settings"),
+    ("log", "log(message), append to this script's log (identical repeats collapse)"),
+    ("debug_locals", "debug_locals([label]), snapshot the locals in scope right here, shown in Settings"),
     ("setting_bool", "setting_bool(key, default) -> bool"),
     ("setting_int", "setting_int(key, default, min, max) -> integer"),
     ("setting_float", "setting_float(key, default, min, max) -> number"),
@@ -42,12 +42,12 @@ pub const HOST_API: &[(&str, &str)] = &[
     ("SAMPLE_RATE", "the engine's sample rate, in Hz"),
     ("NOTE_LOOKAHEAD", "seconds upcoming_notes() looks ahead"),
     ("DT", "seconds since the previous render() call (0.0 on the first)"),
-    ("render", "render(width, height, left, right) — define this; called once per frame"),
+    ("render", "render(width, height, left, right), define this; called once per frame"),
 ];
 
 /// Hover/lookup info for a single identifier, by exact name match against
 /// [`HOST_API`]. Cheap enough (linear scan of ~20 entries) to call directly
-/// from the UI thread every frame the mouse is over the editor — no need to
+/// from the UI thread every frame the mouse is over the editor, no need to
 /// route this through [`CompletionWorker`].
 pub fn lookup(word: &str) -> Option<&'static str> {
     HOST_API.iter().find(|&&(name, _)| name == word).map(|&(_, detail)| detail)
@@ -61,7 +61,7 @@ pub struct Suggestion {
 }
 
 /// Computes suggestions off the UI thread on every [`request`](Self::request),
-/// keeping only the result of the most recent request — an in-flight one
+/// keeping only the result of the most recent request, an in-flight one
 /// that's since been superseded by a newer edit finishes but is discarded
 /// rather than overwriting a fresher result.
 pub struct CompletionWorker {
@@ -108,7 +108,7 @@ impl Default for CompletionWorker {
 
 /// Today: just the fixed host API, regardless of `source`. The parameter is
 /// already here for when this grows into real parsing (locals in scope at
-/// the cursor, Lua stdlib members, ...) — deliberately parked, see TODO.
+/// the cursor, Lua stdlib members, ...), deliberately parked, see TODO.
 fn analyze(_source: &str) -> Vec<Suggestion> {
     HOST_API
         .iter()
