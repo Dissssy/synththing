@@ -77,8 +77,12 @@
     the rest of a custom layout (layout.rs): next to its partner if that's
     open (Songs above Soundfonts, Visualizer left of the Editor), else the
     left/right edge for side sections, or carved out of the widest side
-    leaf for the middle ones. Fullscreen skips the dock entirely and just
-    shows the visualizer (plus the editor as a floating window if open).
+    leaf for the middle ones. Fullscreen is the same dock (the old
+    visualizer-only fullscreen is gone). File > Preferences has "Separate
+    layout for fullscreen" (off by default): off, fullscreen shows and
+    edits the windowed layout; on, fullscreen keeps its own (starting as
+    just the visualizer), saved separately and left untouched when the
+    option is turned off again.
     Playback controls stay pinned at the bottom, outside the dock.
     Needs your hands-on check: where re-shown tabs land, and that dragging
     tabs and dragging songs/soundfonts into playlists don't trip each

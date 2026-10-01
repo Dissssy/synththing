@@ -27,6 +27,15 @@ pub struct Config {
     /// launch) means `layout::default_layout()`.
     #[serde(default)]
     pub layout: Option<DockState<Section>>,
+    /// Preference: fullscreen keeps its own layout. Off (the default), going
+    /// fullscreen shows and edits the same layout as the window.
+    #[serde(default)]
+    pub separate_fullscreen_layout: bool,
+    /// Fullscreen's own layout, only used while `separate_fullscreen_layout`
+    /// is on. Kept when that's turned off, so turning it back on brings the
+    /// same arrangement back. `None` means `layout::fullscreen_default()`.
+    #[serde(default)]
+    pub fullscreen_layout: Option<DockState<Section>>,
 }
 
 impl Config {

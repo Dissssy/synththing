@@ -9,7 +9,7 @@
 //! *reappears*, and only relative to whatever is open at the time, so
 //! re-showing one never resets the rest of a custom arrangement.
 
-use egui_dock::{DockState, Node, NodeIndex, Tree};
+use egui_dock::{DockState, Node, NodeIndex, Surface, SurfaceIndex, Tree};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -85,6 +85,12 @@ pub fn default_layout() -> DockState<Section> {
     dock
 }
 
+/// A separate fullscreen layout's starting point: just the visualizer, which
+/// is what fullscreen showed before it became a layout of its own.
+pub fn fullscreen_default() -> DockState<Section> {
+    DockState::new(vec![Section::Visualizer])
+}
+
 /// A layout loaded from the config, cleaned up: a section appearing more
 /// than once (hand-edited config, say) keeps only its first copy.
 pub fn sanitize(mut dock: DockState<Section>) -> DockState<Section> {
@@ -97,7 +103,19 @@ pub fn sanitize(mut dock: DockState<Section>) -> DockState<Section> {
             true
         }
     });
+    ensure_main_tree(&mut dock);
     dock
+}
+
+/// egui_dock's `retain_tabs` turns a main area with no tabs left into an
+/// "empty surface" with no tree at all, and `main_surface_mut` panics on
+/// that. Put an empty tree back so there's somewhere to add tabs to.
+fn ensure_main_tree(dock: &mut DockState<Section>) {
+    if !dock.is_surface_valid(SurfaceIndex::main())
+        && let Some(surface) = dock.get_surface_mut(SurfaceIndex::main())
+    {
+        *surface = Surface::Main(Tree::new(Vec::new()));
+    }
 }
 
 pub fn is_open(dock: &DockState<Section>, section: Section) -> bool {
@@ -121,6 +139,7 @@ pub fn show(dock: &mut DockState<Section>, section: Section) {
         return;
     }
 
+    ensure_main_tree(dock);
     let tree = dock.main_surface_mut();
     if tree.num_tabs() == 0 {
         *tree = Tree::new(vec![section]);
@@ -267,6 +286,29 @@ mod tests {
         // The editor stays the visible tab of the pair.
         let leaf = dock.leaf(editor.node_path()).unwrap();
         assert_eq!(leaf.tabs()[leaf.active.0], Section::Editor);
+    }
+
+    /// A saved layout with no tabs left in the main area (all closed, or
+    /// all floated out into windows) comes back from `sanitize` with no main
+    /// tree at all, which egui_dock panics on when anything's added.
+    #[test]
+    fn showing_into_a_reloaded_layout_with_an_empty_main_area_works() {
+        let mut dock = default_layout();
+        hide(&mut dock, Section::Songs);
+        hide(&mut dock, Section::Playlists);
+        let json = serde_json::to_string(&dock).unwrap();
+        let mut dock = sanitize(serde_json::from_str(&json).unwrap());
+        show(&mut dock, Section::Visualizer);
+        assert_eq!(open(&dock), vec![Section::Visualizer]);
+        show(&mut dock, Section::Songs);
+        assert_eq!(open(&dock), vec![Section::Songs, Section::Visualizer]);
+
+        let mut floated = DockState::new(vec![Section::Songs]);
+        floated.add_window(vec![Section::Playlists]);
+        hide(&mut floated, Section::Songs);
+        let mut floated = sanitize(floated);
+        show(&mut floated, Section::Editor);
+        assert_eq!(open(&floated), vec![Section::Playlists, Section::Editor]);
     }
 
     #[test]

@@ -103,9 +103,8 @@ pub struct App {
     /// `sync_engine_loop`.
     engine_loop: bool,
     status: String,
-    /// True OS fullscreen, visualizer-only, the rest of the layout (songs,
-    /// soundfonts, editor) hides and only the visualizer plus the controls
-    /// bar remain.
+    /// True OS fullscreen. Still the docked tabs, from the windowed layout
+    /// or fullscreen's own (see `sync_layout_slot`).
     fullscreen: bool,
     /// Path of the soundfont the engine currently has loaded, the selected
     /// one (`active_sf`), or a playlist entry's override.
@@ -142,6 +141,10 @@ pub struct App {
     /// The layout as last saved, to tell when it's changed.
     saved_layout_json: String,
     last_layout_check: f64,
+    /// Whether `dock` is fullscreen's own layout (true) or the windowed one,
+    /// i.e. which config slot it's saved to. See `sync_layout_slot`.
+    dock_is_fullscreen_layout: bool,
+    preferences_open: bool,
 }
 
 impl App {
@@ -214,6 +217,8 @@ impl App {
             pending_layout: Vec::new(),
             saved_layout_json,
             last_layout_check: 0.0,
+            dock_is_fullscreen_layout: false,
+            preferences_open: false,
         }
     }
 
@@ -267,10 +272,37 @@ impl App {
     /// so it's reported but not fatal.
     fn save_layout(&mut self) {
         self.saved_layout_json = serde_json::to_string(&self.dock).unwrap_or_default();
-        self.config.layout = Some(self.dock.clone());
+        let slot = if self.dock_is_fullscreen_layout {
+            &mut self.config.fullscreen_layout
+        } else {
+            &mut self.config.layout
+        };
+        *slot = Some(self.dock.clone());
         if let Err(e) = self.config.save() {
             self.status = format!("Couldn't save layout: {e}");
         }
+    }
+
+    /// Swap in the fullscreen layout or the windowed one, if the one showing
+    /// isn't the one that should be: fullscreen's own only while fullscreen
+    /// with the separate-layout preference on, the windowed one otherwise.
+    /// The outgoing layout is saved to its own slot first, so neither ever
+    /// overwrites the other; with the preference off, the fullscreen layout
+    /// just sits untouched in the config until it's turned back on.
+    fn sync_layout_slot(&mut self) {
+        let want_fullscreen_layout = self.fullscreen && self.config.separate_fullscreen_layout;
+        if want_fullscreen_layout == self.dock_is_fullscreen_layout || self.dock_in_use {
+            return;
+        }
+        self.save_layout();
+        self.dock = if want_fullscreen_layout {
+            self.config.fullscreen_layout.clone().map(layout::sanitize).unwrap_or_else(layout::fullscreen_default)
+        } else {
+            self.config.layout.clone().map(layout::sanitize).unwrap_or_else(layout::default_layout)
+        };
+        self.dock_is_fullscreen_layout = want_fullscreen_layout;
+        self.refresh_open_sections();
+        self.save_layout();
     }
 
     /// Save the layout if it's changed (tabs dragged, dividers moved) —
@@ -286,9 +318,8 @@ impl App {
         }
     }
 
-    /// Enter or leave true OS fullscreen. Fullscreen always shows the
-    /// visualizer, open in the layout or not; the tabs just aren't drawn for
-    /// the duration, so leaving fullscreen restores the layout untouched.
+    /// Enter or leave true OS fullscreen. The layout shown is the windowed
+    /// one, or fullscreen's own if that preference is on (`sync_layout_slot`).
     fn set_fullscreen(&mut self, ctx: &egui::Context, fullscreen: bool) {
         self.fullscreen = fullscreen;
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
@@ -567,15 +598,13 @@ impl App {
                 let ctx = ui.ctx().clone();
                 self.set_fullscreen(&ctx, !self.fullscreen);
             }
-            if !self.fullscreen {
-                let visualizer = self.is_open(Section::Visualizer);
-                if ui.selectable_label(visualizer, "Visualizer").clicked() {
-                    self.set_open(Section::Visualizer, !visualizer);
-                }
-                let playlists = self.is_open(Section::Playlists);
-                if ui.selectable_label(playlists, "Playlist").clicked() {
-                    self.set_open(Section::Playlists, !playlists);
-                }
+            let visualizer = self.is_open(Section::Visualizer);
+            if ui.selectable_label(visualizer, "Visualizer").clicked() {
+                self.set_open(Section::Visualizer, !visualizer);
+            }
+            let playlists = self.is_open(Section::Playlists);
+            if ui.selectable_label(playlists, "Playlist").clicked() {
+                self.set_open(Section::Playlists, !playlists);
             }
             if ui
                 .selectable_label(self.loop_mode != LoopMode::Off, self.loop_mode.label())
@@ -694,6 +723,15 @@ impl App {
     /// be shown is switched on and off from one place.
     fn top_bar_ui(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("Preferences...").clicked() {
+                    self.preferences_open = true;
+                }
+                ui.separator();
+                if ui.button("Quit").clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
             let mut toggled = Vec::new();
             ui.menu_button("View", |ui| {
                 let mut section_checkbox = |ui: &mut egui::Ui, section: Section| {
@@ -1056,6 +1094,48 @@ impl App {
         self.visualizer.visualizer_mut().set_source_and_save(self.editor_text.clone());
     }
 
+    /// App-wide preferences, as a modal over everything else.
+    fn preferences_ui(&mut self, ctx: &egui::Context) {
+        if !self.preferences_open {
+            return;
+        }
+        let mut separate = self.config.separate_fullscreen_layout;
+        let mut close = false;
+        let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
+            ui.set_width(400.0);
+            ui.heading("Preferences");
+            ui.add_space(8.0);
+
+            ui.strong("Layout");
+            ui.checkbox(&mut separate, "Separate layout for fullscreen");
+            ui.weak(
+                "Off: fullscreen shows the same tabs as the window, and rearranging them in \
+                 either changes both. On: fullscreen remembers its own arrangement (starting \
+                 with just the visualizer). Turning this off keeps that arrangement saved for \
+                 if you turn it back on.",
+            );
+
+            ui.add_space(12.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if close || response.should_close() {
+            self.preferences_open = false;
+        }
+        if separate != self.config.separate_fullscreen_layout {
+            self.config.separate_fullscreen_layout = separate;
+            // Saves the config (with the new preference) along the way when
+            // the layout actually switches; otherwise save it directly.
+            self.sync_layout_slot();
+            if let Err(e) = self.config.save() {
+                self.status = format!("Couldn't save preferences: {e}");
+            }
+        }
+    }
+
     /// The active script's settings widgets, its `debug_locals()` snapshot,
     /// and its log/error history.
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
@@ -1273,7 +1353,7 @@ impl eframe::App for App {
         // Single-key shortcuts are suspended whenever some widget (namely the
         // song browser's search box) has keyboard focus, so typing "v" there
         // types a "v" instead of toggling the visualizer.
-        let typing = ctx.memory(|m| m.focused().is_some());
+        let typing = ctx.memory(|m| m.focused().is_some()) || self.preferences_open;
         let mut toggle_fullscreen = false;
         let mut toggle_visualizer = false;
         let mut next = false;
@@ -1327,55 +1407,18 @@ impl eframe::App for App {
         self.handle_os_file_drops(&ctx);
         self.playlist_tick(view);
 
-        // Fullscreen hides everything but the visualizer and the controls
-        // bar below it, the top bar and every other section.
-        if !self.fullscreen {
-            egui::Panel::top("top_bar").show(ui, |ui| self.top_bar_ui(ui));
-        }
+        // Which layout the dock shows depends on fullscreen (when the
+        // separate-fullscreen-layout preference is on), so settle that before
+        // drawing anything.
+        self.sync_layout_slot();
 
+        egui::Panel::top("top_bar").show(ui, |ui| self.top_bar_ui(ui));
         egui::Panel::bottom("controls_panel").show(ui, |ui| {
             self.controls_bar_ui(ui, view);
         });
-
-        if self.fullscreen {
-            if self.is_open(Section::Editor) {
-                // No room for a side panel in fullscreen (and nothing to
-                // split it from besides the visualizer), a floating,
-                // movable/resizable window instead, so the editor stays
-                // reachable without leaving fullscreen just to use it.
-                egui::Window::new("Script Editor")
-                    .default_size([520.0, 440.0])
-                    .resizable(true)
-                    .collapsible(true)
-                    .show(&ctx, |ui| {
-                        self.visualizer_editor_ui(ui);
-                    });
-            }
-            // Same for the other script tabs; closing one of these windows
-            // closes (hides) its tab too.
-            for (section, size) in [(Section::Settings, [360.0, 420.0]), (Section::Reference, [460.0, 560.0])] {
-                if !self.is_open(section) {
-                    continue;
-                }
-                let mut open = true;
-                egui::Window::new(section.title())
-                    .open(&mut open)
-                    .default_size(size)
-                    .show(&ctx, |ui| match section {
-                        Section::Settings => self.settings_ui(ui),
-                        _ => self.docs_ui(ui),
-                    });
-                if !open {
-                    self.set_open(section, false);
-                }
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                self.visualizer_preview_ui(ui, shared.notes.clone(), shared.view.clone());
-            });
-        } else {
-            self.dock_ui(ui, &shared);
-            self.autosave_layout(&ctx);
-        }
+        self.dock_ui(ui, &shared);
+        self.autosave_layout(&ctx);
+        self.preferences_ui(&ctx);
 
         drag_ghost_ui(&ctx);
 
@@ -1383,7 +1426,7 @@ impl eframe::App for App {
         // stay fully idle otherwise. While a playlist is playing, keep
         // polling too, so the end of a track is noticed and the next one
         // starts even with the window idle in the background.
-        if self.fullscreen || self.is_open(Section::Visualizer) {
+        if self.is_open(Section::Visualizer) {
             ctx.request_repaint_after(Duration::from_millis(16));
         } else if !view.paused && (view.has_midi || view.has_audio_file) {
             ctx.request_repaint_after(Duration::from_millis(200));
