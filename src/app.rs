@@ -634,23 +634,23 @@ impl App {
         }
     }
 
-    /// App name, then one toggle per section. The tool windows (Settings,
-    /// Docs) are here too, so everything that can be shown is switched on
-    /// and off from one place.
+    /// Desktop-style menu bar. View holds one checkbox per section,
+    /// including the tool windows (Settings, Docs), so everything that can
+    /// be shown is switched on and off from one place.
     fn top_bar_ui(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.strong("synththing");
-            ui.separator();
             let before = self.config.panels;
-            let panels = &mut self.config.panels;
-            ui.toggle_value(&mut panels.songs, "Songs");
-            ui.toggle_value(&mut panels.soundfonts, "Soundfonts");
-            ui.toggle_value(&mut panels.playlists, "Playlists");
-            ui.separator();
-            ui.toggle_value(&mut panels.visualizer, "Visualizer");
-            ui.toggle_value(&mut panels.editor, "Script Editor");
-            ui.toggle_value(&mut self.settings_open, "Script Settings");
-            ui.toggle_value(&mut self.docs_open, "Docs");
+            ui.menu_button("View", |ui| {
+                let panels = &mut self.config.panels;
+                ui.checkbox(&mut panels.songs, "Songs");
+                ui.checkbox(&mut panels.soundfonts, "Soundfonts");
+                ui.checkbox(&mut panels.playlists, "Playlists");
+                ui.separator();
+                ui.checkbox(&mut panels.visualizer, "Visualizer");
+                ui.checkbox(&mut panels.editor, "Script Editor");
+                ui.checkbox(&mut self.settings_open, "Script Settings");
+                ui.checkbox(&mut self.docs_open, "Scripting Reference");
+            });
             if self.config.panels != before {
                 self.save_panels();
             }
@@ -703,7 +703,7 @@ impl App {
             Section::Empty => {
                 ui.centered_and_justified(|ui| {
                     ui.weak(
-                        "Nothing open. Use the bar at the top to show Songs (pick something \
+                        "Nothing open. Use the View menu at the top to show Songs (pick something \
                          to play), Playlists, the Visualizer, and more.",
                     );
                 });
