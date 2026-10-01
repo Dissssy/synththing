@@ -333,6 +333,20 @@ impl MidiFile {
     pub fn get_length(&self) -> f64 {
         *self.times.last().unwrap()
     }
+
+    // LOCAL PATCH (synththing): the distinct MIDI channels (0-15) that carry
+    // at least one note-on, for building a per-channel toggle list.
+    pub fn note_channels(&self) -> Vec<u8> {
+        let mut seen = [false; 16];
+        for msg in &self.messages {
+            if let Message::Normal { status, data2, .. } = *msg {
+                if status & 0xF0 == 0x90 && data2 > 0 {
+                    seen[(status & 0x0F) as usize] = true;
+                }
+            }
+        }
+        (0u8..16).filter(|&c| seen[c as usize]).collect()
+    }
 }
 
 #[cfg(test)]

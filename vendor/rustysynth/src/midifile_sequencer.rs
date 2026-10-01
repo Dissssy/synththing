@@ -23,6 +23,18 @@ pub struct MidiFileSequencer {
     current_time: f64,
     msg_index: usize,
     loop_index: usize,
+
+    // LOCAL PATCH (synththing): bit N set = channel N audible. Note-ons for a
+    // muted channel are dropped in `process_events`; everything else still
+    // goes through so releases and controller state stay consistent.
+    channel_mask: u16,
+
+    // LOCAL PATCH (synththing): score-level held-note velocities, indexed by
+    // `channel * 128 + key` (0 = not held). Maintained incrementally in
+    // `process_events` so `active_notes` is O(1) instead of re-scanning the
+    // message list from the top every frame. Tracks the score regardless of
+    // `channel_mask`, so a muted channel's notes still report as active.
+    active_grid: Vec<u8>,
 }
 
 impl MidiFileSequencer {
@@ -41,6 +53,21 @@ impl MidiFileSequencer {
             current_time: 0.0,
             msg_index: 0,
             loop_index: 0,
+            channel_mask: 0xFFFF,
+            active_grid: vec![0u8; 16 * 128],
+        }
+    }
+
+    /// LOCAL PATCH (synththing): set which channels are audible (bit N set =
+    /// channel N plays). Channels newly muted have their ringing voices
+    /// released immediately. Not reset by `play`.
+    pub fn set_channel_mask(&mut self, mask: u16) {
+        let newly_muted = self.channel_mask & !mask;
+        self.channel_mask = mask;
+        for channel in 0..16 {
+            if newly_muted & (1 << channel) != 0 {
+                self.synthesizer.note_off_all_channel(channel, false);
+            }
         }
     }
 
@@ -59,6 +86,7 @@ impl MidiFileSequencer {
         self.current_time = 0.0;
         self.msg_index = 0;
         self.loop_index = 0;
+        self.active_grid.fill(0); // LOCAL PATCH (synththing)
 
         self.synthesizer.reset()
     }
@@ -127,18 +155,35 @@ impl MidiFileSequencer {
                     } => {
                         let channel = status & 0x0F;
                         let command = status & 0xF0;
-                        self.synthesizer.process_midi_message(
-                            channel as i32,
-                            command as i32,
-                            data1 as i32,
-                            data2 as i32,
-                        );
+
+                        // LOCAL PATCH (synththing): track the score's held notes
+                        // regardless of muting, so the visualizer still sees a
+                        // muted channel's notes.
+                        if command == 0x90 || command == 0x80 {
+                            let held = command == 0x90 && data2 > 0;
+                            self.active_grid[(channel as usize) * 128 + data1 as usize] =
+                                if held { data2 } else { 0 };
+                        }
+
+                        // LOCAL PATCH (synththing): swallow note-ons for a muted
+                        // channel; let note-offs, CC, program change, etc. pass.
+                        let muted = self.channel_mask & (1 << channel) == 0;
+                        let note_on = command == 0x90 && data2 > 0;
+                        if !(muted && note_on) {
+                            self.synthesizer.process_midi_message(
+                                channel as i32,
+                                command as i32,
+                                data1 as i32,
+                                data2 as i32,
+                            );
+                        }
                     }
                     Message::LoopStart if self.play_loop => self.loop_index = self.msg_index,
                     Message::LoopEnd if self.play_loop => {
                         self.current_time = midi_file.times[self.loop_index];
                         self.msg_index = self.loop_index;
                         self.synthesizer.note_off_all(false);
+                        self.active_grid.fill(0); // LOCAL PATCH (synththing)
                     }
                     _ => (),
                 }
@@ -152,6 +197,7 @@ impl MidiFileSequencer {
             self.current_time = midi_file.times[self.loop_index];
             self.msg_index = self.loop_index;
             self.synthesizer.note_off_all(false);
+            self.active_grid.fill(0); // LOCAL PATCH (synththing)
         }
     }
 
@@ -208,4 +254,94 @@ impl MidiFileSequencer {
 
         self.speed = value;
     }
+
+    // LOCAL PATCH (synththing): note inspection for visualizers. These scan
+    // the MIDI message list directly rather than the synthesizer's voices, so
+    // they report which keys the *score* has held down right now (and which
+    // change soon), not which voices are still ringing out a release tail.
+
+    /// Notes with a note-on and no matching note-off at or before the current
+    /// playback position. Empty when no MIDI file is playing.
+    pub fn active_notes(&self) -> Vec<ActiveNote> {
+        let mut out = Vec::new();
+        for channel in 0..16usize {
+            for key in 0..128usize {
+                let velocity = self.active_grid[channel * 128 + key];
+                if velocity > 0 {
+                    out.push(ActiveNote {
+                        channel: channel as i32,
+                        key: key as i32,
+                        velocity: velocity as i32,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Note-on / note-off events occurring within `window` seconds after the
+    /// current playback position, earliest first.
+    pub fn upcoming_notes(&self, window: f64) -> Vec<NoteEvent> {
+        let Some(midi_file) = self.midi_file.as_ref() else {
+            return Vec::new();
+        };
+
+        let horizon = self.current_time + window.max(0.0);
+        let mut events = Vec::new();
+        for i in self.msg_index..midi_file.messages.len() {
+            let time = midi_file.times[i];
+            if time > horizon {
+                break;
+            }
+            if time <= self.current_time {
+                continue;
+            }
+            if let Message::Normal {
+                status,
+                data1,
+                data2,
+            } = midi_file.messages[i]
+            {
+                let command = status & 0xF0;
+                if command != 0x90 && command != 0x80 {
+                    continue;
+                }
+                let velocity = data2 as i32;
+                let on = command == 0x90 && velocity > 0;
+                events.push(NoteEvent {
+                    channel: (status & 0x0F) as i32,
+                    key: data1 as i32,
+                    velocity: if on { velocity } else { 0 },
+                    on,
+                    time_until: time - self.current_time,
+                });
+            }
+        }
+
+        events
+    }
+}
+
+/// A note the sequencer's score currently holds down. See
+/// [`MidiFileSequencer::active_notes`].
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct ActiveNote {
+    pub channel: i32,
+    pub key: i32,
+    pub velocity: i32,
+}
+
+/// An upcoming note-on or note-off. See [`MidiFileSequencer::upcoming_notes`].
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct NoteEvent {
+    pub channel: i32,
+    pub key: i32,
+    /// Velocity of a note-on; `0` for a note-off.
+    pub velocity: i32,
+    /// `true` for a note-on, `false` for a note-off.
+    pub on: bool,
+    /// Seconds from the current playback position until this event.
+    pub time_until: f64,
 }
