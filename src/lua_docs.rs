@@ -97,7 +97,7 @@ pub fn sections() -> &'static [Section] {
             title: "Playback & timing",
             blocks: &[
                 Block::Code(
-                    "playback() -> {position, length, speed, paused, finished, loop_enabled}\nDT              -- seconds since the previous render() call (0.0 on the first)\nSAMPLE_RATE     -- the engine's sample rate, in Hz\nNOTE_LOOKAHEAD  -- seconds upcoming_notes() looks ahead",
+                    "playback() -> {position, length, speed, paused, finished, loop_enabled}\nDT              -- seconds since the previous render() call (0.0 on the first, at most 0.25)\nSAMPLE_RATE     -- the engine's sample rate, in Hz\nNOTE_LOOKAHEAD  -- seconds upcoming_notes() looks ahead",
                 ),
                 Block::P(
                     "Check playback().paused before writing into a scrolling history buffer, \

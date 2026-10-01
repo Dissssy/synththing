@@ -41,7 +41,7 @@ pub const HOST_API: &[(&str, &str)] = &[
     ("setting_selection", "setting_selection(key, options, defaults, max_selections) -> selected"),
     ("SAMPLE_RATE", "the engine's sample rate, in Hz"),
     ("NOTE_LOOKAHEAD", "seconds upcoming_notes() looks ahead"),
-    ("DT", "seconds since the previous render() call (0.0 on the first)"),
+    ("DT", "seconds since the previous render() call (0.0 on the first, at most 0.25)"),
     ("render", "render(width, height, left, right), define this; called once per frame"),
 ];
 

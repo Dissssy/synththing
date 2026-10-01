@@ -7,27 +7,24 @@
 //! around, split, float them out into windows. Closing a tab only hides that
 //! section; the View menu brings it back (see `layout.rs` for where).
 
+mod loading;
 mod playlist_panel;
 
-use std::fs::File;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
 use eframe::{egui, Frame};
 use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{DockArea, DockState, TabViewer};
-use rodio::Source as _;
-use rustysynth::{MidiFile, SoundFont};
 
 use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
-use crate::config::{self, nice_name, Config};
-use crate::engine::{DecodedAudio, EngineView, MAX_SPEED, MIN_SPEED};
+use crate::config::{self, nice_name, Config, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
+use crate::engine::{EngineView, MAX_SPEED, MIN_SPEED};
 use crate::filebrowser::{DraggedFile, FileBrowser};
 use crate::layout::{self, Section};
+use crate::loader::{self, Asset, AssetCache, SoundFontProbe};
 use crate::lua_completion::{self, CompletionWorker};
 use crate::lua_docs;
 use crate::lua_highlight;
@@ -35,7 +32,7 @@ use crate::lua_visualizer::{
     self, DebugVar, LogLevel, LuaVisualizer, SettingDescriptor, SettingKind, SettingValue,
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
-use crate::visualizer::{NotesSnapshot, SampleTap, StereoFrame, VisualizerPanel};
+use crate::visualizer::{NotesSnapshot, SampleTap, VisualizerPanel};
 
 const VISUALIZER_WIDTH: usize = 800;
 const VISUALIZER_HEIGHT: usize = 320;
@@ -45,11 +42,6 @@ const VISUALIZER_HEIGHT: usize = 320;
 /// format themselves, this list is just what shows up in the picker).
 const SONG_EXTENSIONS: &[&str] = &["mid", "midi", "wav", "mp3", "ogg", "flac", "m4a", "aac"];
 const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
-
-/// How many parsed soundfonts stay in memory, so switching between a
-/// playlist entry's override and the selected soundfont doesn't re-read and
-/// re-parse a (potentially huge) file on every track change.
-const SOUNDFONT_CACHE_SIZE: usize = 3;
 
 /// "Previous" restarts the current track instead of going back a track
 /// once it's been playing longer than this, the usual player behavior.
@@ -109,8 +101,30 @@ pub struct App {
     /// Path of the soundfont the engine currently has loaded, the selected
     /// one (`active_sf`), or a playlist entry's override.
     loaded_sf: Option<PathBuf>,
-    /// Most recently used first.
-    sf_cache: Vec<(PathBuf, Arc<SoundFont>)>,
+    /// Songs and soundfonts, loaded (and preloaded) in the background.
+    assets: AssetCache,
+    /// A song waiting on its file (and soundfont) to finish loading.
+    pending_play: Option<loading::PendingPlay>,
+    /// A soundfont waiting to finish loading before the engine switches to
+    /// it. `Some(idx)`: it was clicked in the list and becomes the selected
+    /// one too; `None`: just a swap for the playing song (its playlist
+    /// override changed).
+    pending_soundfont: Option<(Option<usize>, PathBuf)>,
+    /// The song the engine has (or last had) loaded.
+    current_song: Option<PathBuf>,
+    /// Playlist tracks skipped in a row for failing to load, so a playlist
+    /// of nothing but missing files stops instead of cycling forever.
+    skips_in_a_row: usize,
+    /// The playlist row the pointer is over this frame: (song, override).
+    hovered_playlist_entry: Option<(PathBuf, Option<PathBuf>)>,
+    /// The song the pointer's been resting on, and since when (egui time),
+    /// for hover preloading's dwell delay.
+    hover_since: Option<(PathBuf, f64)>,
+    /// Preferences opened while playing: playback was paused for it and
+    /// resumes when it closes.
+    paused_for_preferences: bool,
+    /// Whether the preferences modal was open last frame.
+    preferences_were_open: bool,
     playlists: Library,
     /// The playlist shown in the Playlists panel (not necessarily the one
     /// playing).
@@ -203,7 +217,15 @@ impl App {
             status,
             fullscreen: false,
             loaded_sf: None,
-            sf_cache: Vec::new(),
+            assets: AssetCache::new(),
+            pending_play: None,
+            pending_soundfont: None,
+            current_song: None,
+            skips_in_a_row: 0,
+            hovered_playlist_entry: None,
+            hover_since: None,
+            paused_for_preferences: false,
+            preferences_were_open: false,
             playlists,
             viewed_playlist,
             now_playing: None,
@@ -330,107 +352,7 @@ impl App {
     /// A song picked straight from the browser, leaves any playlist.
     fn play_path(&mut self, path: PathBuf) {
         self.now_playing = None;
-        self.play_song(&path, None);
-    }
-
-    /// Load and start `path`. MIDI gets `soundfont_override` if given,
-    /// otherwise the selected soundfont (swapping back to it if an earlier
-    /// playlist entry's override is still loaded). Returns whether the song
-    /// itself loaded, a soundfont problem is only reported in the status.
-    fn play_song(&mut self, path: &Path, soundfont_override: Option<&Path>) -> bool {
-        let name = nice_name(path);
-        if is_midi_path(path) {
-            let midi = match load_midi(path) {
-                Ok(midi) => midi,
-                Err(e) => {
-                    self.status = format!("Failed to read '{name}': {e}");
-                    return false;
-                }
-            };
-            let sf_error = match soundfont_override {
-                Some(sf) => self.load_soundfont(sf).err(),
-                None => self.restore_selected_soundfont().err(),
-            };
-            self.send(AudioCommand::LoadMidi(midi, name.clone()));
-            self.status = match sf_error {
-                Some(e) => format!("Playing {name}, but {e}"),
-                None if self.loaded_sf.is_none() => {
-                    format!("Loaded {name}, pick a soundfont to hear it.")
-                }
-                None => format!("Playing: {name}"),
-            };
-        } else {
-            match load_audio_file(path) {
-                Ok(audio) => {
-                    self.send(AudioCommand::LoadAudioFile(audio, name.clone()));
-                    self.status = format!("Playing: {name}");
-                }
-                Err(e) => {
-                    self.status = format!("Failed to read '{name}': {e}");
-                    return false;
-                }
-            }
-        }
-        self.browser.set_active(Some(path.to_path_buf()));
-        self.advance_armed = false;
-        true
-    }
-
-    /// Make the engine use the soundfont at `path`, through the small
-    /// parsed-soundfont cache. No-op if it's already the loaded one.
-    fn load_soundfont(&mut self, path: &Path) -> std::result::Result<(), String> {
-        if self.loaded_sf.as_deref() == Some(path) {
-            return Ok(());
-        }
-        let name = nice_name(path);
-        let soundfont = if let Some(pos) = self.sf_cache.iter().position(|(p, _)| p == path) {
-            let entry = self.sf_cache.remove(pos);
-            let soundfont = Arc::clone(&entry.1);
-            self.sf_cache.insert(0, entry);
-            soundfont
-        } else {
-            if !path.exists() {
-                return Err(format!("soundfont is missing: {}", path.display()));
-            }
-            let soundfont = match probe_soundfont(path) {
-                Ok(SoundFontProbe::Playable(soundfont)) => soundfont,
-                Ok(SoundFontProbe::Unplayable(reason)) => {
-                    return Err(format!("can't load '{name}': {reason}"));
-                }
-                Ok(SoundFontProbe::NotSoundFont) => {
-                    return Err(format!("'{name}' is not a SoundFont file (no RIFF/sfbk header)."));
-                }
-                Err(e) => return Err(format!("failed to read '{name}': {e}")),
-            };
-            self.sf_cache.insert(0, (path.to_path_buf(), Arc::clone(&soundfont)));
-            self.sf_cache.truncate(SOUNDFONT_CACHE_SIZE);
-            soundfont
-        };
-        self.send(AudioCommand::SetSoundFont(soundfont, name));
-        self.loaded_sf = Some(path.to_path_buf());
-        Ok(())
-    }
-
-    /// Back to the soundfont selected in the Soundfonts panel, if an
-    /// override replaced it.
-    fn restore_selected_soundfont(&mut self) -> std::result::Result<(), String> {
-        match self.active_sf.and_then(|i| self.config.soundfonts.get(i)).cloned() {
-            Some(path) => self.load_soundfont(&path),
-            None => Ok(()),
-        }
-    }
-
-    fn activate_soundfont(&mut self, idx: usize) {
-        let Some(path) = self.config.soundfonts.get(idx).cloned() else {
-            return;
-        };
-        match self.load_soundfont(&path) {
-            Ok(()) => {
-                self.active_sf = Some(idx);
-                self.status = format!("Soundfont loaded: {}", nice_name(&path));
-            }
-            Err(e) => self.status = format!("Soundfont not loaded: {e}"),
-        }
+        self.request_play(&path, None, None, false);
     }
 
     fn add_soundfont(&mut self, path: PathBuf) {
@@ -439,8 +361,13 @@ impl App {
         // Only refuse files that aren't SoundFont containers at all. A valid
         // container that this build of rustysynth can't render yet (e.g. a
         // compressed SF3) is still added to the list, with a note.
-        let note = match probe_soundfont(&path) {
-            Ok(SoundFontProbe::Playable(_)) => None,
+        let note = match loader::probe_soundfont(&path) {
+            Ok(SoundFontProbe::Playable(soundfont)) => {
+                // Already parsed it, so keep it rather than parse it again
+                // when it's picked.
+                self.assets.insert_ready(&path, Asset::SoundFont(soundfont), std::time::Instant::now());
+                None
+            }
             Ok(SoundFontProbe::Unplayable(reason)) => Some(reason),
             Ok(SoundFontProbe::NotSoundFont) => {
                 self.status = format!("'{name}' is not a SoundFont file (no RIFF/sfbk header).");
@@ -476,6 +403,7 @@ impl App {
             Ok(()) => format!("Removed soundfont: {name}"),
         };
         self.active_sf = shift_active(self.active_sf, idx);
+        self.pending_soundfont = None;
     }
 
     fn open_soundfont_browser(&mut self) {
@@ -612,6 +540,7 @@ impl App {
                 .clicked()
             {
                 self.loop_mode = self.loop_mode.cycle();
+                self.plan_upcoming();
             }
             if ui.selectable_label(self.shuffle, "Shuffle").clicked() {
                 self.shuffle = !self.shuffle;
@@ -619,6 +548,7 @@ impl App {
                 if let Some(np) = &mut self.now_playing {
                     np.history = vec![np.entry];
                 }
+                self.plan_upcoming();
             }
 
             ui.separator();
@@ -846,7 +776,7 @@ impl App {
 
         self.channels_ui(ui, &mut notes);
 
-        self.visualizer.show(ui, &self.tap, &notes, &playback);
+        self.visualizer.show(ui, &self.tap, &notes, &playback, self.preferences_open);
 
         // A script can ask to mute/unmute a channel itself (e.g. a game
         // script silencing a dead player's channel), same command the GUI's
@@ -1094,12 +1024,34 @@ impl App {
         self.visualizer.visualizer_mut().set_source_and_save(self.editor_text.clone());
     }
 
+    /// While Preferences is open, playback and the visualizer script pause;
+    /// closing it resumes playback only if it was playing beforehand.
+    fn pause_for_preferences(&mut self, view: &EngineView) {
+        if self.preferences_open && !self.preferences_were_open {
+            let playing = !view.paused && !view.finished && (view.has_midi || view.has_audio_file);
+            if playing {
+                self.send(AudioCommand::TogglePause);
+            }
+            self.paused_for_preferences = playing;
+        } else if !self.preferences_open && self.preferences_were_open {
+            if self.paused_for_preferences && view.paused {
+                self.send(AudioCommand::TogglePause);
+            }
+            self.paused_for_preferences = false;
+        }
+        self.preferences_were_open = self.preferences_open;
+    }
+
     /// App-wide preferences, as a modal over everything else.
     fn preferences_ui(&mut self, ctx: &egui::Context) {
         if !self.preferences_open {
             return;
         }
         let mut separate = self.config.separate_fullscreen_layout;
+        let mut expiry = self.config.preload_expiry_secs.unwrap_or(DEFAULT_PRELOAD_EXPIRY_SECS);
+        let mut show_experimental = self.config.show_experimental;
+        let mut hover_preload = self.config.preload_on_hover;
+        let loaded = self.assets.summary();
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
             ui.set_width(400.0);
@@ -1115,6 +1067,43 @@ impl App {
                  if you turn it back on.",
             );
 
+            ui.add_space(10.0);
+            ui.strong("Loading");
+            ui.horizontal(|ui| {
+                ui.label("Unload preloaded files after");
+                ui.add(egui::Slider::new(&mut expiry, PRELOAD_EXPIRY_RANGE).suffix(" s").logarithmic(true));
+            });
+            ui.weak(
+                "Songs and soundfonts load in the background, and the next playlist track is \
+                 loaded ahead of time. Anything loaded that nothing has needed for this long \
+                 (not playing, not up next, not hovered) is unloaded to free memory.",
+            );
+
+            ui.add_space(10.0);
+            ui.checkbox(&mut show_experimental, "Show experimental settings");
+            if show_experimental {
+                ui.add_space(4.0);
+                ui.strong("Experimental");
+                ui.checkbox(&mut hover_preload, "Preload songs on hover");
+                ui.weak(
+                    "Start loading a song once the pointer rests on it in Songs or a playlist, \
+                     so it starts sooner when clicked. Uses more memory while browsing.",
+                );
+                egui::CollapsingHeader::new(format!("Loaded right now ({})", loaded.len()))
+                    .id_salt("preferences_loaded_files")
+                    .show(ui, |ui| {
+                        if loaded.is_empty() {
+                            ui.weak("(nothing)");
+                        }
+                        egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                            for (path, kind, state) in &loaded {
+                                ui.label(format!("{} ({kind:?}, {state})", nice_name(path)))
+                                    .on_hover_text(path.display().to_string());
+                            }
+                        });
+                    });
+            }
+
             ui.add_space(12.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 if ui.button("Close").clicked() {
@@ -1124,6 +1113,24 @@ impl App {
         });
         if close || response.should_close() {
             self.preferences_open = false;
+        }
+        let mut changed = false;
+        let expiry = Some(expiry).filter(|&s| s != DEFAULT_PRELOAD_EXPIRY_SECS);
+        if expiry != self.config.preload_expiry_secs
+            || show_experimental != self.config.show_experimental
+            || hover_preload != self.config.preload_on_hover
+        {
+            self.config.preload_expiry_secs = expiry;
+            self.config.show_experimental = show_experimental;
+            self.config.preload_on_hover = hover_preload;
+            changed = true;
+        }
+        // (A layout preference change saves the config itself, below.)
+        if changed
+            && separate == self.config.separate_fullscreen_layout
+            && let Err(e) = self.config.save()
+        {
+            self.status = format!("Couldn't save preferences: {e}");
         }
         if separate != self.config.separate_fullscreen_layout {
             self.config.separate_fullscreen_layout = separate;
@@ -1404,13 +1411,20 @@ impl eframe::App for App {
             self.previous_track(view.position);
         }
 
+        self.pause_for_preferences(view);
         self.handle_os_file_drops(&ctx);
-        self.playlist_tick(view);
+        self.poll_loads();
+        if !self.preferences_open {
+            self.playlist_tick(view);
+        }
 
         // Which layout the dock shows depends on fullscreen (when the
         // separate-fullscreen-layout preference is on), so settle that before
         // drawing anything.
         self.sync_layout_slot();
+
+        self.browser.clear_hovered();
+        self.hovered_playlist_entry = None;
 
         egui::Panel::top("top_bar").show(ui, |ui| self.top_bar_ui(ui));
         egui::Panel::bottom("controls_panel").show(ui, |ui| {
@@ -1419,6 +1433,7 @@ impl eframe::App for App {
         self.dock_ui(ui, &shared);
         self.autosave_layout(&ctx);
         self.preferences_ui(&ctx);
+        self.keep_loaded(&ctx);
 
         drag_ghost_ui(&ctx);
 
@@ -1576,78 +1591,8 @@ fn fmt_time(secs: f64) -> String {
     format!("{:02}:{:02}", total / 60, total % 60)
 }
 
-enum SoundFontProbe {
-    /// rustysynth parsed it and can render with it.
-    Playable(Arc<SoundFont>),
-    /// A real SoundFont container, but this build of rustysynth can't use it.
-    Unplayable(String),
-    /// Not a RIFF/sfbk file at all.
-    NotSoundFont,
-}
-
-fn probe_soundfont(path: &Path) -> Result<SoundFontProbe> {
-    let bytes = std::fs::read(path)?;
-    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"sfbk" {
-        return Ok(SoundFontProbe::NotSoundFont);
-    }
-    match SoundFont::new(&mut bytes.as_slice()) {
-        Ok(soundfont) => Ok(SoundFontProbe::Playable(Arc::new(soundfont))),
-        Err(err) => Ok(SoundFontProbe::Unplayable(describe_soundfont_error(
-            &err.to_string(),
-            &bytes,
-        ))),
-    }
-}
-
-/// Turn a rustysynth parse failure into something actionable. The common case
-/// for "valid" soundfonts that fail here is a compressed SF3 (Ogg/FLAC sample
-/// data), which rustysynth does not support, FluidSynth does, which is why it
-/// plays elsewhere.
-fn describe_soundfont_error(base: &str, bytes: &[u8]) -> String {
-    if contains_bytes(bytes, b"OggS") || contains_bytes(bytes, b"fLaC") {
-        "it's a compressed SF3 soundfont. rustysynth only plays uncompressed SF2, \
-         convert it with Polyphone (File > Save as... > .sf2) and add that file."
-            .to_string()
-    } else {
-        format!("rustysynth rejected it ({base}).")
-    }
-}
-
-fn contains_bytes(haystack: &[u8], needle: &[u8; 4]) -> bool {
-    haystack.windows(needle.len()).any(|w| w == needle)
-}
-
 fn is_midi_path(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|ext| MIDI_EXTENSIONS.iter().any(|m| ext.eq_ignore_ascii_case(m)))
-}
-
-fn load_midi(path: &Path) -> Result<Arc<MidiFile>> {
-    let mut file = File::open(path)?;
-    let midi = MidiFile::new(&mut file).map_err(|e| anyhow!("{e}"))?;
-    Ok(Arc::new(midi))
-}
-
-/// Decode a plain audio file (wav/mp3/ogg/flac/...) fully into memory up
-/// front, seeking and speed then just become arithmetic on an index, no
-/// re-decoding needed. Mono is duplicated to stereo; anything beyond stereo
-/// keeps only its first two channels.
-fn load_audio_file(path: &Path) -> Result<Arc<DecodedAudio>> {
-    let file = BufReader::new(File::open(path)?);
-    let decoder = rodio::Decoder::new(file).map_err(|e| anyhow!("{e}"))?;
-    let channels = decoder.channels().get() as usize;
-    let sample_rate = decoder.sample_rate().get();
-
-    let raw: Vec<f32> = decoder.collect();
-    let samples: Vec<StereoFrame> = if channels <= 1 {
-        raw.into_iter().map(|s| (s, s)).collect()
-    } else {
-        raw.chunks_exact(channels).map(|f| (f[0], f[1])).collect()
-    };
-    if samples.is_empty() {
-        return Err(anyhow!("no audio data decoded"));
-    }
-
-    Ok(Arc::new(DecodedAudio { samples, sample_rate }))
 }

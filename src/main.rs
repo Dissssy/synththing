@@ -12,6 +12,7 @@ mod config;
 mod engine;
 mod filebrowser;
 mod layout;
+mod loader;
 mod lua_completion;
 mod lua_docs;
 mod lua_highlight;

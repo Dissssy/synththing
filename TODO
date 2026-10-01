@@ -49,9 +49,24 @@
     the first time.
 
     Follow-ups, not built yet:
-    - [M][!] Load songs/soundfonts off the UI thread. Decoding a long mp3
-      or parsing a big .sf2 freezes the window for a moment, now
-      noticeable at every auto-advance, not just on clicks.
+    - DONE: songs and soundfonts load off the UI thread (loader.rs, two
+      worker threads, path-keyed store). A clicked song shows
+      "Loading..." and plays when ready; a MIDI file waits for its
+      soundfont so it never starts on the wrong one. The next playlist
+      track (decided as soon as the current one starts, even shuffled)
+      and its soundfont preload in the background, as does the selected
+      soundfont. Files nothing has needed for N seconds (Preferences,
+      default 30) are unloaded, and at most 4 unneeded ones are kept
+      regardless. Experimental (Preferences > Show experimental settings):
+      preload a song after the pointer rests on it ~0.3 s in Songs or a
+      playlist, plus a list of what's loaded right now.
+      Preferences being open pauses playback (resumed on close if it was
+      playing) and freezes the visualizer script. Script DT is now capped
+      at 0.25 s so that pause, or a hidden Visualizer tab, doesn't jump
+      animations.
+      Not done: a load already running can't be cancelled, only dropped
+      when it finishes; adding a soundfont via the dialog still parses it
+      on the UI thread once (to validate it), then keeps that parse.
     - [S][.] Remember loop/shuffle mode between launches (the open panels
       are remembered already).
     - [M][.] Multi-select rows (shift/ctrl-click) to move/remove several at

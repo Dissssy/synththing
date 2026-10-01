@@ -435,6 +435,9 @@ pub struct LogEntry {
     pub count: u32,
 }
 
+/// Longest `DT` a script ever sees, in seconds (see `render`).
+const MAX_DT: f64 = 0.25;
+
 const MAX_LOG_ENTRIES: usize = 200;
 const MAX_LOG_MESSAGE_LEN: usize = 500;
 
@@ -776,9 +779,11 @@ impl Visualizer for LuaVisualizer {
         *self.playback.borrow_mut() = playback.clone();
 
         let now = Instant::now();
+        // Capped, so a stretch of not rendering at all (Visualizer tab
+        // hidden, Preferences open) reads as one slow frame, not a jump.
         let dt = self
             .last_render_instant
-            .map(|prev| now.duration_since(prev).as_secs_f64())
+            .map(|prev| now.duration_since(prev).as_secs_f64().min(MAX_DT))
             .unwrap_or(0.0);
         self.last_render_instant = Some(now);
 

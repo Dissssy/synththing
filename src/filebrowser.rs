@@ -38,6 +38,8 @@ pub struct FileBrowser {
     /// once when the query goes from empty to non-empty and re-scored on
     /// every keystroke rather than re-walking the disk each time.
     search_candidates: Option<Vec<(String, PathBuf)>>,
+    /// The file row under the pointer as of the last `ui` call.
+    hovered: Option<PathBuf>,
 }
 
 impl FileBrowser {
@@ -53,6 +55,7 @@ impl FileBrowser {
             active: None,
             search_query: String::new(),
             search_candidates: None,
+            hovered: None,
         };
         browser.refresh();
         browser
@@ -60,6 +63,17 @@ impl FileBrowser {
 
     pub fn set_active(&mut self, path: Option<PathBuf>) {
         self.active = path;
+    }
+
+    /// The file (not folder) row the pointer is over, if any.
+    pub fn hovered(&self) -> Option<&Path> {
+        self.hovered.as_deref()
+    }
+
+    /// Forget the hovered row; call once a frame before drawing, so a
+    /// browser that isn't drawn (its tab closed or hidden) reports nothing.
+    pub fn clear_hovered(&mut self) {
+        self.hovered = None;
     }
 
     /// The directory currently being listed.
@@ -234,25 +248,35 @@ impl FileBrowser {
 
         let query = self.search_query.trim().to_string();
         let mut clicked: Option<(PathBuf, bool)> = None;
+        let mut hovered: Option<PathBuf> = None;
         egui::ScrollArea::vertical()
             .id_salt(&self.title)
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 if query.is_empty() {
                     for entry in &self.entries {
-                        if row(ui, entry, self.active.as_deref()) {
+                        let response = row(ui, entry, self.active.as_deref());
+                        if response.clicked() {
                             clicked = Some((entry.path.clone(), entry.is_dir));
+                        }
+                        if response.hovered() && !entry.is_dir {
+                            hovered = Some(entry.path.clone());
                         }
                     }
                 } else if let Some(candidates) = &self.search_candidates {
                     for entry in ranked_matches(candidates, &query) {
-                        if row(ui, &entry, self.active.as_deref()) {
+                        let response = row(ui, &entry, self.active.as_deref());
+                        if response.clicked() {
                             clicked = Some((entry.path.clone(), entry.is_dir));
+                        }
+                        if response.hovered() && !entry.is_dir {
+                            hovered = Some(entry.path.clone());
                         }
                     }
                 }
             });
 
+        self.hovered = hovered;
         match clicked {
             Some((path, true)) => {
                 self.cwd = path;
@@ -271,22 +295,22 @@ impl FileBrowser {
 /// onto a playlist).
 pub struct DraggedFile(pub PathBuf);
 
-/// Draw one clickable row; returns `true` if it was clicked this frame. File
-/// rows can also be dragged out, carrying a [`DraggedFile`].
-fn row(ui: &mut egui::Ui, entry: &Entry, active: Option<&Path>) -> bool {
+/// Draw one clickable row. File rows can also be dragged out, carrying a
+/// [`DraggedFile`].
+fn row(ui: &mut egui::Ui, entry: &Entry, active: Option<&Path>) -> egui::Response {
     // Directories already carry a trailing "/" from `refresh`, so the label
     // alone distinguishes them; the active file gets egui's own highlighted
     // "selected" look rather than a marker glyph (icon fonts are a common
     // source of missing-glyph boxes, so plain text + native styling wins).
     let is_active = active == Some(entry.path.as_path());
     if entry.is_dir {
-        return ui.selectable_label(is_active, &entry.label).clicked();
+        return ui.selectable_label(is_active, &entry.label);
     }
     let response = ui.add(
         egui::Button::selectable(is_active, &entry.label).sense(egui::Sense::click_and_drag()),
     );
     response.dnd_set_drag_payload(DraggedFile(entry.path.clone()));
-    response.clicked()
+    response
 }
 
 /// Re-rank `candidates` against `query` and return the top matches as `Entry`s.

@@ -79,15 +79,13 @@ impl App {
     /// Start entry `entry` of playlist `list` as a fresh run through it
     /// (shuffle history restarts from here).
     fn play_entry(&mut self, list: usize, entry: usize) {
-        let np = NowPlaying::new(list, entry);
-        if self.start_now_playing(&np) {
-            self.now_playing = Some(np);
-        }
+        self.start_now_playing(NowPlaying::new(list, entry), false);
     }
 
-    /// Load `np`'s entry. Returns false (with the reason in the status) if
-    /// the song couldn't be loaded.
-    fn start_now_playing(&mut self, np: &NowPlaying) -> bool {
+    /// Make `np` the current playlist position and start loading its song
+    /// (it plays once loaded; see `loading.rs`). Also decides what comes
+    /// after it, so that can preload meanwhile.
+    fn start_now_playing(&mut self, np: NowPlaying, skip_on_failure: bool) {
         let Some(entry) = self
             .playlists
             .lists
@@ -95,52 +93,64 @@ impl App {
             .and_then(|l| l.playlist.entries.get(np.entry))
             .cloned()
         else {
-            return false;
+            return;
         };
-        let ok = self.play_song(&entry.path, entry.soundfont.as_deref());
-        if !ok && let Some(stored) = self.playlists.lists.get_mut(np.list) {
-            stored.playlist.entries[np.entry].missing = !entry.path.exists();
-        }
-        ok
+        self.now_playing = Some(np.clone());
+        self.plan_upcoming();
+        self.request_play(&entry.path, entry.soundfont.as_deref(), Some(np), skip_on_failure);
     }
 
-    /// Advance to the next playlist entry, per loop/shuffle mode. Entries
-    /// that fail to load are skipped (at most one pass through the list).
+    fn pick_next(&mut self, np: &NowPlaying) -> Option<usize> {
+        let len = self.playlists.lists.get(np.list).map_or(0, |l| l.playlist.entries.len());
+        let random = self.rng.next();
+        playlist::next_entry(len, np.entry, self.loop_mode, self.shuffle, &np.history, random)
+    }
+
+    /// Decide now which entry follows the current one (randomly, if
+    /// shuffling), so it can be preloaded and Next/auto-advance go exactly
+    /// there. Re-decided whenever the playlist or loop/shuffle mode changes.
+    pub(super) fn plan_upcoming(&mut self) {
+        let Some(np) = self.now_playing.clone() else {
+            return;
+        };
+        let upcoming = self.pick_next(&np);
+        if let Some(np) = &mut self.now_playing {
+            np.upcoming = upcoming;
+        }
+    }
+
+    /// Advance to the next playlist entry (the one already planned, see
+    /// `plan_upcoming`). One that fails to load is skipped, at most one pass
+    /// through the list (see `loading.rs`).
     pub(super) fn next_track(&mut self) {
         let Some(mut np) = self.now_playing.clone() else {
             return;
         };
         let len = self.playlists.lists.get(np.list).map_or(0, |l| l.playlist.entries.len());
-        for _ in 0..len.max(1) {
-            let random = self.rng.next();
-            let Some(next) =
-                playlist::next_entry(len, np.entry, self.loop_mode, self.shuffle, &np.history, random)
-            else {
-                break;
-            };
-            np.entry = next;
-            if self.shuffle {
-                if np.history.len() >= len {
-                    // Every entry's had its turn: this pick starts a new pass.
-                    np.history.clear();
-                }
-                np.history.push(next);
-            } else {
-                // History only matters for shuffle; don't let it grow
-                // forever on a looping playlist.
-                np.history = vec![next];
-            }
-            if self.start_now_playing(&np) {
-                self.now_playing = Some(np);
-                return;
-            }
-        }
-        // Ran off the end (or nothing loadable): stay on the last track,
-        // finished, rather than leaving the playlist.
-        self.now_playing = Some(np);
-        if !self.status.starts_with("Failed") {
+        let next = match np.upcoming.filter(|&u| u < len) {
+            Some(next) => Some(next),
+            None => self.pick_next(&np),
+        };
+        let Some(next) = next else {
+            // Ran off the end: stay on the last track, finished, rather than
+            // leaving the playlist.
             self.status = "End of playlist.".to_string();
+            return;
+        };
+        if self.shuffle {
+            if np.history.len() >= len {
+                // Every entry's had its turn: this pick starts a new pass.
+                np.history.clear();
+            }
+            np.history.push(next);
+        } else {
+            // History only matters for shuffle; don't let it grow forever
+            // on a looping playlist.
+            np.history = vec![next];
         }
+        np.entry = next;
+        np.upcoming = None;
+        self.start_now_playing(np, true);
     }
 
     /// "Previous": restart the track if it's been playing a little while
@@ -159,9 +169,8 @@ impl App {
                     np.history = vec![prev];
                 }
                 np.entry = prev;
-                if self.start_now_playing(&np) {
-                    self.now_playing = Some(np);
-                }
+                np.upcoming = None;
+                self.start_now_playing(np, false);
             }
             _ => self.send(AudioCommand::Seek(0.0)),
         }
@@ -220,6 +229,7 @@ impl App {
             np.entry = shift(np.entry);
             np.history.iter_mut().for_each(|h| *h = shift(*h));
         }
+        self.plan_upcoming();
         self.save_playlist(list);
     }
 
@@ -248,6 +258,7 @@ impl App {
                 }
             }
         }
+        self.plan_upcoming();
         self.save_playlist(list);
     }
 
@@ -268,6 +279,7 @@ impl App {
             np.entry = playlist::index_after_move(np.entry, from, to);
             np.history.iter_mut().for_each(|h| *h = playlist::index_after_move(*h, from, to));
         }
+        self.plan_upcoming();
         self.save_playlist(list);
     }
 
@@ -284,8 +296,16 @@ impl App {
             self.status = "Soundfont overrides only apply to MIDI files.".to_string();
             return;
         }
-        entry.soundfont = soundfont;
+        entry.soundfont = soundfont.clone();
         self.save_playlist(list);
+
+        // Changing the override of the entry that's playing right now
+        // swaps its soundfont live, same as picking one in the list does.
+        let playing_this = self.now_playing.as_ref().is_some_and(|np| np.list == list && np.entry == idx)
+            && self.pending_play.is_none();
+        if playing_this {
+            self.refresh_playing_soundfont(soundfont.as_deref());
+        }
     }
 
     /// Files dragged onto the window from the OS file manager: soundfonts
@@ -516,6 +536,7 @@ impl App {
     fn playlist_rows_ui(&mut self, ui: &mut egui::Ui, list: usize) -> (Option<RowDrop>, Option<RowAction>) {
         let mut row_drop = None;
         let mut action = None;
+        let mut hovered = None;
         let entries = &self.playlists.lists[list].playlist.entries;
         let playing = self.now_playing.as_ref().filter(|np| np.list == list).map(|np| np.entry);
         let selected_sf = self.active_sf.and_then(|i| self.config.soundfonts.get(i)).is_some();
@@ -547,6 +568,9 @@ impl App {
                                     .sense(egui::Sense::click_and_drag()),
                             )
                             .on_hover_text(entry.path.display().to_string());
+                        if response.hovered() {
+                            hovered = Some((entry.path.clone(), entry.soundfont.clone()));
+                        }
                         response.dnd_set_drag_payload(DraggedEntry {
                             list,
                             idx,
@@ -602,6 +626,7 @@ impl App {
                 }
             });
 
+        self.hovered_playlist_entry = hovered;
         (row_drop, action)
     }
 

@@ -195,11 +195,15 @@ pub struct NowPlaying {
     pub list: usize,
     pub entry: usize,
     pub history: Vec<usize>,
+    /// The entry already picked to play next (decided as soon as this one
+    /// starts, even when shuffling, so it can be preloaded). `None` when
+    /// nothing follows, or not decided yet.
+    pub upcoming: Option<usize>,
 }
 
 impl NowPlaying {
     pub fn new(list: usize, entry: usize) -> Self {
-        Self { list, entry, history: vec![entry] }
+        Self { list, entry, history: vec![entry], upcoming: None }
     }
 }
 

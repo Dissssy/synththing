@@ -36,7 +36,21 @@ pub struct Config {
     /// same arrangement back. `None` means `layout::fullscreen_default()`.
     #[serde(default)]
     pub fullscreen_layout: Option<DockState<Section>>,
+    /// Preference: preloaded files nothing has needed for this many seconds
+    /// are unloaded. `None` means `DEFAULT_PRELOAD_EXPIRY_SECS`.
+    #[serde(default)]
+    pub preload_expiry_secs: Option<u32>,
+    /// Preference: show the Experimental section in Preferences.
+    #[serde(default)]
+    pub show_experimental: bool,
+    /// Experimental preference: start loading a song when the pointer rests
+    /// on it, so clicking it plays sooner.
+    #[serde(default)]
+    pub preload_on_hover: bool,
 }
+
+pub const DEFAULT_PRELOAD_EXPIRY_SECS: u32 = 30;
+pub const PRELOAD_EXPIRY_RANGE: std::ops::RangeInclusive<u32> = 5..=300;
 
 impl Config {
     fn file_path() -> Result<PathBuf> {
@@ -51,6 +65,10 @@ impl Config {
         let data = fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
         Ok(serde_json::from_str(&data).unwrap_or_default())
+    }
+
+    pub fn preload_expiry(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.preload_expiry_secs.unwrap_or(DEFAULT_PRELOAD_EXPIRY_SECS)))
     }
 
     /// Folder the file browser should open in.

@@ -180,8 +180,14 @@ impl<V: Visualizer> VisualizerPanel<V> {
         tap: &SampleTap,
         notes: &NotesSnapshot,
         playback: &EngineView,
+        frozen: bool,
     ) {
         let available = ui.available_size();
+        // Frozen: show the last frame as-is, without running the script.
+        if frozen && let Some(texture) = &self.texture {
+            ui.add(egui::Image::new((texture.id(), texture.size_vec2())).fit_to_exact_size(available));
+            return;
+        }
         let (buf_w, buf_h) = logical_buffer_size(available);
         self.resize(buf_w, buf_h);
 
