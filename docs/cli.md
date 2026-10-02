@@ -19,12 +19,13 @@ synththing [--visualizer]
 ```
 synththing run-script <SCRIPT> [--song FILE] [--soundfont FILE] [--frames N] [--fps N]
                                [--width PX] [--height PX] [--start SECONDS] [--save-data] [--quiet]
-                               [--screenshot FILE]
+                               [--screenshot FILE] [--video FILE] [--video-size SIZE]
+                               [--video-quality QUALITY]
 ```
 
 Runs a script the way the app does, with a song playing into it, but with no window, then prints what happened. It's for catching errors in a script without opening the app and playing through the song by hand, for example in an automated check.
 
-It uses the same engine and script code as the app. Each frame it plays `1/fps` seconds of the song, then runs the script's `render()` with that audio, the current notes and the playback state, then carries out anything the script asked for (`set_paused`, `seek`, `set_channel_enabled`). `DT` is exactly `1/fps` every frame (0.0 on the first), and `TIME` counts frames, so a run is the same every time no matter how fast the machine is.
+It uses the same engine and script code as the app. Each frame it plays `1/fps` seconds of the song, then runs the script's `render()` with that audio, the current notes and the playback state, then carries out anything the script asked for (`set_paused`, `seek`, `set_channel_enabled`, notes to play). Notes the script plays (`play_note` and the like) are mixed into the audio it gets, as in the app. `DT` is exactly `1/fps` every frame (0.0 on the first), and `TIME` counts frames, so a run is the same every time no matter how fast the machine is.
 
 | Option | Default | |
 |---|---|---|
@@ -38,6 +39,9 @@ It uses the same engine and script code as the app. Each frame it plays `1/fps` 
 | `--save-data` | off | Let the script write its saved data (`store_set`) to `<script>.lua.store.json`. Off by default so test runs don't overwrite real saved data; the script still reads what's saved either way. |
 | `--quiet`, `-q` | off | Print only errors and the summary, not the script's log. |
 | `--screenshot` | none | Save the last frame as a PNG image at this path, to see what the script drew. |
+| `--video` | none | Record the run to a video at this path (`.mp4`: H.264 video, AAC sound), the same way the app records. The video is `--video-size` instead of `--width`/`--height`, at `--fps` (a whole number). It's written as fast as the script and the encoder allow, faster or slower than real time, and every frame is in it: the same run gives the same video. Needs ffmpeg, on the PATH or downloaded by the app (Preferences > Recording). |
+| `--video-size` | 1080p | The video's size: `720p`, `1080p`, `1440p` or `4k`. |
+| `--video-quality` | standard | How it's encoded: `standard` (H.264 4:2:0, plays everywhere; single-pixel colored details soften slightly), `sharp` (H.264 4:4:4, exact pixel edges; plays in desktop players, not reliably in browsers or Discord) or `lossless` (every pixel exactly; big files, for editing). |
 
 Output: each distinct error once, with the frame and song position it happened at; then the script's log (each line prefixed `log: `, repeats shown as `(xN)`), unless `--quiet`; then how long `render()` took (average and worst, real time on this machine, and whether the app would drop the script to 30 fps for averaging over 16.7 ms); then a summary line:
 
@@ -48,13 +52,15 @@ render() took 4.03 ms on average, 6.45 ms at worst (a 60 fps frame allows 16.7 m
 ran 600 frames at 60 fps, song at 10.00s of 109.92s, 1 error
 ```
 
+With `--video`, a line before the log says where it went: `saved a 10.0 s video to clip.mp4`.
+
 Exit codes:
 
 - `0`: ran cleanly.
 - `1`: the script had a compile error or runtime errors.
 - `2`: something couldn't be loaded (the script file, the song, the soundfont), or an option was invalid.
 
-Not simulated: mouse, keyboard and typed input (scripts see no pointer, no keys and no typing, and `display_mode()` is `"window"`), notes the script plays (`play_note` and the like are accepted but not heard or rendered), and the app's own UI.
+Not simulated: mouse, keyboard and typed input (scripts see no pointer, no keys and no typing, and `display_mode()` is `"window"`), and the app's own UI.
 
 ## Running from a terminal on Windows
 

@@ -216,7 +216,7 @@ playback() -> {position, length, speed, paused, finished, loop_enabled, generati
 set_paused(paused)  -- pause or resume playback
 seek(seconds)       -- jump to a position in the song
 DT                  -- seconds since the previous render() call (0.0 on the first, at most 0.25)
-TIME                -- seconds since this script started, wall clock, never capped
+TIME                -- seconds since this script started (the sum of every frame's real length, never capped)
 FRAME               -- frames rendered since this script started (1 on the first)
 SAMPLE_RATE         -- the engine's sample rate, in Hz
 NOTE_LOOKAHEAD      -- song seconds upcoming_notes() looks ahead (4.0)
@@ -290,7 +290,9 @@ Mouse state is reported while the pointer is over the visualizer (and while it h
 
 For the keyboard, see Controls (rebindable actions) and Typing (text entry) below.
 
-Three keys always belong to the app, and are never reported to a script in any mode: Escape means "get me out" (releases focus, and goes from either fullscreen straight back to windowed), F11 toggles the dedicated fullscreen, and F5 restarts the running script.
+Five keys always belong to the app, and are never reported to a script in any mode: Escape means "get me out" (releases focus, and goes from either fullscreen straight back to windowed), F11 toggles the dedicated fullscreen, F5 restarts the running script, F9 starts and stops recording, and F10 pauses recording.
+
+While the visualizer is being recorded (the Record button above it), `render()` gets the recording's size as `width` and `height` (1920 x 1080, say) whatever the panel's size, and the picture is shown letterboxed in the panel, with `mouse()` still in the picture's own pixels. It's also called once per video frame rather than once per screen refresh, with `DT` the video time that passed (1/60 s at 60 fps, more if it had to catch up), so motion in the video is perfectly even. A script that lays itself out from `width` and `height` and moves things by `DT` needs nothing special; a bigger recording size just costs more time per frame, and a script too slow for it makes the video repeat frames.
 
 `display_mode()` tells a script where it's being shown: `"window"` (a tab in the normal window), `"fullscreen"` (a tab, with the whole app fullscreen), or `"dedicated"` (the Fullscreen visualizer button or F11: nothing but the visualizer, filling the screen, with focus).
 
@@ -495,7 +497,7 @@ if score > best then store_set("best", score) end
 synththing run-script my_script.lua --song song.mid --frames 1800
 ```
 
-Runs a script with no window, playing the song into it, and prints its errors (with the frame and song position each happened at), its log and a summary; the exit code is 0 if it ran cleanly and 1 if it had errors. Add `--screenshot frame.png` to save the last frame as an image and see what it drew. `DT` is exactly 1/60 per frame and `TIME` counts frames, so runs are repeatable, and saved data isn't written unless you add `--save-data`. Mouse and keyboard input isn't simulated. All the options are in `docs/cli.md` in the repository, or `synththing run-script --help`.
+Runs a script with no window, playing the song into it, and prints its errors (with the frame and song position each happened at), its log and a summary; the exit code is 0 if it ran cleanly and 1 if it had errors. Add `--screenshot frame.png` to save the last frame as an image and see what it drew, or `--video clip.mp4` to record the whole run as a video with its sound (every frame, at 1080p unless `--video-size` says otherwise). `DT` is exactly 1/60 per frame and `TIME` counts frames, so runs are repeatable, and saved data isn't written unless you add `--save-data`. Mouse and keyboard input isn't simulated. All the options are in `docs/cli.md` in the repository, or `synththing run-script --help`.
 
 ## Performance
 

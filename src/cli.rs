@@ -86,6 +86,21 @@ pub struct RunScriptArgs {
     /// Save the last frame as a PNG image (to see what the script drew).
     #[arg(long, value_name = "FILE")]
     pub screenshot: Option<std::path::PathBuf>,
+
+    /// Record the run to a video (.mp4) with its sound, at --video-size
+    /// (instead of --width and --height) and --fps. Needs ffmpeg: on the
+    /// PATH, or downloaded by the app (record once from the app).
+    #[arg(long, value_name = "FILE")]
+    pub video: Option<std::path::PathBuf>,
+
+    /// The video's size: 720p, 1080p, 1440p or 4k.
+    #[arg(long, value_name = "SIZE", default_value = "1080p")]
+    pub video_size: String,
+
+    /// The video's encoding: standard (plays everywhere), sharp (4:4:4,
+    /// exact pixel edges) or lossless.
+    #[arg(long, value_name = "QUALITY", default_value = "standard")]
+    pub video_quality: String,
 }
 
 /// If launched with arguments from a terminal, attach to it so output and

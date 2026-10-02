@@ -1021,8 +1021,8 @@ struct Compiled {
     typing: Rc<RefCell<TypingSpan>>,
     /// Frames rendered since this script started (`FRAME`).
     frame: Cell<u64>,
-    /// When it rendered its first frame (`TIME` counts from here).
-    started: Cell<Option<Instant>>,
+    /// `TIME`: seconds since its first frame, as of the last render.
+    time: Cell<f64>,
 }
 
 impl Drop for Compiled {
@@ -1379,10 +1379,13 @@ impl Visualizer for LuaVisualizer {
         // hidden, Preferences open) reads as one slow frame, not a jump.
         // With a fixed timestep (headless runs), every frame is exactly
         // that long instead.
-        let dt = match (self.last_render_instant, self.fixed_timestep) {
-            (None, _) => 0.0,
-            (Some(_), Some(step)) => step,
-            (Some(prev), None) => now.duration_since(prev).as_secs_f64().min(MAX_DT),
+        let (dt, advance) = match (self.last_render_instant, self.fixed_timestep) {
+            (None, _) => (0.0, 0.0),
+            (Some(_), Some(step)) => (step, step),
+            (Some(prev), None) => {
+                let real = now.duration_since(prev).as_secs_f64();
+                (real.min(MAX_DT), real)
+            }
         };
         self.last_render_instant = Some(now);
 
@@ -1391,12 +1394,11 @@ impl Visualizer for LuaVisualizer {
         };
         let _ = compiled.lua.globals().set("DT", dt);
         compiled.frame.set(compiled.frame.get() + 1);
-        let started = compiled.started.get().unwrap_or(now);
-        compiled.started.set(Some(started));
-        let time = match self.fixed_timestep {
-            Some(step) => (compiled.frame.get() - 1) as f64 * step,
-            None => now.duration_since(started).as_secs_f64(),
-        };
+        // TIME adds up each frame's length (real, uncapped; or the fixed
+        // step), so it stays continuous when the timestep switches (a
+        // recording starting or stopping).
+        let time = if compiled.frame.get() == 1 { 0.0 } else { compiled.time.get() + advance };
+        compiled.time.set(time);
         let _ = compiled.lua.globals().set("FRAME", compiled.frame.get());
         let _ = compiled.lua.globals().set("TIME", time);
 
@@ -1535,7 +1537,7 @@ fn compile(
         controls,
         typing,
         frame: Cell::new(0),
-        started: Cell::new(None),
+        time: Cell::new(0.0),
     })
 }
 

@@ -9,6 +9,7 @@
 
 mod loading;
 mod playlist_panel;
+mod recording;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -233,6 +234,11 @@ pub struct App {
     /// i.e. which config slot it's saved to. See `sync_layout_slot`.
     dock_is_fullscreen_layout: bool,
     preferences_open: bool,
+    sample_rate: u32,
+    /// Recording the visualizer to video (see `app/recording.rs`).
+    recording: recording::Recording,
+    /// The last recording saved, for "Show last recording".
+    last_recording: Option<PathBuf>,
 }
 
 impl App {
@@ -339,6 +345,9 @@ impl App {
             last_layout_check: 0.0,
             dock_is_fullscreen_layout: false,
             preferences_open: false,
+            sample_rate,
+            recording: recording::Recording::new(),
+            last_recording: None,
         }
     }
 
@@ -1280,6 +1289,7 @@ impl App {
             || self.rename.is_some()
             || self.credits_open
             || self.song_info_open.is_some()
+            || self.recording.prompt_open
     }
 
     /// Pick up files added, removed or changed on disk in the folders on
@@ -1426,6 +1436,7 @@ impl App {
                 let ctx = ui.ctx().clone();
                 self.enter_dedicated(&ctx);
             }
+            self.recording_buttons_ui(ui, &playback);
             if let Some(path) = self.visualizer.visualizer().path() {
                 ui.weak(path.display().to_string());
             }
@@ -1442,7 +1453,11 @@ impl App {
     /// Draw (and run) the visualizer into the rest of `ui`, and pass on
     /// whatever it asked for.
     fn show_visualizer(&mut self, ui: &mut egui::Ui, notes: &NotesSnapshot, playback: &EngineView, mode: DisplayMode) {
-        self.visualizer_output = self.visualizer.show(ui, &self.tap, notes, playback, self.preferences_open, mode);
+        let fixed_size = self.recording.frame_size();
+        let hold = self.pace_recording();
+        self.visualizer_output =
+            self.visualizer.show(ui, &self.tap, notes, playback, self.preferences_open, mode, fixed_size, hold);
+        self.feed_recording(ui);
         self.visualizer_drawn = true;
 
         // A script can ask to mute/unmute a channel itself (e.g. a game
@@ -1889,6 +1904,9 @@ impl App {
             );
 
             ui.add_space(10.0);
+            self.recording_preferences_ui(ui);
+
+            ui.add_space(10.0);
             ui.checkbox(&mut show_experimental, "Show experimental settings");
             if show_experimental {
                 ui.add_space(4.0);
@@ -2301,13 +2319,21 @@ impl eframe::App for App {
         // Not while a modal is up: Escape closes the modal instead.
         if !self.any_modal_open() {
             let in_fullscreen = self.fullscreen || self.dedicated.is_some();
-            let (escape, f11, f5) = ctx.input_mut(|i| {
+            let (escape, f11, f5, f9, f10) = ctx.input_mut(|i| {
                 (
                     in_fullscreen && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
                     i.consume_key(egui::Modifiers::NONE, egui::Key::F11),
                     i.consume_key(egui::Modifiers::NONE, egui::Key::F5),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::F9),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::F10),
                 )
             });
+            if f9 {
+                self.toggle_recording();
+            }
+            if f10 {
+                self.toggle_recording_pause();
+            }
             if escape {
                 self.dedicated = None;
                 self.set_fullscreen(&ctx, false);
@@ -2412,6 +2438,10 @@ impl eframe::App for App {
             self.credits_ui(&ctx);
             self.song_info_ui(&ctx);
         }
+        // Outside the layout: F9 can ask for ffmpeg from the dedicated
+        // fullscreen too.
+        self.ffmpeg_prompt_ui(&ctx);
+        self.poll_recordings(view);
         if self.status != self.logged_status {
             log::info!(target: "synththing::status", "{}", self.status);
             self.logged_status = self.status.clone();
@@ -2442,6 +2472,13 @@ impl eframe::App for App {
     /// Last chance to save a layout change the once-a-second autosave
     /// hasn't caught yet.
     fn on_exit(&mut self) {
+        // Don't lose a recording to closing the app: write it out first.
+        if let Some(recorder) = self.recording.recorder.take()
+            && let Err(e) = recorder.finish_now()
+        {
+            log::warn!("recording lost on exit: {e:#}");
+        }
+        self.recording.wait_for_saves();
         if serde_json::to_string(&self.dock).unwrap_or_default() != self.saved_layout_json {
             self.save_layout();
         }

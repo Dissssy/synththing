@@ -61,6 +61,16 @@ pub struct Config {
     pub loop_mode: LoopMode,
     #[serde(default)]
     pub shuffle: bool,
+    /// Recording size and frame rate (`None`: the default, 60).
+    #[serde(default)]
+    pub record_resolution: crate::recorder::Resolution,
+    #[serde(default)]
+    pub record_fps: Option<u32>,
+    #[serde(default)]
+    pub record_quality: crate::recorder::Quality,
+    /// Where recordings are saved; `None` means Videos\synththing.
+    #[serde(default)]
+    pub record_dir: Option<PathBuf>,
 }
 
 pub const DEFAULT_PRELOAD_EXPIRY_SECS: u32 = 30;
@@ -83,6 +93,11 @@ impl Config {
 
     pub fn preload_expiry(&self) -> std::time::Duration {
         std::time::Duration::from_secs(u64::from(self.preload_expiry_secs.unwrap_or(DEFAULT_PRELOAD_EXPIRY_SECS)))
+    }
+
+    /// Where recordings are saved.
+    pub fn recordings_dir(&self) -> PathBuf {
+        self.record_dir.clone().unwrap_or_else(default_recordings_dir)
     }
 
     /// Folder the file browser should open in.
@@ -132,6 +147,18 @@ pub fn config_dir() -> Result<PathBuf> {
     let dirs = ProjectDirs::from("", "", "synththing")
         .context("could not determine a config directory for this platform")?;
     Ok(dirs.config_dir().to_path_buf())
+}
+
+/// Where recordings go when nothing's chosen: Videos\synththing, or under
+/// the home folder.
+pub fn default_recordings_dir() -> PathBuf {
+    let dirs = UserDirs::new();
+    let base = dirs
+        .as_ref()
+        .and_then(|d| d.video_dir().map(Path::to_path_buf))
+        .or_else(|| dirs.as_ref().map(|d| d.home_dir().to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("synththing")
 }
 
 /// Where saved playlists live, one JSON file each.

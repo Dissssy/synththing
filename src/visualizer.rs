@@ -130,6 +130,16 @@ impl SampleTap {
         frames
     }
 
+    /// How many frames `drain` would hand out right now.
+    pub fn ready_frames(&self) -> usize {
+        let buf = self.inner.lock().unwrap();
+        let heard = |queue: &VecDeque<StereoFrame>, backlog: &Option<Backlog>| {
+            queue.len().saturating_sub(backlog.as_ref().map_or(0, Backlog::unheard_frames))
+        };
+        let song = heard(&buf.song, &buf.song_backlog);
+        if buf.song_running { song } else { song.max(heard(&buf.live, &buf.live_backlog)) }
+    }
+
     /// Throw away the song's buffered audio (a seek, a pause, a new song).
     /// Live audio is kept: the live synth carries on regardless.
     pub fn clear_song(&self) {
@@ -201,7 +211,8 @@ impl DisplayMode {
 /// Keys the app always keeps for itself, never reported to a script:
 /// Escape (back to windowed), F5 (restart the script), F11 (toggle the
 /// dedicated visualizer fullscreen).
-pub const RESERVED_KEYS: [egui::Key; 3] = [egui::Key::Escape, egui::Key::F5, egui::Key::F11];
+pub const RESERVED_KEYS: [egui::Key; 5] =
+    [egui::Key::Escape, egui::Key::F5, egui::Key::F9, egui::Key::F10, egui::Key::F11];
 
 /// Mouse buttons a script can ask about, in `VisualizerInput`'s array order.
 pub const MOUSE_BUTTONS: [egui::PointerButton; 3] =
@@ -257,10 +268,22 @@ pub struct CursorRequest {
 }
 
 /// What `VisualizerPanel::show` reports back to the app.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct ShowOutput {
     pub focused: bool,
     pub cursor: CursorRequest,
+    /// The script drew a new frame this time (not frozen, not a frame
+    /// skipped at a reduced frame rate).
+    pub rendered: bool,
+    /// Where the picture is on screen (smaller than the panel when a fixed
+    /// size is letterboxed into it).
+    pub image_rect: egui::Rect,
+}
+
+impl Default for ShowOutput {
+    fn default() -> Self {
+        Self { focused: false, cursor: CursorRequest::default(), rendered: false, image_rect: egui::Rect::NOTHING }
+    }
 }
 
 /// Implement this to draw one frame of a visualizer.
@@ -353,6 +376,8 @@ pub struct VisualizerPanel<V> {
     /// Input from frames that weren't rendered (reduced frame rate), saved
     /// up for the next one that is.
     pending_input: Option<VisualizerInput>,
+    /// The audio the last rendered frame was given (for recording).
+    last_samples: Vec<StereoFrame>,
 }
 
 impl<V: Visualizer> VisualizerPanel<V> {
@@ -366,7 +391,15 @@ impl<V: Visualizer> VisualizerPanel<V> {
             texture: None,
             focus_requested: false,
             pending_input: None,
+            last_samples: Vec::new(),
         }
+    }
+
+    /// For recording: the audio the last rendered frame was given, and its
+    /// pixels (`0x00RRGGBB`). A recorder may swap the pixel buffer out for
+    /// another of the same size; the next frame redraws it in full anyway.
+    pub fn recording_parts(&mut self) -> (&[StereoFrame], &mut Vec<u32>) {
+        (&self.last_samples, &mut self.pixels)
     }
 
     /// Give the visualizer keyboard focus the next time it's shown.
@@ -386,6 +419,11 @@ impl<V: Visualizer> VisualizerPanel<V> {
     /// call, and draw it into `ui`, filling whatever space `ui` currently
     /// has available, growing or shrinking the pixel buffer to match (e.g. as
     /// the visualizer panel is resized or the editor is toggled beside it).
+    /// With `fixed_size` (recording), the buffer is exactly that size
+    /// instead, shown as large as fits with black bars around it. `hold`:
+    /// don't render this time, show the last frame again (a recording
+    /// renders exactly when a video frame is due).
+    #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -394,10 +432,19 @@ impl<V: Visualizer> VisualizerPanel<V> {
         playback: &EngineView,
         frozen: bool,
         mode: DisplayMode,
+        fixed_size: Option<(usize, usize)>,
+        hold: bool,
     ) -> ShowOutput {
         let available = ui.available_size();
-        let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
+        let (panel_rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
         let ctx = ui.ctx().clone();
+        let rect = match fixed_size {
+            Some((w, h)) => {
+                ui.painter().rect_filled(panel_rect, 0.0, egui::Color32::BLACK);
+                letterbox(panel_rect, w as f32 / h.max(1) as f32)
+            }
+            None => panel_rect,
+        };
 
         // Keyboard focus: clicking in takes it, clicking elsewhere or Escape
         // (egui's own default) gives it up. While focused, Tab and the arrow
@@ -423,16 +470,17 @@ impl<V: Visualizer> VisualizerPanel<V> {
         // Frozen: show the last frame as-is, without running the script.
         if frozen && let Some(texture) = &self.texture {
             ui.painter().image(texture.id(), rect, uv, egui::Color32::WHITE);
-            return ShowOutput { focused, cursor: CursorRequest::default() };
+            return ShowOutput { focused, cursor: CursorRequest::default(), rendered: false, image_rect: rect };
         }
 
-        let (buf_w, buf_h) = logical_buffer_size(available);
+        let (buf_w, buf_h) = fixed_size.unwrap_or_else(|| logical_buffer_size(available));
         self.resize(buf_w, buf_h);
         let mut input = gather_input(&ctx, &response, rect, (self.width, self.height), focused, mode);
 
-        // Reduced frame rate: show the last frame again, and keep this
-        // frame's input (the audio waits in the tap) for the next render.
-        if !self.visualizer.ready_for_frame()
+        // Reduced frame rate (or held for a recording): show the last frame
+        // again, and keep this frame's input (the audio waits in the tap)
+        // for the next render.
+        if (hold || !self.visualizer.ready_for_frame())
             && let Some(texture) = &self.texture
         {
             match &mut self.pending_input {
@@ -440,19 +488,19 @@ impl<V: Visualizer> VisualizerPanel<V> {
                 None => self.pending_input = Some(input),
             }
             ui.painter().image(texture.id(), rect, uv, egui::Color32::WHITE);
-            return ShowOutput { focused, cursor: self.visualizer.cursor_request() };
+            return ShowOutput { focused, cursor: self.visualizer.cursor_request(), rendered: false, image_rect: rect };
         }
         if let Some(mut pending) = self.pending_input.take() {
             pending.absorb(input);
             input = pending;
         }
 
-        let samples = tap.drain();
+        self.last_samples = tap.drain();
         self.visualizer.render(
             &mut self.pixels,
             self.width,
             self.height,
-            &samples,
+            &self.last_samples,
             notes,
             playback,
             &input,
@@ -471,8 +519,12 @@ impl<V: Visualizer> VisualizerPanel<V> {
         let image = egui::ColorImage::from_rgba_unmultiplied([self.width, self.height], &self.rgba);
         // Nearest, not linear: when the buffer is downscaled from the panel
         // size, this is what keeps the upscale crisp/pixel-art rather than
-        // blurry, and it's a no-op cost-wise when buffer == panel size.
-        let options = egui::TextureOptions::NEAREST;
+        // blurry, and it's a no-op cost-wise when buffer == panel size. A
+        // buffer bigger than its spot on screen (recording at a fixed size
+        // into a small panel) is shrunk smoothly instead.
+        let on_screen = rect.width() * ctx.pixels_per_point();
+        let options =
+            if self.width as f32 > on_screen { egui::TextureOptions::LINEAR } else { egui::TextureOptions::NEAREST };
         match &mut self.texture {
             Some(texture) => texture.set(image, options),
             None => self.texture = Some(ctx.load_texture("visualizer", image, options)),
@@ -487,7 +539,7 @@ impl<V: Visualizer> VisualizerPanel<V> {
         if cursor.hidden && input.pointer.is_some() {
             ctx.set_cursor_icon(egui::CursorIcon::None);
         }
-        ShowOutput { focused, cursor }
+        ShowOutput { focused, cursor, rendered: true, image_rect: rect }
     }
 
     fn resize(&mut self, width: usize, height: usize) {
@@ -516,7 +568,8 @@ fn gather_input(
 ) -> VisualizerInput {
     let scale_x = buffer.0 as f32 / rect.width().max(1.0);
     let scale_y = buffer.1 as f32 / rect.height().max(1.0);
-    let hovered = response.contains_pointer();
+    // Over the picture itself, not the black bars around a letterboxed one.
+    let hovered = response.contains_pointer() && ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| rect.contains(p));
     ctx.input(|i| {
         let mut input = VisualizerInput { mode, focused, ..Default::default() };
         if hovered && let Some(pos) = i.pointer.hover_pos() {
@@ -562,6 +615,14 @@ fn gather_input(
 /// `available` scaled down (preserving aspect ratio) so its area fits within
 /// [`MAX_VISUALIZER_PIXELS`], a no-op (1:1 with the panel) for ordinary
 /// windowed sizes, which is already comfortably under budget.
+/// The largest rect of aspect ratio `aspect` (width / height) that fits in
+/// `outer`, centered.
+fn letterbox(outer: egui::Rect, aspect: f32) -> egui::Rect {
+    let (w, h) = (outer.width(), outer.height());
+    let size = if w / h.max(1.0) > aspect { egui::vec2(h * aspect, h) } else { egui::vec2(w, w / aspect) };
+    egui::Rect::from_center_size(outer.center(), size)
+}
+
 fn logical_buffer_size(available: egui::Vec2) -> (usize, usize) {
     let w = available.x.max(1.0);
     let h = available.y.max(1.0);

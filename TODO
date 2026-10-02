@@ -419,4 +419,32 @@ Smaller:
     publishes the one being heard. Script notes stay current. Also fixed:
     a flush is done by the render thread under the ring lock, so audio
     rendered right after a seek is no longer thrown away by the consumer.
-    Not counted: the OS/device's own output latency.
+    Not counted: the OS/device's own output latency.
+
+[L][!] recording the visualizer to video - DONE
+    recorder.rs: raw frames piped to ffmpeg (libx264 veryfast crf 18,
+    temp .mkv) on a writer thread, audio to a temp float WAV, muxed to
+    .mp4 (AAC) on Stop. Video frames are counted off the audio, so they
+    can't drift; silence keeps time while nothing plays; repeats instead
+    of stalling when the encoder lags (live), waits for it (run-script);
+    frames handed over by swapping buffers. While recording, the script
+    renders exactly when a video frame is due, with DT = the video time
+    passed (even motion). Quality: standard (4:2:0, tune animation, crf
+    16, BT.709 tagged), sharp (4:4:4), lossless (RGB); warning past 1080p
+    and "frames repeating" on the REC badge. The panel renders at the recording size (letterboxed on
+    screen, mouse mapped). ffmpeg.rs: the downloaded copy in the config
+    folder or one on the PATH; on Windows, offers gyan.dev's release
+    essentials (SHA-256 checked, only ffmpeg.exe kept). Record menu: this
+    song from the start (stops at its end or when it starts over), this
+    playlist from the start (stops after the last track), or free; F9/F10.
+    Preferences > Recording: size (720p-4K), 30/60 fps, folder
+    (Videos\synththing). run-script --video renders offline with the
+    same recorder. Ideas: render a song to video from the app (offline,
+    frame-perfect, any speed), scripts knowing they're being recorded.
+
+[L][.] shared script library (long term)
+    A place to share scripts (they're sandboxed: the worst a script can do
+    is spam notes or mute channels). Maybe `synththing serve` as a web
+    server (needs a Linux build) that renders each upload with a default
+    song through run-script --video's path: a 5 s preview to play in the
+    app and a thumbnail from the most striking frame of it.

@@ -85,7 +85,7 @@ impl App {
 
     /// Start entry `entry` of playlist `list` as a fresh run through it
     /// (shuffle history restarts from here).
-    fn play_entry(&mut self, list: usize, entry: usize) {
+    pub(super) fn play_entry(&mut self, list: usize, entry: usize) {
         self.start_now_playing(NowPlaying::new(list, entry), false);
     }
 

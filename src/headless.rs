@@ -3,7 +3,8 @@
 //! script code the app uses, driven frame by frame: render `1/fps` seconds
 //! of audio, hand it to the script with the current notes and playback
 //! state, apply anything the script asked for (pause, seek, channel
-//! toggles), repeat.
+//! toggles, notes to play), repeat. With `--video`, every frame and its
+//! audio also go to a `Recorder`, the same one the app records with.
 //!
 //! Exit codes: 0 ran cleanly, 1 the script had errors, 2 something
 //! couldn't be loaded.
@@ -15,6 +16,7 @@ use crate::config::{nice_name, Config};
 use crate::engine::Engine;
 use crate::loader::{self, SoundFontProbe};
 use crate::lua_visualizer::{LuaVisualizer, PlaybackRequest};
+use crate::recorder::{Format, Quality, Recorder, Resolution};
 use crate::visualizer::{DisplayMode, StereoFrame, Visualizer, VisualizerInput};
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -38,6 +40,29 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
     if args.width == 0 || args.height == 0 {
         return Err("--width and --height must be at least 1".into());
     }
+    // A video sets the size; the frame rate has to be a whole number.
+    let (width, height) = match &args.video {
+        Some(_) => Resolution::parse(&args.video_size)
+            .ok_or_else(|| format!("--video-size {} isn't one of 720p, 1080p, 1440p, 4k", args.video_size))?
+            .size(),
+        None => (args.width, args.height),
+    };
+    let mut recorder = match &args.video {
+        Some(path) => {
+            if args.fps.fract() != 0.0 || args.fps > 240.0 {
+                return Err("--fps must be a whole number (up to 240) for --video".into());
+            }
+            let ffmpeg = crate::ffmpeg::find()
+                .ok_or("--video needs ffmpeg: put it on the PATH, or record once in the app to download it")?;
+            let quality = Quality::parse(&args.video_quality).ok_or_else(|| {
+                format!("--video-quality {} isn't one of standard, sharp, lossless", args.video_quality)
+            })?;
+            let format = Format { width, height, fps: args.fps as u32, quality };
+            let recorder = Recorder::start(&ffmpeg, format, SAMPLE_RATE, path.clone()).map_err(|e| format!("{e:#}"))?;
+            Some(recorder.wait_for_encoder())
+        }
+        None => None,
+    };
     let source = std::fs::read_to_string(&args.script)
         .map_err(|e| format!("couldn't read {}: {e}", args.script.display()))?;
 
@@ -63,16 +88,37 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
 
     let samples_per_frame = (f64::from(SAMPLE_RATE) / args.fps).round().max(1.0) as usize;
     let mut audio = vec![0.0f32; samples_per_frame * 2];
-    let mut pixels = vec![0u32; args.width * args.height];
+    let mut live = vec![0.0f32; samples_per_frame * 2];
+    let mut pixels = vec![0u32; width * height];
     let input = VisualizerInput { mode: DisplayMode::Window, ..Default::default() };
 
     for frame in 1..=args.frames {
         engine.render_into(&mut audio);
+        // Notes the script plays, mixed in as the app's output does.
+        if engine.live_busy() {
+            engine.render_live(&mut live);
+            for (sample, extra) in audio.iter_mut().zip(&live) {
+                *sample += extra;
+            }
+        }
         // chunks_exact(2) rather than as_chunks::<2>(), like the rest of the code.
         #[allow(clippy::chunks_exact_to_as_chunks)]
         let samples: Vec<StereoFrame> = audio.chunks_exact(2).map(|s| (s[0], s[1])).collect();
         let view = engine.view();
-        visualizer.render(&mut pixels, args.width, args.height, &samples, &engine.notes_snapshot(), &view, &input);
+        let mut notes = engine.notes_snapshot();
+        notes.active.extend(engine.live_notes());
+        visualizer.render(&mut pixels, width, height, &samples, &notes, &view, &input);
+
+        if frame == args.frames
+            && let Some(path) = &args.screenshot
+        {
+            std::fs::write(path, crate::png::encode_rgb(&pixels, width, height))
+                .map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
+            println!("saved the last frame to {}", path.display());
+        }
+        if let Some(recording) = &mut recorder {
+            recording.feed(1.0 / args.fps, &samples, Some(&mut pixels)).map_err(|e| format!("{e:#}"))?;
+        }
 
         if let Some(error) = visualizer.error()
             && last_error.as_deref() != Some(error)
@@ -99,10 +145,11 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
         }
     }
 
-    if let Some(path) = &args.screenshot {
-        std::fs::write(path, crate::png::encode_rgb(&pixels, args.width, args.height))
-            .map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
-        println!("saved the last frame to {}", path.display());
+    if let Some(recording) = recorder {
+        let output = recording.output().to_path_buf();
+        let seconds = recording.seconds();
+        recording.finish_now().map_err(|e| format!("{e:#}"))?;
+        println!("saved a {seconds:.1} s video to {}", output.display());
     }
     if !args.quiet {
         for entry in visualizer.log_entries() {

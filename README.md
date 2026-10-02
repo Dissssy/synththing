@@ -5,6 +5,7 @@ A MIDI and audio player for Windows with a visualizer you can script in Lua.
 - Plays MIDI files through any SoundFont (`.sf2`), and audio files (MP3, WAV, OGG Vorbis, FLAC, M4A/AAC).
 - Playlists: build them by dragging songs or whole folders in, reorder, shuffle and loop, give MIDI tracks their own soundfont, import and export `.m3u`.
 - A visualizer driven by Lua scripts: waveform, spectrum, piano roll, spectrogram, even a snake game that plays along, and a piano you can play along on with your keyboard. Write your own with a live-reloading editor: scripts can take mouse and keyboard input (with rebindable controls), take typed text, and play notes on the song's instruments, in a window or fullscreen.
+- Record the visualizer with its sound to a video (MP4, 720p to 4K, 30 or 60 fps): a whole song, a whole playlist, or whatever you play. Uses ffmpeg, which synththing offers to download the first time.
 - Rearrangeable layout: every section is a tab you can drag, split or pop out.
 - Updates itself: new releases are offered in the app.
 
@@ -39,6 +40,8 @@ The View menu shows and hides each section; drag tabs around to arrange them how
 | F | Fullscreen (the whole app) |
 | F11 | Fullscreen visualizer |
 | F5 | Restart the visualizer script |
+| F9 | Start / stop recording the visualizer |
+| F10 | Pause / resume the recording |
 | Esc | Back to windowed |
 
 In a playlist: click to select (Ctrl and Shift for more), double-click to play, Ctrl+A selects all, Delete removes. Right-click a row for more.
