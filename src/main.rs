@@ -19,6 +19,7 @@ mod lua_highlight;
 mod lua_visualizer;
 mod playlist;
 mod spectrum;
+mod updater;
 mod visualizer;
 
 use std::sync::atomic::AtomicBool;
@@ -77,6 +78,7 @@ fn main() -> Result<()> {
 
     let mut app = App::new(command_tx, shared, config, tap, sample_rate);
     app.autoload_first_soundfont();
+    app.check_for_updates_on_launch();
     if std::env::args().any(|a| a == "--visualizer" || a == "--viz") {
         app.set_visualizer_open(true);
     }

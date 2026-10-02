@@ -47,6 +47,14 @@ pub struct Config {
     /// on it, so clicking it plays sooner.
     #[serde(default)]
     pub preload_on_hover: bool,
+    /// Preference: look for a new release on GitHub at startup. `None`
+    /// means yes.
+    #[serde(default)]
+    pub check_updates_on_launch: Option<bool>,
+    /// A release version the user chose to skip: the startup check doesn't
+    /// bring it up again (a manual check still shows it).
+    #[serde(default)]
+    pub skipped_update: Option<String>,
 }
 
 pub const DEFAULT_PRELOAD_EXPIRY_SECS: u32 = 30;

@@ -32,6 +32,7 @@ use crate::lua_visualizer::{
     self, DebugVar, LogLevel, LuaVisualizer, SettingDescriptor, SettingKind, SettingValue,
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
+use crate::updater::{self, UpdateState, Updater};
 use crate::visualizer::{DisplayMode, NotesSnapshot, SampleTap, ShowOutput, VisualizerPanel};
 
 const VISUALIZER_WIDTH: usize = 800;
@@ -145,6 +146,11 @@ pub struct App {
     visualizer_output: ShowOutput,
     /// Whether the cursor is currently confined to the window for a script.
     cursor_confined: bool,
+    updater: Updater,
+    updates_open: bool,
+    /// The startup update check is running: show its result only if it
+    /// finds something new (and not a skipped version).
+    launch_update_check: bool,
     playlists: Library,
     /// The playlist shown in the Playlists panel (not necessarily the one
     /// playing).
@@ -249,6 +255,9 @@ impl App {
             dedicated: None,
             visualizer_output: ShowOutput::default(),
             cursor_confined: false,
+            updater: Updater::new(),
+            updates_open: false,
+            launch_update_check: false,
             playlists,
             viewed_playlist,
             now_playing: None,
@@ -265,6 +274,17 @@ impl App {
             dock_is_fullscreen_layout: false,
             preferences_open: false,
         }
+    }
+
+    /// Look for a new release in the background, if that's enabled. Not in
+    /// development builds (`cargo run`), which shouldn't offer to replace
+    /// themselves with a release.
+    pub fn check_for_updates_on_launch(&mut self) {
+        if cfg!(debug_assertions) || !self.config.check_updates_on_launch.unwrap_or(true) {
+            return;
+        }
+        self.launch_update_check = true;
+        self.updater.check();
     }
 
     fn send(&self, command: AudioCommand) {
@@ -705,7 +725,129 @@ impl App {
             for (section, open) in toggled {
                 self.set_open(section, open);
             }
+            ui.menu_button("Help", |ui| {
+                if ui.button("Check for updates...").clicked() {
+                    self.launch_update_check = false;
+                    self.updates_open = true;
+                    self.updater.check();
+                }
+                ui.separator();
+                ui.weak(format!("synththing v{}", env!("CARGO_PKG_VERSION")));
+            });
         });
+    }
+
+    /// The Updates window: what the update check found, release notes, and
+    /// installing. Opened from Help, or by the startup check when it finds
+    /// a release that isn't skipped.
+    fn updates_ui(&mut self, ctx: &egui::Context) {
+        let state = self.updater.state();
+        if self.launch_update_check {
+            match &state {
+                UpdateState::Checking => {}
+                UpdateState::Available(release) => {
+                    self.launch_update_check = false;
+                    let skipped = self.config.skipped_update.as_deref() == Some(release.version.to_string().as_str());
+                    self.updates_open |= !skipped;
+                }
+                _ => self.launch_update_check = false,
+            }
+        }
+        if matches!(state, UpdateState::Checking | UpdateState::Downloading { .. }) {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        if !self.updates_open {
+            return;
+        }
+
+        let current = updater::current_version();
+        let mut open = true;
+        let mut close = false;
+        egui::Window::new("Updates")
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(420.0)
+            .show(ctx, |ui| match &state {
+                UpdateState::Idle => {
+                    if ui.button("Check for updates").clicked() {
+                        self.updater.check();
+                    }
+                }
+                UpdateState::Checking => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Checking for updates...");
+                    });
+                }
+                UpdateState::UpToDate => {
+                    ui.label(format!("You're on the latest version (v{current})."));
+                }
+                UpdateState::Available(release) => {
+                    ui.heading(format!("synththing v{} is available", release.version));
+                    ui.weak(format!("You have v{current}."));
+                    if !release.notes.trim().is_empty() {
+                        ui.add_space(4.0);
+                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                            ui.label(release.notes.trim());
+                        });
+                    }
+                    ui.hyperlink_to("Release page", &release.page_url);
+                    ui.add_space(6.0);
+                    let dev_build = cfg!(debug_assertions);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(!dev_build, egui::Button::new("Install"))
+                            .on_disabled_hover_text(
+                                "This is a development build (cargo run); updates install into release builds.",
+                            )
+                            .clicked()
+                        {
+                            self.updater.install(release.clone());
+                        }
+                        if ui.button("Skip this version").clicked() {
+                            self.config.skipped_update = Some(release.version.to_string());
+                            if let Err(e) = self.config.save() {
+                                self.status = format!("Couldn't save preferences: {e}");
+                            }
+                            close = true;
+                        }
+                        if ui.button("Not now").clicked() {
+                            close = true;
+                        }
+                    });
+                }
+                UpdateState::Downloading { release, downloaded } => {
+                    ui.label(format!("Downloading v{}...", release.version));
+                    let total = release.size().max(1);
+                    ui.add(
+                        egui::ProgressBar::new(*downloaded as f32 / total as f32)
+                            .text(format!("{:.1} / {:.1} MB", *downloaded as f64 / 1e6, total as f64 / 1e6)),
+                    );
+                }
+                UpdateState::Installed(version) => {
+                    ui.label(format!("v{version} is installed. It runs the next time synththing starts."));
+                    ui.horizontal(|ui| {
+                        if ui.button("Restart now").clicked() {
+                            match updater::relaunch() {
+                                Ok(()) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
+                                Err(e) => self.status = format!("Couldn't restart: {e}"),
+                            }
+                        }
+                        if ui.button("Later").clicked() {
+                            close = true;
+                        }
+                    });
+                }
+                UpdateState::Failed(error) => {
+                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
+                    if ui.button("Try again").clicked() {
+                        self.updater.check();
+                    }
+                }
+            });
+        if !open || close {
+            self.updates_open = false;
+        }
     }
 
     /// The section tabs, filling everything between the menu bar and the
@@ -1174,6 +1316,7 @@ impl App {
         let mut expiry = self.config.preload_expiry_secs.unwrap_or(DEFAULT_PRELOAD_EXPIRY_SECS);
         let mut show_experimental = self.config.show_experimental;
         let mut hover_preload = self.config.preload_on_hover;
+        let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
         let loaded = self.assets.summary();
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
@@ -1188,6 +1331,14 @@ impl App {
                  either changes both. On: fullscreen remembers its own arrangement (starting \
                  with just the visualizer). Turning this off keeps that arrangement saved for \
                  if you turn it back on.",
+            );
+
+            ui.add_space(10.0);
+            ui.strong("Updates");
+            ui.checkbox(&mut check_updates, "Check for updates when synththing starts");
+            ui.weak(
+                "Looks for a newer release on GitHub and asks before installing anything. \
+                 Help > Check for updates does it any time.",
             );
 
             ui.add_space(10.0);
@@ -1242,7 +1393,9 @@ impl App {
         if expiry != self.config.preload_expiry_secs
             || show_experimental != self.config.show_experimental
             || hover_preload != self.config.preload_on_hover
+            || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
         {
+            self.config.check_updates_on_launch = (!check_updates).then_some(false);
             self.config.preload_expiry_secs = expiry;
             self.config.show_experimental = show_experimental;
             self.config.preload_on_hover = hover_preload;
@@ -1589,6 +1742,7 @@ impl eframe::App for App {
             self.dock_ui(ui, &shared);
             self.autosave_layout(&ctx);
             self.preferences_ui(&ctx);
+            self.updates_ui(&ctx);
         }
         self.apply_cursor_confinement(&ctx);
         self.keep_loaded(&ctx);

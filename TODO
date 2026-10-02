@@ -103,13 +103,21 @@
     tabs and dragging songs/soundfonts into playlists don't trip each
     other up.
 
-[L][.] auto updating system of some kind to help deploy to testers easier?
-    Packaging/distribution infrastructure (versioning, update checks,
-    downloading + replacing the running binary, Windows signing
-    considerations), not an app feature per se. Valuable for your testing
-    cadence but orthogonal to everything else on this list - lowest
-    coupling to the rest, so it can slot in whenever without blocking
-    anything above it.
+[L][.] auto updating system - DONE (GitHub Releases, Dissssy/synththing)
+    Releasing: `cargo release patch` (dry run), then
+    `cargo release patch --execute` bumps Cargo.toml, commits, tags vX.Y.Z
+    and pushes; the tag runs .github/workflows/release.yml (checks the tag
+    matches Cargo.toml, tests, builds release, publishes the GitHub Release
+    with synththing-windows-x86_64.exe and generated notes).
+    App (src/updater.rs): release builds check GitHub at startup
+    (Preferences toggle) and open an Updates window only if there's a newer
+    version that wasn't skipped; Help > Check for updates any time.
+    Install downloads in the background, checks size and GitHub's SHA-256
+    for the asset, swaps the running exe (self-replace), then Restart now /
+    Later. Debug builds never check on launch and can't install.
+    Not done: code signing (SmartScreen will warn testers on first run of
+    an unsigned exe), release notes beyond GitHub's generated ones, a
+    project README/license.
 
 ## Additional/unsorted
 

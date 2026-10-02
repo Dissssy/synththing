@@ -1,0 +1,47 @@
+# Builds and publishes a release whenever a version tag is pushed (cargo
+# release does that, see release.toml). The exe is attached to the GitHub
+# Release as synththing-windows-x86_64.exe, the name the in-app updater
+# (src/updater.rs) looks for.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tag matches Cargo.toml version
+        shell: bash
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "synththing") | .version')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME doesn't match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - name: Test
+        run: cargo test --bin synththing
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp target/release/synththing.exe synththing-windows-x86_64.exe
+          gh release create "$GITHUB_REF_NAME" synththing-windows-x86_64.exe \
+            --title "synththing $GITHUB_REF_NAME" \
+            --generate-notes

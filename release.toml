@@ -1,0 +1,10 @@
+# cargo-release settings. `cargo release patch` (or minor/major) shows what
+# it would do; add `--execute` to bump the version in Cargo.toml, commit,
+# tag vX.Y.Z and push. The pushed tag triggers .github/workflows/release.yml,
+# which builds the Windows exe and publishes the GitHub Release the in-app
+# updater looks for.
+publish = false
+allow-branch = ["master"]
+tag-name = "v{{version}}"
+pre-release-commit-message = "Release {{version}}"
+tag-message = "Release {{version}}"
