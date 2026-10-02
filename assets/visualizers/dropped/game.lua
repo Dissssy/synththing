@@ -1,4 +1,4 @@
--- note_runner.lua
+-- game.lua
 -- A platformer whose level is the music. Every note is a platform: pitch
 -- sets its height, duration its length, and its left edge crosses the
 -- playhead line exactly when the note sounds.
