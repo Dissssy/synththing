@@ -1945,6 +1945,39 @@ impl App {
         let mut changed: Option<(String, SettingValue)> = None;
         let mut clear_log = false;
 
+        // Performance: render time against the 60 fps budget.
+        let perf = self.visualizer.visualizer().perf_summary();
+        let mut retry = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.strong("Performance");
+            if perf.frames == 0 {
+                ui.weak("(not rendered yet)");
+                return;
+            }
+            let budget = 1000.0 / 60.0;
+            let color = if perf.avg_ms > budget {
+                egui::Color32::from_rgb(220, 90, 90)
+            } else if perf.avg_ms > budget * 0.6 {
+                egui::Color32::from_rgb(220, 180, 80)
+            } else {
+                ui.visuals().text_color()
+            };
+            ui.colored_label(color, format!("render() {:.1} ms avg, {:.1} ms worst", perf.avg_ms, perf.max_ms))
+                .on_hover_text(format!(
+                    "Over the last second. A 60 fps frame allows {budget:.1} ms; a script averaging more than that for 3 seconds runs at 30 fps until its code changes."
+                ));
+            if perf.half_rate {
+                ui.colored_label(egui::Color32::from_rgb(220, 180, 80), "running at 30 fps");
+                retry = ui.small_button("Try 60 fps again").clicked();
+            } else {
+                ui.weak("60 fps");
+            }
+        });
+        if retry {
+            self.visualizer.visualizer_mut().retry_full_frame_rate();
+        }
+        ui.separator();
+
         egui::ScrollArea::vertical()
             .id_salt("visualizer_settings_scroll")
             .auto_shrink([false, false])

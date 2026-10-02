@@ -39,11 +39,12 @@ It uses the same engine and script code as the app. Each frame it plays `1/fps` 
 | `--quiet`, `-q` | off | Print only errors and the summary, not the script's log. |
 | `--screenshot` | none | Save the last frame as a PNG image at this path, to see what the script drew. |
 
-Output: each distinct error once, with the frame and song position it happened at; then the script's log (each line prefixed `log: `, repeats shown as `(xN)`), unless `--quiet`; then a summary line:
+Output: each distinct error once, with the frame and song position it happened at; then the script's log (each line prefixed `log: `, repeats shown as `(xN)`), unless `--quiet`; then how long `render()` took (average and worst, real time on this machine, and whether the app would drop the script to 30 fps for averaging over 16.7 ms); then a summary line:
 
 ```
 frame 30 (0.50s): error: runtime error: [string "visualizer"]:2: attempt to call a nil value (global 'nope')
 log: started
+render() took 4.03 ms on average, 6.45 ms at worst (a 60 fps frame allows 16.7 ms)
 ran 600 frames at 60 fps, song at 10.00s of 109.92s, 1 error
 ```
 

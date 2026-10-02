@@ -128,7 +128,15 @@ function render(width, height, left, right)
 end
 ```
 
-`x, y` is the sprite's top-left corner, rounded to whole pixels. The fourth argument is a scale (1 by default), or an options table with `scale`, `flip_x` and `flip_y`. Scaling is nearest-neighbor, so pixels stay crisp; whole-number scales keep every sprite pixel exactly square. `sprite` returns the size it drew, in buffer pixels.
+`x, y` is the sprite's top-left corner, rounded to whole pixels. The fourth argument is a scale (1 by default), or an options table with `scale`, `flip_x`, `flip_y` and `src`. Scaling is nearest-neighbor, so pixels stay crisp; whole-number scales keep every sprite pixel exactly square. `sprite` returns the size it drew, in buffer pixels.
+
+`src = {x, y, w, h}` (or `{x = .., y = .., w = .., h = ..}`) draws only that part of the sprite, in sprite pixels with (0, 0) at its top-left, clipped to the sprite: a sprite sheet. Register all of a character's animation frames as one image and pick the frame when drawing; scale and flips apply to the part, and the returned size is the part's.
+
+```lua
+-- Four 8x8 frames side by side in one 32x8 image.
+local frame = math.floor(TIME * 8) % 4
+sprite(walker, x, y, { scale = 3, src = { frame * 8, 0, 8, 8 } })
+```
 
 Register sprites once, at the top level of the script (outside `render()`), and keep the ids: each call registers a new sprite, and a script can have at most 10,000. Sprites belong to the script and go away when it's reloaded or restarted, which re-registers them anyway.
 
@@ -344,6 +352,8 @@ Runs a script with no window, playing the song into it, and prints its errors (w
 ## Performance
 
 A script runs on every rendered frame while it's on screen, so the usual budget is the 60fps frame, ~16.7ms, but each draw call's cost scales with how many pixels it actually touches, not just how many calls you make, so a heatmap-style script needs more care than a line plot.
+
+The top of the Script Settings tab shows how long `render()` takes (average and worst over the last second, drawing included), against that budget. A script that averages more than 16.7 ms for 3 seconds straight drops to 30 fps: it renders every other frame, the visualizer keeps showing its last picture in between, and nothing is lost meanwhile (the audio and any key presses arrive with the next render, and `DT` covers the whole gap). It stays at 30 through Restart and song changes, and goes back to 60 when the script's code changes or another script loads, or with "Try 60 fps again". `run-script` prints the same numbers at the end of a run.
 
 - The buffer is capped at ~1280x720 worth of pixels and scaled up (nearest-neighbor) to fill larger views, so either fullscreen on a large monitor doesn't multiply your render cost, but it's still worth keeping draw counts sane.
 - `spectrogram.lua` run-length-merges same-colored cells in a column into one rect instead of one draw per cell, worth copying for any other grid/heatmap-shaped script.

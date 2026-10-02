@@ -79,7 +79,7 @@
 //! never blanks the view, so a mid-edit typo doesn't stop playback.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -291,7 +291,9 @@ enum DrawCommand {
     Pixel { x: i32, y: i32, color: u32 },
     Circle { x: f32, y: f32, radius: f32, color: u32 },
     Polygon { points: Vec<(f32, f32)>, color: u32 },
-    Sprite { index: usize, x: f32, y: f32, scale: f32, flip_x: bool, flip_y: bool },
+    /// `src` is the part of the sprite to draw: (x, y, width, height) in
+    /// sprite pixels, already clipped to the sprite.
+    Sprite { index: usize, x: f32, y: f32, scale: f32, flip_x: bool, flip_y: bool, src: (usize, usize, usize, usize) },
 }
 
 /// A sprite a script registered: its palette-indexed image turned into
@@ -558,6 +560,84 @@ pub struct LogEntry {
     pub message: String,
     /// How many times this exact message repeated immediately in a row.
     pub count: u32,
+}
+
+/// A 60 fps frame, in milliseconds: the render-time budget.
+const FRAME_BUDGET_MS: f32 = 1000.0 / 60.0;
+/// How long a script's render time has to average over budget, without a
+/// break, before it's dropped to 30 fps.
+const SLOW_FOR: Duration = Duration::from_secs(3);
+/// Minimum time between renders at the reduced rate: a 30 fps frame, less
+/// a little slack so a repaint arriving slightly early still renders.
+const HALF_RATE_INTERVAL: Duration = Duration::from_micros(29_300);
+
+/// A script's render times: the last second's for the readout and the
+/// 30 fps fallback, and the whole run's for `run-script`'s summary.
+#[derive(Default)]
+struct Perf {
+    /// (when, milliseconds) for renders in the last second.
+    recent: VecDeque<(Instant, f32)>,
+    /// When the last-second average went over budget (cleared when it
+    /// comes back under).
+    slow_since: Option<Instant>,
+    half_rate: bool,
+    frames: u64,
+    total_ms: f64,
+    worst_ms: f32,
+}
+
+/// The numbers shown in Script Settings (and at the end of `run-script`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PerfSummary {
+    /// Average and worst render time over the last second, milliseconds.
+    pub avg_ms: f32,
+    pub max_ms: f32,
+    /// Running at 30 fps because it was too slow for 60.
+    pub half_rate: bool,
+    /// Average and worst over everything rendered since the script loaded.
+    pub overall_avg_ms: f32,
+    pub overall_max_ms: f32,
+    pub frames: u64,
+}
+
+impl Perf {
+    /// Record one render. Returns a message the first time this pushes the
+    /// script down to 30 fps.
+    fn record(&mut self, now: Instant, ms: f32) -> Option<String> {
+        self.frames += 1;
+        self.total_ms += f64::from(ms);
+        self.worst_ms = self.worst_ms.max(ms);
+        self.recent.push_back((now, ms));
+        while self.recent.front().is_some_and(|&(t, _)| now.duration_since(t) > Duration::from_secs(1)) {
+            self.recent.pop_front();
+        }
+        let avg = self.recent.iter().map(|&(_, ms)| ms).sum::<f32>() / self.recent.len() as f32;
+        if avg <= FRAME_BUDGET_MS {
+            self.slow_since = None;
+            return None;
+        }
+        let since = *self.slow_since.get_or_insert(now);
+        if !self.half_rate && now.duration_since(since) >= SLOW_FOR {
+            self.half_rate = true;
+            return Some(format!(
+                "render() has averaged {avg:.1} ms for {} s, over the {FRAME_BUDGET_MS:.1} ms a 60 fps frame allows: running this script at 30 fps",
+                SLOW_FOR.as_secs()
+            ));
+        }
+        None
+    }
+
+    fn summary(&self) -> PerfSummary {
+        let n = self.recent.len().max(1) as f32;
+        PerfSummary {
+            avg_ms: self.recent.iter().map(|&(_, ms)| ms).sum::<f32>() / n,
+            max_ms: self.recent.iter().map(|&(_, ms)| ms).fold(0.0, f32::max),
+            half_rate: self.half_rate,
+            overall_avg_ms: if self.frames == 0 { 0.0 } else { (self.total_ms / self.frames as f64) as f32 },
+            overall_max_ms: self.worst_ms,
+            frames: self.frames,
+        }
+    }
 }
 
 /// Longest `DT` a script ever sees, in seconds (see `render`).
@@ -864,6 +944,9 @@ pub struct LuaVisualizer {
     /// Seconds per frame for DT and TIME instead of the wall clock: set
     /// for headless runs, which render frames much faster than real time.
     fixed_timestep: Option<f64>,
+    /// Render times, and the 30 fps fallback. Kept through Restart and song
+    /// changes; reset when the code changes or another script loads.
+    perf: Perf,
 }
 
 impl LuaVisualizer {
@@ -885,6 +968,7 @@ impl LuaVisualizer {
             onset_detector: OnsetDetector::new(sample_rate),
             last_render_instant: None,
             fixed_timestep: None,
+            perf: Perf::default(),
         };
         visualizer.set_source(source);
         visualizer
@@ -1015,6 +1099,8 @@ impl LuaVisualizer {
             Ok(compiled) => {
                 self.compiled = Some(compiled);
                 self.compile_error = None;
+                // New code (or another script): judge its speed afresh.
+                self.perf = Perf::default();
             }
             Err(e) => {
                 if let Some(compiled) = &self.compiled {
@@ -1023,6 +1109,19 @@ impl LuaVisualizer {
                 self.compile_error = Some(e);
             }
         }
+    }
+
+    /// The script's render times and frame rate, for the readout.
+    pub fn perf_summary(&self) -> PerfSummary {
+        self.perf.summary()
+    }
+
+    /// Back to 60 fps after the fallback kicked in ("Try 60 fps again"). If
+    /// it's still too slow it drops again after another few seconds.
+    pub fn retry_full_frame_rate(&mut self) {
+        self.perf.half_rate = false;
+        self.perf.slow_since = None;
+        self.perf.recent.clear();
     }
 
     /// Start the running script over from scratch: a fresh Lua VM running
@@ -1096,6 +1195,7 @@ impl Visualizer for LuaVisualizer {
         playback: &EngineView,
         input: &VisualizerInput,
     ) {
+        let render_began = Instant::now();
         buffer.fill(0);
         *self.notes.borrow_mut() = notes.clone();
         *self.playback.borrow_mut() = playback.clone();
@@ -1162,10 +1262,21 @@ impl Visualizer for LuaVisualizer {
             rasterize(buffer, width, height, cmd, &compiled.sprites.borrow());
         }
         compiled.store.borrow_mut().save(false);
+
+        let ms = render_began.elapsed().as_secs_f32() * 1000.0;
+        if let Some(message) = self.perf.record(Instant::now(), ms) {
+            compiled.log.borrow_mut().push(LogLevel::Info, message.clone());
+            log::info!(target: "synththing::script", "{message}");
+        }
     }
 
     fn cursor_request(&self) -> CursorRequest {
         self.compiled.as_ref().map(|c| *c.cursor.borrow()).unwrap_or_default()
+    }
+
+    fn ready_for_frame(&self) -> bool {
+        !self.perf.half_rate
+            || self.last_render_instant.is_none_or(|last| last.elapsed() >= HALF_RATE_INTERVAL)
     }
 }
 
@@ -1361,6 +1472,7 @@ fn register_sprites(
                 return Err(mlua::Error::runtime(format!("sprite: no sprite with id {id}")));
             };
             let (mut scale, mut flip_x, mut flip_y) = (1.0f32, false, false);
+            let mut src = (0, 0, sprite.width, sprite.height);
             match options {
                 Value::Nil => {}
                 Value::Integer(n) => scale = n as f32,
@@ -1369,6 +1481,9 @@ fn register_sprites(
                     scale = t.get::<Option<f32>>("scale")?.unwrap_or(1.0);
                     flip_x = t.get::<Option<bool>>("flip_x")?.unwrap_or(false);
                     flip_y = t.get::<Option<bool>>("flip_y")?.unwrap_or(false);
+                    if let Some(part) = t.get::<Option<Table>>("src")? {
+                        src = sprite_part(&part, sprite)?;
+                    }
                 }
                 other => {
                     return Err(mlua::Error::runtime(format!(
@@ -1380,8 +1495,8 @@ fn register_sprites(
             if !(scale.is_finite() && scale >= 0.0) {
                 return Err(mlua::Error::runtime("sprite: scale must be a number, 0 or more"));
             }
-            let size = ((sprite.width as f32 * scale).round(), (sprite.height as f32 * scale).round());
-            cmds.borrow_mut().push(DrawCommand::Sprite { index: id - 1, x, y, scale, flip_x, flip_y });
+            let size = ((src.2 as f32 * scale).round(), (src.3 as f32 * scale).round());
+            cmds.borrow_mut().push(DrawCommand::Sprite { index: id - 1, x, y, scale, flip_x, flip_y, src });
             Ok(size)
         })?,
     )?;
@@ -1398,6 +1513,26 @@ fn register_sprites(
         })?,
     )?;
     Ok(())
+}
+
+/// The part of `sprite` an options table's `src` names: `{x, y, w, h}` or
+/// `{x = .., y = .., w = .., h = ..}`, in sprite pixels from the top-left
+/// (0, 0), clipped to the sprite.
+fn sprite_part(part: &Table, sprite: &Sprite) -> mlua::Result<(usize, usize, usize, usize)> {
+    let field = |name: &str, index: usize| -> mlua::Result<f64> {
+        let named: Option<f64> = part.get(name)?;
+        let value = match named {
+            Some(v) => Some(v),
+            None => part.raw_get::<Option<f64>>(index)?,
+        };
+        value.ok_or_else(|| mlua::Error::runtime(format!("sprite: src needs {name} (src = {{x, y, w, h}})")))
+    };
+    let (x, y, w, h) = (field("x", 1)?, field("y", 2)?, field("w", 3)?, field("h", 4)?);
+    let x0 = (x.max(0.0) as usize).min(sprite.width);
+    let y0 = (y.max(0.0) as usize).min(sprite.height);
+    let x1 = ((x + w).max(0.0) as usize).min(sprite.width);
+    let y1 = ((y + h).max(0.0) as usize).min(sprite.height);
+    Ok((x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0)))
 }
 
 /// A sprite from `{image = {{1, 0, 2, ...}, ...}, palette = {{r, g, b, a}, ...}}`:
@@ -2165,30 +2300,33 @@ fn rasterize(buffer: &mut [u32], width: usize, height: usize, cmd: DrawCommand, 
         }
         DrawCommand::Circle { x, y, radius, color } => fill_circle(buffer, width, height, (x, y, radius), color),
         DrawCommand::Polygon { points, color } => fill_polygon(buffer, width, height, &points, color),
-        DrawCommand::Sprite { index, x, y, scale, flip_x, flip_y } => {
+        DrawCommand::Sprite { index, x, y, scale, flip_x, flip_y, src } => {
             if let Some(sprite) = sprites.get(index) {
-                draw_sprite(buffer, width, height, sprite, (x, y), scale, (flip_x, flip_y));
+                draw_sprite(buffer, width, height, sprite, src, (x, y), scale, (flip_x, flip_y));
             }
         }
     }
 }
 
-/// Draw `sprite` with its top-left at `(x, y)`, `scale` times its size,
+/// Draw the `src` part of `sprite` (x, y, width, height in sprite pixels)
+/// with its top-left at `(x, y)`, `scale` times its size,
 /// nearest-neighbor: every buffer pixel takes the sprite pixel under its
 /// center. Transparent pixels are skipped, opaque ones copied, translucent
 /// ones blended.
+#[allow(clippy::too_many_arguments)]
 fn draw_sprite(
     buffer: &mut [u32],
     width: usize,
     height: usize,
     sprite: &Sprite,
+    (src_x, src_y, src_w, src_h): (usize, usize, usize, usize),
     (x, y): (f32, f32),
     scale: f32,
     (flip_x, flip_y): (bool, bool),
 ) {
-    let out_w = (sprite.width as f32 * scale).round();
-    let out_h = (sprite.height as f32 * scale).round();
-    if out_w < 1.0 || out_h < 1.0 || sprite.width == 0 || sprite.height == 0 {
+    let out_w = (src_w as f32 * scale).round();
+    let out_h = (src_h as f32 * scale).round();
+    if out_w < 1.0 || out_h < 1.0 || src_w == 0 || src_h == 0 {
         return;
     }
     let left = x.round() as i64;
@@ -2207,9 +2345,9 @@ fn draw_sprite(
         if flip { size - 1 - i } else { i }
     };
     let columns: Vec<usize> =
-        (x_start..x_end).map(|bx| source(bx - left, out_w, sprite.width, flip_x)).collect();
+        (x_start..x_end).map(|bx| src_x + source(bx - left, out_w, src_w, flip_x)).collect();
     for by in y_start..y_end {
-        let sy = source(by - top, out_h, sprite.height, flip_y);
+        let sy = src_y + source(by - top, out_h, src_h, flip_y);
         let src_row = &sprite.pixels[sy * sprite.width..(sy + 1) * sprite.width];
         let dst_row = &mut buffer[by as usize * width + x_start as usize..by as usize * width + x_end as usize];
         for (dst, &sx) in dst_row.iter_mut().zip(&columns) {
@@ -2871,6 +3009,80 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
             frame(&mut v2, &sample_playback());
             assert!(visualizer.error().is_some() || v2.error().is_some(), "{bad}");
         }
+    }
+
+    #[test]
+    fn sprite_sheets_draw_just_the_named_part() {
+        // A 4x2 sheet: two 2x2 frames side by side, red then green.
+        let script = "
+            local sheet = sprite_register({
+                palette = { { r = 255, g = 0, b = 0 }, { r = 0, g = 255, b = 0 } },
+                image = { { 1, 1, 2, 2 }, { 1, 1, 2, 2 } },
+            })
+            function render(w, h, l, r)
+                local dw, dh = sprite(sheet, 0, 0, { src = { 2, 0, 2, 2 }, scale = 2 })
+                sprite(sheet, 4, 0, { src = { x = 0, y = 0, w = 2, h = 2 } })
+                sprite(sheet, 6, 0, { src = { 3, 1, 9, 9 } }) -- clipped to the sheet: 1x1 green
+                log(dw .. 'x' .. dh)
+            end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let w = 8;
+        let mut buffer = vec![0u32; w * 4];
+        visualizer.render(&mut buffer, w, 4, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        assert_eq!(visualizer.error(), None);
+        assert_eq!(last_log(&visualizer), "4.0x4.0");
+        let at = |x: usize, y: usize| buffer[y * w + x];
+        assert!((0..4).all(|x| (0..4).all(|y| at(x, y) == 0x00FF00)), "second frame, doubled");
+        assert_eq!((at(4, 0), at(5, 1)), (0xFF0000, 0xFF0000));
+        assert_eq!((at(6, 0), at(7, 0), at(6, 1)), (0x00FF00, 0, 0));
+    }
+
+    #[test]
+    fn slow_scripts_drop_to_30_fps_after_three_seconds() {
+        let mut perf = Perf::default();
+        let t0 = Instant::now();
+        // Fast frames: never drops.
+        for i in 0..300 {
+            assert!(perf.record(t0 + Duration::from_millis(i * 16), 5.0).is_none());
+        }
+        // Slow for a while, then fast for long enough that the last-second
+        // average is back under budget: the run is broken, still 60.
+        let slow_start = t0 + Duration::from_secs(10);
+        let mut t = slow_start;
+        while t < slow_start + Duration::from_millis(1500) {
+            assert!(perf.record(t, 25.0).is_none());
+            t += Duration::from_millis(25);
+        }
+        for _ in 0..120 {
+            assert!(perf.record(t, 2.0).is_none());
+            t += Duration::from_millis(16);
+        }
+        assert!(!perf.half_rate);
+        assert!(perf.slow_since.is_none());
+        // Slow for 3 s straight: drops, once.
+        let mut messages = 0;
+        let start = t;
+        while t < start + Duration::from_millis(4200) {
+            messages += usize::from(perf.record(t, 25.0).is_some());
+            t += Duration::from_millis(25);
+        }
+        assert!(perf.half_rate);
+        assert_eq!(messages, 1);
+        let summary = perf.summary();
+        assert!(summary.half_rate && (summary.avg_ms - 25.0).abs() < 0.01 && summary.overall_max_ms == 25.0);
+    }
+
+    #[test]
+    fn frame_rate_fallback_survives_restart_but_not_new_code() {
+        let mut visualizer = LuaVisualizer::new("function render() end".to_string(), None, 44_100);
+        visualizer.perf.half_rate = true;
+        visualizer.restart();
+        assert!(visualizer.perf_summary().half_rate, "Restart keeps the fallback");
+        visualizer.set_source("function render() end -- edited".to_string());
+        assert!(!visualizer.perf_summary().half_rate, "new code is judged afresh");
+        visualizer.perf.half_rate = true;
+        visualizer.retry_full_frame_rate();
+        assert!(!visualizer.perf_summary().half_rate);
     }
 
     #[test]

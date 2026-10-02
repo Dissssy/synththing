@@ -110,6 +110,16 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
             }
         }
     }
+    let perf = visualizer.perf_summary();
+    if perf.frames > 0 {
+        println!(
+            "render() took {:.2} ms on average, {:.2} ms at worst (a 60 fps frame allows {:.1} ms){}",
+            perf.overall_avg_ms,
+            perf.overall_max_ms,
+            1000.0 / 60.0,
+            if perf.half_rate { "; the app would drop it to 30 fps" } else { "" }
+        );
+    }
     let view = engine.view();
     println!(
         "ran {} frames at {} fps, song at {:.2}s of {:.2}s, {} error{}",

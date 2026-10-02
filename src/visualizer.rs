@@ -204,6 +204,34 @@ pub trait Visualizer {
     fn cursor_request(&self) -> CursorRequest {
         CursorRequest::default()
     }
+
+    /// Whether to render this frame. A visualizer running at a reduced
+    /// frame rate says no in between; the panel keeps showing the last
+    /// frame and saves up the audio and input for the next one.
+    fn ready_for_frame(&self) -> bool {
+        true
+    }
+}
+
+impl VisualizerInput {
+    /// Fold a later frame's input into this one (for a frame that wasn't
+    /// rendered): presses, releases, movement and scrolling add up, the
+    /// current state (position, held buttons and keys) is the later one's.
+    fn absorb(&mut self, later: VisualizerInput) {
+        self.mode = later.mode;
+        self.focused = later.focused;
+        self.pointer = later.pointer;
+        self.pointer_delta = (self.pointer_delta.0 + later.pointer_delta.0, self.pointer_delta.1 + later.pointer_delta.1);
+        self.scroll = (self.scroll.0 + later.scroll.0, self.scroll.1 + later.scroll.1);
+        self.buttons_down = later.buttons_down;
+        for i in 0..3 {
+            self.buttons_pressed[i] |= later.buttons_pressed[i];
+            self.buttons_released[i] |= later.buttons_released[i];
+        }
+        self.keys_down = later.keys_down;
+        self.keys_pressed.extend(later.keys_pressed);
+        self.keys_released.extend(later.keys_released);
+    }
 }
 
 /// Upper bound on how many pixels the visualizer actually renders, no matter
@@ -231,6 +259,9 @@ pub struct VisualizerPanel<V> {
     /// Take keyboard focus the next time it's drawn (entering the dedicated
     /// fullscreen).
     focus_requested: bool,
+    /// Input from frames that weren't rendered (reduced frame rate), saved
+    /// up for the next one that is.
+    pending_input: Option<VisualizerInput>,
 }
 
 impl<V: Visualizer> VisualizerPanel<V> {
@@ -243,6 +274,7 @@ impl<V: Visualizer> VisualizerPanel<V> {
             height,
             texture: None,
             focus_requested: false,
+            pending_input: None,
         }
     }
 
@@ -305,7 +337,24 @@ impl<V: Visualizer> VisualizerPanel<V> {
 
         let (buf_w, buf_h) = logical_buffer_size(available);
         self.resize(buf_w, buf_h);
-        let input = gather_input(&ctx, &response, rect, (self.width, self.height), focused, mode);
+        let mut input = gather_input(&ctx, &response, rect, (self.width, self.height), focused, mode);
+
+        // Reduced frame rate: show the last frame again, and keep this
+        // frame's input (the audio waits in the tap) for the next render.
+        if !self.visualizer.ready_for_frame()
+            && let Some(texture) = &self.texture
+        {
+            match &mut self.pending_input {
+                Some(pending) => pending.absorb(input),
+                None => self.pending_input = Some(input),
+            }
+            ui.painter().image(texture.id(), rect, uv, egui::Color32::WHITE);
+            return ShowOutput { focused, cursor: self.visualizer.cursor_request() };
+        }
+        if let Some(mut pending) = self.pending_input.take() {
+            pending.absorb(input);
+            input = pending;
+        }
 
         let samples = tap.drain();
         self.visualizer.render(
