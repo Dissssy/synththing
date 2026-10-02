@@ -11,6 +11,7 @@ use egui_dock::DockState;
 use serde::{Deserialize, Serialize};
 
 use crate::layout::Section;
+use crate::playlist::LoopMode;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -55,6 +56,11 @@ pub struct Config {
     /// bring it up again (a manual check still shows it).
     #[serde(default)]
     pub skipped_update: Option<String>,
+    /// The Loop and Shuffle buttons, remembered between launches.
+    #[serde(default)]
+    pub loop_mode: LoopMode,
+    #[serde(default)]
+    pub shuffle: bool,
 }
 
 pub const DEFAULT_PRELOAD_EXPIRY_SECS: u32 = 30;

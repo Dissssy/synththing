@@ -36,6 +36,7 @@ Scripts live in the `visualizers` folder of the app's config folder (`%APPDATA%\
 - New: a new script (`untitled-N.lua`) from a template: Blank, or a copy of any bundled script, including the template-only ones like `settings_demo` and `input_demo`.
 - Restore default: for a bundled script, puts the built-in version back (they're copied into the folder once, on first run, and yours to edit from then on).
 - Restart (or F5, from anywhere): starts the running script over on a fresh Lua VM, all of its own state reset, its settings kept.
+- Rename: renames the running script's file (its settings file comes along). A renamed bundled script no longer offers Restore default, since it's no longer under the bundled name.
 
 Live reload: editing a script in the Script Editor saves it and recompiles it on a fresh Lua VM as you type. A script that fails to compile leaves whatever was running before still running; the error shows above the editor and in this script's log (Script Settings tab) and stays until you fix it or revert. Restart restarts the version that's running, not the broken edit.
 
@@ -44,6 +45,7 @@ Live reload: editing a script in the Script Editor saves it and recompiles it on
 - Syntax highlighting, with the app's own functions colored apart from plain Lua.
 - Functions: a dropdown of every host function; picking one inserts its name at the text cursor.
 - Hover a function name, or press F1 with the text cursor on one, to see its one-line description above the editor.
+- Errors: the line a compile or runtime error points at is underlined in red, and "Go to line N" next to the error (above the editor, or above the visualizer, which also opens the editor) jumps the text cursor there.
 - Opening the editor for the first time in a run puts this reference next to it as a tab.
 
 ## Drawing

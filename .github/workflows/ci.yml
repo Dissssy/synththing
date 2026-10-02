@@ -1,0 +1,26 @@
+# Builds and tests every push to master and every pull request, so a broken
+# build shows up right away instead of when the next release tag is pushed.
+# (Releases are release.yml's job.)
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --bin synththing

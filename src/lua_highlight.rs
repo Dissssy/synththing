@@ -44,18 +44,32 @@ fn color_for(kind: Kind, visuals: &egui::Visuals) -> Color32 {
 /// colored galley at `wrap_width`. Called every frame the editor is drawn
 /// (egui caches nothing here, so this has to stay cheap, a single linear
 /// scan plus one `HOST_API` lookup per identifier easily does).
-pub fn layout(ui: &Ui, source: &str, wrap_width: f32) -> Arc<Galley> {
+///
+/// `error_line` (1-based), if any, is underlined in red on a faint red
+/// background: where the script's current error points.
+pub fn layout(ui: &Ui, source: &str, wrap_width: f32, error_line: Option<usize>) -> Arc<Galley> {
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap_width;
     let visuals = ui.visuals();
     let font_id = FontId::monospace(13.0);
+    let error_color = Color32::from_rgb(220, 90, 90);
 
+    let mut line = 1;
     for (text, kind) in tokenize(source) {
-        job.append(
-            text,
-            0.0,
-            TextFormat { font_id: font_id.clone(), color: color_for(kind, visuals), ..Default::default() },
-        );
+        // A token can span lines (comments, long strings, whitespace), so
+        // split it at newlines to mark exactly the error line.
+        for piece in text.split_inclusive('\n') {
+            let mut format =
+                TextFormat { font_id: font_id.clone(), color: color_for(kind, visuals), ..Default::default() };
+            if Some(line) == error_line {
+                format.underline = egui::Stroke::new(1.5, error_color);
+                format.background = error_color.gamma_multiply(0.15);
+            }
+            job.append(piece, 0.0, format);
+            if piece.ends_with('\n') {
+                line += 1;
+            }
+        }
     }
 
     ui.fonts_mut(|f| f.layout_job(job))

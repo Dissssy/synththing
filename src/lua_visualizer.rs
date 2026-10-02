@@ -67,7 +67,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use eframe::egui;
 use mlua::{Function, Lua, LuaOptions, StdLib, Table, Value};
 use serde::Deserialize;
@@ -180,6 +180,67 @@ pub fn new_script_from_template(dir: &Path, content: &str) -> Result<PathBuf> {
 
 pub fn display_name(path: &Path) -> String {
     nice_name(path)
+}
+
+/// Rename the script at `old` to `<new_name>.lua` in the same folder, taking
+/// its settings sidecar along, and return the new path. Refuses names that
+/// can't be Windows file names and names already taken (a change of case
+/// only is fine: same file).
+pub fn rename_script(old: &Path, new_name: &str) -> Result<PathBuf> {
+    let name = new_name.trim();
+    validate_script_name(name)?;
+    let new = old.with_file_name(format!("{name}.lua"));
+    if new == old {
+        return Ok(new);
+    }
+    let same_file = match (old.canonicalize(), new.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+    if new.exists() && !same_file {
+        anyhow::bail!("there's already a script called {name}.lua");
+    }
+    fs::rename(old, &new).with_context(|| format!("renaming {}", old.display()))?;
+    let old_sidecar = sidecar_path(old);
+    if old_sidecar.exists() {
+        fs::rename(&old_sidecar, sidecar_path(&new))
+            .with_context(|| format!("renaming its settings file {}", old_sidecar.display()))?;
+    }
+    Ok(new)
+}
+
+/// A script name (without `.lua`) that works as a file name everywhere,
+/// Windows' rules being the strict ones.
+fn validate_script_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("the name can't be empty");
+    }
+    if let Some(c) = name.chars().find(|c| r#"\/:*?"<>|"#.contains(*c) || c.is_control()) {
+        anyhow::bail!("names can't contain '{c}'");
+    }
+    if name.starts_with('.') || name.ends_with('.') || name.ends_with(' ') {
+        anyhow::bail!("names can't start with a dot or end with a dot or space");
+    }
+    let upper = name.to_ascii_uppercase();
+    let device = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper.len() == 4
+            && upper.as_bytes()[3].is_ascii_digit());
+    if device {
+        anyhow::bail!("'{name}' is a reserved name on Windows");
+    }
+    Ok(())
+}
+
+/// The script line (1-based) a compile or runtime error points at, from
+/// mlua's `[string "visualizer"]:12: ...` location prefix (the chunk name is
+/// set in `compile`). The first one in the message is the error itself;
+/// later ones are the stack traceback.
+pub fn error_line(error: &str) -> Option<usize> {
+    const MARKER: &str = "\"visualizer\"]:";
+    let start = error.find(MARKER)? + MARKER.len();
+    let digits: String = error[start..].chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok().filter(|&line| line > 0)
 }
 
 /// The current embedded source for an auto-seeded (dropped) script, by file
@@ -1715,6 +1776,44 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         let mut buffer = vec![0u32; 4];
         visualizer.render(&mut buffer, 2, 2, &[], &NotesSnapshot::default(), &sample_playback(), &input);
         assert_eq!(visualizer.log_entries().last().unwrap().message, "falsefalsefalsetrue");
+    }
+
+    #[test]
+    fn error_line_finds_where_compile_and_runtime_errors_point() {
+        let mut visualizer = LuaVisualizer::new("-- one\n-- two\nfunction render(\n".to_string(), None, 44_100);
+        let compile = visualizer.error().unwrap().to_string();
+        assert_eq!(error_line(&compile), Some(4), "{compile}");
+
+        visualizer.set_source("function render(w, h, l, r)\n  local x = 1\n  nope()\nend".to_string());
+        let mut buffer = vec![0u32; 4];
+        visualizer.render(&mut buffer, 2, 2, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        let runtime = visualizer.error().unwrap().to_string();
+        assert_eq!(error_line(&runtime), Some(3), "{runtime}");
+
+        assert_eq!(error_line("failed to save C:/x.lua: access denied"), None);
+    }
+
+    #[test]
+    fn rename_moves_the_script_and_its_settings() {
+        let dir = std::env::temp_dir().join(format!("synththing-rename-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("untitled-1.lua");
+        fs::write(&old, "function render() end").unwrap();
+        fs::write(sidecar_path(&old), "{}").unwrap();
+        fs::write(dir.join("taken.lua"), "").unwrap();
+
+        assert!(rename_script(&old, "bad/name").is_err());
+        assert!(rename_script(&old, "con").is_err());
+        assert!(rename_script(&old, "  ").is_err());
+        assert!(rename_script(&old, "taken").is_err());
+
+        let new = rename_script(&old, " my visualizer ").unwrap();
+        assert_eq!(new, dir.join("my visualizer.lua"));
+        assert!(new.exists() && !old.exists());
+        assert!(sidecar_path(&new).exists() && !sidecar_path(&old).exists());
+        // Case-only rename of the same file is allowed.
+        assert!(rename_script(&new, "My Visualizer").is_ok());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

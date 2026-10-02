@@ -49,6 +49,15 @@ const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 /// once it's been playing longer than this, the usual player behavior.
 const PREVIOUS_RESTARTS_AFTER_SECS: f64 = 3.0;
 
+/// The Rename script modal's state.
+struct RenameScript {
+    path: PathBuf,
+    name: String,
+    error: Option<String>,
+    /// Focus the text box on the first frame only.
+    focused_once: bool,
+}
+
 /// How long the "Esc to exit" hint shows after entering the dedicated
 /// visualizer fullscreen, in seconds.
 const DEDICATED_HINT_SECS: f64 = 3.0;
@@ -160,6 +169,11 @@ pub struct App {
     /// The status line as last written to the log, so each new status
     /// message is logged once.
     logged_status: String,
+    /// The Rename script modal, while it's open.
+    rename: Option<RenameScript>,
+    /// Move the editor's text cursor to this line (1-based) and scroll to
+    /// it, the next time the editor is drawn ("Go to line").
+    editor_goto_line: Option<usize>,
     playlists: Library,
     /// The playlist shown in the Playlists panel (not necessarily the one
     /// playing).
@@ -220,6 +234,7 @@ impl App {
         let viewed_playlist = (!playlists.lists.is_empty()).then_some(0);
         let dock = config.layout.clone().map(layout::sanitize).unwrap_or_else(layout::default_layout);
         let saved_layout_json = serde_json::to_string(&dock).unwrap_or_default();
+        let (loop_mode, shuffle) = (config.loop_mode, config.shuffle);
         let status = match playlist_errors.first() {
             Some(e) => format!("Couldn't read a playlist ({e})"),
             None => "Click a song to play it, click a soundfont to load it.".to_string(),
@@ -246,8 +261,8 @@ impl App {
             editor_opened_this_run: false,
             volume: 1.0,
             buffer_ms: DEFAULT_BUFFER_MS,
-            loop_mode: LoopMode::Off,
-            shuffle: false,
+            loop_mode,
+            shuffle,
             engine_loop: false,
             status,
             fullscreen: false,
@@ -271,6 +286,8 @@ impl App {
             log_min_level: log::Level::Info,
             log_search: String::new(),
             logged_status: String::new(),
+            rename: None,
+            editor_goto_line: None,
             playlists,
             viewed_playlist,
             now_playing: None,
@@ -597,6 +614,7 @@ impl App {
             {
                 self.loop_mode = self.loop_mode.cycle();
                 self.plan_upcoming();
+                self.save_playback_modes();
             }
             if ui.selectable_label(self.shuffle, "Shuffle").clicked() {
                 self.shuffle = !self.shuffle;
@@ -605,6 +623,7 @@ impl App {
                     np.history = vec![np.entry];
                 }
                 self.plan_upcoming();
+                self.save_playback_modes();
             }
 
             ui.separator();
@@ -960,10 +979,101 @@ impl App {
         }
     }
 
-    /// Whether one of the app's modals (Preferences, Log, Updates) is up.
-    /// They get the keyboard: app shortcuts and the global keys pause.
+    /// The Rename script modal: a new name for the running script's file.
+    fn rename_ui(&mut self, ctx: &egui::Context) {
+        let Some(rename) = &mut self.rename else {
+            return;
+        };
+        let mut submit = false;
+        let mut cancel = false;
+        let response = egui::Modal::new(egui::Id::new("rename_script")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.heading("Rename script");
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let edit = ui.add(egui::TextEdit::singleline(&mut rename.name).desired_width(260.0));
+                ui.label(".lua");
+                if !rename.focused_once {
+                    edit.request_focus();
+                    rename.focused_once = true;
+                }
+                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    submit = true;
+                }
+            });
+            if let Some(error) = &rename.error {
+                ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
+            }
+            ui.weak("Its settings file is renamed along with it.");
+            ui.add_space(8.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                if ui.button("Rename").clicked() {
+                    submit = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+        });
+        if cancel || response.should_close() {
+            self.rename = None;
+            return;
+        }
+        if !submit {
+            return;
+        }
+        let (path, name) = (rename.path.clone(), rename.name.clone());
+        match lua_visualizer::rename_script(&path, &name) {
+            Ok(new_path) => {
+                self.available_scripts = lua_visualizer::list_scripts(&self.scripts_dir);
+                self.active_script = self.available_scripts.iter().position(|p| *p == new_path);
+                self.visualizer.visualizer_mut().set_path(Some(new_path.clone()));
+                self.status = format!("Renamed script to {}", lua_visualizer::display_name(&new_path));
+                self.rename = None;
+            }
+            Err(e) => {
+                if let Some(rename) = &mut self.rename {
+                    rename.error = Some(format!("{e:#}"));
+                }
+            }
+        }
+    }
+
+    /// The running script's error, if any, with a "Go to line" button when
+    /// it points at a line. `open_editor`: the button also opens the editor
+    /// (for the copy shown above the visualizer).
+    fn script_error_ui(&mut self, ui: &mut egui::Ui, open_editor: bool) {
+        let Some(error) = self.visualizer.visualizer().error().map(str::to_string) else {
+            return;
+        };
+        let line = lua_visualizer::error_line(&error);
+        ui.horizontal_wrapped(|ui| {
+            if let Some(line) = line
+                && ui.small_button(format!("Go to line {line}")).clicked()
+            {
+                self.editor_goto_line = Some(line);
+                if open_editor {
+                    self.set_open(Section::Editor, true);
+                }
+            }
+            ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
+        });
+    }
+
+    /// Whether one of the app's modals (Preferences, Log, Updates, Rename
+    /// script) is up. They get the keyboard: app shortcuts and the global
+    /// keys pause.
     fn any_modal_open(&self) -> bool {
-        self.preferences_open || self.log_open || self.updates_open
+        self.preferences_open || self.log_open || self.updates_open || self.rename.is_some()
+    }
+
+    /// Remember Loop and Shuffle for next launch.
+    fn save_playback_modes(&mut self) {
+        self.config.loop_mode = self.loop_mode;
+        self.config.shuffle = self.shuffle;
+        if let Err(e) = self.config.save() {
+            self.status = format!("Couldn't save loop/shuffle: {e}");
+        }
     }
 
     /// The section tabs, filling everything between the menu bar and the
@@ -1012,10 +1122,8 @@ impl App {
     fn editor_section_ui(&mut self, ui: &mut egui::Ui) {
         if !self.is_open(Section::Visualizer) {
             self.script_picker_ui(ui);
-            if let Some(error) = self.visualizer.visualizer().error() {
-                ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
-            }
         }
+        self.script_error_ui(ui, false);
         self.visualizer_editor_ui(ui);
     }
 
@@ -1061,9 +1169,7 @@ impl App {
             }
         });
 
-        if let Some(error) = self.visualizer.visualizer().error() {
-            ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
-        }
+        self.script_error_ui(ui, true);
 
         self.channels_ui(ui, &mut notes);
 
@@ -1164,6 +1270,7 @@ impl App {
         let mut picked_idx = None;
         let mut restore_bundled: Option<String> = None;
         let mut restart = false;
+        let mut rename: Option<PathBuf> = None;
         ui.horizontal(|ui| {
             ui.label("Script:");
             let current = self
@@ -1220,7 +1327,16 @@ impl App {
             {
                 restart = true;
             }
+            if let Some(path) = self.visualizer.visualizer().path()
+                && ui.button("Rename").on_hover_text("Rename this script's file (its settings come along)").clicked()
+            {
+                rename = Some(path.to_path_buf());
+            }
         });
+        if let Some(path) = rename {
+            let name = lua_visualizer::display_name(&path);
+            self.rename = Some(RenameScript { path, name, error: None, focused_once: false });
+        }
         if restart {
             self.restart_script();
         }
@@ -1335,15 +1451,35 @@ impl App {
             .id_salt("visualizer_editor_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                let error_line = self.visualizer.visualizer().error().and_then(lua_visualizer::error_line);
                 let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                    lua_highlight::layout(ui, buf.as_str(), wrap_width)
+                    lua_highlight::layout(ui, buf.as_str(), wrap_width, error_line)
                 };
+
+                // "Go to line": put the text cursor at the start of the line
+                // before drawing, then scroll to it once the layout exists.
+                let goto = self.editor_goto_line.take().map(|line| char_index_of_line(&self.editor_text, line));
+                if let Some(index) = goto {
+                    let ctx = ui.ctx().clone();
+                    let mut state = egui::widgets::text_edit::TextEditState::load(&ctx, editor_id).unwrap_or_default();
+                    state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(index))));
+                    state.store(&ctx, editor_id);
+                    ctx.memory_mut(|m| m.request_focus(editor_id));
+                }
+
                 let output = egui::TextEdit::multiline(&mut self.editor_text)
                     .id(editor_id)
                     .code_editor()
                     .desired_width(f32::INFINITY)
                     .layouter(&mut layouter)
                     .show(ui);
+
+                if let Some(index) = goto {
+                    let rect = output.galley.pos_from_cursor(egui::text::CCursor::new(index));
+                    ui.scroll_to_rect(rect.translate(output.galley_pos.to_vec2()), Some(egui::Align::Center));
+                }
 
                 if output.response.changed() {
                     self.recompile_editor();
@@ -1859,6 +1995,7 @@ impl eframe::App for App {
             self.preferences_ui(&ctx);
             self.updates_ui(&ctx);
             self.log_ui(&ctx);
+            self.rename_ui(&ctx);
         }
         if self.status != self.logged_status {
             log::info!(target: "synththing::status", "{}", self.status);
@@ -1957,6 +2094,24 @@ fn inline_code_job(ui: &egui::Ui, prefix: &str, text: &str) -> egui::text::Layou
         job.append(span, 0.0, if is_code { code.clone() } else { body.clone() });
     }
     job
+}
+
+/// Char offset of the start of 1-based `line` in `text` (the end, if
+/// `text` has fewer lines).
+fn char_index_of_line(text: &str, line: usize) -> usize {
+    if line <= 1 {
+        return 0;
+    }
+    let mut newlines = 0;
+    for (index, c) in text.chars().enumerate() {
+        if c == '\n' {
+            newlines += 1;
+            if newlines == line - 1 {
+                return index + 1;
+            }
+        }
+    }
+    text.chars().count()
 }
 
 /// Show `path` in the system file manager (selected, on Windows).

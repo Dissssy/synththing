@@ -13,11 +13,12 @@
 
 ## Tier 2 - solid value, moderate effort
 
-[M][.] ability to name/rename custom scripts (and non custom ones?)
-    Filesystem rename + updating whatever currently holds the old path
-    (active script pointer, editor state). ("New" choosing from a template
-    list is done - it now offers Blank plus every script under
-    assets/visualizers/{dropped,undropped}, auto-discovered by build.rs.)
+[M][.] rename scripts - DONE
+    Rename button by the script picker opens a modal; renames the .lua and
+    its .settings.json together, refuses names Windows can't use or that
+    are taken (case-only changes allowed), and repoints the running
+    script, the picker and the editor at the new path. Works on bundled
+    scripts too (they just stop offering Restore default).
 
 [S][.] fuzzy search should index subdirectories as well
     Already does this - `collect_candidates` walks up to 12 levels deep from
@@ -67,8 +68,7 @@
       Not done: a load already running can't be cancelled, only dropped
       when it finishes; adding a soundfont via the dialog still parses it
       on the UI thread once (to validate it), then keeps that parse.
-    - [S][.] Remember loop/shuffle mode between launches (the open panels
-      are remembered already).
+    - DONE: loop/shuffle mode remembered between launches (config).
     - [M][.] Multi-select rows (shift/ctrl-click) to move/remove several at
       once; drag a folder from Songs to add all of it.
     - [S][.] Show track lengths and a total (needs reading each file's
@@ -187,10 +187,10 @@
       a color").
     - Lua stdlib completion/hover: math.*/string.*/table.* members aren't in
       HOST_API at all right now, only our own host functions.
-    - Inline error-line highlighting: mlua's compile/runtime errors already
-      carry a line number (visible in the error banner text) that isn't yet
-      used to underline/mark that line in the editor, the one piece from
-      the original three-piece plan that's still outstanding.
+    - DONE: error-line highlighting. The line an error points at (parsed
+      from mlua's [string "visualizer"]:N: prefix) is underlined in red,
+      and "Go to line N" by the error (editor, or visualizer, which opens
+      the editor) moves the text cursor there and scrolls to it.
 
 [S][.] debug variable inspector in the Settings popup - DONE
     Not a `lua.globals()` dump, every bundled script correctly uses `local`
@@ -231,3 +231,7 @@
     panics on any thread (with a backtrace) via a panic hook.
     Lua scripts' own log()/errors stay in each script's log (Script
     Settings tab), not here.
+
+[S][.] CI on every push - DONE
+    .github/workflows/ci.yml builds and runs the tests on every push to
+    master and every pull request (release.yml still does releases).
