@@ -8,6 +8,48 @@
 
 ## Tier 2 - solid value, moderate effort
 
+[M][!] script editor, group 1: everyday editing comfort - DONE (code_edit.rs,
+    app/editor.rs)
+    - line numbers, the error marked in the gutter and its message at
+      its line (alignment was a problem once before: iterate on it with
+      screenshots)
+    - auto-indent: Enter keeps indentation, indents after function/then/
+      do/{, `end` dedents itself
+    - Tab / Shift+Tab indent a selection; Ctrl+/ toggles -- comments
+    - auto-close brackets and quotes; highlight the matching bracket
+    - find / replace (Ctrl+F, Ctrl+H), all matches highlighted
+    - when edits apply: every edit (today), after a pause in typing, or
+      only on Ctrl+S (every keystroke restarts the script now)
+    - local history: last ~50 versions per script, History... to restore
+    - zoom (Ctrl+scroll), word wrap toggle
+
+[L][!] script editor, group 2: understanding Lua (needs a parser, e.g.
+    full_moon)
+    - autocomplete popup as you type: host API, Lua stdlib (math.,
+      string., table.), the script's locals and functions, fields of known
+      tables (playback(). -> position, song_id, ...); Tab/Enter accepts
+    - signature help inside a call, current parameter highlighted
+    - warnings without running: undefined/misspelled globals, unused
+      locals, accidental globals
+    - outline (the script's functions), go to definition (Ctrl+click),
+      hover for the script's own names
+    - format document (StyLua)
+
+[M][.] script editor, group 3: visual tools
+    - color swatches next to {r, g, b} tables, click for a picker that
+      rewrites the numbers
+    - sprite editor: open a sprite_register call in a palette + pixel
+      grid editor that writes image/palette back into the code
+    - snippets: settings block, input_register controls, sprite
+      template, typing_begin text field
+    - hover help links into the Scripting Reference at that function
+
+[M][!] layout presets
+    Named layouts to switch between: media playback (songs, playlists,
+    visualizer), script writing (editor, reference, settings, visualizer),
+    sprite editing (sprite editor, editor, visualizer), etc. Built-ins
+    plus saving your own; View > Layout.
+
 [M][.] rename scripts - DONE
     Rename button by the script picker opens a modal; renames the .lua and
     its .settings.json together, refuses names Windows can't use or that

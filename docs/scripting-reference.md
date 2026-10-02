@@ -42,10 +42,15 @@ Live reload: editing a script in the Script Editor saves it and recompiles it on
 
 ## The editor
 
-- Syntax highlighting, with the app's own functions colored apart from plain Lua.
+- Syntax highlighting, with the app's own functions colored apart from plain Lua, and line numbers.
+- When edits apply (the "Apply:" choice above the text): every edit, once typing pauses for a moment (the default), or only on Ctrl+S. Applying saves the file and restarts the script from scratch, so a game loses its state; the later two keep that from happening on every keystroke. Ctrl+S always applies right away, and "Not applied yet" shows while edits are waiting. Waiting edits are applied before switching scripts, renaming one or closing the app.
+- Typing: Enter keeps the line's indentation, one level deeper after `then`, `do`, `function(...)`, `repeat`, `else` or an opening bracket; `end`, `else`, `elseif`, `until` and closing brackets line themselves up with their block as you type them. Tab and Shift+Tab indent and outdent (every line of a selection); Ctrl+/ comments lines out with `--` or back in. Brackets and quotes close themselves (or wrap the selection), typing a closer that's already there steps over it, and Backspace in an empty pair removes both. The bracket matching the one at the text cursor is highlighted.
+- Find and replace: Ctrl+F (Ctrl+H for replace) opens a bar above the text, starting from the selected text. Every match is highlighted; Enter and Shift+Enter go to the next and previous one, Aa matches case, Esc closes it.
 - Functions: a dropdown of every host function; picking one inserts its name at the text cursor.
 - Hover a function name, or press F1 with the text cursor on one, to see its one-line description above the editor.
-- Errors: the line a compile or runtime error points at is underlined in red, and "Go to line N" next to the error (above the editor, or above the visualizer, which also opens the editor) jumps the text cursor there.
+- Errors: the line a compile or runtime error points at is underlined in red, its line number is red, its message is shown at the end of the line, and "Go to line N" next to the error (above the editor, or above the visualizer, which also opens the editor) jumps the text cursor there.
+- History...: synththing keeps a copy of the script when it's opened and about once a minute while you edit (the last 50, in its config folder). The History window shows each with how long ago and how many lines differ from now, previews it, and restores it (keeping the current version in the list).
+- Text size: Ctrl+scroll over the text, or the size box; Wrap turns line wrapping off for long lines (scroll sideways instead).
 - Opening the editor for the first time in a run puts this reference next to it as a tab.
 
 ## Drawing

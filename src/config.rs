@@ -68,6 +68,14 @@ pub struct Config {
     pub record_fps: Option<u32>,
     #[serde(default)]
     pub record_quality: crate::recorder::Quality,
+    /// The script editor: when edits apply, text size, wrapping (`None`:
+    /// the defaults).
+    #[serde(default)]
+    pub editor_apply: crate::app::ApplyMode,
+    #[serde(default)]
+    pub editor_font_size: Option<f32>,
+    #[serde(default)]
+    pub editor_wrap: Option<bool>,
     /// Where recordings are saved; `None` means Videos\synththing.
     #[serde(default)]
     pub record_dir: Option<PathBuf>,

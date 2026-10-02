@@ -7,6 +7,8 @@
 //! around, split, float them out into windows. Closing a tab only hides that
 //! section; the View menu brings it back (see `layout.rs` for where).
 
+mod editor;
+pub use editor::ApplyMode;
 mod loading;
 mod playlist_panel;
 mod recording;
@@ -28,9 +30,8 @@ use crate::engine::{EngineView, MAX_SPEED, MIN_SPEED};
 use crate::filebrowser::{DraggedFile, FileBrowser};
 use crate::layout::{self, Section};
 use crate::loader::{self, Asset, AssetCache, SoundFontProbe};
-use crate::lua_completion::{self, CompletionWorker};
+use crate::lua_completion::CompletionWorker;
 use crate::lua_docs;
-use crate::lua_highlight;
 use crate::lua_visualizer::{
     self, DebugVar, LogLevel, LuaVisualizer, PlaybackRequest, SettingDescriptor, SettingKind, SettingValue,
 };
@@ -235,6 +236,11 @@ pub struct App {
     dock_is_fullscreen_layout: bool,
     preferences_open: bool,
     sample_rate: u32,
+    /// The script editor's state (see `app/editor.rs`).
+    editor: editor::EditorState,
+    /// The script's text as last saved to (or read from) its file, to tell
+    /// an outside change from our own save.
+    editor_saved: String,
     /// Recording the visualizer to video (see `app/recording.rs`).
     recording: recording::Recording,
     /// The last recording saved, for "Show last recording".
@@ -271,7 +277,7 @@ impl App {
             None => "Click a song to play it, click a soundfont to load it.".to_string(),
         };
 
-        Self {
+        let mut app = Self {
             commands,
             shared,
             config,
@@ -346,9 +352,15 @@ impl App {
             dock_is_fullscreen_layout: false,
             preferences_open: false,
             sample_rate,
+            editor: editor::EditorState::default(),
+            editor_saved: String::new(),
             recording: recording::Recording::new(),
             last_recording: None,
+        };
+        if let Some(path) = app.visualizer.visualizer().path().map(Path::to_path_buf) {
+            app.editor_opened(&path);
         }
+        app
     }
 
     /// Look for a new release in the background, if that's enabled. Not in
@@ -538,15 +550,18 @@ impl App {
         let Some(path) = self.available_scripts.get(idx).cloned() else {
             return;
         };
+        // Edits still waiting go to the script they were made in.
+        self.flush_editor();
         match std::fs::read_to_string(&path) {
             Ok(source) => {
                 self.editor_text = source.clone();
                 self.completion.request(source.clone());
                 self.editor_hover_info = None;
                 let visualizer = self.visualizer.visualizer_mut();
-                visualizer.set_path(Some(path));
+                visualizer.set_path(Some(path.clone()));
                 visualizer.set_source(source);
                 self.active_script = Some(idx);
+                self.editor_opened(&path);
             }
             Err(e) => self.status = format!("Failed to read script: {e}"),
         }
@@ -1241,9 +1256,11 @@ impl App {
         }
         let (path, name) = (rename.path.clone(), rename.name.clone());
         // Unsaved script data goes to the old name first, then moves along.
+        self.flush_editor();
         self.visualizer.visualizer_mut().flush_store();
         match lua_visualizer::rename_script(&path, &name) {
             Ok(new_path) => {
+                editor::rename_history(&path, &new_path);
                 self.available_scripts = lua_visualizer::list_scripts(&self.scripts_dir);
                 self.active_script = self.available_scripts.iter().position(|p| *p == new_path);
                 self.visualizer.visualizer_mut().renamed_to(new_path.clone());
@@ -1290,6 +1307,7 @@ impl App {
             || self.credits_open
             || self.song_info_open.is_some()
             || self.recording.prompt_open
+            || self.editor.history_open
     }
 
     /// Pick up files added, removed or changed on disk in the folders on
@@ -1321,9 +1339,18 @@ impl App {
             return;
         };
         let name = lua_visualizer::display_name(&path);
+        // Compared with what was last saved, not the editor: the editor
+        // can hold edits that aren't applied (saved) yet.
         match std::fs::read_to_string(&path) {
-            Ok(text) if text != self.editor_text => {
+            Ok(text) if text != self.editor_saved && self.editor_dirty() => {
+                self.editor_saved = text;
+                self.status = format!(
+                    "{name} changed on disk; kept your edits that aren't applied yet (applying them overwrites the file)."
+                );
+            }
+            Ok(text) if text != self.editor_saved => {
                 self.editor_text = text.clone();
+                self.editor_saved = text.clone();
                 self.completion.request(text.clone());
                 self.visualizer.visualizer_mut().set_source(text);
                 self.status = format!("Reloaded {name} (changed on disk).");
@@ -1642,8 +1669,12 @@ impl App {
             self.load_script(idx);
         }
         if let Some(source) = restore_bundled {
+            if let Some(path) = self.visualizer.visualizer().path().map(Path::to_path_buf) {
+                self.editor_opened(&path);
+            }
             self.editor_text = source;
-            self.recompile_editor();
+            self.completion.request(self.editor_text.clone());
+            self.apply_editor();
         }
     }
 
@@ -1701,142 +1732,6 @@ impl App {
                 self.send(AudioCommand::SetChannelEnabled(channel, enabled));
             }
         }
-    }
-
-    /// The script source editor: syntax-highlighted, scrollable so a long
-    /// script doesn't just keep growing the panel, with a "Functions"
-    /// insert-at-cursor list and hover/F1 lookup info against the same host
-    /// API table (see `lua_completion`), including `debug_locals()` itself
-    /// now; calling it by hand, from wherever in the script you want a
-    /// snapshot, is the whole interface. (An earlier version added a gutter
-    /// with clickable per-line markers to inject the call automatically,
-    /// cut after it turned out laggy, a button per source line adds up, and
-    /// lining a hand-rolled gutter up pixel-for-pixel with TextEdit's own
-    /// line layout wasn't worth what it bought.)
-    fn visualizer_editor_ui(&mut self, ui: &mut egui::Ui) {
-        let editor_id = egui::Id::new(SCRIPT_EDITOR_ID);
-
-        if let Some((word, detail)) = &self.editor_hover_info {
-            ui.horizontal(|ui| {
-                ui.strong(word);
-                ui.label(detail);
-            });
-        } else {
-            ui.weak("Hover a function, or press F1 at the text cursor, for info about it.");
-        }
-
-        ui.horizontal(|ui| {
-            let mut insert = None;
-            egui::ComboBox::from_id_salt("visualizer_editor_functions")
-                .selected_text("Functions")
-                .show_ui(ui, |ui| {
-                    for suggestion in self.completion.suggestions() {
-                        if ui
-                            .selectable_label(false, &suggestion.label)
-                            .on_hover_text(&suggestion.detail)
-                            .clicked()
-                        {
-                            insert = Some(suggestion.label);
-                        }
-                    }
-                });
-            if let Some(name) = insert {
-                self.insert_at_editor_cursor(ui.ctx(), editor_id, &name);
-            }
-        });
-
-        egui::ScrollArea::vertical()
-            .id_salt("visualizer_editor_scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let error_line = self.visualizer.visualizer().error().and_then(lua_visualizer::error_line);
-                let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                    lua_highlight::layout(ui, buf.as_str(), wrap_width, error_line)
-                };
-
-                // "Go to line": put the text cursor at the start of the line
-                // before drawing, then scroll to it once the layout exists.
-                let goto = self.editor_goto_line.take().map(|line| char_index_of_line(&self.editor_text, line));
-                if let Some(index) = goto {
-                    let ctx = ui.ctx().clone();
-                    let mut state = egui::widgets::text_edit::TextEditState::load(&ctx, editor_id).unwrap_or_default();
-                    state
-                        .cursor
-                        .set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(index))));
-                    state.store(&ctx, editor_id);
-                    ctx.memory_mut(|m| m.request_focus(editor_id));
-                }
-
-                let output = egui::TextEdit::multiline(&mut self.editor_text)
-                    .id(editor_id)
-                    .code_editor()
-                    .desired_width(f32::INFINITY)
-                    .layouter(&mut layouter)
-                    .show(ui);
-
-                if let Some(index) = goto {
-                    let rect = output.galley.pos_from_cursor(egui::text::CCursor::new(index));
-                    ui.scroll_to_rect(rect.translate(output.galley_pos.to_vec2()), Some(egui::Align::Center));
-                }
-
-                if output.response.changed() {
-                    self.recompile_editor();
-                }
-
-                // Mouse hovering a known identifier.
-                if output.response.hovered()
-                    && let Some(pointer) = ui.input(|i| i.pointer.hover_pos())
-                {
-                    let local = pointer - output.galley_pos;
-                    let char_index = output.galley.cursor_from_pos(local).index.0;
-                    if let Some(word) = identifier_at(&self.editor_text, char_index)
-                        && let Some(detail) = lua_completion::lookup(&word)
-                    {
-                        self.editor_hover_info = Some((word, detail.to_string()));
-                    }
-                }
-
-                // F1 at the text (writing) cursor's position, same display,
-                // different trigger, for when the mouse isn't the one doing
-                // the pointing.
-                if output.response.has_focus()
-                    && ui.input(|i| i.key_pressed(egui::Key::F1))
-                    && let Some(range) = output.cursor_range
-                {
-                    let char_index = range.primary.index.0;
-                    self.editor_hover_info = identifier_at(&self.editor_text, char_index)
-                        .and_then(|word| lua_completion::lookup(&word).map(|d| (word, d.to_string())));
-                }
-            });
-    }
-
-    /// Splice `text` into the editor at the text cursor's last-known
-    /// position (from the previous frame, the editor widget itself hasn't
-    /// drawn yet this frame when "Functions" is above it) and leave the
-    /// cursor right after the inserted text.
-    fn insert_at_editor_cursor(&mut self, ctx: &egui::Context, editor_id: egui::Id, text: &str) {
-        let mut state = egui::widgets::text_edit::TextEditState::load(ctx, editor_id).unwrap_or_default();
-        let char_index = state.cursor.char_range().map_or_else(
-            || self.editor_text.chars().count(),
-            |range| range.primary.index.0,
-        );
-
-        let byte_index =
-            self.editor_text.char_indices().nth(char_index).map_or(self.editor_text.len(), |(b, _)| b);
-        self.editor_text.insert_str(byte_index, text);
-
-        let new_index = char_index + text.chars().count();
-        state
-            .cursor
-            .set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(new_index))));
-        state.store(ctx, editor_id);
-
-        self.recompile_editor();
-    }
-
-    fn recompile_editor(&mut self) {
-        self.completion.request(self.editor_text.clone());
-        self.visualizer.visualizer_mut().set_source_and_save(self.editor_text.clone());
     }
 
     /// While Preferences is open, playback and the visualizer script pause;
@@ -2437,7 +2332,9 @@ impl eframe::App for App {
             self.rename_ui(&ctx);
             self.credits_ui(&ctx);
             self.song_info_ui(&ctx);
+            self.history_ui(&ctx);
         }
+        self.editor_tick(&ctx);
         // Outside the layout: F9 can ask for ffmpeg from the dedicated
         // fullscreen too.
         self.ffmpeg_prompt_ui(&ctx);
@@ -2472,6 +2369,7 @@ impl eframe::App for App {
     /// Last chance to save a layout change the once-a-second autosave
     /// hasn't caught yet.
     fn on_exit(&mut self) {
+        self.flush_editor();
         // Don't lose a recording to closing the app: write it out first.
         if let Some(recorder) = self.recording.recorder.take()
             && let Err(e) = recorder.finish_now()

@@ -46,12 +46,13 @@ fn color_for(kind: Kind, visuals: &egui::Visuals) -> Color32 {
 /// scan plus one `HOST_API` lookup per identifier easily does).
 ///
 /// `error_line` (1-based), if any, is underlined in red on a faint red
-/// background: where the script's current error points.
-pub fn layout(ui: &Ui, source: &str, wrap_width: f32, error_line: Option<usize>) -> Arc<Galley> {
+/// background: where the script's current error points. `font_size` in
+/// points.
+pub fn layout(ui: &Ui, source: &str, wrap_width: f32, error_line: Option<usize>, font_size: f32) -> Arc<Galley> {
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap_width;
     let visuals = ui.visuals();
-    let font_id = FontId::monospace(13.0);
+    let font_id = FontId::monospace(font_size);
     let error_color = Color32::from_rgb(220, 90, 90);
 
     let mut line = 1;

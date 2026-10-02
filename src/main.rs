@@ -11,6 +11,7 @@ mod cli;
 mod headless;
 mod applog;
 mod audio;
+mod code_edit;
 mod config;
 mod credits;
 mod engine;
