@@ -41,6 +41,14 @@
 //!   `mouse_down/pressed/released([button])`, `key_down/pressed/released(name)`,
 //!   `has_focus()`, `display_mode()`. Mouse while the pointer is over the
 //!   visualizer, keys while it has focus; Escape is never reported.
+//! * `notes_between(t0, t1)`, every note sounding in a time window, whole:
+//!   `{id, channel, key, velocity, start, stop}` (see `midi_notes.rs`).
+//! * `set_paused(paused)` / `seek(seconds)`, playback control, queued like
+//!   `set_channel_enabled` and carried out by the app.
+//! * `store_get(key)` / `store_set(key, value)`, the script's own saved data
+//!   (`<script>.lua.store.json`), separate from user-facing settings.
+//! * `FRAME` (frames since the script started) and `TIME` (seconds since
+//!   it started, wall clock, uncapped).
 //! * Cursor: `set_cursor_visible(visible)` (applies over the visualizer) and
 //!   `set_cursor_locked(locked)` (keeps it on screen, dedicated fullscreen
 //!   only).
@@ -60,12 +68,13 @@
 //! previously working script (if any) running, the error is recorded but
 //! never blanks the view, so a mid-edit typo doesn't stop playback.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use eframe::egui;
@@ -74,6 +83,7 @@ use serde::Deserialize;
 
 use crate::config::{config_dir, nice_name};
 use crate::engine::{EngineView, NOTE_LOOKAHEAD_SECS};
+use crate::midi_notes::NoteList;
 use crate::spectrum::SpectrumAnalyzer;
 use crate::visualizer::{
     ActiveNote, CursorRequest, NoteChange, NotesSnapshot, RESERVED_KEYS, StereoFrame, Visualizer,
@@ -94,10 +104,13 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 -- Draw with clear/line/rect/pixel; color tables take an optional `a` (0..1).
 --   clear({r,g,b})  line(x0,y0,x1,y1,{r,g,b,a})  rect(...)  pixel(x,y,{r,g,b,a})
 -- fft_left(left) / fft_right(right)     magnitude spectrum, computed in Rust
+-- notes_between(t0, t1)                 whole notes with start/stop times
 -- active_notes() / upcoming_notes()     notes held now / changing soon
 -- midi_channels() / channel_enabled(c)  the file's channels and their toggles
 -- set_channel_enabled(c, enabled)       mute/unmute a channel from the script
--- playback()                            transport state (paused, position, ...)
+-- playback() / set_paused(p) / seek(t)  transport state and control
+-- store_get(key) / store_set(key, v)    data saved across restarts
+-- FRAME / TIME                          frame count, seconds since start
 -- log(message) / DT                     debug log, seconds since last frame
 -- mouse() / key_down('a') / has_focus()  input over the visualizer (see Docs)
 -- setting_bool/int/float/color/string/selection(key, ...)  user-editable values
@@ -201,10 +214,11 @@ pub fn rename_script(old: &Path, new_name: &str) -> Result<PathBuf> {
         anyhow::bail!("there's already a script called {name}.lua");
     }
     fs::rename(old, &new).with_context(|| format!("renaming {}", old.display()))?;
-    let old_sidecar = sidecar_path(old);
-    if old_sidecar.exists() {
-        fs::rename(&old_sidecar, sidecar_path(&new))
-            .with_context(|| format!("renaming its settings file {}", old_sidecar.display()))?;
+    for (old_sidecar, new_sidecar) in [(sidecar_path(old), sidecar_path(&new)), (store_path(old), store_path(&new))] {
+        if old_sidecar.exists() {
+            fs::rename(&old_sidecar, &new_sidecar)
+                .with_context(|| format!("renaming {}", old_sidecar.display()))?;
+        }
     }
     Ok(new)
 }
@@ -666,6 +680,64 @@ fn describe_scalar(value: &Value) -> String {
 /// script can't linger), the `render` function, the draw-command queue its
 /// draw calls feed, and its settings/log state, all reset together on
 /// reload, since they're meaningless carried over to a different script.
+/// Playback changes a script asked for (`set_paused`, `seek`), carried out
+/// by the app after the frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PlaybackRequest {
+    Pause(bool),
+    Seek(f64),
+}
+
+/// Saved data a script owns (`store_get`/`store_set`), in
+/// `<script>.lua.store.json`. Written when changed, at most about once a
+/// second, plus whenever the script is replaced or the app closes.
+struct ScriptStore {
+    /// Where it's saved; `None` for a script with no file (in-memory only).
+    path: Option<PathBuf>,
+    values: serde_json::Map<String, serde_json::Value>,
+    dirty: bool,
+    last_saved: Instant,
+}
+
+/// How often a changing store is written out, at most.
+const STORE_SAVE_INTERVAL: Duration = Duration::from_secs(1);
+
+impl ScriptStore {
+    fn load(script: Option<&Path>) -> Self {
+        let path = script.map(store_path);
+        let values = path
+            .as_ref()
+            .and_then(|p| fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        Self { path, values, dirty: false, last_saved: Instant::now() }
+    }
+
+    fn save(&mut self, force: bool) {
+        if !self.dirty || (!force && self.last_saved.elapsed() < STORE_SAVE_INTERVAL) {
+            return;
+        }
+        self.dirty = false;
+        self.last_saved = Instant::now();
+        let Some(path) = &self.path else {
+            return;
+        };
+        let result = serde_json::to_string_pretty(&self.values)
+            .map_err(anyhow::Error::from)
+            .and_then(|json| fs::write(path, json).map_err(Into::into));
+        if let Err(e) = result {
+            log::warn!("couldn't save script data to {}: {e}", path.display());
+        }
+    }
+}
+
+/// `<script>.lua.store.json`, next to the script.
+fn store_path(script_path: &Path) -> PathBuf {
+    let mut name = script_path.as_os_str().to_os_string();
+    name.push(".store.json");
+    PathBuf::from(name)
+}
+
 struct Compiled {
     /// The source this was compiled from, so `restart` can run the same
     /// script again even after a newer edit failed to compile.
@@ -686,6 +758,19 @@ struct Compiled {
     /// What the script asked for via `set_cursor_visible`/`set_cursor_locked`.
     /// Per script: a newly loaded one starts with a normal cursor.
     cursor: Rc<RefCell<CursorRequest>>,
+    playback_requests: Rc<RefCell<Vec<PlaybackRequest>>>,
+    store: Rc<RefCell<ScriptStore>>,
+    /// Frames rendered since this script started (`FRAME`).
+    frame: Cell<u64>,
+    /// When it rendered its first frame (`TIME` counts from here).
+    started: Cell<Option<Instant>>,
+}
+
+impl Drop for Compiled {
+    /// A script being replaced (or the app closing) saves its store.
+    fn drop(&mut self) {
+        self.store.borrow_mut().save(true);
+    }
 }
 
 pub struct LuaVisualizer {
@@ -717,6 +802,9 @@ pub struct LuaVisualizer {
     /// The current frame's mouse/keyboard input, shared with the input
     /// functions. Ground truth like `playback`, so it outlives recompiles.
     input: Rc<RefCell<VisualizerInput>>,
+    /// Every note of the current MIDI file (empty for plain audio), for
+    /// `notes_between`. Song data, so it outlives recompiles.
+    note_list: Rc<RefCell<Arc<NoteList>>>,
     last_render_instant: Option<Instant>,
 }
 
@@ -734,6 +822,7 @@ impl LuaVisualizer {
             notes: Rc::new(RefCell::new(NotesSnapshot::default())),
             playback: Rc::new(RefCell::new(EngineView::default())),
             input: Rc::new(RefCell::new(VisualizerInput::default())),
+            note_list: Rc::new(RefCell::new(Arc::default())),
             last_render_instant: None,
         };
         visualizer.set_source(source);
@@ -746,6 +835,35 @@ impl LuaVisualizer {
 
     pub fn set_path(&mut self, path: Option<PathBuf>) {
         self.path = path;
+    }
+
+    /// The running script's file was renamed to `path` (its sidecars already
+    /// moved along with it): point everything, the script's store included,
+    /// at the new name. Call `flush_store` before renaming the files.
+    pub fn renamed_to(&mut self, path: PathBuf) {
+        if let Some(compiled) = &self.compiled {
+            compiled.store.borrow_mut().path = Some(store_path(&path));
+        }
+        self.path = Some(path);
+    }
+
+    /// Write the running script's store out now if it has unsaved changes.
+    pub fn flush_store(&mut self) {
+        if let Some(compiled) = &self.compiled {
+            compiled.store.borrow_mut().save(true);
+        }
+    }
+
+    /// The current song's notes, for `notes_between` (empty for audio).
+    pub fn set_note_list(&mut self, notes: Arc<NoteList>) {
+        *self.note_list.borrow_mut() = notes;
+    }
+
+    /// Playback changes the script asked for since the last call, oldest
+    /// first, for the app to carry out.
+    pub fn take_playback_requests(&mut self) -> Vec<PlaybackRequest> {
+        let Some(compiled) = &self.compiled else { return Vec::new() };
+        compiled.playback_requests.borrow_mut().drain(..).collect()
     }
 
     /// The error to show right now: a standing compile/save error from the
@@ -814,6 +932,8 @@ impl LuaVisualizer {
             &self.notes,
             &self.playback,
             &self.input,
+            &self.note_list,
+            self.path.as_deref(),
             pending_settings,
         ) {
             Ok(compiled) => {
@@ -847,6 +967,8 @@ impl LuaVisualizer {
             &self.notes,
             &self.playback,
             &self.input,
+            &self.note_list,
+            self.path.as_deref(),
             pending_settings,
         ) {
             Ok(compiled) => {
@@ -915,6 +1037,11 @@ impl Visualizer for LuaVisualizer {
             return;
         };
         let _ = compiled.lua.globals().set("DT", dt);
+        compiled.frame.set(compiled.frame.get() + 1);
+        let started = compiled.started.get().unwrap_or(now);
+        compiled.started.set(Some(started));
+        let _ = compiled.lua.globals().set("FRAME", compiled.frame.get());
+        let _ = compiled.lua.globals().set("TIME", now.duration_since(started).as_secs_f64());
 
         let left: Vec<f32> = samples.iter().map(|&(l, _)| l).collect();
         let right: Vec<f32> = samples.iter().map(|&(_, r)| r).collect();
@@ -941,6 +1068,7 @@ impl Visualizer for LuaVisualizer {
         for cmd in compiled.commands.borrow_mut().drain(..) {
             rasterize(buffer, width, height, cmd);
         }
+        compiled.store.borrow_mut().save(false);
     }
 
     fn cursor_request(&self) -> CursorRequest {
@@ -957,6 +1085,8 @@ fn compile(
     notes: &Rc<RefCell<NotesSnapshot>>,
     playback: &Rc<RefCell<EngineView>>,
     input: &Rc<RefCell<VisualizerInput>>,
+    note_list: &Rc<RefCell<Arc<NoteList>>>,
+    script_path: Option<&Path>,
     pending_settings: HashMap<String, serde_json::Value>,
 ) -> Result<Compiled, String> {
     // No io/os/ffi/debug: a visualizer script has no legitimate reason to
@@ -989,6 +1119,9 @@ fn compile(
     .map_err(|e| e.to_string())?;
     let cursor = Rc::new(RefCell::new(CursorRequest::default()));
     register_input(&lua, input, &cursor).map_err(|e| e.to_string())?;
+    let playback_requests: Rc<RefCell<Vec<PlaybackRequest>>> = Rc::default();
+    let store = Rc::new(RefCell::new(ScriptStore::load(script_path)));
+    register_song_and_state(&lua, note_list, &playback_requests, &store).map_err(|e| e.to_string())?;
 
     lua.load(source)
         .set_name("visualizer")
@@ -1009,6 +1142,164 @@ fn compile(
         channel_requests,
         debug_snapshot,
         cursor,
+        playback_requests,
+        store,
+        frame: Cell::new(0),
+        started: Cell::new(None),
+    })
+}
+
+/// `notes_between`, `set_paused`, `seek`, `store_get`, `store_set`.
+fn register_song_and_state(
+    lua: &Lua,
+    note_list: &Rc<RefCell<Arc<NoteList>>>,
+    playback_requests: &Rc<RefCell<Vec<PlaybackRequest>>>,
+    store: &Rc<RefCell<ScriptStore>>,
+) -> mlua::Result<()> {
+    let globals = lua.globals();
+
+    let notes = Rc::clone(note_list);
+    globals.set(
+        "notes_between",
+        lua.create_function(move |lua, (t0, t1): (f64, f64)| {
+            let notes = notes.borrow();
+            let array = lua.create_table()?;
+            for (n, (index, note)) in notes.between(t0, t1).enumerate() {
+                let entry = lua.create_table_with_capacity(0, 6)?;
+                entry.raw_set("id", index + 1)?;
+                entry.raw_set("channel", note.channel)?;
+                entry.raw_set("key", note.key)?;
+                entry.raw_set("velocity", note.velocity)?;
+                entry.raw_set("start", note.start)?;
+                entry.raw_set("stop", note.stop)?;
+                array.raw_set(n + 1, entry)?;
+            }
+            Ok(array)
+        })?,
+    )?;
+
+    let requests = Rc::clone(playback_requests);
+    globals.set(
+        "set_paused",
+        lua.create_function(move |_, paused: bool| {
+            requests.borrow_mut().push(PlaybackRequest::Pause(paused));
+            Ok(())
+        })?,
+    )?;
+    let requests = Rc::clone(playback_requests);
+    globals.set(
+        "seek",
+        lua.create_function(move |_, seconds: f64| {
+            if !seconds.is_finite() {
+                return Err(mlua::Error::runtime("seek() needs a number of seconds"));
+            }
+            requests.borrow_mut().push(PlaybackRequest::Seek(seconds.max(0.0)));
+            Ok(())
+        })?,
+    )?;
+
+    let data = Rc::clone(store);
+    globals.set(
+        "store_get",
+        lua.create_function(move |lua, key: String| match data.borrow().values.get(&key) {
+            Some(value) => json_to_lua(lua, value),
+            None => Ok(Value::Nil),
+        })?,
+    )?;
+    let data = Rc::clone(store);
+    globals.set(
+        "store_set",
+        lua.create_function(move |_, (key, value): (String, Value)| {
+            let mut store = data.borrow_mut();
+            let changed = if value.is_nil() {
+                store.values.remove(&key).is_some()
+            } else {
+                let json = lua_to_json(&value, 0)?;
+                let changed = store.values.get(&key) != Some(&json);
+                if changed {
+                    store.values.insert(key, json);
+                }
+                changed
+            };
+            store.dirty |= changed;
+            Ok(())
+        })?,
+    )?;
+    Ok(())
+}
+
+/// Deepest table nesting `store_set` accepts.
+const MAX_STORE_DEPTH: usize = 16;
+
+/// A Lua value as JSON, for the store: booleans, numbers, strings and tables
+/// (a table with keys 1..n is an array, anything else an object with its
+/// keys as strings). Functions and the like can't be stored.
+fn lua_to_json(value: &Value, depth: usize) -> mlua::Result<serde_json::Value> {
+    use serde_json::Value as Json;
+    Ok(match value {
+        Value::Nil => Json::Null,
+        Value::Boolean(b) => Json::Bool(*b),
+        Value::Integer(i) => Json::from(*i),
+        Value::Number(n) => serde_json::Number::from_f64(*n)
+            .map(Json::Number)
+            .ok_or_else(|| mlua::Error::runtime("store_set can't save inf or nan"))?,
+        Value::String(s) => Json::String(s.to_str()?.to_string()),
+        Value::Table(table) => {
+            if depth >= MAX_STORE_DEPTH {
+                return Err(mlua::Error::runtime("store_set: tables nested too deeply"));
+            }
+            let len = table.raw_len();
+            let pairs: Vec<(Value, Value)> = table.pairs::<Value, Value>().collect::<mlua::Result<_>>()?;
+            if len > 0 && pairs.len() == len {
+                let mut array = Vec::with_capacity(len);
+                for i in 1..=len {
+                    array.push(lua_to_json(&table.raw_get(i)?, depth + 1)?);
+                }
+                Json::Array(array)
+            } else {
+                let mut object = serde_json::Map::new();
+                for (k, v) in pairs {
+                    let key = match k {
+                        Value::String(s) => s.to_str()?.to_string(),
+                        Value::Integer(i) => i.to_string(),
+                        Value::Number(n) => n.to_string(),
+                        _ => return Err(mlua::Error::runtime("store_set: table keys must be strings or numbers")),
+                    };
+                    object.insert(key, lua_to_json(&v, depth + 1)?);
+                }
+                Json::Object(object)
+            }
+        }
+        other => {
+            return Err(mlua::Error::runtime(format!("store_set can't save a {}", other.type_name())));
+        }
+    })
+}
+
+fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> mlua::Result<Value> {
+    use serde_json::Value as Json;
+    Ok(match value {
+        Json::Null => Value::Nil,
+        Json::Bool(b) => Value::Boolean(*b),
+        Json::Number(n) => match n.as_i64() {
+            Some(i) => Value::Integer(i),
+            None => Value::Number(n.as_f64().unwrap_or(0.0)),
+        },
+        Json::String(s) => Value::String(lua.create_string(s)?),
+        Json::Array(items) => {
+            let table = lua.create_table_with_capacity(items.len(), 0)?;
+            for (i, item) in items.iter().enumerate() {
+                table.raw_set(i + 1, json_to_lua(lua, item)?)?;
+            }
+            Value::Table(table)
+        }
+        Json::Object(map) => {
+            let table = lua.create_table_with_capacity(0, map.len())?;
+            for (k, v) in map {
+                table.raw_set(k.as_str(), json_to_lua(lua, v)?)?;
+            }
+            Value::Table(table)
+        }
     })
 }
 
@@ -1147,6 +1438,8 @@ fn register_globals(
     globals.set("SAMPLE_RATE", sample_rate)?;
     globals.set("NOTE_LOOKAHEAD", NOTE_LOOKAHEAD_SECS)?;
     globals.set("DT", 0.0)?;
+    globals.set("FRAME", 0)?;
+    globals.set("TIME", 0.0)?;
 
     let cmds = Rc::clone(commands);
     globals.set(
@@ -1276,6 +1569,7 @@ fn register_globals(
             t.raw_set("paused", view.paused)?;
             t.raw_set("finished", view.finished)?;
             t.raw_set("loop_enabled", view.loop_enabled)?;
+            t.raw_set("generation", view.generation)?;
             Ok(t)
         })?,
     )?;
@@ -1605,6 +1899,7 @@ mod tests {
             paused: false,
             finished: false,
             loop_enabled: false,
+            generation: 0,
         }
     }
 
@@ -1813,6 +2108,95 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         assert!(sidecar_path(&new).exists() && !sidecar_path(&old).exists());
         // Case-only rename of the same file is allowed.
         assert!(rename_script(&new, "My Visualizer").is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn frame(visualizer: &mut LuaVisualizer, playback: &EngineView) {
+        let mut buffer = vec![0u32; 4];
+        visualizer.render(&mut buffer, 2, 2, &[], &NotesSnapshot::default(), playback, &VisualizerInput::default());
+    }
+
+    fn last_log(visualizer: &LuaVisualizer) -> String {
+        visualizer.log_entries().last().map(|e| e.message.clone()).unwrap_or_default()
+    }
+
+    #[test]
+    fn notes_between_returns_whole_notes() {
+        // One track, 480 ticks/quarter at the default 120 bpm: middle C from
+        // 0 to 0.5 s on channel 0.
+        let mut smf = b"MThd\0\0\0\x06\0\0\0\x01\x01\xE0MTrk".to_vec();
+        let track = [0x00, 0x90, 60, 100, 0x83, 0x60, 0x80, 60, 0, 0x00, 0xFF, 0x2F, 0x00];
+        smf.extend((track.len() as u32).to_be_bytes());
+        smf.extend(track);
+        let script = "function render(w, h, l, r)
+            local notes = notes_between(0.25, 1.0)
+            local n = notes[1]
+            log(#notes .. ' ' .. n.id .. ' ' .. n.channel .. ' ' .. n.key .. ' ' .. n.velocity .. ' ' .. n.start .. ' ' .. n.stop)
+            log(#notes_between(0.5, 1.0))
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        visualizer.set_note_list(Arc::new(NoteList::from_smf(&smf).unwrap()));
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(visualizer.error(), None);
+        let messages: Vec<String> = visualizer.log_entries().into_iter().map(|e| e.message).collect();
+        assert_eq!(messages, ["1 1 0 60 100 0.0 0.5", "0"]);
+    }
+
+    #[test]
+    fn frame_time_generation_and_playback_requests() {
+        let script = "function render(w, h, l, r)
+            log(FRAME .. ' ' .. tostring(TIME >= 0) .. ' ' .. playback().generation)
+            if FRAME == 2 then set_paused(true); seek(12.5) end
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let mut playback = sample_playback();
+        playback.generation = 7;
+        frame(&mut visualizer, &playback);
+        assert_eq!(last_log(&visualizer), "1 true 7");
+        assert!(visualizer.take_playback_requests().is_empty());
+        frame(&mut visualizer, &playback);
+        assert_eq!(last_log(&visualizer), "2 true 7");
+        assert_eq!(
+            visualizer.take_playback_requests(),
+            [PlaybackRequest::Pause(true), PlaybackRequest::Seek(12.5)]
+        );
+        // Restart starts the count over.
+        visualizer.restart();
+        frame(&mut visualizer, &playback);
+        assert_eq!(last_log(&visualizer), "1 true 7");
+    }
+
+    #[test]
+    fn store_survives_the_script_being_reloaded() {
+        let dir = std::env::temp_dir().join(format!("synththing-store-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("game.lua");
+        let script = "function render(w, h, l, r)
+            local best = store_get('best') or 0
+            store_set('best', best + 1)
+            store_set('table', { 1, 2, { name = 'x' } })
+            local t = store_get('table')
+            log(best .. ' ' .. #t .. ' ' .. t[3].name .. ' ' .. tostring(store_get('missing')))
+            store_set('gone', nil)
+        end";
+        fs::write(&path, script).unwrap();
+
+        let mut first = LuaVisualizer::new(script.to_string(), Some(path.clone()), 44_100);
+        frame(&mut first, &sample_playback());
+        frame(&mut first, &sample_playback());
+        assert_eq!(last_log(&first), "1 3 x nil");
+        drop(first); // saves
+
+        let mut second = LuaVisualizer::new(script.to_string(), Some(path.clone()), 44_100);
+        frame(&mut second, &sample_playback());
+        assert_eq!(second.error(), None);
+        assert_eq!(last_log(&second), "2 3 x nil");
+        assert!(store_path(&path).exists());
+
+        // Functions can't be stored.
+        second.set_source("function render() store_set('f', print) end".to_string());
+        frame(&mut second, &sample_playback());
+        assert!(second.error().unwrap_or_default().contains("can't save"));
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -27,6 +27,7 @@ use rodio::Source as _;
 use rustysynth::{MidiFile, SoundFont};
 
 use crate::engine::DecodedAudio;
+use crate::midi_notes::NoteList;
 use crate::visualizer::StereoFrame;
 
 /// Loads run on this many threads: enough that a big soundfont parse
@@ -46,9 +47,16 @@ pub enum AssetKind {
     SoundFont,
 }
 
+/// A parsed MIDI file plus every note in it (for `notes_between`).
+#[derive(Clone)]
+pub struct LoadedMidi {
+    pub file: Arc<MidiFile>,
+    pub notes: Arc<NoteList>,
+}
+
 #[derive(Clone)]
 pub enum Asset {
-    Midi(Arc<MidiFile>),
+    Midi(LoadedMidi),
     Audio(Arc<DecodedAudio>),
     SoundFont(Arc<SoundFont>),
 }
@@ -311,10 +319,16 @@ fn load(path: &Path, kind: AssetKind) -> Result<Asset> {
     }
 }
 
-pub fn load_midi(path: &Path) -> Result<Arc<MidiFile>> {
-    let mut file = File::open(path)?;
-    let midi = MidiFile::new(&mut file).map_err(|e| anyhow!("{e}"))?;
-    Ok(Arc::new(midi))
+pub fn load_midi(path: &Path) -> Result<LoadedMidi> {
+    let bytes = std::fs::read(path)?;
+    let file = MidiFile::new(&mut bytes.as_slice()).map_err(|e| anyhow!("{e}"))?;
+    // A file rustysynth plays but this can't list notes from still plays;
+    // scripts just see no notes from notes_between().
+    let notes = NoteList::from_smf(&bytes).unwrap_or_else(|e| {
+        log::warn!("couldn't list the notes in {}: {e}", path.display());
+        NoteList::default()
+    });
+    Ok(LoadedMidi { file: Arc::new(file), notes: Arc::new(notes) })
 }
 
 /// Decode a plain audio file (wav/mp3/ogg/flac/...) fully into memory up

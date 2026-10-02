@@ -30,7 +30,7 @@ use crate::lua_completion::{self, CompletionWorker};
 use crate::lua_docs;
 use crate::lua_highlight;
 use crate::lua_visualizer::{
-    self, DebugVar, LogLevel, LuaVisualizer, SettingDescriptor, SettingKind, SettingValue,
+    self, DebugVar, LogLevel, LuaVisualizer, PlaybackRequest, SettingDescriptor, SettingKind, SettingValue,
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
 use crate::updater::{self, UpdateState, Updater};
@@ -1028,11 +1028,13 @@ impl App {
             return;
         }
         let (path, name) = (rename.path.clone(), rename.name.clone());
+        // Unsaved script data goes to the old name first, then moves along.
+        self.visualizer.visualizer_mut().flush_store();
         match lua_visualizer::rename_script(&path, &name) {
             Ok(new_path) => {
                 self.available_scripts = lua_visualizer::list_scripts(&self.scripts_dir);
                 self.active_script = self.available_scripts.iter().position(|p| *p == new_path);
-                self.visualizer.visualizer_mut().set_path(Some(new_path.clone()));
+                self.visualizer.visualizer_mut().renamed_to(new_path.clone());
                 self.status = format!("Renamed script to {}", lua_visualizer::display_name(&new_path));
                 self.rename = None;
             }
@@ -1234,6 +1236,21 @@ impl App {
         // the last channel" rule.
         for (channel, enabled) in self.visualizer.visualizer_mut().take_channel_requests() {
             self.send(AudioCommand::SetChannelEnabled(channel, enabled));
+        }
+
+        // set_paused / seek from the script. `paused` tracks the effect of
+        // earlier requests this frame, since the engine's view won't
+        // reflect them until next frame.
+        let mut paused = playback.paused;
+        for request in self.visualizer.visualizer_mut().take_playback_requests() {
+            match request {
+                PlaybackRequest::Pause(pause) if pause != paused => {
+                    self.send(AudioCommand::TogglePause);
+                    paused = pause;
+                }
+                PlaybackRequest::Pause(_) => {}
+                PlaybackRequest::Seek(seconds) => self.send(AudioCommand::Seek(seconds)),
+            }
         }
     }
 

@@ -249,7 +249,8 @@
 ## Script API wishlist (from a script author's feedback, 2026-10-02)
 # In the author's order of how much each would have helped. Tags as above.
 
-[S][!!] document units (item 2), answers already found in the code:
+[S][!!] document units (item 2) - DONE, in docs/scripting-reference.md.
+    The answers, for reference:
     - playback().position / length: seconds of song time.
     - upcoming_notes() seconds_until and NOTE_LOOKAHEAD (4.0): song time
       too, not wall-clock. Speed changes how fast song time passes (at 2x,
@@ -259,9 +260,15 @@
       i * SAMPLE_RATE / 1024 Hz (~43.07 Hz apart at 44.1 kHz), from a ~23 ms
       Hann-windowed window; a full-scale sine reads ~1.0; empty table until
       the first 1024 samples have played.
-    Just docs/scripting-reference.md edits; do first.
 
 [M][!!] notes_between(t0, t1) -> {channel, key, velocity, start, stop, id}
+    - DONE without touching the vendored rustysynth: midi_notes.rs reads
+      the Standard MIDI File itself on the loader thread (note on/off
+      paired first-in first-out per channel+key, ticks to seconds through
+      the tempo map, checked against rustysynth's own timing in a test).
+      Any window, held notes included, id = stable index. The same reader
+      can provide the tempo map / time signature for beat() later, still
+      without vendor changes.
     Pairing note-offs to note-ons in Lua is the fiddliest part of game
     scripts (upcoming_notes repeats events every frame until they play, so
     scripts dedupe by float timestamps). Pair them once in Rust at MIDI
@@ -272,33 +279,45 @@
     the after-seek / script-start gap). Could also add an id to
     upcoming_notes entries as the smaller step.
 
-[M][!] text(x, y, string, color, size) and text_width(string, size)
-    Three scripts so far wrote their own bitmap font. A built-in bitmap
-    font rasterized in Rust (same command queue as rect/line), integer
-    scale for size.
+[M][!] text drawing (next up; design from discussion 2026-10-02)
+    Three scripts so far wrote their own bitmap font. Plan:
+    - An existing pixel-art font, embedded in the binary, drawn with pure
+      nearest-neighbor scaling (no smoothing), through the same command
+      queue as rect/line.
+    - The script gives a pixel height, not a font size, for easy layout:
+      text(x, y, string, color, height) -> width drawn. Heights that are a
+      whole multiple of the font's native height stay perfectly crisp;
+      other heights still work (nearest-neighbor), just with uneven pixels.
+    - Measuring without drawing, for laying out tables first:
+      text_width(string, height), or a dry-run flag on text().
+    - Candidate fonts, all free to embed (check the license file when
+      picking): Monogram (CC0), Pixel Operator (CC0), Spleen (BSD), Cozette
+      (MIT), Press Start 2P (OFL). Needs a pick.
 
-[S][!] seek/loop generation in playback()
+[S][!] seek/loop generation in playback() - DONE (playback().generation)
     A counter that bumps on every seek, loop and new song, so scripts
     detect discontinuities exactly instead of guessing from position
     jumps. Engine-side counter, passed through EngineView.
 
-[S][!] persistent script storage: store_get(key) / store_set(key, value)
+[S][!] persistent script storage: store_get(key) / store_set(key, value) - DONE
+    (<script>.lua.store.json; tables supported; Rename moves it too)
     Script-owned saved state (high scores, unlocks), separate from the
     user-facing settings. A <script>.lua.store.json sidecar next to the
     settings one; bool/number/string values (maybe nested tables via
     JSON); written when changed, debounced. Rename should carry it along
     like the settings sidecar.
 
-[S][!] playback control from scripts: set_paused(bool), seek(t)
+[S][!] playback control from scripts: set_paused(bool), seek(t) - DONE
+    (allowed always, like set_channel_enabled)
     Pause on death, "retry this section", practice loops. Same pattern as
     set_channel_enabled (queued requests, the app sends AudioCommands).
     Worth deciding whether it's allowed always or only while focused.
 
 [M][.] musical timing: beat() (position in beats), tempo, time signature
-    For beat-synced effects and rhythm-game judgment windows. Needs the
-    vendored rustysynth MidiFile patched to keep tempo (FF 51) and time
-    signature (FF 58) events with their times; beat() is then a lookup
-    in that map. Nothing for plain audio files.
+    For beat-synced effects and rhythm-game judgment windows. Now doable
+    without patching the vendored rustysynth: midi_notes.rs already reads
+    tempo events (FF 51); add time signatures (FF 58) and keep both as a
+    map, then beat() is a lookup. Nothing for plain audio files.
 
 [S/M][.] cheap audio features: level_left/right() (RMS), onset flag
     RMS is trivial in Rust over the frame's samples. Onset (e.g. spectral
@@ -313,11 +332,20 @@
     keep being the main use.
 
 Smaller:
-[S][.] FRAME counter and an unclamped wall clock (TIME) global, since DT
-    is capped at 0.25 now.
+[S][.] FRAME counter and an unclamped wall clock (TIME) - DONE
 [M][!] headless script runner: synththing --run-script file.lua
     --frames N [--midi song.mid], feeding a MIDI file through the engine
     without a window and reporting runtime errors, so script authors can
-    test without mocking the API. Note: release builds have no console
-    (windows_subsystem = "windows"), so output needs AttachConsole on
-    Windows or results written to a file / exit code.
+    test without mocking the API.
+    Console question: windows_subsystem is decided at compile time, per
+    exe, so one exe can't be a GUI app when double-clicked and a console
+    app when run from a terminal. Options:
+    - A second small binary (src/bin, e.g. synththing-cli.exe) built as a
+      console app, sharing the engine and script code, shipped alongside.
+      Cleanest: the terminal waits for it and gets its output and exit
+      code. (Recommended.)
+    - Keep one exe and AttachConsole(ATTACH_PARENT_PROCESS) when run with
+      CLI flags: output shows in the terminal, but the shell doesn't wait
+      for it, so prompts and output interleave and exit codes are lost.
+    - Make the exe a console app and hide the console when it's a GUI
+      launch: a console window flashes up on double-click.

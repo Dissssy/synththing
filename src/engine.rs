@@ -45,6 +45,9 @@ pub struct EngineView {
     pub paused: bool,
     pub finished: bool,
     pub loop_enabled: bool,
+    /// Bumps on every seek, every loop back to the start, and every newly
+    /// loaded song: anything that makes `position` jump rather than run on.
+    pub generation: u64,
 }
 
 pub struct Engine {
@@ -67,6 +70,8 @@ pub struct Engine {
     channels_enabled: [bool; 16],
     /// Restart from the top instead of finishing, when the track runs out.
     loop_enabled: bool,
+    /// See `EngineView::generation`.
+    generation: u64,
 }
 
 impl Engine {
@@ -87,6 +92,7 @@ impl Engine {
             detected_channels: Vec::new(),
             channels_enabled: [true; 16],
             loop_enabled: false,
+            generation: 0,
         }
     }
 
@@ -107,6 +113,7 @@ impl Engine {
             paused: self.paused,
             finished: self.finished,
             loop_enabled: self.loop_enabled,
+            generation: self.generation,
         }
     }
 
@@ -183,6 +190,7 @@ impl Engine {
 
     /// Load a MIDI file and start playing it from the top (if a soundfont is loaded).
     pub fn load_midi(&mut self, midi: Arc<MidiFile>, name: String) {
+        self.generation += 1;
         self.audio_file = None;
         self.length = midi.get_length();
         self.track_name = Some(name);
@@ -202,6 +210,7 @@ impl Engine {
     /// Load a plain audio file (already decoded) and start playing it from the
     /// top. No soundfont needed, there's nothing to synthesize.
     pub fn load_audio_file(&mut self, data: Arc<DecodedAudio>, name: String) {
+        self.generation += 1;
         self.midi = None;
         self.length = data.samples.len() as f64 / data.sample_rate as f64;
         self.track_name = Some(name);
@@ -302,6 +311,7 @@ impl Engine {
     /// seek, so we restart the sequence and fast-forward through it silently;
     /// for a decoded audio file it's just moving the read head.
     pub fn seek(&mut self, target: f64) {
+        self.generation += 1;
         let target = target.clamp(0.0, self.length.max(0.0));
 
         if let Some(audio) = &mut self.audio_file {
@@ -337,9 +347,14 @@ impl Engine {
         if let Some(audio) = self.audio_file.as_mut() {
             let reached_end =
                 render_audio_file(audio, self.speed, self.sample_rate, self.loop_enabled, out);
-            if reached_end && !self.loop_enabled {
-                self.finished = true;
-                self.paused = true;
+            if reached_end {
+                if self.loop_enabled {
+                    // Wrapped back to the start inside render_audio_file.
+                    self.generation += 1;
+                } else {
+                    self.finished = true;
+                    self.paused = true;
+                }
             }
             return;
         }

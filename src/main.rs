@@ -18,6 +18,7 @@ mod lua_completion;
 mod lua_docs;
 mod lua_highlight;
 mod lua_visualizer;
+mod midi_notes;
 mod playlist;
 mod spectrum;
 mod updater;
