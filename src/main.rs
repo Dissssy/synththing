@@ -7,6 +7,8 @@
 //! buffer so a dense passage can't stall the audio callback or the GUI.
 
 mod app;
+mod cli;
+mod headless;
 mod applog;
 mod audio;
 mod config;
@@ -35,12 +37,26 @@ use anyhow::{anyhow, Result};
 use eframe::egui;
 
 use crate::app::App;
+use crate::cli::{Cli, Command};
+use clap::Parser;
 use crate::audio::{AudioEngine, AudioRing, PlaybackShared, SynthSource};
 use crate::config::Config;
 use crate::engine::Engine;
 use crate::visualizer::SampleTap;
 
 fn main() -> Result<()> {
+    // Arguments mean someone ran this from a terminal: attach to it first,
+    // so --help, errors and run-script output show up there.
+    if std::env::args_os().len() > 1 && cli::attach_console() {
+        println!();
+    }
+    let cli = Cli::parse();
+
+    if let Some(Command::RunScript(args)) = &cli.command {
+        let config = Config::load().unwrap_or_default();
+        std::process::exit(headless::run(args, &config));
+    }
+
     applog::init();
     log::info!("synththing v{} starting", env!("CARGO_PKG_VERSION"));
 
@@ -87,7 +103,7 @@ fn main() -> Result<()> {
     let mut app = App::new(command_tx, shared, config, tap, sample_rate);
     app.autoload_first_soundfont();
     app.check_for_updates_on_launch();
-    if std::env::args().any(|a| a == "--visualizer" || a == "--viz") {
+    if cli.visualizer {
         app.set_visualizer_open(true);
     }
 

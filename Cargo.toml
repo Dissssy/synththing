@@ -22,6 +22,10 @@ egui_dock = { version = "0.21.1", features = ["serde"] }      # dockable, rearra
 ureq = { version = "3.4", features = ["json"] }            # HTTPS for update checks/downloads
 semver = "1.0"                                            # comparing release versions
 self-replace = "1.5"                                      # swapping the running exe on update
-sha2 = "0.11"
-log = "0.4"                                               # app-wide log (applog.rs)                                             # verifying downloaded updates
+sha2 = "0.11"                                             # verifying downloaded updates
+log = "0.4"                                               # app-wide log (applog.rs)
 notify = "8"                                              # live-refresh watched folders (watch.rs)
+clap = { version = "4.6", features = ["derive"] }         # command-line arguments (cli.rs)
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }  # re-attach to the terminal for CLI use

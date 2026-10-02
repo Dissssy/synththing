@@ -279,7 +279,9 @@
     the after-seek / script-start gap). Could also add an id to
     upcoming_notes entries as the smaller step.
 
-[M][!] text drawing (next up; design from discussion 2026-10-02)
+[M][!] text drawing - DONE (pixel_font.rs: Monogram, CC0, by Vinícius
+    Menézio; text() returns width/height, text_size() measures, height is
+    the line height in pixels, FONT_HEIGHT = 12). Original plan:
     Three scripts so far wrote their own bitmap font. Plan:
     - An existing pixel-art font, embedded in the binary, drawn with pure
       nearest-neighbor scaling (no smoothing), through the same command
@@ -333,7 +335,11 @@
 
 Smaller:
 [S][.] FRAME counter and an unclamped wall clock (TIME) - DONE
-[M][!] headless script runner: synththing --run-script file.lua
+[M][!] headless script runner - DONE as `synththing run-script` (headless.rs,
+    cli.rs with clap; release exe re-attaches to the launching terminal via
+    AttachConsole when given arguments; documented in docs/cli.md; fixed
+    1/fps timestep). Original notes:
+    synththing --run-script file.lua
     --frames N [--midi song.mid], feeding a MIDI file through the engine
     without a window and reporting runtime errors, so script authors can
     test without mocking the API.
@@ -349,3 +355,12 @@ Smaller:
       for it, so prompts and output interleave and exit codes are lost.
     - Make the exe a console app and hide the console when it's a GUI
       launch: a console window flashes up on double-click.
+
+[S][.] credits & licenses modal - DONE
+    Help > Credits & licenses: GitHub contributors (fetched on first
+    open), Monogram attribution + its credits.txt, Lua's license, and all
+    libraries in the Windows build with license texts
+    (assets/licenses/third_party.json from `cargo run --example
+    gen_licenses`; a test fails if it drifts from Cargo.lock).
+    Release checklist (incl. keeping docs/scripting-reference.md and
+    docs/cli.md current before every commit): docs/RELEASING.md.

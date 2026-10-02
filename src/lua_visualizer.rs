@@ -810,6 +810,9 @@ pub struct LuaVisualizer {
     /// `notes_between`. Song data, so it outlives recompiles.
     note_list: Rc<RefCell<Arc<NoteList>>>,
     last_render_instant: Option<Instant>,
+    /// Seconds per frame for DT and TIME instead of the wall clock: set
+    /// for headless runs, which render frames much faster than real time.
+    fixed_timestep: Option<f64>,
 }
 
 impl LuaVisualizer {
@@ -828,6 +831,7 @@ impl LuaVisualizer {
             input: Rc::new(RefCell::new(VisualizerInput::default())),
             note_list: Rc::new(RefCell::new(Arc::default())),
             last_render_instant: None,
+            fixed_timestep: None,
         };
         visualizer.set_source(source);
         visualizer
@@ -849,6 +853,20 @@ impl LuaVisualizer {
             compiled.store.borrow_mut().path = Some(store_path(&path));
         }
         self.path = Some(path);
+    }
+
+    /// Frames are `step` seconds apart (for DT and TIME) rather than timed
+    /// by the wall clock; `None` for real time.
+    pub fn set_fixed_timestep(&mut self, step: Option<f64>) {
+        self.fixed_timestep = step;
+    }
+
+    /// Keep the running script's store in memory only: it still reads
+    /// what's saved, but writes nothing (headless test runs).
+    pub fn detach_store(&mut self) {
+        if let Some(compiled) = &self.compiled {
+            compiled.store.borrow_mut().path = None;
+        }
     }
 
     /// Write the running script's store out now if it has unsaved changes.
@@ -1031,10 +1049,13 @@ impl Visualizer for LuaVisualizer {
         let now = Instant::now();
         // Capped, so a stretch of not rendering at all (Visualizer tab
         // hidden, Preferences open) reads as one slow frame, not a jump.
-        let dt = self
-            .last_render_instant
-            .map(|prev| now.duration_since(prev).as_secs_f64().min(MAX_DT))
-            .unwrap_or(0.0);
+        // With a fixed timestep (headless runs), every frame is exactly
+        // that long instead.
+        let dt = match (self.last_render_instant, self.fixed_timestep) {
+            (None, _) => 0.0,
+            (Some(_), Some(step)) => step,
+            (Some(prev), None) => now.duration_since(prev).as_secs_f64().min(MAX_DT),
+        };
         self.last_render_instant = Some(now);
 
         let Some(compiled) = &self.compiled else {
@@ -1044,8 +1065,12 @@ impl Visualizer for LuaVisualizer {
         compiled.frame.set(compiled.frame.get() + 1);
         let started = compiled.started.get().unwrap_or(now);
         compiled.started.set(Some(started));
+        let time = match self.fixed_timestep {
+            Some(step) => (compiled.frame.get() - 1) as f64 * step,
+            None => now.duration_since(started).as_secs_f64(),
+        };
         let _ = compiled.lua.globals().set("FRAME", compiled.frame.get());
-        let _ = compiled.lua.globals().set("TIME", now.duration_since(started).as_secs_f64());
+        let _ = compiled.lua.globals().set("TIME", time);
 
         let left: Vec<f32> = samples.iter().map(|&(l, _)| l).collect();
         let right: Vec<f32> = samples.iter().map(|&(_, r)| r).collect();

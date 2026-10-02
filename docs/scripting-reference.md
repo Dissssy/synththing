@@ -258,6 +258,14 @@ local best = store_get("best") or 0
 if score > best then store_set("best", score) end
 ```
 
+## Testing scripts from the command line
+
+```
+synththing run-script my_script.lua --song song.mid --frames 1800
+```
+
+Runs a script with no window, playing the song into it, and prints its errors (with the frame and song position each happened at), its log and a summary; the exit code is 0 if it ran cleanly and 1 if it had errors. `DT` is exactly 1/60 per frame and `TIME` counts frames, so runs are repeatable, and saved data isn't written unless you add `--save-data`. Mouse and keyboard input isn't simulated. All the options are in `docs/cli.md` in the repository, or `synththing run-script --help`.
+
 ## Performance
 
 A script runs on every rendered frame while it's on screen, so the usual budget is the 60fps frame, ~16.7ms, but each draw call's cost scales with how many pixels it actually touches, not just how many calls you make, so a heatmap-style script needs more care than a line plot.
