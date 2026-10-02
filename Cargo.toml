@@ -24,3 +24,4 @@ semver = "1.0"                                            # comparing release ve
 self-replace = "1.5"                                      # swapping the running exe on update
 sha2 = "0.11"
 log = "0.4"                                               # app-wide log (applog.rs)                                             # verifying downloaded updates
+notify = "8"                                              # live-refresh watched folders (watch.rs)

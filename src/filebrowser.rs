@@ -75,6 +75,15 @@ impl FileBrowser {
         self.hovered = None;
     }
 
+    /// Re-read the current folder (and the search results, mid-search),
+    /// e.g. because files in it changed on disk.
+    pub fn rescan(&mut self) {
+        self.refresh();
+        if !self.search_query.trim().is_empty() {
+            self.search_candidates = Some(self.collect_candidates());
+        }
+    }
+
     /// The directory currently being listed.
     pub fn cwd(&self) -> &Path {
         &self.cwd

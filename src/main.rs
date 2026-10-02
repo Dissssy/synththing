@@ -21,6 +21,7 @@ mod lua_visualizer;
 mod playlist;
 mod spectrum;
 mod updater;
+mod watch;
 mod visualizer;
 
 use std::sync::atomic::AtomicBool;

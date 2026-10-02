@@ -34,6 +34,7 @@ use crate::lua_visualizer::{
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
 use crate::updater::{self, UpdateState, Updater};
+use crate::watch::{FolderWatch, Watched};
 use crate::visualizer::{DisplayMode, NotesSnapshot, SampleTap, ShowOutput, VisualizerPanel};
 
 const VISUALIZER_WIDTH: usize = 800;
@@ -174,6 +175,9 @@ pub struct App {
     /// Move the editor's text cursor to this line (1-based) and scroll to
     /// it, the next time the editor is drawn ("Go to line").
     editor_goto_line: Option<usize>,
+    /// Watches the Songs folder and the scripts folder for changes on disk.
+    /// Made on the first frame (it needs the egui context to wake the UI).
+    folder_watch: Option<FolderWatch>,
     playlists: Library,
     /// The playlist shown in the Playlists panel (not necessarily the one
     /// playing).
@@ -288,6 +292,7 @@ impl App {
             logged_status: String::new(),
             rename: None,
             editor_goto_line: None,
+            folder_watch: None,
             playlists,
             viewed_playlist,
             now_playing: None,
@@ -1065,6 +1070,47 @@ impl App {
     /// keys pause.
     fn any_modal_open(&self) -> bool {
         self.preferences_open || self.log_open || self.updates_open || self.rename.is_some()
+    }
+
+    /// Pick up files added, removed or changed on disk in the folders on
+    /// screen: the Songs browser's current folder and the scripts folder.
+    fn refresh_changed_folders(&mut self, ctx: &egui::Context) {
+        let watch = self.folder_watch.get_or_insert_with(|| FolderWatch::new(ctx.clone()));
+        watch.watch(Watched::Songs, self.browser.cwd());
+        watch.watch(Watched::Scripts, &self.scripts_dir);
+        for which in watch.poll() {
+            match which {
+                Watched::Songs => self.browser.rescan(),
+                Watched::Scripts => self.rescan_scripts(),
+            }
+        }
+    }
+
+    /// The scripts folder changed: refresh the picker, and if the running
+    /// script's own file changed (edited in another editor, say), load the
+    /// new version into the editor and visualizer. The app's own saves
+    /// leave the file matching the editor, so they don't reload anything.
+    fn rescan_scripts(&mut self) {
+        let current = self.visualizer.visualizer().path().map(Path::to_path_buf);
+        self.available_scripts = lua_visualizer::list_scripts(&self.scripts_dir);
+        self.active_script = current.as_ref().and_then(|p| self.available_scripts.iter().position(|q| q == p));
+        let Some(path) = current else {
+            return;
+        };
+        let name = lua_visualizer::display_name(&path);
+        match std::fs::read_to_string(&path) {
+            Ok(text) if text != self.editor_text => {
+                self.editor_text = text.clone();
+                self.completion.request(text.clone());
+                self.visualizer.visualizer_mut().set_source(text);
+                self.status = format!("Reloaded {name} (changed on disk).");
+            }
+            Ok(_) => {}
+            Err(_) if !path.exists() => {
+                self.status = format!("{name}.lua was moved or deleted; it keeps running until another script is picked.");
+            }
+            Err(e) => log::warn!("couldn't re-read {}: {e}", path.display()),
+        }
     }
 
     /// Remember Loop and Shuffle for next launch.
@@ -1971,6 +2017,7 @@ impl eframe::App for App {
         self.pause_for_preferences(view);
         self.handle_os_file_drops(&ctx);
         self.poll_loads();
+        self.refresh_changed_folders(&ctx);
         if !self.preferences_open {
             self.playlist_tick(view);
         }

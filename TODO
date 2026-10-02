@@ -235,3 +235,13 @@
 [S][.] CI on every push - DONE
     .github/workflows/ci.yml builds and runs the tests on every push to
     master and every pull request (release.yml still does releases).
+
+[S][.] live refresh of folders on screen - DONE
+    watch.rs (notify crate, OS change notifications, no polling) watches
+    the Songs browser's current folder and the scripts folder; changes
+    settle for 300 ms, then the browser re-lists (search results too) and
+    the script picker refreshes. If the running script's own file changed
+    (edited in another editor), it's reloaded into the editor and
+    visualizer; the app's own saves match the editor, so they don't.
+    Not watched: saved playlists (their missing-file marks update when a
+    track fails to load) and the soundfont list (it's a list, not a folder).

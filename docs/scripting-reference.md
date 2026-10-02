@@ -38,7 +38,7 @@ Scripts live in the `visualizers` folder of the app's config folder (`%APPDATA%\
 - Restart (or F5, from anywhere): starts the running script over on a fresh Lua VM, all of its own state reset, its settings kept.
 - Rename: renames the running script's file (its settings file comes along). A renamed bundled script no longer offers Restore default, since it's no longer under the bundled name.
 
-Live reload: editing a script in the Script Editor saves it and recompiles it on a fresh Lua VM as you type. A script that fails to compile leaves whatever was running before still running; the error shows above the editor and in this script's log (Script Settings tab) and stays until you fix it or revert. Restart restarts the version that's running, not the broken edit.
+Live reload: editing a script in the Script Editor saves it and recompiles it on a fresh Lua VM as you type. Editing the file in another editor works too: when the running script's file changes on disk, the app loads the new version into the editor and visualizer, and the script list updates as files are added, removed or renamed in the folder. A script that fails to compile leaves whatever was running before still running; the error shows above the editor and in this script's log (Script Settings tab) and stays until you fix it or revert. Restart restarts the version that's running, not the broken edit.
 
 ## The editor
 
