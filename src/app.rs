@@ -859,13 +859,12 @@ impl App {
         }
 
         let current = updater::current_version();
-        let mut open = true;
         let mut close = false;
-        egui::Window::new("Updates")
-            .open(&mut open)
-            .collapsible(false)
-            .default_width(420.0)
-            .show(ctx, |ui| match &state {
+        let response = egui::Modal::new(egui::Id::new("updates")).show(ctx, |ui| {
+            ui.set_width(440.0);
+            ui.heading("Updates");
+            ui.add_space(4.0);
+            match &state {
                 UpdateState::Idle => {
                     if ui.button("Check for updates").clicked() {
                         self.updater.check();
@@ -942,10 +941,29 @@ impl App {
                         self.updater.check();
                     }
                 }
-            });
-        if !open || close {
+            }
+            // Every state but Available has its own way out above, so a
+            // plain Close for the rest. (A download carries on in the
+            // background if this closes, and Help > Check for updates
+            // shows how it went.)
+            if !matches!(state, UpdateState::Available(_) | UpdateState::Installed(_)) {
+                ui.add_space(8.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                });
+            }
+        });
+        if close || response.should_close() {
             self.updates_open = false;
         }
+    }
+
+    /// Whether one of the app's modals (Preferences, Log, Updates) is up.
+    /// They get the keyboard: app shortcuts and the global keys pause.
+    fn any_modal_open(&self) -> bool {
+        self.preferences_open || self.log_open || self.updates_open
     }
 
     /// The section tabs, filling everything between the menu bar and the
@@ -1735,7 +1753,8 @@ impl eframe::App for App {
         // windowed, F11 toggles the dedicated visualizer fullscreen, F5
         // restarts the running script. Escape is only taken when there's a
         // fullscreen to leave, so it still does its usual job elsewhere.
-        if !self.preferences_open {
+        // Not while a modal is up: Escape closes the modal instead.
+        if !self.any_modal_open() {
             let in_fullscreen = self.fullscreen || self.dedicated.is_some();
             let (escape, f11, f5) = ctx.input_mut(|i| {
                 (
@@ -1764,7 +1783,7 @@ impl eframe::App for App {
         // Single-key shortcuts are suspended whenever some widget (namely the
         // song browser's search box) has keyboard focus, so typing "v" there
         // types a "v" instead of toggling the visualizer.
-        let typing = ctx.memory(|m| m.focused().is_some()) || self.preferences_open || self.log_open;
+        let typing = ctx.memory(|m| m.focused().is_some()) || self.any_modal_open();
         let mut toggle_fullscreen = false;
         let mut toggle_visualizer = false;
         let mut next = false;

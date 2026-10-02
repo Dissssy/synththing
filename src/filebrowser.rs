@@ -1,8 +1,7 @@
-//! A minimal file browser widget. Used two ways: inline as the always-visible
-//! song panel, where clicking a `.mid` plays it and marks it with a dot, and
-//! inside a modal `egui::Window` for adding a soundfont to the retained list.
-//! Both just call [`FileBrowser::ui`], it returns `Some(path)` when a *file*
-//! row is clicked; clicking a directory navigates into it internally.
+//! A minimal file browser widget: the Songs tab, where clicking a song plays
+//! it and marks it as playing. [`FileBrowser::ui`] returns `Some(path)` when
+//! a *file* row is clicked; clicking a directory navigates into it
+//! internally. File rows can also be dragged out (onto a playlist).
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
