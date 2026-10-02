@@ -63,6 +63,37 @@ pixel(x, y, {r,g,b,a})
 
 The buffer is cleared to all-black before your `render()` runs, there's no double buffering, so anything you want visible this frame has to be drawn this frame, including whatever scrolling history your own script is keeping track of.
 
+## Text
+
+```lua
+text(x, y, string, {r,g,b,a}, [height]) -> width, height   -- draw, and get the size drawn
+text_size(string, [height]) -> width, height               -- measure only, draws nothing
+FONT_HEIGHT                                                 -- 12, the font's own line height
+```
+
+Text uses the built-in Monogram pixel font, scaled with pure nearest-neighbor so its pixels stay crisp, square blocks. `height` is the height of one line in pixels (default `FONT_HEIGHT`), and the text fills the box from `y` to `y + height` per line: the line box includes room for accents above capitals and descenders below, with capitals taking rows 3 to 10 of the font's 12. Whole multiples of `FONT_HEIGHT` (12, 24, 36, ...) keep every font pixel exactly square; any other height works but some pixels come out a pixel wider or taller than others.
+
+Every character is the same width (monospace): 6 font pixels per character, the last one blank. The returned width ends at the last drawn column of the widest line, and the returned height is lines times `height`. `\n` starts a new line. Characters the font doesn't have draw as `?`; it covers ASCII, accented Latin letters, Cyrillic and a few symbols and arrows.
+
+`text_size` gives the same numbers as `text` without drawing anything, for laying things out before drawing, like a table whose columns depend on its widest entry:
+
+```lua
+local rows = { { "Player", "Score" }, { "you", "1200" } }
+local h = 24
+local col = 0
+for _, row in ipairs(rows) do
+    local w = text_size(row[1], h) -- just the width; the height is the second value
+    col = math.max(col, w)
+end
+for i, row in ipairs(rows) do
+    local y = 8 + (i - 1) * h
+    text(8, y, row[1], { r = 230, g = 230, b = 240 }, h)
+    text(8 + col + 16, y, row[2], { r = 255, g = 200, b = 60 }, h)
+end
+```
+
+Text is drawn as rects, so it alpha-blends and clips at the edges exactly like `rect`.
+
 ## Audio data
 
 ```lua

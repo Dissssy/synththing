@@ -19,6 +19,7 @@ mod lua_docs;
 mod lua_highlight;
 mod lua_visualizer;
 mod midi_notes;
+mod pixel_font;
 mod playlist;
 mod spectrum;
 mod updater;

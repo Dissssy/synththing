@@ -41,6 +41,8 @@
 //!   `mouse_down/pressed/released([button])`, `key_down/pressed/released(name)`,
 //!   `has_focus()`, `display_mode()`. Mouse while the pointer is over the
 //!   visualizer, keys while it has focus; Escape is never reported.
+//! * `text(x, y, string, color, [height])` / `text_size(string, [height])`,
+//!   pixel text in the built-in Monogram font (see `pixel_font.rs`).
 //! * `notes_between(t0, t1)`, every note sounding in a time window, whole:
 //!   `{id, channel, key, velocity, start, stop}` (see `midi_notes.rs`).
 //! * `set_paused(paused)` / `seek(seconds)`, playback control, queued like
@@ -84,6 +86,7 @@ use serde::Deserialize;
 use crate::config::{config_dir, nice_name};
 use crate::engine::{EngineView, NOTE_LOOKAHEAD_SECS};
 use crate::midi_notes::NoteList;
+use crate::pixel_font;
 use crate::spectrum::SpectrumAnalyzer;
 use crate::visualizer::{
     ActiveNote, CursorRequest, NoteChange, NotesSnapshot, RESERVED_KEYS, StereoFrame, Visualizer,
@@ -103,6 +106,7 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 --
 -- Draw with clear/line/rect/pixel; color tables take an optional `a` (0..1).
 --   clear({r,g,b})  line(x0,y0,x1,y1,{r,g,b,a})  rect(...)  pixel(x,y,{r,g,b,a})
+--   text(x, y, string, color, height) / text_size(string, height)  pixel text
 -- fft_left(left) / fft_right(right)     magnitude spectrum, computed in Rust
 -- notes_between(t0, t1)                 whole notes with start/stop times
 -- active_notes() / upcoming_notes()     notes held now / changing soon
@@ -1476,6 +1480,31 @@ fn register_globals(
         )?,
     )?;
 
+    // Pixel text (Monogram, see pixel_font.rs): drawn as rects, so it
+    // blends and clips exactly like rect() does.
+    globals.set("FONT_HEIGHT", pixel_font::CELL_HEIGHT)?;
+    let cmds = Rc::clone(commands);
+    globals.set(
+        "text",
+        lua.create_function(
+            move |_, (x, y, text, color, height): (f32, f32, String, Table, Option<f32>)| {
+                let color = table_to_color(&color)?;
+                let height = text_height(height)?;
+                let mut cmds = cmds.borrow_mut();
+                pixel_font::layout(&text, x, y, height, |x0, y0, x1, y1| {
+                    cmds.push(DrawCommand::Rect { x0, y0, x1, y1, color });
+                });
+                Ok(pixel_font::measure(&text, height))
+            },
+        )?,
+    )?;
+    globals.set(
+        "text_size",
+        lua.create_function(|_, (text, height): (String, Option<f32>)| {
+            Ok(pixel_font::measure(&text, text_height(height)?))
+        })?,
+    )?;
+
     let cmds = Rc::clone(commands);
     globals.set(
         "pixel",
@@ -1744,6 +1773,17 @@ fn vec_to_table(lua: &Lua, values: &[f32]) -> mlua::Result<Table> {
         table.raw_set(i + 1, v)?;
     }
     Ok(table)
+}
+
+/// A text line height from a script: `FONT_HEIGHT` when not given; must be
+/// a positive, finite number of pixels (capped, so a typo can't ask for
+/// gigantic text).
+fn text_height(height: Option<f32>) -> mlua::Result<f32> {
+    let height = height.unwrap_or(pixel_font::CELL_HEIGHT as f32);
+    if !(height.is_finite() && height > 0.0) {
+        return Err(mlua::Error::runtime("text height must be a positive number of pixels"));
+    }
+    Ok(height.min(4096.0))
 }
 
 fn rasterize(buffer: &mut [u32], width: usize, height: usize, cmd: DrawCommand) {
@@ -2198,6 +2238,26 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         frame(&mut second, &sample_playback());
         assert!(second.error().unwrap_or_default().contains("can't save"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn text_draws_inside_the_size_it_returns() {
+        let script = "function render(w, h, l, r)
+            clear({ r = 0, g = 0, b = 0 })
+            local tw, th = text(0, 0, 'Hi', { r = 255, g = 255, b = 255 }, FONT_HEIGHT)
+            local mw, mh = text_size('Hi', 24)
+            log(tw .. ' ' .. th .. ' ' .. mw .. ' ' .. mh)
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let (w, h) = (32, 16);
+        let mut buffer = vec![0u32; w * h];
+        visualizer.render(&mut buffer, w, h, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        assert_eq!(visualizer.error(), None);
+        assert_eq!(last_log(&visualizer), "11.0 12.0 22.0 24.0");
+        let lit: Vec<(usize, usize)> =
+            (0..w * h).filter(|&i| buffer[i] == 0x00FF_FFFF).map(|i| (i % w, i / w)).collect();
+        assert!(!lit.is_empty());
+        assert!(lit.iter().all(|&(x, y)| x < 11 && y < 12), "{lit:?}");
     }
 
     #[test]
