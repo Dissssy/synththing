@@ -23,6 +23,8 @@ pub const NOTE_LOOKAHEAD_SECS: f64 = 4.0;
 pub struct DecodedAudio {
     pub samples: Vec<StereoFrame>,
     pub sample_rate: u32,
+    /// See `loader::song_id`.
+    pub song_id: String,
 }
 
 /// Playback head into a [`DecodedAudio`].

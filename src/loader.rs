@@ -14,8 +14,7 @@
 //! has it loaded; if one does, the stale copy only lives until it expires.
 
 use std::collections::{HashMap, VecDeque};
-use std::fs::File;
-use std::io::BufReader;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
@@ -25,6 +24,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use rodio::Source as _;
 use rustysynth::{MidiFile, SoundFont};
+use sha2::{Digest, Sha256};
 
 use crate::engine::DecodedAudio;
 use crate::midi_notes::NoteList;
@@ -52,6 +52,15 @@ pub enum AssetKind {
 pub struct LoadedMidi {
     pub file: Arc<MidiFile>,
     pub notes: Arc<NoteList>,
+    /// See [`song_id`].
+    pub song_id: String,
+}
+
+/// A song's identity for scripts (`playback().song_id`): the start of the
+/// SHA-256 of the file's bytes, so it follows the song itself, not where
+/// it's kept or what it's called.
+pub fn song_id(bytes: &[u8]) -> String {
+    Sha256::digest(bytes).iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
 #[derive(Clone)]
@@ -328,7 +337,7 @@ pub fn load_midi(path: &Path) -> Result<LoadedMidi> {
         log::warn!("couldn't list the notes in {}: {e}", path.display());
         NoteList::default()
     });
-    Ok(LoadedMidi { file: Arc::new(file), notes: Arc::new(notes) })
+    Ok(LoadedMidi { file: Arc::new(file), notes: Arc::new(notes), song_id: song_id(&bytes) })
 }
 
 /// Decode a plain audio file (wav/mp3/ogg/flac/...) fully into memory up
@@ -336,8 +345,9 @@ pub fn load_midi(path: &Path) -> Result<LoadedMidi> {
 /// re-decoding needed. Mono is duplicated to stereo; anything beyond stereo
 /// keeps only its first two channels.
 pub fn load_audio_file(path: &Path) -> Result<Arc<DecodedAudio>> {
-    let file = BufReader::new(File::open(path)?);
-    let decoder = rodio::Decoder::new(file).map_err(|e| anyhow!("{e}"))?;
+    let bytes = std::fs::read(path)?;
+    let id = song_id(&bytes);
+    let decoder = rodio::Decoder::new(Cursor::new(bytes)).map_err(|e| anyhow!("{e}"))?;
     let channels = decoder.channels().get() as usize;
     let sample_rate = decoder.sample_rate().get();
 
@@ -351,7 +361,7 @@ pub fn load_audio_file(path: &Path) -> Result<Arc<DecodedAudio>> {
         return Err(anyhow!("no audio data decoded"));
     }
 
-    Ok(Arc::new(DecodedAudio { samples, sample_rate }))
+    Ok(Arc::new(DecodedAudio { samples, sample_rate, song_id: id }))
 }
 
 pub enum SoundFontProbe {

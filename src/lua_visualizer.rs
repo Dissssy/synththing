@@ -29,7 +29,8 @@
 //!   checkboxes, so it can't disable the last remaining enabled channel
 //!   either.
 //! * `playback()`, transport state: `{position, length, speed, paused,
-//!   finished, loop_enabled}`. The thing to check before writing into a
+//!   finished, loop_enabled, generation}` plus which song (`song_name`,
+//!   `song_path`, `song_id`). The thing to check before writing into a
 //!   scrolling history buffer, so pausing freezes the picture instead of
 //!   scrolling through a frozen spectrum.
 //! * `log(message)`, appends to this script's log, shown in the Settings
@@ -52,7 +53,7 @@
 //! * `circle`, `triangle`, `polygon`: filled shapes.
 //! * `sprite_register` / `sprite` / `sprite_size`: palette-indexed pixel
 //!   images, converted to colors once at registration, drawn
-//!   nearest-neighbor.
+//!   nearest-neighbor, optionally recolored per draw (`palette`, `tint`).
 //! * `beat`, `time_at_beat`, `bar`, `tempo`, `time_signature`: the MIDI
 //!   file's musical timing (nil for plain audio).
 //! * `level_left`, `level_right` (RMS) and `onset()` (spectral flux), audio
@@ -306,17 +307,43 @@ enum DrawCommand {
     Circle { x: f32, y: f32, radius: f32, color: u32 },
     Polygon { points: Vec<(f32, f32)>, color: u32 },
     /// `src` is the part of the sprite to draw: (x, y, width, height) in
-    /// sprite pixels, already clipped to the sprite.
-    Sprite { index: usize, x: f32, y: f32, scale: f32, flip_x: bool, flip_y: bool, src: (usize, usize, usize, usize) },
+    /// sprite pixels, already clipped to the sprite. `colors` replaces the
+    /// sprite's palette for this draw (`palette` / `tint` options), indexed
+    /// like `Sprite::palette`.
+    Sprite {
+        index: usize,
+        x: f32,
+        y: f32,
+        scale: f32,
+        flip_x: bool,
+        flip_y: bool,
+        src: (usize, usize, usize, usize),
+        colors: Option<Rc<[u32]>>,
+    },
 }
 
 /// A sprite a script registered: its palette-indexed image turned into
-/// packed colors once, at registration, so drawing is just copying.
+/// packed colors once, at registration, so a plain draw is just copying.
+/// The indices are kept too, for draws that recolor it.
 struct Sprite {
     width: usize,
     height: usize,
     /// Row-major `0xAARRGGBB`; alpha 0 is transparent (palette index 0).
     pixels: Vec<u32>,
+    /// Row-major palette indices, 0 = transparent.
+    indices: Vec<u32>,
+    /// `0xAARRGGBB` per palette index; `palette[0]` is transparent.
+    palette: Vec<u32>,
+}
+
+/// `color` multiplied by `tint` (both `0xAARRGGBB`), channel by channel.
+fn tint_color(color: u32, tint: u32) -> u32 {
+    let channel = |shift: u32| {
+        let a = (color >> shift) & 0xFF;
+        let b = (tint >> shift) & 0xFF;
+        ((a * b + 127) / 255) << shift
+    };
+    channel(24) | channel(16) | channel(8) | channel(0)
 }
 
 /// Most sprites one script can register: plenty for any real use, and it
@@ -825,6 +852,13 @@ struct AudioFeatures {
     onset_wanted: bool,
 }
 
+/// Which song is loaded, for `playback()`.
+#[derive(Clone, Default)]
+struct SongIdentity {
+    path: Option<String>,
+    id: Option<String>,
+}
+
 /// Playback changes a script asked for (`set_paused`, `seek`), carried out
 /// by the app after the frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1030,6 +1064,9 @@ pub struct LuaVisualizer {
     /// Every note of the current MIDI file (empty for plain audio), for
     /// `notes_between`. Song data, so it outlives recompiles.
     note_list: Rc<RefCell<Arc<NoteList>>>,
+    /// The current song's path and id, for `playback()`. Song data, so it
+    /// outlives recompiles.
+    song: Rc<RefCell<SongIdentity>>,
     /// Notes the script plays (`play_note`, sequences), for the app to pass
     /// to the live synth. Outlives recompiles, so the "stop everything"
     /// a new compile queues still gets delivered.
@@ -1060,6 +1097,7 @@ impl LuaVisualizer {
             playback: Rc::new(RefCell::new(EngineView::default())),
             input: Rc::new(RefCell::new(VisualizerInput::default())),
             note_list: Rc::new(RefCell::new(Arc::default())),
+            song: Rc::default(),
             live: Rc::default(),
             features: Rc::default(),
             onset_detector: OnsetDetector::new(sample_rate),
@@ -1109,6 +1147,12 @@ impl LuaVisualizer {
         if let Some(compiled) = &self.compiled {
             compiled.store.borrow_mut().save(true);
         }
+    }
+
+    /// The current song's file and id (`loader::song_id`), for
+    /// `playback().song_path` / `song_id`.
+    pub fn set_song(&mut self, path: Option<&Path>, id: Option<String>) {
+        *self.song.borrow_mut() = SongIdentity { path: path.map(|p| p.display().to_string()), id };
     }
 
     /// The current song's notes, for `notes_between` (empty for audio).
@@ -1194,6 +1238,7 @@ impl LuaVisualizer {
             &self.spectrum_right,
             &self.notes,
             &self.playback,
+            &self.song,
             &self.input,
             &self.note_list,
             &self.live,
@@ -1263,6 +1308,7 @@ impl LuaVisualizer {
             &self.spectrum_right,
             &self.notes,
             &self.playback,
+            &self.song,
             &self.input,
             &self.note_list,
             &self.live,
@@ -1415,6 +1461,7 @@ fn compile(
     spectrum_right: &Rc<RefCell<SpectrumAnalyzer>>,
     notes: &Rc<RefCell<NotesSnapshot>>,
     playback: &Rc<RefCell<EngineView>>,
+    song: &Rc<RefCell<SongIdentity>>,
     input: &Rc<RefCell<VisualizerInput>>,
     note_list: &Rc<RefCell<Arc<NoteList>>>,
     live: &Rc<RefCell<LiveQueue>>,
@@ -1444,6 +1491,7 @@ fn compile(
         spectrum_right,
         notes,
         playback,
+        song,
         &settings,
         &log,
         &channel_requests,
@@ -1889,6 +1937,7 @@ fn register_sprites(
             };
             let (mut scale, mut flip_x, mut flip_y) = (1.0f32, false, false);
             let mut src = (0, 0, sprite.width, sprite.height);
+            let mut colors: Option<Rc<[u32]>> = None;
             match options {
                 Value::Nil => {}
                 Value::Integer(n) => scale = n as f32,
@@ -1900,6 +1949,7 @@ fn register_sprites(
                     if let Some(part) = t.get::<Option<Table>>("src")? {
                         src = sprite_part(&part, sprite)?;
                     }
+                    colors = sprite_colors(&t, sprite)?;
                 }
                 other => {
                     return Err(mlua::Error::runtime(format!(
@@ -1912,7 +1962,7 @@ fn register_sprites(
                 return Err(mlua::Error::runtime("sprite: scale must be a number, 0 or more"));
             }
             let size = ((src.2 as f32 * scale).round(), (src.3 as f32 * scale).round());
-            cmds.borrow_mut().push(DrawCommand::Sprite { index: id - 1, x, y, scale, flip_x, flip_y, src });
+            cmds.borrow_mut().push(DrawCommand::Sprite { index: id - 1, x, y, scale, flip_x, flip_y, src, colors });
             Ok(size)
         })?,
     )?;
@@ -1929,6 +1979,54 @@ fn register_sprites(
         })?,
     )?;
     Ok(())
+}
+
+/// The colors for one draw of `sprite`, from an options table's `palette`
+/// (`{[index] = color, ...}`, replacing just those entries) and `tint` (a
+/// color every entry is multiplied by), or `None` for its own colors.
+fn sprite_colors(options: &Table, sprite: &Sprite) -> mlua::Result<Option<Rc<[u32]>>> {
+    let swaps: Option<Table> = options
+        .get::<Option<Table>>("palette")
+        .map_err(|_| mlua::Error::runtime("sprite: palette is a table of {[index] = color}"))?;
+    let tint: Option<Table> = options
+        .get::<Option<Table>>("tint")
+        .map_err(|_| mlua::Error::runtime("sprite: tint is a color table"))?;
+    if swaps.is_none() && tint.is_none() {
+        return Ok(None);
+    }
+    let mut colors = sprite.palette.clone();
+    if let Some(swaps) = swaps {
+        for pair in swaps.pairs::<Value, Value>() {
+            let (index, color) = pair?;
+            let index = match index {
+                Value::Integer(i) => i,
+                Value::Number(n) if n.fract() == 0.0 => n as i64,
+                other => {
+                    return Err(mlua::Error::runtime(format!(
+                        "sprite: palette keys are palette indices, not a {}",
+                        other.type_name()
+                    )));
+                }
+            };
+            if index < 1 || index as usize >= colors.len() {
+                return Err(mlua::Error::runtime(format!(
+                    "sprite: palette[{index}], but the sprite's palette has {} colors",
+                    colors.len() - 1
+                )));
+            }
+            let Value::Table(color) = color else {
+                return Err(mlua::Error::runtime(format!("sprite: palette[{index}] isn't a color table")));
+            };
+            colors[index as usize] = table_to_color(&color)?;
+        }
+    }
+    if let Some(tint) = tint {
+        let tint = table_to_color(&tint)?;
+        for color in colors.iter_mut().skip(1) {
+            *color = tint_color(*color, tint);
+        }
+    }
+    Ok(Some(colors.into()))
 }
 
 /// The part of `sprite` an options table's `src` names: `{x, y, w, h}` or
@@ -1962,7 +2060,8 @@ fn parse_sprite(data: &Table) -> mlua::Result<Sprite> {
     let palette_table: Table = data
         .get::<Option<Table>>("palette")?
         .ok_or_else(|| mlua::Error::runtime("sprite_register: needs a `palette` table (a list of colors)"))?;
-    let mut palette = Vec::with_capacity(palette_table.raw_len());
+    let mut palette = Vec::with_capacity(palette_table.raw_len() + 1);
+    palette.push(0); // index 0: transparent
     for i in 1..=palette_table.raw_len() {
         let color: Table = palette_table
             .raw_get(i)
@@ -1971,7 +2070,7 @@ fn parse_sprite(data: &Table) -> mlua::Result<Sprite> {
     }
 
     let height = image.raw_len();
-    let mut rows: Vec<Vec<u32>> = Vec::with_capacity(height);
+    let mut rows: Vec<Vec<u32>> = Vec::with_capacity(height); // palette indices
     for y in 1..=height {
         let row: Table = image
             .raw_get(y)
@@ -1981,27 +2080,24 @@ fn parse_sprite(data: &Table) -> mlua::Result<Sprite> {
             let index: i64 = row.raw_get(x).map_err(|_| {
                 mlua::Error::runtime(format!("sprite_register: image[{y}][{x}] isn't a palette index"))
             })?;
-            let color = match index {
-                0 => 0,
-                i if i >= 1 && (i as usize) <= palette.len() => palette[i as usize - 1],
-                i => {
-                    return Err(mlua::Error::runtime(format!(
-                        "sprite_register: image[{y}][{x}] is {i}, but the palette has {} colors (0 is transparent)",
-                        palette.len()
-                    )));
-                }
-            };
-            pixels.push(color);
+            if !(0..palette.len() as i64).contains(&index) {
+                return Err(mlua::Error::runtime(format!(
+                    "sprite_register: image[{y}][{x}] is {index}, but the palette has {} colors (0 is transparent)",
+                    palette.len() - 1
+                )));
+            }
+            pixels.push(index as u32);
         }
         rows.push(pixels);
     }
     let width = rows.iter().map(Vec::len).max().unwrap_or(0);
-    let mut pixels = Vec::with_capacity(width * height);
+    let mut indices = Vec::with_capacity(width * height);
     for mut row in rows {
         row.resize(width, 0);
-        pixels.extend(row);
+        indices.extend(row);
     }
-    Ok(Sprite { width, height, pixels })
+    let pixels = indices.iter().map(|&i| palette[i as usize]).collect();
+    Ok(Sprite { width, height, pixels, indices, palette })
 }
 
 fn register_timing_audio_shapes(
@@ -2474,6 +2570,7 @@ fn register_globals(
     spectrum_right: &Rc<RefCell<SpectrumAnalyzer>>,
     notes: &Rc<RefCell<NotesSnapshot>>,
     playback: &Rc<RefCell<EngineView>>,
+    song: &Rc<RefCell<SongIdentity>>,
     settings: &Rc<RefCell<SettingsStore>>,
     log: &Rc<RefCell<LogHistory>>,
     channel_requests: &Rc<RefCell<Vec<(u8, bool)>>>,
@@ -2628,11 +2725,13 @@ fn register_globals(
     )?;
 
     let view = Rc::clone(playback);
+    let song = Rc::clone(song);
     globals.set(
         "playback",
         lua.create_function(move |lua, ()| {
             let view = view.borrow();
-            let t = lua.create_table_with_capacity(0, 6)?;
+            let song = song.borrow();
+            let t = lua.create_table_with_capacity(0, 10)?;
             t.raw_set("position", view.position)?;
             t.raw_set("length", view.length)?;
             t.raw_set("speed", view.speed)?;
@@ -2640,6 +2739,9 @@ fn register_globals(
             t.raw_set("finished", view.finished)?;
             t.raw_set("loop_enabled", view.loop_enabled)?;
             t.raw_set("generation", view.generation)?;
+            t.raw_set("song_name", view.track_name.clone())?;
+            t.raw_set("song_path", song.path.clone())?;
+            t.raw_set("song_id", song.id.clone())?;
             Ok(t)
         })?,
     )?;
@@ -2841,9 +2943,9 @@ fn rasterize(buffer: &mut [u32], width: usize, height: usize, cmd: DrawCommand, 
         }
         DrawCommand::Circle { x, y, radius, color } => fill_circle(buffer, width, height, (x, y, radius), color),
         DrawCommand::Polygon { points, color } => fill_polygon(buffer, width, height, &points, color),
-        DrawCommand::Sprite { index, x, y, scale, flip_x, flip_y, src } => {
+        DrawCommand::Sprite { index, x, y, scale, flip_x, flip_y, src, colors } => {
             if let Some(sprite) = sprites.get(index) {
-                draw_sprite(buffer, width, height, sprite, src, (x, y), scale, (flip_x, flip_y));
+                draw_sprite(buffer, width, height, sprite, colors.as_deref(), src, (x, y), scale, (flip_x, flip_y));
             }
         }
     }
@@ -2853,13 +2955,15 @@ fn rasterize(buffer: &mut [u32], width: usize, height: usize, cmd: DrawCommand, 
 /// with its top-left at `(x, y)`, `scale` times its size,
 /// nearest-neighbor: every buffer pixel takes the sprite pixel under its
 /// center. Transparent pixels are skipped, opaque ones copied, translucent
-/// ones blended.
+/// ones blended. `colors`, when given, recolors it: one color per palette
+/// index.
 #[allow(clippy::too_many_arguments)]
 fn draw_sprite(
     buffer: &mut [u32],
     width: usize,
     height: usize,
     sprite: &Sprite,
+    colors: Option<&[u32]>,
     (src_x, src_y, src_w, src_h): (usize, usize, usize, usize),
     (x, y): (f32, f32),
     scale: f32,
@@ -2889,14 +2993,25 @@ fn draw_sprite(
         (x_start..x_end).map(|bx| src_x + source(bx - left, out_w, src_w, flip_x)).collect();
     for by in y_start..y_end {
         let sy = src_y + source(by - top, out_h, src_h, flip_y);
-        let src_row = &sprite.pixels[sy * sprite.width..(sy + 1) * sprite.width];
+        let row = sy * sprite.width..(sy + 1) * sprite.width;
         let dst_row = &mut buffer[by as usize * width + x_start as usize..by as usize * width + x_end as usize];
-        for (dst, &sx) in dst_row.iter_mut().zip(&columns) {
-            let color = src_row[sx];
-            match color >> 24 {
-                0 => {}
-                255 => *dst = color & 0x00FF_FFFF,
-                _ => *dst = blend(*dst, color),
+        let put = |dst: &mut u32, color: u32| match color >> 24 {
+            0 => {}
+            255 => *dst = color & 0x00FF_FFFF,
+            _ => *dst = blend(*dst, color),
+        };
+        match colors {
+            None => {
+                let src_row = &sprite.pixels[row];
+                for (dst, &sx) in dst_row.iter_mut().zip(&columns) {
+                    put(dst, src_row[sx]);
+                }
+            }
+            Some(colors) => {
+                let src_row = &sprite.indices[row];
+                for (dst, &sx) in dst_row.iter_mut().zip(&columns) {
+                    put(dst, colors[src_row[sx] as usize]);
+                }
             }
         }
     }
@@ -3683,6 +3798,63 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         assert!((0..4).all(|x| (0..4).all(|y| at(x, y) == 0x00FF00)), "second frame, doubled");
         assert_eq!((at(4, 0), at(5, 1)), (0xFF0000, 0xFF0000));
         assert_eq!((at(6, 0), at(7, 0), at(6, 1)), (0x00FF00, 0, 0));
+    }
+
+    #[test]
+    fn sprites_can_be_recolored_per_draw() {
+        // A 2x1 sprite: a red pixel and a white one. Drawn plain, with its
+        // red swapped for blue, tinted, and both, all in the same frame.
+        let script = "
+            local s = sprite_register({
+                palette = { { r = 255, g = 0, b = 0 }, { r = 255, g = 255, b = 255 } },
+                image = { { 1, 2 } },
+            })
+            function render(w, h, l, r)
+                sprite(s, 0, 0)
+                sprite(s, 2, 0, { palette = { [1] = { r = 0, g = 0, b = 255 } } })
+                sprite(s, 4, 0, { tint = { r = 255, g = 128, b = 0 } })
+                sprite(s, 6, 0, { palette = { [2] = { r = 0, g = 255, b = 0 } }, tint = { r = 0, g = 255, b = 255 } })
+            end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let mut buffer = vec![0u32; 8];
+        visualizer.render(&mut buffer, 8, 1, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        assert_eq!(visualizer.error(), None);
+        assert_eq!(
+            buffer,
+            [0xFF0000, 0xFFFFFF, 0x0000FF, 0xFFFFFF, 0xFF0000, 0xFF8000, 0x000000, 0x00FF00]
+        );
+
+        for (bad, message) in [
+            ("{ palette = { [3] = { r = 0, g = 0, b = 0 } } }", "palette has 2 colors"),
+            ("{ palette = { red = { r = 0, g = 0, b = 0 } } }", "palette indices"),
+            ("{ tint = 5 }", "tint is a color table"),
+        ] {
+            let script = format!(
+                "local s = sprite_register({{ palette = {{ {{ r = 1, g = 1, b = 1 }}, {{ r = 2, g = 2, b = 2 }} }}, image = {{ {{ 1 }} }} }})
+                function render() sprite(s, 0, 0, {bad}) end"
+            );
+            let mut visualizer = LuaVisualizer::new(script, None, 44_100);
+            let mut buffer = vec![0u32; 4];
+            visualizer.render(&mut buffer, 2, 2, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+            let error = visualizer.error().unwrap_or_default();
+            assert!(error.contains(message), "{bad}: {error}");
+        }
+    }
+
+    #[test]
+    fn playback_names_the_song() {
+        let script = "function render()
+            local p = playback()
+            log(tostring(p.song_name) .. '|' .. tostring(p.song_path) .. '|' .. tostring(p.song_id))
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "test|nil|nil");
+        visualizer.set_song(Some(Path::new("C:/music/song.mid")), Some(crate::loader::song_id(b"MThd")));
+        frame(&mut visualizer, &sample_playback());
+        // The id is the start of the file's SHA-256, so the same bytes
+        // always give the same id, wherever the file is.
+        assert_eq!(last_log(&visualizer), "test|C:/music/song.mid|70fad3c7454a1f31");
     }
 
     fn render_with(visualizer: &mut LuaVisualizer, input: &VisualizerInput) {

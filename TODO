@@ -410,3 +410,9 @@ Smaller:
     SmartScreen "Run anyway" step, first steps, keys, scripts, where files
     live, building, credits). Still open: a license for synththing itself
     (the repo has none, so it's all rights reserved by default).
+
+[S][.] friend feedback (game visualizer) - DONE
+    sprite() palette = {[i] = color} and tint = color, per draw (sprites
+    keep palette indices next to their baked colors). playback() has
+    song_name, song_path and song_id (16 hex digits of the file's
+    SHA-256, loader::song_id) for per-song saved data.

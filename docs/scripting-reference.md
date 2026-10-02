@@ -128,7 +128,7 @@ function render(width, height, left, right)
 end
 ```
 
-`x, y` is the sprite's top-left corner, rounded to whole pixels. The fourth argument is a scale (1 by default), or an options table with `scale`, `flip_x`, `flip_y` and `src`. Scaling is nearest-neighbor, so pixels stay crisp; whole-number scales keep every sprite pixel exactly square. `sprite` returns the size it drew, in buffer pixels.
+`x, y` is the sprite's top-left corner, rounded to whole pixels. The fourth argument is a scale (1 by default), or an options table with `scale`, `flip_x`, `flip_y`, `src`, `palette` and `tint`. Scaling is nearest-neighbor, so pixels stay crisp; whole-number scales keep every sprite pixel exactly square. `sprite` returns the size it drew, in buffer pixels.
 
 `src = {x, y, w, h}` (or `{x = .., y = .., w = .., h = ..}`) draws only that part of the sprite, in sprite pixels with (0, 0) at its top-left, clipped to the sprite: a sprite sheet. Register all of a character's animation frames as one image and pick the frame when drawing; scale and flips apply to the part, and the returned size is the part's.
 
@@ -136,6 +136,15 @@ end
 -- Four 8x8 frames side by side in one 32x8 image.
 local frame = math.floor(TIME * 8) % 4
 sprite(walker, x, y, { scale = 3, src = { frame * 8, 0, 8, 8 } })
+```
+
+`palette` and `tint` recolor the sprite for just that one draw, so one sprite can be drawn in several colors in the same frame (a player per channel, a flash when hit). `palette = { [index] = color, ... }` swaps the palette entries you name for other colors and leaves the rest alone; `tint = color` multiplies every color by it, channel by channel, so white becomes the tint, black stays black, and the tint's `a` fades the whole sprite. With both, the swaps happen first and the tint applies on top. A recolored draw costs about the same as a plain one.
+
+```lua
+-- One player sprite: palette entry 1 is its body, 2 its outline.
+local color = setting_color("player_color", { r = 90, g = 200, b = 255 })
+sprite(player, x, y, { scale = 3, palette = { [1] = color } })
+sprite(player, x2, y2, { scale = 3, tint = { r = 255, g = 255, b = 255, a = 0.4 } }) -- a ghost
 ```
 
 Register sprites once, at the top level of the script (outside `render()`), and keep the ids: each call registers a new sprite, and a script can have at most 10,000. Sprites belong to the script and go away when it's reloaded or restarted, which re-registers them anyway.
@@ -203,7 +212,7 @@ All empty/true for a plain audio file, there's no score to read, so nothing here
 ## Playback & timing
 
 ```lua
-playback() -> {position, length, speed, paused, finished, loop_enabled, generation}
+playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id}
 set_paused(paused)  -- pause or resume playback
 seek(seconds)       -- jump to a position in the song
 DT                  -- seconds since the previous render() call (0.0 on the first, at most 0.25)
@@ -214,6 +223,14 @@ NOTE_LOOKAHEAD      -- song seconds upcoming_notes() looks ahead (4.0)
 ```
 
 Units: `position` and `length` are seconds of song time. `speed` is the playback rate (1.0 is normal), and it's song time that runs faster or slower: at 2.0, one song-second passes in half a real second. Everything song-related (`position`, note `start`/`stop`, `seconds_until`, `NOTE_LOOKAHEAD`) is in song seconds, while `DT` and `TIME` are real seconds. To turn a song-time gap into real time, divide by `speed`.
+
+`song_name` is the song's name as the app shows it, `song_path` the file's full path, and `song_id` a short code made from the file's contents (16 hex digits): the same song gives the same id wherever it's kept and whatever it's called, and a different file gives a different one. All three are nil with no song loaded. `song_id` is the one to key saved data by, like a best score per song:
+
+```lua
+local p = playback()
+local key = "best:" .. (p.song_id or "none")
+if score > (store_get(key) or 0) then store_set(key, score) end
+```
 
 `generation` goes up by one every time the position jumps instead of running on: a seek (by the user or a script), a loop back to the start, or a new song. Compare it with the value from the previous frame to know exactly when to reset anything that tracks position, with no guessing from how far `position` moved.
 
@@ -498,6 +515,8 @@ The first seven are copied into your scripts folder on first run (one that came 
 - `spectrogram.lua`, a scrolling time/frequency heatmap; run-length merging, pause-awareness, live-tunable resolution, frequency labels, optional onset ticks (`onset`)
 - `letters.lua`, one glyph per channel, colored by pitch; a from-scratch bitmap font
 - `snake.lua`, one snake per channel hunting apples spawned by note-ons; apples are sprites, a text scoreboard, and a `player_channel` setting to steer one snake yourself with rebindable steering actions (best length saved with `store_set`); the most elaborate example, worth reading end to end
+- `disco.lua`, a spinning mirror ball firing a laser per note, colored by channel and aimed by pitch, anticipated with `upcoming_notes()`
+- `game.lua`, a platformer whose level is the music: notes are platforms, channels take turns being solid; rebindable controls, recolored player sprite (`palette`, `tint`), best scores per song (`song_id`)
 - `pulse.lua`, a ring that beats with the song: the time signature's beats around a circle, a polygon turning with the beat and swelling with loudness, eighth-note sprites bursting out on onsets, and a tempo/bar readout
 - `settings_demo.lua`, exercises every setting type; not a music visualizer, a reference for the settings API itself
 - `input_demo.lua`, mouse, keyboard actions and cursor control: a paint toy with its own cursor; not a music visualizer either

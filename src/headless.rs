@@ -150,6 +150,7 @@ fn load_song(
         .is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"));
     if !is_midi {
         let audio = loader::load_audio_file(song).map_err(|e| format!("couldn't read {}: {e}", song.display()))?;
+        visualizer.set_song(Some(song), Some(audio.song_id.clone()));
         engine.load_audio_file(audio, name);
         return Ok(());
     }
@@ -170,5 +171,6 @@ fn load_song(
     let midi = loader::load_midi(song).map_err(|e| format!("couldn't read {}: {e}", song.display()))?;
     engine.load_midi(midi.file, name);
     visualizer.set_note_list(midi.notes);
+    visualizer.set_song(Some(song), Some(midi.song_id));
     Ok(())
 }

@@ -194,6 +194,7 @@ impl App {
             Asset::Midi(midi) => {
                 self.send(AudioCommand::LoadMidi(midi.file, name.clone()));
                 self.visualizer.visualizer_mut().set_note_list(midi.notes);
+                self.visualizer.visualizer_mut().set_song(Some(&path), Some(midi.song_id));
                 self.status = match sf_error {
                     Some(e) => format!("Playing {name}, but its soundfont didn't load: {e}"),
                     None if self.loaded_sf.is_none() => format!("Loaded {name}, pick a soundfont to hear it."),
@@ -201,8 +202,9 @@ impl App {
                 };
             }
             Asset::Audio(audio) => {
-                self.send(AudioCommand::LoadAudioFile(audio, name.clone()));
+                self.send(AudioCommand::LoadAudioFile(audio.clone(), name.clone()));
                 self.visualizer.visualizer_mut().set_note_list(Default::default());
+                self.visualizer.visualizer_mut().set_song(Some(&path), Some(audio.song_id.clone()));
                 self.status = format!("Playing: {name}");
             }
             Asset::SoundFont(_) => {
