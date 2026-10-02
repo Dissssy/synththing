@@ -79,3 +79,7 @@ The program ends up at `target\release\synththing.exe`. Run the tests with `carg
 ## Credits
 
 synththing is by [Dissssy](https://github.com/Dissssy) and contributors. It plays MIDI with [rustysynth](https://github.com/sinshu/rustysynth) by Nobuaki Tanaka, runs scripts on [Lua](https://www.lua.org) through mlua, and draws script text in [Monogram](https://datagoblin.itch.io/monogram) by Vinícius Menézio. Help > Credits & licenses in the app lists every library it's built from, with their licenses.
+
+## License
+
+synththing's own code is released under the [WTFPL](LICENSE): do whatever you want with it. The libraries, font and code it's built from keep their own licenses (rustysynth and Lua are MIT, Monogram is CC0, and so on); Help > Credits & licenses lists them all.

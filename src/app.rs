@@ -1030,6 +1030,10 @@ impl App {
                 ui.weak(format!("synththing v{}", env!("CARGO_PKG_VERSION")));
                 ui.hyperlink_to(&repo_url, &repo_url);
             });
+            ui.horizontal_wrapped(|ui| {
+                ui.label("synththing itself is released under the WTFPL: do whatever you want with it.");
+                ui.hyperlink_to("License", format!("{repo_url}/blob/master/LICENSE"));
+            });
             ui.separator();
             egui::ScrollArea::vertical().id_salt("credits_scroll").max_height(480.0).auto_shrink([false, true]).show(
                 ui,
