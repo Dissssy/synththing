@@ -32,7 +32,7 @@ use crate::lua_visualizer::{
     self, DebugVar, LogLevel, LuaVisualizer, SettingDescriptor, SettingKind, SettingValue,
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
-use crate::visualizer::{NotesSnapshot, SampleTap, VisualizerPanel};
+use crate::visualizer::{DisplayMode, NotesSnapshot, SampleTap, ShowOutput, VisualizerPanel};
 
 const VISUALIZER_WIDTH: usize = 800;
 const VISUALIZER_HEIGHT: usize = 320;
@@ -46,6 +46,19 @@ const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 /// "Previous" restarts the current track instead of going back a track
 /// once it's been playing longer than this, the usual player behavior.
 const PREVIOUS_RESTARTS_AFTER_SECS: f64 = 3.0;
+
+/// How long the "Esc to exit" hint shows after entering the dedicated
+/// visualizer fullscreen, in seconds.
+const DEDICATED_HINT_SECS: f64 = 3.0;
+
+/// The dedicated visualizer fullscreen: just the visualizer, nothing else.
+struct Dedicated {
+    /// Whether the app was already fullscreen before, so leaving goes back
+    /// to exactly that.
+    was_fullscreen: bool,
+    /// egui time it was entered, for the exit hint.
+    since: f64,
+}
 
 /// Drag-and-drop payload for a row dragged out of the Soundfonts list (onto
 /// a playlist entry, to set its override).
@@ -125,6 +138,13 @@ pub struct App {
     paused_for_preferences: bool,
     /// Whether the preferences modal was open last frame.
     preferences_were_open: bool,
+    /// Set while the dedicated visualizer fullscreen is up.
+    dedicated: Option<Dedicated>,
+    /// What the visualizer reported this frame (focus, cursor request);
+    /// default when it wasn't drawn.
+    visualizer_output: ShowOutput,
+    /// Whether the cursor is currently confined to the window for a script.
+    cursor_confined: bool,
     playlists: Library,
     /// The playlist shown in the Playlists panel (not necessarily the one
     /// playing).
@@ -226,6 +246,9 @@ impl App {
             hover_since: None,
             paused_for_preferences: false,
             preferences_were_open: false,
+            dedicated: None,
+            visualizer_output: ShowOutput::default(),
+            cursor_confined: false,
             playlists,
             viewed_playlist,
             now_playing: None,
@@ -766,9 +789,19 @@ impl App {
     ) {
         self.script_picker_ui(ui);
 
-        if let Some(path) = self.visualizer.visualizer().path() {
-            ui.weak(path.display().to_string());
-        }
+        ui.horizontal(|ui| {
+            if ui
+                .button("Fullscreen visualizer")
+                .on_hover_text("Just the visualizer, filling the screen, with mouse and keyboard going to the script. F11 toggles it, Esc exits.")
+                .clicked()
+            {
+                let ctx = ui.ctx().clone();
+                self.enter_dedicated(&ctx);
+            }
+            if let Some(path) = self.visualizer.visualizer().path() {
+                ui.weak(path.display().to_string());
+            }
+        });
 
         if let Some(error) = self.visualizer.visualizer().error() {
             ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
@@ -776,7 +809,14 @@ impl App {
 
         self.channels_ui(ui, &mut notes);
 
-        self.visualizer.show(ui, &self.tap, &notes, &playback, self.preferences_open);
+        let mode = if self.fullscreen { DisplayMode::Fullscreen } else { DisplayMode::Window };
+        self.show_visualizer(ui, &notes, &playback, mode);
+    }
+
+    /// Draw (and run) the visualizer into the rest of `ui`, and pass on
+    /// whatever it asked for.
+    fn show_visualizer(&mut self, ui: &mut egui::Ui, notes: &NotesSnapshot, playback: &EngineView, mode: DisplayMode) {
+        self.visualizer_output = self.visualizer.show(ui, &self.tap, notes, playback, self.preferences_open, mode);
 
         // A script can ask to mute/unmute a channel itself (e.g. a game
         // script silencing a dead player's channel), same command the GUI's
@@ -787,12 +827,85 @@ impl App {
         }
     }
 
+    /// Enter the dedicated visualizer fullscreen: OS fullscreen with only
+    /// the visualizer, which gets keyboard focus.
+    fn enter_dedicated(&mut self, ctx: &egui::Context) {
+        let since = ctx.input(|i| i.time);
+        self.dedicated = Some(Dedicated { was_fullscreen: self.fullscreen, since });
+        if !self.fullscreen {
+            self.set_fullscreen(ctx, true);
+        }
+        self.visualizer.request_focus();
+    }
+
+    /// Start the running visualizer script over from scratch (F5, or the
+    /// Restart button).
+    fn restart_script(&mut self) {
+        let name = self.visualizer.visualizer().path().map(nice_name).unwrap_or_else(|| "script".to_string());
+        self.status = if self.visualizer.visualizer_mut().restart() {
+            format!("Restarted {name}.")
+        } else {
+            "No script running to restart.".to_string()
+        };
+    }
+
+    /// F11 out of the dedicated fullscreen: back to the normal layout, and
+    /// out of OS fullscreen too unless the app was fullscreen before. (Esc
+    /// skips that and always goes straight back to windowed.)
+    fn exit_dedicated(&mut self, ctx: &egui::Context) {
+        if let Some(dedicated) = self.dedicated.take()
+            && !dedicated.was_fullscreen
+        {
+            self.set_fullscreen(ctx, false);
+        }
+    }
+
+    /// The dedicated fullscreen's whole window: the visualizer edge to edge,
+    /// plus a brief "Esc to exit" hint.
+    fn dedicated_ui(&mut self, ui: &mut egui::Ui, shared: &PlaybackShared) {
+        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+            self.show_visualizer(ui, &shared.notes, &shared.view, DisplayMode::Dedicated);
+        });
+        let ctx = ui.ctx().clone();
+        let elapsed = ctx.input(|i| i.time) - self.dedicated.as_ref().map_or(0.0, |d| d.since);
+        if elapsed < DEDICATED_HINT_SECS {
+            egui::Area::new(egui::Id::new("dedicated_exit_hint"))
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 24.0))
+                .interactable(false)
+                .show(&ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.label("Press Esc to exit");
+                    });
+                });
+        }
+    }
+
+    /// Confine the cursor to the window while a script asks for it, but only
+    /// in the dedicated fullscreen, while the visualizer has focus and the
+    /// window is focused. Released the moment any of that stops being true
+    /// (Escape included), so a script can never trap the cursor.
+    fn apply_cursor_confinement(&mut self, ctx: &egui::Context) {
+        let window_focused = ctx.input(|i| i.focused);
+        let want = self.dedicated.is_some()
+            && self.visualizer_output.focused
+            && self.visualizer_output.cursor.confined
+            && window_focused
+            && !self.preferences_open;
+        if want != self.cursor_confined {
+            self.cursor_confined = want;
+            let grab = if want { egui::viewport::CursorGrab::Confined } else { egui::viewport::CursorGrab::None };
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(grab));
+        }
+    }
+
     /// Active script picker, "New" from template, and "Restore default" for
     /// a bundled script. Shown above the visualizer, or above the editor
     /// when the visualizer is off.
     fn script_picker_ui(&mut self, ui: &mut egui::Ui) {
         let mut picked_idx = None;
         let mut restore_bundled: Option<String> = None;
+        let mut restart = false;
         ui.horizontal(|ui| {
             ui.label("Script:");
             let current = self
@@ -842,7 +955,17 @@ impl App {
             {
                 restore_bundled = Some(bundled.to_string());
             }
+            if ui
+                .button("Restart")
+                .on_hover_text("Start the running script over from scratch: its state resets, its settings stay (F5)")
+                .clicked()
+            {
+                restart = true;
+            }
         });
+        if restart {
+            self.restart_script();
+        }
         if let Some(idx) = picked_idx {
             self.load_script(idx);
         }
@@ -1357,6 +1480,38 @@ impl eframe::App for App {
             self.fullscreen = actual;
         }
 
+        // App-wide keys, honored from anywhere: while typing, with the
+        // visualizer focused, in either fullscreen (scripts never see them,
+        // see visualizer::RESERVED_KEYS). Esc goes all the way back to
+        // windowed, F11 toggles the dedicated visualizer fullscreen, F5
+        // restarts the running script. Escape is only taken when there's a
+        // fullscreen to leave, so it still does its usual job elsewhere.
+        if !self.preferences_open {
+            let in_fullscreen = self.fullscreen || self.dedicated.is_some();
+            let (escape, f11, f5) = ctx.input_mut(|i| {
+                (
+                    in_fullscreen && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::F11),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::F5),
+                )
+            });
+            if escape {
+                self.dedicated = None;
+                self.set_fullscreen(&ctx, false);
+            }
+            if f11 {
+                if self.dedicated.is_some() {
+                    self.exit_dedicated(&ctx);
+                } else {
+                    self.enter_dedicated(&ctx);
+                }
+            }
+            if f5 {
+                self.restart_script();
+            }
+        }
+        self.visualizer_output = ShowOutput::default();
+
         // Single-key shortcuts are suspended whenever some widget (namely the
         // song browser's search box) has keyboard focus, so typing "v" there
         // types a "v" instead of toggling the visualizer.
@@ -1388,9 +1543,7 @@ impl eframe::App for App {
                 if input.key_pressed(egui::Key::P) {
                     previous = true;
                 }
-                if input.key_pressed(egui::Key::F)
-                    || (self.fullscreen && input.key_pressed(egui::Key::Escape))
-                {
+                if input.key_pressed(egui::Key::F) {
                     toggle_fullscreen = true;
                 }
             });
@@ -1426,13 +1579,18 @@ impl eframe::App for App {
         self.browser.clear_hovered();
         self.hovered_playlist_entry = None;
 
-        egui::Panel::top("top_bar").show(ui, |ui| self.top_bar_ui(ui));
-        egui::Panel::bottom("controls_panel").show(ui, |ui| {
-            self.controls_bar_ui(ui, view);
-        });
-        self.dock_ui(ui, &shared);
-        self.autosave_layout(&ctx);
-        self.preferences_ui(&ctx);
+        if self.dedicated.is_some() {
+            self.dedicated_ui(ui, &shared);
+        } else {
+            egui::Panel::top("top_bar").show(ui, |ui| self.top_bar_ui(ui));
+            egui::Panel::bottom("controls_panel").show(ui, |ui| {
+                self.controls_bar_ui(ui, view);
+            });
+            self.dock_ui(ui, &shared);
+            self.autosave_layout(&ctx);
+            self.preferences_ui(&ctx);
+        }
+        self.apply_cursor_confinement(&ctx);
         self.keep_loaded(&ctx);
 
         drag_ghost_ui(&ctx);
@@ -1441,7 +1599,7 @@ impl eframe::App for App {
         // stay fully idle otherwise. While a playlist is playing, keep
         // polling too, so the end of a track is noticed and the next one
         // starts even with the window idle in the background.
-        if self.is_open(Section::Visualizer) {
+        if self.dedicated.is_some() || self.is_open(Section::Visualizer) {
             ctx.request_repaint_after(Duration::from_millis(16));
         } else if !view.paused && (view.has_midi || view.has_audio_file) {
             ctx.request_repaint_after(Duration::from_millis(200));

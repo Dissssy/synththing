@@ -113,14 +113,29 @@
 
 ## Additional/unsorted
 
-[M][.] expose cursor position, click info, and maybe keyboard state to the
-    lua interpreter
-    Deliberately deferred in favor of fullscreen + the VLC-style bottom bar.
-    Needs plumbing mouse position/clicks (and possibly key state) from the
-    visualizer panel's egui::Response through to LuaVisualizer::render, plus
-    new host functions (mouse(), mouse_down()/clicked(), maybe key_down(k)) -
-    similar shape to the playback()/settings additions, just a new kind of
-    per-frame input rather than new output.
+[M][.] mouse/keyboard input for lua scripts - DONE
+    mouse(), mouse_delta(), scroll(), mouse_down/pressed/released([button]),
+    key_down/pressed/released(name), has_focus(), display_mode() ("window",
+    "fullscreen", "dedicated"), set_cursor_visible(), set_cursor_locked().
+    Mouse while the pointer is over the visualizer; keys only while it has
+    focus (click in, click elsewhere to leave), and the app's own shortcuts
+    are off meanwhile. Escape is never reported to scripts: it releases
+    focus and exits the dedicated fullscreen.
+    "Fullscreen visualizer" button above the visualizer: OS fullscreen with
+    only the visualizer, focused, a 3 s "Press Esc to exit" hint; Esc goes
+    back to the layout (and out of OS fullscreen unless it was already).
+    Hidden cursor only applies while over the visualizer; cursor locking is
+    a confine-to-window (Windows can't do a true relative-motion lock) and
+    only takes effect in the dedicated fullscreen, with focus, while the
+    window is focused, so a script can never trap the cursor.
+    input_demo.lua (undropped, New > input_demo): paint toy using all of it.
+    App-wide keys, work from anywhere and never reach scripts: Esc (from
+    either fullscreen straight back to windowed), F11 (toggle the dedicated
+    fullscreen, back to wherever you were), F5 (restart the running script:
+    fresh VM, same source and settings; also a Restart button by the script
+    picker).
+    Ideas not done: text input (typed characters), gamepad, snake steered
+    by the arrow keys as an option.
 
 [S][.] a real doc system for the lua scripting API - DONE
     Went with the lighter option rather than a hosted/multi-page wiki: a

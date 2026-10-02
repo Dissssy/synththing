@@ -112,6 +112,40 @@ pub fn sections() -> &'static [Section] {
             ],
         },
         Section {
+            title: "Input",
+            blocks: &[
+                Block::Code(
+                    "mouse() -> x, y              -- buffer pixels; nil, nil when not over the visualizer
+mouse_delta() -> dx, dy       -- movement since last frame, buffer pixels
+scroll() -> dx, dy            -- scrolling since last frame (positive y is up)
+mouse_down([button])          -- \"left\" (default), \"right\", \"middle\"
+mouse_pressed([button])       -- went down this frame
+mouse_released([button])      -- went up this frame
+key_down(name)                -- \"a\", \"space\", \"up\", \"enter\", \"f5\", ...
+key_pressed(name)             -- went down this frame (no key repeat)
+key_released(name)            -- went up this frame
+has_focus() -> bool           -- whether keys come to this script
+display_mode() -> string      -- \"window\", \"fullscreen\" or \"dedicated\"",
+                ),
+                Block::P(
+                    "Mouse state is reported while the pointer is over the visualizer (and while                      it has focus, so a drag that wanders off still ends cleanly). Keys only                      while the visualizer has focus: click into it to give it focus, click                      anywhere else to take it back. While it has focus the app's own shortcuts                      (space to pause, arrows to seek, ...) are off, so they're the script's.",
+                ),
+                Block::P(
+                    "Three keys are the app's, never reported to any script in any mode:                      Escape always means \"get me out\" (releases focus, and goes from either                      fullscreen straight back to windowed), F11 toggles the dedicated                      fullscreen, and F5 restarts the running script (also the Restart button                      next to the script picker): a fresh start for its state, same settings.",
+                ),
+                Block::P(
+                    "The \"Fullscreen visualizer\" button above the visualizer is the dedicated                      fullscreen: just the visualizer, the whole screen, with focus.                      display_mode() tells a script which of the three it's in, e.g. to only                      take over the cursor when it's dedicated.",
+                ),
+                Block::Code(
+                    "set_cursor_visible(visible)   -- false: hide the system cursor over the visualizer
+set_cursor_locked(locked)     -- true: keep the cursor on screen (dedicated only)",
+                ),
+                Block::P(
+                    "Both stick until changed (or a different script loads). A hidden cursor                      only hides while it's over the visualizer, so draw your own there.                      Locking only takes effect in the dedicated fullscreen while it has focus,                      and lets go whenever that stops (Escape, switching windows), so a script                      can't trap the cursor. See input_demo.lua (New > input_demo).",
+                ),
+            ],
+        },
+        Section {
             title: "Logging",
             blocks: &[
                 Block::Code("log(message)"),
@@ -203,6 +237,7 @@ pub fn sections() -> &'static [Section] {
                     "letters.lua, one glyph per channel, colored by pitch; a from-scratch bitmap font",
                     "snake.lua, one snake per channel hunting apples spawned by note-ons; the most elaborate example, worth reading end to end",
                     "settings_demo.lua, exercises every setting type; not a music visualizer, a reference for the settings API itself",
+                    "input_demo.lua, mouse, keyboard and cursor control: a paint toy with its own cursor; not a music visualizer either",
                 ]),
             ],
         },
