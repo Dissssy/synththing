@@ -99,6 +99,39 @@ end
 
 Text is drawn as rects, so it alpha-blends and clips at the edges exactly like `rect`.
 
+## Sprites
+
+```lua
+sprite_register({ image = rows, palette = colors }) -> id   -- once, outside render()
+sprite(id, x, y, [scale or options]) -> width, height      -- draw it; the size drawn
+sprite_size(id) -> width, height                            -- its size in sprite pixels
+```
+
+A sprite is a little pixel image the script hands over once; the app turns it into ready-to-draw colors right then, so drawing it later, at any size, is cheap. `image` is a list of rows, each a list of palette indices; `palette` is a list of color tables. Index 1 is the palette's first color (Lua counting), and 0 is transparent. Rows can be different lengths (a short row is transparent past its end); the sprite is as wide as its longest row. Palette colors can be translucent (`a` below 1), and those pixels blend.
+
+```lua
+local heart = sprite_register({
+    palette = { { r = 230, g = 40, b = 70 }, { r = 255, g = 160, b = 180 } },
+    image = {
+        { 0, 1, 1, 0, 1, 1, 0 },
+        { 1, 2, 1, 1, 1, 1, 1 },
+        { 1, 1, 1, 1, 1, 1, 1 },
+        { 0, 1, 1, 1, 1, 1, 0 },
+        { 0, 0, 1, 1, 1, 0, 0 },
+        { 0, 0, 0, 1, 0, 0, 0 },
+    },
+})
+
+function render(width, height, left, right)
+    sprite(heart, 10, 10, 4)                             -- 4x size
+    sprite(heart, 60, 10, { scale = 4, flip_x = true })  -- mirrored
+end
+```
+
+`x, y` is the sprite's top-left corner, rounded to whole pixels. The fourth argument is a scale (1 by default), or an options table with `scale`, `flip_x` and `flip_y`. Scaling is nearest-neighbor, so pixels stay crisp; whole-number scales keep every sprite pixel exactly square. `sprite` returns the size it drew, in buffer pixels.
+
+Register sprites once, at the top level of the script (outside `render()`), and keep the ids: each call registers a new sprite, and a script can have at most 10,000. Sprites belong to the script and go away when it's reloaded or restarted, which re-registers them anyway.
+
 ## Audio data
 
 ```lua

@@ -340,12 +340,12 @@
     (pixel-center coverage, even-odd fill, blended once). Original: filled
     circle, triangle/polygon
     Scanline fills in rasterize(), alpha-blended like rect.
-[L][.] images/sprites from the scripts folder
-    Open question (2026-10-02): how scripts would supply images. Options:
-    image files next to the script in the scripts folder (a script ships
-    as a folder or alongside its .png files), images embedded in the
-    script as data (e.g. a small text format), or only images bundled
-    with the app. Decide before building.
+[M][.] sprites - DONE (2026-10-02 design): scripts register palette-indexed
+    images as Lua data, sprite_register({image = rows, palette = colors}),
+    converted to packed colors once; sprite(id, x, y, scale/options) draws
+    nearest-neighbor with flips. No image files involved. Could add later:
+    rotation, drawing a sub-rectangle (sprite sheets), loading .png from
+    the scripts folder.
     Needs an image decoder (png crate or similar), a per-script texture
     cache, and a blit command with scaling. Bigger, but natural if games
     keep being the main use.

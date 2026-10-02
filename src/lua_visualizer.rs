@@ -44,6 +44,9 @@
 //! * `text(x, y, string, color, [height])` / `text_size(string, [height])`,
 //!   pixel text in the built-in Monogram font (see `pixel_font.rs`).
 //! * `circle`, `triangle`, `polygon`: filled shapes.
+//! * `sprite_register` / `sprite` / `sprite_size`: palette-indexed pixel
+//!   images, converted to colors once at registration, drawn
+//!   nearest-neighbor.
 //! * `beat`, `time_at_beat`, `bar`, `tempo`, `time_signature`: the MIDI
 //!   file's musical timing (nil for plain audio).
 //! * `level_left`, `level_right` (RMS) and `onset()` (spectral flux), audio
@@ -112,6 +115,7 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 -- Draw with clear/line/rect/pixel; color tables take an optional `a` (0..1).
 --   clear({r,g,b})  line(x0,y0,x1,y1,{r,g,b,a})  rect(...)  pixel(x,y,{r,g,b,a})
 --   circle(x,y,r,color)  triangle(x1,y1,x2,y2,x3,y3,color)  polygon(points,color)
+--   sprite_register({image = rows, palette = colors}) once, then sprite(id, x, y, scale)
 --   text(x, y, string, color, height) / text_size(string, height)  pixel text
 -- fft_left(left) / fft_right(right)     magnitude spectrum, computed in Rust
 -- level_left() / level_right() / onset() loudness, and whether a sound just started
@@ -287,7 +291,22 @@ enum DrawCommand {
     Pixel { x: i32, y: i32, color: u32 },
     Circle { x: f32, y: f32, radius: f32, color: u32 },
     Polygon { points: Vec<(f32, f32)>, color: u32 },
+    Sprite { index: usize, x: f32, y: f32, scale: f32, flip_x: bool, flip_y: bool },
 }
+
+/// A sprite a script registered: its palette-indexed image turned into
+/// packed colors once, at registration, so drawing is just copying.
+struct Sprite {
+    width: usize,
+    height: usize,
+    /// Row-major `0xAARRGGBB`; alpha 0 is transparent (palette index 0).
+    pixels: Vec<u32>,
+}
+
+/// Most sprites one script can register: plenty for any real use, and it
+/// turns "registered a sprite inside render() every frame" into an error
+/// instead of memory that grows forever.
+const MAX_SPRITES: usize = 10_000;
 
 /// Most points `polygon()` takes (a typo shouldn't be able to ask for
 /// millions).
@@ -792,6 +811,8 @@ struct Compiled {
     cursor: Rc<RefCell<CursorRequest>>,
     playback_requests: Rc<RefCell<Vec<PlaybackRequest>>>,
     store: Rc<RefCell<ScriptStore>>,
+    /// Sprites the script registered (`sprite_register`), per script.
+    sprites: Rc<RefCell<Vec<Sprite>>>,
     /// Frames rendered since this script started (`FRAME`).
     frame: Cell<u64>,
     /// When it rendered its first frame (`TIME` counts from here).
@@ -1138,7 +1159,7 @@ impl Visualizer for LuaVisualizer {
         }
 
         for cmd in compiled.commands.borrow_mut().drain(..) {
-            rasterize(buffer, width, height, cmd);
+            rasterize(buffer, width, height, cmd, &compiled.sprites.borrow());
         }
         compiled.store.borrow_mut().save(false);
     }
@@ -1194,6 +1215,8 @@ fn compile(
     register_input(&lua, input, &cursor).map_err(|e| e.to_string())?;
     let playback_requests: Rc<RefCell<Vec<PlaybackRequest>>> = Rc::default();
     let store = Rc::new(RefCell::new(ScriptStore::load(script_path)));
+    let sprites: Rc<RefCell<Vec<Sprite>>> = Rc::default();
+    register_sprites(&lua, &sprites, &commands).map_err(|e| e.to_string())?;
     register_song_and_state(&lua, note_list, &playback_requests, &store).map_err(|e| e.to_string())?;
     register_timing_audio_shapes(&lua, note_list, playback, features, &commands).map_err(|e| e.to_string())?;
 
@@ -1218,6 +1241,7 @@ fn compile(
         cursor,
         playback_requests,
         store,
+        sprites,
         frame: Cell::new(0),
         started: Cell::new(None),
     })
@@ -1304,6 +1328,131 @@ fn register_song_and_state(
 
 /// `beat`, `time_at_beat`, `bar`, `tempo`, `time_signature`,
 /// `level_left`, `level_right`, `onset`, `circle`, `triangle`, `polygon`.
+/// `sprite_register`, `sprite`, `sprite_size`.
+fn register_sprites(
+    lua: &Lua,
+    sprites: &Rc<RefCell<Vec<Sprite>>>,
+    commands: &Rc<RefCell<Vec<DrawCommand>>>,
+) -> mlua::Result<()> {
+    let globals = lua.globals();
+
+    let list = Rc::clone(sprites);
+    globals.set(
+        "sprite_register",
+        lua.create_function(move |_, data: Table| {
+            let mut list = list.borrow_mut();
+            if list.len() >= MAX_SPRITES {
+                return Err(mlua::Error::runtime(format!(
+                    "sprite_register: at most {MAX_SPRITES} sprites per script (register them once, outside render())"
+                )));
+            }
+            list.push(parse_sprite(&data)?);
+            Ok(list.len())
+        })?,
+    )?;
+
+    let list = Rc::clone(sprites);
+    let cmds = Rc::clone(commands);
+    globals.set(
+        "sprite",
+        lua.create_function(move |_, (id, x, y, options): (usize, f32, f32, Value)| {
+            let list = list.borrow();
+            let Some(sprite) = id.checked_sub(1).and_then(|i| list.get(i)) else {
+                return Err(mlua::Error::runtime(format!("sprite: no sprite with id {id}")));
+            };
+            let (mut scale, mut flip_x, mut flip_y) = (1.0f32, false, false);
+            match options {
+                Value::Nil => {}
+                Value::Integer(n) => scale = n as f32,
+                Value::Number(n) => scale = n as f32,
+                Value::Table(t) => {
+                    scale = t.get::<Option<f32>>("scale")?.unwrap_or(1.0);
+                    flip_x = t.get::<Option<bool>>("flip_x")?.unwrap_or(false);
+                    flip_y = t.get::<Option<bool>>("flip_y")?.unwrap_or(false);
+                }
+                other => {
+                    return Err(mlua::Error::runtime(format!(
+                        "sprite: the 4th argument is a scale or an options table, not a {}",
+                        other.type_name()
+                    )));
+                }
+            }
+            if !(scale.is_finite() && scale >= 0.0) {
+                return Err(mlua::Error::runtime("sprite: scale must be a number, 0 or more"));
+            }
+            let size = ((sprite.width as f32 * scale).round(), (sprite.height as f32 * scale).round());
+            cmds.borrow_mut().push(DrawCommand::Sprite { index: id - 1, x, y, scale, flip_x, flip_y });
+            Ok(size)
+        })?,
+    )?;
+
+    let list = Rc::clone(sprites);
+    globals.set(
+        "sprite_size",
+        lua.create_function(move |_, id: usize| {
+            let list = list.borrow();
+            match id.checked_sub(1).and_then(|i| list.get(i)) {
+                Some(sprite) => Ok((sprite.width, sprite.height)),
+                None => Err(mlua::Error::runtime(format!("sprite_size: no sprite with id {id}"))),
+            }
+        })?,
+    )?;
+    Ok(())
+}
+
+/// A sprite from `{image = {{1, 0, 2, ...}, ...}, palette = {{r, g, b, a}, ...}}`:
+/// `image` is rows of palette indices (1-based like Lua; 0 is
+/// transparent), rows may differ in length (short rows are transparent at
+/// the end), and the width is the longest row.
+fn parse_sprite(data: &Table) -> mlua::Result<Sprite> {
+    let image: Table = data
+        .get::<Option<Table>>("image")?
+        .ok_or_else(|| mlua::Error::runtime("sprite_register: needs an `image` table (rows of palette indices)"))?;
+    let palette_table: Table = data
+        .get::<Option<Table>>("palette")?
+        .ok_or_else(|| mlua::Error::runtime("sprite_register: needs a `palette` table (a list of colors)"))?;
+    let mut palette = Vec::with_capacity(palette_table.raw_len());
+    for i in 1..=palette_table.raw_len() {
+        let color: Table = palette_table
+            .raw_get(i)
+            .map_err(|_| mlua::Error::runtime(format!("sprite_register: palette[{i}] isn't a color table")))?;
+        palette.push(table_to_color(&color)?);
+    }
+
+    let height = image.raw_len();
+    let mut rows: Vec<Vec<u32>> = Vec::with_capacity(height);
+    for y in 1..=height {
+        let row: Table = image
+            .raw_get(y)
+            .map_err(|_| mlua::Error::runtime(format!("sprite_register: image[{y}] isn't a row table")))?;
+        let mut pixels = Vec::with_capacity(row.raw_len());
+        for x in 1..=row.raw_len() {
+            let index: i64 = row.raw_get(x).map_err(|_| {
+                mlua::Error::runtime(format!("sprite_register: image[{y}][{x}] isn't a palette index"))
+            })?;
+            let color = match index {
+                0 => 0,
+                i if i >= 1 && (i as usize) <= palette.len() => palette[i as usize - 1],
+                i => {
+                    return Err(mlua::Error::runtime(format!(
+                        "sprite_register: image[{y}][{x}] is {i}, but the palette has {} colors (0 is transparent)",
+                        palette.len()
+                    )));
+                }
+            };
+            pixels.push(color);
+        }
+        rows.push(pixels);
+    }
+    let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let mut pixels = Vec::with_capacity(width * height);
+    for mut row in rows {
+        row.resize(width, 0);
+        pixels.extend(row);
+    }
+    Ok(Sprite { width, height, pixels })
+}
+
 fn register_timing_audio_shapes(
     lua: &Lua,
     note_list: &Rc<RefCell<Arc<NoteList>>>,
@@ -2003,7 +2152,7 @@ fn text_height(height: Option<f32>) -> mlua::Result<f32> {
     Ok(height.min(4096.0))
 }
 
-fn rasterize(buffer: &mut [u32], width: usize, height: usize, cmd: DrawCommand) {
+fn rasterize(buffer: &mut [u32], width: usize, height: usize, cmd: DrawCommand, sprites: &[Sprite]) {
     match cmd {
         // `clear` always overwrites (the alpha channel is dropped).
         DrawCommand::Clear(color) => buffer.fill(color & 0x00FF_FFFF),
@@ -2016,6 +2165,61 @@ fn rasterize(buffer: &mut [u32], width: usize, height: usize, cmd: DrawCommand) 
         }
         DrawCommand::Circle { x, y, radius, color } => fill_circle(buffer, width, height, (x, y, radius), color),
         DrawCommand::Polygon { points, color } => fill_polygon(buffer, width, height, &points, color),
+        DrawCommand::Sprite { index, x, y, scale, flip_x, flip_y } => {
+            if let Some(sprite) = sprites.get(index) {
+                draw_sprite(buffer, width, height, sprite, (x, y), scale, (flip_x, flip_y));
+            }
+        }
+    }
+}
+
+/// Draw `sprite` with its top-left at `(x, y)`, `scale` times its size,
+/// nearest-neighbor: every buffer pixel takes the sprite pixel under its
+/// center. Transparent pixels are skipped, opaque ones copied, translucent
+/// ones blended.
+fn draw_sprite(
+    buffer: &mut [u32],
+    width: usize,
+    height: usize,
+    sprite: &Sprite,
+    (x, y): (f32, f32),
+    scale: f32,
+    (flip_x, flip_y): (bool, bool),
+) {
+    let out_w = (sprite.width as f32 * scale).round();
+    let out_h = (sprite.height as f32 * scale).round();
+    if out_w < 1.0 || out_h < 1.0 || sprite.width == 0 || sprite.height == 0 {
+        return;
+    }
+    let left = x.round() as i64;
+    let top = y.round() as i64;
+    let (out_w, out_h) = (out_w as i64, out_h as i64);
+    let x_start = left.max(0);
+    let x_end = (left + out_w).min(width as i64);
+    let y_start = top.max(0);
+    let y_end = (top + out_h).min(height as i64);
+    if x_start >= x_end || y_start >= y_end {
+        return;
+    }
+    // Which sprite column each visible buffer column shows, worked out once.
+    let source = |offset: i64, out: i64, size: usize, flip: bool| -> usize {
+        let i = (((offset as f64 + 0.5) * size as f64 / out as f64) as usize).min(size - 1);
+        if flip { size - 1 - i } else { i }
+    };
+    let columns: Vec<usize> =
+        (x_start..x_end).map(|bx| source(bx - left, out_w, sprite.width, flip_x)).collect();
+    for by in y_start..y_end {
+        let sy = source(by - top, out_h, sprite.height, flip_y);
+        let src_row = &sprite.pixels[sy * sprite.width..(sy + 1) * sprite.width];
+        let dst_row = &mut buffer[by as usize * width + x_start as usize..by as usize * width + x_end as usize];
+        for (dst, &sx) in dst_row.iter_mut().zip(&columns) {
+            let color = src_row[sx];
+            match color >> 24 {
+                0 => {}
+                255 => *dst = color & 0x00FF_FFFF,
+                _ => *dst = blend(*dst, color),
+            }
+        }
     }
 }
 
@@ -2622,6 +2826,51 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         let left: f32 = log.split(' ').next().unwrap().parse().unwrap();
         assert!((left - 0.566).abs() < 0.01 && log.contains(" 0.25 "), "{log}");
         assert_eq!(hits, 1, "one onset when the sound starts");
+    }
+
+    #[test]
+    fn sprites_register_once_and_draw_scaled_flipped_and_transparent() {
+        let script = "
+            local red = { r = 255, g = 0, b = 0 }
+            local green = { r = 0, g = 255, b = 0, a = 0.5 }
+            local id = sprite_register({
+                image = { { 1, 0 }, { 2 } },   -- second row is short: transparent at the end
+                palette = { red, green },
+            })
+            function render(w, h, l, r)
+                clear({ r = 0, g = 0, b = 255 })
+                local sw, sh = sprite_size(id)
+                local dw, dh = sprite(id, 0, 0, 2)
+                sprite(id, 6, 0, { scale = 1, flip_x = true })
+                log(id .. ' ' .. sw .. 'x' .. sh .. ' drawn ' .. dw .. 'x' .. dh)
+            end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let w = 8;
+        let mut buffer = vec![0u32; w * 4];
+        visualizer.render(&mut buffer, w, 4, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        assert_eq!(visualizer.error(), None);
+        assert_eq!(last_log(&visualizer), "1 2x2 drawn 4.0x4.0");
+        let at = |x: usize, y: usize| buffer[y * w + x];
+        // Scaled 2x: red block top-left, transparent top-right (blue shows).
+        assert_eq!([at(0, 0), at(1, 1)], [0xFF0000, 0xFF0000]);
+        assert_eq!(at(2, 0), 0x0000FF);
+        // Bottom-left: half-transparent green over blue.
+        assert!(at(0, 2) != 0x0000FF && at(0, 2) & 0x00FF00 != 0);
+        assert_eq!(at(3, 3), 0x0000FF);
+        // Flipped copy at x 6: red now on the right.
+        assert_eq!((at(6, 0), at(7, 0)), (0x0000FF, 0xFF0000));
+
+        for bad in [
+            "sprite_register({ image = { { 3 } }, palette = { { r = 1, g = 1, b = 1 } } })",
+            "sprite_register({ palette = {} })",
+            "function render() sprite(5, 0, 0) end",
+        ] {
+            let mut visualizer = LuaVisualizer::new(format!("{bad}\nfunction render() end"), None, 44_100);
+            frame(&mut visualizer, &sample_playback());
+            let mut v2 = LuaVisualizer::new(bad.to_string(), None, 44_100);
+            frame(&mut v2, &sample_playback());
+            assert!(visualizer.error().is_some() || v2.error().is_some(), "{bad}");
+        }
     }
 
     #[test]
