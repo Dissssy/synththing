@@ -38,9 +38,15 @@
 //! * `DT`, seconds since the previous `render` call (0.0 on the first,
 //!   capped at 0.25).
 //! * Input: `mouse()`, `mouse_delta()`, `scroll()`,
-//!   `mouse_down/pressed/released([button])`, `key_down/pressed/released(name)`,
-//!   `has_focus()`, `display_mode()`. Mouse while the pointer is over the
-//!   visualizer, keys while it has focus; Escape is never reported.
+//!   `mouse_down/pressed/released([button])`, `has_focus()`,
+//!   `display_mode()`; keys through rebindable actions (`input_register`,
+//!   `input`, `input_down`) and typing (`text_typed`, `typing_*`). Mouse
+//!   while the pointer is over the visualizer, keys while it has focus;
+//!   Escape is never reported.
+//! * Playing notes: `play_note`, `note_on` / `note_off`, `stop_notes`,
+//!   `notes_playable`, `sequence_register` / `sequence_play` /
+//!   `sequence_stop`, on the live synth (`live.rs`), queued and passed on by
+//!   the app like `set_channel_enabled`.
 //! * `text(x, y, string, color, [height])` / `text_size(string, [height])`,
 //!   pixel text in the built-in Monogram font (see `pixel_font.rs`).
 //! * `circle`, `triangle`, `polygon`: filled shapes.
@@ -96,6 +102,7 @@ use crate::engine::{EngineView, NOTE_LOOKAHEAD_SECS};
 use crate::midi_notes::NoteList;
 use crate::pixel_font;
 use crate::spectrum::{self, OnsetDetector, SpectrumAnalyzer};
+use crate::live::{LiveCommand, LiveNote};
 use crate::typing::TypingSpan;
 use crate::visualizer::{
     ActiveNote, CursorRequest, NoteChange, NotesSnapshot, RESERVED_KEYS, StereoFrame, Visualizer,
@@ -125,6 +132,7 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 -- active_notes() / upcoming_notes()     notes held now / changing soon
 -- midi_channels() / channel_enabled(c)  the file's channels and their toggles
 -- set_channel_enabled(c, enabled)       mute/unmute a channel from the script
+-- play_note(key, {channel, velocity, duration})  play a note on the song's instruments
 -- playback() / set_paused(p) / seek(t)  transport state and control
 -- store_get(key) / store_set(key, v)    data saved across restarts
 -- FRAME / TIME                          frame count, seconds since start
@@ -1022,6 +1030,10 @@ pub struct LuaVisualizer {
     /// Every note of the current MIDI file (empty for plain audio), for
     /// `notes_between`. Song data, so it outlives recompiles.
     note_list: Rc<RefCell<Arc<NoteList>>>,
+    /// Notes the script plays (`play_note`, sequences), for the app to pass
+    /// to the live synth. Outlives recompiles, so the "stop everything"
+    /// a new compile queues still gets delivered.
+    live: Rc<RefCell<LiveQueue>>,
     features: Rc<RefCell<AudioFeatures>>,
     onset_detector: OnsetDetector,
     last_render_instant: Option<Instant>,
@@ -1048,6 +1060,7 @@ impl LuaVisualizer {
             playback: Rc::new(RefCell::new(EngineView::default())),
             input: Rc::new(RefCell::new(VisualizerInput::default())),
             note_list: Rc::new(RefCell::new(Arc::default())),
+            live: Rc::default(),
             features: Rc::default(),
             onset_detector: OnsetDetector::new(sample_rate),
             last_render_instant: None,
@@ -1101,6 +1114,12 @@ impl LuaVisualizer {
     /// The current song's notes, for `notes_between` (empty for audio).
     pub fn set_note_list(&mut self, notes: Arc<NoteList>) {
         *self.note_list.borrow_mut() = notes;
+    }
+
+    /// Notes the script played since the last call, oldest first, for the
+    /// app to send to the live synth.
+    pub fn take_live_commands(&mut self) -> Vec<LiveCommand> {
+        std::mem::take(&mut self.live.borrow_mut().commands)
     }
 
     /// Playback changes the script asked for since the last call, oldest
@@ -1177,12 +1196,14 @@ impl LuaVisualizer {
             &self.playback,
             &self.input,
             &self.note_list,
+            &self.live,
             &self.features,
             self.path.as_deref(),
             pending_settings,
         ) {
             Ok(compiled) => {
                 self.compiled = Some(compiled);
+                self.live.borrow_mut().stop_all();
                 self.compile_error = None;
                 // New code (or another script): judge its speed afresh.
                 self.perf = Perf::default();
@@ -1244,12 +1265,14 @@ impl LuaVisualizer {
             &self.playback,
             &self.input,
             &self.note_list,
+            &self.live,
             &self.features,
             self.path.as_deref(),
             pending_settings,
         ) {
             Ok(compiled) => {
                 self.compiled = Some(compiled);
+                self.live.borrow_mut().stop_all();
                 self.runtime_error = None;
                 self.last_render_instant = None;
                 true
@@ -1394,6 +1417,7 @@ fn compile(
     playback: &Rc<RefCell<EngineView>>,
     input: &Rc<RefCell<VisualizerInput>>,
     note_list: &Rc<RefCell<Arc<NoteList>>>,
+    live: &Rc<RefCell<LiveQueue>>,
     features: &Rc<RefCell<AudioFeatures>>,
     script_path: Option<&Path>,
     pending_settings: HashMap<String, serde_json::Value>,
@@ -1436,6 +1460,7 @@ fn compile(
     register_sprites(&lua, &sprites, &commands).map_err(|e| e.to_string())?;
     register_song_and_state(&lua, note_list, &playback_requests, &store).map_err(|e| e.to_string())?;
     register_timing_audio_shapes(&lua, note_list, playback, features, &commands).map_err(|e| e.to_string())?;
+    register_live_notes(&lua, notes, playback, note_list, live).map_err(|e| e.to_string())?;
 
     lua.load(source)
         .set_name("visualizer")
@@ -1464,6 +1489,289 @@ fn compile(
         frame: Cell::new(0),
         started: Cell::new(None),
     })
+}
+
+/// Live synth commands waiting for the app, and the next sequence
+/// playback's tag.
+#[derive(Default)]
+struct LiveQueue {
+    commands: Vec<LiveCommand>,
+    next_tag: u64,
+}
+
+impl LiveQueue {
+    /// Silence everything: a new script (or a restart) starts quiet.
+    fn stop_all(&mut self) {
+        self.commands.retain(|c| !matches!(c, LiveCommand::Play(_)));
+        self.commands.push(LiveCommand::StopAll);
+    }
+}
+
+/// A note of a registered sequence, in beats.
+struct SequenceNote {
+    at: f64,
+    length: f64,
+    key: i64,
+    velocity: Option<i64>,
+    channel: Option<i64>,
+}
+
+const DEFAULT_VELOCITY: i64 = 100;
+const DEFAULT_NOTE_SECONDS: f64 = 0.5;
+const MAX_SEQUENCES: usize = 10_000;
+const MAX_SEQUENCE_NOTES: usize = 100_000;
+
+/// A sequence from the script: a list whose entries are a key number, or
+/// a table {key, at, length, velocity, channel} (no key: a rest). `at`
+/// defaults to where the previous entry ended, `length` to 1 beat.
+fn parse_sequence(list: &Table) -> mlua::Result<Vec<SequenceNote>> {
+    let mut notes = Vec::new();
+    let mut cursor = 0.0f64;
+    for (i, entry) in list.sequence_values::<Value>().enumerate() {
+        let index = i + 1;
+        let bad = |what: &str| mlua::Error::runtime(format!("sequence_register: entry {index} {what}"));
+        let (key, at, length, velocity, channel) = match entry? {
+            Value::Integer(key) => (Some(key), None, None, None, None),
+            Value::Number(key) => (Some(key.round() as i64), None, None, None, None),
+            Value::Table(t) => {
+                let key = t.get::<Option<f64>>("key").map_err(|_| bad("has a key that isn't a number"))?;
+                (
+                    key.map(|k| k.round() as i64),
+                    t.get::<Option<f64>>("at").map_err(|_| bad("has an `at` that isn't a number"))?,
+                    t.get::<Option<f64>>("length").map_err(|_| bad("has a length that isn't a number"))?,
+                    t.get::<Option<i64>>("velocity").map_err(|_| bad("has a velocity that isn't a number"))?,
+                    t.get::<Option<i64>>("channel").map_err(|_| bad("has a channel that isn't a number"))?,
+                )
+            }
+            other => return Err(bad(&format!("is a {}; use a key number or a table", other.type_name()))),
+        };
+        let at = at.unwrap_or(cursor);
+        let length = length.unwrap_or(1.0);
+        if !at.is_finite() || at < 0.0 || !length.is_finite() || length <= 0.0 {
+            return Err(bad("needs `at` 0 or more and a length above 0"));
+        }
+        cursor = at + length;
+        if let Some(key) = key {
+            notes.push(SequenceNote { at, length, key, velocity, channel });
+        }
+        if notes.len() > MAX_SEQUENCE_NOTES {
+            return Err(mlua::Error::runtime(format!(
+                "sequence_register: at most {MAX_SEQUENCE_NOTES} notes per sequence"
+            )));
+        }
+    }
+    Ok(notes)
+}
+
+/// `play_note`, `note_on`, `note_off`, `stop_notes`, `notes_playable` and
+/// sequences: notes a script plays on the live synth (`live.rs`), only
+/// while a MIDI is loaded with a soundfont.
+fn register_live_notes(
+    lua: &Lua,
+    notes: &Rc<RefCell<NotesSnapshot>>,
+    playback: &Rc<RefCell<EngineView>>,
+    note_list: &Rc<RefCell<Arc<NoteList>>>,
+    live: &Rc<RefCell<LiveQueue>>,
+) -> mlua::Result<()> {
+    let globals = lua.globals();
+
+    let playable = {
+        let view = Rc::clone(playback);
+        move || {
+            let view = view.borrow();
+            view.has_midi && view.has_soundfont
+        }
+    };
+    // The channel asked for if the song uses it, else the song's lowest.
+    let channel_for = {
+        let notes = Rc::clone(notes);
+        move |asked: Option<i64>| -> u8 {
+            let notes = notes.borrow();
+            let detected = &notes.detected_channels;
+            match asked {
+                Some(c) if (0..16).contains(&c) && detected.contains(&(c as u8)) => c as u8,
+                _ => detected.first().copied().unwrap_or(0),
+            }
+        }
+    };
+    let key_of = |key: f64| -> u8 { key.round().clamp(0.0, 127.0) as u8 };
+    let velocity_of = |v: Option<i64>| -> u8 { v.unwrap_or(DEFAULT_VELOCITY).clamp(1, 127) as u8 };
+
+    {
+        let playable = playable.clone();
+        globals.set("notes_playable", lua.create_function(move |_, ()| Ok(playable()))?)?;
+    }
+
+    {
+        let (playable, channel_for, live) = (playable.clone(), channel_for.clone(), Rc::clone(live));
+        globals.set(
+            "play_note",
+            lua.create_function(move |_, (key, options): (f64, Option<Table>)| {
+                if !playable() {
+                    return Ok(false);
+                }
+                let (mut channel, mut velocity, mut duration, mut delay) = (None, None, None, None);
+                if let Some(o) = options {
+                    channel = o.get::<Option<i64>>("channel")?;
+                    velocity = o.get::<Option<i64>>("velocity")?;
+                    duration = o.get::<Option<f64>>("duration")?;
+                    delay = o.get::<Option<f64>>("delay")?;
+                }
+                let duration = duration.unwrap_or(DEFAULT_NOTE_SECONDS);
+                if !duration.is_finite() || duration <= 0.0 {
+                    return Err(mlua::Error::runtime("play_note: duration must be above 0 seconds"));
+                }
+                live.borrow_mut().commands.push(LiveCommand::Play(vec![LiveNote {
+                    delay: delay.unwrap_or(0.0).max(0.0),
+                    length: Some(duration),
+                    channel: channel_for(channel),
+                    key: key_of(key),
+                    velocity: velocity_of(velocity),
+                    tag: 0,
+                }]));
+                Ok(true)
+            })?,
+        )?;
+    }
+
+    {
+        let (playable, channel_for, live) = (playable.clone(), channel_for.clone(), Rc::clone(live));
+        globals.set(
+            "note_on",
+            lua.create_function(move |_, (key, options): (f64, Option<Table>)| {
+                if !playable() {
+                    return Ok(false);
+                }
+                let (mut channel, mut velocity) = (None, None);
+                if let Some(o) = options {
+                    channel = o.get::<Option<i64>>("channel")?;
+                    velocity = o.get::<Option<i64>>("velocity")?;
+                }
+                live.borrow_mut().commands.push(LiveCommand::Play(vec![LiveNote {
+                    delay: 0.0,
+                    length: None,
+                    channel: channel_for(channel),
+                    key: key_of(key),
+                    velocity: velocity_of(velocity),
+                    tag: 0,
+                }]));
+                Ok(true)
+            })?,
+        )?;
+    }
+
+    {
+        let (channel_for, live) = (channel_for.clone(), Rc::clone(live));
+        globals.set(
+            "note_off",
+            lua.create_function(move |_, (key, channel): (f64, Option<i64>)| {
+                live.borrow_mut().commands.push(LiveCommand::Release { channel: channel_for(channel), key: key_of(key) });
+                Ok(())
+            })?,
+        )?;
+    }
+
+    {
+        let live = Rc::clone(live);
+        globals.set(
+            "stop_notes",
+            lua.create_function(move |_, ()| {
+                live.borrow_mut().stop_all();
+                Ok(())
+            })?,
+        )?;
+    }
+
+    let sequences: Rc<RefCell<Vec<Vec<SequenceNote>>>> = Rc::default();
+    {
+        let sequences = Rc::clone(&sequences);
+        globals.set(
+            "sequence_register",
+            lua.create_function(move |_, list: Table| {
+                let notes = parse_sequence(&list)?;
+                let mut sequences = sequences.borrow_mut();
+                if sequences.len() >= MAX_SEQUENCES {
+                    return Err(mlua::Error::runtime(format!(
+                        "sequence_register: at most {MAX_SEQUENCES} sequences; register them once, outside render()"
+                    )));
+                }
+                sequences.push(notes);
+                Ok(sequences.len())
+            })?,
+        )?;
+    }
+
+    {
+        let (playable, channel_for, live) = (playable.clone(), channel_for.clone(), Rc::clone(live));
+        let (view, song) = (Rc::clone(playback), Rc::clone(note_list));
+        let sequences = Rc::clone(&sequences);
+        globals.set(
+            "sequence_play",
+            lua.create_function(move |_, (id, options): (usize, Option<Table>)| {
+                let sequences = sequences.borrow();
+                let sequence = id
+                    .checked_sub(1)
+                    .and_then(|i| sequences.get(i))
+                    .ok_or_else(|| mlua::Error::runtime(format!("sequence_play: no sequence with id {id}")))?;
+                if !playable() {
+                    return Ok(None);
+                }
+                let (mut channel, mut transpose, mut tempo, mut delay) = (None, 0i64, None, None);
+                if let Some(o) = options {
+                    channel = o.get::<Option<i64>>("channel")?;
+                    transpose = o.get::<Option<i64>>("transpose")?.unwrap_or(0);
+                    tempo = o.get::<Option<f64>>("tempo")?;
+                    delay = o.get::<Option<f64>>("delay")?;
+                }
+                // Default: the song's tempo right now, as heard (times the
+                // playback speed), so the sequence plays in time with it.
+                let bpm = match tempo {
+                    Some(bpm) => bpm,
+                    None => {
+                        let view = view.borrow();
+                        let song_bpm = song.borrow().timing().map(|t| t.tempo_at(view.position)).unwrap_or(120.0);
+                        song_bpm * view.speed
+                    }
+                };
+                if !bpm.is_finite() || bpm <= 0.0 {
+                    return Err(mlua::Error::runtime("sequence_play: tempo must be above 0"));
+                }
+                let beat = 60.0 / bpm;
+                let delay = delay.unwrap_or(0.0).max(0.0);
+                let mut queue = live.borrow_mut();
+                queue.next_tag += 1;
+                let tag = queue.next_tag;
+                let notes = sequence
+                    .iter()
+                    .filter_map(|n| {
+                        let key = n.key + transpose;
+                        (0..128).contains(&key).then(|| LiveNote {
+                            delay: delay + n.at * beat,
+                            length: Some(n.length * beat),
+                            channel: channel_for(n.channel.or(channel)),
+                            key: key as u8,
+                            velocity: velocity_of(n.velocity),
+                            tag,
+                        })
+                    })
+                    .collect();
+                queue.commands.push(LiveCommand::Play(notes));
+                Ok(Some(tag))
+            })?,
+        )?;
+    }
+
+    {
+        let live = Rc::clone(live);
+        globals.set(
+            "sequence_stop",
+            lua.create_function(move |_, handle: u64| {
+                live.borrow_mut().commands.push(LiveCommand::Stop(handle));
+                Ok(())
+            })?,
+        )?;
+    }
+    Ok(())
 }
 
 /// `notes_between`, `set_paused`, `seek`, `store_get`, `store_set`.
@@ -3057,6 +3365,100 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         visualizer.restart();
         frame(&mut visualizer, &playback);
         assert_eq!(last_log(&visualizer), "1 true 7");
+    }
+
+    #[test]
+    fn scripts_play_notes_and_sequences_on_the_songs_channels() {
+        let script = "
+            local riff = sequence_register({ 60, { key = 64, length = 0.5 }, {}, { key = 67, at = 4, channel = 5, velocity = 30 } })
+            function render()
+                if FRAME == 1 then
+                    log(tostring(notes_playable()))
+                    play_note(60.4, { velocity = 200, duration = 0.25 })   -- no channel: the song's lowest
+                    note_on(62, { channel = 5 })
+                    note_off(62, 5)
+                    log(sequence_play(riff, { tempo = 120, transpose = 2, channel = 9 }))
+                elseif FRAME == 2 then
+                    sequence_stop(1)
+                    stop_notes()
+                end
+            end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        assert_eq!(visualizer.take_live_commands(), [LiveCommand::StopAll], "a new script starts quiet");
+        let notes = NotesSnapshot { detected_channels: vec![2, 5], ..NotesSnapshot::default() };
+        let mut buffer = vec![0u32; 4];
+        let mut run = |visualizer: &mut LuaVisualizer| {
+            visualizer.render(&mut buffer, 2, 2, &[], &notes, &sample_playback(), &VisualizerInput::default());
+        };
+        run(&mut visualizer);
+        assert_eq!(visualizer.error(), None);
+        let note = |delay: f64, length: Option<f64>, channel: u8, key: u8, velocity: u8, tag: u64| LiveNote {
+            delay,
+            length,
+            channel,
+            key,
+            velocity,
+            tag,
+        };
+        // 120 bpm: half a second a beat. Channel 9 isn't in the song, so the
+        // sequence falls back to channel 2; the last note asks for 5, which is.
+        assert_eq!(
+            visualizer.take_live_commands(),
+            [
+                LiveCommand::Play(vec![note(0.0, Some(0.25), 2, 60, 127, 0)]),
+                LiveCommand::Play(vec![note(0.0, None, 5, 62, 100, 0)]),
+                LiveCommand::Release { channel: 5, key: 62 },
+                LiveCommand::Play(vec![
+                    note(0.0, Some(0.5), 2, 62, 100, 1),
+                    note(0.5, Some(0.25), 2, 66, 100, 1),
+                    note(2.0, Some(0.5), 5, 69, 30, 1),
+                ]),
+            ]
+        );
+        assert_eq!(last_log(&visualizer), "1");
+        run(&mut visualizer);
+        assert_eq!(visualizer.take_live_commands(), [LiveCommand::Stop(1), LiveCommand::StopAll]);
+
+        // No soundfont (or a plain audio file): nothing to play on.
+        let mut silent = LuaVisualizer::new("function render() log(tostring(play_note(60))) end".into(), None, 44_100);
+        silent.take_live_commands();
+        let mut buffer = vec![0u32; 4];
+        let view = EngineView { has_soundfont: false, ..sample_playback() };
+        silent.render(&mut buffer, 2, 2, &[], &notes, &view, &VisualizerInput::default());
+        assert_eq!(last_log(&silent), "false");
+        assert!(silent.take_live_commands().is_empty());
+    }
+
+    #[test]
+    fn keyboard_example_plays_along() {
+        use egui::Key;
+        let source = include_str!("../assets/visualizers/dropped/keyboard.lua");
+        let mut visualizer = LuaVisualizer::new(source.to_string(), None, 44_100);
+        visualizer.take_live_commands();
+        let notes = NotesSnapshot { detected_channels: vec![3, 4], ..NotesSnapshot::default() };
+        let mut buffer = vec![0u32; 320 * 200];
+        let mut run = |visualizer: &mut LuaVisualizer, input: VisualizerInput| {
+            visualizer.render(&mut buffer, 320, 200, &[], &notes, &sample_playback(), &input);
+            assert_eq!(visualizer.error(), None);
+            visualizer.take_live_commands()
+        };
+        let held = |key: u8| LiveCommand::Play(vec![LiveNote { delay: 0.0, length: None, channel: 3, key, velocity: 100, tag: 0 }]);
+        let release = |key: u8| LiveCommand::Release { channel: 3, key };
+
+        // A plays the span's first note, C4, until it's let go.
+        assert_eq!(run(&mut visualizer, keys(&[Key::A], &[Key::A], &[])), [held(60)]);
+        assert_eq!(run(&mut visualizer, keys(&[Key::A], &[], &[])), []);
+        assert_eq!(run(&mut visualizer, keys(&[], &[], &[Key::A])), [release(60)]);
+        // Right moves the span up a step: A is now D4, L is E5.
+        run(&mut visualizer, keys(&[Key::ArrowRight], &[Key::ArrowRight], &[]));
+        assert_eq!(run(&mut visualizer, keys(&[Key::A, Key::L], &[Key::A, Key::L], &[])), [held(62), held(76)]);
+        // Up changes the key to C# major, one semitone up; held notes keep
+        // their own key until released.
+        assert_eq!(run(&mut visualizer, keys(&[Key::ArrowUp], &[Key::ArrowUp], &[])), [release(62), release(76)]);
+        assert_eq!(run(&mut visualizer, keys(&[Key::A], &[Key::A], &[])), [held(63)]);
+        // Losing focus lets go.
+        let unfocused = VisualizerInput { focused: false, ..VisualizerInput::default() };
+        assert_eq!(run(&mut visualizer, unfocused), [release(63)]);
     }
 
     #[test]

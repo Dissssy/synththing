@@ -20,6 +20,7 @@ mod loader;
 mod lua_completion;
 mod lua_docs;
 mod lua_highlight;
+mod live;
 mod lua_visualizer;
 mod midi_notes;
 mod pixel_font;
@@ -74,6 +75,9 @@ fn main() -> Result<()> {
     // Ring buffer between the render thread and the audio callback, sized for
     // two seconds so any buffer-slider setting fits with room to spare.
     let ring = AudioRing::new(sample_rate as usize * 2 * 2);
+    // The same for notes scripts play (the live synth), mixed in by the
+    // output; it only ever holds a few tens of milliseconds.
+    let live_ring = AudioRing::new(sample_rate as usize * 2 / 2);
     let flush = Arc::new(AtomicBool::new(false));
     let shared = Arc::new(Mutex::new(PlaybackShared::default()));
     let (command_tx, command_rx) = mpsc::channel();
@@ -84,12 +88,16 @@ fn main() -> Result<()> {
     stream
         .mixer()
         .add(SynthSource::new(ring.clone(), Arc::clone(&flush), sample_rate));
+    stream
+        .mixer()
+        .add(SynthSource::new(live_ring.clone(), Arc::new(AtomicBool::new(false)), sample_rate));
 
     // Render thread, owns the engine, produces into the ring.
     let audio = AudioEngine::new(
         engine,
         tap.clone(),
         ring,
+        live_ring,
         Arc::clone(&flush),
         command_rx,
         Arc::clone(&shared),

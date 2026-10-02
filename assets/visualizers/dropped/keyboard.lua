@@ -14,6 +14,14 @@
 -- disabled channels (translucent, alpha DISABLED_ALPHA). Because the
 -- translucent pass runs last, a disabled note still shows its ghost even
 -- where an enabled note would otherwise sit in front of it.
+--
+-- Play along: click the visualizer (or use the Fullscreen visualizer) and
+-- the A S D F G H J K L keys play nine notes of a major scale, marked
+-- above the keyboard; Left/Right move that span a note at a time and
+-- Up/Down change the key (C major, C# major, ...). Notes hold for as long
+-- as the key does (note_on/note_off) and sound like the song's own
+-- instrument on the "play_channel" setting's channel (0: the song's
+-- first). Every key can be rebound under Controls in Script Settings.
 
 local FIRST_KEY = 21   -- A0
 local LAST_KEY = 108   -- C8
@@ -40,6 +48,77 @@ end
 local function channel_tint(channel, alpha)
     local base = CHANNEL_COLORS[(channel % #CHANNEL_COLORS) + 1]
     return { r = base.r, g = base.g, b = base.b, a = alpha }
+end
+
+-- Play-along controls (see the top). Registered once; the user can rebind
+-- them under Controls.
+local PLAY = {}
+for i, key in ipairs({ "a", "s", "d", "f", "g", "h", "j", "k", "l" }) do
+    PLAY[i] = input_register("play " .. i, key)
+end
+local PLAY_LETTERS = { "A", "S", "D", "F", "G", "H", "J", "K", "L" }
+local SPAN_LEFT = input_register("span left", "left")
+local SPAN_RIGHT = input_register("span right", "right")
+local KEY_UP = input_register("key up", "up")
+local KEY_DOWN = input_register("key down", "down")
+
+local MAJOR = { 0, 2, 4, 5, 7, 9, 11 }
+local NOTE_NAMES = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }
+local PLAYER_COLOR = { r = 255, g = 214, b = 90 }
+
+-- The key (0 = C ... 11 = B) and the span's first note, in scale steps
+-- from that key's tonic around middle C. Both remembered between runs.
+local tonic = store_get("tonic") or 0
+local span = store_get("span") or 0
+local sounding = {} -- [play slot] = { key = .., channel = .. } while held
+
+-- The MIDI key of scale step `step` (0 = the tonic, 7 = an octave up).
+local function step_key(step)
+    return 60 + tonic + 12 * (step // 7) + MAJOR[step % 7 + 1]
+end
+
+-- Keep the whole span on the keyboard.
+local function clamp_span()
+    while step_key(span + #PLAY - 1) > LAST_KEY do span = span - 1 end
+    while step_key(span) < FIRST_KEY do span = span + 1 end
+end
+clamp_span()
+
+local function release_all()
+    for _, s in pairs(sounding) do
+        note_off(s.key, s.channel)
+    end
+    sounding = {}
+end
+
+-- Read the play-along keys; returns the span's keys.
+local function play_along(channel, velocity)
+    local moved = false
+    if input(SPAN_LEFT) == "pressed" then span = span - 1; moved = true end
+    if input(SPAN_RIGHT) == "pressed" then span = span + 1; moved = true end
+    if input(KEY_UP) == "pressed" then tonic = (tonic + 1) % 12; moved = true end
+    if input(KEY_DOWN) == "pressed" then tonic = (tonic - 1) % 12; moved = true end
+    if moved then
+        clamp_span()
+        store_set("tonic", tonic)
+        store_set("span", span)
+    end
+
+    local keys = {}
+    for i, action in ipairs(PLAY) do
+        keys[i] = step_key(span + i - 1)
+        local state = input(action)
+        if state == "pressed" then
+            if sounding[i] then note_off(sounding[i].key, sounding[i].channel) end
+            if note_on(keys[i], { channel = channel, velocity = velocity }) then
+                sounding[i] = { key = keys[i], channel = channel }
+            end
+        elseif sounding[i] and (state == "released" or state == "up") then
+            note_off(sounding[i].key, sounding[i].channel)
+            sounding[i] = nil
+        end
+    end
+    return keys
 end
 
 -- Per-key horizontal layout, rebuilt only when the window width changes.
@@ -86,6 +165,18 @@ function render(width, height, left, right)
     local lookahead = setting_float("lookahead_seconds", 4.0, 0.5, 16.0)
     local show_beats = setting_bool("beat_lines", true)
     local show_octaves = setting_bool("octave_labels", true)
+    local playing = setting_bool("play_along", true)
+    local play_channel = setting_int("play_channel", 0, 0, 16) -- 1-16 as in the GUI; 0 = the song's first
+    local play_velocity = setting_int("play_velocity", 100, 1, 127)
+
+    -- Play along only while focused; let go of everything otherwise (a key
+    -- released while focus was elsewhere never reports "released").
+    local span_keys = nil
+    if playing and has_focus() then
+        span_keys = play_along(play_channel > 0 and (play_channel - 1) or nil, play_velocity)
+    else
+        release_all()
+    end
 
     clear(background)
 
@@ -108,6 +199,9 @@ function render(width, height, left, right)
         if channel_enabled(note.channel) then
             held[note.key] = channel_tint(note.channel, 1.0)
         end
+    end
+    for _, s in pairs(sounding) do
+        held[s.key] = PLAYER_COLOR
     end
 
     -- Beat lines behind the notes: song time of each beat in the window,
@@ -173,4 +267,25 @@ function render(width, height, left, right)
     end
 
     line(0, kb_top, width, kb_top, separator)
+
+    -- The play-along span: a marker and its letter above each key, and
+    -- which key and controls in the corner.
+    if span_keys then
+        for i, k in ipairs(span_keys) do
+            local box = key_box(k, width)
+            if box then
+                local color = sounding[i] and PLAYER_COLOR or { r = 255, g = 214, b = 90, a = 0.55 }
+                rect(box.x0 + 1, kb_top - 4, box.x1 - 1, kb_top - 1, color)
+                local tw = text_size(PLAY_LETTERS[i])
+                text((box.x0 + box.x1 - tw) / 2, kb_top - 6 - FONT_HEIGHT, PLAY_LETTERS[i], color)
+            end
+        end
+        local label = NOTE_NAMES[tonic + 1] .. " major   A-L play   Left/Right move   Up/Down key"
+        if not notes_playable() then
+            label = "play along needs a MIDI song and a soundfont"
+        end
+        local tw = text_size(label)
+        rect(width - tw - 12, 4, width - 4, 8 + FONT_HEIGHT, { r = 0, g = 0, b = 0, a = 0.6 })
+        text(width - tw - 8, 6, label, PLAYER_COLOR)
+    end
 end

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use rustysynth::{MidiFile, MidiFileSequencer, SoundFont, Synthesizer, SynthesizerSettings};
 
+use crate::live::{LiveCommand, LiveSynth};
 use crate::visualizer::{ActiveNote, NoteChange, NotesSnapshot, StereoFrame};
 
 pub const MIN_SPEED: f64 = 0.10;
@@ -72,6 +73,8 @@ pub struct Engine {
     loop_enabled: bool,
     /// See `EngineView::generation`.
     generation: u64,
+    /// Notes scripts play (see `live.rs`); built with the soundfont.
+    live: Option<LiveSynth>,
 }
 
 impl Engine {
@@ -93,6 +96,7 @@ impl Engine {
             channels_enabled: [true; 16],
             loop_enabled: false,
             generation: 0,
+            live: None,
         }
     }
 
@@ -183,6 +187,13 @@ impl Engine {
         }
         seq.set_channel_mask(self.channel_mask());
 
+        self.live = match LiveSynth::new(&soundfont, self.sample_rate) {
+            Ok(live) => Some(live),
+            Err(e) => {
+                log::warn!("no live synth for script notes: {e}");
+                None
+            }
+        };
         self.seq = Some(seq);
         self.soundfont_name = Some(name);
         Ok(())
@@ -198,6 +209,7 @@ impl Engine {
         self.paused = false;
         self.detected_channels = midi.note_channels();
         self.channels_enabled = [true; 16];
+        self.live_command(LiveCommand::StopAll);
 
         if let Some(seq) = &mut self.seq {
             seq.play(&midi, false);
@@ -218,7 +230,33 @@ impl Engine {
         self.paused = false;
         self.detected_channels.clear();
         self.channels_enabled = [true; 16];
+        self.live_command(LiveCommand::StopAll);
         self.audio_file = Some(AudioFilePlayback { data, position: 0.0 });
+    }
+
+    /// Notes from a script. Only while a MIDI is loaded (with a soundfont):
+    /// the live synth borrows that song's instruments.
+    pub fn live_command(&mut self, command: LiveCommand) {
+        let playable = self.midi.is_some() || command == LiveCommand::StopAll;
+        if let Some(live) = &mut self.live
+            && playable
+        {
+            live.apply(command);
+        }
+    }
+
+    /// Whether the live synth has anything to render.
+    pub fn live_busy(&self) -> bool {
+        self.midi.is_some() && self.seq.is_some() && self.live.as_ref().is_some_and(LiveSynth::busy)
+    }
+
+    /// Render the live synth's next block (interleaved stereo), whether or
+    /// not the song is paused.
+    pub fn render_live(&mut self, out: &mut [f32]) {
+        match (&mut self.live, &self.seq) {
+            (Some(live), Some(seq)) => live.render(seq.get_synthesizer(), out),
+            _ => out.fill(0.0),
+        }
     }
 
     /// Bit N set = channel N audible / visually enabled.

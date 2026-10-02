@@ -1,13 +1,15 @@
 #![allow(dead_code)]
 
-#[derive(Debug, PartialEq, Eq)]
+// LOCAL PATCH (synththing): Clone/Copy, so a channel can be cloned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DataType {
     None,
     Rpn,
     Nrpn,
 }
 
-#[derive(Debug)]
+// LOCAL PATCH (synththing): Clone, for Synthesizer::copy_channels_from.
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub(crate) struct Channel {
     pub(crate) is_percussion_channel: bool,

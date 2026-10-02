@@ -158,6 +158,21 @@
     Ideas not done: gamepad bindings for actions (the Controls list is
     where they'd go), mouse buttons as action bindings.
 
+[M][.] scripts play notes - DONE
+    play_note / note_on / note_off / stop_notes / notes_playable and
+    sequences (sequence_register in beats, sequence_play at the song's
+    tempo, sequence_stop). A second synthesizer (src/live.rs) copies the
+    song synth's channel state every block (vendored LOCAL PATCH:
+    Synthesizer::copy_channels_from) and renders into its own ~25 ms ring,
+    mixed by rodio, so notes are heard quickly instead of after the song's
+    buffer. Only while a MIDI with a soundfont is loaded; channel falls
+    back to the song's lowest. Stopped on recompile/restart, song load,
+    and when the visualizer stops being drawn.
+    keyboard.lua plays along: A-L a major-scale span, arrows move it and
+    change the key.
+    Ideas not done: script notes in the visualizer tap (fft/levels), in
+    active_notes(); other scales; sequence looping.
+
 [S][.] a real doc system for the lua scripting API - DONE
     One page, the Scripting Reference tab. The source is
     docs/scripting-reference.md (plain Markdown, readable on GitHub and easy

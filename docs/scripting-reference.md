@@ -347,6 +347,71 @@ end
 
 See `terminal.lua` (New > terminal) for a full example: a command prompt with history.
 
+## Playing notes
+
+```lua
+play_note(key, [options]) -> bool    -- options: channel, velocity, duration, delay
+note_on(key, [options]) -> bool      -- options: channel, velocity; held until note_off
+note_off(key, [channel])
+stop_notes()                         -- let go of everything, cancel every sequence
+notes_playable() -> bool             -- whether notes can play right now
+```
+
+While a MIDI song is loaded with a soundfont, a script can play notes of its own, on the song's instruments: a note on channel 3 sounds like the song's channel 3 does at that moment (its instrument, volume, pan and pitch bend). Without a MIDI song or a soundfont (or with a plain audio file) there's nothing to play on, so these return false and do nothing; `notes_playable()` says which. Notes play whether the song is paused or not.
+
+- `key`: MIDI note number, 0 to 127 (60 is middle C)
+- `channel`: 0 to 15, as in `midi_channels()`. Left out, or a channel the song doesn't use (not every song has a channel 0), it's the song's lowest channel.
+- `velocity`: how hard, 1 to 127 (default 100)
+- `duration`: seconds (default 0.5); `play_note` only
+- `delay`: seconds from now until it starts (default 0); `play_note` only
+
+`play_note` is fire and forget: the note ends by itself after `duration`. `note_on` holds the note until `note_off` with the same key (and channel, if one was given), for things like playing along on the keyboard, where the note should last as long as the key is held:
+
+```lua
+local PLAY = input_register("play", "space")
+
+function render(width, height, left, right)
+    local state = input(PLAY)
+    if state == "pressed" then note_on(60) end
+    if state == "released" then note_off(60) end
+end
+```
+
+Script notes play on a separate synthesizer from the song's, mixed in at the output with very little delay (tens of milliseconds, not the song's audio buffer), and they never cut off the song's notes or get cut off by them. They aren't part of the song itself, so they don't show up in `active_notes()` or the audio functions (`fft_left`, levels, `onset`); a script that wants to show what it plays keeps track itself. Everything a script plays stops when it's reloaded or restarted, when another song loads, and when the visualizer is closed or hidden. A script holding notes with `note_on` should let go when it loses focus (`has_focus()`), since a key released while the visualizer didn't have focus never reports `"released"`.
+
+## Sequences
+
+```lua
+sequence_register(notes) -> id               -- once, outside render()
+sequence_play(id, [options]) -> handle       -- options: channel, transpose, tempo, delay
+sequence_stop(handle)
+```
+
+A sequence is a little score a script registers once and plays whenever it likes: a fanfare, an arpeggio, a riff to answer the song with. Times are in beats, so the same sequence fits any tempo. `notes` is a list, and each entry is either a key number (a one-beat note) or a table:
+
+- `key`: MIDI note number; leave it out for a rest
+- `at`: when it starts, in beats from the start of the sequence; defaults to where the previous entry ended, so a melody can just be listed in order
+- `length`: beats (default 1)
+- `velocity`: 1 to 127 (default 100)
+- `channel`: this note's channel, over the one `sequence_play` picks
+
+```lua
+local fanfare = sequence_register({
+    { key = 60, length = 0.5 }, { key = 64, length = 0.5 }, { key = 67, length = 0.5 },
+    { length = 0.5 },                                         -- a rest
+    { key = 72, length = 2, velocity = 120 },
+    { key = 48, at = 2, length = 2 },                         -- under the top note
+})
+
+if onset() and notes_playable() then
+    sequence_play(fanfare, { transpose = 5 })
+end
+```
+
+`sequence_play` options: `channel` (as for `play_note`; for notes that don't name their own), `transpose` (semitones up, or down when negative; notes pushed past 0 to 127 are skipped), `tempo` (beats per minute) and `delay` (seconds before it starts). Without a `tempo` it plays at the song's tempo right now, as heard (times the playback speed), so it keeps time with the song; 120 for a song with no tempo marking. It returns a handle for `sequence_stop`, which cancels the notes still to come and lets go of the ones sounding, or nil when notes can't play (see `notes_playable()`). The same sequence can play several times at once, each with its own handle. A script can register up to 10,000 sequences.
+
+See `keyboard.lua` (play along on the keyboard) for `note_on`/`note_off` in use.
+
 ## Logging
 
 ```lua
@@ -429,7 +494,7 @@ The first seven are copied into your scripts folder on first run (one that came 
 
 - `waveform.lua`, a scrolling oscilloscope trace; the simplest ring-buffer example
 - `fft.lua`, log-spaced spectrum bars, left/right overlap shown as a third color; frequency labels (text) and loudness meters (`level_left`/`level_right`)
-- `keyboard.lua`, an 88-key piano with falling notes from `notes_between` (exact lengths, adjustable look-ahead), beat and numbered bar lines (`beat`, `bar`, `time_at_beat`), octave labels; two-pass enabled/disabled channel rendering
+- `keyboard.lua`, an 88-key piano with falling notes from `notes_between` (exact lengths, adjustable look-ahead), beat and numbered bar lines (`beat`, `bar`, `time_at_beat`), octave labels; two-pass enabled/disabled channel rendering; and play along: with focus, A to L play a major scale on the song's instrument (`note_on`/`note_off`), the arrows move the span and change the key
 - `spectrogram.lua`, a scrolling time/frequency heatmap; run-length merging, pause-awareness, live-tunable resolution, frequency labels, optional onset ticks (`onset`)
 - `letters.lua`, one glyph per channel, colored by pitch; a from-scratch bitmap font
 - `snake.lua`, one snake per channel hunting apples spawned by note-ons; apples are sprites, a text scoreboard, and a `player_channel` setting to steer one snake yourself with rebindable steering actions (best length saved with `store_set`); the most elaborate example, worth reading end to end

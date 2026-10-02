@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use rustysynth::{MidiFile, SoundFont};
 
 use crate::engine::{DecodedAudio, Engine, EngineView};
+use crate::live::LiveCommand;
 use crate::visualizer::{NotesSnapshot, SampleTap};
 
 /// How many stereo frames the consumer pulls from the ring at a time.
@@ -29,6 +30,10 @@ const RENDER_BLOCK_FRAMES: usize = 512;
 pub const MIN_BUFFER_MS: u32 = 40;
 pub const MAX_BUFFER_MS: u32 = 500;
 pub const DEFAULT_BUFFER_MS: u32 = 150;
+/// The live synth's (script notes') block size and cushion: small, so a
+/// note is heard soon after the script plays it.
+const LIVE_BLOCK_FRAMES: usize = 128;
+const LIVE_BUFFER_MS: u32 = 25;
 
 /// GUI -> render thread. Everything the GUI used to call on `Engine` directly.
 pub enum AudioCommand {
@@ -48,6 +53,8 @@ pub enum AudioCommand {
     SetVolume(f32),
     /// Target cushion in milliseconds.
     SetBufferMs(u32),
+    /// Notes a script plays (`live.rs`).
+    Live(LiveCommand),
 }
 
 /// Render thread -> GUI. Cloned once per GUI frame.
@@ -163,6 +170,8 @@ pub struct AudioEngine {
     engine: Engine,
     tap: SampleTap,
     ring: AudioRing,
+    /// The live synth's ring, mixed with `ring` by the output.
+    live_ring: AudioRing,
     flush: Arc<AtomicBool>,
     commands: Receiver<AudioCommand>,
     shared: Arc<Mutex<PlaybackShared>>,
@@ -170,6 +179,7 @@ pub struct AudioEngine {
     volume: f32,
     buffer_ms: u32,
     block: Vec<f32>,
+    live_block: Vec<f32>,
     /// Mirrors the engine: don't feed the ring while paused/finished or with
     /// nothing loaded.
     should_render: bool,
@@ -182,6 +192,7 @@ impl AudioEngine {
         engine: Engine,
         tap: SampleTap,
         ring: AudioRing,
+        live_ring: AudioRing,
         flush: Arc<AtomicBool>,
         commands: Receiver<AudioCommand>,
         shared: Arc<Mutex<PlaybackShared>>,
@@ -191,6 +202,7 @@ impl AudioEngine {
             engine,
             tap,
             ring,
+            live_ring,
             flush,
             commands,
             shared,
@@ -198,6 +210,7 @@ impl AudioEngine {
             volume: 1.0,
             buffer_ms: DEFAULT_BUFFER_MS,
             block: vec![0.0; RENDER_BLOCK_FRAMES * 2],
+            live_block: vec![0.0; LIVE_BLOCK_FRAMES * 2],
             should_render: false,
             last_publish: Instant::now(),
         }
@@ -215,7 +228,9 @@ impl AudioEngine {
             }
 
             self.refresh_flags();
+            self.fill_live_ring();
             self.fill_ring();
+            self.fill_live_ring();
 
             if self.last_publish.elapsed() >= Duration::from_millis(16) {
                 self.publish();
@@ -271,6 +286,7 @@ impl AudioEngine {
             AudioCommand::SetBufferMs(ms) => {
                 self.buffer_ms = ms.clamp(MIN_BUFFER_MS, MAX_BUFFER_MS);
             }
+            AudioCommand::Live(command) => self.engine.live_command(command),
         }
     }
 
@@ -306,6 +322,20 @@ impl AudioEngine {
                 }
             }
             self.ring.push(&self.block);
+        }
+    }
+
+    /// Keep the live synth's small cushion topped up, paused or not. It
+    /// stops once its notes (and their tails) are over, and the output just
+    /// mixes in silence.
+    fn fill_live_ring(&mut self) {
+        let target_samples = (self.sample_rate as u64 * LIVE_BUFFER_MS as u64 / 1000) as usize * 2;
+        while self.engine.live_busy() && self.live_ring.len() < target_samples {
+            self.engine.render_live(&mut self.live_block);
+            for sample in &mut self.live_block {
+                *sample = (*sample * self.volume).clamp(-1.0, 1.0);
+            }
+            self.live_ring.push(&self.live_block);
         }
     }
 

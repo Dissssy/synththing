@@ -157,6 +157,10 @@ pub struct App {
     /// What the visualizer reported this frame (focus, cursor request);
     /// default when it wasn't drawn.
     visualizer_output: ShowOutput,
+    /// Whether the visualizer was drawn (and its script run) this frame and
+    /// last frame: when it stops, notes the script was holding are let go.
+    visualizer_drawn: bool,
+    visualizer_was_drawn: bool,
     /// Whether the cursor is currently confined to the window for a script.
     cursor_confined: bool,
     updater: Updater,
@@ -299,6 +303,8 @@ impl App {
             preferences_were_open: false,
             dedicated: None,
             visualizer_output: ShowOutput::default(),
+            visualizer_drawn: false,
+            visualizer_was_drawn: false,
             cursor_confined: false,
             updater: Updater::new(),
             updates_open: false,
@@ -1437,6 +1443,7 @@ impl App {
     /// whatever it asked for.
     fn show_visualizer(&mut self, ui: &mut egui::Ui, notes: &NotesSnapshot, playback: &EngineView, mode: DisplayMode) {
         self.visualizer_output = self.visualizer.show(ui, &self.tap, notes, playback, self.preferences_open, mode);
+        self.visualizer_drawn = true;
 
         // A script can ask to mute/unmute a channel itself (e.g. a game
         // script silencing a dead player's channel), same command the GUI's
@@ -1444,6 +1451,11 @@ impl App {
         // the last channel" rule.
         for (channel, enabled) in self.visualizer.visualizer_mut().take_channel_requests() {
             self.send(AudioCommand::SetChannelEnabled(channel, enabled));
+        }
+
+        // Notes the script played, for the live synth.
+        for command in self.visualizer.visualizer_mut().take_live_commands() {
+            self.send(AudioCommand::Live(command));
         }
 
         // set_paused / seek from the script. `paused` tracks the effect of
@@ -2272,6 +2284,7 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         let shared = self.shared.lock().unwrap().clone();
         let view = &shared.view;
+        self.visualizer_drawn = false;
 
         // The OS is the final authority on fullscreen state, e.g. the user
         // could leave it some way other than our own button/key.
@@ -2412,6 +2425,13 @@ impl eframe::App for App {
         // stay fully idle otherwise. While a playlist is playing, keep
         // polling too, so the end of a track is noticed and the next one
         // starts even with the window idle in the background.
+        // The visualizer went away (tab closed or hidden): its script can't
+        // let go of notes it's holding any more, so let go for it.
+        if self.visualizer_was_drawn && !self.visualizer_drawn {
+            self.send(AudioCommand::Live(crate::live::LiveCommand::StopAll));
+        }
+        self.visualizer_was_drawn = self.visualizer_drawn;
+
         if self.dedicated.is_some() || self.is_open(Section::Visualizer) {
             ctx.request_repaint_after(Duration::from_millis(16));
         } else if !view.paused && (view.has_midi || view.has_audio_file) {

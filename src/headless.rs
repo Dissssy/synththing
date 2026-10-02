@@ -87,6 +87,9 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
         for (channel, enabled) in visualizer.take_channel_requests() {
             engine.set_channel_enabled(channel, enabled);
         }
+        for command in visualizer.take_live_commands() {
+            engine.live_command(command);
+        }
         for request in visualizer.take_playback_requests() {
             match request {
                 PlaybackRequest::Pause(pause) if pause != engine.view().paused => engine.toggle_pause(),

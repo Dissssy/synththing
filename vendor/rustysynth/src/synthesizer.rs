@@ -285,6 +285,23 @@ impl Synthesizer {
         }
     }
 
+    /// LOCAL PATCH (synththing): take on another synthesizer's channel
+    /// state (bank, program, volume, pan, pitch bend, ...), minus its
+    /// sustain pedal, so notes played here sound like that synthesizer's
+    /// channels. Voices already sounding follow the new state.
+    pub fn copy_channels_from(&mut self, other: &Synthesizer) {
+        for (mine, theirs) in self.channels.iter_mut().zip(&other.channels) {
+            *mine = theirs.clone();
+            mine.set_hold_pedal(0);
+        }
+    }
+
+    /// LOCAL PATCH (synththing): how many voices are sounding (including
+    /// ones in their release).
+    pub fn active_voice_count(&self) -> usize {
+        self.voices.active_voice_count
+    }
+
     /// Resets all the controllers.
     pub fn reset_all_controllers(&mut self) {
         for channel in &mut self.channels {
