@@ -171,7 +171,7 @@ The levels are the root mean square of the samples `render()` got this frame: 0 
 
 ```lua
 notes_between(t0, t1) -> notes  -- whole notes sounding in [t0, t1): {id, channel, key, velocity, start, stop}
-active_notes() -> notes         -- held right now: {channel, key, velocity}
+active_notes() -> notes         -- held right now: {channel, key, velocity, source}
 upcoming_notes() -> notes       -- changing within NOTE_LOOKAHEAD: adds `on`, `seconds_until`
 midi_channels() -> channels     -- channels this file uses, sorted
 channel_enabled(c) -> bool      -- the GUI's per-channel toggle
@@ -377,7 +377,7 @@ function render(width, height, left, right)
 end
 ```
 
-Script notes play on a separate synthesizer from the song's, mixed in at the output with very little delay (tens of milliseconds, not the song's audio buffer), and they never cut off the song's notes or get cut off by them. They aren't part of the song itself, so they don't show up in `active_notes()` or the audio functions (`fft_left`, levels, `onset`); a script that wants to show what it plays keeps track itself. Everything a script plays stops when it's reloaded or restarted, when another song loads, and when the visualizer is closed or hidden. A script holding notes with `note_on` should let go when it loses focus (`has_focus()`), since a key released while the visualizer didn't have focus never reports `"released"`.
+Script notes play on a separate synthesizer from the song's, mixed in at the output with very little delay (tens of milliseconds, not the song's audio buffer), and they never cut off the song's notes or get cut off by them. They show up in `active_notes()` while they sound, with `source = "script"` (the song's own notes have `source = "song"`), so a visualizer lights up for them like for the song's, and one that only wants the score can skip them. They aren't in the audio functions (`fft_left`, levels, `onset`), or in `notes_between` and `upcoming_notes`, which read the song file. Everything a script plays stops when it's reloaded or restarted, when another song loads, and when the visualizer is closed or hidden. A script holding notes with `note_on` should let go when it loses focus (`has_focus()`), since a key released while the visualizer didn't have focus never reports `"released"`.
 
 ## Sequences
 

@@ -78,7 +78,7 @@ struct Dedicated {
 /// a playlist entry, to set its override).
 struct DraggedSoundfont(PathBuf);
 
-/// How often (seconds) the dock layout is checked for changes to save —
+/// How often (seconds) the dock layout is checked for changes to save:
 /// dragging a tab or a divider doesn't announce itself, so it's polled.
 const LAYOUT_AUTOSAVE_SECS: f64 = 1.0;
 
@@ -436,7 +436,7 @@ impl App {
         self.save_layout();
     }
 
-    /// Save the layout if it's changed (tabs dragged, dividers moved) —
+    /// Save the layout if it's changed (tabs dragged, dividers moved),
     /// checked about once a second, and never mid-drag.
     fn autosave_layout(&mut self, ctx: &egui::Context) {
         let (now, dragging) = ctx.input(|i| (i.time, i.pointer.any_down()));
@@ -1694,7 +1694,7 @@ impl App {
     /// API table (see `lua_completion`), including `debug_locals()` itself
     /// now; calling it by hand, from wherever in the script you want a
     /// snapshot, is the whole interface. (An earlier version added a gutter
-    /// with clickable per-line markers to inject the call automatically —
+    /// with clickable per-line markers to inject the call automatically,
     /// cut after it turned out laggy, a button per source line adds up, and
     /// lining a hand-rolled gutter up pixel-for-pixel with TextEdit's own
     /// line layout wasn't worth what it bought.)

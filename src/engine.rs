@@ -145,16 +145,28 @@ impl Engine {
             return base;
         }
 
+        // The score's held notes, then the script's (see live.rs).
+        let mut active: Vec<ActiveNote> = seq
+            .active_notes()
+            .into_iter()
+            .map(|n| ActiveNote {
+                channel: n.channel as u8,
+                key: n.key as u8,
+                velocity: n.velocity as u8,
+                from_script: false,
+            })
+            .collect();
+        if let Some(live) = &self.live {
+            active.extend(live.sounding_keys().into_iter().map(|(channel, key, velocity)| ActiveNote {
+                channel,
+                key,
+                velocity,
+                from_script: true,
+            }));
+        }
+
         NotesSnapshot {
-            active: seq
-                .active_notes()
-                .into_iter()
-                .map(|n| ActiveNote {
-                    channel: n.channel as u8,
-                    key: n.key as u8,
-                    velocity: n.velocity as u8,
-                })
-                .collect(),
+            active,
             upcoming: seq
                 .upcoming_notes(NOTE_LOOKAHEAD_SECS)
                 .into_iter()

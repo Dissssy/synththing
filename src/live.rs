@@ -69,6 +69,7 @@ struct Pending {
 struct Sounding {
     channel: u8,
     key: u8,
+    velocity: u8,
     tag: u64,
     /// When it ends; `None` = held until released.
     off_at: Option<u64>,
@@ -134,7 +135,7 @@ impl Schedule {
         due.sort_by_key(|d| d.0);
         for (at, length, channel, key, velocity, tag) in due {
             ops.push(SynthOp::On { channel, key, velocity });
-            self.sounding.push(Sounding { channel, key, tag, off_at: length.map(|l| at + l) });
+            self.sounding.push(Sounding { channel, key, velocity, tag, off_at: length.map(|l| at + l) });
         }
         self.clock = end;
     }
@@ -162,6 +163,19 @@ impl Schedule {
 
     fn idle(&self) -> bool {
         self.pending.is_empty() && self.sounding.is_empty()
+    }
+
+    /// (channel, key, velocity) of each key sounding, once per key (the
+    /// latest note's velocity when it's sounding twice).
+    fn sounding_keys(&self) -> Vec<(u8, u8, u8)> {
+        let mut keys: Vec<(u8, u8, u8)> = Vec::new();
+        for s in &self.sounding {
+            match keys.iter_mut().find(|(c, k, _)| *c == s.channel && *k == s.key) {
+                Some(entry) => entry.2 = s.velocity,
+                None => keys.push((s.channel, s.key, s.velocity)),
+            }
+        }
+        keys
     }
 }
 
@@ -195,6 +209,12 @@ impl LiveSynth {
         }
         self.schedule.apply(command, &mut self.ops);
         self.run_ops();
+    }
+
+    /// (channel, key, velocity) of the keys the script has sounding now,
+    /// for `active_notes()`.
+    pub fn sounding_keys(&self) -> Vec<(u8, u8, u8)> {
+        self.schedule.sounding_keys()
     }
 
     /// Whether there's anything to hear: notes sounding or coming, or a
@@ -271,6 +291,7 @@ mod tests {
         assert_eq!(step(&mut schedule, 10), [on(60)]);
         assert_eq!(step(&mut schedule, 10), []);
         assert_eq!(step(&mut schedule, 10), [on(64)]);
+        assert_eq!(schedule.sounding_keys(), [(0, 60, 100), (0, 64, 100)]);
         assert_eq!(step(&mut schedule, 20), []);
         assert_eq!(step(&mut schedule, 10), [off(60)], "50 ms after it started");
         assert_eq!(step(&mut schedule, 1000), [], "a held note stays");

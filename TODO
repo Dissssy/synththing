@@ -170,8 +170,10 @@
     and when the visualizer stops being drawn.
     keyboard.lua plays along: A-L a major-scale span, arrows move it and
     change the key.
-    Ideas not done: script notes in the visualizer tap (fft/levels), in
-    active_notes(); other scales; sequence looping.
+    Script notes are in active_notes() with source = "script".
+    Ideas not done: script notes in the visualizer tap (fft/levels); a
+    hardware MIDI input (parked: nothing to test with); other scales;
+    sequence looping.
 
 [S][.] a real doc system for the lua scripting API - DONE
     One page, the Scripting Reference tab. The source is
@@ -209,7 +211,7 @@
     Deliberately NOT built (parked per your "park that for now" call):
     - Real source parsing: the completion/hover analysis is still just the
       static HOST_API table, blind to the actual script. `analyze()` in
-      lua_completion.rs already takes the source string for exactly this —
+      lua_completion.rs already takes the source string for exactly this;
       next step would be finding locals in scope at the cursor and the
       variable's inferred kind (e.g. "this came from setting_color, so it's
       a color").

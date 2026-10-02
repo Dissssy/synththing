@@ -104,7 +104,7 @@ impl FileBrowser {
         // Point the dialog at the *parent* of the current directory, not the
         // current directory itself. `set_directory` opens straight into that
         // folder's contents, so starting it at `self.cwd` left the current
-        // folder with nothing in the list to click "Select Folder" on —
+        // folder with nothing in the list to click "Select Folder" on;
         // starting one level up puts it in the list as a normal, selectable
         // entry instead.
         let start = self.cwd.parent().unwrap_or(&self.cwd);

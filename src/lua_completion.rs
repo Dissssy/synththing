@@ -1,6 +1,6 @@
 //! A small "internal LSP" for the script editor: a background-computed list
 //! of autocomplete suggestions, plus hover/lookup info for a single
-//! identifier (used for both mouse-hover and a keybind-at-cursor trigger —
+//! identifier (used for both mouse-hover and a keybind-at-cursor trigger;
 //! see `app.rs`'s editor UI).
 //!
 //! Today the analysis is just our fixed host API table (`HOST_API`), which
@@ -43,7 +43,7 @@ pub const HOST_API: &[(&str, &str)] = &[
     ("level_right", "level_right() -> number: this frame's right loudness (RMS)"),
     ("onset", "onset() -> hit, strength: whether a sound just started this frame"),
     ("notes_between", "notes_between(t0, t1) -> notes: whole notes sounding in the window, {id, channel, key, velocity, start, stop}"),
-    ("active_notes", "active_notes() -> notes, MIDI notes held right now"),
+    ("active_notes", "active_notes() -> notes, MIDI notes held right now: {channel, key, velocity, source (\"song\" or \"script\")}"),
     ("upcoming_notes", "upcoming_notes() -> notes, note on/off changes within NOTE_LOOKAHEAD"),
     ("midi_channels", "midi_channels() -> channels, channels the current file uses"),
     ("channel_enabled", "channel_enabled(channel) -> bool, is this channel enabled"),

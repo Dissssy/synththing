@@ -1003,7 +1003,7 @@ pub struct LuaVisualizer {
     path: Option<PathBuf>,
     source: String,
     compiled: Option<Compiled>,
-    /// Set when the most recent `set_source` call failed (to compile, or —
+    /// Set when the most recent `set_source` call failed (to compile, or,
     /// from `set_source_and_save`, to write to disk); cleared the next time
     /// a `set_source` call succeeds outright. Deliberately independent of
     /// `runtime_error`: the old script kept running after a bad edit might
@@ -1012,7 +1012,7 @@ pub struct LuaVisualizer {
     /// read, that was the actual bug, not just overly-transient UI.
     compile_error: Option<String>,
     /// Set from the outcome of the most recent `render` call; cleared the
-    /// next time one succeeds. This one *is* meant to be that transient —
+    /// next time one succeeds. This one *is* meant to be that transient:
     /// it reflects whether the script is erroring right now.
     runtime_error: Option<String>,
     spectrum_left: Rc<RefCell<SpectrumAnalyzer>>,
@@ -1180,7 +1180,7 @@ impl LuaVisualizer {
 
     /// Recompile against `new_source` on a fresh Lua VM. On success the new
     /// script takes over immediately; on failure the error is recorded (and
-    /// also logged against the still-running old script, if there is one —
+    /// also logged against the still-running old script, if there is one:
     /// "your last edit didn't take" is as much a fact about that script's
     /// history as a runtime error would be) and whatever script was
     /// previously running keeps running.
@@ -2776,10 +2776,11 @@ fn strings_to_table(lua: &Lua, values: &[String]) -> mlua::Result<Table> {
 fn active_notes_to_table(lua: &Lua, notes: &[ActiveNote]) -> mlua::Result<Table> {
     let array = lua.create_table_with_capacity(notes.len(), 0)?;
     for (i, note) in notes.iter().enumerate() {
-        let entry = lua.create_table_with_capacity(0, 3)?;
+        let entry = lua.create_table_with_capacity(0, 4)?;
         entry.raw_set("channel", note.channel)?;
         entry.raw_set("key", note.key)?;
         entry.raw_set("velocity", note.velocity)?;
+        entry.raw_set("source", if note.from_script { "script" } else { "song" })?;
         array.raw_set(i + 1, entry)?;
     }
     Ok(array)
@@ -3066,10 +3067,10 @@ mod tests {
     fn sample_notes() -> NotesSnapshot {
         NotesSnapshot {
             active: vec![
-                ActiveNote { channel: 0, key: 60, velocity: 100 },
-                ActiveNote { channel: 1, key: 64, velocity: 80 },
-                ActiveNote { channel: 0, key: 21, velocity: 40 },
-                ActiveNote { channel: 9, key: 108, velocity: 127 },
+                ActiveNote { channel: 0, key: 60, velocity: 100, from_script: false },
+                ActiveNote { channel: 1, key: 64, velocity: 80, from_script: false },
+                ActiveNote { channel: 0, key: 21, velocity: 40, from_script: false },
+                ActiveNote { channel: 9, key: 108, velocity: 127, from_script: true },
             ],
             upcoming: vec![
                 NoteChange { channel: 0, key: 67, velocity: 90, on: true, seconds_until: 0.4 },
@@ -3427,6 +3428,19 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         silent.render(&mut buffer, 2, 2, &[], &notes, &view, &VisualizerInput::default());
         assert_eq!(last_log(&silent), "false");
         assert!(silent.take_live_commands().is_empty());
+    }
+
+    #[test]
+    fn active_notes_say_whether_the_script_played_them() {
+        let script = "function render()
+            local sources = {}
+            for _, n in ipairs(active_notes()) do sources[#sources + 1] = n.key .. '=' .. n.source end
+            log(table.concat(sources, ' '))
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let mut buffer = vec![0u32; 4];
+        visualizer.render(&mut buffer, 2, 2, &[], &sample_notes(), &sample_playback(), &VisualizerInput::default());
+        assert_eq!(last_log(&visualizer), "60=song 64=song 21=song 108=script");
     }
 
     #[test]
@@ -3939,6 +3953,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
                     channel: i % 6,
                     key: 30 + i * 2,
                     velocity: 90,
+                    from_script: false,
                 });
             }
             for i in 0..64u8 {

@@ -73,6 +73,9 @@ pub struct ActiveNote {
     pub channel: u8,
     pub key: u8,
     pub velocity: u8,
+    /// Played by the visualizer script (`play_note`, `note_on`,
+    /// sequences) rather than the song.
+    pub from_script: bool,
 }
 
 /// An upcoming note-on or note-off within the look-ahead window.
@@ -255,7 +258,7 @@ impl VisualizerInput {
 /// Upper bound on how many pixels the visualizer actually renders, no matter
 /// how large the panel showing it is. Every bundled script does real
 /// per-pixel work (filling rects, running the alpha blender, scanning the
-/// quantized-run palette, ...), so buffer size directly sets render cost —
+/// quantized-run palette, ...), so buffer size directly sets render cost:
 /// fine at a windowed panel's few hundred thousand pixels, not at a
 /// fullscreen 1440p+ one's several million. Above this budget the logical
 /// buffer shrinks (same aspect ratio) and gets scaled back up to fill the
