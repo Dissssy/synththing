@@ -82,6 +82,10 @@ pub struct RunScriptArgs {
     /// Only print errors and the summary, not the script's log.
     #[arg(long, short)]
     pub quiet: bool,
+
+    /// Save the last frame as a PNG image (to see what the script drew).
+    #[arg(long, value_name = "FILE")]
+    pub screenshot: Option<std::path::PathBuf>,
 }
 
 /// If launched with arguments from a terminal, attach to it so output and

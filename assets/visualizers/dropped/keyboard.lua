@@ -1,11 +1,14 @@
 -- Piano keyboard visualizer.
 --
--- Bottom strip: an 88-key keyboard (MIDI 21..108). A key fills with its
--- channel's color while it's held (active_notes()), but only if that channel
--- is enabled in the GUI. Disabled channels never light up the keys.
--- Above it: a "falling notes" lane. Upcoming note-ons (upcoming_notes())
--- descend toward their key; a bar's length is the note's duration, found by
--- pairing each note-on with its matching note-off within NOTE_LOOKAHEAD.
+-- Bottom strip: an 88-key keyboard (MIDI 21..108), C keys labeled with their
+-- octave. A key fills with its channel's color while it's held
+-- (active_notes()), but only if that channel is enabled in the GUI. Disabled
+-- channels never light up the keys.
+-- Above it: a "falling notes" lane. Every note in the next few seconds
+-- (notes_between(), so each comes with its exact start and stop) descends
+-- toward its key; a bar's length is the note's duration. Faint lines mark
+-- the beats and brighter, numbered ones the bars (beat(), bar(),
+-- time_at_beat()), for MIDI files that have tempo information.
 --
 -- Bars are drawn in two passes: enabled channels first (opaque), then
 -- disabled channels (translucent, alpha DISABLED_ALPHA). Because the
@@ -74,30 +77,21 @@ local function key_box(key, width)
     return layout.keys[key]
 end
 
--- Find the note-off matching `on` at or after index `from` in `upcoming`.
-local function matching_off(upcoming, from, channel, key)
-    for j = from, #upcoming do
-        local o = upcoming[j]
-        if (not o.on) and o.channel == channel and o.key == key then
-            return o.seconds_until
-        end
-    end
-    return nil
-end
-
 function render(width, height, left, right)
     local background = setting_color("background", { r = 14, g = 14, b = 20 })
     local key_idle_white = setting_color("key_idle_white", { r = 232, g = 232, b = 238 })
     local key_idle_black = setting_color("key_idle_black", { r = 28, g = 28, b = 34 })
     local separator = setting_color("separator", { r = 60, g = 60, b = 72 })
     local disabled_alpha = setting_float("disabled_alpha", 0.22, 0.0, 1.0)
+    local lookahead = setting_float("lookahead_seconds", 4.0, 0.5, 16.0)
+    local show_beats = setting_bool("beat_lines", true)
+    local show_octaves = setting_bool("octave_labels", true)
 
     clear(background)
 
     local kb_h = math.max(1, math.floor(height * KEYBOARD_FRACTION))
     local kb_top = height - kb_h
     local lane_height = math.max(1, kb_top)
-    local lookahead = math.max(0.001, NOTE_LOOKAHEAD)
 
     local function time_to_y(t)
         local clamped = math.max(0.0, math.min(lookahead, t))
@@ -105,7 +99,8 @@ function render(width, height, left, right)
     end
 
     local active = active_notes()
-    local upcoming = upcoming_notes()
+    local now = playback().position
+    local notes = notes_between(now, now + lookahead)
 
     -- Which keys are held right now, enabled channels only.
     local held = {}
@@ -115,24 +110,30 @@ function render(width, height, left, right)
         end
     end
 
-    -- One pass over every bar for a given enabled/disabled selection.
-    local function draw_bars(want_enabled, alpha)
-        for i, ev in ipairs(upcoming) do
-            if ev.on and channel_enabled(ev.channel) == want_enabled then
-                local box = key_box(ev.key, width)
-                if box then
-                    local off_t = matching_off(upcoming, i + 1, ev.channel, ev.key) or lookahead
-                    rect(box.x0 + 1, time_to_y(off_t), box.x1 - 1, time_to_y(ev.seconds_until),
-                        channel_tint(ev.channel, alpha))
-                end
+    -- Beat lines behind the notes: song time of each beat in the window,
+    -- brighter and numbered where a bar starts.
+    if show_beats and beat() then
+        for b = math.ceil(beat(now)), math.floor(beat(now + lookahead)) do
+            local t = time_at_beat(b)
+            local y = math.floor(time_to_y(t - now))
+            local bar_number, into = bar(t)
+            if into < 0.01 then
+                line(0, y, width, y, { r = 255, g = 255, b = 255, a = 0.22 })
+                text(4, y - FONT_HEIGHT, tostring(bar_number), { r = 255, g = 255, b = 255, a = 0.45 })
+            else
+                line(0, y, width, y, { r = 255, g = 255, b = 255, a = 0.07 })
             end
         end
-        for _, note in ipairs(active) do
+    end
+
+    -- One pass over every bar for a given enabled/disabled selection. Notes
+    -- already sounding are clamped to the keyboard edge by time_to_y.
+    local function draw_bars(want_enabled, alpha)
+        for _, note in ipairs(notes) do
             if channel_enabled(note.channel) == want_enabled then
                 local box = key_box(note.key, width)
                 if box then
-                    local off_t = matching_off(upcoming, 1, note.channel, note.key) or lookahead
-                    rect(box.x0 + 1, time_to_y(off_t), box.x1 - 1, kb_top,
+                    rect(box.x0 + 1, time_to_y(note.stop - now), box.x1 - 1, time_to_y(note.start - now),
                         channel_tint(note.channel, alpha))
                 end
             end
@@ -150,6 +151,19 @@ function render(width, height, left, right)
             rect(box.x0 + 1, kb_top, box.x1 - 1, height, held[k] or key_idle_white)
         end
     end
+    -- Octave labels on the C keys, when the keys are wide enough.
+    local c_box = key_box(60, width)
+    if show_octaves and c_box and c_box.x1 - c_box.x0 >= 7 then
+        for k = 24, LAST_KEY, 12 do
+            local box = key_box(k, width)
+            local label = "C" .. (k // 12 - 1)
+            local tw = text_size(label)
+            if box and tw <= (box.x1 - box.x0) * 2.2 then
+                text(box.x0 + 2, height - FONT_HEIGHT - 2, label, { r = 90, g = 90, b = 110 })
+            end
+        end
+    end
+
     local black_h = math.floor(kb_h * 0.62)
     for k = FIRST_KEY, LAST_KEY do
         local box = key_box(k, width)

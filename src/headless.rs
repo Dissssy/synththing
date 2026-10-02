@@ -96,6 +96,11 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
         }
     }
 
+    if let Some(path) = &args.screenshot {
+        std::fs::write(path, crate::png::encode_rgb(&pixels, args.width, args.height))
+            .map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
+        println!("saved the last frame to {}", path.display());
+    }
     if !args.quiet {
         for entry in visualizer.log_entries() {
             if entry.count > 1 {

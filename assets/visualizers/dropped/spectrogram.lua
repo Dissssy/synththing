@@ -19,6 +19,11 @@
 -- stays visible, not blank). There's deliberately no equivalent check for
 -- looping -- nothing here resets `history` on a seek, so a loop restart just
 -- keeps scrolling through it like any other moment in the song, not a wipe.
+--
+-- Frequency labels down the left edge (100 Hz, 1k, 10k, ...) use the same
+-- log mapping as the rows. With "onset_ticks" on, a small tick along the
+-- top marks every column where onset() saw a sound start, scrolling along
+-- with the picture.
 
 local MIN_FREQUENCY_HZ = 30.0
 local MAX_FREQUENCY_HZ = 16000.0
@@ -88,6 +93,8 @@ end
 -- array of quantized levels (0..QUANT_LEVELS). Rebuilt from scratch whenever
 -- freq_bins/column_count change, since old columns don't match the new shape.
 local history, write_pos, count, smoothed = {}, 1, 0, {}
+local onsets = {} -- per history slot: true if a sound started that column
+local LABEL_FREQS = { 50, 100, 200, 500, 1000, 2000, 5000, 10000 }
 local built_bins, built_columns = nil, nil
 
 -- Rebuilt only when the setting colors actually change, not every frame.
@@ -98,6 +105,8 @@ function render(width, height, left, right)
     local accent = setting_color("accent", { r = 51, g = 204, b = 255 })
     local freq_bins = setting_int("freq_bins", 36, 8, 96)
     local column_count = setting_int("columns", 140, 40, 400)
+    local show_labels = setting_bool("frequency_labels", true)
+    local show_onsets = setting_bool("onset_ticks", false)
 
     if not colors_equal(bg, palette_bg) or not colors_equal(accent, palette_accent) then
         palette = build_palette(bg, accent)
@@ -106,6 +115,7 @@ function render(width, height, left, right)
 
     if freq_bins ~= built_bins or column_count ~= built_columns then
         history, write_pos, count = {}, 1, 0
+        onsets = {}
         smoothed = {}
         for i = 1, freq_bins do
             smoothed[i] = 0.0
@@ -128,6 +138,7 @@ function render(width, height, left, right)
         end
 
         history[write_pos] = column
+        onsets[write_pos] = show_onsets and onset() or false
         write_pos = write_pos % column_count + 1
         if count < column_count then
             count = count + 1
@@ -163,6 +174,22 @@ function render(width, height, left, right)
                 run_start = row
                 run_level = level
             end
+        end
+
+        if show_onsets and onsets[index] then
+            rect(x0, 0, x1, math.max(3, row_h * 0.6), { r = 255, g = 255, b = 255, a = 0.85 })
+        end
+    end
+
+    if show_labels then
+        -- Row 1 is the top (highest frequency): a frequency's height is how
+        -- far up the log scale it sits.
+        local span = math.log(MAX_FREQUENCY_HZ / MIN_FREQUENCY_HZ)
+        for _, f in ipairs(LABEL_FREQS) do
+            local y = math.floor((1 - math.log(f / MIN_FREQUENCY_HZ) / span) * height + 0.5)
+            local label = (f >= 1000) and ((f // 1000) .. "k") or tostring(f)
+            line(0, y, 6, y, { r = 255, g = 255, b = 255, a = 0.5 })
+            text(8, y - FONT_HEIGHT // 2, label, { r = 220, g = 220, b = 235, a = 0.6 })
         end
     end
 end

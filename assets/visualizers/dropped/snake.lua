@@ -24,6 +24,13 @@
 -- Fit: the cell size is an integer (pixel-crisp) chosen so the field is about
 -- 40x22 cells, then cols/rows are whatever fills the window; leftover pixels
 -- become an even border. The game restarts if the window size changes.
+--
+-- Play along: set "player_channel" (Script Settings) to a channel number and
+-- that channel's snake is yours while the visualizer has focus (click it, or
+-- use the Fullscreen visualizer): arrow keys or WASD steer. It drives itself
+-- again whenever the visualizer loses focus. Your best length is saved
+-- (store_set), and the scoreboard (text) shows every snake's length.
+-- Apples are sprites, one per snake color.
 
 local floor, max, min = math.floor, math.max, math.min
 
@@ -110,6 +117,31 @@ local lo, hi = nil, nil
 -- Updated from the setting at the top of each render() call; read by
 -- kill_snake, which isn't itself called from render() directly.
 local disable_on_death = true
+
+-- Player: the channel whose snake the keyboard steers (nil = nobody), turns
+-- queued from key presses, and the best length ever reached (saved).
+local player_ch = nil
+local turn_queue = {}
+local best = store_get("best_length") or 0
+local KEY_DIRS = { right = 1, d = 1, down = 2, s = 2, left = 3, a = 3, up = 4, w = 4 }
+
+-- Apple sprite: 1 skin, 2 shine, 3 stem, 4 leaf. Registered once per snake
+-- color (plus a default red one), recolored through the palette.
+local APPLE_IMAGE = {
+    { 0, 0, 0, 0, 3, 4, 4, 0 },
+    { 0, 0, 0, 3, 4, 4, 0, 0 },
+    { 0, 1, 1, 3, 1, 1, 0, 0 },
+    { 1, 2, 1, 1, 1, 1, 1, 0 },
+    { 1, 2, 1, 1, 1, 1, 1, 0 },
+    { 1, 1, 1, 1, 1, 1, 1, 0 },
+    { 0, 1, 1, 1, 1, 1, 0, 0 },
+    { 0, 0, 1, 1, 1, 0, 0, 0 },
+}
+
+local function apple_sprite(skin, shine)
+    return sprite_register({ image = APPLE_IMAGE, palette = { skin, shine, APPLE_STEM, APPLE_LEAF } })
+end
+local DEFAULT_APPLE = apple_sprite(APPLE_RED, APPLE_HI)
 
 -- Helpers --------------------------------------------------------------
 local function cell_index(x, y)
@@ -319,10 +351,24 @@ local function wander(sn)
     return pick
 end
 
+-- The player's move: the next queued turn (a U-turn is ignored), else
+-- straight on. nil if that runs into something.
+local function player_move(sn)
+    local want = table.remove(turn_queue, 1) or sn.dir
+    if want == OPP[sn.dir] then want = sn.dir end
+    if is_free(sn.x + DX[want], sn.y + DY[want]) then return want end
+    return nil
+end
+
 local function step_snake(sn)
     if not sn.alive then return end
 
-    local d = plan(sn) or wander(sn)
+    local d
+    if sn.ch == player_ch and has_focus() then
+        d = player_move(sn)
+    else
+        d = plan(sn) or wander(sn)
+    end
     if not d then
         kill_snake(sn, true) -- crashed
         return
@@ -340,6 +386,10 @@ local function step_snake(sn)
         remove_apple(a)
         own_count[a.ch] = max(0, (own_count[a.ch] or 1) - 1)
         if #sn.body + sn.grow < MAX_LEN then sn.grow = sn.grow + 1 end
+        if sn.ch == player_ch and #sn.body + sn.grow > best then
+            best = #sn.body + sn.grow
+            store_set("best_length", best)
+        end
         sn.flash = game_time
         local px, py = cell_center(nx, ny)
         local owner = snake_by_ch[a.ch]
@@ -391,10 +441,6 @@ local function spawn_apple(ch, key)
 end
 
 -- Drawing --------------------------------------------------------------
-local function ur(x0, y0, u, a, b, c, d, col)
-    rect(floor(x0 + a * u), floor(y0 + b * u), floor(x0 + c * u), floor(y0 + d * u), col)
-end
-
 local function draw_apple(a)
     local age = game_time - a.born
     local s = 1.0
@@ -402,19 +448,10 @@ local function draw_apple(a)
         local k = max(0, age / POP_TIME)
         s = 0.3 + 0.7 * (1 - (1 - k) * (1 - k))
     end
-    local u = cell / 8 * s
-    local cx, cy = cell_center(a.x, a.y)
-    local x0, y0 = cx - 4 * u, cy - 4 * u
-
     local owner = snake_by_ch[a.ch]
-    local body = owner and owner.pal.body_a or APPLE_RED
-    local shine = owner and owner.pal.apple_hi or APPLE_HI
-
-    ur(x0, y0, u, 1.5, 2.5, 6.5, 7.5, body)
-    ur(x0, y0, u, 0.5, 3.5, 7.5, 6.5, body)
-    ur(x0, y0, u, 1.5, 3.5, 2.8, 4.8, shine)
-    ur(x0, y0, u, 3.6, 0.8, 4.4, 2.6, APPLE_STEM)
-    ur(x0, y0, u, 4.4, 0.8, 6.4, 1.8, APPLE_LEAF)
+    local size = cell * s
+    local cx, cy = cell_center(a.x, a.y)
+    sprite(owner and owner.apple or DEFAULT_APPLE, cx - size / 2, cy - size / 2, size / 8)
 end
 
 local function draw_snake(sn)
@@ -479,6 +516,33 @@ local function draw_particles()
     end
 end
 
+-- Scoreboard: a chip per snake with its length, in the top-left corner.
+local function draw_scores(width, height)
+    local th = (height >= 600) and FONT_HEIGHT * 2 or FONT_HEIGHT
+    local pad = floor(th / 4)
+    local x = ox + pad
+    local y = oy + pad
+    for _, sn in ipairs(snakes) do
+        if not sn.disabled then
+            local label = tostring(#sn.body)
+            if sn.ch == player_ch then label = "you " .. label end
+            local tw = text_size(label, th)
+            rect(x, y, x + th + pad + tw + pad * 2, y + th + pad, { r = 0, g = 0, b = 0, a = 0.35 })
+            rect(x + pad, y + pad / 2, x + pad + th - pad, y + th + pad / 2 - pad, sn.pal.head)
+            text(x + th + pad, y + pad / 2, label, { r = 255, g = 255, b = 255 }, th)
+            x = x + th + pad + tw + pad * 3
+        end
+    end
+    if player_ch then
+        local line = has_focus() and ("best " .. best .. "  (arrows / WASD)")
+            or ("click to steer channel " .. (player_ch + 1))
+        local tw = text_size(line, th)
+        local lx, ly = ox + pad, oy + rows * cell - th - pad
+        rect(lx, ly - pad / 2, lx + tw + pad * 2, ly + th + pad / 2, { r = 0, g = 0, b = 0, a = 0.35 })
+        text(lx + pad, ly, line, { r = 255, g = 255, b = 255 }, th)
+    end
+end
+
 local function draw_board(width, height, frame_col, light, dark)
     clear(frame_col)
     rect(ox, oy, ox + cols * cell, oy + rows * cell, light)
@@ -499,6 +563,20 @@ function render(width, height, left, right)
     local base_steps = setting_int("base_steps", BASE_STEPS, 1, 30)
     local max_steps = setting_int("max_steps", MAX_STEPS, 1, 60)
     disable_on_death = setting_bool("disable_channel_on_death", true)
+    local player = setting_int("player_channel", 0, 0, 16) -- 0 = nobody
+    local show_scores = setting_bool("show_scores", true)
+    player_ch = (player > 0) and (player - 1) or nil
+
+    -- Steering keys (only arrive while the visualizer has focus). Keep at
+    -- most two turns queued, so quick taps still all count.
+    if player_ch then
+        for key, d in pairs(KEY_DIRS) do
+            if key_pressed(key) and #turn_queue < 2 then
+                turn_queue[#turn_queue + 1] = d
+            end
+        end
+        if not has_focus() then turn_queue = {} end
+    end
 
     layout(width, height)
 
@@ -518,6 +596,7 @@ function render(width, height, left, right)
                 flash = -10,
                 disabled = false,
             }
+            sn.apple = apple_sprite(sn.pal.body_a, sn.pal.apple_hi)
             snakes[#snakes + 1] = sn
             snake_by_ch[ch] = sn
         end
@@ -611,4 +690,5 @@ function render(width, height, left, right)
         if sn.alive then draw_snake(sn) end
     end
     draw_particles()
+    if show_scores then draw_scores(width, height) end
 end

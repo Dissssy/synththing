@@ -339,7 +339,7 @@ if score > best then store_set("best", score) end
 synththing run-script my_script.lua --song song.mid --frames 1800
 ```
 
-Runs a script with no window, playing the song into it, and prints its errors (with the frame and song position each happened at), its log and a summary; the exit code is 0 if it ran cleanly and 1 if it had errors. `DT` is exactly 1/60 per frame and `TIME` counts frames, so runs are repeatable, and saved data isn't written unless you add `--save-data`. Mouse and keyboard input isn't simulated. All the options are in `docs/cli.md` in the repository, or `synththing run-script --help`.
+Runs a script with no window, playing the song into it, and prints its errors (with the frame and song position each happened at), its log and a summary; the exit code is 0 if it ran cleanly and 1 if it had errors. Add `--screenshot frame.png` to save the last frame as an image and see what it drew. `DT` is exactly 1/60 per frame and `TIME` counts frames, so runs are repeatable, and saved data isn't written unless you add `--save-data`. Mouse and keyboard input isn't simulated. All the options are in `docs/cli.md` in the repository, or `synththing run-script --help`.
 
 ## Performance
 
@@ -351,13 +351,14 @@ A script runs on every rendered frame while it's on screen, so the usual budget 
 
 ## Bundled scripts, as reference
 
-The first six are copied into your scripts folder on first run; the last two are templates only, made with New when you want them.
+The first seven are copied into your scripts folder on first run (one that came out after your first run, like `pulse.lua`, is under New instead); the last two are templates only, made with New when you want them.
 
 - `waveform.lua`, a scrolling oscilloscope trace; the simplest ring-buffer example
-- `fft.lua`, log-spaced spectrum bars, left/right overlap shown as a third color
-- `keyboard.lua`, an 88-key piano with falling notes; two-pass enabled/disabled channel rendering
-- `spectrogram.lua`, a scrolling time/frequency heatmap; run-length merging, pause-awareness, live-tunable resolution
+- `fft.lua`, log-spaced spectrum bars, left/right overlap shown as a third color; frequency labels (text) and loudness meters (`level_left`/`level_right`)
+- `keyboard.lua`, an 88-key piano with falling notes from `notes_between` (exact lengths, adjustable look-ahead), beat and numbered bar lines (`beat`, `bar`, `time_at_beat`), octave labels; two-pass enabled/disabled channel rendering
+- `spectrogram.lua`, a scrolling time/frequency heatmap; run-length merging, pause-awareness, live-tunable resolution, frequency labels, optional onset ticks (`onset`)
 - `letters.lua`, one glyph per channel, colored by pitch; a from-scratch bitmap font
-- `snake.lua`, one snake per channel hunting apples spawned by note-ons; the most elaborate example, worth reading end to end
+- `snake.lua`, one snake per channel hunting apples spawned by note-ons; apples are sprites, a text scoreboard, and a `player_channel` setting to steer one snake yourself with the arrow keys or WASD (best length saved with `store_set`); the most elaborate example, worth reading end to end
+- `pulse.lua`, a ring that beats with the song: the time signature's beats around a circle, a polygon turning with the beat and swelling with loudness, eighth-note sprites bursting out on onsets, and a tempo/bar readout
 - `settings_demo.lua`, exercises every setting type; not a music visualizer, a reference for the settings API itself
 - `input_demo.lua`, mouse, keyboard and cursor control: a paint toy with its own cursor; not a music visualizer either

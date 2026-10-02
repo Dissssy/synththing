@@ -19,6 +19,7 @@ synththing [--visualizer]
 ```
 synththing run-script <SCRIPT> [--song FILE] [--soundfont FILE] [--frames N] [--fps N]
                                [--width PX] [--height PX] [--start SECONDS] [--save-data] [--quiet]
+                               [--screenshot FILE]
 ```
 
 Runs a script the way the app does, with a song playing into it, but with no window, then prints what happened. It's for catching errors in a script without opening the app and playing through the song by hand, for example in an automated check.
@@ -36,6 +37,7 @@ It uses the same engine and script code as the app. Each frame it plays `1/fps` 
 | `--start` | 0 | Start this many seconds into the song. |
 | `--save-data` | off | Let the script write its saved data (`store_set`) to `<script>.lua.store.json`. Off by default so test runs don't overwrite real saved data; the script still reads what's saved either way. |
 | `--quiet`, `-q` | off | Print only errors and the summary, not the script's log. |
+| `--screenshot` | none | Save the last frame as a PNG image at this path, to see what the script drew. |
 
 Output: each distinct error once, with the frame and song position it happened at; then the script's log (each line prefixed `log: `, repeats shown as `(xN)`), unless `--quiet`; then a summary line:
 
