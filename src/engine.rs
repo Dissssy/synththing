@@ -147,28 +147,17 @@ impl Engine {
             return base;
         }
 
-        // The score's held notes, then the script's (see live.rs).
-        let mut active: Vec<ActiveNote> = seq
-            .active_notes()
-            .into_iter()
-            .map(|n| ActiveNote {
-                channel: n.channel as u8,
-                key: n.key as u8,
-                velocity: n.velocity as u8,
-                from_script: false,
-            })
-            .collect();
-        if let Some(live) = &self.live {
-            active.extend(live.sounding_keys().into_iter().map(|(channel, key, velocity)| ActiveNote {
-                channel,
-                key,
-                velocity,
-                from_script: true,
-            }));
-        }
-
         NotesSnapshot {
-            active,
+            active: seq
+                .active_notes()
+                .into_iter()
+                .map(|n| ActiveNote {
+                    channel: n.channel as u8,
+                    key: n.key as u8,
+                    velocity: n.velocity as u8,
+                    from_script: false,
+                })
+                .collect(),
             upcoming: seq
                 .upcoming_notes(NOTE_LOOKAHEAD_SECS)
                 .into_iter()
@@ -182,6 +171,15 @@ impl Engine {
                 .collect(),
             ..base
         }
+    }
+
+    /// The notes a script has sounding on the live synth right now.
+    pub fn live_notes(&self) -> Vec<ActiveNote> {
+        let Some(live) = &self.live else { return Vec::new() };
+        live.sounding_keys()
+            .into_iter()
+            .map(|(channel, key, velocity)| ActiveNote { channel, key, velocity, from_script: true })
+            .collect()
     }
 
     /// Swap in a new soundfont, rebuilding the synthesizer while keeping the

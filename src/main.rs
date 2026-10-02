@@ -78,6 +78,8 @@ fn main() -> Result<()> {
     // The same for notes scripts play (the live synth), mixed in by the
     // output; it only ever holds a few tens of milliseconds.
     let live_ring = AudioRing::new(sample_rate as usize * 2 / 2);
+    // The visualizer gets audio as it's heard, not as it's rendered.
+    tap.hold_back_unheard(ring.backlog(), live_ring.backlog());
     let flush = Arc::new(AtomicBool::new(false));
     let shared = Arc::new(Mutex::new(PlaybackShared::default()));
     let (command_tx, command_rx) = mpsc::channel();

@@ -232,6 +232,8 @@ local key = "best:" .. (p.song_id or "none")
 if score > (store_get(key) or 0) then store_set(key, score) end
 ```
 
+Everything a script sees follows what's being heard, not what's been prepared: the app renders audio a little ahead (the audio buffer in Preferences), and `position`, the notes (`active_notes`, `upcoming_notes`), `paused`/`finished` and the `left`/`right` samples are all held back to match the speakers, so visuals line up with the sound at any buffer size. A seek, pause or new song shows up right away.
+
 `generation` goes up by one every time the position jumps instead of running on: a seek (by the user or a script), a loop back to the start, or a new song. Compare it with the value from the previous frame to know exactly when to reset anything that tracks position, with no guessing from how far `position` moved.
 
 `set_paused` and `seek` are carried out by the app right after the frame, and show up in `playback()` from the next frame on (along with a new `generation` for a seek). Unpausing a song that has finished starts it over. Like `set_channel_enabled`, they're meant for things like pausing a game when the player dies, or a "retry this section" practice loop.
@@ -394,7 +396,7 @@ function render(width, height, left, right)
 end
 ```
 
-Script notes play on a separate synthesizer from the song's, mixed in at the output with very little delay (tens of milliseconds, not the song's audio buffer), and they never cut off the song's notes or get cut off by them. They show up in `active_notes()` while they sound, with `source = "script"` (the song's own notes have `source = "song"`), so a visualizer lights up for them like for the song's, and one that only wants the score can skip them. They aren't in the audio functions (`fft_left`, levels, `onset`), or in `notes_between` and `upcoming_notes`, which read the song file. Everything a script plays stops when it's reloaded or restarted, when another song loads, and when the visualizer is closed or hidden. A script holding notes with `note_on` should let go when it loses focus (`has_focus()`), since a key released while the visualizer didn't have focus never reports `"released"`.
+Script notes play on a separate synthesizer from the song's, mixed in at the output with very little delay (tens of milliseconds, not the song's audio buffer), and they never cut off the song's notes or get cut off by them. They show up in `active_notes()` while they sound, with `source = "script"` (the song's own notes have `source = "song"`), so a visualizer lights up for them like for the song's, and one that only wants the score can skip them. Their sound is in the `left`/`right` samples `render()` gets, mixed with the song's (and on their own while the song is paused), so the waveform, `fft_left`/`fft_right`, the levels and `onset()` react to them too. They aren't in `notes_between` or `upcoming_notes`, which read the song file. Everything a script plays stops when it's reloaded or restarted, when another song loads, and when the visualizer is closed or hidden. A script holding notes with `note_on` should let go when it loses focus (`has_focus()`), since a key released while the visualizer didn't have focus never reports `"released"`.
 
 ## Sequences
 

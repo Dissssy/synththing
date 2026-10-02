@@ -3,13 +3,8 @@
 
 ## Tier 1 - quick wins
 
-[S/M][!] enable current folder in browse as valid selection, when selecting if
-    you just click select while in a folder it doesnt work properly?
-    Was about the rfd "Browse..." folder dialog - tried pointing it at the
-    parent directory instead of the folder itself (the standard workaround
-    for this exact native-dialog quirk) as a best-effort fix. Still needs
-    your confirmation it actually resolved it; couldn't verify a real OS
-    dialog's click behavior from here.
+[S/M][!] Browse... folder selection - DONE (pointing the dialog at the
+    parent folder fixed it; confirmed working).
 
 ## Tier 2 - solid value, moderate effort
 
@@ -20,12 +15,8 @@
     script, the picker and the editor at the new path. Works on bundled
     scripts too (they just stop offering Restore default).
 
-[S][.] fuzzy search should index subdirectories as well
-    Already does this - `collect_candidates` walks up to 12 levels deep from
-    the current directory and indexes every matching file in the tree, not
-    just the current folder. If something's still missing, it's likely that
-    *folders themselves* aren't searchable/clickable results (only files
-    are) - worth confirming which of these you actually meant.
+[S][.] fuzzy search should index subdirectories as well - DONE (it
+    already walked subfolders; confirmed working).
 
 ## Tier 3 - bigger undertakings
 
@@ -171,8 +162,10 @@
     keyboard.lua plays along: A-L a major-scale span, arrows move it and
     change the key.
     Script notes are in active_notes() with source = "script".
-    Ideas not done: script notes in the visualizer tap (fft/levels); a
-    hardware MIDI input (parked: nothing to test with); other scales;
+    Their audio is in the visualizer tap too (SampleTap::push_live: mixed
+    into the song's samples one for one while it plays, alone while it
+    doesn't), so waveform/fft/levels/onset react to them.
+    Ideas not done: a hardware MIDI input (parked: nothing to test with); other scales;
     sequence looping.
 
 [S][.] a real doc system for the lua scripting API - DONE
@@ -416,3 +409,14 @@ Smaller:
     keep palette indices next to their baked colors). playback() has
     song_name, song_path and song_id (16 hex digits of the file's
     SHA-256, loader::song_id) for per-song saved data.
+
+[M][!] visuals in step with the sound - DONE
+    The ring buffer runs buffer_ms ahead of the speakers. AudioRing keeps a
+    lock-free Backlog (queued + consumer-held samples); SampleTap hands the
+    visualizer only audio that's played (song and live synth each held
+    back by their own backlog); the render thread records a Moment
+    (position, generation, paused, finished, score notes) per block and
+    publishes the one being heard. Script notes stay current. Also fixed:
+    a flush is done by the render thread under the ring lock, so audio
+    rendered right after a seek is no longer thrown away by the consumer.
+    Not counted: the OS/device's own output latency.

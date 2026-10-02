@@ -6,10 +6,13 @@
 //! keep whatever state it wants between frames (rolling history, smoothed
 //! levels, a copy of the previous frame for trails, ...), and show it with
 //! [`VisualizerPanel`]. Either way it needs a [`SampleTap`], which is also
-//! wired into the audio path (see `SynthSource::with_tap` in `engine.rs`).
+//! wired into the audio path: the render thread in `audio.rs` pushes the
+//! song's audio and the live synth's (script notes) into it.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+
+use crate::audio::Backlog;
 
 use eframe::egui;
 
@@ -27,43 +30,110 @@ pub type StereoFrame = (f32, f32);
 /// played since the last frame. If nobody drains for a while, the buffer
 /// stops growing at `capacity` and quietly drops the oldest frames first,
 /// rather than using unbounded memory.
+///
+/// Notes a script plays (the live synth, `live.rs`) arrive separately,
+/// through [`push_live`](SampleTap::push_live). While the song plays they're
+/// mixed into its samples one for one, so the visualizer still gets one
+/// stream at the real-time rate; while it doesn't, they come through alone.
 #[derive(Clone)]
 pub struct SampleTap {
-    inner: Arc<Mutex<VecDeque<StereoFrame>>>,
+    inner: Arc<Mutex<TapBuffers>>,
     capacity: usize,
+}
+
+#[derive(Default)]
+struct TapBuffers {
+    song: VecDeque<StereoFrame>,
+    live: VecDeque<StereoFrame>,
+    /// Whether the song is being rendered (playing, not paused).
+    song_running: bool,
+    /// How much of each stream is rendered but not heard yet; that much is
+    /// held back, so the visualizer sees audio as it's heard. None (tests,
+    /// headless): everything is handed out.
+    song_backlog: Option<Backlog>,
+    live_backlog: Option<Backlog>,
+}
+
+/// `(L, R, L, R, ...)` as pairs. An odd trailing sample (there shouldn't be
+/// one) is dropped.
+fn pairs(interleaved: &[f32]) -> impl Iterator<Item = StereoFrame> + '_ {
+    // chunks_exact(2) rather than as_chunks::<2>() to stay on stable Rust.
+    #[allow(clippy::chunks_exact_to_as_chunks)]
+    interleaved.chunks_exact(2).map(|pair| (pair[0], pair[1]))
+}
+
+/// Drop the oldest frames past `capacity`.
+fn cap(buf: &mut VecDeque<StereoFrame>, capacity: usize) {
+    let excess = buf.len().saturating_sub(capacity);
+    if excess > 0 {
+        buf.drain(..excess);
+    }
 }
 
 impl SampleTap {
     /// `capacity` is in stereo frames (one `(left, right)` pair each), e.g.
     /// `sample_rate` caps it at one second.
     pub fn new(capacity: usize) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
-            capacity,
-        }
+        Self { inner: Arc::default(), capacity }
     }
 
-    /// Called from the audio thread with a newly rendered chunk of
-    /// interleaved `(L, R, L, R, ...)` samples; paired up here so producers
-    /// don't need to know about the pair representation. An odd trailing
-    /// sample (there shouldn't be one) is dropped.
+    /// Called from the audio thread with a newly rendered chunk of the
+    /// song, interleaved `(L, R, L, R, ...)`.
     pub fn push(&self, interleaved: &[f32]) {
         let mut buf = self.inner.lock().unwrap();
-        // chunks_exact(2) rather than as_chunks::<2>() to stay on stable Rust.
-        #[allow(clippy::chunks_exact_to_as_chunks)]
-        let pairs = interleaved.chunks_exact(2).map(|pair| (pair[0], pair[1]));
-        buf.extend(pairs);
-        let excess = buf.len().saturating_sub(self.capacity);
-        if excess > 0 {
-            buf.drain(..excess);
-        }
+        buf.song.extend(pairs(interleaved));
+        cap(&mut buf.song, self.capacity);
+    }
+
+    /// The same for the live synth (notes the script plays).
+    pub fn push_live(&self, interleaved: &[f32]) {
+        let mut buf = self.inner.lock().unwrap();
+        buf.live.extend(pairs(interleaved));
+        cap(&mut buf.live, self.capacity);
+    }
+
+    /// Hand out only audio that's been heard: the newest frames, as many as
+    /// each backlog says are still waiting to play, stay in the tap.
+    pub fn hold_back_unheard(&self, song: Backlog, live: Backlog) {
+        let mut buf = self.inner.lock().unwrap();
+        buf.song_backlog = Some(song);
+        buf.live_backlog = Some(live);
+    }
+
+    /// Whether the song is being rendered: while it is, live audio waits to
+    /// be mixed into its samples; while it isn't, live audio is drained alone.
+    pub fn set_song_running(&self, running: bool) {
+        self.inner.lock().unwrap().song_running = running;
     }
 
     /// Called once per rendered frame: takes every `(left, right)` pair
-    /// buffered since the last call, oldest first, leaving the tap empty.
+    /// buffered since the last call, oldest first, with the live synth's
+    /// mixed in, leaving the tap empty (bar live audio still waiting for
+    /// song samples to mix into).
     pub fn drain(&self) -> Vec<StereoFrame> {
-        let mut buf = self.inner.lock().unwrap();
-        buf.drain(..).collect()
+        let mut guard = self.inner.lock().unwrap();
+        let buf = &mut *guard;
+        let heard = |queue: &VecDeque<StereoFrame>, backlog: &Option<Backlog>| {
+            queue.len().saturating_sub(backlog.as_ref().map_or(0, Backlog::unheard_frames))
+        };
+        let song_heard = heard(&buf.song, &buf.song_backlog);
+        let live_heard = heard(&buf.live, &buf.live_backlog);
+        let mut frames: Vec<StereoFrame> = buf.song.drain(..song_heard).collect();
+        let mixed = frames.len().min(live_heard);
+        for (frame, (l, r)) in frames.iter_mut().zip(buf.live.drain(..mixed)) {
+            frame.0 += l;
+            frame.1 += r;
+        }
+        if !buf.song_running {
+            frames.extend(buf.live.drain(..live_heard - mixed));
+        }
+        frames
+    }
+
+    /// Throw away the song's buffered audio (a seek, a pause, a new song).
+    /// Live audio is kept: the live synth carries on regardless.
+    pub fn clear_song(&self) {
+        self.inner.lock().unwrap().song.clear();
     }
 }
 
@@ -498,4 +568,35 @@ fn logical_buffer_size(available: egui::Vec2) -> (usize, usize) {
     let area = w * h;
     let scale = if area > MAX_VISUALIZER_PIXELS { (MAX_VISUALIZER_PIXELS / area).sqrt() } else { 1.0 };
     (((w * scale) as usize).max(1), ((h * scale) as usize).max(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_audio_mixes_into_the_song_one_for_one() {
+        let tap = SampleTap::new(100);
+        tap.set_song_running(true);
+        tap.push(&[0.1, 0.1, 0.2, 0.2, 0.3, 0.3]);
+        tap.push_live(&[1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0]);
+        // Three song frames out, each with a live frame added; the fourth
+        // live frame waits for the next song frame.
+        let frames = tap.drain();
+        assert_eq!(frames.len(), 3);
+        assert!((frames[2].0 - 1.3).abs() < 1e-6 && (frames[2].1 - 2.3).abs() < 1e-6);
+        tap.push(&[0.5, 0.5]);
+        assert_eq!(tap.drain(), [(1.5, 2.5)]);
+        assert!(tap.drain().is_empty());
+    }
+
+    #[test]
+    fn live_audio_comes_through_alone_while_the_song_is_stopped() {
+        let tap = SampleTap::new(100);
+        tap.push_live(&[0.25, 0.5, 0.25, 0.5]);
+        assert_eq!(tap.drain(), [(0.25, 0.5), (0.25, 0.5)]);
+        tap.push_live(&[0.25, 0.5]);
+        tap.clear_song();
+        assert_eq!(tap.drain(), [(0.25, 0.5)], "a seek doesn't throw away live audio");
+    }
 }

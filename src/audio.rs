@@ -11,7 +11,7 @@
 //!   slider changes what you hear without changing what the visualizer sees.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -57,6 +57,20 @@ pub enum AudioCommand {
     Live(LiveCommand),
 }
 
+/// Playback as of a point in the rendered audio (`at`, in song frames
+/// rendered), for publishing it once that point is heard.
+struct Moment {
+    at: u64,
+    position: f64,
+    generation: u64,
+    paused: bool,
+    finished: bool,
+    notes: NotesSnapshot,
+}
+
+/// More than enough moments for the largest buffer (one per render block).
+const MAX_MOMENTS: usize = 256;
+
 /// Render thread -> GUI. Cloned once per GUI frame.
 #[derive(Clone, Default)]
 pub struct PlaybackShared {
@@ -72,6 +86,26 @@ pub struct PlaybackShared {
 pub struct AudioRing {
     inner: Arc<Mutex<VecDeque<f32>>>,
     capacity: usize,
+    backlog: Backlog,
+}
+
+/// How much rendered audio hasn't been heard yet: what's queued in an
+/// [`AudioRing`] plus what its consumer has taken but not played. Readable
+/// from any thread without locking, so the visualizer can hold back what
+/// hasn't played (see `SampleTap`).
+#[derive(Clone, Default)]
+pub struct Backlog {
+    /// Samples in the ring (updated under its lock).
+    queued: Arc<AtomicUsize>,
+    /// Samples the consumer holds locally.
+    local: Arc<AtomicUsize>,
+}
+
+impl Backlog {
+    /// Stereo frames rendered but not yet played.
+    pub fn unheard_frames(&self) -> usize {
+        (self.queued.load(Ordering::Relaxed) + self.local.load(Ordering::Relaxed)) / 2
+    }
 }
 
 impl AudioRing {
@@ -79,15 +113,22 @@ impl AudioRing {
         Self {
             inner: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
             capacity,
+            backlog: Backlog::default(),
         }
     }
 
+    pub fn backlog(&self) -> Backlog {
+        self.backlog.clone()
+    }
+
     fn len(&self) -> usize {
-        self.inner.lock().unwrap().len()
+        self.backlog.queued.load(Ordering::Relaxed)
     }
 
     fn push(&self, block: &[f32]) {
-        self.inner.lock().unwrap().extend(block.iter().copied());
+        let mut queue = self.inner.lock().unwrap();
+        queue.extend(block.iter().copied());
+        self.backlog.queued.store(queue.len(), Ordering::Relaxed);
     }
 
     /// Consumer side: move up to `out.capacity()` samples into `out`, returning
@@ -99,11 +140,18 @@ impl AudioRing {
         };
         let take = queue.len().min(out.capacity());
         out.extend(queue.drain(..take));
+        self.backlog.queued.store(queue.len(), Ordering::Relaxed);
         take
     }
 
-    fn clear(&self) {
-        self.inner.lock().unwrap().clear();
+    /// Render side: drop everything queued, and tell the consumer (through
+    /// `flush`) to drop what it holds too. Done under the lock, so audio
+    /// rendered right after (from the new position) is kept.
+    fn flush(&self, flush: &AtomicBool) {
+        let mut queue = self.inner.lock().unwrap();
+        queue.clear();
+        self.backlog.queued.store(0, Ordering::Relaxed);
+        flush.store(true, Ordering::Relaxed);
     }
 }
 
@@ -133,8 +181,9 @@ impl Iterator for SynthSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<f32> {
+        // A flush: the render thread already emptied the ring, drop what we
+        // took from it before.
         if self.flush.swap(false, Ordering::Relaxed) {
-            self.ring.clear();
             self.buf.clear();
             self.pos = 0;
         }
@@ -142,11 +191,13 @@ impl Iterator for SynthSource {
             let got = self.ring.pop_into(&mut self.buf);
             self.pos = 0;
             if got == 0 {
+                self.ring.backlog.local.store(0, Ordering::Relaxed);
                 return Some(0.0); // underrun / idle -> silence
             }
         }
         let sample = self.buf[self.pos];
         self.pos += 1;
+        self.ring.backlog.local.store(self.buf.len() - self.pos, Ordering::Relaxed);
         Some(sample)
     }
 }
@@ -180,6 +231,11 @@ pub struct AudioEngine {
     buffer_ms: u32,
     block: Vec<f32>,
     live_block: Vec<f32>,
+    /// Song frames rendered since the engine started, and what playback
+    /// looked like after each block, so `publish` can report the moment
+    /// being heard rather than the one just rendered.
+    rendered: u64,
+    history: VecDeque<Moment>,
     /// Mirrors the engine: don't feed the ring while paused/finished or with
     /// nothing loaded.
     should_render: bool,
@@ -211,6 +267,8 @@ impl AudioEngine {
             buffer_ms: DEFAULT_BUFFER_MS,
             block: vec![0.0; RENDER_BLOCK_FRAMES * 2],
             live_block: vec![0.0; LIVE_BLOCK_FRAMES * 2],
+            rendered: 0,
+            history: VecDeque::new(),
             should_render: false,
             last_publish: Instant::now(),
         }
@@ -294,14 +352,35 @@ impl AudioEngine {
     /// has locally buffered) plus queued visualizer samples, so a seek / pause
     /// / load takes effect immediately regardless of buffer size.
     fn flush_now(&mut self) {
-        self.flush.store(true, Ordering::Relaxed);
-        self.tap.drain();
+        self.ring.flush(&self.flush);
+        self.tap.clear_song();
+        // Nothing rendered is waiting to be heard any more: what's heard
+        // next is the engine as it is now.
+        self.history.clear();
+        self.remember();
+    }
+
+    /// Note what playback looks like as of everything rendered so far.
+    fn remember(&mut self) {
+        let view = self.engine.view();
+        self.history.push_back(Moment {
+            at: self.rendered,
+            position: view.position,
+            generation: view.generation,
+            paused: view.paused,
+            finished: view.finished,
+            notes: self.engine.notes_snapshot(),
+        });
+        while self.history.len() > MAX_MOMENTS {
+            self.history.pop_front();
+        }
     }
 
     fn refresh_flags(&mut self) {
         let view = self.engine.view();
         let has_content = view.has_audio_file || (view.has_midi && view.has_soundfont);
         self.should_render = !view.paused && !view.finished && has_content;
+        self.tap.set_song_running(self.should_render);
     }
 
     fn fill_ring(&mut self) {
@@ -316,6 +395,8 @@ impl AudioEngine {
             }
             self.engine.render_into(&mut self.block);
             self.tap.push(&self.block); // pre-volume, for the visualizer
+            self.rendered += (self.block.len() / 2) as u64;
+            self.remember();
             if (self.volume - 1.0).abs() > f32::EPSILON {
                 for sample in &mut self.block {
                     *sample = (*sample * self.volume).clamp(-1.0, 1.0);
@@ -332,6 +413,7 @@ impl AudioEngine {
         let target_samples = (self.sample_rate as u64 * LIVE_BUFFER_MS as u64 / 1000) as usize * 2;
         while self.engine.live_busy() && self.live_ring.len() < target_samples {
             self.engine.render_live(&mut self.live_block);
+            self.tap.push_live(&self.live_block); // pre-volume, like the song's
             for sample in &mut self.live_block {
                 *sample = (*sample * self.volume).clamp(-1.0, 1.0);
             }
@@ -343,9 +425,63 @@ impl AudioEngine {
         (self.sample_rate as u64 * self.buffer_ms as u64 / 1000) as usize
     }
 
+    /// Publish playback as it's being heard: the position, the score's
+    /// notes and the paused/finished state from the latest block that has
+    /// actually played (the ring holds `buffer_ms` of audio not yet heard),
+    /// everything else (speed, loop, names, channels) as it is now. Notes a
+    /// script plays come from the live synth as they are, being heard within
+    /// a few tens of milliseconds.
     fn publish(&mut self) {
+        let heard = self.rendered.saturating_sub(self.ring.backlog().unheard_frames() as u64);
+        while self.history.len() > 1 && self.history[1].at <= heard {
+            self.history.pop_front();
+        }
+        let mut view = self.engine.view();
+        let mut notes = self.engine.notes_snapshot();
+        if let Some(moment) = self.history.front() {
+            view.position = moment.position;
+            view.generation = moment.generation;
+            view.paused = moment.paused;
+            view.finished = moment.finished;
+            notes.active = moment.notes.active.clone();
+            notes.upcoming = moment.notes.upcoming.clone();
+        }
+        notes.active.extend(self.engine.live_notes());
         let mut shared = self.shared.lock().unwrap();
-        shared.view = self.engine.view();
-        shared.notes = self.engine.notes_snapshot();
+        shared.view = view;
+        shared.notes = notes;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_visualizer_only_gets_audio_that_has_played() {
+        let ring = AudioRing::new(64);
+        let tap = SampleTap::new(64);
+        tap.hold_back_unheard(ring.backlog(), AudioRing::new(64).backlog());
+        tap.set_song_running(true);
+
+        // Four frames rendered: in the ring and the tap, none heard yet.
+        let block = [0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4];
+        ring.push(&block);
+        tap.push(&block);
+        assert!(tap.drain().is_empty());
+
+        // The output takes two frames and plays them.
+        let mut out = Vec::with_capacity(4);
+        assert_eq!(ring.pop_into(&mut out), 4);
+        assert_eq!(tap.drain(), [(0.1, 0.1), (0.2, 0.2)]);
+
+        // A flush (seek): nothing is waiting to be heard any more.
+        ring.flush(&AtomicBool::new(false));
+        tap.clear_song();
+        ring.push(&[0.9, 0.9]);
+        tap.push(&[0.9, 0.9]);
+        assert!(tap.drain().is_empty());
+        ring.pop_into(&mut out);
+        assert_eq!(tap.drain(), [(0.9, 0.9)]);
     }
 }
