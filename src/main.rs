@@ -10,6 +10,7 @@ mod app;
 mod applog;
 mod audio;
 mod config;
+mod credits;
 mod engine;
 mod filebrowser;
 mod layout;

@@ -20,6 +20,7 @@ use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{DockArea, DockState, TabViewer};
 
 use crate::applog;
+use crate::credits::{self, Contributors, ContributorsState};
 use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, nice_name, Config, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
 use crate::engine::{EngineView, MAX_SPEED, MIN_SPEED};
@@ -175,6 +176,10 @@ pub struct App {
     /// Move the editor's text cursor to this line (1-based) and scroll to
     /// it, the next time the editor is drawn ("Go to line").
     editor_goto_line: Option<usize>,
+    /// Help > Credits & licenses.
+    credits_open: bool,
+    contributors: Contributors,
+    credits_search: String,
     /// Watches the Songs folder and the scripts folder for changes on disk.
     /// Made on the first frame (it needs the egui context to wake the UI).
     folder_watch: Option<FolderWatch>,
@@ -293,6 +298,9 @@ impl App {
             rename: None,
             editor_goto_line: None,
             folder_watch: None,
+            credits_open: false,
+            contributors: Contributors::default(),
+            credits_search: String::new(),
             playlists,
             viewed_playlist,
             now_playing: None,
@@ -771,6 +779,9 @@ impl App {
                 if ui.button("Log...").clicked() {
                     self.log_open = true;
                 }
+                if ui.button("Credits & licenses...").clicked() {
+                    self.credits_open = true;
+                }
                 ui.separator();
                 ui.weak(format!("synththing v{}", env!("CARGO_PKG_VERSION")));
             });
@@ -984,6 +995,122 @@ impl App {
         }
     }
 
+    /// Help > Credits & licenses: contributors (from GitHub), the font, Lua,
+    /// and every library in the app with its license text.
+    fn credits_ui(&mut self, ctx: &egui::Context) {
+        if !self.credits_open {
+            return;
+        }
+        self.contributors.fetch_once();
+        let contributors = self.contributors.state();
+        if matches!(contributors, ContributorsState::Fetching) {
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
+        let third_party = credits::third_party();
+        let repo_url = format!("https://github.com/{}", updater::REPO);
+
+        let mut close = false;
+        let response = egui::Modal::new(egui::Id::new("credits")).show(ctx, |ui| {
+            ui.set_width(660.0);
+            ui.heading("Credits & licenses");
+            ui.horizontal(|ui| {
+                ui.weak(format!("synththing v{}", env!("CARGO_PKG_VERSION")));
+                ui.hyperlink_to(&repo_url, &repo_url);
+            });
+            ui.separator();
+            egui::ScrollArea::vertical().id_salt("credits_scroll").max_height(480.0).auto_shrink([false, true]).show(
+                ui,
+                |ui| {
+                    ui.strong("Contributors");
+                    match &contributors {
+                        ContributorsState::NotFetched | ContributorsState::Fetching => {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.weak("Loading from GitHub...");
+                            });
+                        }
+                        ContributorsState::Done(list) if list.is_empty() => {
+                            ui.weak("(none listed yet)");
+                        }
+                        ContributorsState::Done(list) => {
+                            for contributor in list {
+                                ui.horizontal(|ui| {
+                                    ui.hyperlink_to(&contributor.login, &contributor.html_url);
+                                    let s = if contributor.contributions == 1 { "" } else { "s" };
+                                    ui.weak(format!("{} commit{s}", contributor.contributions));
+                                });
+                            }
+                        }
+                        ContributorsState::Failed(error) => {
+                            ui.weak(format!("Couldn't load the list ({error})."));
+                            ui.hyperlink_to("See them on GitHub", format!("{repo_url}/graphs/contributors"));
+                        }
+                    }
+
+                    ui.separator();
+                    ui.strong("Font");
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Script text uses Monogram by Vinícius Menézio (datagoblin), released to the public domain (CC0). Attribution isn't required, but it's given gladly.");
+                        ui.hyperlink_to("datagoblin.itch.io/monogram", "https://datagoblin.itch.io/monogram");
+                    });
+                    egui::CollapsingHeader::new("Monogram's credits").id_salt("credits_monogram").show(ui, |ui| {
+                        ui.label(egui::RichText::new(credits::MONOGRAM_CREDITS.trim()).monospace());
+                    });
+
+                    ui.separator();
+                    ui.strong("Lua");
+                    ui.label("Visualizer scripts run on Lua 5.4, by Lua.org, PUC-Rio (MIT license), through mlua.");
+                    egui::CollapsingHeader::new("Lua's license").id_salt("credits_lua").show(ui, |ui| {
+                        ui.label(egui::RichText::new(credits::LUA_LICENSE.trim()).monospace());
+                    });
+
+                    ui.separator();
+                    ui.strong(format!("Libraries ({})", third_party.packages.len()));
+                    ui.weak("Everything compiled into this build, with its license. Click one for its license text.");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.credits_search)
+                            .hint_text("search by name or license...")
+                            .desired_width(240.0),
+                    );
+                    let search = self.credits_search.to_lowercase();
+                    for package in &third_party.packages {
+                        let matches = search.is_empty()
+                            || package.name.to_lowercase().contains(&search)
+                            || package.license.to_lowercase().contains(&search);
+                        if !matches {
+                            continue;
+                        }
+                        egui::CollapsingHeader::new(format!(
+                            "{} {}   {}",
+                            package.name, package.version, package.license
+                        ))
+                        .id_salt(("credits_package", &package.name, &package.version))
+                        .show(ui, |ui| {
+                            if !package.authors.is_empty() {
+                                ui.weak(format!("By {}", package.authors.join(", ")));
+                            }
+                            if let Some(repository) = &package.repository {
+                                ui.hyperlink_to(repository, repository);
+                            }
+                            for text in third_party.texts_for(package) {
+                                ui.label(egui::RichText::new(text).monospace().small());
+                            }
+                        });
+                    }
+                },
+            );
+            ui.separator();
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if close || response.should_close() {
+            self.credits_open = false;
+        }
+    }
+
     /// The Rename script modal: a new name for the running script's file.
     fn rename_ui(&mut self, ctx: &egui::Context) {
         let Some(rename) = &mut self.rename else {
@@ -1071,7 +1198,7 @@ impl App {
     /// script) is up. They get the keyboard: app shortcuts and the global
     /// keys pause.
     fn any_modal_open(&self) -> bool {
-        self.preferences_open || self.log_open || self.updates_open || self.rename.is_some()
+        self.preferences_open || self.log_open || self.updates_open || self.rename.is_some() || self.credits_open
     }
 
     /// Pick up files added, removed or changed on disk in the folders on
@@ -2060,6 +2187,7 @@ impl eframe::App for App {
             self.updates_ui(&ctx);
             self.log_ui(&ctx);
             self.rename_ui(&ctx);
+            self.credits_ui(&ctx);
         }
         if self.status != self.logged_status {
             log::info!(target: "synththing::status", "{}", self.status);
