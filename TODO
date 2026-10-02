@@ -315,20 +315,31 @@
     set_channel_enabled (queued requests, the app sends AudioCommands).
     Worth deciding whether it's allowed always or only while focused.
 
-[M][.] musical timing: beat() (position in beats), tempo, time signature
+[M][.] musical timing - DONE: beat(), time_at_beat(), bar(), tempo(),
+    time_signature(), from midi_notes.rs's tempo map (no vendor changes).
+    Original note: beat() (position in beats), tempo, time signature
     For beat-synced effects and rhythm-game judgment windows. Now doable
     without patching the vendored rustysynth: midi_notes.rs already reads
     tempo events (FF 51); add time signatures (FF 58) and keep both as a
     map, then beat() is a lookup. Nothing for plain audio files.
 
-[S/M][.] cheap audio features: level_left/right() (RMS), onset flag
+[S/M][.] cheap audio features - DONE: level_left/right() (RMS), onset()
+    (spectral flux, adaptive threshold, 80 ms refractory; only runs once a
+    script asks). Original: level_left/right() (RMS), onset flag
     RMS is trivial in Rust over the frame's samples. Onset (e.g. spectral
     flux over the FFT the analyzer already does, with a threshold) is a
     bit more, but saves every audio-reactive script reinventing it.
 
-[S/M][.] more drawing primitives: filled circle, triangle/polygon
+[S/M][.] more drawing primitives - DONE: circle(), triangle(), polygon()
+    (pixel-center coverage, even-odd fill, blended once). Original: filled
+    circle, triangle/polygon
     Scanline fills in rasterize(), alpha-blended like rect.
 [L][.] images/sprites from the scripts folder
+    Open question (2026-10-02): how scripts would supply images. Options:
+    image files next to the script in the scripts folder (a script ships
+    as a folder or alongside its .png files), images embedded in the
+    script as data (e.g. a small text format), or only images bundled
+    with the app. Decide before building.
     Needs an image decoder (png crate or similar), a per-script texture
     cache, and a blit command with scaling. Bigger, but natural if games
     keep being the main use.

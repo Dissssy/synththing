@@ -50,14 +50,19 @@ Live reload: editing a script in the Script Editor saves it and recompiles it on
 
 ## Drawing
 
-Four functions, all color-table based:
+All color-table based:
 
 ```lua
 clear({r,g,b})
 line(x0, y0, x1, y1, {r,g,b,a})
 rect(x0, y0, x1, y1, {r,g,b,a})
 pixel(x, y, {r,g,b,a})
+circle(x, y, radius, {r,g,b,a})                -- filled
+triangle(x1, y1, x2, y2, x3, y3, {r,g,b,a})    -- filled
+polygon(points, {r,g,b,a})                     -- filled; points {x1, y1, x2, y2, ...} or {{x, y}, ...}
 ```
+
+Shapes fill every pixel whose center is inside them, so edges are crisp (no anti-aliasing) and a translucent shape blends each pixel exactly once. `polygon` takes up to 4096 points, as a flat list of coordinates or a list of points (`{x, y}` or `{x = .., y = ..}`); a polygon that crosses itself leaves holes where it overlaps (the even-odd rule). For outlines, use `line`.
 
 `r`, `g` and `b` are 0 to 255 (values outside that are clamped, fractions are fine). `a` is opacity, 0.0 to 1.0, defaulting to 1.0. An opaque draw (`a = 1`) overwrites; a translucent one alpha-blends over what's already there. `clear` always overwrites regardless of `a`. Coordinates are buffer pixels, (0, 0) at the top left, and can be fractional.
 
@@ -110,6 +115,16 @@ local spectrum = fft_left(left)
 local function bin_for(hz) return math.floor(hz * 1024 / SAMPLE_RATE) + 1 end
 local a440 = spectrum[bin_for(440)] or 0
 ```
+
+```lua
+level_left() -> number     -- loudness of this frame's left samples (RMS)
+level_right() -> number    -- same for the right
+onset() -> hit, strength   -- did a sound just start this frame?
+```
+
+The levels are the root mean square of the samples `render()` got this frame: 0 for silence, about 0.71 for a full-volume sine wave, 0 while paused. They change quickly from frame to frame, so smooth them if you want a steady meter (`shown = shown + (level_left() - shown) * 0.2`).
+
+`onset()` is true on a frame where the sound suddenly gets stronger (a drum hit, a note attack), worked out in Rust from how much the spectrum gained since the previous frame against the average of the last half second. After an onset, the next 80 ms can't be another, so one hit counts once. `strength` is that frame's gain in the spectrum: bigger means a sharper change, useful for comparing hits within a song rather than as an absolute number. It's meant for visuals reacting to the audio, not as a beat tracker: for MIDI, `notes_between` and `beat()` are exact. The detector starts running the first time a script calls `onset()`, so that first call (and the next few frames, while it builds up a history) returns false.
 
 ## MIDI data
 
@@ -170,6 +185,33 @@ Check `playback().paused` before writing into a scrolling history buffer, otherw
 `DT` is for frame-rate-independent animation (e.g. a smooth sweep or a moving player), not for gating logic, a visualizer should look right regardless of how fast frames are actually arriving.
 
 `render()` only runs while the visualizer is on screen: not while its tab is closed or hidden behind another tab, and not while Preferences is open (the visualizer freezes on its last frame, and playback pauses). `DT` is capped at 0.25 so the first frame back after a gap like that doesn't make animations jump.
+
+## Musical timing
+
+```lua
+beat([seconds]) -> beats                  -- song position in beats (quarter notes), from 0
+time_at_beat(beat) -> seconds             -- when a beat falls, in song seconds
+bar([seconds]) -> bar, beat_in_bar        -- bar number (from 1) and beats into it (from 0)
+tempo([seconds]) -> bpm                   -- quarter notes per minute
+time_signature([seconds]) -> num, den     -- e.g. 3, 4 for 3/4
+```
+
+These read the MIDI file's own tempo changes and time signatures, so they're exact, and follow every change in the song. Each takes an optional song time in seconds and defaults to the current position. Beats are quarter notes, the MIDI convention, whatever the time signature: in 6/8, a bar is 3 beats long. A song with no tempo marking is 120 bpm in 4/4, as MIDI defines it.
+
+For a plain audio file there's no score to read, so these all return nil (as do MIDI files timed in SMPTE frames, which have no beats); check before doing math with them.
+
+```lua
+-- Pulse on every beat, stronger on the first beat of each bar.
+local b = beat()
+if b then
+    local _, into = bar()
+    local pulse = 1 - (b % 1)              -- 1 right on the beat, fading to 0
+    local size = (into < 1) and 40 or 24
+    circle(width / 2, height / 2, size * pulse, { r = 255, g = 200, b = 60 })
+end
+```
+
+For rhythm games, `time_at_beat` turns a beat into the song time to compare against `playback().position` (both song seconds), and `notes_between` gives each note's exact time.
 
 ## Input
 

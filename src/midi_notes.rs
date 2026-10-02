@@ -7,6 +7,9 @@
 //! and key, first-in first-out, with ticks turned into seconds through the
 //! file's tempo changes, the same way the player times them. Times are song
 //! seconds, the same clock as `playback().position`.
+//!
+//! It also keeps the file's timing: the tempo map and time signatures, for
+//! `beat()`, `bar()`, `tempo()` and friends.
 
 /// One note, start to stop, in song seconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -26,9 +29,88 @@ pub struct NoteList {
     /// The longest note, so a window query knows how far back to look for
     /// notes that started earlier but are still held.
     longest: f64,
+    /// Tempo map and time signatures; `None` for files timed in SMPTE
+    /// frames (which have no beats) and for plain audio.
+    timing: Option<Timing>,
+}
+
+/// A MIDI file's musical timing: where the beats fall in song seconds.
+/// Beats are quarter notes, counted from 0 at the start of the song.
+#[derive(Clone, Debug)]
+pub struct Timing {
+    ticks_per_quarter: f64,
+    /// `(tick, seconds at that tick, microseconds per quarter note)` from
+    /// each tempo change on; the first is at tick 0.
+    tempos: Vec<(u64, f64, f64)>,
+    /// `(tick, numerator, denominator)` from each time signature change on;
+    /// the first is at tick 0 (4/4 unless the file says otherwise).
+    signatures: Vec<(u64, u8, u8)>,
+}
+
+impl Timing {
+    fn tempo_index_at_seconds(&self, seconds: f64) -> usize {
+        self.tempos.partition_point(|&(_, s, _)| s <= seconds).saturating_sub(1)
+    }
+
+    fn ticks_at(&self, seconds: f64) -> f64 {
+        let seconds = seconds.max(0.0);
+        let (tick, start, micros) = self.tempos[self.tempo_index_at_seconds(seconds)];
+        tick as f64 + (seconds - start) * 1_000_000.0 / micros * self.ticks_per_quarter
+    }
+
+    /// Song position in beats (quarter notes) at `seconds`.
+    pub fn beat_at(&self, seconds: f64) -> f64 {
+        self.ticks_at(seconds) / self.ticks_per_quarter
+    }
+
+    /// The song time of beat `beat` (the inverse of `beat_at`).
+    pub fn seconds_at_beat(&self, beat: f64) -> f64 {
+        let ticks = beat.max(0.0) * self.ticks_per_quarter;
+        let index = self.tempos.partition_point(|&(t, _, _)| (t as f64) <= ticks).saturating_sub(1);
+        let (tick, start, micros) = self.tempos[index];
+        start + (ticks - tick as f64) / self.ticks_per_quarter * micros / 1_000_000.0
+    }
+
+    /// Tempo at `seconds`, in quarter notes per minute.
+    pub fn tempo_at(&self, seconds: f64) -> f64 {
+        60_000_000.0 / self.tempos[self.tempo_index_at_seconds(seconds.max(0.0))].2
+    }
+
+    /// Time signature at `seconds`, as `(numerator, denominator)`.
+    pub fn signature_at(&self, seconds: f64) -> (u8, u8) {
+        let ticks = self.ticks_at(seconds);
+        let index = self.signatures.partition_point(|&(t, _, _)| (t as f64) <= ticks).saturating_sub(1);
+        let (_, numerator, denominator) = self.signatures[index];
+        (numerator, denominator)
+    }
+
+    /// Bar number (1-based) at `seconds`, and how far into that bar it is,
+    /// in beats (quarter notes, from 0). Follows time signature changes.
+    pub fn bar_at(&self, seconds: f64) -> (u32, f64) {
+        let ticks = self.ticks_at(seconds);
+        let mut bars_before = 0.0;
+        for (i, &(start, numerator, denominator)) in self.signatures.iter().enumerate() {
+            let bar_ticks = self.ticks_per_quarter * 4.0 * f64::from(numerator) / f64::from(denominator.max(1));
+            let end = self.signatures.get(i + 1).map_or(f64::INFINITY, |&(t, _, _)| t as f64);
+            if ticks < end {
+                let into = (ticks - start as f64) / bar_ticks;
+                let bar = into.floor();
+                let beat_in_bar = (into - bar) * bar_ticks / self.ticks_per_quarter;
+                return ((bars_before + bar) as u32 + 1, beat_in_bar);
+            }
+            // A signature change mid-bar starts a new bar there (rounding up).
+            bars_before += ((end - start as f64) / bar_ticks).ceil();
+        }
+        (1, 0.0)
+    }
 }
 
 impl NoteList {
+    /// The file's tempo map and time signatures, if it has beats.
+    pub fn timing(&self) -> Option<&Timing> {
+        self.timing.as_ref()
+    }
+
     /// `(index, note)` for every note sounding at any point in
     /// `[t0, t1)`: starting inside it, or started earlier and still held at
     /// `t0`. In start order.
@@ -74,6 +156,9 @@ impl NoteList {
         events.sort_by_key(|&(tick, order, _)| (tick, order));
 
         let mut clock = TickClock::new(division);
+        let smpte = division & 0x8000 != 0;
+        let mut tempos: Vec<(u64, f64, f64)> = vec![(0, 0.0, 500_000.0)];
+        let mut signatures: Vec<(u64, u8, u8)> = vec![(0, 4, 4)];
         let mut open: std::collections::HashMap<(u8, u8), std::collections::VecDeque<(f64, u8)>> =
             std::collections::HashMap::new();
         let mut notes = Vec::new();
@@ -82,7 +167,21 @@ impl NoteList {
             let time = clock.seconds(tick);
             end_time = end_time.max(time);
             match event {
-                Event::Tempo(micros_per_quarter) => clock.set_tempo(tick, micros_per_quarter),
+                Event::Tempo(micros_per_quarter) => {
+                    clock.set_tempo(tick, micros_per_quarter);
+                    let entry = (tick, time, f64::from(micros_per_quarter.max(1)));
+                    match tempos.last_mut() {
+                        Some(last) if last.0 == tick => *last = entry,
+                        _ => tempos.push(entry),
+                    }
+                }
+                Event::TimeSignature(numerator, denominator) => {
+                    let entry = (tick, numerator.max(1), denominator.max(1));
+                    match signatures.last_mut() {
+                        Some(last) if last.0 == tick => *last = entry,
+                        _ => signatures.push(entry),
+                    }
+                }
                 Event::NoteOn { channel, key, velocity } => {
                     open.entry((channel, key)).or_default().push_back((time, velocity));
                 }
@@ -102,7 +201,12 @@ impl NoteList {
         }
         notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.channel.cmp(&b.channel)).then(a.key.cmp(&b.key)));
         let longest = notes.iter().map(|n| n.stop - n.start).fold(0.0, f64::max);
-        Ok(Self { notes, longest })
+        let timing = (!smpte).then(|| Timing {
+            ticks_per_quarter: f64::from(division.max(1)),
+            tempos,
+            signatures,
+        });
+        Ok(Self { notes, longest, timing })
     }
 }
 
@@ -112,6 +216,8 @@ enum Event {
     NoteOff { channel: u8, key: u8 },
     /// Microseconds per quarter note.
     Tempo(u32),
+    /// Numerator and denominator (already as a number, e.g. 8 for x/8).
+    TimeSignature(u8, u8),
     Other,
 }
 
@@ -128,6 +234,7 @@ fn read_track(r: &mut Reader, events: &mut Vec<(u64, usize, Event)>, order: &mut
                 let data = r.take(len)?;
                 match (kind, data) {
                     (0x51, [a, b, c]) => Event::Tempo(u32::from_be_bytes([0, *a, *b, *c])),
+                    (0x58, [numerator, power, ..]) if *power < 8 => Event::TimeSignature(*numerator, 1 << power),
                     (0x2F, _) => {
                         events.push((tick, *order, Event::Other)); // end of track still marks time
                         *order += 1;
@@ -316,6 +423,7 @@ mod tests {
         bytes.extend([0, 1, 0, 2, 0x01, 0xE0]);
         bytes.extend(track(&[
             (0, &[0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20]), // 500000 us/q
+            (0, &[0xFF, 0x58, 0x04, 3, 2, 24, 8]),     // 3/4
             (960, &[0xFF, 0x51, 0x03, 0x03, 0xD0, 0x90]), // 250000 us/q
         ]));
         bytes.extend(track(&[
@@ -362,6 +470,26 @@ mod tests {
         assert_eq!(ids(1.0, 1.3), [2]); // note 1 stops exactly at 1.0
         assert_eq!(ids(0.0, 10.0), [0, 1, 2, 3]);
         assert!(ids(5.0, 6.0).is_empty());
+    }
+
+    #[test]
+    fn timing_follows_tempo_and_signature_changes() {
+        let list = NoteList::from_smf(&sample_file()).unwrap();
+        let timing = list.timing().unwrap();
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        // 120 bpm for the first 2 beats (1.0 s), then 240 bpm.
+        assert!(close(timing.beat_at(0.5), 1.0));
+        assert!(close(timing.beat_at(1.0), 2.0));
+        assert!(close(timing.beat_at(1.25), 3.0));
+        assert!(close(timing.tempo_at(0.9), 120.0) && close(timing.tempo_at(1.1), 240.0));
+        for beat in [0.0, 1.5, 2.0, 3.7] {
+            assert!(close(timing.beat_at(timing.seconds_at_beat(beat)), beat));
+        }
+        // 3/4: bars are 3 beats.
+        assert_eq!(timing.signature_at(1.0), (3, 4));
+        let (bar, into) = timing.bar_at(timing.seconds_at_beat(4.5));
+        assert_eq!(bar, 2);
+        assert!(close(into, 1.5));
     }
 
     #[test]

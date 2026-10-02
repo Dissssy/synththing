@@ -43,6 +43,11 @@
 //!   visualizer, keys while it has focus; Escape is never reported.
 //! * `text(x, y, string, color, [height])` / `text_size(string, [height])`,
 //!   pixel text in the built-in Monogram font (see `pixel_font.rs`).
+//! * `circle`, `triangle`, `polygon`: filled shapes.
+//! * `beat`, `time_at_beat`, `bar`, `tempo`, `time_signature`: the MIDI
+//!   file's musical timing (nil for plain audio).
+//! * `level_left`, `level_right` (RMS) and `onset()` (spectral flux), audio
+//!   features computed in Rust.
 //! * `notes_between(t0, t1)`, every note sounding in a time window, whole:
 //!   `{id, channel, key, velocity, start, stop}` (see `midi_notes.rs`).
 //! * `set_paused(paused)` / `seek(seconds)`, playback control, queued like
@@ -87,7 +92,7 @@ use crate::config::{config_dir, nice_name};
 use crate::engine::{EngineView, NOTE_LOOKAHEAD_SECS};
 use crate::midi_notes::NoteList;
 use crate::pixel_font;
-use crate::spectrum::SpectrumAnalyzer;
+use crate::spectrum::{self, OnsetDetector, SpectrumAnalyzer};
 use crate::visualizer::{
     ActiveNote, CursorRequest, NoteChange, NotesSnapshot, RESERVED_KEYS, StereoFrame, Visualizer,
     VisualizerInput,
@@ -106,8 +111,11 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 --
 -- Draw with clear/line/rect/pixel; color tables take an optional `a` (0..1).
 --   clear({r,g,b})  line(x0,y0,x1,y1,{r,g,b,a})  rect(...)  pixel(x,y,{r,g,b,a})
+--   circle(x,y,r,color)  triangle(x1,y1,x2,y2,x3,y3,color)  polygon(points,color)
 --   text(x, y, string, color, height) / text_size(string, height)  pixel text
 -- fft_left(left) / fft_right(right)     magnitude spectrum, computed in Rust
+-- level_left() / level_right() / onset() loudness, and whether a sound just started
+-- beat() / bar() / tempo()              musical timing from the MIDI file
 -- notes_between(t0, t1)                 whole notes with start/stop times
 -- active_notes() / upcoming_notes()     notes held now / changing soon
 -- midi_channels() / channel_enabled(c)  the file's channels and their toggles
@@ -271,13 +279,19 @@ pub fn bundled_default(file_name: &str) -> Option<&'static str> {
     DROPPED_SCRIPTS.iter().find(|&&(name, _)| name == file_name).map(|&(_, contents)| contents)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum DrawCommand {
     Clear(u32),
     Line { x0: f32, y0: f32, x1: f32, y1: f32, color: u32 },
     Rect { x0: f32, y0: f32, x1: f32, y1: f32, color: u32 },
     Pixel { x: i32, y: i32, color: u32 },
+    Circle { x: f32, y: f32, radius: f32, color: u32 },
+    Polygon { points: Vec<(f32, f32)>, color: u32 },
 }
+
+/// Most points `polygon()` takes (a typo shouldn't be able to ask for
+/// millions).
+const MAX_POLYGON_POINTS: usize = 4096;
 
 // --- settings -----------------------------------------------------------
 
@@ -684,6 +698,20 @@ fn describe_scalar(value: &Value) -> String {
 /// script can't linger), the `render` function, the draw-command queue its
 /// draw calls feed, and its settings/log state, all reset together on
 /// reload, since they're meaningless carried over to a different script.
+/// This frame's audio levels and onset, computed in Rust before the
+/// script runs (`level_left`, `level_right`, `onset`).
+#[derive(Default)]
+struct AudioFeatures {
+    level_left: f32,
+    level_right: f32,
+    onset: bool,
+    onset_strength: f32,
+    /// Set the first time a script calls `onset()`: from then on the
+    /// detector runs every frame (it needs a running history), and not
+    /// before, so scripts that don't use it don't pay for it.
+    onset_wanted: bool,
+}
+
 /// Playback changes a script asked for (`set_paused`, `seek`), carried out
 /// by the app after the frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -809,6 +837,8 @@ pub struct LuaVisualizer {
     /// Every note of the current MIDI file (empty for plain audio), for
     /// `notes_between`. Song data, so it outlives recompiles.
     note_list: Rc<RefCell<Arc<NoteList>>>,
+    features: Rc<RefCell<AudioFeatures>>,
+    onset_detector: OnsetDetector,
     last_render_instant: Option<Instant>,
     /// Seconds per frame for DT and TIME instead of the wall clock: set
     /// for headless runs, which render frames much faster than real time.
@@ -830,6 +860,8 @@ impl LuaVisualizer {
             playback: Rc::new(RefCell::new(EngineView::default())),
             input: Rc::new(RefCell::new(VisualizerInput::default())),
             note_list: Rc::new(RefCell::new(Arc::default())),
+            features: Rc::default(),
+            onset_detector: OnsetDetector::new(sample_rate),
             last_render_instant: None,
             fixed_timestep: None,
         };
@@ -955,6 +987,7 @@ impl LuaVisualizer {
             &self.playback,
             &self.input,
             &self.note_list,
+            &self.features,
             self.path.as_deref(),
             pending_settings,
         ) {
@@ -990,6 +1023,7 @@ impl LuaVisualizer {
             &self.playback,
             &self.input,
             &self.note_list,
+            &self.features,
             self.path.as_deref(),
             pending_settings,
         ) {
@@ -1074,6 +1108,15 @@ impl Visualizer for LuaVisualizer {
 
         let left: Vec<f32> = samples.iter().map(|&(l, _)| l).collect();
         let right: Vec<f32> = samples.iter().map(|&(_, r)| r).collect();
+        {
+            let mut features = self.features.borrow_mut();
+            features.level_left = spectrum::rms(&left);
+            features.level_right = spectrum::rms(&right);
+            if features.onset_wanted {
+                let mono: Vec<f32> = samples.iter().map(|&(l, r)| (l + r) * 0.5).collect();
+                (features.onset, features.onset_strength) = self.onset_detector.update(&mono);
+            }
+        }
 
         let build_tables = (|| -> mlua::Result<(Table, Table)> {
             Ok((
@@ -1115,6 +1158,7 @@ fn compile(
     playback: &Rc<RefCell<EngineView>>,
     input: &Rc<RefCell<VisualizerInput>>,
     note_list: &Rc<RefCell<Arc<NoteList>>>,
+    features: &Rc<RefCell<AudioFeatures>>,
     script_path: Option<&Path>,
     pending_settings: HashMap<String, serde_json::Value>,
 ) -> Result<Compiled, String> {
@@ -1151,6 +1195,7 @@ fn compile(
     let playback_requests: Rc<RefCell<Vec<PlaybackRequest>>> = Rc::default();
     let store = Rc::new(RefCell::new(ScriptStore::load(script_path)));
     register_song_and_state(&lua, note_list, &playback_requests, &store).map_err(|e| e.to_string())?;
+    register_timing_audio_shapes(&lua, note_list, playback, features, &commands).map_err(|e| e.to_string())?;
 
     lua.load(source)
         .set_name("visualizer")
@@ -1255,6 +1300,153 @@ fn register_song_and_state(
         })?,
     )?;
     Ok(())
+}
+
+/// `beat`, `time_at_beat`, `bar`, `tempo`, `time_signature`,
+/// `level_left`, `level_right`, `onset`, `circle`, `triangle`, `polygon`.
+fn register_timing_audio_shapes(
+    lua: &Lua,
+    note_list: &Rc<RefCell<Arc<NoteList>>>,
+    playback: &Rc<RefCell<EngineView>>,
+    features: &Rc<RefCell<AudioFeatures>>,
+    commands: &Rc<RefCell<Vec<DrawCommand>>>,
+) -> mlua::Result<()> {
+    let globals = lua.globals();
+
+    // Timing: each takes an optional song time (default: now) and returns
+    // nil when the song has no beats (plain audio, SMPTE-timed MIDI).
+    macro_rules! timing_fn {
+        ($name:literal, |$timing:ident, $seconds:ident| $body:expr) => {{
+            let notes = Rc::clone(note_list);
+            let view = Rc::clone(playback);
+            globals.set(
+                $name,
+                lua.create_function(move |_, seconds: Option<f64>| {
+                    let notes = notes.borrow();
+                    let $seconds = seconds.unwrap_or(view.borrow().position);
+                    Ok(notes.timing().map(|$timing| $body))
+                })?,
+            )?;
+        }};
+    }
+    timing_fn!("beat", |timing, seconds| timing.beat_at(seconds));
+    timing_fn!("tempo", |timing, seconds| timing.tempo_at(seconds));
+    let notes = Rc::clone(note_list);
+    let view = Rc::clone(playback);
+    globals.set(
+        "bar",
+        lua.create_function(move |_, seconds: Option<f64>| {
+            let notes = notes.borrow();
+            let seconds = seconds.unwrap_or(view.borrow().position);
+            Ok(match notes.timing() {
+                Some(timing) => {
+                    let (bar, beat) = timing.bar_at(seconds);
+                    (Some(bar), Some(beat))
+                }
+                None => (None, None),
+            })
+        })?,
+    )?;
+    let notes = Rc::clone(note_list);
+    let view = Rc::clone(playback);
+    globals.set(
+        "time_signature",
+        lua.create_function(move |_, seconds: Option<f64>| {
+            let notes = notes.borrow();
+            let seconds = seconds.unwrap_or(view.borrow().position);
+            Ok(match notes.timing() {
+                Some(timing) => {
+                    let (numerator, denominator) = timing.signature_at(seconds);
+                    (Some(numerator), Some(denominator))
+                }
+                None => (None, None),
+            })
+        })?,
+    )?;
+    let notes = Rc::clone(note_list);
+    globals.set(
+        "time_at_beat",
+        lua.create_function(move |_, beat: f64| Ok(notes.borrow().timing().map(|t| t.seconds_at_beat(beat))))?,
+    )?;
+
+    // Audio features.
+    let state = Rc::clone(features);
+    globals.set("level_left", lua.create_function(move |_, ()| Ok(state.borrow().level_left))?)?;
+    let state = Rc::clone(features);
+    globals.set("level_right", lua.create_function(move |_, ()| Ok(state.borrow().level_right))?)?;
+    let state = Rc::clone(features);
+    globals.set(
+        "onset",
+        lua.create_function(move |_, ()| {
+            let mut features = state.borrow_mut();
+            features.onset_wanted = true;
+            Ok((features.onset, features.onset_strength))
+        })?,
+    )?;
+
+    // Shapes.
+    let cmds = Rc::clone(commands);
+    globals.set(
+        "circle",
+        lua.create_function(move |_, (x, y, radius, color): (f32, f32, f32, Table)| {
+            let color = table_to_color(&color)?;
+            cmds.borrow_mut().push(DrawCommand::Circle { x, y, radius, color });
+            Ok(())
+        })?,
+    )?;
+    let cmds = Rc::clone(commands);
+    globals.set(
+        "triangle",
+        lua.create_function(
+            move |_, (x1, y1, x2, y2, x3, y3, color): (f32, f32, f32, f32, f32, f32, Table)| {
+                let color = table_to_color(&color)?;
+                cmds.borrow_mut().push(DrawCommand::Polygon { points: vec![(x1, y1), (x2, y2), (x3, y3)], color });
+                Ok(())
+            },
+        )?,
+    )?;
+    let cmds = Rc::clone(commands);
+    globals.set(
+        "polygon",
+        lua.create_function(move |_, (points, color): (Table, Table)| {
+            let color = table_to_color(&color)?;
+            let points = table_to_points(&points)?;
+            cmds.borrow_mut().push(DrawCommand::Polygon { points, color });
+            Ok(())
+        })?,
+    )?;
+    Ok(())
+}
+
+/// Polygon points from Lua: either a flat list `{x1, y1, x2, y2, ...}` or
+/// a list of points `{{x, y}, ...}` / `{{x = .., y = ..}, ...}`.
+fn table_to_points(table: &Table) -> mlua::Result<Vec<(f32, f32)>> {
+    let len = table.raw_len();
+    if len > MAX_POLYGON_POINTS * 2 {
+        return Err(mlua::Error::runtime(format!("polygon: at most {MAX_POLYGON_POINTS} points")));
+    }
+    let first: Value = table.raw_get(1)?;
+    let mut points = Vec::new();
+    if let Value::Table(_) = first {
+        for i in 1..=len {
+            let point: Table = table.raw_get(i)?;
+            let x: Option<f32> = point.get("x")?;
+            let y: Option<f32> = point.get("y")?;
+            let (x, y) = match (x, y) {
+                (Some(x), Some(y)) => (x, y),
+                _ => (point.raw_get(1)?, point.raw_get(2)?),
+            };
+            points.push((x, y));
+        }
+    } else {
+        if !len.is_multiple_of(2) {
+            return Err(mlua::Error::runtime("polygon: a flat point list needs an even count (x, y pairs)"));
+        }
+        for i in (1..=len).step_by(2) {
+            points.push((table.raw_get(i)?, table.raw_get(i + 1)?));
+        }
+    }
+    Ok(points)
 }
 
 /// Deepest table nesting `store_set` accepts.
@@ -1822,7 +2014,69 @@ fn rasterize(buffer: &mut [u32], width: usize, height: usize, cmd: DrawCommand) 
         DrawCommand::Rect { x0, y0, x1, y1, color } => {
             fill_rect(buffer, width, height, (x0, y0, x1, y1), color);
         }
+        DrawCommand::Circle { x, y, radius, color } => fill_circle(buffer, width, height, (x, y, radius), color),
+        DrawCommand::Polygon { points, color } => fill_polygon(buffer, width, height, &points, color),
     }
+}
+
+/// A filled circle: every pixel whose center is within `radius` of
+/// `(cx, cy)`. Each row is one span, so a translucent circle blends each
+/// pixel exactly once.
+fn fill_circle(buffer: &mut [u32], width: usize, height: usize, (cx, cy, radius): (f32, f32, f32), color: u32) {
+    if radius.is_nan() || radius <= 0.0 {
+        return;
+    }
+    let top = (cy - radius - 0.5).floor().max(0.0) as usize;
+    let bottom = ((cy + radius + 0.5).ceil().max(0.0) as usize).min(height);
+    for row in top..bottom {
+        let dy = row as f32 + 0.5 - cy;
+        let span = radius * radius - dy * dy;
+        if span < 0.0 {
+            continue;
+        }
+        let half = span.sqrt();
+        fill_row_span(buffer, width, row, cx - half, cx + half, color);
+    }
+}
+
+/// A filled polygon (even-odd rule, so self-intersecting shapes get
+/// holes): every pixel whose center is inside it, one span per crossing
+/// pair per row.
+fn fill_polygon(buffer: &mut [u32], width: usize, height: usize, points: &[(f32, f32)], color: u32) {
+    if points.len() < 3 {
+        return;
+    }
+    let min_y = points.iter().map(|p| p.1).fold(f32::INFINITY, f32::min);
+    let max_y = points.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max);
+    let top = (min_y - 0.5).floor().max(0.0) as usize;
+    let bottom = ((max_y + 0.5).ceil().max(0.0) as usize).min(height);
+    let mut crossings: Vec<f32> = Vec::new();
+    for row in top..bottom {
+        let y = row as f32 + 0.5;
+        crossings.clear();
+        for i in 0..points.len() {
+            let (ax, ay) = points[i];
+            let (bx, by) = points[(i + 1) % points.len()];
+            if (ay <= y && y < by) || (by <= y && y < ay) {
+                crossings.push(ax + (y - ay) * (bx - ax) / (by - ay));
+            }
+        }
+        crossings.sort_by(f32::total_cmp);
+        #[allow(clippy::chunks_exact_to_as_chunks)] // like the rest of the code
+        for pair in crossings.chunks_exact(2) {
+            fill_row_span(buffer, width, row, pair[0], pair[1], color);
+        }
+    }
+}
+
+/// Fill the pixels in `row` whose centers lie in `[x0, x1)`.
+fn fill_row_span(buffer: &mut [u32], width: usize, row: usize, x0: f32, x1: f32, color: u32) {
+    let first = (x0 - 0.5).ceil();
+    let end = (x1 - 0.5).ceil();
+    if end <= first {
+        return;
+    }
+    fill_rect(buffer, width, row + 1, (first, row as f32, end, row as f32 + 1.0), color);
 }
 
 /// Alpha-composite `src` (`0xAARRGGBB`) over `dst` (`0x00RRGGBB`), returning
@@ -2283,6 +2537,91 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
             (0..w * h).filter(|&i| buffer[i] == 0x00FF_FFFF).map(|i| (i % w, i / w)).collect();
         assert!(!lit.is_empty());
         assert!(lit.iter().all(|&(x, y)| x < 11 && y < 12), "{lit:?}");
+    }
+
+    #[test]
+    fn shapes_fill_the_right_pixels_once() {
+        let script = "function render(w, h, l, r)
+            clear({ r = 0, g = 0, b = 0 })
+            circle(8, 8, 4, { r = 255, g = 0, b = 0 })
+            triangle(20, 2, 30, 2, 20, 12, { r = 0, g = 255, b = 0 })
+            polygon({ 2, 20, 12, 20, 12, 30, 2, 30 }, { r = 0, g = 0, b = 255, a = 0.5 })
+            polygon({ { x = 20, y = 20 }, { x = 30, y = 20 }, { 30, 30 } }, { r = 255, g = 255, b = 255 })
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let w = 32;
+        let mut buffer = vec![0u32; w * w];
+        visualizer.render(&mut buffer, w, w, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        assert_eq!(visualizer.error(), None);
+        let at = |x: usize, y: usize| buffer[y * w + x];
+        // Circle: center filled, corners of its box not.
+        assert_eq!(at(8, 8), 0xFF0000);
+        assert_eq!(at(5, 5), 0xFF0000);
+        assert_eq!(at(4, 4), 0);
+        // Triangle: inside its right angle, not past the hypotenuse.
+        assert_eq!(at(21, 3), 0x00FF00);
+        assert_eq!(at(29, 11), 0);
+        // Translucent square: blended exactly once everywhere (no seams).
+        let blue = at(2, 20);
+        assert!(blue != 0 && (2..12).all(|x| (20..30).all(|y| at(x, y) == blue)));
+        assert_eq!(at(12, 25), 0);
+        // Point-list polygon (mixed {x=,y=} and {x, y} forms).
+        assert_eq!(at(29, 21), 0xFFFFFF);
+        assert_eq!(at(21, 29), 0);
+    }
+
+    #[test]
+    fn timing_functions_follow_the_song() {
+        // One note, default tempo (120 bpm) and time signature (4/4).
+        let mut smf = b"MThd\0\0\0\x06\0\0\0\x01\x01\xE0MTrk".to_vec();
+        let track = [0x00, 0x90, 60, 100, 0x83, 0x60, 0x80, 60, 0, 0x00, 0xFF, 0x2F, 0x00];
+        smf.extend((track.len() as u32).to_be_bytes());
+        smf.extend(track);
+        let script = "function render(w, h, l, r)
+            local bar, into = bar(2.75)
+            local num, den = time_signature()
+            log(beat() .. ' ' .. beat(1.0) .. ' ' .. time_at_beat(3) .. ' ' .. tempo() .. ' ' .. bar .. ' ' .. into .. ' ' .. num .. '/' .. den)
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        visualizer.set_note_list(Arc::new(NoteList::from_smf(&smf).unwrap()));
+        let mut playback = sample_playback();
+        playback.position = 0.25;
+        frame(&mut visualizer, &playback);
+        assert_eq!(visualizer.error(), None);
+        assert_eq!(last_log(&visualizer), "0.5 2.0 1.5 120.0 2 1.5 4/4");
+
+        // No song timing (plain audio): nil, not an error.
+        let mut visualizer = LuaVisualizer::new(
+            "function render() log(tostring(beat()) .. ' ' .. tostring(tempo()) .. ' ' .. tostring(bar())) end".to_string(),
+            None,
+            44_100,
+        );
+        frame(&mut visualizer, &playback);
+        assert_eq!(last_log(&visualizer), "nil nil nil");
+    }
+
+    #[test]
+    fn audio_levels_and_onsets_reach_scripts() {
+        let script = "function render(w, h, l, r)
+            local hit, strength = onset()
+            log(string.format('%.2f %.2f %s', level_left(), level_right(), tostring(hit)))
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let mut buffer = vec![0u32; 4];
+        let quiet = vec![(0.0, 0.0); 735];
+        let loud: Vec<StereoFrame> = (0..735).map(|i| ((i as f32 * 0.3).sin() * 0.8, 0.25)).collect();
+        let mut hits = 0;
+        for n in 0..40 {
+            let samples = if n < 30 { &quiet } else { &loud };
+            visualizer.render(&mut buffer, 2, 2, samples, &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+            hits += usize::from(last_log(&visualizer).ends_with("true"));
+        }
+        assert_eq!(visualizer.error(), None);
+        // A 0.8-amplitude sine is ~0.566 RMS; a constant 0.25 is 0.25.
+        let log = last_log(&visualizer);
+        let left: f32 = log.split(' ').next().unwrap().parse().unwrap();
+        assert!((left - 0.566).abs() < 0.01 && log.contains(" 0.25 "), "{log}");
+        assert_eq!(hits, 1, "one onset when the sound starts");
     }
 
     #[test]
