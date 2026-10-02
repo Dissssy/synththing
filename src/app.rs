@@ -34,6 +34,7 @@ use crate::lua_visualizer::{
     self, DebugVar, LogLevel, LuaVisualizer, PlaybackRequest, SettingDescriptor, SettingKind, SettingValue,
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
+use crate::song_info::{format_length, SongInfoCache};
 use crate::updater::{self, UpdateState, Updater};
 use crate::watch::{FolderWatch, Watched};
 use crate::visualizer::{DisplayMode, NotesSnapshot, SampleTap, ShowOutput, VisualizerPanel};
@@ -176,6 +177,14 @@ pub struct App {
     /// Move the editor's text cursor to this line (1-based) and scroll to
     /// it, the next time the editor is drawn ("Go to line").
     editor_goto_line: Option<usize>,
+    /// Lengths and details of songs in the lists, read in the background.
+    song_info: SongInfoCache,
+    /// The song whose info modal is open.
+    song_info_open: Option<PathBuf>,
+    /// Selected rows of the playlist on screen, sorted.
+    playlist_selection: Vec<usize>,
+    /// Where a Shift+click range starts: the last plain or Ctrl click.
+    selection_anchor: Option<usize>,
     /// Help > Credits & licenses.
     credits_open: bool,
     contributors: Contributors,
@@ -298,6 +307,10 @@ impl App {
             rename: None,
             editor_goto_line: None,
             folder_watch: None,
+            song_info: SongInfoCache::new(),
+            song_info_open: None,
+            playlist_selection: Vec::new(),
+            selection_anchor: None,
             credits_open: false,
             contributors: Contributors::default(),
             credits_search: String::new(),
@@ -1111,6 +1124,55 @@ impl App {
         }
     }
 
+    /// The song info modal: every detail read from one file.
+    fn song_info_ui(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.song_info_open.clone() else {
+            return;
+        };
+        let info = self.song_info.get(&path);
+        let mut close = false;
+        let response = egui::Modal::new(egui::Id::new("song_info")).show(ctx, |ui| {
+            ui.set_width(460.0);
+            ui.heading(nice_name(&path));
+            ui.weak(path.display().to_string());
+            ui.add_space(6.0);
+            match &info {
+                None => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.weak("Reading...");
+                    });
+                }
+                Some(info) if info.details.is_empty() => {
+                    ui.weak("Nothing to show for this file.");
+                }
+                Some(info) => {
+                    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                        egui::Grid::new("song_info_grid").num_columns(2).spacing([16.0, 4.0]).striped(true).show(
+                            ui,
+                            |ui| {
+                                for (key, value) in &info.details {
+                                    ui.strong(key);
+                                    ui.add(egui::Label::new(value).wrap());
+                                    ui.end_row();
+                                }
+                            },
+                        );
+                    });
+                }
+            }
+            ui.add_space(8.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if close || response.should_close() {
+            self.song_info_open = None;
+        }
+    }
+
     /// The Rename script modal: a new name for the running script's file.
     fn rename_ui(&mut self, ctx: &egui::Context) {
         let Some(rename) = &mut self.rename else {
@@ -1198,7 +1260,12 @@ impl App {
     /// script) is up. They get the keyboard: app shortcuts and the global
     /// keys pause.
     fn any_modal_open(&self) -> bool {
-        self.preferences_open || self.log_open || self.updates_open || self.rename.is_some() || self.credits_open
+        self.preferences_open
+            || self.log_open
+            || self.updates_open
+            || self.rename.is_some()
+            || self.credits_open
+            || self.song_info_open.is_some()
     }
 
     /// Pick up files added, removed or changed on disk in the folders on
@@ -1209,7 +1276,10 @@ impl App {
         watch.watch(Watched::Scripts, &self.scripts_dir);
         for which in watch.poll() {
             match which {
-                Watched::Songs => self.browser.rescan(),
+                Watched::Songs => {
+                    self.song_info.forget_folder(self.browser.cwd());
+                    self.browser.rescan();
+                }
                 Watched::Scripts => self.rescan_scripts(),
             }
         }
@@ -1316,7 +1386,10 @@ impl App {
                 };
             }
         });
-        if let Some(path) = self.browser.ui(ui) {
+        let cache = &mut self.song_info;
+        let info_open = &mut self.song_info_open;
+        let clicked = self.browser.ui(ui, &mut |ui, path| song_info_widgets(ui, cache, path, info_open));
+        if let Some(path) = clicked {
             self.play_path(path);
         }
     }
@@ -2162,6 +2235,9 @@ impl eframe::App for App {
         self.handle_os_file_drops(&ctx);
         self.poll_loads();
         self.refresh_changed_folders(&ctx);
+        if self.song_info.poll() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
         if !self.preferences_open {
             self.playlist_tick(view);
         }
@@ -2188,6 +2264,7 @@ impl eframe::App for App {
             self.log_ui(&ctx);
             self.rename_ui(&ctx);
             self.credits_ui(&ctx);
+            self.song_info_ui(&ctx);
         }
         if self.status != self.logged_status {
             log::info!(target: "synththing::status", "{}", self.status);
@@ -2286,6 +2363,25 @@ fn inline_code_job(ui: &egui::Ui, prefix: &str, text: &str) -> egui::text::Layou
         job.append(span, 0.0, if is_code { code.clone() } else { body.clone() });
     }
     job
+}
+
+/// A song's length and an info button (greyed out when the file has no
+/// details to show), for the end of a list row; laid out right to left.
+fn song_info_widgets(ui: &mut egui::Ui, cache: &mut SongInfoCache, path: &Path, open: &mut Option<PathBuf>) {
+    let info = cache.get(path);
+    let has_details = info.as_ref().is_some_and(|i| !i.details.is_empty());
+    let button = ui
+        .add_enabled(has_details, egui::Button::new("i").small())
+        .on_hover_text("Song info")
+        .on_disabled_hover_text(if info.is_none() { "Reading..." } else { "No details for this file" });
+    if button.clicked() {
+        *open = Some(path.to_path_buf());
+    }
+    let length = match &info {
+        None => "...".to_string(),
+        Some(info) => info.length.map(format_length).unwrap_or_else(|| "--:--".to_string()),
+    };
+    ui.weak(length);
 }
 
 /// Char offset of the start of 1-based `line` in `text` (the end, if

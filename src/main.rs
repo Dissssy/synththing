@@ -24,6 +24,7 @@ mod lua_visualizer;
 mod midi_notes;
 mod pixel_font;
 mod playlist;
+mod song_info;
 mod spectrum;
 mod updater;
 mod watch;

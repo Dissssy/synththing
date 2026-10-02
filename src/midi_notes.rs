@@ -32,6 +32,26 @@ pub struct NoteList {
     /// Tempo map and time signatures; `None` for files timed in SMPTE
     /// frames (which have no beats) and for plain audio.
     timing: Option<Timing>,
+    /// Facts about the file itself, for the song info view.
+    facts: MidiFacts,
+}
+
+/// Facts about a MIDI file, shown in the song info view.
+#[derive(Clone, Debug, Default)]
+pub struct MidiFacts {
+    /// 0 (one track), 1 (tracks played together) or 2 (separate songs).
+    pub format: u16,
+    pub tracks: u16,
+    /// Ticks per quarter note; `None` for SMPTE (frame-based) timing.
+    pub ticks_per_quarter: Option<u16>,
+    /// When the last event happens, in song seconds.
+    pub end_time: f64,
+    /// Each track's name (meta event 03), in track order; empty for a track
+    /// without one. The first track's name is the song's title by MIDI
+    /// convention.
+    pub track_names: Vec<String>,
+    /// The copyright notice (meta event 02), if there is one.
+    pub copyright: Option<String>,
 }
 
 /// A MIDI file's musical timing: where the beats fall in song seconds.
@@ -106,6 +126,24 @@ impl Timing {
 }
 
 impl NoteList {
+    /// Facts about the file (format, tracks, names, ...).
+    pub fn facts(&self) -> &MidiFacts {
+        &self.facts
+    }
+
+    /// How many notes the file has.
+    pub fn note_count(&self) -> usize {
+        self.notes.len()
+    }
+
+    /// The distinct channels with notes, sorted.
+    pub fn channels(&self) -> Vec<u8> {
+        let mut channels: Vec<u8> = self.notes.iter().map(|n| n.channel).collect();
+        channels.sort_unstable();
+        channels.dedup();
+        channels
+    }
+
     /// The file's tempo map and time signatures, if it has beats.
     pub fn timing(&self) -> Option<&Timing> {
         self.timing.as_ref()
@@ -132,7 +170,7 @@ impl NoteList {
         }
         let header_len = r.u32()? as usize;
         let header_start = r.pos;
-        let _format = r.u16()?;
+        let format = r.u16()?;
         let tracks = r.u16()?;
         let division = r.u16()?;
         r.pos = header_start + header_len;
@@ -140,6 +178,7 @@ impl NoteList {
         // Every event that matters, from every track, with its tick.
         let mut events: Vec<(u64, usize, Event)> = Vec::new();
         let mut order = 0usize;
+        let mut texts = TrackTexts::default();
         for _ in 0..tracks {
             let id = r.take(4)?;
             let len = r.u32()? as usize;
@@ -149,7 +188,8 @@ impl NoteList {
                 continue;
             }
             let mut track = Reader { bytes: &bytes[..end], pos: r.pos };
-            read_track(&mut track, &mut events, &mut order)?;
+            texts.names.push(String::new());
+            read_track(&mut track, &mut events, &mut order, &mut texts)?;
             r.pos = end;
         }
         // Merge tracks by tick, keeping each track's own order for ties.
@@ -206,7 +246,15 @@ impl NoteList {
             tempos,
             signatures,
         });
-        Ok(Self { notes, longest, timing })
+        let facts = MidiFacts {
+            format,
+            tracks,
+            ticks_per_quarter: (!smpte).then_some(division),
+            end_time,
+            track_names: texts.names,
+            copyright: texts.copyright,
+        };
+        Ok(Self { notes, longest, timing, facts })
     }
 }
 
@@ -221,7 +269,29 @@ enum Event {
     Other,
 }
 
-fn read_track(r: &mut Reader, events: &mut Vec<(u64, usize, Event)>, order: &mut usize) -> Result<(), String> {
+/// Text meta events collected while reading tracks.
+#[derive(Default)]
+struct TrackTexts {
+    names: Vec<String>,
+    copyright: Option<String>,
+}
+
+/// Meta event text, which has no declared encoding: UTF-8 when it is,
+/// else read as Latin-1 (what most older files use).
+fn meta_text(bytes: &[u8]) -> String {
+    let text = match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => bytes.iter().map(|&b| char::from(b)).collect(),
+    };
+    text.trim_matches(|c: char| c.is_whitespace() || c == '\0').to_string()
+}
+
+fn read_track(
+    r: &mut Reader,
+    events: &mut Vec<(u64, usize, Event)>,
+    order: &mut usize,
+    texts: &mut TrackTexts,
+) -> Result<(), String> {
     let mut tick = 0u64;
     let mut running_status = 0u8;
     while r.pos < r.bytes.len() {
@@ -234,6 +304,22 @@ fn read_track(r: &mut Reader, events: &mut Vec<(u64, usize, Event)>, order: &mut
                 let data = r.take(len)?;
                 match (kind, data) {
                     (0x51, [a, b, c]) => Event::Tempo(u32::from_be_bytes([0, *a, *b, *c])),
+                    (0x02, text) => {
+                        let text = meta_text(text);
+                        if texts.copyright.is_none() && !text.is_empty() {
+                            texts.copyright = Some(text);
+                        }
+                        Event::Other
+                    }
+                    (0x03, text) => {
+                        let text = meta_text(text);
+                        if let Some(name) = texts.names.last_mut()
+                            && name.is_empty()
+                        {
+                            *name = text;
+                        }
+                        Event::Other
+                    }
                     (0x58, [numerator, power, ..]) if *power < 8 => Event::TimeSignature(*numerator, 1 << power),
                     (0x2F, _) => {
                         events.push((tick, *order, Event::Other)); // end of track still marks time
@@ -490,6 +576,26 @@ mod tests {
         let (bar, into) = timing.bar_at(timing.seconds_at_beat(4.5));
         assert_eq!(bar, 2);
         assert!(close(into, 1.5));
+    }
+
+    #[test]
+    fn collects_file_facts() {
+        let mut bytes = sample_file();
+        // Give the second track a name: insert FF 03 "Lead" at its start.
+        let name_event = [0x00, 0xFF, 0x03, 0x04, b'L', b'e', b'a', b'd'];
+        let second = bytes.windows(4).rposition(|w| w == b"MTrk").unwrap();
+        let len_at = second + 4;
+        let len = u32::from_be_bytes(bytes[len_at..len_at + 4].try_into().unwrap()) + name_event.len() as u32;
+        bytes.splice(len_at..len_at + 4, len.to_be_bytes());
+        bytes.splice(len_at + 4..len_at + 4, name_event);
+
+        let list = NoteList::from_smf(&bytes).unwrap();
+        let facts = list.facts();
+        assert_eq!((facts.format, facts.tracks, facts.ticks_per_quarter), (1, 2, Some(480)));
+        assert_eq!(facts.track_names, ["", "Lead"]);
+        assert_eq!(list.note_count(), 4);
+        assert_eq!(list.channels(), [0, 1, 2]);
+        assert!((facts.end_time - 1.75).abs() < 1e-9);
     }
 
     #[test]

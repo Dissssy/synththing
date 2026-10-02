@@ -264,18 +264,81 @@ pub fn previous_entry(len: usize, current: usize, loop_mode: LoopMode, shuffle: 
     }
 }
 
-/// Where an index that pointed at `idx` ends up after moving the entry at
-/// `from` so that it lands at position `to` (in the post-move list).
-pub fn index_after_move(idx: usize, from: usize, to: usize) -> usize {
-    if idx == from {
-        to
-    } else if from < idx && idx <= to {
-        idx - 1
-    } else if to <= idx && idx < from {
-        idx + 1
-    } else {
-        idx
+/// The list's new order after moving the entries at `moving` (in their
+/// current relative order) to sit together just before position `before`
+/// of the current list: the old index of each entry, in new order.
+pub fn order_after_move(len: usize, moving: &[usize], before: usize) -> Vec<usize> {
+    let mut moving: Vec<usize> = moving.iter().copied().filter(|&i| i < len).collect();
+    moving.sort_unstable();
+    moving.dedup();
+    let mut rest: Vec<usize> = (0..len).filter(|i| moving.binary_search(i).is_err()).collect();
+    let insert_at = rest.iter().take_while(|&&i| i < before).count();
+    rest.splice(insert_at..insert_at, moving);
+    rest
+}
+
+/// For a new order from `order_after_move`: where each old index ended up.
+pub fn new_positions(order: &[usize]) -> Vec<usize> {
+    let mut positions = vec![0; order.len()];
+    for (new, &old) in order.iter().enumerate() {
+        positions[old] = new;
     }
+    positions
+}
+
+/// The comment line marking a playlist entry's soundfont override in an
+/// exported .m3u (other players skip `#` lines, so it's harmless there).
+const M3U_SOUNDFONT: &str = "#SYNTHTHING-SOUNDFONT:";
+
+/// `playlist` as an extended M3U (UTF-8): a `#EXTINF` line per entry with
+/// its length in whole seconds (-1 when unknown, as M3U expects) and name,
+/// its soundfont override if any, then its absolute path.
+pub fn to_m3u(playlist: &Playlist, mut length_of: impl FnMut(&Path) -> Option<f64>) -> String {
+    let mut out = String::from("#EXTM3U\n");
+    out.push_str(&format!("#PLAYLIST:{}\n", playlist.name));
+    for entry in &playlist.entries {
+        let seconds = length_of(&entry.path).map_or(-1, |s| s.round() as i64);
+        let name = entry.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        out.push_str(&format!("#EXTINF:{seconds},{name}\n"));
+        if let Some(sf) = &entry.soundfont {
+            out.push_str(&format!("{M3U_SOUNDFONT}{}\n", sf.display()));
+        }
+        out.push_str(&format!("{}\n", entry.path.display()));
+    }
+    out
+}
+
+/// Entries from an M3U/M3U8 file's text: every non-comment line is a file
+/// (relative paths are relative to `base`, the file's folder); web URLs are
+/// skipped. Soundfont overrides written by `to_m3u` come back too.
+pub fn from_m3u(text: &str, base: &Path) -> Vec<PlaylistEntry> {
+    let resolve = |line: &str| {
+        let path = PathBuf::from(line);
+        if path.is_relative() { base.join(path) } else { path }
+    };
+    let mut entries = Vec::new();
+    let mut soundfont: Option<PathBuf> = None;
+    for line in text.trim_start_matches('\u{FEFF}').lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(sf) = line.strip_prefix(M3U_SOUNDFONT) {
+            soundfont = Some(resolve(sf.trim()));
+            continue;
+        }
+        if line.starts_with('#') {
+            continue;
+        }
+        if line.contains("://") {
+            soundfont = None;
+            continue;
+        }
+        let mut entry = PlaylistEntry::new(resolve(line));
+        entry.soundfont = soundfont.take();
+        entries.push(entry);
+    }
+    entries
 }
 
 /// Where an index ends up after removing entry `removed`; `None` if it was
@@ -356,17 +419,41 @@ mod tests {
     }
 
     #[test]
-    fn move_remaps_indices_like_vec_remove_then_insert() {
-        for from in 0..5 {
-            for to in 0..5 {
-                let mut v: Vec<usize> = (0..5).collect();
-                let item = v.remove(from);
-                v.insert(to, item);
-                for idx in 0..5 {
-                    assert_eq!(v[index_after_move(idx, from, to)], idx, "from {from} to {to} idx {idx}");
-                }
-            }
-        }
+    fn moving_several_keeps_their_order_and_lands_before_the_target() {
+        // Move entries 1 and 3 to just before 0.
+        assert_eq!(order_after_move(5, &[3, 1], 0), [1, 3, 0, 2, 4]);
+        // To the end.
+        assert_eq!(order_after_move(5, &[0, 2], 5), [1, 3, 4, 0, 2]);
+        // Into the middle, "before 4" in the current list.
+        assert_eq!(order_after_move(5, &[0, 1], 4), [2, 3, 0, 1, 4]);
+        // Dropping a block onto itself changes nothing.
+        assert_eq!(order_after_move(4, &[1, 2], 2), [0, 1, 2, 3]);
+        let order = order_after_move(5, &[3, 1], 0);
+        assert_eq!(new_positions(&order), [2, 0, 3, 1, 4]);
+    }
+
+    #[test]
+    fn m3u_round_trips_paths_and_soundfont_overrides() {
+        let base = Path::new("C:/music/lists");
+        let mut playlist = Playlist { name: "Mix".into(), entries: Vec::new() };
+        let mut first = PlaylistEntry::new(PathBuf::from("C:/music/a.mid"));
+        first.soundfont = Some(PathBuf::from("C:/sf/piano.sf2"));
+        playlist.entries.push(first);
+        playlist.entries.push(PlaylistEntry::new(PathBuf::from("C:/music/b.mp3")));
+        let text = to_m3u(&playlist, |p| (p.extension().unwrap() == "mp3").then_some(61.4));
+        assert!(text.starts_with("#EXTM3U\n#PLAYLIST:Mix\n#EXTINF:-1,a\n#SYNTHTHING-SOUNDFONT:"), "{text}");
+        assert!(text.contains("#EXTINF:61,b\n"));
+
+        let back = from_m3u(&text, base);
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].path, PathBuf::from("C:/music/a.mid"));
+        assert_eq!(back[0].soundfont, Some(PathBuf::from("C:/sf/piano.sf2")));
+        assert_eq!(back[1].soundfont, None);
+
+        // Plain M3U from elsewhere: relative paths, a BOM, URLs skipped.
+        let other = from_m3u("\u{FEFF}# comment\nsongs/c.ogg\nhttp://radio.example/stream\n\nd.wav\n", base);
+        let paths: Vec<_> = other.iter().map(|e| e.path.clone()).collect();
+        assert_eq!(paths, [base.join("songs/c.ogg"), base.join("d.wav")]);
     }
 
     #[test]

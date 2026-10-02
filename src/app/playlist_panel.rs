@@ -8,37 +8,44 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
-use super::{is_midi_path, App, DraggedSoundfont, PREVIOUS_RESTARTS_AFTER_SECS, SONG_EXTENSIONS};
+use super::{is_midi_path, song_info_widgets, App, DraggedSoundfont, PREVIOUS_RESTARTS_AFTER_SECS, SONG_EXTENSIONS};
 use crate::audio::AudioCommand;
 use crate::config::nice_name;
 use crate::engine::EngineView;
 use crate::filebrowser::DraggedFile;
 use crate::layout::Section;
 use crate::playlist::{self, LoopMode, NowPlaying, PlaylistEntry};
+use crate::song_info::format_length;
 
-/// Drag-and-drop payload for a playlist row being dragged to reorder it.
+/// Drag-and-drop payload for playlist rows being dragged to reorder them:
+/// the selection if the dragged row is part of it, else just that row.
 pub(super) struct DraggedEntry {
     pub list: usize,
-    pub idx: usize,
+    pub indices: Vec<usize>,
+    /// The row grabbed, for the label following the pointer.
     pub path: PathBuf,
 }
 
 /// Something dropped onto a playlist row this frame.
 enum RowDrop {
-    /// A song from the browser, to insert at this position.
+    /// A song (or a folder of songs) from the browser, to insert at this
+    /// position.
     Song(PathBuf, usize),
-    /// Another row of the same playlist, moved to this position.
-    Move(usize, usize),
-    /// A soundfont, to become this row's override.
+    /// Rows of the same playlist, moved to just before this position.
+    Move(Vec<usize>, usize),
+    /// A soundfont, to become the override of this row (and the rest of
+    /// the selection, if this row is selected).
     Soundfont(PathBuf, usize),
 }
 
-/// A row's right-click menu choice, or a click on one of its own controls.
+/// A click on a row or one of its controls, or a right-click menu choice.
+/// The `Vec` ones apply to the selection when used on a selected row.
 enum RowAction {
     Play(usize),
-    Remove(usize),
-    ClearSoundfont(usize),
-    UseSelectedSoundfont(usize),
+    Select(usize),
+    Remove(Vec<usize>),
+    ClearSoundfont(Vec<usize>),
+    UseSelectedSoundfont(Vec<usize>),
     RevealInSongs(usize),
 }
 
@@ -190,6 +197,8 @@ impl App {
                 self.viewed_playlist = Some(idx);
                 self.playlist_rename = None;
                 self.confirm_delete_playlist = false;
+                self.playlist_selection.clear();
+                self.selection_anchor = None;
             }
             Err(e) => self.status = format!("Couldn't create playlist: {e}"),
         }
@@ -202,6 +211,8 @@ impl App {
             return;
         }
         self.status = format!("Deleted playlist: {name}");
+        self.playlist_selection.clear();
+        self.selection_anchor = None;
         self.now_playing = self.now_playing.take().and_then(|mut np| {
             np.list = playlist::index_after_remove(np.list, list)?;
             Some(np)
@@ -212,7 +223,18 @@ impl App {
             .or_else(|| (!self.playlists.lists.is_empty()).then_some(0));
     }
 
+    /// Insert `songs` at `at`; a folder among them adds the songs directly
+    /// in it.
     fn insert_songs(&mut self, list: usize, at: usize, songs: Vec<PathBuf>) {
+        let songs: Vec<PathBuf> = songs
+            .into_iter()
+            .flat_map(|p| if p.is_dir() { playlist::songs_in_folder(&p, SONG_EXTENSIONS) } else { vec![p] })
+            .collect();
+        if songs.is_empty() {
+            self.status = "No songs directly in that folder.".to_string();
+            return;
+        }
+        self.playlist_selection.clear();
         let Some(stored) = self.playlists.lists.get_mut(list) else {
             return;
         };
@@ -262,25 +284,101 @@ impl App {
         self.save_playlist(list);
     }
 
-    fn move_entry(&mut self, list: usize, from: usize, to: usize) {
+    /// Move the entries at `indices` (keeping their order) to sit together
+    /// just before position `before` of the current list.
+    fn move_entries(&mut self, list: usize, indices: &[usize], before: usize) {
         let Some(stored) = self.playlists.lists.get_mut(list) else {
             return;
         };
-        let len = stored.playlist.entries.len();
-        if from >= len || from == to {
+        let order = playlist::order_after_move(stored.playlist.entries.len(), indices, before);
+        if order.iter().enumerate().all(|(new, &old)| new == old) {
             return;
         }
-        let to = to.min(len - 1);
-        let entry = stored.playlist.entries.remove(from);
-        stored.playlist.entries.insert(to, entry);
+        let positions = playlist::new_positions(&order);
+        let mut old: Vec<Option<PlaylistEntry>> =
+            std::mem::take(&mut stored.playlist.entries).into_iter().map(Some).collect();
+        stored.playlist.entries = order.iter().filter_map(|&i| old[i].take()).collect();
         if let Some(np) = &mut self.now_playing
             && np.list == list
         {
-            np.entry = playlist::index_after_move(np.entry, from, to);
-            np.history.iter_mut().for_each(|h| *h = playlist::index_after_move(*h, from, to));
+            np.entry = positions[np.entry];
+            np.history.iter_mut().for_each(|h| *h = positions.get(*h).copied().unwrap_or(*h));
+        }
+        if self.viewed_playlist == Some(list) {
+            let mut selection: Vec<usize> = self.playlist_selection.iter().filter_map(|&i| positions.get(i).copied()).collect();
+            selection.sort_unstable();
+            self.playlist_selection = selection;
+            self.selection_anchor = self.selection_anchor.and_then(|i| positions.get(i).copied());
         }
         self.plan_upcoming();
         self.save_playlist(list);
+    }
+
+    /// Remove several entries (highest first, so indices stay valid).
+    fn remove_entries(&mut self, list: usize, indices: &[usize]) {
+        let mut indices = indices.to_vec();
+        indices.sort_unstable_by(|a, b| b.cmp(a));
+        indices.dedup();
+        for idx in indices {
+            self.remove_entry(list, idx);
+        }
+        self.playlist_selection.clear();
+        self.selection_anchor = None;
+    }
+
+    /// Set (or clear) the soundfont override of several entries; plain
+    /// audio ones are skipped when setting.
+    fn set_entries_soundfont(&mut self, list: usize, indices: &[usize], soundfont: Option<PathBuf>) {
+        let midi: Vec<usize> = indices
+            .iter()
+            .copied()
+            .filter(|&i| {
+                soundfont.is_none()
+                    || self.playlists.lists.get(list).and_then(|l| l.playlist.entries.get(i)).is_some_and(|e| is_midi_path(&e.path))
+            })
+            .collect();
+        if midi.is_empty() && soundfont.is_some() {
+            self.status = "Soundfont overrides only apply to MIDI files.".to_string();
+            return;
+        }
+        for idx in midi {
+            self.set_entry_soundfont(list, idx, soundfont.clone());
+        }
+    }
+
+    /// Update the selection for a click on row `idx`, by the modifier keys
+    /// held: plain selects just it, Ctrl toggles it, Shift extends a range
+    /// from the last plain/Ctrl click.
+    fn click_select(&mut self, idx: usize, modifiers: egui::Modifiers) {
+        if modifiers.shift
+            && let Some(anchor) = self.selection_anchor
+        {
+            let (lo, hi) = (anchor.min(idx), anchor.max(idx));
+            if !modifiers.command {
+                self.playlist_selection.clear();
+            }
+            self.playlist_selection.extend(lo..=hi);
+            self.playlist_selection.sort_unstable();
+            self.playlist_selection.dedup();
+            return;
+        }
+        if modifiers.command {
+            match self.playlist_selection.binary_search(&idx) {
+                Ok(pos) => {
+                    self.playlist_selection.remove(pos);
+                }
+                Err(pos) => self.playlist_selection.insert(pos, idx),
+            }
+        } else {
+            self.playlist_selection = vec![idx];
+        }
+        self.selection_anchor = Some(idx);
+    }
+
+    /// The rows an action on row `idx` should apply to: the whole selection
+    /// if `idx` is part of it, otherwise just `idx`.
+    fn rows_for(&self, idx: usize) -> Vec<usize> {
+        if self.playlist_selection.contains(&idx) { self.playlist_selection.clone() } else { vec![idx] }
     }
 
     fn set_entry_soundfont(&mut self, list: usize, idx: usize, soundfont: Option<PathBuf>) {
@@ -382,6 +480,9 @@ impl App {
                         self.create_playlist(&name, songs);
                     }
                 }
+                if ui.button("Import .m3u...").clicked() {
+                    self.import_m3u();
+                }
             });
         });
 
@@ -421,25 +522,45 @@ impl App {
         let Some(list) = self.viewed_playlist else {
             return;
         };
+
+        // Keys, while the pointer is over the list and nothing's being
+        // typed: Ctrl+A selects all, Delete removes the selection.
+        let typing = ui.ctx().memory(|m| m.focused().is_some());
+        if !typing && ui.rect_contains_pointer(panel_rect) {
+            let (select_all, delete) = ui.input(|i| {
+                (i.modifiers.command && i.key_pressed(egui::Key::A), i.key_pressed(egui::Key::Delete))
+            });
+            if select_all {
+                let len = self.playlists.lists.get(list).map_or(0, |l| l.playlist.entries.len());
+                self.playlist_selection = (0..len).collect();
+            }
+            if delete && !self.playlist_selection.is_empty() {
+                let selection = self.playlist_selection.clone();
+                self.remove_entries(list, &selection);
+            }
+        }
+
         match row_drop {
             Some(RowDrop::Song(path, at)) => self.insert_songs(list, at, vec![path]),
-            Some(RowDrop::Move(from, before)) => {
-                // `before` is an insertion point in the current list; removing
-                // `from` first shifts everything after it up by one.
-                let to = if before > from { before - 1 } else { before };
-                self.move_entry(list, from, to);
+            Some(RowDrop::Move(indices, before)) => self.move_entries(list, &indices, before),
+            Some(RowDrop::Soundfont(sf, idx)) => {
+                let rows = self.rows_for(idx);
+                self.set_entries_soundfont(list, &rows, Some(sf));
             }
-            Some(RowDrop::Soundfont(sf, idx)) => self.set_entry_soundfont(list, idx, Some(sf)),
             None => {}
         }
         match action {
             Some(RowAction::Play(idx)) => self.play_entry(list, idx),
-            Some(RowAction::Remove(idx)) => self.remove_entry(list, idx),
-            Some(RowAction::ClearSoundfont(idx)) => self.set_entry_soundfont(list, idx, None),
-            Some(RowAction::UseSelectedSoundfont(idx)) => {
+            Some(RowAction::Select(idx)) => {
+                let modifiers = ui.input(|i| i.modifiers);
+                self.click_select(idx, modifiers);
+            }
+            Some(RowAction::Remove(rows)) => self.remove_entries(list, &rows),
+            Some(RowAction::ClearSoundfont(rows)) => self.set_entries_soundfont(list, &rows, None),
+            Some(RowAction::UseSelectedSoundfont(rows)) => {
                 let selected = self.active_sf.and_then(|i| self.config.soundfonts.get(i)).cloned();
                 match selected {
-                    Some(sf) => self.set_entry_soundfont(list, idx, Some(sf)),
+                    Some(sf) => self.set_entries_soundfont(list, &rows, Some(sf)),
                     None => self.status = "No soundfont selected.".to_string(),
                 }
             }
@@ -482,6 +603,8 @@ impl App {
             self.viewed_playlist = Some(i);
             self.playlist_rename = None;
             self.confirm_delete_playlist = false;
+            self.playlist_selection.clear();
+            self.selection_anchor = None;
         }
 
         let Some(list) = viewed else {
@@ -515,6 +638,10 @@ impl App {
                 self.playlist_rename = Some(self.playlists.lists[list].playlist.name.clone());
             }
 
+            if ui.button("Export .m3u...").on_hover_text("Save as an .m3u8 playlist other players can open").clicked() {
+                self.export_m3u(list);
+            }
+
             let delete_label = if self.confirm_delete_playlist { "Really delete?" } else { "Delete" };
             let response = ui.button(delete_label);
             if response.clicked() {
@@ -540,12 +667,29 @@ impl App {
         let entries = &self.playlists.lists[list].playlist.entries;
         let playing = self.now_playing.as_ref().filter(|np| np.list == list).map(|np| np.entry);
         let selected_sf = self.active_sf.and_then(|i| self.config.soundfonts.get(i)).is_some();
+        let selection = &self.playlist_selection;
+        let cache = &mut self.song_info;
+        let info_open = &mut self.song_info_open;
 
+        // Total time from what's been read so far.
+        let (mut total, mut unknown) = (0.0, 0usize);
+        for entry in entries {
+            match cache.get(&entry.path).and_then(|i| i.length) {
+                Some(length) => total += length,
+                None => unknown += 1,
+            }
+        }
         let missing = entries.iter().filter(|e| e.missing).count();
-        let summary = match missing {
-            0 => format!("{} song(s)", entries.len()),
-            n => format!("{} song(s), {n} missing", entries.len()),
-        };
+        let mut summary = format!("{} song{}, {}", entries.len(), if entries.len() == 1 { "" } else { "s" }, format_length(total));
+        if unknown > 0 {
+            summary.push_str(&format!(" (+{unknown} of unknown length)"));
+        }
+        if missing > 0 {
+            summary.push_str(&format!(", {missing} missing"));
+        }
+        if !selection.is_empty() {
+            summary.push_str(&format!(", {} selected", selection.len()));
+        }
         ui.weak(summary);
         ui.separator();
 
@@ -556,56 +700,62 @@ impl App {
             .show_rows(ui, row_height, entries.len(), |ui, range| {
                 for idx in range {
                     let entry = &entries[idx];
+                    let is_selected = selection.binary_search(&idx).is_ok();
+                    let rows = || if is_selected { selection.clone() } else { vec![idx] };
                     let row = ui.horizontal(|ui| {
-                        ui.weak(format!("{:>3}", idx + 1));
+                        // The playing entry is marked in the number column;
+                        // the highlight is the selection.
+                        if playing == Some(idx) {
+                            ui.strong(" > ").on_hover_text("Playing");
+                        } else {
+                            ui.weak(format!("{:>3}", idx + 1));
+                        }
                         let mut label = nice_name(&entry.path);
                         if entry.missing {
                             label.push_str("  (missing)");
                         }
                         let response = ui
-                            .add(
-                                egui::Button::selectable(playing == Some(idx), label)
-                                    .sense(egui::Sense::click_and_drag()),
-                            )
-                            .on_hover_text(entry.path.display().to_string());
+                            .add(egui::Button::selectable(is_selected, label).sense(egui::Sense::click_and_drag()))
+                            .on_hover_text(format!("{}\nDouble-click to play", entry.path.display()));
                         if response.hovered() {
                             hovered = Some((entry.path.clone(), entry.soundfont.clone()));
                         }
-                        response.dnd_set_drag_payload(DraggedEntry {
-                            list,
-                            idx,
-                            path: entry.path.clone(),
-                        });
-                        if response.clicked() {
+                        response.dnd_set_drag_payload(DraggedEntry { list, indices: rows(), path: entry.path.clone() });
+                        if response.double_clicked() {
                             action = Some(RowAction::Play(idx));
+                        } else if response.clicked() {
+                            action = Some(RowAction::Select(idx));
                         }
                         response.context_menu(|ui| {
+                            let rows = rows();
+                            let count = if rows.len() > 1 { format!(" ({})", rows.len()) } else { String::new() };
                             if ui.button("Play").clicked() {
                                 action = Some(RowAction::Play(idx));
                             }
-                            if is_midi_path(&entry.path) {
+                            if is_midi_path(&entry.path) || rows.len() > 1 {
                                 if ui
-                                    .add_enabled(selected_sf, egui::Button::new("Use selected soundfont for this"))
+                                    .add_enabled(selected_sf, egui::Button::new(format!("Use selected soundfont{count}")))
                                     .clicked()
                                 {
-                                    action = Some(RowAction::UseSelectedSoundfont(idx));
+                                    action = Some(RowAction::UseSelectedSoundfont(rows.clone()));
                                 }
-                                if entry.soundfont.is_some() && ui.button("Clear soundfont override").clicked() {
-                                    action = Some(RowAction::ClearSoundfont(idx));
+                                if ui.button(format!("Clear soundfont override{count}")).clicked() {
+                                    action = Some(RowAction::ClearSoundfont(rows.clone()));
                                 }
                             }
                             if ui.button("Show in Songs").clicked() {
                                 action = Some(RowAction::RevealInSongs(idx));
                             }
-                            if ui.button("Remove from playlist").clicked() {
-                                action = Some(RowAction::Remove(idx));
+                            if ui.button(format!("Remove from playlist{count}")).clicked() {
+                                action = Some(RowAction::Remove(rows));
                             }
                         });
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("x").on_hover_text("Remove from playlist").clicked() {
-                                action = Some(RowAction::Remove(idx));
+                                action = Some(RowAction::Remove(vec![idx]));
                             }
+                            song_info_widgets(ui, cache, &entry.path, info_open);
                             if let Some(sf) = &entry.soundfont
                                 && ui
                                     .small_button(format!("SF: {}", nice_name(sf)))
@@ -615,7 +765,7 @@ impl App {
                                     ))
                                     .clicked()
                             {
-                                action = Some(RowAction::ClearSoundfont(idx));
+                                action = Some(RowAction::ClearSoundfont(vec![idx]));
                             }
                         });
                     });
@@ -628,6 +778,66 @@ impl App {
 
         self.hovered_playlist_entry = hovered;
         (row_drop, action)
+    }
+
+    /// New playlist from an .m3u/.m3u8 file (named after it).
+    fn import_m3u(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("M3U playlist", &["m3u", "m3u8"])
+            .set_directory(self.config.browse_start_dir())
+            .pick_file()
+        else {
+            return;
+        };
+        let text = match std::fs::read(&path) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(e) => {
+                self.status = format!("Couldn't read {}: {e}", path.display());
+                return;
+            }
+        };
+        let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let entries = playlist::from_m3u(&text, &base);
+        if entries.is_empty() {
+            self.status = format!("No songs found in {}.", nice_name(&path));
+            return;
+        }
+        let name = self.unique_playlist_name(&nice_name(&path));
+        let songs: Vec<PathBuf> = entries.iter().map(|e| e.path.clone()).collect();
+        self.create_playlist(&name, songs);
+        if let Some(list) = self.viewed_playlist
+            && let Some(stored) = self.playlists.lists.get_mut(list)
+        {
+            for (entry, imported) in stored.playlist.entries.iter_mut().zip(&entries) {
+                entry.soundfont = imported.soundfont.clone();
+            }
+            self.save_playlist(list);
+        }
+        let missing = entries.iter().filter(|e| e.missing).count();
+        self.status = match missing {
+            0 => format!("Imported {} songs as \"{name}\".", entries.len()),
+            n => format!("Imported {} songs as \"{name}\" ({n} not found).", entries.len()),
+        };
+    }
+
+    /// Save playlist `list` as an .m3u8 file.
+    fn export_m3u(&mut self, list: usize) {
+        let Some(stored) = self.playlists.lists.get(list) else {
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("M3U playlist", &["m3u8", "m3u"])
+            .set_file_name(format!("{}.m3u8", stored.playlist.name))
+            .save_file()
+        else {
+            return;
+        };
+        let cache = &mut self.song_info;
+        let text = playlist::to_m3u(&stored.playlist, |p| cache.get(p).and_then(|i| i.length));
+        self.status = match std::fs::write(&path, text) {
+            Ok(()) => format!("Exported to {}.", path.display()),
+            Err(e) => format!("Couldn't write {}: {e}", path.display()),
+        };
     }
 
     fn unique_playlist_name(&self, base: &str) -> String {
@@ -665,7 +875,7 @@ fn row_drop_ui(ui: &egui::Ui, row: &egui::Response, list: usize, idx: usize, is_
         ui.painter().hline(rect.x_range(), line_y, stroke);
         if released {
             egui::DragAndDrop::clear_payload(ctx);
-            return Some(RowDrop::Move(entry.idx, insert_at));
+            return Some(RowDrop::Move(entry.indices.clone(), insert_at));
         }
     } else if egui::DragAndDrop::has_payload_of_type::<DraggedSoundfont>(ctx) && is_midi {
         ui.painter().rect_stroke(rect, 2.0, stroke, egui::StrokeKind::Inside);

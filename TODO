@@ -69,11 +69,17 @@
       when it finishes; adding a soundfont via the dialog still parses it
       on the UI thread once (to validate it), then keeps that parse.
     - DONE: loop/shuffle mode remembered between launches (config).
-    - [M][.] Multi-select rows (shift/ctrl-click) to move/remove several at
-      once; drag a folder from Songs to add all of it.
-    - [S][.] Show track lengths and a total (needs reading each file's
-      length).
-    - [S][.] Import/export .m3u.
+    - DONE: multi-select (click selects, Ctrl/Shift extend, double-click
+      plays, Ctrl+A, Delete; drag moves the selection; right-click and
+      soundfont drops apply to it), folders dragged from Songs add their
+      songs, .m3u/.m3u8 import and export (soundfont overrides kept as a
+      #SYNTHTHING-SOUNDFONT: comment line).
+    - DONE: song info (song_info.rs, background thread + cache): length in
+      the Songs browser and playlist rows, playlist total, and an info
+      button (greyed out when there's nothing) opening a modal of
+      details: MIDI title/tracks/notes/channels/tempo/signature from
+      midi_notes.rs, audio codec/rate/channels/tags via symphonia (no
+      decoding). MP3s without a length header show --:--.
     - Needs your hands-on check: drag-and-drop feel (drop line placement,
       the label that follows the cursor), and that auto-advance fires
       reliably with the window in the background.
@@ -375,3 +381,8 @@ Smaller:
     gen_licenses`; a test fails if it drifts from Cargo.lock).
     Release checklist (incl. keeping docs/scripting-reference.md and
     docs/cli.md current before every commit): docs/RELEASING.md.
+
+[S][.] README for testers - DONE (README.md: what it is, download, the
+    SmartScreen "Run anyway" step, first steps, keys, scripts, where files
+    live, building, credits). Still open: a license for synththing itself
+    (the repo has none, so it's all rights reserved by default).

@@ -215,8 +215,9 @@ impl FileBrowser {
 
     /// Draw the browser (search box + scrollable list) into `ui`. Returns
     /// `Some(path)` the frame a file row is clicked; clicking a directory row
-    /// navigates into it internally and returns `None`.
-    pub fn ui(&mut self, ui: &mut egui::Ui) -> Option<PathBuf> {
+    /// navigates into it internally and returns `None`. `trailing` draws
+    /// extra widgets at the right end of each file row (right to left).
+    pub fn ui(&mut self, ui: &mut egui::Ui, trailing: &mut dyn FnMut(&mut egui::Ui, &Path)) -> Option<PathBuf> {
         ui.weak(display_dir(&self.cwd));
 
         let mut hidden_changed = false;
@@ -263,7 +264,7 @@ impl FileBrowser {
             .show(ui, |ui| {
                 if query.is_empty() {
                     for entry in &self.entries {
-                        let response = row(ui, entry, self.active.as_deref());
+                        let response = row(ui, entry, self.active.as_deref(), trailing);
                         if response.clicked() {
                             clicked = Some((entry.path.clone(), entry.is_dir));
                         }
@@ -273,7 +274,7 @@ impl FileBrowser {
                     }
                 } else if let Some(candidates) = &self.search_candidates {
                     for entry in ranked_matches(candidates, &query) {
-                        let response = row(ui, &entry, self.active.as_deref());
+                        let response = row(ui, &entry, self.active.as_deref(), trailing);
                         if response.clicked() {
                             clicked = Some((entry.path.clone(), entry.is_dir));
                         }
@@ -303,22 +304,34 @@ impl FileBrowser {
 /// onto a playlist).
 pub struct DraggedFile(pub PathBuf);
 
-/// Draw one clickable row. File rows can also be dragged out, carrying a
-/// [`DraggedFile`].
-fn row(ui: &mut egui::Ui, entry: &Entry, active: Option<&Path>) -> egui::Response {
+/// Draw one clickable row. File and folder rows (not "..") can also be
+/// dragged out, carrying a [`DraggedFile`] (a folder dropped on a playlist
+/// adds the songs in it). File rows get `trailing` at their right end.
+fn row(
+    ui: &mut egui::Ui,
+    entry: &Entry,
+    active: Option<&Path>,
+    trailing: &mut dyn FnMut(&mut egui::Ui, &Path),
+) -> egui::Response {
     // Directories already carry a trailing "/" from `refresh`, so the label
     // alone distinguishes them; the active file gets egui's own highlighted
     // "selected" look rather than a marker glyph (icon fonts are a common
     // source of missing-glyph boxes, so plain text + native styling wins).
     let is_active = active == Some(entry.path.as_path());
-    if entry.is_dir {
+    if entry.label == ".." {
         return ui.selectable_label(is_active, &entry.label);
     }
-    let response = ui.add(
-        egui::Button::selectable(is_active, &entry.label).sense(egui::Sense::click_and_drag()),
-    );
-    response.dnd_set_drag_payload(DraggedFile(entry.path.clone()));
-    response
+    ui.horizontal(|ui| {
+        let response = ui.add(
+            egui::Button::selectable(is_active, &entry.label).sense(egui::Sense::click_and_drag()),
+        );
+        response.dnd_set_drag_payload(DraggedFile(entry.path.clone()));
+        if !entry.is_dir {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| trailing(ui, &entry.path));
+        }
+        response
+    })
+    .inner
 }
 
 /// Re-rank `candidates` against `query` and return the top matches as `Entry`s.
