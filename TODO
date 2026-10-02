@@ -245,3 +245,79 @@
     visualizer; the app's own saves match the editor, so they don't.
     Not watched: saved playlists (their missing-file marks update when a
     track fails to load) and the soundfont list (it's a list, not a folder).
+
+## Script API wishlist (from a script author's feedback, 2026-10-02)
+# In the author's order of how much each would have helped. Tags as above.
+
+[S][!!] document units (item 2), answers already found in the code:
+    - playback().position / length: seconds of song time.
+    - upcoming_notes() seconds_until and NOTE_LOOKAHEAD (4.0): song time
+      too, not wall-clock. Speed changes how fast song time passes (at 2x,
+      one song-second takes 0.5 s), so wall-clock = seconds_until / speed.
+    - colors: r/g/b 0-255 (clamped, fractions allowed), a 0.0-1.0.
+    - fft_left/right: 512 magnitudes (FFT_SIZE 1024 / 2), bin i is
+      i * SAMPLE_RATE / 1024 Hz (~43.07 Hz apart at 44.1 kHz), from a ~23 ms
+      Hann-windowed window; a full-scale sine reads ~1.0; empty table until
+      the first 1024 samples have played.
+    Just docs/scripting-reference.md edits; do first.
+
+[M][!!] notes_between(t0, t1) -> {channel, key, velocity, start, stop, id}
+    Pairing note-offs to note-ons in Lua is the fiddliest part of game
+    scripts (upcoming_notes repeats events every frame until they play, so
+    scripts dedupe by float timestamps). Pair them once in Rust at MIDI
+    load (the vendored MidiFile has every message and its time), keep the
+    note list shared with the visualizer, answer any window (not limited
+    to NOTE_LOOKAHEAD, so whole-song/level building works), give each note
+    a stable id (its index), and include notes already held at t0 (fixes
+    the after-seek / script-start gap). Could also add an id to
+    upcoming_notes entries as the smaller step.
+
+[M][!] text(x, y, string, color, size) and text_width(string, size)
+    Three scripts so far wrote their own bitmap font. A built-in bitmap
+    font rasterized in Rust (same command queue as rect/line), integer
+    scale for size.
+
+[S][!] seek/loop generation in playback()
+    A counter that bumps on every seek, loop and new song, so scripts
+    detect discontinuities exactly instead of guessing from position
+    jumps. Engine-side counter, passed through EngineView.
+
+[S][!] persistent script storage: store_get(key) / store_set(key, value)
+    Script-owned saved state (high scores, unlocks), separate from the
+    user-facing settings. A <script>.lua.store.json sidecar next to the
+    settings one; bool/number/string values (maybe nested tables via
+    JSON); written when changed, debounced. Rename should carry it along
+    like the settings sidecar.
+
+[S][!] playback control from scripts: set_paused(bool), seek(t)
+    Pause on death, "retry this section", practice loops. Same pattern as
+    set_channel_enabled (queued requests, the app sends AudioCommands).
+    Worth deciding whether it's allowed always or only while focused.
+
+[M][.] musical timing: beat() (position in beats), tempo, time signature
+    For beat-synced effects and rhythm-game judgment windows. Needs the
+    vendored rustysynth MidiFile patched to keep tempo (FF 51) and time
+    signature (FF 58) events with their times; beat() is then a lookup
+    in that map. Nothing for plain audio files.
+
+[S/M][.] cheap audio features: level_left/right() (RMS), onset flag
+    RMS is trivial in Rust over the frame's samples. Onset (e.g. spectral
+    flux over the FFT the analyzer already does, with a threshold) is a
+    bit more, but saves every audio-reactive script reinventing it.
+
+[S/M][.] more drawing primitives: filled circle, triangle/polygon
+    Scanline fills in rasterize(), alpha-blended like rect.
+[L][.] images/sprites from the scripts folder
+    Needs an image decoder (png crate or similar), a per-script texture
+    cache, and a blit command with scaling. Bigger, but natural if games
+    keep being the main use.
+
+Smaller:
+[S][.] FRAME counter and an unclamped wall clock (TIME) global, since DT
+    is capped at 0.25 now.
+[M][!] headless script runner: synththing --run-script file.lua
+    --frames N [--midi song.mid], feeding a MIDI file through the engine
+    without a window and reporting runtime errors, so script authors can
+    test without mocking the API. Note: release builds have no console
+    (windows_subsystem = "windows"), so output needs AttachConsole on
+    Windows or results written to a file / exit code.
