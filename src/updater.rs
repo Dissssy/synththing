@@ -91,9 +91,18 @@ impl Updater {
         let this = self.clone();
         thread::spawn(move || {
             let state = match fetch_latest() {
-                Ok(release) if release.version > current_version() => UpdateState::Available(release),
-                Ok(_) => UpdateState::UpToDate,
-                Err(e) => UpdateState::Failed(format!("Couldn't check for updates: {e:#}")),
+                Ok(release) if release.version > current_version() => {
+                    log::info!("update available: v{}", release.version);
+                    UpdateState::Available(release)
+                }
+                Ok(release) => {
+                    log::info!("up to date (latest release is v{})", release.version);
+                    UpdateState::UpToDate
+                }
+                Err(e) => {
+                    log::warn!("update check failed: {e:#}");
+                    UpdateState::Failed(format!("Couldn't check for updates: {e:#}"))
+                }
             };
             this.set(state);
         });
@@ -108,9 +117,16 @@ impl Updater {
         self.set(UpdateState::Downloading { release: release.clone(), downloaded: 0 });
         let this = self.clone();
         thread::spawn(move || {
+            log::info!("installing v{} from {}", release.version, release.asset_url);
             let state = match download_and_replace(&release, &this) {
-                Ok(()) => UpdateState::Installed(release.version),
-                Err(e) => UpdateState::Failed(format!("Update failed: {e:#}")),
+                Ok(()) => {
+                    log::info!("installed v{}, runs from the next launch", release.version);
+                    UpdateState::Installed(release.version)
+                }
+                Err(e) => {
+                    log::warn!("update install failed: {e:#}");
+                    UpdateState::Failed(format!("Update failed: {e:#}"))
+                }
             };
             this.set(state);
         });

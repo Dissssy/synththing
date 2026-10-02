@@ -146,14 +146,14 @@
     by the arrow keys as an option.
 
 [S][.] a real doc system for the lua scripting API - DONE
-    Went with the lighter option rather than a hosted/multi-page wiki: a
-    single embedded reference page (lua_docs.rs), reachable from a "Docs"
-    button next to Settings. Structured Rust data (Section/Block), not
-    parsed markdown - rendered directly with egui's own heading/label/code
-    widgets, so there's no markdown renderer to maintain for formatting this
-    didn't need. Hand-written, not auto-generated from the module doc
-    comment (that comment stays the terse code-adjacent version for reading
-    the source; the docs page is the prose version for using the app).
+    One page, the Scripting Reference tab. The source is
+    docs/scripting-reference.md (plain Markdown, readable on GitHub and easy
+    to hand to an AI); build.rs parses a small subset of it (## sections,
+    paragraphs, fenced code, - bullets, inline `code`, <!-- comments -->)
+    into lua_docs.rs's Section/Block table at build time, and a malformed
+    file (unterminated fence, text before the first ##) fails the build.
+    The in-app hover help (lua_completion::HOST_API) is still separate,
+    one line per function.
 
 [S][.] lua language server / vscode-like script editor - DONE for the scoped
     v1, rest intentionally parked below
@@ -220,3 +220,14 @@
     properly instead: it's now in lua_completion::HOST_API (autocomplete,
     hover info, syntax highlighting, the works) and has its own section on
     the Docs page. Calling it by hand is the whole interface.
+
+[S][!] central app log - DONE
+    No console in release builds, so applog.rs is the `log` crate's logger:
+    in memory for Help > Log... (a modal: level filter, search, copy, open
+    log folder, clear) and written to <config dir>/synththing.log, with the
+    previous run's kept as synththing.prev.log. App messages from Info up,
+    other crates (egui/wgpu/winit) from Warn up. Logged: every status-line
+    message, failed song/soundfont loads, update checks and installs, and
+    panics on any thread (with a backtrace) via a panic hook.
+    Lua scripts' own log()/errors stay in each script's log (Script
+    Settings tab), not here.

@@ -2,7 +2,7 @@
 -- data fft.lua uses, colored along a gradient from a dark background through
 -- an accent color to white for the hottest peaks. Both colors, the
 -- frequency resolution and the time window are editable live via the
--- Settings popup, so "a little blocky" is a slider away rather than an edit.
+-- Script Settings tab, so "a little blocky" is a slider away rather than an edit.
 --
 -- Like waveform.lua's ring buffer, history is kept in a fixed-size ring of
 -- already-quantized columns rather than a growing array. Unlike a line plot

@@ -7,6 +7,7 @@
 //! buffer so a dense passage can't stall the audio callback or the GUI.
 
 mod app;
+mod applog;
 mod audio;
 mod config;
 mod engine;
@@ -36,6 +37,9 @@ use crate::engine::Engine;
 use crate::visualizer::SampleTap;
 
 fn main() -> Result<()> {
+    applog::init();
+    log::info!("synththing v{} starting", env!("CARGO_PKG_VERSION"));
+
     let sample_rate = 44_100u32;
 
     let engine = Engine::new(sample_rate);

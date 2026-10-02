@@ -173,7 +173,10 @@ impl AssetCache {
             {
                 entry.state = match result {
                     Ok(asset) => LoadState::Ready(asset),
-                    Err(e) => LoadState::Failed(e),
+                    Err(e) => {
+                        log::warn!("couldn't load {}: {e}", path.display());
+                        LoadState::Failed(e)
+                    }
                 };
             }
         }

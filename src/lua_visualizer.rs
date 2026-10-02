@@ -49,7 +49,7 @@
 //! `setting_bool/int/float/color/string/selection(key, ...)`, called every
 //! frame, the first call each compile registers the descriptor (default,
 //! range, options); every call after that just returns the live value, so
-//! editing a slider in the Settings popup updates the running script
+//! editing a slider in the Script Settings tab updates the running script
 //! immediately, without a recompile or disturbing any history the script is
 //! keeping. Values persist to `<script>.lua.settings.json` next to the
 //! script and are re-applied on the next load, falling back to the script's
@@ -376,7 +376,7 @@ impl SettingsStore {
         initial
     }
 
-    /// Apply a value edited through the Settings popup. Selection values are
+    /// Apply a value edited through the Script Settings tab. Selection values are
     /// defensively truncated (keeping the most recent) in case a caller
     /// hands back more than `max_selections`, the UI itself should never do
     /// this, but a setting is cheap to protect either way.
@@ -700,7 +700,7 @@ impl LuaVisualizer {
         self.compiled.as_ref().map(|c| c.settings.borrow().descriptors.clone()).unwrap_or_default()
     }
 
-    /// Apply a value edited through the Settings popup and persist it to the
+    /// Apply a value edited through the Script Settings tab and persist it to the
     /// script's sidecar file (if it has one, a script with no path yet,
     /// e.g. mid-creation, just keeps the change in memory).
     pub fn set_setting(&mut self, key: &str, value: SettingValue) {

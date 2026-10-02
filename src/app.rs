@@ -19,6 +19,7 @@ use eframe::{egui, Frame};
 use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{DockArea, DockState, TabViewer};
 
+use crate::applog;
 use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, nice_name, Config, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
 use crate::engine::{EngineView, MAX_SPEED, MIN_SPEED};
@@ -151,6 +152,14 @@ pub struct App {
     /// The startup update check is running: show its result only if it
     /// finds something new (and not a skipped version).
     launch_update_check: bool,
+    /// The Log viewer (Help > Log...).
+    log_open: bool,
+    /// Lowest level shown in the Log viewer.
+    log_min_level: log::Level,
+    log_search: String,
+    /// The status line as last written to the log, so each new status
+    /// message is logged once.
+    logged_status: String,
     playlists: Library,
     /// The playlist shown in the Playlists panel (not necessarily the one
     /// playing).
@@ -258,6 +267,10 @@ impl App {
             updater: Updater::new(),
             updates_open: false,
             launch_update_check: false,
+            log_open: false,
+            log_min_level: log::Level::Info,
+            log_search: String::new(),
+            logged_status: String::new(),
             playlists,
             viewed_playlist,
             now_playing: None,
@@ -731,10 +744,95 @@ impl App {
                     self.updates_open = true;
                     self.updater.check();
                 }
+                if ui.button("Log...").clicked() {
+                    self.log_open = true;
+                }
                 ui.separator();
                 ui.weak(format!("synththing v{}", env!("CARGO_PKG_VERSION")));
             });
         });
+    }
+
+    /// The app log viewer, as a modal: level filter, search, copy, and the
+    /// log file's location.
+    fn log_ui(&mut self, ctx: &egui::Context) {
+        if !self.log_open {
+            return;
+        }
+        let entries = applog::entries();
+        let search = self.log_search.to_lowercase();
+        let shown: Vec<&applog::Entry> = entries
+            .iter()
+            .filter(|e| e.level <= self.log_min_level)
+            .filter(|e| search.is_empty() || e.line().to_lowercase().contains(&search))
+            .collect();
+
+        let mut close = false;
+        let response = egui::Modal::new(egui::Id::new("app_log")).show(ctx, |ui| {
+            ui.set_width(720.0);
+            ui.heading("Log");
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("log_min_level")
+                    .selected_text(match self.log_min_level {
+                        log::Level::Error => "Errors",
+                        log::Level::Warn => "Warnings and up",
+                        _ => "Everything",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.log_min_level, log::Level::Info, "Everything");
+                        ui.selectable_value(&mut self.log_min_level, log::Level::Warn, "Warnings and up");
+                        ui.selectable_value(&mut self.log_min_level, log::Level::Error, "Errors");
+                    });
+                ui.add(egui::TextEdit::singleline(&mut self.log_search).hint_text("search...").desired_width(200.0));
+                ui.weak(format!("{} of {}", shown.len(), entries.len()));
+            });
+            ui.separator();
+            egui::ScrollArea::both()
+                .id_salt("app_log_scroll")
+                .max_height(420.0)
+                .auto_shrink([false, true])
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    if shown.is_empty() {
+                        ui.weak("(nothing)");
+                    }
+                    for entry in &shown {
+                        let color = match entry.level {
+                            log::Level::Error => egui::Color32::from_rgb(220, 90, 90),
+                            log::Level::Warn => egui::Color32::from_rgb(220, 180, 80),
+                            _ => ui.visuals().text_color(),
+                        };
+                        ui.add(egui::Label::new(egui::RichText::new(entry.line()).monospace().color(color)).extend());
+                    }
+                });
+            ui.separator();
+            if let Some(path) = applog::file_path() {
+                ui.weak(format!("Also saved to {} (the previous run's is synththing.prev.log)", path.display()));
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Copy shown").clicked() {
+                    let text: Vec<String> = shown.iter().map(|e| e.line()).collect();
+                    ui.ctx().copy_text(text.join("\n"));
+                }
+                if let Some(path) = applog::file_path()
+                    && ui.button("Open log folder").clicked()
+                {
+                    open_in_file_manager(&path);
+                }
+                if ui.button("Clear").on_hover_text("Clears this view; the log file keeps everything").clicked() {
+                    applog::clear();
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+        if close || response.should_close() {
+            self.log_open = false;
+        }
+        ctx.request_repaint_after(Duration::from_millis(250));
     }
 
     /// The Updates window: what the update check found, release notes, and
@@ -1518,7 +1616,7 @@ impl App {
                 for block in section.blocks {
                     match block {
                         lua_docs::Block::P(text) => {
-                            ui.label(*text);
+                            ui.label(inline_code_job(ui, "", text));
                             ui.add_space(4.0);
                         }
                         lua_docs::Block::Code(code) => {
@@ -1527,9 +1625,7 @@ impl App {
                         }
                         lua_docs::Block::Bullets(items) => {
                             for item in *items {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label(format!("- {item}"));
-                                });
+                                ui.label(inline_code_job(ui, "- ", item));
                             }
                             ui.add_space(4.0);
                         }
@@ -1668,7 +1764,7 @@ impl eframe::App for App {
         // Single-key shortcuts are suspended whenever some widget (namely the
         // song browser's search box) has keyboard focus, so typing "v" there
         // types a "v" instead of toggling the visualizer.
-        let typing = ctx.memory(|m| m.focused().is_some()) || self.preferences_open;
+        let typing = ctx.memory(|m| m.focused().is_some()) || self.preferences_open || self.log_open;
         let mut toggle_fullscreen = false;
         let mut toggle_visualizer = false;
         let mut next = false;
@@ -1743,6 +1839,11 @@ impl eframe::App for App {
             self.autosave_layout(&ctx);
             self.preferences_ui(&ctx);
             self.updates_ui(&ctx);
+            self.log_ui(&ctx);
+        }
+        if self.status != self.logged_status {
+            log::info!(target: "synththing::status", "{}", self.status);
+            self.logged_status = self.status.clone();
         }
         self.apply_cursor_confinement(&ctx);
         self.keep_loaded(&ctx);
@@ -1814,6 +1915,42 @@ impl TabViewer for SectionTabs<'_> {
     /// outer scroll area from the dock would just fight it.
     fn scroll_bars(&self, _tab: &Section) -> [bool; 2] {
         [false, false]
+    }
+}
+
+/// Reference text as one wrapping label: `prefix`, then `text` with its
+/// `inline code` spans in the code font and background.
+fn inline_code_job(ui: &egui::Ui, prefix: &str, text: &str) -> egui::text::LayoutJob {
+    let body = egui::TextFormat {
+        font_id: egui::TextStyle::Body.resolve(ui.style()),
+        color: ui.visuals().text_color(),
+        ..Default::default()
+    };
+    let code = egui::TextFormat {
+        font_id: egui::TextStyle::Monospace.resolve(ui.style()),
+        color: ui.visuals().text_color(),
+        background: ui.visuals().code_bg_color,
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    job.append(prefix, 0.0, body.clone());
+    for (span, is_code) in lua_docs::inline_spans(text) {
+        job.append(span, 0.0, if is_code { code.clone() } else { body.clone() });
+    }
+    job
+}
+
+/// Show `path` in the system file manager (selected, on Windows).
+fn open_in_file_manager(path: &Path) {
+    let result = if cfg!(windows) {
+        std::process::Command::new("explorer").arg("/select,").arg(path).spawn()
+    } else {
+        let dir = path.parent().unwrap_or(path);
+        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        std::process::Command::new(opener).arg(dir).spawn()
+    };
+    if let Err(e) = result {
+        log::warn!("couldn't open the file manager: {e}");
     }
 }
 

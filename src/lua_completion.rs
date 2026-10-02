@@ -32,7 +32,7 @@ pub const HOST_API: &[(&str, &str)] = &[
     ("set_channel_enabled", "set_channel_enabled(channel, enabled), mute/unmute a channel"),
     ("playback", "playback() -> {position,length,speed,paused,finished,loop_enabled}"),
     ("log", "log(message), append to this script's log (identical repeats collapse)"),
-    ("debug_locals", "debug_locals([label]), snapshot the locals in scope right here, shown in Settings"),
+    ("debug_locals", "debug_locals([label]), snapshot the locals in scope right here, shown in the Script Settings tab"),
     ("setting_bool", "setting_bool(key, default) -> bool"),
     ("setting_int", "setting_int(key, default, min, max) -> integer"),
     ("setting_float", "setting_float(key, default, min, max) -> number"),

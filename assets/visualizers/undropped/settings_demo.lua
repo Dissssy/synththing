@@ -1,8 +1,8 @@
 -- Settings API demo. Not a music visualizer, it exercises every setting
 -- type the host supports and logs what it's doing, as a reference for
--- writing your own settings-driven script. Open the Settings popup (the
--- "Settings" button next to the script picker) to see the widgets and the
--- log output underneath them.
+-- writing your own settings-driven script. Open the Script Settings tab
+-- (View > Script Settings) to see the widgets and the log output
+-- underneath them.
 --
 -- Not auto-installed like the real visualizers, create it from the "New"
 -- button's template list when you want to poke at it.
@@ -15,7 +15,7 @@ function render(width, height, left, right)
     -- bool / int / float / color / string: each call both declares the
     -- setting (default + range, first call only) and returns its current
     -- live value, call it every frame, it's cheap, and a slider drag in
-    -- the Settings popup shows up on the very next frame.
+    -- the Script Settings tab shows up on the very next frame.
     local enabled = setting_bool("enabled", true)
     local count = setting_int("count", 5, 0, 10)
     local gain = setting_float("gain", 0.5, 0.0, 1.0)
