@@ -148,8 +148,15 @@
     fullscreen, back to wherever you were), F5 (restart the running script:
     fresh VM, same source and settings; also a Restart button by the script
     picker).
-    Ideas not done: text input (typed characters), gamepad, snake steered
-    by the arrow keys as an option.
+    Keyboard input is now actions (input_register/input/input_down,
+    rebindable under Script Settings > Controls, saved to
+    <script>.lua.controls.json) plus text_typed() and typing spans
+    (typing_begin/typing_state/typing_end, editing in src/typing.rs;
+    actions are blocked while a span is active). key_down/key_pressed/
+    key_released still work but are out of the docs. Examples: snake and
+    input_demo use actions, terminal.lua (undropped) is a typing span.
+    Ideas not done: gamepad bindings for actions (the Controls list is
+    where they'd go), mouse buttons as action bindings.
 
 [S][.] a real doc system for the lua scripting API - DONE
     One page, the Scripting Reference tab. The source is

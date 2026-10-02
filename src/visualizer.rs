@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use eframe::egui;
 
 use crate::engine::EngineView;
+use crate::typing::TextEvent;
 
 /// One stereo sample: `.0` is left, `.1` is right. A plain tuple rather than a
 /// named-field struct, same layout as two adjacent `f32`s (no padding, no
@@ -155,6 +156,22 @@ pub struct VisualizerInput {
     pub keys_down: Vec<egui::Key>,
     pub keys_pressed: Vec<egui::Key>,
     pub keys_released: Vec<egui::Key>,
+    /// Typing this frame, in order: characters, pastes, and key presses
+    /// (with key repeat and modifiers), for typing spans and text_typed().
+    pub text_events: Vec<TextEvent>,
+}
+
+impl VisualizerInput {
+    /// The characters typed this frame (not pastes or keys).
+    pub fn typed(&self) -> String {
+        self.text_events
+            .iter()
+            .filter_map(|e| match e {
+                TextEvent::Text(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// What a script asked for, cursor-wise. Hiding applies while the pointer
@@ -231,6 +248,7 @@ impl VisualizerInput {
         self.keys_down = later.keys_down;
         self.keys_pressed.extend(later.keys_pressed);
         self.keys_released.extend(later.keys_released);
+        self.text_events.extend(later.text_events);
     }
 }
 
@@ -444,14 +462,23 @@ fn gather_input(
         if focused {
             input.keys_down = i.keys_down.iter().copied().filter(|k| !RESERVED_KEYS.contains(k)).collect();
             for event in &i.events {
-                if let egui::Event::Key { key, pressed, repeat, .. } = event
-                    && !RESERVED_KEYS.contains(key)
-                {
-                    if *pressed && !*repeat {
-                        input.keys_pressed.push(*key);
-                    } else if !*pressed {
-                        input.keys_released.push(*key);
+                match event {
+                    egui::Event::Key { key, pressed, repeat, modifiers, .. } if !RESERVED_KEYS.contains(key) => {
+                        if *pressed && !*repeat {
+                            input.keys_pressed.push(*key);
+                        } else if !*pressed {
+                            input.keys_released.push(*key);
+                        }
+                        if *pressed {
+                            input.text_events.push(TextEvent::Key(*key, *modifiers));
+                        }
                     }
+                    egui::Event::Text(text) => input.text_events.push(TextEvent::Text(text.clone())),
+                    egui::Event::Paste(text) => input.text_events.push(TextEvent::Paste(text.clone())),
+                    egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                        input.text_events.push(TextEvent::Text(text.clone()));
+                    }
+                    _ => {}
                 }
             }
         }

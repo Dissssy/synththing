@@ -27,8 +27,9 @@
 --
 -- Play along: set "player_channel" (Script Settings) to a channel number and
 -- that channel's snake is yours while the visualizer has focus (click it, or
--- use the Fullscreen visualizer): arrow keys or WASD steer. It drives itself
--- again whenever the visualizer loses focus. Your best length is saved
+-- use the Fullscreen visualizer): arrow keys or WASD steer, or whatever
+-- keys you bind under Controls in Script Settings. It drives itself again
+-- whenever the visualizer loses focus. Your best length is saved
 -- (store_set), and the scoreboard (text) shows every snake's length.
 -- Apples are sprites, one per snake color.
 
@@ -123,7 +124,14 @@ local disable_on_death = true
 local player_ch = nil
 local turn_queue = {}
 local best = store_get("best_length") or 0
-local KEY_DIRS = { right = 1, d = 1, down = 2, s = 2, left = 3, a = 3, up = 4, w = 4 }
+-- Steering actions, rebindable under Controls in Script Settings; the
+-- value is the direction each one turns to.
+local STEER = {
+    [input_register("right", { "right", "d" })] = 1,
+    [input_register("down", { "down", "s" })] = 2,
+    [input_register("left", { "left", "a" })] = 3,
+    [input_register("up", { "up", "w" })] = 4,
+}
 
 -- Apple sprite: 1 skin, 2 shine, 3 stem, 4 leaf. Registered once per snake
 -- color (plus a default red one), recolored through the palette.
@@ -570,8 +578,8 @@ function render(width, height, left, right)
     -- Steering keys (only arrive while the visualizer has focus). Keep at
     -- most two turns queued, so quick taps still all count.
     if player_ch then
-        for key, d in pairs(KEY_DIRS) do
-            if key_pressed(key) and #turn_queue < 2 then
+        for action, d in pairs(STEER) do
+            if input(action) == "pressed" and #turn_queue < 2 then
                 turn_queue[#turn_queue + 1] = d
             end
         end

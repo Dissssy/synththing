@@ -33,7 +33,7 @@ Anything a script keeps between frames goes in module-level locals (declared out
 Scripts live in the `visualizers` folder of the app's config folder (`%APPDATA%\synththing\config\visualizers` on Windows); the path of the running one is shown above the visualizer. The row of controls above the visualizer (or above the editor, while the visualizer is closed):
 
 - Script: pick which script runs.
-- New: a new script (`untitled-N.lua`) from a template: Blank, or a copy of any bundled script, including the template-only ones like `settings_demo` and `input_demo`.
+- New: a new script (`untitled-N.lua`) from a template: Blank, or a copy of any bundled script, including the template-only ones like `settings_demo`, `input_demo` and `terminal`.
 - Restore default: for a bundled script, puts the built-in version back (they're copied into the folder once, on first run, and yours to edit from then on).
 - Restart (or F5, from anywhere): starts the running script over on a fresh Lua VM, all of its own state reset, its settings kept.
 - Rename: renames the running script's file (its settings and saved-data files come along). A renamed bundled script no longer offers Restore default, since it's no longer under the bundled name.
@@ -263,14 +263,13 @@ scroll() -> dx, dy            -- scrolling since last frame (positive y is up)
 mouse_down([button])          -- held; "left" (default), "right", "middle"
 mouse_pressed([button])       -- went down this frame
 mouse_released([button])      -- went up this frame
-key_down(name)                -- held; "a", "space", "up", "enter", "f6", ...
-key_pressed(name)             -- went down this frame (no key repeat)
-key_released(name)            -- went up this frame
 has_focus() -> bool           -- whether keys come to this script
 display_mode() -> string      -- "window", "fullscreen" or "dedicated"
 ```
 
-Mouse state is reported while the pointer is over the visualizer (and while it has focus, so a drag that wanders off still ends cleanly). Keys only while the visualizer has focus: click into it to give it focus, click anywhere else to take it back. While it has focus the app's own shortcuts (space to pause, arrows to seek, ...) are off, so those keys are the script's. Key names are case-insensitive; an unknown key or button name is a script error that says so. `scroll()` arrives smoothed, a little per frame, so add it up rather than treating each frame as one notch.
+Mouse state is reported while the pointer is over the visualizer (and while it has focus, so a drag that wanders off still ends cleanly). Keys only while the visualizer has focus: click into it to give it focus, click anywhere else to take it back. While it has focus the app's own shortcuts (space to pause, arrows to seek, ...) are off, so those keys are the script's. An unknown button name is a script error that says so. `scroll()` arrives smoothed, a little per frame, so add it up rather than treating each frame as one notch.
+
+For the keyboard, see Controls (rebindable actions) and Typing (text entry) below.
 
 Three keys always belong to the app, and are never reported to a script in any mode: Escape means "get me out" (releases focus, and goes from either fullscreen straight back to windowed), F11 toggles the dedicated fullscreen, and F5 restarts the running script.
 
@@ -282,6 +281,71 @@ set_cursor_locked(locked)     -- true: keep the cursor on screen (dedicated only
 ```
 
 Both stick until changed (or a different script loads). A hidden cursor only hides while it's over the visualizer, so draw your own there. Locking only takes effect in the dedicated fullscreen while it has focus, and lets go whenever that stops (Escape, switching windows), so a script can't trap the cursor. It keeps the cursor inside the screen rather than pinning it in place, so use `mouse_delta()` for motion. See `input_demo.lua` (New > input_demo).
+
+## Controls
+
+```lua
+input_register(name, default_keys) -> id   -- once, outside render()
+input(id) -> state       -- "pressed", "held", "released" or "up"
+input_down(id) -> bool   -- held: "pressed" or "held"
+```
+
+Keyboard input comes through actions: a script names each thing it can do ("jump", "left", "clear") and gives it default keys, and the user can rebind them under Controls in the Script Settings tab (click a key, press the new one; x removes a key, + adds another, Reset goes back to the script's keys). Bindings are saved per script, in `<script>.lua.controls.json` next to it.
+
+`default_keys` is a key name or a list of them: `"space"`, `{ "left", "a" }`. Key names are case-insensitive: letters (`"a"`), digits (`"1"`), `"space"`, `"enter"`, `"tab"`, `"backspace"`, arrows (`"up"`, `"down"`, `"left"`, `"right"`), `"f1"` to `"f20"` and so on; an unknown name is a script error that says so, as is one of the app's reserved keys (below). An empty list makes an action with no keys until the user binds some.
+
+`input(id)` says what the action did this frame: `"pressed"` the frame one of its keys went down (key repeat doesn't count), `"held"` while it stays down after that, `"released"` the frame it went up, and `"up"` otherwise. `input_down(id)` is the "is it down" shortcut, for movement. Registering the same name twice gives the same id. Register actions once, at the top level of the script, like sprites; the Controls list shows them in the order they were registered.
+
+```lua
+local JUMP = input_register("jump", "space")
+local LEFT = input_register("left", { "left", "a" })
+
+function render(width, height, left, right)
+    if input(JUMP) == "pressed" then vy = -300 end
+    if input_down(LEFT) then x = x - 100 * DT end
+end
+```
+
+## Typing
+
+```lua
+text_typed() -> string                          -- characters typed this frame
+typing_begin([text], [{max_length, multiline}]) -- start a typing span
+typing_state() -> {active, done, cancelled, text, cursor, line, column, key}
+typing_end() -> text                            -- stop it, returning the text
+```
+
+`text_typed()` gives the characters typed this frame (already shifted, accented and so on, as the keyboard layout makes them), for a script that does its own editing. It's empty while the visualizer doesn't have focus.
+
+For a text field, a chat line or a name entry, a typing span does the editing for you. `typing_begin` starts one, with optional starting text (the cursor goes at its end), a `max_length` in characters and `multiline`. While it's active, the app edits the text: typing and pasting insert at the cursor, Backspace and Delete remove (with Ctrl, a whole word), Left/Right move (Ctrl: by word), Home/End go to the start and end of the line, and in a multiline span Up/Down move between lines. The script draws everything itself, from `typing_state()`:
+
+- `active`: the span is open
+- `done`: it ended with Enter (in a multiline span Shift+Enter adds a new line instead)
+- `cancelled`: it ended with Escape or by losing focus
+- `text`: the text so far
+- `cursor`: how many characters come before the cursor, counting a new line as one
+- `line`, `column`: the cursor's line (from 1) and its column in that line (from 0)
+- `key`: the last key pressed this frame while the span was active, as a key name (`"up"`, `"enter"`, ...), or nil; handy for things the span doesn't do itself, like recalling earlier lines with Up in a single-line span
+
+While a span is active, the script's actions don't fire (`input` says `"up"`, `input_down` false), so typing a "w" doesn't also walk forward. The state stays readable after the span ends (with `done` or `cancelled` set) until the next `typing_begin`; `typing_end` closes the span from the script's side. Escape still belongs to the app: it ends the span (as cancelled) along with taking focus away.
+
+The font is monospace, so drawing the cursor is simple: it sits `column * 6` font pixels from the start of its line (times `height / FONT_HEIGHT` when the text is drawn bigger).
+
+```lua
+local NAME_SCALE = 2
+function render(width, height, left, right)
+    local s = typing_state()
+    if not s.active and not s.done and has_focus() then typing_begin(name or "", { max_length = 16 }) end
+    if s.done then name = s.text end
+    text(20, 20, s.text, { r = 255, g = 255, b = 255 }, FONT_HEIGHT * NAME_SCALE)
+    if s.active then
+        local x = 20 + s.column * 6 * NAME_SCALE
+        rect(x, 20, x + NAME_SCALE, 20 + FONT_HEIGHT * NAME_SCALE, { r = 255, g = 200, b = 60 })
+    end
+end
+```
+
+See `terminal.lua` (New > terminal) for a full example: a command prompt with history.
 
 ## Logging
 
@@ -368,7 +432,8 @@ The first seven are copied into your scripts folder on first run (one that came 
 - `keyboard.lua`, an 88-key piano with falling notes from `notes_between` (exact lengths, adjustable look-ahead), beat and numbered bar lines (`beat`, `bar`, `time_at_beat`), octave labels; two-pass enabled/disabled channel rendering
 - `spectrogram.lua`, a scrolling time/frequency heatmap; run-length merging, pause-awareness, live-tunable resolution, frequency labels, optional onset ticks (`onset`)
 - `letters.lua`, one glyph per channel, colored by pitch; a from-scratch bitmap font
-- `snake.lua`, one snake per channel hunting apples spawned by note-ons; apples are sprites, a text scoreboard, and a `player_channel` setting to steer one snake yourself with the arrow keys or WASD (best length saved with `store_set`); the most elaborate example, worth reading end to end
+- `snake.lua`, one snake per channel hunting apples spawned by note-ons; apples are sprites, a text scoreboard, and a `player_channel` setting to steer one snake yourself with rebindable steering actions (best length saved with `store_set`); the most elaborate example, worth reading end to end
 - `pulse.lua`, a ring that beats with the song: the time signature's beats around a circle, a polygon turning with the beat and swelling with loudness, eighth-note sprites bursting out on onsets, and a tempo/bar readout
 - `settings_demo.lua`, exercises every setting type; not a music visualizer, a reference for the settings API itself
-- `input_demo.lua`, mouse, keyboard and cursor control: a paint toy with its own cursor; not a music visualizer either
+- `input_demo.lua`, mouse, keyboard actions and cursor control: a paint toy with its own cursor; not a music visualizer either
+- `terminal.lua`, a typing span: a command prompt with history, its prompt and cursor drawn from a sprite sheet; not a music visualizer

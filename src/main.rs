@@ -27,6 +27,7 @@ mod playlist;
 mod png;
 mod song_info;
 mod spectrum;
+mod typing;
 mod updater;
 mod watch;
 mod visualizer;

@@ -185,6 +185,9 @@ pub struct App {
     playlist_selection: Vec<usize>,
     /// Where a Shift+click range starts: the last plain or Ctrl click.
     selection_anchor: Option<usize>,
+    /// A Controls binding waiting for a key press: (action index, which of
+    /// its keys to replace, or `None` to add one).
+    binding_capture: Option<(usize, Option<usize>)>,
     /// Help > Credits & licenses.
     credits_open: bool,
     contributors: Contributors,
@@ -311,6 +314,7 @@ impl App {
             song_info_open: None,
             playlist_selection: Vec::new(),
             selection_anchor: None,
+            binding_capture: None,
             credits_open: false,
             contributors: Contributors::default(),
             credits_search: String::new(),
@@ -1938,6 +1942,97 @@ impl App {
         }
     }
 
+    /// The running script's input actions and their keys: click a key and
+    /// press another to rebind it, x to remove, + to add, Reset for the
+    /// script's defaults. Saved per script.
+    fn controls_ui(&mut self, ui: &mut egui::Ui) {
+        let actions = self.visualizer.visualizer().actions();
+        if actions.is_empty() {
+            self.binding_capture = None;
+            return;
+        }
+        ui.separator();
+        ui.strong("Controls");
+        ui.weak("Click a key, then press the new one. Controls work while the visualizer has focus.");
+
+        let mut change: Option<(usize, Vec<egui::Key>)> = None;
+        let mut start_capture: Option<Option<(usize, Option<usize>)>> = None;
+        egui::Grid::new("script_controls").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+            for (i, action) in actions.iter().enumerate() {
+                ui.label(&action.name);
+                ui.horizontal_wrapped(|ui| {
+                    for (slot, key) in action.bindings.iter().enumerate() {
+                        let capturing = self.binding_capture == Some((i, Some(slot)));
+                        let label = if capturing { "press a key...".to_string() } else { key.name().to_string() };
+                        if ui.selectable_label(capturing, label).clicked() {
+                            start_capture = Some((!capturing).then_some((i, Some(slot))));
+                        }
+                        if ui.small_button("x").on_hover_text("Remove this key").clicked() {
+                            let mut bindings = action.bindings.clone();
+                            bindings.remove(slot);
+                            change = Some((i, bindings));
+                        }
+                    }
+                    let adding = self.binding_capture == Some((i, None));
+                    if ui
+                        .selectable_label(adding, if adding { "press a key..." } else { "+" })
+                        .on_hover_text("Add another key")
+                        .clicked()
+                    {
+                        start_capture = Some((!adding).then_some((i, None)));
+                    }
+                    if action.bindings != action.defaults
+                        && ui.small_button("Reset").on_hover_text("Back to the script's keys").clicked()
+                    {
+                        change = Some((i, action.defaults.clone()));
+                    }
+                });
+                ui.end_row();
+            }
+        });
+
+        // Waiting for a key: the first press (not a reserved key) binds it.
+        let mut captured = false;
+        if let Some((i, slot)) = self.binding_capture
+            && let Some(action) = actions.get(i)
+        {
+            let pressed = ui.input(|input| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::Key { key, pressed: true, repeat: false, .. } => Some(*key),
+                    _ => None,
+                })
+            });
+            if let Some(key) = pressed {
+                captured = true;
+                self.binding_capture = None;
+                if !crate::visualizer::RESERVED_KEYS.contains(&key) {
+                    let mut bindings = action.bindings.clone();
+                    match slot {
+                        Some(slot) if slot < bindings.len() => bindings[slot] = key,
+                        _ => bindings.push(key),
+                    }
+                    let mut seen = Vec::new();
+                    bindings.retain(|k| {
+                        let first = !seen.contains(k);
+                        seen.push(*k);
+                        first
+                    });
+                    change = Some((i, bindings));
+                }
+            }
+        }
+        // (A key that just got bound can also "click" the focused button;
+        // don't let that start capturing again.)
+        if let Some(capture) = start_capture
+            && !captured
+        {
+            self.binding_capture = capture;
+        }
+        if let Some((i, bindings)) = change {
+            self.visualizer.visualizer_mut().set_action_bindings(i, bindings);
+        }
+    }
+
     /// The active script's settings widgets, its `debug_locals()` snapshot,
     /// and its log/error history.
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
@@ -1976,6 +2071,7 @@ impl App {
         if retry {
             self.visualizer.visualizer_mut().retry_full_frame_rate();
         }
+        self.controls_ui(ui);
         ui.separator();
 
         egui::ScrollArea::vertical()
@@ -2219,7 +2315,7 @@ impl eframe::App for App {
         // Single-key shortcuts are suspended whenever some widget (namely the
         // song browser's search box) has keyboard focus, so typing "v" there
         // types a "v" instead of toggling the visualizer.
-        let typing = ctx.memory(|m| m.focused().is_some()) || self.any_modal_open();
+        let typing = ctx.memory(|m| m.focused().is_some()) || self.any_modal_open() || self.binding_capture.is_some();
         let mut toggle_fullscreen = false;
         let mut toggle_visualizer = false;
         let mut next = false;

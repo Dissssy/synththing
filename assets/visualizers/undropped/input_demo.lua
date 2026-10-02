@@ -10,6 +10,7 @@
 --   l              toggle cursor locking (only does anything in the
 --                  dedicated fullscreen: "Fullscreen visualizer")
 --
+-- The keys are defaults: rebind them under Controls in Script Settings.
 -- Keys only arrive while the visualizer has focus: click into it first
 -- (the border turns green). Escape always gets you out, scripts never see it.
 
@@ -42,6 +43,20 @@ local function stamp(cx, cy, value)
     end
 end
 
+-- Keyboard controls are actions: registered once with default keys, and
+-- rebindable by the user under Controls in Script Settings.
+local HIDE = input_register("toggle cursor", "h")
+local LOCK = input_register("toggle cursor lock", "l")
+local CLEAR = input_register("clear", "c")
+local LEFT = input_register("left", { "a", "left" })
+local RIGHT = input_register("right", { "d", "right" })
+local UP = input_register("up", { "w", "up" })
+local DOWN = input_register("down", { "s", "down" })
+local COLORS = {}
+for i = 1, #palette do
+    COLORS[i] = input_register("color " .. i, tostring(i))
+end
+
 function render(width, height, left, right)
     local cell = setting_int("cell_size", 4, 1, 16)
     local speed = setting_float("square_speed", 140, 20, 400)
@@ -50,8 +65,8 @@ function render(width, height, left, right)
     -- Cursor: hide the system one over the visualizer (we draw our own),
     -- and lock it to the screen if asked. Locking is ignored outside the
     -- dedicated fullscreen, so it's safe to just ask every frame.
-    if key_pressed("h") then hide_cursor = not hide_cursor end
-    if key_pressed("l") then
+    if input(HIDE) == "pressed" then hide_cursor = not hide_cursor end
+    if input(LOCK) == "pressed" then
         lock_cursor = not lock_cursor
         if lock_cursor and display_mode() ~= "dedicated" then
             log("cursor lock only applies in the dedicated fullscreen")
@@ -67,9 +82,9 @@ function render(width, height, left, right)
     end
 
     for i = 1, #palette do
-        if key_pressed(tostring(i)) then color = i end
+        if input(COLORS[i]) == "pressed" then color = i end
     end
-    if key_pressed("c") then cells = {} end
+    if input(CLEAR) == "pressed" then cells = {} end
 
     -- Scroll arrives smoothed, a little per frame; turn it into steps.
     local _, sy = scroll()
@@ -97,10 +112,10 @@ function render(width, height, left, right)
 
     -- The square, frame-rate independent via DT.
     local vx, vy = 0, 0
-    if key_down("a") or key_down("left") then vx = vx - 1 end
-    if key_down("d") or key_down("right") then vx = vx + 1 end
-    if key_down("w") or key_down("up") then vy = vy - 1 end
-    if key_down("s") or key_down("down") then vy = vy + 1 end
+    if input_down(LEFT) then vx = vx - 1 end
+    if input_down(RIGHT) then vx = vx + 1 end
+    if input_down(UP) then vy = vy - 1 end
+    if input_down(DOWN) then vy = vy + 1 end
     px = math.max(0, math.min(width - 10, px + vx * speed * DT))
     py = math.max(0, math.min(height - 10, py + vy * speed * DT))
 

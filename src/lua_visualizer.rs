@@ -96,6 +96,7 @@ use crate::engine::{EngineView, NOTE_LOOKAHEAD_SECS};
 use crate::midi_notes::NoteList;
 use crate::pixel_font;
 use crate::spectrum::{self, OnsetDetector, SpectrumAnalyzer};
+use crate::typing::TypingSpan;
 use crate::visualizer::{
     ActiveNote, CursorRequest, NoteChange, NotesSnapshot, RESERVED_KEYS, StereoFrame, Visualizer,
     VisualizerInput,
@@ -128,7 +129,8 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 -- store_get(key) / store_set(key, v)    data saved across restarts
 -- FRAME / TIME                          frame count, seconds since start
 -- log(message) / DT                     debug log, seconds since last frame
--- mouse() / key_down('a') / has_focus()  input over the visualizer (see Docs)
+-- mouse() / has_focus()                 the mouse over the visualizer (see Docs)
+-- input_register(name, keys) / input(id) rebindable keys; typing_begin() for text
 -- setting_bool/int/float/color/string/selection(key, ...)  user-editable values
 
 function render(width, height, left, right)
@@ -230,7 +232,11 @@ pub fn rename_script(old: &Path, new_name: &str) -> Result<PathBuf> {
         anyhow::bail!("there's already a script called {name}.lua");
     }
     fs::rename(old, &new).with_context(|| format!("renaming {}", old.display()))?;
-    for (old_sidecar, new_sidecar) in [(sidecar_path(old), sidecar_path(&new)), (store_path(old), store_path(&new))] {
+    for (old_sidecar, new_sidecar) in [
+        (sidecar_path(old), sidecar_path(&new)),
+        (store_path(old), store_path(&new)),
+        (controls_path(old), controls_path(&new)),
+    ] {
         if old_sidecar.exists() {
             fs::rename(&old_sidecar, &new_sidecar)
                 .with_context(|| format!("renaming {}", old_sidecar.display()))?;
@@ -869,6 +875,80 @@ fn store_path(script_path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// `<script>.lua.controls.json`: the user's key bindings for the script's
+/// actions, by action name.
+fn controls_path(script_path: &Path) -> PathBuf {
+    let mut name = script_path.as_os_str().to_os_string();
+    name.push(".controls.json");
+    PathBuf::from(name)
+}
+
+/// An input action a script registered (`input_register`): a name, the
+/// keys it starts with, and the keys bound to it now.
+#[derive(Clone, Debug)]
+pub struct Action {
+    pub name: String,
+    pub defaults: Vec<egui::Key>,
+    pub bindings: Vec<egui::Key>,
+}
+
+/// A script's actions, plus the bindings saved for it (kept even for
+/// actions the current code doesn't register, so they come back if it
+/// does again).
+struct Controls {
+    actions: Vec<Action>,
+    path: Option<PathBuf>,
+    saved: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Controls {
+    fn load(script: Option<&Path>) -> Self {
+        let path = script.map(controls_path);
+        let saved = path
+            .as_ref()
+            .and_then(|p| fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        Self { actions: Vec::new(), path, saved }
+    }
+
+    /// The bindings saved for `name`, if any (unknown key names dropped).
+    fn saved_bindings(&self, name: &str) -> Option<Vec<egui::Key>> {
+        let list = self.saved.get(name)?.as_array()?;
+        Some(list.iter().filter_map(|v| v.as_str()).filter_map(|k| parse_key(k).ok().flatten()).collect())
+    }
+
+    fn save(&mut self) {
+        for action in &self.actions {
+            let names: Vec<serde_json::Value> =
+                action.bindings.iter().map(|k| serde_json::Value::from(k.name())).collect();
+            self.saved.insert(action.name.clone(), serde_json::Value::Array(names));
+        }
+        let Some(path) = &self.path else { return };
+        let result = serde_json::to_string_pretty(&self.saved)
+            .map_err(anyhow::Error::from)
+            .and_then(|json| fs::write(path, json).map_err(Into::into));
+        if let Err(e) = result {
+            log::warn!("couldn't save controls to {}: {e}", path.display());
+        }
+    }
+}
+
+/// "pressed" (went down this frame), "held", "released" (went up this
+/// frame) or "up", for an action bound to `bindings`.
+fn action_state(input: &VisualizerInput, bindings: &[egui::Key]) -> &'static str {
+    let any = |keys: &[egui::Key]| bindings.iter().any(|k| keys.contains(k));
+    if any(&input.keys_pressed) {
+        "pressed"
+    } else if any(&input.keys_down) {
+        "held"
+    } else if any(&input.keys_released) {
+        "released"
+    } else {
+        "up"
+    }
+}
+
 struct Compiled {
     /// The source this was compiled from, so `restart` can run the same
     /// script again even after a newer edit failed to compile.
@@ -893,6 +973,10 @@ struct Compiled {
     store: Rc<RefCell<ScriptStore>>,
     /// Sprites the script registered (`sprite_register`), per script.
     sprites: Rc<RefCell<Vec<Sprite>>>,
+    /// Input actions (`input_register`) and their bindings.
+    controls: Rc<RefCell<Controls>>,
+    /// The typing span (`typing_begin` ... `typing_end`).
+    typing: Rc<RefCell<TypingSpan>>,
     /// Frames rendered since this script started (`FRAME`).
     frame: Cell<u64>,
     /// When it rendered its first frame (`TIME` counts from here).
@@ -988,6 +1072,7 @@ impl LuaVisualizer {
     pub fn renamed_to(&mut self, path: PathBuf) {
         if let Some(compiled) = &self.compiled {
             compiled.store.borrow_mut().path = Some(store_path(&path));
+            compiled.controls.borrow_mut().path = Some(controls_path(&path));
         }
         self.path = Some(path);
     }
@@ -1111,6 +1196,22 @@ impl LuaVisualizer {
         }
     }
 
+    /// The script's input actions and their bindings, for the Controls list.
+    pub fn actions(&self) -> Vec<Action> {
+        self.compiled.as_ref().map(|c| c.controls.borrow().actions.clone()).unwrap_or_default()
+    }
+
+    /// Rebind action `index` (from `actions()`) and save it.
+    pub fn set_action_bindings(&mut self, index: usize, bindings: Vec<egui::Key>) {
+        if let Some(compiled) = &self.compiled {
+            let mut controls = compiled.controls.borrow_mut();
+            if let Some(action) = controls.actions.get_mut(index) {
+                action.bindings = bindings;
+                controls.save();
+            }
+        }
+    }
+
     /// The script's render times and frame rate, for the readout.
     pub fn perf_summary(&self) -> PerfSummary {
         self.perf.summary()
@@ -1200,6 +1301,9 @@ impl Visualizer for LuaVisualizer {
         *self.notes.borrow_mut() = notes.clone();
         *self.playback.borrow_mut() = playback.clone();
         *self.input.borrow_mut() = input.clone();
+        if let Some(compiled) = &self.compiled {
+            compiled.typing.borrow_mut().update(&input.text_events, input.focused);
+        }
 
         let now = Instant::now();
         // Capped, so a stretch of not rendering at all (Visualizer tab
@@ -1323,7 +1427,9 @@ fn compile(
     )
     .map_err(|e| e.to_string())?;
     let cursor = Rc::new(RefCell::new(CursorRequest::default()));
-    register_input(&lua, input, &cursor).map_err(|e| e.to_string())?;
+    let controls = Rc::new(RefCell::new(Controls::load(script_path)));
+    let typing: Rc<RefCell<TypingSpan>> = Rc::default();
+    register_input(&lua, input, &cursor, &controls, &typing).map_err(|e| e.to_string())?;
     let playback_requests: Rc<RefCell<Vec<PlaybackRequest>>> = Rc::default();
     let store = Rc::new(RefCell::new(ScriptStore::load(script_path)));
     let sprites: Rc<RefCell<Vec<Sprite>>> = Rc::default();
@@ -1353,6 +1459,8 @@ fn compile(
         playback_requests,
         store,
         sprites,
+        controls,
+        typing,
         frame: Cell::new(0),
         started: Cell::new(None),
     })
@@ -1815,8 +1923,126 @@ fn register_input(
     lua: &Lua,
     input: &Rc<RefCell<VisualizerInput>>,
     cursor: &Rc<RefCell<CursorRequest>>,
+    controls: &Rc<RefCell<Controls>>,
+    typing: &Rc<RefCell<TypingSpan>>,
 ) -> mlua::Result<()> {
     let globals = lua.globals();
+
+    // Actions: named, rebindable controls (see the Controls list in Script
+    // Settings). Blocked (always "up") while a typing span is active.
+    let actions = Rc::clone(controls);
+    globals.set(
+        "input_register",
+        lua.create_function(move |_, (name, default): (String, Value)| {
+            let mut controls = actions.borrow_mut();
+            if let Some(i) = controls.actions.iter().position(|a| a.name == name) {
+                return Ok(i + 1);
+            }
+            let names: Vec<String> = match default {
+                Value::String(s) => vec![s.to_str()?.to_string()],
+                Value::Table(t) => t.sequence_values::<String>().collect::<mlua::Result<_>>()?,
+                Value::Nil => Vec::new(),
+                other => {
+                    return Err(mlua::Error::runtime(format!(
+                        "input_register: the default is a key name or a list of them, not a {}",
+                        other.type_name()
+                    )));
+                }
+            };
+            let mut defaults = Vec::new();
+            for key_name in &names {
+                match parse_key(key_name)? {
+                    Some(key) => defaults.push(key),
+                    None => {
+                        return Err(mlua::Error::runtime(format!(
+                            "input_register: '{key_name}' is reserved by the app and can't be bound"
+                        )));
+                    }
+                }
+            }
+            let bindings = controls.saved_bindings(&name).unwrap_or_else(|| defaults.clone());
+            controls.actions.push(Action { name, defaults, bindings });
+            Ok(controls.actions.len())
+        })?,
+    )?;
+    let actions = Rc::clone(controls);
+    let state = Rc::clone(input);
+    let span = Rc::clone(typing);
+    globals.set(
+        "input",
+        lua.create_function(move |_, id: usize| {
+            let controls = actions.borrow();
+            let action = id
+                .checked_sub(1)
+                .and_then(|i| controls.actions.get(i))
+                .ok_or_else(|| mlua::Error::runtime(format!("input: no action with id {id}")))?;
+            if span.borrow().active {
+                return Ok("up");
+            }
+            Ok(action_state(&state.borrow(), &action.bindings))
+        })?,
+    )?;
+    let actions = Rc::clone(controls);
+    let state = Rc::clone(input);
+    let span = Rc::clone(typing);
+    globals.set(
+        "input_down",
+        lua.create_function(move |_, id: usize| {
+            let controls = actions.borrow();
+            let action = id
+                .checked_sub(1)
+                .and_then(|i| controls.actions.get(i))
+                .ok_or_else(|| mlua::Error::runtime(format!("input_down: no action with id {id}")))?;
+            if span.borrow().active {
+                return Ok(false);
+            }
+            Ok(matches!(action_state(&state.borrow(), &action.bindings), "pressed" | "held"))
+        })?,
+    )?;
+
+    // Text.
+    let state = Rc::clone(input);
+    globals.set("text_typed", lua.create_function(move |_, ()| Ok(state.borrow().typed()))?)?;
+    let span = Rc::clone(typing);
+    globals.set(
+        "typing_begin",
+        lua.create_function(move |_, (text, options): (Option<String>, Option<Table>)| {
+            let (mut max_length, mut multiline) = (None, false);
+            if let Some(options) = options {
+                max_length = options.get::<Option<usize>>("max_length")?;
+                multiline = options.get::<Option<bool>>("multiline")?.unwrap_or(false);
+            }
+            span.borrow_mut().begin(text.as_deref().unwrap_or(""), max_length, multiline);
+            Ok(())
+        })?,
+    )?;
+    let span = Rc::clone(typing);
+    globals.set(
+        "typing_state",
+        lua.create_function(move |lua, ()| {
+            let span = span.borrow();
+            let (line, column) = span.line_and_column();
+            let t = lua.create_table_with_capacity(0, 8)?;
+            t.raw_set("active", span.active)?;
+            t.raw_set("done", span.done)?;
+            t.raw_set("cancelled", span.cancelled)?;
+            t.raw_set("text", span.text())?;
+            t.raw_set("cursor", span.cursor())?;
+            t.raw_set("line", line)?;
+            t.raw_set("column", column)?;
+            t.raw_set("key", span.last_key.clone())?;
+            Ok(t)
+        })?,
+    )?;
+    let span = Rc::clone(typing);
+    globals.set(
+        "typing_end",
+        lua.create_function(move |_, ()| {
+            let mut span = span.borrow_mut();
+            span.end();
+            Ok(span.text())
+        })?,
+    )?;
 
     let state = Rc::clone(input);
     globals.set(
@@ -1852,14 +2078,20 @@ fn register_input(
         )?;
     }
 
+    // The original per-key functions: superseded by actions (input_register)
+    // and out of the docs, kept so existing scripts keep working.
     for (name, pick) in [("key_down", 0usize), ("key_pressed", 1), ("key_released", 2)] {
         let state = Rc::clone(input);
+        let span = Rc::clone(typing);
         globals.set(
             name,
             lua.create_function(move |_, key: String| {
                 let Some(key) = parse_key(&key)? else {
                     return Ok(false); // reserved by the app, never reported
                 };
+                if span.borrow().active {
+                    return Ok(false);
+                }
                 let input = state.borrow();
                 let keys = match pick {
                     0 => &input.keys_down,
@@ -3035,6 +3267,117 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         assert!((0..4).all(|x| (0..4).all(|y| at(x, y) == 0x00FF00)), "second frame, doubled");
         assert_eq!((at(4, 0), at(5, 1)), (0xFF0000, 0xFF0000));
         assert_eq!((at(6, 0), at(7, 0), at(6, 1)), (0x00FF00, 0, 0));
+    }
+
+    fn render_with(visualizer: &mut LuaVisualizer, input: &VisualizerInput) {
+        let mut buffer = vec![0u32; 4];
+        visualizer.render(&mut buffer, 2, 2, &[], &NotesSnapshot::default(), &sample_playback(), input);
+    }
+
+    fn keys(down: &[egui::Key], pressed: &[egui::Key], released: &[egui::Key]) -> VisualizerInput {
+        VisualizerInput {
+            focused: true,
+            keys_down: down.to_vec(),
+            keys_pressed: pressed.to_vec(),
+            keys_released: released.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn actions_report_their_state_and_keep_saved_bindings() {
+        use egui::Key;
+        let dir = std::env::temp_dir().join(format!("synththing-actions-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("game.lua");
+        let script = "
+            local jump = input_register('jump', 'space')
+            local left = input_register('left', { 'a', 'left' })
+            local again = input_register('jump', 'x') -- same name: same action
+            function render()
+                log(input(jump) .. ' ' .. input(left) .. ' ' .. tostring(input_down(left)) .. ' ' .. tostring(jump == again))
+            end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), Some(path.clone()), 44_100);
+        render_with(&mut visualizer, &keys(&[Key::Space, Key::A], &[Key::Space], &[]));
+        assert_eq!(visualizer.error(), None);
+        assert_eq!(last_log(&visualizer), "pressed held true true");
+        render_with(&mut visualizer, &keys(&[Key::ArrowLeft], &[Key::ArrowLeft], &[Key::Space]));
+        assert_eq!(last_log(&visualizer), "released pressed true true");
+        render_with(&mut visualizer, &keys(&[], &[], &[]));
+        assert_eq!(last_log(&visualizer), "up up false true");
+
+        // Rebind jump to J; a reload of the script keeps it.
+        let actions = visualizer.actions();
+        assert_eq!(actions[1].bindings, [Key::A, Key::ArrowLeft]);
+        visualizer.set_action_bindings(0, vec![Key::J]);
+        let mut reloaded = LuaVisualizer::new(script.to_string(), Some(path.clone()), 44_100);
+        assert_eq!(reloaded.actions()[0].bindings, [Key::J]);
+        assert_eq!(reloaded.actions()[0].defaults, [Key::Space]);
+        render_with(&mut reloaded, &keys(&[Key::Space], &[Key::Space], &[]));
+        assert_eq!(last_log(&reloaded).split(' ').next(), Some("up"), "space no longer jumps");
+
+        // Reserved keys can't be bound.
+        let mut bad = LuaVisualizer::new("input_register('quit', 'escape') function render() end".to_string(), None, 44_100);
+        render_with(&mut bad, &VisualizerInput::default());
+        assert!(bad.error().unwrap_or_default().contains("reserved"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn typing_spans_edit_text_and_block_controls() {
+        use crate::typing::TextEvent;
+        use egui::{Key, Modifiers};
+        let script = "
+            local jump = input_register('jump', 'space')
+            typing_begin('hi')
+            function render()
+                local s = typing_state()
+                log(string.format('%s|%d|%s|%s|%s|%s|%s', s.text, s.cursor, tostring(s.active), tostring(s.done),
+                    input(jump), tostring(key_down('space')), text_typed()))
+            end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let mut input = keys(&[Key::Space], &[Key::Space], &[]);
+        input.text_events = vec![
+            TextEvent::Text(" there".into()),
+            TextEvent::Key(Key::ArrowLeft, Modifiers::NONE),
+            TextEvent::Key(Key::Backspace, Modifiers::NONE),
+        ];
+        render_with(&mut visualizer, &input);
+        assert_eq!(visualizer.error(), None);
+        // Typing: controls are blocked even though space is down.
+        assert_eq!(last_log(&visualizer), "hi thee|6|true|false|up|false| there");
+
+        let mut enter = keys(&[], &[], &[]);
+        enter.text_events = vec![TextEvent::Key(Key::Enter, Modifiers::NONE)];
+        render_with(&mut visualizer, &enter);
+        assert_eq!(last_log(&visualizer), "hi thee|6|false|true|up|false|");
+        // Span over: controls work again.
+        render_with(&mut visualizer, &keys(&[Key::Space], &[Key::Space], &[]));
+        assert!(last_log(&visualizer).ends_with("pressed|true|"), "{}", last_log(&visualizer));
+    }
+
+    #[test]
+    fn terminal_example_runs_lines_and_recalls_history() {
+        use crate::typing::TextEvent;
+        use egui::{Key, Modifiers};
+        let script = format!(
+            "{}\nlocal inner = render\nfunction render(...) inner(...) local s = typing_state() log(s.text .. '|' .. s.cursor) end",
+            include_str!("../assets/visualizers/undropped/terminal.lua")
+        );
+        let mut visualizer = LuaVisualizer::new(script, None, 44_100);
+        let typed = |events: Vec<TextEvent>| VisualizerInput { text_events: events, ..keys(&[], &[], &[]) };
+        render_with(&mut visualizer, &keys(&[], &[], &[]));
+        render_with(&mut visualizer, &typed(vec![TextEvent::Text("echo hi".into())]));
+        assert_eq!(last_log(&visualizer), "echo hi|7");
+        render_with(&mut visualizer, &typed(vec![TextEvent::Key(Key::Enter, Modifiers::NONE)]));
+        assert_eq!(last_log(&visualizer), "|0");
+        render_with(&mut visualizer, &typed(vec![TextEvent::Key(Key::ArrowUp, Modifiers::NONE)]));
+        assert_eq!(last_log(&visualizer), "echo hi|7");
+        render_with(&mut visualizer, &typed(vec![TextEvent::Key(Key::ArrowDown, Modifiers::NONE)]));
+        assert_eq!(last_log(&visualizer), "|0");
+        render_with(&mut visualizer, &typed(vec![TextEvent::Text("help".into())]));
+        render_with(&mut visualizer, &typed(vec![TextEvent::Key(Key::Enter, Modifiers::NONE)]));
+        assert_eq!(visualizer.error(), None);
     }
 
     #[test]

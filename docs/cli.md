@@ -54,7 +54,7 @@ Exit codes:
 - `1`: the script had a compile error or runtime errors.
 - `2`: something couldn't be loaded (the script file, the song, the soundfont), or an option was invalid.
 
-Not simulated: mouse and keyboard input (scripts see no pointer and no keys, and `display_mode()` is `"window"`), and the app's own UI.
+Not simulated: mouse, keyboard and typed input (scripts see no pointer, no keys and no typing, and `display_mode()` is `"window"`), and the app's own UI.
 
 ## Running from a terminal on Windows
 
