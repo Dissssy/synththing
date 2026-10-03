@@ -2,7 +2,7 @@
 
 synththing has only ever been built and run on Windows. This file lists what's known (from reading the code and the CI build, not from running the app on Linux) about getting it going there: what should already work, what's likely to need changes, and what has to be decided. It's meant as a starting point for whoever does the port, person or AI: check each item off (or correct it) as it's actually tried.
 
-Status: CI's `linux` job (ubuntu-latest) builds it, and all but one test passed on the first try (2026-10-03, v0.3.1); that one was a test using Windows paths, fixed since. So it compiles and the logic holds up; nobody has opened the window or heard it play on Linux yet. That's the real first step.
+Status: it builds on Ubuntu and every test passes (CI's `linux` job, required since 0.3.2; on the first try only one test failed, one using Windows paths). From 0.3.3, each release has a Linux build too, `synththing-linux-x86_64`, built on Ubuntu 22.04. Nobody has opened the window or heard it play on Linux yet: download it, `chmod +x synththing-linux-x86_64`, run it, and work through section 3.
 
 ## 1. Get it compiling
 
@@ -25,7 +25,7 @@ cargo test --bin synththing
 | eframe / winit | xkbcommon, Wayland, X11 libraries, OpenGL | the window |
 | mlua (`vendored`) | a C compiler | builds Lua 5.4 from source |
 
-CI (`.github/workflows/ci.yml`) has a `linux` job doing this on every push to master, allowed to fail (`continue-on-error`) until Linux is supported: its log shows how far the build gets. Once it passes, drop `continue-on-error` so it stays that way. It runs:
+CI (`.github/workflows/ci.yml`) has a `linux` job doing this on every push to master, so it stays building. It runs:
 
 ```yaml
   linux:
@@ -45,7 +45,7 @@ These have non-Windows branches already (written blind, so still worth checking)
 - **ffmpeg** (`ffmpeg.rs`). Linux uses `ffmpeg` from the PATH; the download offer is Windows-only (`CAN_DOWNLOAD`), and Preferences > Recording says it isn't set up. Distributions all package ffmpeg.
 - **Recording file names** (`recorder.rs`). `local_timestamp` uses UTC off Windows (no time zone lookup without another dependency); a crate like `time` or `chrono` with local offsets would fix it.
 - **Show in folder** (`app.rs`, `open_in_file_manager`). Uses `xdg-open` on the folder (it can't select the file the way Explorer does).
-- **The updater** (`updater.rs`). `ASSET_NAME` is per platform: on Linux it looks for `synththing-linux-x86_64`, which no release has yet, so it reports no update rather than downloading the Windows exe. See section 4.
+- **The updater** (`updater.rs`). `ASSET_NAME` is per platform: on Linux it looks for `synththing-linux-x86_64` (attached to releases from 0.3.3), marks the download executable, and swaps it in with `self-replace` like on Windows. Untested on Linux so far.
 - **Folders.** `directories` gives `~/.config/synththing` for the config (scripts, playlists, themes, logs), and `~/Music/synththing/Starter songs` for the starter songs (falling back to the home folder when there's no XDG music folder).
 - **Paths and file names.** Extensions are compared case-insensitively. Script renames reject names Windows wouldn't allow, which is stricter than Linux needs but harmless.
 
@@ -64,8 +64,8 @@ These have non-Windows branches already (written blind, so still worth checking)
 
 ## 4. Decisions for whoever ports it
 
-- **How it's distributed.** Options: a plain `x86_64` binary on the release (simplest; the updater can swap it in place like on Windows, as `self-replace` supports Linux), an AppImage (one file that carries its libraries; the updater would have to replace the AppImage rather than the binary inside it), or Flatpak (sandboxed: folder access goes through portals, and Flathub does its own updates, so the in-app updater would be turned off). A plain binary plus a `.desktop` file is the closest to how it works on Windows.
-- **The release workflow.** `.github/workflows/release.yml` builds on `windows-latest` only. A Linux job would build on `ubuntu-latest` (an older Ubuntu image gives a binary that runs on more distributions), name the file to match `ASSET_NAME`, and attach it to the same release. The release notes come from `CHANGELOG.md` already.
+- **How it's distributed.** For now a plain binary on each release (see below). Options for later: a plain `x86_64` binary on the release (simplest; the updater can swap it in place like on Windows, as `self-replace` supports Linux), an AppImage (one file that carries its libraries; the updater would have to replace the AppImage rather than the binary inside it), or Flatpak (sandboxed: folder access goes through portals, and Flathub does its own updates, so the in-app updater would be turned off). A plain binary plus a `.desktop` file is the closest to how it works on Windows.
+- **The release workflow.** Done for now: `.github/workflows/release.yml` builds a plain binary on `ubuntu-22.04` after the Windows job and attaches it to the same release, named to match `ASSET_NAME`. If that glibc is too new for someone, an older image or a musl build would help.
 - **The license list.** Help > Credits & licenses lists the libraries compiled into the Windows build (`examples/gen_licenses.rs`, `TARGET`). A Linux build pulls in some different ones (ALSA bindings, Wayland and X11 crates, no `windows-sys`); the generator could take the target as an argument and the app could embed the list for the platform it's built for.
 - **Docs.** README.md, docs/cli.md and the in-app text say Windows in places (`%APPDATA%`, "Explorer", Windows SmartScreen, `Music\synththing`). Most of it should say where things are on each platform once Linux works.
 

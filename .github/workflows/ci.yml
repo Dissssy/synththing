@@ -25,11 +25,10 @@ jobs:
       - name: Test
         run: cargo test --bin synththing
 
-  # Not a supported platform yet (see docs/LINUX.md): this shows how far a
-  # Linux build gets, without failing the run when it doesn't.
+  # Linux (experimental, see docs/LINUX.md): it builds and its tests pass,
+  # and this keeps it that way.
   linux:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
 

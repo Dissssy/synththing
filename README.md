@@ -20,7 +20,7 @@ A MIDI and audio player for Windows with a visualizer you can script in Lua.
 
 After that, synththing checks for new versions when it starts and asks before installing one (you can turn that off in synththing > Preferences, or check any time from Help > Check for updates).
 
-It needs 64-bit Windows 10 or 11.
+It needs 64-bit Windows 10 or 11. There's an experimental Linux build on each release too, `synththing-linux-x86_64` (`chmod +x` it, then run it); see [docs/LINUX.md](docs/LINUX.md) for what's known and what still needs testing.
 
 ## First steps
 

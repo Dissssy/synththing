@@ -1,7 +1,8 @@
 # Builds and publishes a release whenever a version tag is pushed (cargo
-# release does that, see release.toml). The exe is attached to the GitHub
-# Release as synththing-windows-x86_64.exe, the name the in-app updater
-# (src/updater.rs) looks for.
+# release does that, see release.toml). The Windows exe is attached to the
+# GitHub Release as synththing-windows-x86_64.exe and the Linux build
+# (experimental, docs/LINUX.md) as synththing-linux-x86_64: the names the
+# in-app updater (src/updater.rs, ASSET_NAME) looks for.
 name: Release
 
 on:
@@ -52,3 +53,35 @@ jobs:
           gh release create "$GITHUB_REF_NAME" synththing-windows-x86_64.exe \
             --title "synththing $GITHUB_REF_NAME" \
             --notes-file notes.md
+
+  # Built once the Windows job has published the release, and added to it.
+  # On an older Ubuntu, so the binary runs on more distributions (it needs
+  # a glibc at least as new as the one it's built against).
+  linux:
+    needs: windows
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev libwayland-dev
+
+      - name: Test
+        run: cargo test --bin synththing
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Add to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp target/release/synththing synththing-linux-x86_64
+          chmod +x synththing-linux-x86_64
+          gh release upload "$GITHUB_REF_NAME" synththing-linux-x86_64
