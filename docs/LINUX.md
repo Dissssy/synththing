@@ -25,7 +25,7 @@ cargo test --bin synththing
 | eframe / winit | xkbcommon, Wayland, X11 libraries, OpenGL | the window |
 | mlua (`vendored`) | a C compiler | builds Lua 5.4 from source |
 
-Adding a Linux job to CI (`.github/workflows/ci.yml`) is the quickest way to keep it compiling once it does, even without anyone on Linux:
+CI (`.github/workflows/ci.yml`) has a `linux` job doing this on every push to master, allowed to fail (`continue-on-error`) until Linux is supported: its log shows how far the build gets. Once it passes, drop `continue-on-error` so it stays that way. It runs:
 
 ```yaml
   linux:
