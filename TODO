@@ -544,4 +544,19 @@ Smaller:
     in the Controls list too). pad_axis() reads sticks/triggers directly
     (not rebindable), gamepads() lists them. Pads count while the window has
     focus. Ideas: rumble, per-player pads (pad 1 vs pad 2) for local
-    multiplayer, pad defaults in the bundled games.
+    multiplayer, pad defaults in the bundled games.
+
+[M][!] analogue values for actions
+    input_value(id) -> 0..1 for any action: keys and buttons 0 or 1, a
+    trigger how far it's pulled, a stick direction (pad_lstick_left) how far
+    it's pushed that way. input()/input_down() keep the threshold, so
+    nothing existing changes. Steering becomes input_value(RIGHT) -
+    input_value(LEFT), the same from keys or a stick and fully rebindable;
+    pad_axis stays as a convenience. Update the docs and gamepad_demo.lua.
+
+[M][.] grouped controls and settings, shown as tabs
+    Let scripts put controls (and settings) in named groups, e.g.
+    input_register("jump", { "space", "pad_a" }, { group = "Movement" }) and
+    a group option on setting_*; Script Settings shows each group as a
+    selectable tab button above its list, ungrouped ones under "General".
+    For scripts like gamepad_demo.lua with dozens of controls.
