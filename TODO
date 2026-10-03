@@ -44,7 +44,9 @@
       template, typing_begin text field
     - hover help links into the Scripting Reference at that function
 
-[M][!] layout presets
+[M][!] layout presets - DONE (layout::PRESETS: Listening, Watching, Script
+    writing; saved layouts; each keeps changes made while active, built-ins
+    have Reset). Add a Sprite editing preset with the sprite editor.
     Named layouts to switch between: media playback (songs, playlists,
     visualizer), script writing (editor, reference, settings, visualizer),
     sprite editing (sprite editor, editor, visualizer), etc. Built-ins

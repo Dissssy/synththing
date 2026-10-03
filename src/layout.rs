@@ -85,6 +85,88 @@ pub fn default_layout() -> DockState<Section> {
     dock
 }
 
+/// A built-in arrangement to switch to from View > Layout. Add one by
+/// writing its `build` function and listing it in [`PRESETS`].
+pub struct Preset {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub build: fn() -> DockState<Section>,
+}
+
+pub const PRESETS: &[Preset] = &[
+    Preset {
+        name: "Listening",
+        description: "Songs and playlists, to pick music and play it",
+        build: default_layout,
+    },
+    Preset {
+        name: "Watching",
+        description: "The visualizer big in the middle, songs and soundfonts on the left, playlists on the right",
+        build: watching_layout,
+    },
+    Preset {
+        name: "Script writing",
+        description: "The script editor with the reference beside it, the visualizer and script settings on the right",
+        build: script_writing_layout,
+    },
+];
+
+fn watching_layout() -> DockState<Section> {
+    let mut dock = DockState::new(vec![Section::Visualizer]);
+    let surface = dock.main_surface_mut();
+    let [center, _] = surface.split_left(NodeIndex::root(), 0.78, vec![Section::Songs, Section::Soundfonts]);
+    surface.split_right(center, 0.75, vec![Section::Playlists]);
+    dock
+}
+
+fn script_writing_layout() -> DockState<Section> {
+    let mut dock = DockState::new(vec![Section::Editor, Section::Reference]);
+    let surface = dock.main_surface_mut();
+    let [_, right] = surface.split_right(NodeIndex::root(), 0.58, vec![Section::Visualizer]);
+    surface.split_below(right, 0.55, vec![Section::Settings]);
+    dock
+}
+
+/// Whether two layouts are arranged the same: the same tabs in the same
+/// places, split the same ways in about the same proportions. Ignores
+/// what's only about the moment (which tab is showing in a group, on-screen
+/// sizes, scroll positions), which the saved form also holds.
+pub fn same_arrangement(a: &DockState<Section>, b: &DockState<Section>) -> bool {
+    arrangement(a) == arrangement(b)
+}
+
+fn arrangement(dock: &DockState<Section>) -> Vec<String> {
+    let mut parts = Vec::new();
+    for surface in dock.iter_surfaces() {
+        let Some(tree) = surface.node_tree() else {
+            parts.push("-".to_string());
+            continue;
+        };
+        parts.push("surface".to_string());
+        for node in tree.iter() {
+            parts.push(match node {
+                Node::Empty => "e".to_string(),
+                Node::Leaf(leaf) => format!("{:?}", leaf.tabs),
+                Node::Vertical(split) => format!("v{:.2}", split.fraction),
+                Node::Horizontal(split) => format!("h{:.2}", split.fraction),
+            });
+        }
+    }
+    // Trailing empty slots of the node array don't change anything.
+    while parts.last().is_some_and(|p| p == "e") {
+        parts.pop();
+    }
+    parts
+}
+
+/// A layout the user saved under a name (View > Layout > Save current
+/// layout as...), kept in the config.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedLayout {
+    pub name: String,
+    pub dock: DockState<Section>,
+}
+
 /// A separate fullscreen layout's starting point: just the visualizer, which
 /// is what fullscreen showed before it became a layout of its own.
 pub fn fullscreen_default() -> DockState<Section> {
@@ -309,6 +391,40 @@ mod tests {
         let mut floated = sanitize(floated);
         show(&mut floated, Section::Editor);
         assert_eq!(open(&floated), vec![Section::Playlists, Section::Editor]);
+    }
+
+    #[test]
+    fn presets_hold_each_section_at_most_once() {
+        for preset in PRESETS {
+            let dock = (preset.build)();
+            let tabs: Vec<Section> = dock.iter_all_tabs().map(|(_, tab)| *tab).collect();
+            assert!(!tabs.is_empty(), "{}", preset.name);
+            for section in &tabs {
+                assert_eq!(tabs.iter().filter(|s| *s == section).count(), 1, "{} has {section:?} twice", preset.name);
+            }
+            // Showing and hiding still works on them.
+            let mut dock = dock;
+            for section in Section::ALL {
+                show(&mut dock, section);
+                assert!(is_open(&dock, section));
+            }
+        }
+        assert_eq!(open(&(PRESETS[2].build)()), [Section::Visualizer, Section::Editor, Section::Settings, Section::Reference]);
+    }
+
+    #[test]
+    fn arrangement_ignores_the_moment_but_not_the_layout() {
+        let a = (PRESETS[2].build)();
+        let mut b = (PRESETS[2].build)();
+        assert!(same_arrangement(&a, &b));
+        // Switching the shown tab in a group isn't a change...
+        if let Some(path) = b.find_tab(&Section::Reference) {
+            b.set_active_tab(path).unwrap();
+        }
+        assert!(same_arrangement(&a, &b));
+        // ...closing a section is.
+        hide(&mut b, Section::Settings);
+        assert!(!same_arrangement(&a, &b));
     }
 
     #[test]

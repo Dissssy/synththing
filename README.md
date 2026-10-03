@@ -26,7 +26,7 @@ It needs 64-bit Windows 10 or 11.
 3. **Make a playlist.** Open View > Playlists, then **New playlist**, and drag songs (or folders) in from Songs. Drag a soundfont onto a MIDI entry to give it its own.
 4. **Turn on the visualizer.** View > Visualizer, then pick a script above it. **Fullscreen visualizer** (or F11) fills the screen; Esc comes back.
 
-The View menu shows and hides each section; drag tabs around to arrange them however you like, and the layout is remembered.
+The View menu shows and hides each section; drag tabs around to arrange them however you like, and the layout is remembered. View > Layout switches between ready-made arrangements (Listening, Watching, Script writing) and ones you've saved with "Save current layout as...". Each keeps whatever changes you make while it's showing; a changed built-in one has a Reset button to go back to how it comes.
 
 ### Keys
 

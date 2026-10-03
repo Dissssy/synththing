@@ -235,6 +235,8 @@ pub struct App {
     /// i.e. which config slot it's saved to. See `sync_layout_slot`.
     dock_is_fullscreen_layout: bool,
     preferences_open: bool,
+    /// View > Layout > Save current layout as...: the name being typed.
+    layout_save: Option<String>,
     sample_rate: u32,
     /// The script editor's state (see `app/editor.rs`).
     editor: editor::EditorState,
@@ -269,6 +271,11 @@ impl App {
         let (playlists, playlist_errors) =
             Library::load(config::playlists_dir().unwrap_or_else(|_| PathBuf::from("playlists")));
         let viewed_playlist = (!playlists.lists.is_empty()).then_some(0);
+        let mut config = config;
+        if config.layout.is_none() && config.active_layout.is_none() {
+            // A first launch starts on the Listening layout.
+            config.active_layout = layout::PRESETS.first().map(|p| p.name.to_string());
+        }
         let dock = config.layout.clone().map(layout::sanitize).unwrap_or_else(layout::default_layout);
         let saved_layout_json = serde_json::to_string(&dock).unwrap_or_default();
         let (loop_mode, shuffle) = (config.loop_mode, config.shuffle);
@@ -351,6 +358,7 @@ impl App {
             last_layout_check: 0.0,
             dock_is_fullscreen_layout: false,
             preferences_open: false,
+            layout_save: None,
             sample_rate,
             editor: editor::EditorState::default(),
             editor_saved: String::new(),
@@ -430,8 +438,42 @@ impl App {
             &mut self.config.layout
         };
         *slot = Some(self.dock.clone());
+        self.store_in_active_layout();
         if let Err(e) = self.config.save() {
             self.status = format!("Couldn't save layout: {e}");
+        }
+    }
+
+    /// The named layout the showing slot is on, if any.
+    fn active_layout(&self) -> Option<&String> {
+        if self.dock_is_fullscreen_layout {
+            self.config.fullscreen_active_layout.as_ref()
+        } else {
+            self.config.active_layout.as_ref()
+        }
+    }
+
+    fn set_active_layout(&mut self, name: Option<String>) {
+        if self.dock_is_fullscreen_layout {
+            self.config.fullscreen_active_layout = name;
+        } else {
+            self.config.active_layout = name;
+        }
+    }
+
+    /// Changes to the arrangement go into the active named layout: a
+    /// built-in's override (dropped when it matches the original again),
+    /// or a saved layout itself.
+    fn store_in_active_layout(&mut self) {
+        let Some(name) = self.active_layout().cloned() else { return };
+        if let Some(preset) = layout::PRESETS.iter().find(|p| p.name == name) {
+            if layout::same_arrangement(&self.dock, &(preset.build)()) {
+                self.config.layout_overrides.remove(&name);
+            } else {
+                self.config.layout_overrides.insert(name, self.dock.clone());
+            }
+        } else if let Some(saved) = self.config.layout_presets.iter_mut().find(|p| p.name == name) {
+            saved.dock = self.dock.clone();
         }
     }
 
@@ -467,6 +509,170 @@ impl App {
         self.last_layout_check = now;
         if serde_json::to_string(&self.dock).unwrap_or_default() != self.saved_layout_json {
             self.save_layout();
+        }
+    }
+
+    /// View > Layout: the built-in arrangements (with Reset when changed),
+    /// the user's saved ones, and saving the current one. The active one is
+    /// marked; changes made while it's active are kept in it.
+    fn layout_menu_ui(&mut self, ui: &mut egui::Ui) {
+        let active = self.active_layout().cloned();
+        let mut switch = None;
+        let mut reset = None;
+        for preset in layout::PRESETS {
+            let changed = self.config.layout_overrides.contains_key(preset.name);
+            ui.horizontal(|ui| {
+                let label = if changed { format!("{} (changed)", preset.name) } else { preset.name.to_string() };
+                if ui
+                    .selectable_label(active.as_deref() == Some(preset.name), label)
+                    .on_hover_text(preset.description)
+                    .clicked()
+                {
+                    switch = Some(preset.name.to_string());
+                    ui.close();
+                }
+                if changed && ui.small_button("Reset").on_hover_text("Back to how this layout comes").clicked() {
+                    reset = Some(preset.name.to_string());
+                }
+            });
+        }
+        let mut remove = None;
+        if !self.config.layout_presets.is_empty() {
+            ui.separator();
+            for (n, saved) in self.config.layout_presets.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(active.as_deref() == Some(saved.name.as_str()), &saved.name).clicked() {
+                        switch = Some(saved.name.clone());
+                        ui.close();
+                    }
+                    if ui.small_button("x").on_hover_text("Remove this saved layout").clicked() {
+                        remove = Some(n);
+                    }
+                });
+            }
+        }
+        if active.is_none() {
+            ui.separator();
+            ui.weak("Showing: your own arrangement (Custom)");
+        }
+        ui.separator();
+        if ui.button("Save current layout as...").clicked() {
+            self.layout_save = Some(String::new());
+            ui.close();
+        }
+
+        if let Some(name) = reset {
+            self.config.layout_overrides.remove(&name);
+            if active.as_deref() == Some(name.as_str())
+                && let Some(preset) = layout::PRESETS.iter().find(|p| p.name == name)
+            {
+                self.apply_layout((preset.build)());
+            } else if let Err(e) = self.config.save() {
+                self.status = format!("Couldn't save the layouts: {e}");
+            }
+            self.status = format!("Reset the {name} layout.");
+        }
+        if let Some(n) = remove {
+            let removed = self.config.layout_presets.remove(n);
+            if active.as_deref() == Some(removed.name.as_str()) {
+                self.set_active_layout(None);
+            }
+            self.status = format!("Removed the saved layout \"{}\".", removed.name);
+            if let Err(e) = self.config.save() {
+                self.status = format!("Couldn't save the layout list: {e}");
+            }
+        }
+        if let Some(name) = switch {
+            self.switch_layout(&name);
+        }
+    }
+
+    /// Show the named layout (as the user last left it), after keeping the
+    /// current arrangement in the layout it belongs to.
+    fn switch_layout(&mut self, name: &str) {
+        if self.dock_in_use {
+            return;
+        }
+        self.save_layout();
+        let dock = if let Some(preset) = layout::PRESETS.iter().find(|p| p.name == name) {
+            self.config.layout_overrides.get(name).cloned().map(layout::sanitize).unwrap_or_else(preset.build)
+        } else if let Some(saved) = self.config.layout_presets.iter().find(|p| p.name == name) {
+            layout::sanitize(saved.dock.clone())
+        } else {
+            return;
+        };
+        self.set_active_layout(Some(name.to_string()));
+        self.apply_layout(dock);
+        self.status = format!("Layout: {name}.");
+    }
+
+    /// Switch the arrangement to `dock` (in whichever slot is showing: the
+    /// windowed layout, or fullscreen's own) and remember it.
+    fn apply_layout(&mut self, dock: egui_dock::DockState<Section>) {
+        if self.dock_in_use {
+            return;
+        }
+        self.dock = dock;
+        if self.is_open_in_dock(Section::Editor) {
+            // It already has the reference where the layout put it.
+            self.editor_opened_this_run = true;
+        }
+        self.refresh_open_sections();
+        self.save_layout();
+    }
+
+    fn is_open_in_dock(&self, section: Section) -> bool {
+        layout::is_open(&self.dock, section)
+    }
+
+    /// View > Layout > Save current layout as...: name it.
+    fn layout_save_ui(&mut self, ctx: &egui::Context) {
+        let Some(name) = &mut self.layout_save else { return };
+        let mut save = false;
+        let mut close = false;
+        let taken = self.config.layout_presets.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()));
+        let built_in = layout::PRESETS.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()));
+        let response = egui::Modal::new(egui::Id::new("save_layout")).show(ctx, |ui| {
+            ui.set_width(320.0);
+            ui.heading("Save layout");
+            ui.label("Name:");
+            let field = ui.text_edit_singleline(name);
+            field.request_focus();
+            if built_in {
+                ui.colored_label(ui.visuals().warn_fg_color, "That's a built-in layout's name; pick another.");
+            } else if taken {
+                ui.weak("A saved layout has this name; saving replaces it.");
+            }
+            if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                save = true;
+            }
+            ui.add_space(8.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
+                if ui.add_enabled(!name.trim().is_empty() && !built_in, egui::Button::new("Save")).clicked() {
+                    save = true;
+                }
+            });
+        });
+        if save && !name.trim().is_empty() && !built_in {
+            let name = name.trim().to_string();
+            let saved = layout::SavedLayout { name: name.clone(), dock: self.dock.clone() };
+            match self.config.layout_presets.iter_mut().find(|p| p.name.eq_ignore_ascii_case(&name)) {
+                Some(existing) => *existing = saved,
+                None => self.config.layout_presets.push(saved),
+            }
+            // From now on, changes go into it.
+            self.set_active_layout(Some(name.clone()));
+            self.status = match self.config.save() {
+                Ok(()) => format!("Saved the layout \"{name}\" (View > Layout)."),
+                Err(e) => format!("Couldn't save the layout: {e}"),
+            };
+            close = true;
+        }
+        if close || response.should_close() {
+            self.layout_save = None;
         }
     }
 
@@ -813,6 +1019,8 @@ impl App {
                 section_checkbox(ui, Section::Editor);
                 section_checkbox(ui, Section::Settings);
                 section_checkbox(ui, Section::Reference);
+                ui.separator();
+                ui.menu_button("Layout", |ui| self.layout_menu_ui(ui));
             });
             for (section, open) in toggled {
                 self.set_open(section, open);
@@ -1308,6 +1516,7 @@ impl App {
             || self.song_info_open.is_some()
             || self.recording.prompt_open
             || self.editor.history_open
+            || self.layout_save.is_some()
     }
 
     /// Pick up files added, removed or changed on disk in the folders on
@@ -2333,6 +2542,7 @@ impl eframe::App for App {
             self.credits_ui(&ctx);
             self.song_info_ui(&ctx);
             self.history_ui(&ctx);
+            self.layout_save_ui(&ctx);
         }
         self.editor_tick(&ctx);
         // Outside the layout: F9 can ask for ffmpeg from the dedicated
