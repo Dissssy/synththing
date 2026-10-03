@@ -21,10 +21,11 @@ pub enum Section {
     Editor,
     Settings,
     Reference,
+    Sprites,
 }
 
 impl Section {
-    pub const ALL: [Section; 7] = [
+    pub const ALL: [Section; 8] = [
         Self::Songs,
         Self::Soundfonts,
         Self::Playlists,
@@ -32,6 +33,7 @@ impl Section {
         Self::Editor,
         Self::Settings,
         Self::Reference,
+        Self::Sprites,
     ];
 
     pub fn title(self) -> &'static str {
@@ -43,13 +45,14 @@ impl Section {
             Self::Editor => "Script Editor",
             Self::Settings => "Script Settings",
             Self::Reference => "Scripting Reference",
+            Self::Sprites => "Sprite Editor",
         }
     }
 
     fn column(self) -> Column {
         match self {
             Self::Songs | Self::Soundfonts => Column::Left,
-            Self::Visualizer | Self::Editor | Self::Settings | Self::Reference => Column::Center,
+            Self::Visualizer | Self::Editor | Self::Settings | Self::Reference | Self::Sprites => Column::Center,
             Self::Playlists => Column::Right,
         }
     }
@@ -61,7 +64,7 @@ impl Section {
             Self::Soundfonts => Some(Self::Songs),
             Self::Visualizer => Some(Self::Editor),
             Self::Editor => Some(Self::Visualizer),
-            Self::Playlists | Self::Settings | Self::Reference => None,
+            Self::Playlists | Self::Settings | Self::Reference | Self::Sprites => None,
         }
     }
 }
@@ -109,7 +112,20 @@ pub const PRESETS: &[Preset] = &[
         description: "The script editor with the reference beside it, the visualizer and script settings on the right",
         build: script_writing_layout,
     },
+    Preset {
+        name: "Sprite editing",
+        description: "The sprite editor big on the left, the script editor and the visualizer on the right",
+        build: sprite_editing_layout,
+    },
 ];
+
+fn sprite_editing_layout() -> DockState<Section> {
+    let mut dock = DockState::new(vec![Section::Sprites]);
+    let surface = dock.main_surface_mut();
+    let [_, right] = surface.split_right(NodeIndex::root(), 0.58, vec![Section::Editor, Section::Reference]);
+    surface.split_below(right, 0.55, vec![Section::Visualizer]);
+    dock
+}
 
 fn watching_layout() -> DockState<Section> {
     let mut dock = DockState::new(vec![Section::Visualizer]);

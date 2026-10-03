@@ -32,6 +32,7 @@ mod png;
 mod recorder;
 mod song_info;
 mod spectrum;
+mod sprite_code;
 mod typing;
 mod updater;
 mod watch;

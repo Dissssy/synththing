@@ -5,6 +5,7 @@ A MIDI and audio player for Windows with a visualizer you can script in Lua.
 - Plays MIDI files through any SoundFont (`.sf2`), and audio files (MP3, WAV, OGG Vorbis, FLAC, M4A/AAC).
 - Playlists: build them by dragging songs or whole folders in, reorder, shuffle and loop, give MIDI tracks their own soundfont, import and export `.m3u`.
 - A visualizer driven by Lua scripts: waveform, spectrum, piano roll, spectrogram, even a snake game that plays along, and a piano you can play along on with your keyboard. Write your own with a live-reloading editor: scripts can take mouse and keyboard input (with rebindable controls), take typed text, and play notes on the song's instruments, in a window or fullscreen.
+- A sprite editor for the pixel art scripts draw: paint, fill, palettes and sprite sheets, written straight back into the script.
 - Record the visualizer with its sound to a video (MP4, 720p to 4K, 30 or 60 fps): a whole song, a whole playlist, or whatever you play. Uses ffmpeg, which synththing offers to download the first time.
 - Rearrangeable layout: every section is a tab you can drag, split or pop out.
 - Updates itself: new releases are offered in the app.
@@ -26,7 +27,7 @@ It needs 64-bit Windows 10 or 11.
 3. **Make a playlist.** Open View > Playlists, then **New playlist**, and drag songs (or folders) in from Songs. Drag a soundfont onto a MIDI entry to give it its own.
 4. **Turn on the visualizer.** View > Visualizer, then pick a script above it. **Fullscreen visualizer** (or F11) fills the screen; Esc comes back.
 
-The View menu shows and hides each section; drag tabs around to arrange them however you like, and the layout is remembered. View > Layout switches between ready-made arrangements (Listening, Watching, Script writing) and ones you've saved with "Save current layout as...". Each keeps whatever changes you make while it's showing; a changed built-in one has a Reset button to go back to how it comes.
+The View menu shows and hides each section; drag tabs around to arrange them however you like, and the layout is remembered. View > Layout switches between ready-made arrangements (Listening, Watching, Script writing, Sprite editing) and ones you've saved with "Save current layout as...". Each keeps whatever changes you make while it's showing; a changed built-in one has a Reset button to go back to how it comes.
 
 ### Keys
 

@@ -40,7 +40,11 @@
       rewrites the numbers - DONE (room left by the layouter, code_edit
       color_literals/set_color)
     - sprite editor: open a sprite_register call in a palette + pixel
-      grid editor that writes image/palette back into the code
+      grid editor that writes image/palette back into the code - DONE
+      (sprite_code.rs, app/sprite_editor.rs; sheet comment `-- sprite
+      sheet: N frames of WxH`; New sprite...; Sprite editing layout).
+      Ideas: rectangle/line tools, selection and move, flip, frame
+      reorder, onion skin.
     - snippets: settings block, input_register controls, sprite
       template, typing_begin text field
     - hover help links into the Scripting Reference at that function -

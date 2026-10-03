@@ -12,6 +12,7 @@ pub use editor::ApplyMode;
 mod loading;
 mod playlist_panel;
 mod recording;
+mod sprite_editor;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -242,6 +243,8 @@ pub struct App {
     docs_target: Option<((usize, usize), Instant, bool)>,
     /// A section to bring to the front once the dock is free.
     pending_focus: Option<Section>,
+    /// The Sprite Editor tab (see `app/sprite_editor.rs`).
+    sprite: sprite_editor::SpriteEditorState,
     sample_rate: u32,
     /// The script editor's state (see `app/editor.rs`).
     editor: editor::EditorState,
@@ -366,6 +369,7 @@ impl App {
             layout_save: None,
             docs_target: None,
             pending_focus: None,
+            sprite: sprite_editor::SpriteEditorState::default(),
             sample_rate,
             editor: editor::EditorState::default(),
             editor_saved: String::new(),
@@ -1048,6 +1052,7 @@ impl App {
                 section_checkbox(ui, Section::Editor);
                 section_checkbox(ui, Section::Settings);
                 section_checkbox(ui, Section::Reference);
+                section_checkbox(ui, Section::Sprites);
                 ui.separator();
                 ui.menu_button("Layout", |ui| self.layout_menu_ui(ui));
             });
@@ -1546,6 +1551,7 @@ impl App {
             || self.recording.prompt_open
             || self.editor.history_open
             || self.layout_save.is_some()
+            || self.sprite.new_sprite.is_some()
     }
 
     /// Pick up files added, removed or changed on disk in the folders on
@@ -2599,6 +2605,7 @@ impl eframe::App for App {
             self.song_info_ui(&ctx);
             self.history_ui(&ctx);
             self.layout_save_ui(&ctx);
+            self.new_sprite_ui(&ctx);
         }
         self.editor_tick(&ctx);
         // Outside the layout: F9 can ask for ffmpeg from the dedicated
@@ -2680,6 +2687,7 @@ impl TabViewer for SectionTabs<'_> {
             Section::Editor => app.editor_section_ui(ui),
             Section::Settings => app.settings_ui(ui),
             Section::Reference => app.docs_ui(ui),
+            Section::Sprites => app.sprite_editor_ui(ui),
         }
     }
 

@@ -232,7 +232,7 @@ impl App {
     }
 
     /// The editor's text changed (typed, or an edit made for it).
-    fn editor_changed(&mut self) {
+    pub(super) fn editor_changed(&mut self) {
         self.completion.request(self.editor_text.clone());
         match self.config.editor_apply {
             ApplyMode::EveryEdit => self.apply_editor(),
@@ -439,6 +439,12 @@ impl App {
                     && ui.link("Reference").on_hover_text("Show it in the Scripting Reference").clicked()
                 {
                     self.open_reference(&word);
+                }
+                if word == "sprite_register"
+                    && ui.link("Sprite Editor").on_hover_text("Edit this sprite (or Ctrl+click it)").clicked()
+                {
+                    let (_, cursor) = load_selection(ui.ctx(), editor_id, &self.editor_text);
+                    self.edit_sprite_at(cursor);
                 }
             });
         } else {
@@ -762,6 +768,10 @@ impl App {
     fn go_to_definition(&mut self, ctx: &egui::Context, id: egui::Id, index: usize) {
         let analysis = self.completion.analysis();
         let Some(word) = identifier_at(&self.editor_text, index) else { return };
+        if word == "sprite_register" {
+            self.edit_sprite_at(index);
+            return;
+        }
         let byte = analysis.byte_index(index);
         let target = analysis
             .ref_at(byte)

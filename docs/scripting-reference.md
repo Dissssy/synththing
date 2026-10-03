@@ -57,6 +57,7 @@ Live reload: editing a script in the Script Editor saves it and recompiles it on
 - Errors: the line a compile or runtime error points at is underlined in red, its line number is red, its message is shown at the end of the line, and "Go to line N" next to the error (above the editor, or above the visualizer, which also opens the editor) jumps the text cursor there.
 - History...: synththing keeps a copy of the script when it's opened and about once a minute while you edit (the last 50, in its config folder). The History window shows each with how long ago and how many lines differ from now, previews it, and restores it (keeping the current version in the list).
 - Text size: Ctrl+scroll over the text, or the size box; Wrap turns line wrapping off for long lines (scroll sideways instead).
+- Sprite Editor (View > Sprite Editor, or Ctrl+click a `sprite_register`): draws the script's sprites on a pixel grid and writes them back into the code (see Sprites).
 - Opening the editor for the first time in a run puts this reference next to it as a tab.
 
 ## Drawing
@@ -157,6 +158,8 @@ local color = setting_color("player_color", { r = 90, g = 200, b = 255 })
 sprite(player, x, y, { scale = 3, palette = { [1] = color } })
 sprite(player, x2, y2, { scale = 3, tint = { r = 255, g = 255, b = 255, a = 0.4 } }) -- a ghost
 ```
+
+The Sprite Editor tab (View > Sprite Editor, the "Sprite editing" layout, or Ctrl+click on `sprite_register` in the code) draws a script's sprites and writes them back into the code: pick a sprite, paint with the left button (right erases, Alt+click picks a color), fill, undo and redo, change the size or the palette. It edits sprites whose `image` and `palette` are tables written in the script, in the call or in a `local NAME = {...}` it names; one built by code is listed but left alone. New sprite... adds a blank one above `function render`. A sprite sheet is recorded as a comment just above its call, `-- sprite sheet: 4 frames of 8x8`, which the editor reads to draw frame lines and play the frames; scripts still pick a frame with `src`.
 
 Register sprites once, at the top level of the script (outside `render()`), and keep the ids: each call registers a new sprite, and a script can have at most 10,000. Sprites belong to the script and go away when it's reloaded or restarted, which re-registers them anyway.
 
