@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.3.1 (2026-10-03)
+
 ### New
 - `input_value(id)` for scripts: how far an action is pressed, 0 to 1 (keys 0 or 1, triggers and stick directions how far), so analogue steering stays rebindable. gamepad_demo.lua shows it.
 - Sprite Editor: line (L) and rectangle (U, Shift for filled) tools, and Flip H / Flip V, which mirror each frame of a sheet in place.
