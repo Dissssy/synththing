@@ -3,8 +3,9 @@
 //!
 //! Pick a sprite (the script's `sprite_register` calls), then draw: left
 //! button paints with the selected color, right button erases, Alt+click
-//! picks a color. Tools: pencil (B), fill (G), picker (I). Ctrl+Z / Ctrl+Y
-//! undo and redo. Each stroke is written to the script when the button is
+//! picks a color. Tools: pencil (B), fill (G), line (L), rectangle (U,
+//! Shift for filled), picker (I); Flip mirrors every frame in place.
+//! Ctrl+Z / Ctrl+Y undo and redo. Each stroke is written to the script when the button is
 //! let go, and reaches the running script like any other edit.
 
 use eframe::egui;
@@ -18,6 +19,8 @@ enum Tool {
     #[default]
     Pencil,
     Fill,
+    Line,
+    Rect,
     Picker,
 }
 
@@ -79,6 +82,34 @@ impl Pixels {
         }
         self.rows = rows;
         self.sheet = (frames > 1).then_some(Sheet { count: frames, width, height });
+    }
+
+    /// Mirror each frame left to right, in place (a sheet keeps its frame
+    /// order).
+    fn flip_horizontal(&mut self) {
+        let frame_width = self.frame_width();
+        for row in &mut self.rows {
+            for frame in row.chunks_mut(frame_width.max(1)) {
+                frame.reverse();
+            }
+        }
+    }
+
+    fn flip_vertical(&mut self) {
+        self.rows.reverse();
+    }
+
+    /// A rectangle with corners `a` and `b`: its outline, or `filled`.
+    fn rect(&mut self, a: (usize, usize), b: (usize, usize), color: u32, filled: bool) {
+        let (x0, x1) = (a.0.min(b.0), a.0.max(b.0));
+        let (y0, y1) = (a.1.min(b.1), a.1.max(b.1));
+        for (y, row) in self.rows.iter_mut().enumerate().take(y1 + 1).skip(y0) {
+            for (x, cell) in row.iter_mut().enumerate().take(x1 + 1).skip(x0) {
+                if filled || x == x0 || x == x1 || y == y0 || y == y1 {
+                    *cell = color;
+                }
+            }
+        }
     }
 
     fn fill(&mut self, x: usize, y: usize, color: u32) {
@@ -153,6 +184,8 @@ pub struct SpriteEditorState {
     /// The sprite being drawn on, while a button is held.
     stroke: Option<Pixels>,
     last_cell: Option<(usize, usize)>,
+    /// Where a line or rectangle being dragged started.
+    shape_start: Option<(usize, usize)>,
     preview_fps: f32,
     /// The New sprite dialog.
     pub new_sprite: Option<NewSprite>,
@@ -170,6 +203,7 @@ impl Default for SpriteEditorState {
             redo: Vec::new(),
             stroke: None,
             last_cell: None,
+            shape_start: None,
             preview_fps: 8.0,
             new_sprite: None,
         }
@@ -318,15 +352,23 @@ impl App {
             return;
         }
         let command = egui::Modifiers::COMMAND;
-        let (undo, redo, pencil, fill, picker) = ui.ctx().input_mut(|i| {
+        let (undo, redo, pencil, fill, picker, line, rect) = ui.ctx().input_mut(|i| {
             (
                 i.consume_key(command, egui::Key::Z),
                 i.consume_key(command, egui::Key::Y) || i.consume_key(command | egui::Modifiers::SHIFT, egui::Key::Z),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::B),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::G),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::I),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::L),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::U),
             )
         });
+        if line {
+            self.sprite.tool = Tool::Line;
+        }
+        if rect {
+            self.sprite.tool = Tool::Rect;
+        }
         if undo {
             self.sprite_undo(call, saved, true);
         }
@@ -356,7 +398,22 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.sprite.tool, Tool::Pencil, "Pencil").on_hover_text("B; right button erases");
             ui.selectable_value(&mut self.sprite.tool, Tool::Fill, "Fill").on_hover_text("G: fill the touching area");
+            ui.selectable_value(&mut self.sprite.tool, Tool::Line, "Line").on_hover_text("L: drag from one end to the other");
+            ui.selectable_value(&mut self.sprite.tool, Tool::Rect, "Rectangle")
+                .on_hover_text("U: drag from corner to corner; hold Shift for a filled one");
             ui.selectable_value(&mut self.sprite.tool, Tool::Picker, "Pick").on_hover_text("I: pick a pixel's color (or Alt+click)");
+            ui.separator();
+            let flip_h = ui.button("Flip H").on_hover_text("Mirror left to right (each frame in place)").clicked();
+            let flip_v = ui.button("Flip V").on_hover_text("Mirror top to bottom").clicked();
+            if (flip_h || flip_v) && self.sprite.stroke.is_none() {
+                let mut flipped = saved.clone();
+                if flip_h {
+                    flipped.flip_horizontal();
+                } else {
+                    flipped.flip_vertical();
+                }
+                self.commit_sprite(call, saved.clone(), flipped);
+            }
             ui.separator();
             if ui.add_enabled(!self.sprite.undo.is_empty(), egui::Button::new("Undo")).on_hover_text("Ctrl+Z").clicked() {
                 self.sprite_undo(call, saved, true);
@@ -519,7 +576,8 @@ impl App {
         }
 
         // Drawing.
-        let (primary, secondary, alt) = ui.input(|i| (i.pointer.primary_down(), i.pointer.secondary_down(), i.modifiers.alt));
+        let (primary, secondary, alt, shift) =
+            ui.input(|i| (i.pointer.primary_down(), i.pointer.secondary_down(), i.modifiers.alt, i.modifiers.shift));
         let pointer = ui.input(|i| i.pointer.interact_pos());
         let pressed_here = response.is_pointer_button_down_on();
         if pressed_here && let Some(at) = pointer.and_then(cell_at) {
@@ -534,6 +592,21 @@ impl App {
                         pixels.fill(at.0, at.1, color);
                         self.sprite.stroke = Some(pixels.clone());
                     }
+                }
+                Tool::Line | Tool::Rect => {
+                    // Redrawn from the sprite as it was each frame, so the
+                    // shape follows the pointer until it's let go.
+                    let color = if secondary && !primary { 0 } else { self.sprite.color };
+                    let start = *self.sprite.shape_start.get_or_insert(at);
+                    *pixels = saved.clone();
+                    if tool == Tool::Line {
+                        for (x, y) in line_cells(start, at) {
+                            pixels.rows[y][x] = color;
+                        }
+                    } else {
+                        pixels.rect(start, at, color, shift);
+                    }
+                    self.sprite.stroke = Some(pixels.clone());
                 }
                 Tool::Pencil => {
                     let color = if secondary && !primary { 0 } else { self.sprite.color };
@@ -553,6 +626,7 @@ impl App {
         }
         if !pressed_here {
             self.sprite.last_cell = None;
+            self.sprite.shape_start = None;
         }
     }
 
@@ -709,6 +783,30 @@ mod tests {
         p.remove_color(1);
         assert_eq!(p.rows, [vec![0, 1, 0]]);
         assert_eq!(p.colors.len(), 1);
+    }
+
+    #[test]
+    fn flips_keep_frames_in_place() {
+        // Two 2x2 frames side by side.
+        let mut sheet = pixels(vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8]]);
+        sheet.sheet = Some(Sheet { count: 2, width: 2, height: 2 });
+        sheet.flip_horizontal();
+        assert_eq!(sheet.rows, [vec![2, 1, 4, 3], vec![6, 5, 8, 7]]);
+        sheet.flip_vertical();
+        assert_eq!(sheet.rows, [vec![6, 5, 8, 7], vec![2, 1, 4, 3]]);
+        let mut single = pixels(vec![vec![1, 2, 3]]);
+        single.flip_horizontal();
+        assert_eq!(single.rows, [vec![3, 2, 1]]);
+    }
+
+    #[test]
+    fn rectangles_outline_or_fill() {
+        let mut outline = pixels(vec![vec![0; 4]; 4]);
+        outline.rect((3, 3), (0, 1), 1, false);
+        assert_eq!(outline.rows, [vec![0, 0, 0, 0], vec![1, 1, 1, 1], vec![1, 0, 0, 1], vec![1, 1, 1, 1]]);
+        let mut filled = pixels(vec![vec![0; 3]; 2]);
+        filled.rect((0, 0), (1, 1), 2, true);
+        assert_eq!(filled.rows, [vec![2, 2, 0], vec![2, 2, 0]]);
     }
 
     #[test]

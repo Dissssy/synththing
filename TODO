@@ -43,8 +43,8 @@
       grid editor that writes image/palette back into the code - DONE
       (sprite_code.rs, app/sprite_editor.rs; sheet comment `-- sprite
       sheet: N frames of WxH`; New sprite...; Sprite editing layout).
-      Ideas: rectangle/line tools, selection and move, flip, frame
-      reorder, onion skin.
+      Line and rectangle tools and flips - DONE. Ideas: selection and
+      move, frame reorder, onion skin.
     - snippets: settings block, input_register controls, sprite
       template, typing_begin text field - DONE (snippets.rs, Insert menu;
       Insert > Sprite... uses the Sprite Editor's New sprite dialog)
@@ -546,7 +546,7 @@ Smaller:
     focus. Ideas: rumble, per-player pads (pad 1 vs pad 2) for local
     multiplayer, pad defaults in the bundled games.
 
-[M][!] analogue values for actions
+[M][!] analogue values for actions - DONE (input_value, PadFrame::value)
     input_value(id) -> 0..1 for any action: keys and buttons 0 or 1, a
     trigger how far it's pulled, a stick direction (pad_lstick_left) how far
     it's pushed that way. input()/input_down() keep the threshold, so
