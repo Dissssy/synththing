@@ -10,6 +10,7 @@
 -- enforced on top: higher pitch moves right, lower moves left, a repeated pitch stays in
 -- its lane, and big leaps jump further. Chords hang down from their top note. Long notes
 -- become sustains. Drums go by kit piece instead (kick, snare, hats, toms, crashes).
+-- PLAY ALL (songs with 2+ channels) hands the part around the band bar by bar; see medley_for.
 -- Optionally (mute_on_miss_experimental setting), missing a note mutes the track until you hit again.
 
 script_options({ start_paused = true })
@@ -86,17 +87,6 @@ local function with_a(c, a)
     return { r = c.r, g = c.g, b = c.b, a = a }
 end
 
-local function ring(x, y, radius, col, segs)
-    segs = segs or 32
-    local px, py = x + radius, y
-    for i = 1, segs do
-        local a = i / segs * math.pi * 2
-        local nx, ny = x + math.cos(a) * radius, y + math.sin(a) * radius
-        line(px, py, nx, ny, col)
-        px, py = nx, ny
-    end
-end
-
 local function centered(str, cx, y, col, h)
     local w = text_size(str, h)
     text(cx - w / 2, y, str, col, h)
@@ -143,8 +133,202 @@ local function give_back_playback()
     store_set("borrowed", nil)
 end
 
+local function chan_label(ch)
+    return ch == 9 and "DRUMS" or ("CH " .. (ch + 1))
+end
+
 local function track_name(t)
-    return t.ch == 9 and "DRUMS" or ("CH " .. (t.ch + 1))
+    return t.medley and "PLAY ALL" or chan_label(t.ch)
+end
+
+-- PLAY ALL ------------------------------------------------------------------
+--
+-- The song is cut into bars. Every channel gets a score for every bar it plays in:
+--   density     notes per second against a target for the difficulty: too sparse is
+--               dull, and past the target it falls off again, so a busy hi-hat bar
+--               doesn't win just by being busy
+--   variety     how many different pitches, and how often consecutive notes change
+--   rhythm      how many different gaps between notes (in sixteenths)
+--   prominence  average velocity
+--   melody      how often it's the highest note sounding (the tune is usually on top)
+--   entrance    a bonus for coming in after two silent bars, when you'd notice it
+-- Drums score a bit lower, so they lead when nothing else is doing much.
+-- Then one pass of dynamic programming picks the channel for each bar that gives the best
+-- total, minus a cost per switch: cheap every 4 bars (phrase edges) and on an entrance,
+-- dear in between, so parts last a while and change hands where the music does. Silent
+-- channels can't be picked while anything else is playing. No randomness: the same song
+-- always gives the same chart.
+
+local MEDLEY_TARGET = { 2.0, 3.5, 5.0, 7.0 } -- notes per second a bar should ideally have
+
+local function bar_segments(len)
+    local segs = {}
+    if not beat(0) then -- no beats (SMPTE timing): 2 second blocks
+        local t = 0
+        while t < len do
+            segs[#segs + 1] = { t0 = t, t1 = math.min(len, t + 2), phrase = #segs % 4 == 0 }
+            t = t + 2
+        end
+        return segs
+    end
+    local t = 0
+    while t < len and #segs < 10000 do
+        local num, den = time_signature(t)
+        local t1 = time_at_beat(beat(t) + num * 4 / den)
+        if not t1 or t1 <= t then break end
+        segs[#segs + 1] = { t0 = t, t1 = math.min(t1, len), phrase = #segs % 4 == 0 }
+        t = t1
+    end
+    return segs
+end
+
+local function medley_analysis(real_tracks, len)
+    local segs = bar_segments(len)
+    local buckets, feats, chans = {}, {}, {}
+    for s = 1, #segs do buckets[s] = {} end
+    if #segs == 0 then return { segs = segs, buckets = buckets, feats = feats, chans = chans } end
+    for _, tr in ipairs(real_tracks) do
+        chans[#chans + 1] = tr.ch
+        local s = 1
+        for _, n in ipairs(tr.notes) do
+            while segs[s + 1] and n.start >= segs[s + 1].t0 do s = s + 1 end
+            local b = buckets[s][tr.ch]
+            if not b then
+                b = {}
+                buckets[s][tr.ch] = b
+            end
+            b[#b + 1] = n
+        end
+    end
+
+    for s, seg in ipairs(segs) do
+        local f = {}
+        feats[s] = f
+        local sixteenth = 15 / (tempo(seg.t0) or 120)
+        local melodic = {}
+        for ch, b in pairs(buckets[s]) do
+            if ch ~= 9 then
+                for _, n in ipairs(b) do melodic[#melodic + 1] = n end
+            end
+        end
+        for ch, b in pairs(buckets[s]) do
+            local count = #b
+            local seen_key, seen_gap = {}, {}
+            local distinct, distinct_gap, changes, vel, top = 0, 0, 0, 0, 0
+            for k, n in ipairs(b) do
+                if not seen_key[n.key] then
+                    seen_key[n.key] = true
+                    distinct = distinct + 1
+                end
+                vel = vel + n.velocity
+                if k > 1 then
+                    local prev = b[k - 1]
+                    if n.key ~= prev.key then changes = changes + 1 end
+                    local gap = n.start - prev.start
+                    if gap > 0.03 then
+                        local q = math.floor(gap / sixteenth + 0.5)
+                        if not seen_gap[q] then
+                            seen_gap[q] = true
+                            distinct_gap = distinct_gap + 1
+                        end
+                    end
+                end
+                if ch ~= 9 then
+                    local is_top = true
+                    for _, o in ipairs(melodic) do
+                        if o.channel ~= ch and o.key > n.key and o.start <= n.start + 0.03 and o.stop > n.start then
+                            is_top = false
+                            break
+                        end
+                    end
+                    if is_top then top = top + 1 end
+                end
+            end
+            local quiet_before = s > 2 and not buckets[s - 1][ch] and not buckets[s - 2][ch]
+            f[ch] = {
+                count = count,
+                variety = count > 1 and (0.5 * math.min(1, distinct / 5) + 0.5 * changes / (count - 1)) or 0.2,
+                rhythm = count > 2 and math.min(1, distinct_gap / 3) or 0.3,
+                prominence = vel / count / 127,
+                melody = ch ~= 9 and top / count or 0,
+                entrance = quiet_before and count >= 3,
+            }
+        end
+    end
+    return { segs = segs, buckets = buckets, feats = feats, chans = chans }
+end
+
+-- The notes (and which channel has the part when) for one difficulty.
+local function medley_for(track, diff)
+    if track.by_diff[diff] then return track.by_diff[diff] end
+    local m = track.analysis
+    local target = MEDLEY_TARGET[diff]
+    local S = #m.segs
+    local result = { notes = {}, parts = {} }
+    track.by_diff[diff] = result
+    if S == 0 then return result end
+
+    local best, from = {}, {}
+    for s = 1, S do
+        local seg, f = m.segs[s], m.feats[s]
+        local dur = math.max(0.25, seg.t1 - seg.t0)
+        local any = next(f) ~= nil
+        best[s], from[s] = {}, {}
+        for _, ch in ipairs(m.chans) do
+            local x = f[ch]
+            local v
+            if x then
+                local d = x.count / dur / target
+                local dens = d < 1 and d or 1 / math.sqrt(d)
+                v = dens + 0.6 * x.variety + 0.4 * x.rhythm + 0.3 * x.prominence + 0.5 * x.melody
+                    + (x.entrance and 0.3 or 0)
+                if ch == 9 then v = v * 0.75 end
+            else
+                v = any and -1000 or 0
+            end
+            if s == 1 then
+                best[s][ch] = v
+            else
+                local cost = seg.phrase and 0.3 or 0.9
+                if x and x.entrance then cost = cost * 0.5 end
+                local bv, bc = -math.huge, nil
+                for _, pc in ipairs(m.chans) do
+                    local c = best[s - 1][pc] - (pc == ch and 0 or cost)
+                    if c > bv then bv, bc = c, pc end
+                end
+                best[s][ch], from[s][ch] = bv + v, bc
+            end
+        end
+    end
+
+    local pick = {}
+    local bv, bc = -math.huge, nil
+    for _, ch in ipairs(m.chans) do
+        if best[S][ch] > bv then bv, bc = best[S][ch], ch end
+    end
+    for s = S, 1, -1 do
+        pick[s] = bc
+        bc = from[s][bc]
+    end
+    for s = 1, S do
+        local b = m.buckets[s][pick[s]]
+        if b then
+            local last = result.parts[#result.parts]
+            if not last or last.ch ~= pick[s] then
+                result.parts[#result.parts + 1] = { t = m.segs[s].t0, ch = pick[s] }
+            end
+            for _, n in ipairs(b) do result.notes[#result.notes + 1] = n end
+        end
+    end
+    return result
+end
+
+local function part_at(parts, t)
+    local found = parts[1]
+    for _, pt in ipairs(parts) do
+        if pt.t <= t then found = pt else break end
+    end
+    return found
 end
 
 -- analysis and charting -----------------------------------------------------
@@ -169,6 +353,15 @@ local function analyze(p)
             tracks[#tracks + 1] = t
         end
     end
+    if #tracks >= 2 then
+        local m = { ch = "all", medley = true, by_diff = {}, analysis = medley_analysis(tracks, p.length) }
+        local r = medley_for(m, 2)
+        if #r.notes > 0 then
+            m.notes = r.notes
+            m.nps = #r.notes / math.max(1, r.notes[#r.notes].start - r.notes[1].start)
+            table.insert(tracks, 1, m)
+        end
+    end
     sel_track = math.max(1, math.min(sel_track, #tracks))
 end
 
@@ -190,15 +383,16 @@ end
 
 local function build_chart(track, diff, lanes)
     local d = DIFFS[diff]
-    local notes = track.notes
-    local drums = track.ch == 9
+    local notes = track.medley and medley_for(track, diff).notes or track.notes
 
     -- 1. notes that start together become one chord
     local groups = {}
     local i = 1
     while i <= #notes do
         local g = { t = notes[i].start, notes = {}, stop = 0 }
-        while i <= #notes and notes[i].start - g.t <= 0.03 do
+        g.ch = notes[i].channel
+        g.drums = g.ch == 9
+        while i <= #notes and notes[i].start - g.t <= 0.03 and notes[i].channel == g.ch do
             g.notes[#g.notes + 1] = notes[i]
             g.stop = math.max(g.stop, notes[i].stop)
             i = i + 1
@@ -220,13 +414,13 @@ local function build_chart(track, diff, lanes)
 
     -- 3. lanes
     local gems = {}
-    local prev_top, prev_lane, prev_t = nil, nil, -math.huge
+    local prev_top, prev_lane, prev_t, prev_ch = nil, nil, -math.huge, nil
     local lo_i, hi_i = 1, 1
     for gi, g in ipairs(kept) do
         local next_t = kept[gi + 1] and kept[gi + 1].t or math.huge
         local glanes = {}
 
-        if drums then
+        if g.drums then
             local used = {}
             for _, n in ipairs(g.notes) do
                 local l = drum_lane(n.key, lanes)
@@ -241,12 +435,15 @@ local function build_chart(track, diff, lanes)
             while kept[hi_i + 1] and kept[hi_i + 1].t <= g.t + 3 do hi_i = hi_i + 1 end
             local lo, hi = 127, 0
             for j = lo_i, hi_i do
-                lo = math.min(lo, kept[j].top)
-                hi = math.max(hi, kept[j].top)
+                if kept[j].ch == g.ch then -- in PLAY ALL, only this part's own notes
+                    lo = math.min(lo, kept[j].top)
+                    hi = math.max(hi, kept[j].top)
+                end
             end
             local lane = hi > lo and math.floor((g.top - lo) / (hi - lo + 1) * lanes) or math.floor(lanes / 2)
 
             -- the contour wins over the range, unless it's a fresh phrase
+            if prev_ch ~= g.ch then prev_top = nil end -- the part changed hands: start fresh
             if prev_top and g.t - prev_t < 1.5 then
                 local iv = g.top - prev_top
                 local mag = math.abs(iv)
@@ -280,17 +477,17 @@ local function build_chart(track, diff, lanes)
             for _, o in ipairs(offsets) do
                 glanes[#glanes + 1] = start + o
             end
-            prev_top, prev_lane, prev_t = g.top, start + span, g.t
+            prev_top, prev_lane, prev_t, prev_ch = g.top, start + span, g.t, g.ch
         end
 
         local tail = nil
-        if not drums then
+        if not g.drums then
             local tail_end = math.min(g.stop, next_t - 0.08)
             if tail_end - g.t >= 0.4 then tail = tail_end end
         end
         table.sort(glanes)
         for _, l in ipairs(glanes) do
-            gems[#gems + 1] = { t = g.t, lane = l, tail = tail }
+            gems[#gems + 1] = { t = g.t, lane = l, tail = tail, ch = g.ch }
         end
     end
     return { gems = gems, lanes = lanes, ch = track.ch }
@@ -325,6 +522,8 @@ local function enter_menu(rewind)
     preview_t = t and t.notes[1].start - 0.5 or 0
 end
 
+local hype, acc_ema = 0.35, 0.8 -- how into it the crowd is, and a running hit rate
+
 local function start_game()
     local pspeed = SPEEDS[speed_idx]
     local look = hw_secs_cur * pspeed
@@ -336,6 +535,7 @@ local function start_game()
         g.state, g.holding = nil, false
     end
     stats = { score = 0, combo = 0, max_combo = 0, perfect = 0, good = 0, miss = 0 }
+    acc_ema = 0.8
     first_live, holding, particles, popup = 1, {}, {}, nil
     set_muted(nil)
     borrow_playback(pspeed)
@@ -373,10 +573,309 @@ local function game_layout(width, height, lanes)
     -- the z where the highway meets the bottom of the screen
     local s = 1 + (height - L.hit_y) * G1 / L.range
     L.zb = (1 / s - 1) / K
+    -- depth (in z) of one lane-width, scaled so a gem lying on the road at the hit line looks
+    -- about 55% as deep as it is wide; perspective flattens it further into the distance
+    L.kz = (L.bw / lanes) * 0.55 / (K / G1 * L.range)
     return L
 end
 local function y_of(L, z) return L.hit_y - (1 - s_of(z)) / G1 * L.range end
 local function x_of(L, lanepos, z) return L.cx + (lanepos / L.lanes - 0.5) * L.bw * s_of(z) end
+
+-- gems ---------------------------------------------------------------------
+--
+-- Each lane's gem has the cut its stone is best known for, built from facets in "road
+-- space" (u across the lane, v along the road, both -1..1) and pushed through the same
+-- perspective as the highway, so gems and their sockets lie flat on it.
+--   green  emerald   emerald cut (step cut: stepped rectangular rings)
+--   red    ruby      cushion brilliant
+--   yellow citrine   pear brilliant, pointing up the road
+--   blue   sapphire  oval brilliant
+--   orange fire opal trillion brilliant
+
+local GEM_R = 0.4                    -- lane widths
+local LIGHT_U, LIGHT_V = -0.45, 0.89 -- light from the far left
+
+local function make_cut(outline, style)
+    local n = #outline / 2
+    local pts = {}
+    local function add_ring(k)
+        local base = #pts / 2
+        for i = 1, n do
+            pts[#pts + 1] = outline[2 * i - 1] * k
+            pts[#pts + 1] = outline[2 * i] * k
+        end
+        local idx = {}
+        for i = 1, n do idx[i] = base + i end
+        return idx
+    end
+    local cut = { pts = pts, facets = {} }
+    cut.rim = add_ring(1.14)
+    cut.outline = add_ring(1)
+    local function light(i) -- how much outline edge i faces the light
+        local j = i % n + 1
+        local dx, dv = outline[2 * j - 1] - outline[2 * i - 1], outline[2 * j] - outline[2 * i]
+        local len = math.sqrt(dx * dx + dv * dv)
+        return (dv * LIGHT_U - dx * LIGHT_V) / len
+    end
+    local function facet(idx, shade) cut.facets[#cut.facets + 1] = { idx = idx, shade = shade } end
+    local o = cut.outline
+    if style == "step" then
+        local mid, tab = add_ring(0.74), add_ring(0.48)
+        for i = 1, n do
+            local j = i % n + 1
+            local l = light(i)
+            facet({ o[i], o[j], mid[j], mid[i] }, 0.8 + 0.3 * l)
+            facet({ mid[i], mid[j], tab[j], tab[i] }, 0.85 - 0.25 * l) -- steps alternate
+        end
+        cut.table = tab
+        facet(tab, 1.12)
+    else
+        local tab = add_ring(0.52)
+        for i = 1, n do
+            local j = i % n + 1
+            local l = 0.82 + 0.3 * light(i)
+            if i % 2 == 0 then
+                facet({ o[i], o[j], tab[i] }, l + 0.1)
+                facet({ o[j], tab[j], tab[i] }, l - 0.12)
+            else
+                facet({ o[i], o[j], tab[j] }, l + 0.1)
+                facet({ o[i], tab[j], tab[i] }, l - 0.12)
+            end
+        end
+        cut.table = tab
+        facet(tab, 1.1)
+    end
+    return cut
+end
+
+local function curve(n, fn) -- counter-clockwise outline from fn(angle) -> u, v
+    local o = {}
+    for k = 0, n - 1 do
+        local u, v = fn(k / n * math.pi * 2)
+        o[#o + 1], o[#o + 2] = u, v
+    end
+    return o
+end
+
+local CUTS = {
+    make_cut({ 0.82, -0.38, 0.82, 0.38, 0.58, 0.62, -0.58, 0.62, -0.82, 0.38, -0.82, -0.38, -0.58, -0.62, 0.58, -0.62 },
+        "step"),
+    make_cut(curve(12, function(a)
+        local c, sn = math.cos(a + math.pi / 12), math.sin(a + math.pi / 12)
+        local r = 0.8 / (math.abs(c) ^ 4 + math.abs(sn) ^ 4) ^ 0.25
+        return r * c, r * sn
+    end), "brilliant"),
+    make_cut(curve(12, function(t) return -1.05 * math.sin(t) * math.sin(t / 2), 0.95 * math.cos(t) end), "brilliant"),
+    make_cut(curve(12, function(a) return 0.74 * math.cos(a), 0.95 * math.sin(a) end), "brilliant"),
+    make_cut(curve(12, function(a)
+        local tri = math.cos(math.pi / 3) / math.cos(((a) % (math.pi * 2 / 3)) - math.pi / 3)
+        local r = 0.92 * (0.78 * tri + 0.22)
+        return r * math.cos(a + math.pi / 2), r * math.sin(a + math.pi / 2)
+    end), "brilliant"),
+}
+
+local function shade(c, f, a)
+    if f <= 1 then return { r = c.r * f, g = c.g * f, b = c.b * f, a = a } end
+    local t = math.min(1, f - 1)
+    return { r = c.r + (255 - c.r) * t, g = c.g + (255 - c.g) * t, b = c.b + (255 - c.b) * t, a = a }
+end
+
+-- Project a cut lying on the road (lane, z) into screen points, optionally scaled.
+local function project_cut(L, cut, lane, z, scale)
+    local P, px, py = cut.pts, {}, {}
+    local k = GEM_R * (scale or 1)
+    -- true perspective squashes distant gems to slivers; ease off so they still read as gems
+    local kv = k * L.kz / s_of(math.max(0, z)) ^ 0.6
+    for i = 1, #P / 2 do
+        local lp = lane + 0.5 + P[2 * i - 1] * k
+        local zz = z + P[2 * i] * kv
+        px[i], py[i] = x_of(L, lp, zz), y_of(L, zz)
+    end
+    return px, py
+end
+
+local function poly(px, py, idx, col)
+    local f = {}
+    for _, k in ipairs(idx) do
+        f[#f + 1] = px[k]
+        f[#f + 1] = py[k]
+    end
+    polygon(f, col)
+end
+
+local function loop(px, py, idx, col)
+    for i = 1, #idx do
+        local a, b = idx[i], idx[i % #idx + 1]
+        line(px[a], py[a], px[b], py[b], col)
+    end
+end
+
+local function draw_gem(L, lane, z, base, alpha, seed)
+    local cut = CUTS[lane + 1]
+    local px, py = project_cut(L, cut, lane, z)
+    poly(px, py, cut.rim, { r = 8, g = 8, b = 12, a = alpha })
+    if L.bw / L.lanes * s_of(z) < 36 then -- far away: silhouette and table are enough
+        poly(px, py, cut.outline, shade(base, 0.85, alpha))
+        poly(px, py, cut.table, shade(base, 1.12, alpha))
+        return
+    end
+    for fi, f in ipairs(cut.facets) do
+        local tw = math.sin(TIME * 2.5 + fi * 1.9 + seed)
+        local glint = tw > 0.92 and (tw - 0.92) * 9 or 0 -- now and then a facet catches the light
+        poly(px, py, f.idx, shade(base, f.shade + glint, alpha))
+    end
+end
+
+-- the socket each lane's gems drop into, the same cut, at the hit line
+local function draw_socket(L, lane, pressed, fl)
+    local cut = CUTS[lane + 1]
+    local c = LANE_COLORS[lane + 1]
+    local px, py = project_cut(L, cut, lane, 0)
+    if pressed then poly(px, py, cut.rim, with_a(c, 0.35)) end
+    loop(px, py, cut.rim, c)
+    loop(px, py, cut.outline, shade(c, 0.6, 1))
+    if fl > 0 then
+        local qx, qy = project_cut(L, cut, lane, 0, 1 + (1 - fl) * 0.7)
+        poly(qx, qy, cut.rim, with_a(c, fl * 0.45))
+        loop(qx, qy, cut.rim, shade(c, 1.5, fl))
+    end
+end
+
+-- crowd ---------------------------------------------------------------------
+
+local crowd = { w = 0, h = 0, people = {}, flashes = {} }
+local SKIN = {
+    { r = 240, g = 200, b = 170 }, { r = 210, g = 160, b = 120 }, { r = 170, g = 120, b = 85 },
+    { r = 120, g = 80,  b = 55 }, { r = 85, g = 58, b = 40 },
+}
+
+local function hsv(h, s, v)
+    h = (h % 1) * 6
+    local i = math.floor(h)
+    local f = h - i
+    local p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
+    local r, g, b = v, t, p
+    if i == 1 then
+        r, g, b = q, v, p
+    elseif i == 2 then
+        r, g, b = p, v, t
+    elseif i == 3 then
+        r, g, b = p, q, v
+    elseif i == 4 then
+        r, g, b = t, p, v
+    elseif i == 5 then
+        r, g, b = v, p, q
+    end
+    return { r = r * 255, g = g * 255, b = b * 255 }
+end
+
+local function build_crowd(width, height)
+    crowd.w, crowd.h, crowd.flashes = width, height, {}
+    local people = {}
+    local rows = 10
+    local unit = height / 34
+    local top, bottom = 0.2, 0.97
+    local gap = height * (bottom - top) / (rows - 1)
+    for r = 1, rows do
+        local t = (r - 1) / (rows - 1)
+        local s = 0.4 + t * 0.7
+        local y = height * (top + t * (bottom - top))
+        local step = unit * 2.3 * s
+        local x = -step * math.random()
+        while x < width + step do
+            people[#people + 1] = {
+                x = x + (math.random() - 0.5) * step * 0.4,
+                y = y + (math.random() - 0.5) * unit * 1.6 * s,
+                body_len = gap * 1.6, -- down past the next row's shoulders, so nobody floats
+                s = s * (0.85 + math.random() * 0.3),
+                shirt = hsv(math.random(), 0.55, 1),
+                skin = SKIN[math.random(1, #SKIN)],
+                offbeat = math.random() < 0.3 and 0.5 or 0, -- some bounce on the "and"
+                zeal = 0.35 + math.random() * 0.65,
+                wave = math.random() * 6.28,
+                lighter = math.random() < 0.25,
+            }
+            x = x + step
+        end
+    end
+    crowd.people, crowd.unit = people, unit
+end
+
+local function update_hype(target)
+    hype = hype + (target - hype) * math.min(1, DT * 1.5)
+end
+
+local function draw_backdrop(width, height, beat_pos)
+    if crowd.w ~= width or crowd.h ~= height then build_crowd(width, height) end
+    local pulse = 1 + 0.35 * hype * (1 - beat_pos % 1) ^ 2
+
+    -- sky: dark violet fading to black
+    local bands = 14
+    for i = 0, bands - 1 do
+        local t = i / bands
+        local c = hsv(0.76 - t * 0.08, 0.7, (0.1 + 0.08 * hype) * (1 - t) * pulse)
+        rect(0, height * t, width, height * (t + 1 / bands) + 1, c)
+    end
+
+    -- stage lights sweeping over the crowd
+    for i = 1, 4 do
+        local ang = math.sin(TIME * (0.35 + i * 0.11) + i * 1.7) * 0.6
+        local x0 = width * (i - 0.5) / 4
+        local len = height * 1.2
+        local spread = 0.12
+        local c = hsv(i * 0.23 + TIME * 0.02, 0.8, 1)
+        c.a = 0.04 + 0.1 * hype * pulse
+        triangle(x0, -5, x0 + math.sin(ang - spread) * len, math.cos(ang - spread) * len,
+            x0 + math.sin(ang + spread) * len, math.cos(ang + spread) * len, c)
+    end
+
+    -- people, back row first
+    local light = 0.3 + 0.55 * hype
+    for _, pp in ipairs(crowd.people) do
+        local u = crowd.unit * pp.s
+        local energy = hype * pp.zeal
+        local ph = (beat_pos + pp.offbeat) % 1
+        local jump = (1 - ph) ^ 3 * u * 1.8 * math.max(0, energy - 0.2)
+        local x = pp.x + math.sin(beat_pos * math.pi + pp.wave) * u * 0.35 * energy
+        local y = pp.y - jump
+        local depth = 0.55 + 0.45 * pp.s -- back rows sit in the dark
+        local body = shade(pp.shirt, 0.18 + 0.22 * light * depth, 1)
+        local head = shade(pp.skin, 0.25 + 0.4 * light * depth, 1)
+        if energy > 0.4 then -- arms up, waving
+            local wave = math.sin(TIME * 5 + pp.wave) * u * 0.5 * energy
+            local reach = u * (1.6 + energy)
+            local hx1, hy1 = x - u * 1.2 + wave, y - reach
+            local hx2, hy2 = x + u * 1.2 + wave, y - reach
+            local aw = u * 0.2
+            polygon({ x - u * 0.75, y + u * 0.3, x - u * 0.35, y + u * 0.3, hx1 + aw, hy1, hx1 - aw, hy1 }, body)
+            polygon({ x + u * 0.35, y + u * 0.3, x + u * 0.75, y + u * 0.3, hx2 + aw, hy2, hx2 - aw, hy2 }, body)
+            circle(hx1, hy1, aw * 1.3, head)
+            circle(hx2, hy2, aw * 1.3, head)
+            if pp.lighter and hype > 0.7 then
+                circle(hx2, hy2 - u * 0.2, math.max(1, u * 0.22), { r = 255, g = 230, b = 150, a = (hype - 0.7) * 3 })
+            end
+        end
+        local yb = pp.y + pp.body_len
+        polygon({ x - u * 0.6, y - u * 0.1, x + u * 0.6, y - u * 0.1, x + u * 0.9, y + u * 0.4,
+            x + u * 0.8, yb, x - u * 0.8, yb, x - u * 0.9, y + u * 0.4 }, body)
+        circle(x, y - u * 0.75, u * 0.62, head)
+    end
+
+    -- camera flashes when it's really going off
+    if hype > 0.75 and math.random() < (hype - 0.75) * 30 * DT then
+        local pp = crowd.people[math.random(1, #crowd.people)]
+        crowd.flashes[#crowd.flashes + 1] = { x = pp.x, y = pp.y - crowd.unit * pp.s * 2, life = 0.12 }
+    end
+    for i = #crowd.flashes, 1, -1 do
+        local f = crowd.flashes[i]
+        f.life = f.life - DT
+        if f.life <= 0 then
+            table.remove(crowd.flashes, i)
+        else
+            circle(f.x, f.y, crowd.unit * 0.6, { r = 255, g = 255, b = 255, a = f.life / 0.12 })
+        end
+    end
+end
 
 local function sparks(x, y, col, n, size)
     for _ = 1, n do
@@ -408,6 +907,7 @@ local function hit(g, nowj, pspeed, L)
     local mult = math.min(4, 1 + math.floor(stats.combo / 10))
     stats.score = stats.score + (perfect and 100 or 60) * mult
     if perfect then stats.perfect = stats.perfect + 1 else stats.good = stats.good + 1 end
+    acc_ema = acc_ema * 0.92 + 0.08
     if g.tail then
         g.holding = true
         holding[#holding + 1] = g
@@ -424,8 +924,10 @@ local function miss(g, mute)
     g.state = "miss"
     stats.combo = 0
     stats.miss = stats.miss + 1
+    acc_ema = acc_ema * 0.92
+    hype = math.max(0, hype - 0.04)
     popup = { text = "MISS", life = 0.5, col = { r = 255, g = 90, b = 90 } }
-    if mute then set_muted(play_track.ch) end
+    if mute then set_muted(g.ch) end
 end
 
 local function update_play(p, pspeed, L, offset, mute_on_miss, ghost_penalty)
@@ -490,11 +992,16 @@ local function draw_game(p, L, look, th, width, height)
     local lw = L.bw / lanes
     local zt = 1
 
+    local show_crowd = setting_bool("crowd", true)
+    if show_crowd then
+        draw_backdrop(width, height, (game_time >= 0 and beat(game_time)) or TIME * 2)
+    end
+
     -- road
     polygon({
         x_of(L, 0, zt), y_of(L, zt), x_of(L, lanes, zt), y_of(L, zt),
         x_of(L, lanes, L.zb), height, x_of(L, 0, L.zb), height,
-    }, { r = 18, g = 18, b = 28 })
+    }, { r = 18, g = 18, b = 28, a = show_crowd and setting_float("road_opacity", 0.85, 0.3, 1) or 1 })
 
     -- beat and bar lines
     local b0 = beat(math.max(0, game_time))
@@ -523,19 +1030,10 @@ local function draw_game(p, L, look, th, width, height)
             edge and { r = 150, g = 150, b = 190 } or { r = 45, g = 45, b = 65 })
     end
 
-    -- hit line and frets
-    rect(x_of(L, 0, 0), L.hit_y - 1, x_of(L, lanes, 0), L.hit_y + 1, { r = 200, g = 200, b = 230 })
+    -- hit line and sockets
+    rect(x_of(L, 0, 0), L.hit_y - 1, x_of(L, lanes, 0), L.hit_y + 1, { r = 200, g = 200, b = 230, a = 0.6 })
     for lane = 0, lanes - 1 do
-        local x = x_of(L, lane + 0.5, 0)
-        local c = LANE_COLORS[lane + 1]
-        local r = lw * 0.36
-        if input_down(LANE_INPUT[lane + 1]) then circle(x, L.hit_y, r, with_a(c, 0.45)) end
-        ring(x, L.hit_y, r, c)
-        ring(x, L.hit_y, r - 1, c)
-        local f = flash[lane] or 0
-        if f > 0 then
-            circle(x, L.hit_y, r * (1 + (1 - f) * 0.6), with_a(c, f * 0.5))
-        end
+        draw_socket(L, lane, input_down(LANE_INPUT[lane + 1]), flash[lane] or 0)
     end
 
     -- gems, far to near
@@ -567,13 +1065,8 @@ local function draw_game(p, L, look, th, width, height)
             end
         end
         if g.state ~= "hit" and z >= L.zb and z <= 1 then
-            local s = s_of(z)
-            local x, y = x_of(L, g.lane + 0.5, z), y_of(L, z)
-            local r = lw * 0.34 * s
-            local body = g.state == "miss" and { r = 80, g = 80, b = 90 } or c
-            circle(x, y, r, { r = 10, g = 10, b = 15 })
-            circle(x, y, r * 0.85, body)
-            circle(x, y, r * 0.45, { r = 245, g = 245, b = 250, a = g.state == "miss" and 0.2 or 0.85 })
+            local missed = g.state == "miss"
+            draw_gem(L, g.lane, z, missed and { r = 85, g = 85, b = 95 } or c, missed and 0.6 or 1, i * 2.3)
         end
     end
 
@@ -595,6 +1088,16 @@ local function draw_game(p, L, look, th, width, height)
     local label = track_name(play_track) .. "  " .. DIFFS[sel_diff].name
     w = text_size(label, th)
     text(width - w - 12, 12 + th * 2, label, { r = 150, g = 155, b = 180 }, th)
+    if play_track.medley then
+        local parts = medley_for(play_track, sel_diff).parts
+        local now_part, next_part = part_at(parts, game_time), part_at(parts, game_time + look)
+        if now_part then
+            local s = "playing " .. chan_label(now_part.ch)
+            if next_part and next_part.ch ~= now_part.ch then s = s .. "  then " .. chan_label(next_part.ch) end
+            w = text_size(s, th)
+            text(width - w - 12, 12 + th * 3, s, { r = 120, g = 200, b = 255 }, th)
+        end
+    end
 
     -- progress
     if p.length and p.length > 0 then
@@ -646,7 +1149,12 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
         end
         local ch = get_chart(tr, sel_diff, lanes)
         text(sx + 6, ytop + 4, track_name(tr), sel and white or dim, hsc)
-        text(sx + 6, ytop + 4 + hsc, #ch.gems .. " gems", dim, hsc)
+        local sub = #ch.gems .. " gems"
+        if tr.medley then
+            local pt = part_at(medley_for(tr, sel_diff).parts, preview_t)
+            if pt then sub = chan_label(pt.ch) end
+        end
+        text(sx + 6, ytop + 4 + hsc, sub, dim, hsc)
 
         local hy0 = ytop + 8 + hsc * 2
         local iw = sw - 12
@@ -727,6 +1235,10 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
 end
 
 local function draw_results(width, height, th)
+    if setting_bool("crowd", true) then
+        draw_backdrop(width, height, TIME * 2)
+        rect(0, 0, width, height, { r = 0, g = 0, b = 0, a = 0.55 })
+    end
     local white = { r = 230, g = 232, b = 245 }
     local gold = { r = 255, g = 200, b = 80 }
     local judged = stats.perfect + stats.good + stats.miss
@@ -788,6 +1300,15 @@ function render(width, height, left, right)
     end
 
     local focus = has_focus()
+
+    if state == "play" and stats.combo then
+        update_hype(0.15 + 0.45 * acc_ema ^ 2 + 0.4 * math.min(1, stats.combo / 40))
+    elseif state == "results" then
+        local judged = stats.perfect + stats.good + stats.miss
+        update_hype(judged > 0 and ((stats.perfect + stats.good) / judged) ^ 2 or 0.3)
+    else
+        update_hype(0.4)
+    end
 
     -- changing song: the new one loads paused, and the song_loads check brings up its menu
     if state == "menu" or state == "results" then
