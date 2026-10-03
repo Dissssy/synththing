@@ -293,7 +293,7 @@ impl App {
             available_scripts,
             active_script,
             editor_text: source,
-            completion: CompletionWorker::new(),
+            completion: CompletionWorker::new(lua_visualizer::host_global_names()),
             editor_hover_info: None,
             editor_opened_this_run: false,
             volume: 1.0,

@@ -23,8 +23,8 @@
     - local history: last ~50 versions per script, History... to restore
     - zoom (Ctrl+scroll), word wrap toggle
 
-[L][!] script editor, group 2: understanding Lua (needs a parser, e.g.
-    full_moon)
+[L][!] script editor, group 2: understanding Lua - DONE (lua_analysis.rs on
+    full_moon 2.2; StyLua for formatting)
     - autocomplete popup as you type: host API, Lua stdlib (math.,
       string., table.), the script's locals and functions, fields of known
       tables (playback(). -> position, song_id, ...); Tab/Enter accepts

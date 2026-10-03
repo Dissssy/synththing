@@ -1,19 +1,15 @@
-//! A small "internal LSP" for the script editor: a background-computed list
-//! of autocomplete suggestions, plus hover/lookup info for a single
-//! identifier (used for both mouse-hover and a keybind-at-cursor trigger;
-//! see `app.rs`'s editor UI).
-//!
-//! Today the analysis is just our fixed host API table (`HOST_API`), which
-//! doesn't depend on the script's own source at all. It's still run through
-//! the same request/background/discard-stale-result machinery real analysis
-//! will eventually need (parsing locals in scope at the cursor, listing Lua
-//! stdlib members, ...) so that becoming slower later is a change to
-//! `analyze`, not a rewrite of how the editor talks to it, see the repo
-//! TODO for what's deliberately not built yet.
+//! The script editor's background worker and host API table. Every edit
+//! sends the source to [`CompletionWorker`], which analyzes it off the UI
+//! thread (`lua_analysis`: scopes, warnings, completions, signatures) and
+//! keeps the newest result; a stale one finishing late is dropped. Also
+//! hover/lookup info for a single identifier.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+use crate::lua_analysis::{self, Analysis};
 
 /// name, one-line description, the single source of truth for both the
 /// suggestion list and hover lookups, and also consulted by `lua_highlight`
@@ -99,7 +95,11 @@ pub const HOST_API: &[(&str, &str)] = &[
 /// from the UI thread every frame the mouse is over the editor, no need to
 /// route this through [`CompletionWorker`].
 pub fn lookup(word: &str) -> Option<&'static str> {
-    HOST_API.iter().find(|&&(name, _)| name == word).map(|&(_, detail)| detail)
+    HOST_API
+        .iter()
+        .chain(lua_analysis::LUA_GLOBALS)
+        .find(|&&(name, _)| name == word)
+        .map(|&(_, detail)| detail)
 }
 
 /// One autocomplete suggestion.
@@ -109,58 +109,53 @@ pub struct Suggestion {
     pub detail: String,
 }
 
-/// Computes suggestions off the UI thread on every [`request`](Self::request),
-/// keeping only the result of the most recent request, an in-flight one
+/// Analyzes the script off the UI thread on every [`request`](Self::request),
+/// keeping only the result of the most recent request: an in-flight one
 /// that's since been superseded by a newer edit finishes but is discarded
 /// rather than overwriting a fresher result.
 pub struct CompletionWorker {
     generation: Arc<AtomicU64>,
-    suggestions: Arc<Mutex<Vec<Suggestion>>>,
+    analysis: Arc<Mutex<Arc<Analysis>>>,
+    /// Globals a script has without defining them.
+    known: Arc<HashSet<String>>,
 }
 
 impl CompletionWorker {
-    pub fn new() -> Self {
+    /// `host_globals`: the app's own globals, from a real script VM.
+    pub fn new(host_globals: Vec<String>) -> Self {
         let worker = Self {
             generation: Arc::new(AtomicU64::new(0)),
-            suggestions: Arc::new(Mutex::new(Vec::new())),
+            analysis: Arc::default(),
+            known: Arc::new(lua_analysis::known_globals(host_globals)),
         };
         worker.request(String::new());
         worker
     }
 
-    /// Call whenever the script source changes. `source` isn't used by
-    /// today's analysis, but the request already carries it for when that
-    /// changes (see module docs).
+    /// Call whenever the script source changes.
     pub fn request(&self, source: String) {
         let this_generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let generation = Arc::clone(&self.generation);
-        let suggestions = Arc::clone(&self.suggestions);
+        let analysis = Arc::clone(&self.analysis);
+        let known = Arc::clone(&self.known);
         thread::spawn(move || {
-            let result = analyze(&source);
+            let result = Arc::new(lua_analysis::analyze(&source, &known));
             if generation.load(Ordering::SeqCst) == this_generation {
-                *suggestions.lock().unwrap() = result;
+                *analysis.lock().unwrap() = result;
             }
         });
     }
 
-    /// The most recently completed (non-stale) suggestion list.
+    /// The most recent analysis (possibly an edit or two behind).
+    pub fn analysis(&self) -> Arc<Analysis> {
+        Arc::clone(&self.analysis.lock().unwrap())
+    }
+
+    /// Every host function, for the Functions list.
     pub fn suggestions(&self) -> Vec<Suggestion> {
-        self.suggestions.lock().unwrap().clone()
+        HOST_API
+            .iter()
+            .map(|&(label, detail)| Suggestion { label: label.to_string(), detail: detail.to_string() })
+            .collect()
     }
-}
-
-impl Default for CompletionWorker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Today: just the fixed host API, regardless of `source`. The parameter is
-/// already here for when this grows into real parsing (locals in scope at
-/// the cursor, Lua stdlib members, ...), deliberately parked, see TODO.
-fn analyze(_source: &str) -> Vec<Suggestion> {
-    HOST_API
-        .iter()
-        .map(|&(label, detail)| Suggestion { label: label.to_string(), detail: detail.to_string() })
-        .collect()
 }

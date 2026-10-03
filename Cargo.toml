@@ -30,6 +30,8 @@ notify = "8"                                              # live-refresh watched
 symphonia = { version = "0.5.5", default-features = false } # song info (song_info.rs); same copy and formats rodio uses
 clap = { version = "4.6", features = ["derive"] }         # command-line arguments (cli.rs)
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }  # unpacking a downloaded ffmpeg (ffmpeg.rs)
+stylua = { version = "2.5.2", default-features = false, features = ["lua54"] }
+full_moon = { version = "2.2", default-features = false, features = ["lua54"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_SystemInformation"] }  # re-attach to the terminal for CLI use; local time for recording names

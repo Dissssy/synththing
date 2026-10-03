@@ -7,6 +7,12 @@
 //! comments, brackets and quotes close themselves, `end` lines itself up
 //! with its block. Ctrl+S applies (and saves) now, Ctrl+F finds, Ctrl+H
 //! replaces, Ctrl+scroll zooms.
+//!
+//! Understanding the code (`lua_analysis`, run in the background on every
+//! edit): problems underlined (and listed), completions as you type
+//! (Ctrl+Space to ask), signature help inside a call, an outline to jump
+//! between functions, F12 / Ctrl+click to go to a name's definition, hover
+//! for your own names, and Shift+Alt+F to format the script.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -16,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{char_index_of_line, identifier_at, App, SCRIPT_EDITOR_ID};
 use crate::code_edit::{self, Selection};
+use crate::lua_analysis::{self, Analysis, Item, Severity};
 use crate::lua_completion;
 use crate::lua_highlight;
 use crate::lua_visualizer;
@@ -67,6 +74,19 @@ pub struct EditorState {
     last_snapshot: Option<Instant>,
     /// Put the text cursor here and scroll to it (a find match, a line).
     scroll_to: Option<usize>,
+    /// The completion list, while it's up.
+    popup: Option<Popup>,
+    /// Ctrl+Space: show completions on the next frame even with nothing
+    /// typed.
+    force_popup: bool,
+}
+
+struct Popup {
+    items: Vec<Item>,
+    selected: usize,
+    /// The typed part being completed: chars `from..cursor`.
+    from: usize,
+    cursor: usize,
 }
 
 struct Find {
@@ -289,10 +309,58 @@ impl App {
         }
 
         if !ctx.memory(|m| m.has_focus(id)) {
+            self.editor.popup = None;
             return false;
         }
         let mut sel = load_selection(ctx, id, &self.editor_text);
         let mut changed = false;
+
+        // The completion list takes the arrows, Enter, Tab and Esc.
+        if let Some(popup) = &mut self.editor.popup {
+            let (down, up, accept, close) = ctx.input_mut(|i| {
+                (
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                        || i.consume_key(egui::Modifiers::NONE, egui::Key::Tab),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+                )
+            });
+            let count = popup.items.len().max(1);
+            if down {
+                popup.selected = (popup.selected + 1) % count;
+            }
+            if up {
+                popup.selected = (popup.selected + count - 1) % count;
+            }
+            if close {
+                self.editor.popup = None;
+            } else if accept {
+                let popup = self.editor.popup.take().expect("checked above");
+                if let Some(item) = popup.items.get(popup.selected) {
+                    let end = code_edit::replace_range(&mut self.editor_text, (popup.from, sel.1.max(popup.from)), &item.label);
+                    store_selection(ctx, id, (end, end));
+                    return true;
+                }
+            }
+        }
+        let (force, definition, format) = ctx.input_mut(|i| {
+            (
+                i.consume_key(command, egui::Key::Space),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::F12),
+                i.consume_key(egui::Modifiers::SHIFT | egui::Modifiers::ALT, egui::Key::F),
+            )
+        });
+        if force {
+            self.editor.force_popup = true;
+        }
+        if definition {
+            self.go_to_definition(ctx, id, sel.1);
+        }
+        if format {
+            return self.format_script(ctx, id);
+        }
+
         let text = &mut self.editor_text;
         ctx.input_mut(|i| {
             if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
@@ -382,6 +450,16 @@ impl App {
             None => Vec::new(),
         };
         let current_match = self.editor.find.as_ref().map(|f| f.current);
+        let analysis = self.completion.analysis();
+        // Lines with problems get a mark by their number.
+        let mut marks = std::collections::HashMap::new();
+        for d in &analysis.diagnostics {
+            let color = severity_color(d.severity);
+            let entry = marks.entry(d.line).or_insert(color);
+            if d.severity == Severity::Error {
+                *entry = color;
+            }
+        }
 
         let scroll = if wrap { egui::ScrollArea::vertical() } else { egui::ScrollArea::both() };
         scroll.id_salt("visualizer_editor_scroll").auto_shrink([false, false]).show(ui, |ui| {
@@ -407,7 +485,7 @@ impl App {
                     (output, gutter, behind)
                 })
                 .inner;
-            paint_line_numbers(ui, &output, gutter, &font, error_line);
+            paint_line_numbers(ui, &output, gutter, &font, error_line, &marks);
 
             // Highlights behind the text: find matches, and the bracket pair
             // at the cursor.
@@ -439,6 +517,16 @@ impl App {
                     let rect = row_rect(at, at + 1);
                     shapes.push(egui::Shape::rect_filled(rect, 1.0, ui.visuals().selection.bg_fill.gamma_multiply(0.35)));
                     shapes.push(egui::Shape::rect_stroke(rect, 1.0, stroke, egui::StrokeKind::Inside));
+                }
+            }
+            // Problems, underlined with a wavy line.
+            let length = self.editor_text.chars().count();
+            for d in &analysis.diagnostics {
+                let from = analysis.char_index(d.start).min(length);
+                let to = analysis.char_index(d.end).clamp(from, length).max(from + 1).min(length.max(from + 1));
+                let rect = row_rect(from, to.min(length));
+                if rect.intersects(visible) {
+                    shapes.push(squiggle(rect, severity_color(d.severity)));
                 }
             }
             ui.painter().set(behind, shapes);
@@ -481,16 +569,68 @@ impl App {
                 }
             }
 
-            // Mouse hovering a known identifier.
+            // Completions: as a name is typed (or after `.`/`:`), or when
+            // asked for; gone when the cursor moves off.
+            let cursor = output.cursor_range.filter(|r| r.primary.index.0 == r.secondary.index.0).map(|r| r.primary.index.0);
+            let typed = ui.input(|i| {
+                i.events.iter().any(|e| matches!(e, egui::Event::Text(t) if t.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == ':')))
+            });
+            let forced = std::mem::take(&mut self.editor.force_popup);
+            match cursor {
+                Some(cursor) if output.response.has_focus() => {
+                    let keep = self.editor.popup.as_ref().is_some_and(|p| p.cursor == cursor);
+                    let refresh = forced || typed || (keep && output.response.changed());
+                    if refresh {
+                        self.editor.popup = lua_analysis::complete(&analysis, &self.editor_text, cursor, forced).map(|c| {
+                            let selected = self.editor.popup.as_ref().map_or(0, |p| p.selected).min(c.items.len() - 1);
+                            Popup { items: c.items, selected: if typed { 0 } else { selected }, from: c.from, cursor }
+                        });
+                    } else if !keep {
+                        self.editor.popup = None;
+                    }
+                }
+                _ => self.editor.popup = None,
+            }
+            if let Some(cursor) = cursor
+                && output.response.has_focus()
+            {
+                let at = output.galley.pos_from_cursor(egui::text::CCursor::new(cursor)).translate(output.galley_pos.to_vec2());
+                if let Some(popup) = &mut self.editor.popup {
+                    if let Some(accepted) = completion_popup(ui, popup, at, font_size) {
+                        let end = code_edit::replace_range(&mut self.editor_text, (popup.from, cursor), &accepted);
+                        store_selection(&ctx, editor_id, (end, end));
+                        self.editor.popup = None;
+                        self.editor_changed();
+                    }
+                } else if let Some(signature) = lua_analysis::signature_at(&analysis, &self.editor_text, cursor) {
+                    signature_help(ui, &signature, at, font_size);
+                }
+            }
+
+            // Ctrl+click: go to the definition.
+            if output.response.clicked()
+                && ui.input(|i| i.modifiers.command)
+                && let Some(pointer) = ui.input(|i| i.pointer.interact_pos())
+            {
+                let index = output.galley.cursor_from_pos(pointer - output.galley_pos).index.0;
+                self.go_to_definition(&ctx, editor_id, index);
+            }
+
+            // Hovering: a problem's message, else what a name is.
             if output.response.hovered()
                 && let Some(pointer) = ui.input(|i| i.pointer.hover_pos())
             {
-                let local = pointer - output.galley_pos;
-                let char_index = output.galley.cursor_from_pos(local).index.0;
-                if let Some(word) = identifier_at(&self.editor_text, char_index)
-                    && let Some(detail) = lua_completion::lookup(&word)
-                {
-                    self.editor_hover_info = Some((word, detail.to_string()));
+                let char_index = output.galley.cursor_from_pos(pointer - output.galley_pos).index.0;
+                let byte = analysis.byte_index(char_index);
+                if let Some(d) = analysis.diagnostics.iter().find(|d| d.start <= byte && byte < d.end.max(d.start + 1)) {
+                    let label = if d.severity == Severity::Error { "Error" } else { "Warning" };
+                    self.editor_hover_info = Some((label.to_string(), d.message.clone()));
+                } else if let Some(word) = identifier_at(&self.editor_text, char_index) {
+                    if let Some(info) = describe_name(&analysis, byte, &word) {
+                        self.editor_hover_info = Some((word, info));
+                    } else if let Some(detail) = lua_completion::lookup(&word) {
+                        self.editor_hover_info = Some((word, detail.to_string()));
+                    }
                 }
             }
 
@@ -503,6 +643,69 @@ impl App {
                     .and_then(|word| lua_completion::lookup(&word).map(|d| (word, d.to_string())));
             }
         });
+    }
+
+    /// Put the text cursor at char `index` and scroll there.
+    fn jump_to(&mut self, ctx: &egui::Context, id: egui::Id, index: usize) {
+        store_selection(ctx, id, (index, index));
+        self.editor.scroll_to = Some(index);
+        ctx.memory_mut(|m| m.request_focus(id));
+    }
+
+    /// F12 / Ctrl+click: jump to where the name at char `index` is defined
+    /// (a local, or one of the script's own functions).
+    fn go_to_definition(&mut self, ctx: &egui::Context, id: egui::Id, index: usize) {
+        let analysis = self.completion.analysis();
+        let Some(word) = identifier_at(&self.editor_text, index) else { return };
+        let byte = analysis.byte_index(index);
+        let target = analysis
+            .ref_at(byte)
+            .and_then(|r| r.local)
+            .and_then(|i| analysis.locals.get(i))
+            .map(|l| l.at)
+            .or_else(|| analysis.local_named(&word, byte).map(|l| l.at))
+            .or_else(|| analysis.functions.iter().find(|f| f.name == word).map(|f| f.at));
+        match target {
+            Some(at) => {
+                let index = analysis.char_index(at);
+                self.jump_to(ctx, id, index);
+            }
+            None => {
+                if let Some(detail) = lua_completion::lookup(&word) {
+                    self.editor_hover_info = Some((word, detail.to_string()));
+                } else {
+                    self.status = format!("Couldn't find where `{word}` is defined.");
+                }
+            }
+        }
+    }
+
+    /// Shift+Alt+F: lay the script out with StyLua (4-space indents, lines
+    /// up to 120 wide). The text cursor stays on the same line. Returns
+    /// whether the text changed.
+    fn format_script(&mut self, ctx: &egui::Context, id: egui::Id) -> bool {
+        let mut config = stylua_lib::Config::new();
+        config.syntax = stylua_lib::LuaVersion::Lua54;
+        config.indent_type = stylua_lib::IndentType::Spaces;
+        config.indent_width = 4;
+        config.column_width = 120;
+        config.quote_style = stylua_lib::QuoteStyle::AutoPreferDouble;
+        match stylua_lib::format_code(&self.editor_text, config, None, stylua_lib::OutputVerification::None) {
+            Ok(formatted) if formatted != self.editor_text => {
+                let (_, cursor) = load_selection(ctx, id, &self.editor_text);
+                let line = self.editor_text.chars().take(cursor).filter(|&c| c == '\n').count() + 1;
+                self.editor_text = formatted;
+                let index = char_index_of_line(&self.editor_text, line);
+                store_selection(ctx, id, (index, index));
+                self.status = "Formatted the script.".to_string();
+                true
+            }
+            Ok(_) => false,
+            Err(e) => {
+                self.status = format!("Can't format the script until it parses: {e}");
+                false
+            }
+        }
     }
 
     fn editor_settings_changed(&mut self) {
@@ -528,6 +731,49 @@ impl App {
                 let end = code_edit::replace_range(&mut self.editor_text, sel, &name);
                 store_selection(&ctx, editor_id, (end, end));
                 self.editor_changed();
+            }
+            let analysis = self.completion.analysis();
+            ui.menu_button("Go to", |ui| {
+                if analysis.functions.is_empty() {
+                    ui.weak("No functions yet");
+                }
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    for function in &analysis.functions {
+                        let label = format!("{}({})", function.name, function.params.join(", "));
+                        if ui.button(label).on_hover_text(format!("line {}", function.line)).clicked() {
+                            let index = analysis.char_index(function.at);
+                            self.jump_to(ui.ctx(), editor_id, index);
+                            ui.close();
+                        }
+                    }
+                });
+            })
+            .response
+            .on_hover_text("The script's functions; F12 or Ctrl+click on a name goes to where it's defined");
+            let problems = analysis.diagnostics.len();
+            if problems > 0 {
+                let errors = analysis.diagnostics.iter().any(|d| d.severity == Severity::Error);
+                let color = severity_color(if errors { Severity::Error } else { Severity::Warning });
+                let label = egui::RichText::new(format!("{problems} problem{}", if problems == 1 { "" } else { "s" }))
+                    .color(color);
+                ui.menu_button(label, |ui| {
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for d in &analysis.diagnostics {
+                            let text = egui::RichText::new(format!("{}: {}", d.line, d.message)).color(severity_color(d.severity));
+                            if ui.button(text).clicked() {
+                                let index = analysis.char_index(d.start);
+                                self.jump_to(ui.ctx(), editor_id, index);
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+            }
+            if ui.button("Format").on_hover_text("Tidy the script's layout (Shift+Alt+F)").clicked() {
+                let ctx = ui.ctx().clone();
+                if self.format_script(&ctx, editor_id) {
+                    self.editor_changed();
+                }
             }
             if ui.button("Find").on_hover_text("Ctrl+F; Ctrl+H to replace").clicked() {
                 self.editor.find = Some(Find {
@@ -789,6 +1035,7 @@ fn paint_line_numbers(
     gutter: egui::Rect,
     font: &egui::FontId,
     error_line: Option<usize>,
+    marks: &std::collections::HashMap<usize, egui::Color32>,
 ) {
     let painter = ui.painter();
     let normal = ui.visuals().weak_text_color();
@@ -804,13 +1051,129 @@ fn paint_line_numbers(
                 let is_error = error_line == Some(line);
                 let color = if is_error { error } else { normal };
                 painter.text(egui::pos2(right, top), egui::Align2::RIGHT_TOP, line.to_string(), font.clone(), color);
+                let middle = top + row.row.size.y / 2.0;
                 if is_error {
-                    let middle = top + row.row.size.y / 2.0;
                     painter.circle_filled(egui::pos2(gutter.right() - 3.0, middle), 2.5, error);
+                } else if let Some(&color) = marks.get(&line) {
+                    painter.circle_filled(egui::pos2(gutter.right() - 3.0, middle), 2.0, color);
                 }
             }
             line += 1;
         }
         starts_line = row.ends_with_newline;
     }
+}
+
+fn severity_color(severity: Severity) -> egui::Color32 {
+    match severity {
+        Severity::Error => egui::Color32::from_rgb(230, 80, 80),
+        Severity::Warning => egui::Color32::from_rgb(220, 180, 60),
+    }
+}
+
+/// A wavy line along the bottom of `rect`.
+fn squiggle(rect: egui::Rect, color: egui::Color32) -> egui::Shape {
+    let y = rect.bottom() - 1.5;
+    let step = 3.0;
+    let mut points = Vec::new();
+    let mut x = rect.left();
+    let mut up = true;
+    while x <= rect.right() {
+        points.push(egui::pos2(x, if up { y - 1.5 } else { y + 0.5 }));
+        x += step;
+        up = !up;
+    }
+    if points.len() < 2 {
+        points.push(egui::pos2(rect.right(), y));
+    }
+    egui::Shape::line(points, egui::Stroke::new(1.0, color))
+}
+
+/// What a name of the script's own is, for hovering it.
+fn describe_name(analysis: &Analysis, byte: usize, word: &str) -> Option<String> {
+    let local = analysis
+        .ref_at(byte)
+        .and_then(|r| r.local)
+        .and_then(|i| analysis.locals.get(i))
+        .or_else(|| analysis.locals.iter().find(|l| l.at <= byte && byte <= l.at + l.name.len()))?;
+    if local.name != word {
+        return None;
+    }
+    Some(match (local.kind, &local.params) {
+        (_, Some(params)) => format!("local function {}({}), line {}", local.name, params.join(", "), local.line),
+        (lua_analysis::LocalKind::Parameter, _) => "parameter".to_string(),
+        (lua_analysis::LocalKind::LoopVariable, _) => format!("loop variable, line {}", local.line),
+        _ => format!("local, line {}", local.line),
+    })
+}
+
+/// The completion list under the text cursor (`at` is the cursor's rect).
+/// Returns an item's label when one is clicked.
+fn completion_popup(ui: &egui::Ui, popup: &mut Popup, at: egui::Rect, font_size: f32) -> Option<String> {
+    let mut accepted = None;
+    let font = egui::FontId::monospace(font_size);
+    egui::Area::new(egui::Id::new("editor_completions"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(at.left_bottom() + egui::vec2(0.0, 2.0))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_max_width(520.0);
+                let shown = popup.items.len().min(10);
+                // Keep the selection in the window of shown items.
+                let first = popup.selected.saturating_sub(shown.saturating_sub(1));
+                for (n, item) in popup.items.iter().enumerate().skip(first).take(shown) {
+                    let selected = n == popup.selected;
+                    let text = egui::RichText::new(format!("{} {}", item.kind.tag(), item.label)).font(font.clone());
+                    let response = ui.add(egui::Button::selectable(selected, text).frame_when_inactive(false));
+                    if response.clicked() {
+                        accepted = Some(item.label.clone());
+                    }
+                }
+                if popup.items.len() > shown {
+                    ui.weak(format!("{} more", popup.items.len() - shown));
+                }
+                if let Some(item) = popup.items.get(popup.selected)
+                    && !item.detail.is_empty()
+                {
+                    ui.separator();
+                    ui.weak(&item.detail);
+                }
+                ui.weak("Enter / Tab to use, Esc to close");
+            });
+        });
+    accepted
+}
+
+/// The current call's parameters above the text cursor, the one being
+/// typed in bold.
+fn signature_help(ui: &egui::Ui, signature: &lua_analysis::Signature, at: egui::Rect, font_size: f32) {
+    let font = egui::FontId::monospace(font_size);
+    let visuals = ui.visuals();
+    let mut job = egui::text::LayoutJob::default();
+    let plain = egui::TextFormat { font_id: font.clone(), color: visuals.text_color(), ..Default::default() };
+    let active =
+        egui::TextFormat { font_id: font.clone(), color: visuals.strong_text_color(), underline: egui::Stroke::new(1.0, visuals.strong_text_color()), ..Default::default() };
+    job.append(&format!("{}(", signature.name), 0.0, plain.clone());
+    for (n, param) in signature.params.iter().enumerate() {
+        if n > 0 {
+            job.append(", ", 0.0, plain.clone());
+        }
+        job.append(param, 0.0, if n == signature.active { active.clone() } else { plain.clone() });
+    }
+    job.append(")", 0.0, plain.clone());
+    if !signature.rest.is_empty() {
+        let weak = egui::TextFormat { font_id: font, color: visuals.weak_text_color(), ..Default::default() };
+        job.append(&format!(" {}", signature.rest), 0.0, weak);
+    }
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    let height = galley.size().y + 12.0;
+    egui::Area::new(egui::Id::new("editor_signature"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(at.left_top() - egui::vec2(0.0, height + 2.0))
+        .interactable(false)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.label(galley);
+            });
+        });
 }

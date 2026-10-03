@@ -328,6 +328,18 @@ fn in_comment_or_string(cs: &[char], index: usize) -> bool {
     quote.is_some()
 }
 
+/// Whether char `index` of `chars` is inside a `--` comment or a quoted
+/// string on its line.
+pub fn in_comment_or_string_at(chars: &[char], index: usize) -> bool {
+    in_comment_or_string(chars, index)
+}
+
+/// For each char of `chars`, whether it's code (not in a string or
+/// comment).
+pub fn code_mask_of(chars: &[char]) -> Vec<bool> {
+    code_mask(chars)
+}
+
 /// Which chars are code (not in a string or comment), for bracket matching.
 fn code_mask(cs: &[char]) -> Vec<bool> {
     let mut mask = vec![true; cs.len()];

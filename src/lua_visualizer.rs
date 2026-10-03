@@ -294,6 +294,24 @@ pub fn error_line(error: &str) -> Option<usize> {
 /// one. Undropped scripts never get auto-seeded under their own name (`New`
 /// always writes to a fresh `untitled-N.lua`), so there's nothing for their
 /// filename to drift from, scoped to `DROPPED_SCRIPTS` only.
+/// Every global a script starts with (the app's functions and constants,
+/// deprecated ones included, and Lua's libraries), read from a real
+/// script VM, for the editor's "isn't defined" check.
+pub fn host_global_names() -> Vec<String> {
+    let visualizer = LuaVisualizer::new(BLANK_SCRIPT_TEMPLATE.to_string(), None, 44_100);
+    let Some(compiled) = &visualizer.compiled else { return Vec::new() };
+    compiled
+        .lua
+        .globals()
+        .pairs::<Value, Value>()
+        .filter_map(|pair| match pair {
+            Ok((Value::String(name), _)) => name.to_str().ok().map(|n| n.to_string()),
+            _ => None,
+        })
+        .filter(|name| name != "render")
+        .collect()
+}
+
 pub fn bundled_default(file_name: &str) -> Option<&'static str> {
     DROPPED_SCRIPTS.iter().find(|&&(name, _)| name == file_name).map(|&(_, contents)| contents)
 }
@@ -3558,6 +3576,21 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         let mut buffer = vec![0u32; 4];
         visualizer.render(&mut buffer, 2, 2, &[], &sample_notes(), &sample_playback(), &VisualizerInput::default());
         assert_eq!(last_log(&visualizer), "60=song 64=song 21=song 108=script");
+    }
+
+    /// The editor's checks on every bundled script: they should be clean,
+    /// so a warning in the editor means something.
+    #[test]
+    fn bundled_scripts_pass_the_editor_checks() {
+        let known = crate::lua_analysis::known_globals(host_global_names());
+        let mut problems = Vec::new();
+        for (name, source) in DROPPED_SCRIPTS.iter().chain(UNDROPPED_SCRIPTS) {
+            for d in crate::lua_analysis::analyze(source, &known).diagnostics {
+                problems.push(format!("{name}:{}: {}", d.line, d.message));
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("
+"));
     }
 
     #[test]
