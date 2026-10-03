@@ -104,6 +104,7 @@ use crate::midi_notes::NoteList;
 use crate::pixel_font;
 use crate::spectrum::{self, OnsetDetector, SpectrumAnalyzer};
 use crate::live::{LiveCommand, LiveNote};
+use crate::playlist::LoopMode;
 use crate::typing::TypingSpan;
 use crate::visualizer::{
     ActiveNote, CursorRequest, NoteChange, NotesSnapshot, RESERVED_KEYS, StereoFrame, Visualizer,
@@ -135,6 +136,7 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 -- set_channel_enabled(c, enabled)       mute/unmute a channel from the script
 -- play_note(key, {channel, velocity, duration})  play a note on the song's instruments
 -- playback() / set_paused(p) / seek(t)  transport state and control
+-- playlist() / play_track(i) / next_track()  the current playlist
 -- store_get(key) / store_set(key, v)    data saved across restarts
 -- FRAME / TIME                          frame count, seconds since start
 -- log(message) / DT                     debug log, seconds since last frame
@@ -875,14 +877,50 @@ struct AudioFeatures {
 struct SongIdentity {
     path: Option<String>,
     id: Option<String>,
+    /// The app's playlist and transport modes, refreshed each frame.
+    transport: Transport,
 }
 
-/// Playback changes a script asked for (`set_paused`, `seek`), carried out
-/// by the app after the frame.
+/// What a script can see of the app's playback beyond the engine: the
+/// loop and shuffle modes, and the current playlist (read-only).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Transport {
+    pub loop_mode: LoopMode,
+    pub shuffle: bool,
+    pub playlist: Option<PlaylistView>,
+}
+
+/// The playlist that's playing, or else the one open in the Playlists tab.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlaylistView {
+    pub name: String,
+    /// Whether it's the one playing (rather than just open).
+    pub playing: bool,
+    /// The entry playing, 0-based.
+    pub current: Option<usize>,
+    pub entries: Vec<PlaylistEntryView>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlaylistEntryView {
+    pub name: String,
+    pub length: Option<f64>,
+    pub missing: bool,
+}
+
+/// Playback changes a script asked for (`set_paused`, `seek`, ...),
+/// carried out by the app after the frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PlaybackRequest {
     Pause(bool),
     Seek(f64),
+    /// Play this entry (0-based) of the playlist `playlist()` shows.
+    PlayTrack(usize),
+    NextTrack,
+    PreviousTrack,
+    Speed(f64),
+    Loop(LoopMode),
+    Shuffle(bool),
 }
 
 /// Saved data a script owns (`store_get`/`store_set`), in
@@ -1170,7 +1208,18 @@ impl LuaVisualizer {
     /// The current song's file and id (`loader::song_id`), for
     /// `playback().song_path` / `song_id`.
     pub fn set_song(&mut self, path: Option<&Path>, id: Option<String>) {
-        *self.song.borrow_mut() = SongIdentity { path: path.map(|p| p.display().to_string()), id };
+        let mut song = self.song.borrow_mut();
+        song.path = path.map(|p| p.display().to_string());
+        song.id = id;
+    }
+
+    /// The app's loop/shuffle modes and current playlist, for `playlist()`
+    /// and `playback()`. Call every frame before rendering.
+    pub fn set_transport(&mut self, transport: Transport) {
+        let mut song = self.song.borrow_mut();
+        if song.transport != transport {
+            song.transport = transport;
+        }
     }
 
     /// The current song's notes, for `notes_between` (empty for audio).
@@ -1526,7 +1575,7 @@ fn compile(
     let store = Rc::new(RefCell::new(ScriptStore::load(script_path)));
     let sprites: Rc<RefCell<Vec<Sprite>>> = Rc::default();
     register_sprites(&lua, &sprites, &commands).map_err(|e| e.to_string())?;
-    register_song_and_state(&lua, note_list, &playback_requests, &store).map_err(|e| e.to_string())?;
+    register_song_and_state(&lua, note_list, &playback_requests, &store, song).map_err(|e| e.to_string())?;
     register_timing_audio_shapes(&lua, note_list, playback, features, &commands).map_err(|e| e.to_string())?;
     register_live_notes(&lua, notes, playback, note_list, live).map_err(|e| e.to_string())?;
 
@@ -1842,12 +1891,14 @@ fn register_live_notes(
     Ok(())
 }
 
-/// `notes_between`, `set_paused`, `seek`, `store_get`, `store_set`.
+/// `notes_between`, `set_paused`, `seek`, the playlist and transport
+/// controls, `store_get`, `store_set`.
 fn register_song_and_state(
     lua: &Lua,
     note_list: &Rc<RefCell<Arc<NoteList>>>,
     playback_requests: &Rc<RefCell<Vec<PlaybackRequest>>>,
     store: &Rc<RefCell<ScriptStore>>,
+    song: &Rc<RefCell<SongIdentity>>,
 ) -> mlua::Result<()> {
     let globals = lua.globals();
 
@@ -1887,6 +1938,92 @@ fn register_song_and_state(
                 return Err(mlua::Error::runtime("seek() needs a number of seconds"));
             }
             requests.borrow_mut().push(PlaybackRequest::Seek(seconds.max(0.0)));
+            Ok(())
+        })?,
+    )?;
+
+    // The current playlist, read-only, and moving between its songs.
+    let view = Rc::clone(song);
+    globals.set(
+        "playlist",
+        lua.create_function(move |lua, ()| {
+            let song = view.borrow();
+            let Some(list) = &song.transport.playlist else { return Ok(Value::Nil) };
+            let t = lua.create_table_with_capacity(0, 4)?;
+            t.raw_set("name", list.name.as_str())?;
+            t.raw_set("playing", list.playing)?;
+            t.raw_set("current", list.current.map(|i| i + 1))?;
+            let entries = lua.create_table_with_capacity(list.entries.len(), 0)?;
+            for (n, entry) in list.entries.iter().enumerate() {
+                let e = lua.create_table_with_capacity(0, 3)?;
+                e.raw_set("name", entry.name.as_str())?;
+                e.raw_set("length", entry.length)?;
+                e.raw_set("missing", entry.missing)?;
+                entries.raw_set(n + 1, e)?;
+            }
+            t.raw_set("entries", entries)?;
+            Ok(Value::Table(t))
+        })?,
+    )?;
+    let (requests, view) = (Rc::clone(playback_requests), Rc::clone(song));
+    globals.set(
+        "play_track",
+        lua.create_function(move |_, index: i64| {
+            let count = view.borrow().transport.playlist.as_ref().map_or(0, |l| l.entries.len());
+            if index < 1 || index as usize > count {
+                return Err(mlua::Error::runtime(format!(
+                    "play_track({index}): the playlist has {count} song{}",
+                    if count == 1 { "" } else { "s" }
+                )));
+            }
+            requests.borrow_mut().push(PlaybackRequest::PlayTrack(index as usize - 1));
+            Ok(())
+        })?,
+    )?;
+    for (name, request) in [("next_track", PlaybackRequest::NextTrack), ("previous_track", PlaybackRequest::PreviousTrack)] {
+        let requests = Rc::clone(playback_requests);
+        globals.set(
+            name,
+            lua.create_function(move |_, ()| {
+                requests.borrow_mut().push(request);
+                Ok(())
+            })?,
+        )?;
+    }
+    let requests = Rc::clone(playback_requests);
+    globals.set(
+        "set_speed",
+        lua.create_function(move |_, speed: f64| {
+            if !speed.is_finite() || speed <= 0.0 {
+                return Err(mlua::Error::runtime("set_speed() needs a speed above 0 (1.0 is normal)"));
+            }
+            requests.borrow_mut().push(PlaybackRequest::Speed(speed));
+            Ok(())
+        })?,
+    )?;
+    let requests = Rc::clone(playback_requests);
+    globals.set(
+        "set_loop",
+        lua.create_function(move |_, mode: String| {
+            let mode = match mode.to_ascii_lowercase().as_str() {
+                "off" => LoopMode::Off,
+                "one" => LoopMode::One,
+                "all" => LoopMode::All,
+                other => {
+                    return Err(mlua::Error::runtime(format!(
+                        "set_loop(\"{other}\"): use \"off\", \"one\" or \"all\""
+                    )));
+                }
+            };
+            requests.borrow_mut().push(PlaybackRequest::Loop(mode));
+            Ok(())
+        })?,
+    )?;
+    let requests = Rc::clone(playback_requests);
+    globals.set(
+        "set_shuffle",
+        lua.create_function(move |_, on: bool| {
+            requests.borrow_mut().push(PlaybackRequest::Shuffle(on));
             Ok(())
         })?,
     )?;
@@ -2751,7 +2888,7 @@ fn register_globals(
         lua.create_function(move |lua, ()| {
             let view = view.borrow();
             let song = song.borrow();
-            let t = lua.create_table_with_capacity(0, 10)?;
+            let t = lua.create_table_with_capacity(0, 12)?;
             t.raw_set("position", view.position)?;
             t.raw_set("length", view.length)?;
             t.raw_set("speed", view.speed)?;
@@ -2762,6 +2899,15 @@ fn register_globals(
             t.raw_set("song_name", view.track_name.clone())?;
             t.raw_set("song_path", song.path.clone())?;
             t.raw_set("song_id", song.id.clone())?;
+            t.raw_set(
+                "loop_mode",
+                match song.transport.loop_mode {
+                    LoopMode::Off => "off",
+                    LoopMode::One => "one",
+                    LoopMode::All => "all",
+                },
+            )?;
+            t.raw_set("shuffle", song.transport.shuffle)?;
             Ok(t)
         })?,
     )?;
@@ -3635,6 +3781,52 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         // Losing focus lets go.
         let unfocused = VisualizerInput { focused: false, ..VisualizerInput::default() };
         assert_eq!(run(&mut visualizer, unfocused), [release(63)]);
+    }
+
+    #[test]
+    fn scripts_see_the_playlist_and_move_through_it() {
+        let script = "function render()
+            local list = playlist()
+            if not list then log('none') return end
+            local p = playback()
+            log(list.name .. '|' .. tostring(list.current) .. '|' .. #list.entries .. '|' .. list.entries[2].name
+                .. '|' .. tostring(list.entries[2].length) .. '|' .. p.loop_mode .. '|' .. tostring(p.shuffle))
+            if FRAME == 2 then
+                play_track(2); next_track(); previous_track(); set_speed(1.5); set_loop('all'); set_shuffle(true)
+            end
+            if FRAME == 3 then play_track(3) end
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "none");
+        let entry = |name: &str, length| PlaylistEntryView { name: name.into(), length, missing: false };
+        visualizer.set_transport(Transport {
+            loop_mode: LoopMode::One,
+            shuffle: false,
+            playlist: Some(PlaylistView {
+                name: "Mix".into(),
+                playing: true,
+                current: Some(0),
+                entries: vec![entry("intro", Some(61.5)), entry("outro", None)],
+            }),
+        });
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "Mix|1|2|outro|nil|one|false");
+        assert_eq!(
+            visualizer.take_playback_requests(),
+            [
+                PlaybackRequest::PlayTrack(1),
+                PlaybackRequest::NextTrack,
+                PlaybackRequest::PreviousTrack,
+                PlaybackRequest::Speed(1.5),
+                PlaybackRequest::Loop(LoopMode::All),
+                PlaybackRequest::Shuffle(true),
+            ]
+        );
+        // Only songs in the list.
+        frame(&mut visualizer, &sample_playback());
+        assert!(visualizer.error().unwrap_or_default().contains("the playlist has 2 songs"), "{:?}", visualizer.error());
+        assert!(visualizer.take_playback_requests().is_empty());
     }
 
     #[test]

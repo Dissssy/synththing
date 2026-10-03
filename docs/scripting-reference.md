@@ -227,9 +227,10 @@ All empty/true for a plain audio file, there's no score to read, so nothing here
 ## Playback & timing
 
 ```lua
-playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id}
+playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id, loop_mode, shuffle}
 set_paused(paused)  -- pause or resume playback
-seek(seconds)       -- jump to a position in the song
+seek(seconds)       -- jump to a position in the song (seek(0) restarts it)
+set_speed(speed)    -- playback speed, 1.0 is normal
 DT                  -- seconds since the previous render() call (0.0 on the first, at most 0.25)
 TIME                -- seconds since this script started (the sum of every frame's real length, never capped)
 FRAME               -- frames rendered since this script started (1 on the first)
@@ -253,6 +254,8 @@ Everything a script sees follows what's being heard, not what's been prepared: t
 
 `set_paused` and `seek` are carried out by the app right after the frame, and show up in `playback()` from the next frame on (along with a new `generation` for a seek). Unpausing a song that has finished starts it over. Like `set_channel_enabled`, they're meant for things like pausing a game when the player dies, or a "retry this section" practice loop.
 
+A game can hold the song until the player is ready with `set_paused(true)` at the start and `set_paused(false)` on its "start" button, and restart with `seek(0)` (plus `set_paused(false)` if the song had finished).
+
 `TIME` and `FRAME` start over when the script is reloaded or restarted. `TIME` keeps counting while the visualizer isn't being drawn, unlike the sum of `DT`.
 
 Check `playback().paused` before writing into a scrolling history buffer, otherwise the picture keeps scrolling through a frozen spectrum while paused instead of actually freezing. See `spectrogram.lua` for the pattern.
@@ -260,6 +263,36 @@ Check `playback().paused` before writing into a scrolling history buffer, otherw
 `DT` is for frame-rate-independent animation (e.g. a smooth sweep or a moving player), not for gating logic, a visualizer should look right regardless of how fast frames are actually arriving.
 
 `render()` only runs while the visualizer is on screen: not while its tab is closed or hidden behind another tab, and not while Preferences is open (the visualizer freezes on its last frame, and playback pauses). `DT` is capped at 0.25 so the first frame back after a gap like that doesn't make animations jump.
+
+## Playlist
+
+```lua
+playlist() -> {name, playing, current, entries} or nil
+play_track(index)   -- play the playlist's index-th song
+next_track()        -- the Next button
+previous_track()    -- the Previous button
+set_loop(mode)      -- "off", "one" or "all"
+set_shuffle(on)
+```
+
+A script can see the current playlist and move between its songs, enough to draw its own player: a track list, next and previous buttons, a now-playing line. It's the playlist that's playing, or if none is, the one open in the Playlists tab; nil when there isn't one. It's read-only: a script can't add, remove or reorder songs, or play anything that isn't in the playlist, so what it can play is always up to you.
+
+- `name`: the playlist's name
+- `playing`: whether it's the one playing (rather than only open)
+- `current`: the index of the song playing from it, or nil
+- `entries`: its songs in order, each `{name, length, missing}`; `length` is in seconds once it's been read (nil until then), `missing` is true for a song whose file isn't there any more
+
+`play_track` starts the playlist from that song, as double-clicking it does; an index past the end is an error. `next_track` and `previous_track` do what the app's buttons do (previous restarts the song if it's been playing a little while), and follow the loop and shuffle modes. `set_loop` and `set_shuffle` change the same modes as the buttons; `playback()` reports them as `loop_mode` and `shuffle`. Like `set_paused`, these happen right after the frame. The volume stays the user's.
+
+```lua
+local list = playlist()
+if list then
+    for i, song in ipairs(list.entries) do
+        local color = (i == list.current) and { r = 255, g = 220, b = 80 } or { r = 200, g = 200, b = 210 }
+        text(10, 10 + i * 14, song.name, color)
+    end
+end
+```
 
 ## Musical timing
 
@@ -539,5 +572,6 @@ The first seven are copied into your scripts folder on first run (one that came 
 - `pulse.lua`, a ring that beats with the song: the time signature's beats around a circle, a polygon turning with the beat and swelling with loudness, eighth-note sprites bursting out on onsets, and a tempo/bar readout
 - `settings_demo.lua`, exercises every setting type; not a music visualizer, a reference for the settings API itself
 - `input_demo.lua`, mouse, keyboard actions and cursor control: a paint toy with its own cursor; not a music visualizer either
+- `player.lua`, a music player drawn by a script: the current playlist to click, previous / play-pause / next, a progress bar to seek, loop and shuffle (`playlist`, `play_track`, `next_track`, `set_loop`, ...); not a music visualizer
 - `editor_test.lua`, not a visualizer at all: a page of things for the script editor to react to (three deliberate problems, color tables, functions for Go to, a badly formatted function), each marked TRY
 - `terminal.lua`, a typing span: a command prompt with history, its prompt and cursor drawn from a sprite sheet; not a music visualizer

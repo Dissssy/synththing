@@ -911,18 +911,10 @@ impl App {
                 .on_hover_text("Off → All (wrap the playlist) → One (repeat this track)")
                 .clicked()
             {
-                self.loop_mode = self.loop_mode.cycle();
-                self.plan_upcoming();
-                self.save_playback_modes();
+                self.set_loop_mode(self.loop_mode.cycle());
             }
             if ui.selectable_label(self.shuffle, "Shuffle").clicked() {
-                self.shuffle = !self.shuffle;
-                // Start a fresh pass from whatever's playing now.
-                if let Some(np) = &mut self.now_playing {
-                    np.history = vec![np.entry];
-                }
-                self.plan_upcoming();
-                self.save_playback_modes();
+                self.set_shuffle(!self.shuffle);
             }
 
             ui.separator();
@@ -1727,6 +1719,8 @@ impl App {
     /// Draw (and run) the visualizer into the rest of `ui`, and pass on
     /// whatever it asked for.
     fn show_visualizer(&mut self, ui: &mut egui::Ui, notes: &NotesSnapshot, playback: &EngineView, mode: DisplayMode) {
+        let transport = self.script_transport();
+        self.visualizer.visualizer_mut().set_transport(transport);
         let fixed_size = self.recording.frame_size();
         let hold = self.pace_recording();
         self.visualizer_output =
@@ -1759,7 +1753,71 @@ impl App {
                 }
                 PlaybackRequest::Pause(_) => {}
                 PlaybackRequest::Seek(seconds) => self.send(AudioCommand::Seek(seconds)),
+                PlaybackRequest::PlayTrack(entry) => {
+                    if let Some(list) = self.script_playlist() {
+                        self.play_entry(list, entry);
+                    }
+                }
+                PlaybackRequest::NextTrack => self.next_track(),
+                PlaybackRequest::PreviousTrack => self.previous_track(playback.position),
+                PlaybackRequest::Speed(speed) => self.send(AudioCommand::SetSpeed(speed)),
+                PlaybackRequest::Loop(mode) => self.set_loop_mode(mode),
+                PlaybackRequest::Shuffle(on) => self.set_shuffle(on),
             }
+        }
+    }
+
+    /// The playlist scripts see (`playlist()`): the one playing, else the
+    /// one open in the Playlists tab.
+    fn script_playlist(&self) -> Option<usize> {
+        self.now_playing
+            .as_ref()
+            .map(|np| np.list)
+            .or(self.viewed_playlist)
+            .filter(|&l| l < self.playlists.lists.len())
+    }
+
+    /// What scripts see of the playlist and the loop/shuffle modes.
+    fn script_transport(&mut self) -> lua_visualizer::Transport {
+        let playlist = self.script_playlist().map(|list| {
+            let stored = &self.playlists.lists[list].playlist;
+            let playing = self.now_playing.as_ref().filter(|np| np.list == list);
+            let entries = stored
+                .entries
+                .iter()
+                .map(|entry| lua_visualizer::PlaylistEntryView {
+                    name: nice_name(&entry.path),
+                    length: self.song_info.get(&entry.path).and_then(|info| info.length),
+                    missing: entry.missing,
+                })
+                .collect();
+            lua_visualizer::PlaylistView {
+                name: stored.name.clone(),
+                playing: playing.is_some(),
+                current: playing.map(|np| np.entry),
+                entries,
+            }
+        });
+        lua_visualizer::Transport { loop_mode: self.loop_mode, shuffle: self.shuffle, playlist }
+    }
+
+    fn set_loop_mode(&mut self, mode: LoopMode) {
+        if mode != self.loop_mode {
+            self.loop_mode = mode;
+            self.plan_upcoming();
+            self.save_playback_modes();
+        }
+    }
+
+    fn set_shuffle(&mut self, on: bool) {
+        if on != self.shuffle {
+            self.shuffle = on;
+            // Start a fresh pass from whatever's playing now.
+            if let Some(np) = &mut self.now_playing {
+                np.history = vec![np.entry];
+            }
+            self.plan_upcoming();
+            self.save_playback_modes();
         }
     }
 

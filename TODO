@@ -494,6 +494,12 @@ Smaller:
     same recorder. Ideas: render a song to video from the app (offline,
     frame-perfect, any speed), scripts knowing they're being recorded.
 
+[S][!] scripts drive playback - DONE
+    playlist() (read-only: the playing playlist, else the open one),
+    play_track / next_track / previous_track, set_speed, set_loop,
+    set_shuffle; playback() has loop_mode and shuffle. Only songs already
+    in the playlist; volume stays the user's.
+
 [L][.] shared script library (long term)
     A place to share scripts (they're sandboxed: the worst a script can do
     is spam notes or mute channels). Maybe `synththing serve` as a web

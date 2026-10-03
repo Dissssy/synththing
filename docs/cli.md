@@ -25,7 +25,7 @@ synththing run-script <SCRIPT> [--song FILE] [--soundfont FILE] [--frames N] [--
 
 Runs a script the way the app does, with a song playing into it, but with no window, then prints what happened. It's for catching errors in a script without opening the app and playing through the song by hand, for example in an automated check.
 
-It uses the same engine and script code as the app. Each frame it plays `1/fps` seconds of the song, then runs the script's `render()` with that audio, the current notes and the playback state, then carries out anything the script asked for (`set_paused`, `seek`, `set_channel_enabled`, notes to play). Notes the script plays (`play_note` and the like) are mixed into the audio it gets, as in the app. `DT` is exactly `1/fps` every frame (0.0 on the first), and `TIME` counts frames, so a run is the same every time no matter how fast the machine is.
+It uses the same engine and script code as the app. Each frame it plays `1/fps` seconds of the song, then runs the script's `render()` with that audio, the current notes and the playback state, then carries out anything the script asked for (`set_paused`, `seek`, `set_speed`, `set_channel_enabled`, notes to play). There's no playlist in a run, so `playlist()` is nil and the playlist controls do nothing. Notes the script plays (`play_note` and the like) are mixed into the audio it gets, as in the app. `DT` is exactly `1/fps` every frame (0.0 on the first), and `TIME` counts frames, so a run is the same every time no matter how fast the machine is.
 
 | Option | Default | |
 |---|---|---|

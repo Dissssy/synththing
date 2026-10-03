@@ -141,6 +141,13 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
                 PlaybackRequest::Pause(pause) if pause != engine.view().paused => engine.toggle_pause(),
                 PlaybackRequest::Pause(_) => {}
                 PlaybackRequest::Seek(seconds) => engine.seek(seconds),
+                PlaybackRequest::Speed(speed) => engine.set_speed(speed),
+                // No playlist here: nothing to move between.
+                PlaybackRequest::PlayTrack(_)
+                | PlaybackRequest::NextTrack
+                | PlaybackRequest::PreviousTrack
+                | PlaybackRequest::Loop(_)
+                | PlaybackRequest::Shuffle(_) => {}
             }
         }
     }
