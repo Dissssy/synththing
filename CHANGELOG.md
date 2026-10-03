@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.3.0 (2026-10-03)
+
 ### New
 - A welcome window the first time synththing runs, offering a starter pack: two soundfonts (GeneralUser GS and TimGM6mb, downloaded in the background and ready to use) and four songs to try, arranged for synththing with each instrument on its own channel. Help > Welcome... brings it back.
 - A guided tour (offered by the welcome window, and Help > Tour): it points at the real buttons one at a time, with everything else dimmed, and moves on as you try each thing: playing a song, the controls, soundfonts, visualizers, channels, playlists, a soundfont for one song, fullscreen, and a game.
