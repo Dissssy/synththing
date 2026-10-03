@@ -14,6 +14,7 @@ use super::{is_midi_path, App};
 use crate::audio::AudioCommand;
 use crate::config::nice_name;
 use crate::loader::{Asset, AssetKind, LoadState, Priority};
+use crate::song_info::{thousands, HEAVY_MIDI_NOTES};
 use crate::playlist::{LoopMode, NowPlaying};
 
 /// How long the pointer has to rest on a song before hover preloading
@@ -166,6 +167,20 @@ impl App {
             }
             Some(LoadState::Ready(asset)) => asset,
         };
+
+        // A very large MIDI: ask first (unless that's turned off, or
+        // already answered for this file), as a script going through every
+        // note can freeze the app. The song waits loaded meanwhile.
+        if let Asset::Midi(midi) = &song {
+            let notes = midi.notes.note_count();
+            let warn = self.config.warn_heavy_midi.unwrap_or(true);
+            if warn && notes > HEAVY_MIDI_NOTES && self.heavy_confirmed.as_ref() != Some(&path) {
+                if self.heavy_prompt.is_none() {
+                    self.heavy_prompt = Some((path.clone(), notes));
+                }
+                return;
+            }
+        }
 
         // Swap soundfonts first, so a MIDI file never starts on the wrong
         // one. A soundfont that fails doesn't hold the song up.
@@ -337,6 +352,54 @@ impl App {
         self.assets.request(&song, song_kind(&song), Priority::Background, now);
         if let Some(sf) = self.soundfont_for(&song, sf_override.as_deref()) {
             self.assets.request(&sf, AssetKind::SoundFont, Priority::Background, now);
+        }
+    }
+}
+
+impl App {
+    /// "This MIDI is very large": play it anyway, or don't.
+    pub(super) fn heavy_midi_ui(&mut self, ctx: &egui::Context) {
+        let Some((path, notes)) = self.heavy_prompt.clone() else { return };
+        let mut play = false;
+        let mut cancel = false;
+        let mut dont_ask = !self.config.warn_heavy_midi.unwrap_or(true);
+        let response = egui::Modal::new(egui::Id::new("heavy_midi")).show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.heading("Very large MIDI file");
+            ui.add_space(6.0);
+            ui.label(format!("{} has {} notes.", nice_name(&path), thousands(notes)));
+            ui.label(
+                "Playing it is fine, but a visualizer script that goes through every note (charting \
+                 games like highway, falling notes far ahead) can make synththing slow down, stop \
+                 responding or close.",
+            );
+            ui.add_space(6.0);
+            ui.checkbox(&mut dont_ask, "Don't warn me again");
+            ui.weak("(Preferences can turn this back on.)");
+            ui.add_space(8.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+                if ui.button("Play anyway").clicked() {
+                    play = true;
+                }
+            });
+        });
+        let setting = if dont_ask { Some(false) } else { None };
+        if setting != self.config.warn_heavy_midi {
+            self.config.warn_heavy_midi = setting;
+            if let Err(e) = self.config.save() {
+                self.status = format!("Couldn't save preferences: {e}");
+            }
+        }
+        if play {
+            self.heavy_prompt = None;
+            self.heavy_confirmed = Some(path);
+        } else if cancel || response.should_close() {
+            self.heavy_prompt = None;
+            self.pending_play = None;
+            self.status = format!("Didn't play {}.", nice_name(&path));
         }
     }
 }

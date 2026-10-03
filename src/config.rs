@@ -56,6 +56,9 @@ pub struct Config {
     /// are unloaded. `None` means `DEFAULT_PRELOAD_EXPIRY_SECS`.
     #[serde(default)]
     pub preload_expiry_secs: Option<u32>,
+    /// Preference: ask before playing a very large MIDI file (`None`: yes).
+    #[serde(default)]
+    pub warn_heavy_midi: Option<bool>,
     /// Preference: show the Experimental section in Preferences.
     #[serde(default)]
     pub show_experimental: bool,

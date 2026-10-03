@@ -238,6 +238,10 @@ pub struct App {
     preferences_open: bool,
     /// View > Layout > Save current layout as...: the name being typed.
     layout_save: Option<String>,
+    /// A very large MIDI waiting for "play anyway" (path, notes), and the
+    /// last one that got it.
+    heavy_prompt: Option<(PathBuf, usize)>,
+    heavy_confirmed: Option<PathBuf>,
     /// Game controllers, read every frame; this frame's input.
     gamepads: crate::gamepad::Gamepads,
     pad_frame: crate::gamepad::PadFrame,
@@ -374,6 +378,8 @@ impl App {
             dock_is_fullscreen_layout: false,
             preferences_open: false,
             layout_save: None,
+            heavy_prompt: None,
+            heavy_confirmed: None,
             gamepads: crate::gamepad::Gamepads::new(),
             pad_frame: crate::gamepad::PadFrame::default(),
             loads_sent: 0,
@@ -1554,6 +1560,7 @@ impl App {
             || self.recording.prompt_open
             || self.editor.history_open
             || self.layout_save.is_some()
+            || self.heavy_prompt.is_some()
             || self.sprite.new_sprite.is_some()
     }
 
@@ -2121,6 +2128,7 @@ impl App {
         let mut show_experimental = self.config.show_experimental;
         let mut hover_preload = self.config.preload_on_hover;
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
+        let mut warn_heavy = self.config.warn_heavy_midi.unwrap_or(true);
         let loaded = self.assets.summary();
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
@@ -2147,6 +2155,10 @@ impl App {
 
             ui.add_space(10.0);
             ui.strong("Loading");
+            ui.checkbox(&mut warn_heavy, "Warn before playing a very large MIDI file").on_hover_text(format!(
+                "Over {} notes: scripts that go through every note can freeze synththing on them.",
+                crate::song_info::thousands(crate::song_info::HEAVY_MIDI_NOTES)
+            ));
             ui.horizontal(|ui| {
                 ui.label("Unload preloaded files after");
                 ui.add(egui::Slider::new(&mut expiry, PRELOAD_EXPIRY_RANGE).suffix(" s").logarithmic(true));
@@ -2201,7 +2213,9 @@ impl App {
             || show_experimental != self.config.show_experimental
             || hover_preload != self.config.preload_on_hover
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
+            || warn_heavy != self.config.warn_heavy_midi.unwrap_or(true)
         {
+            self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
             self.config.check_updates_on_launch = (!check_updates).then_some(false);
             self.config.preload_expiry_secs = expiry;
             self.config.show_experimental = show_experimental;
@@ -2739,6 +2753,7 @@ impl eframe::App for App {
         // Outside the layout: F9 can ask for ffmpeg from the dedicated
         // fullscreen too.
         self.ffmpeg_prompt_ui(&ctx);
+        self.heavy_midi_ui(&ctx);
         self.poll_recordings(view);
         if self.status != self.logged_status {
             log::info!(target: "synththing::status", "{}", self.status);
@@ -2872,6 +2887,13 @@ fn song_info_widgets(ui: &mut egui::Ui, cache: &mut SongInfoCache, path: &Path, 
         Some(info) => info.length.map(format_length).unwrap_or_else(|| "--:--".to_string()),
     };
     ui.weak(length);
+    if let Some(info) = info.filter(|i| i.is_heavy()) {
+        ui.colored_label(egui::Color32::from_rgb(230, 80, 80), "!").on_hover_text(format!(
+            "A very large MIDI file: {} notes. It plays fine, but a script going through every note can \
+             freeze synththing.",
+            crate::song_info::thousands(info.notes.unwrap_or_default())
+        ));
+    }
 }
 
 /// Char offset of the start of 1-based `line` in `text` (the end, if

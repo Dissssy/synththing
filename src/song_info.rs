@@ -22,6 +22,31 @@ use crate::midi_notes::NoteList;
 pub struct SongInfo {
     pub length: Option<f64>,
     pub details: Vec<(String, String)>,
+    /// A MIDI file's note count.
+    pub notes: Option<usize>,
+}
+
+/// A MIDI file with more notes than this is "very large": playing it is
+/// fine, but a script going through every note can freeze the app.
+pub const HEAVY_MIDI_NOTES: usize = 100_000;
+
+impl SongInfo {
+    pub fn is_heavy(&self) -> bool {
+        self.notes.is_some_and(|n| n > HEAVY_MIDI_NOTES)
+    }
+}
+
+/// `1234567` as `1,234,567`.
+pub fn thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 enum Slot {
@@ -156,7 +181,7 @@ fn read_midi(path: &Path) -> Result<SongInfo, String> {
     if !named.is_empty() {
         details.push(("Track names".into(), named.join(", ")));
     }
-    Ok(SongInfo { length: Some(facts.end_time), details })
+    Ok(SongInfo { length: Some(facts.end_time), details, notes: Some(list.note_count()) })
 }
 
 fn read_audio(path: &Path) -> Result<SongInfo, String> {
@@ -222,7 +247,7 @@ fn read_audio(path: &Path) -> Result<SongInfo, String> {
             details.push(("Bits per sample".into(), bits.to_string()));
         }
     }
-    Ok(SongInfo { length, details })
+    Ok(SongInfo { length, details, notes: None })
 }
 
 /// "TrackTitle" -> "Track title".
@@ -321,6 +346,10 @@ mod tests {
         let mid_info = cache.get(&mid_path).unwrap();
         assert!((mid_info.length.unwrap() - 0.5).abs() < 1e-9);
         assert!(mid_info.details.iter().any(|(k, v)| k == "Notes" && v == "1"), "{mid_info:?}");
+        assert_eq!(mid_info.notes, Some(1));
+        assert!(!mid_info.is_heavy());
+        assert_eq!(thousands(1_234_567), "1,234,567");
+        assert_eq!(thousands(999), "999");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

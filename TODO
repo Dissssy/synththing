@@ -559,4 +559,13 @@ Smaller:
     input_register("jump", { "space", "pad_a" }, { group = "Movement" }) and
     a group option on setting_*; Script Settings shows each group as a
     selectable tab button above its list, ungrouped ones under "General".
-    For scripts like gamepad_demo.lua with dozens of controls.
+    For scripts like gamepad_demo.lua with dozens of controls.
+
+[S][.] very large MIDI warning - DONE
+    Over 100,000 notes (song_info::HEAVY_MIDI_NOTES): a red ! by the length
+    in the lists, and a "play anyway?" window before playing, with "don't
+    warn me again" (and a Preferences checkbox). highway.lua takes ~3 s on
+    one frame for 150k notes (debug build).
+    Ideas not done: a watchdog that stops render() after a second or two
+    (mlua instruction-count hook) so a heavy script errors instead of
+    freezing the app; highway charting a few tracks per frame.
