@@ -232,6 +232,7 @@ All empty/true for a plain audio file, there's no score to read, so nothing here
 ```lua
 playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id, song_loads, loop_mode, shuffle}
 script_options({start_paused = true})  -- once, at the top: songs wait for the script to start them
+script_options({app_log = true})       -- its log() messages also go to the app's log
 set_paused(paused)  -- pause or resume playback
 seek(seconds)       -- jump to a position in the song (seek(0) restarts it)
 set_speed(speed)    -- playback speed, 1.0 is normal
@@ -279,7 +280,7 @@ function render(width, height, left, right)
 end
 ```
 
-`script_options` only takes the options it knows (`start_paused`, true or false), and an unknown one is an error that says so, so a typo can't go unnoticed.
+`script_options` only takes the options it knows (`start_paused` and `app_log`, each true or false; see Logging for `app_log`), and an unknown one is an error that says so, so a typo can't go unnoticed. Several can go in one call: `script_options({ start_paused = true, app_log = true })`.
 
 `TIME` and `FRAME` start over when the script is reloaded or restarted. `TIME` keeps counting while the visualizer isn't being drawn, unlike the sum of `DT`.
 
@@ -530,9 +531,12 @@ See `keyboard.lua` (play along on the keyboard) for `note_on`/`note_off` in use.
 
 ```lua
 log(message)
+log_app(message)   -- the same, and always copied to the app's log too
 ```
 
-Appends to this script's log, in the Script Settings tab (View > Script Settings), along with the script's own errors. Identical consecutive messages collapse into one entry with a count instead of flooding the pane, safe to call every single frame. (Help > Log... is the app's own log, not the script's.)
+Appends to this script's log, in the Script Settings tab (View > Script Settings), along with the script's own errors. Identical consecutive messages collapse into one entry with a count instead of flooding the pane, safe to call every single frame.
+
+Help > Log... is the app's own log (also written to `synththing.log`, and printed by `synththing --console`). The script's errors always go there; its `log()` messages do too when "Copy script logs to the app log" is on in Preferences, or when the script asks for it with `script_options({ app_log = true })`, and `log_app()` messages always do (for the odd message worth seeing there, like a chart that failed to build), all labelled with the script's name (`highway: chart ready`). Only new messages are copied, not repeats of the one before, so the app's log doesn't fill up with a message logged every frame.
 
 ## Debugging
 

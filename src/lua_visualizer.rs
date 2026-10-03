@@ -799,10 +799,31 @@ struct LogHistory {
     entries: Vec<LogEntry>,
     /// Goes up with every change, so a copy is only needed when it moved.
     revision: u64,
+    /// The "copy script logs to the app log" preference, shared by every
+    /// compile (`LuaVisualizer::set_app_log`).
+    to_app_log: Rc<Cell<bool>>,
+    /// The script asked for that itself (`script_options({ app_log = true })`).
+    script_wants_app_log: bool,
+    /// The script's name, to label what's copied.
+    name: String,
 }
 
 impl LogHistory {
-    fn push(&mut self, level: LogLevel, mut message: String) {
+    /// A `log()` message from the script, copied to the app's log too when
+    /// the preference or the script says so, or for `log_app` (`always`).
+    /// Repeats aren't copied: a script logging the same thing every frame
+    /// would flood it.
+    fn push_from_script(&mut self, message: String, always: bool) {
+        if self.push(LogLevel::Info, message)
+            && (always || self.to_app_log.get() || self.script_wants_app_log)
+            && let Some(entry) = self.entries.last()
+        {
+            log::info!(target: "synththing::script", "{}: {}", self.name, entry.message);
+        }
+    }
+
+    /// Returns whether it's a new entry (not a repeat of the last one).
+    fn push(&mut self, level: LogLevel, mut message: String) -> bool {
         self.revision += 1;
         if message.len() > MAX_LOG_MESSAGE_LEN {
             message.truncate(MAX_LOG_MESSAGE_LEN);
@@ -813,13 +834,14 @@ impl LogHistory {
             && last.message == message
         {
             last.count += 1;
-            return;
+            return false;
         }
         self.entries.push(LogEntry { level, message, count: 1 });
         if self.entries.len() > MAX_LOG_ENTRIES {
             let excess = self.entries.len() - MAX_LOG_ENTRIES;
             self.entries.drain(0..excess);
         }
+        true
     }
 }
 
@@ -975,6 +997,9 @@ struct SongIdentity {
 pub struct ScriptOptions {
     /// Songs load paused at the start, for the script to start them.
     pub start_paused: bool,
+    /// Its `log()` messages are copied to the app's log, whatever the
+    /// preference says.
+    pub app_log: bool,
 }
 
 /// What a script can see of the app's playback beyond the engine: the
@@ -1290,6 +1315,8 @@ pub struct LuaVisualizer {
     /// Goes up with every compile and restart (a fresh log), for
     /// `log_revision`.
     compiles: u64,
+    /// The "copy script logs to the app log" preference.
+    app_log: Rc<Cell<bool>>,
 }
 
 impl LuaVisualizer {
@@ -1317,6 +1344,7 @@ impl LuaVisualizer {
             stop: Arc::default(),
             watchdog_limit: WATCHDOG_LIMIT,
             compiles: 0,
+            app_log: Rc::default(),
         };
         visualizer.set_source(source);
         visualizer
@@ -1329,6 +1357,12 @@ impl LuaVisualizer {
         visualizer.watchdog_limit = limit;
         visualizer.set_source(source);
         visualizer
+    }
+
+    /// Copy the script's `log()` messages to the app's log (the
+    /// preference; a script can also ask for it with `script_options`).
+    pub fn set_app_log(&mut self, on: bool) {
+        self.app_log.set(on);
     }
 
     /// The flag that stops the script's code running now (see `stop`).
@@ -1504,6 +1538,7 @@ impl LuaVisualizer {
             pending_settings,
             &self.stop,
             self.watchdog_limit,
+            &self.app_log,
         ) {
             Ok(compiled) => {
                 self.compiled = Some(compiled);
@@ -1577,6 +1612,7 @@ impl LuaVisualizer {
             pending_settings,
             &self.stop,
             self.watchdog_limit,
+            &self.app_log,
         ) {
             Ok(compiled) => {
                 self.compiled = Some(compiled);
@@ -1737,6 +1773,7 @@ fn compile(
     pending_settings: HashMap<String, serde_json::Value>,
     stop: &Arc<AtomicBool>,
     watchdog_limit: Duration,
+    app_log: &Rc<Cell<bool>>,
 ) -> Result<Compiled, String> {
     // No io/os/ffi/debug: a visualizer script has no legitimate reason to
     // touch the filesystem or spawn processes, even one the user just wrote.
@@ -1769,7 +1806,11 @@ fn compile(
         descriptors: Vec::new(),
         pending: pending_settings,
     }));
-    let log = Rc::new(RefCell::new(LogHistory::default()));
+    let log = Rc::new(RefCell::new(LogHistory {
+        to_app_log: Rc::clone(app_log),
+        name: script_path.map_or_else(|| "script".to_string(), display_name),
+        ..LogHistory::default()
+    }));
     let channel_requests: Rc<RefCell<Vec<(u8, bool)>>> = Rc::new(RefCell::new(Vec::new()));
     let debug_snapshot: Rc<RefCell<Option<DebugSnapshot>>> = Rc::new(RefCell::new(None));
 
@@ -1800,6 +1841,7 @@ fn compile(
     let options: Rc<Cell<ScriptOptions>> = Rc::default();
     {
         let options = Rc::clone(&options);
+        let log = Rc::clone(&log);
         lua.globals()
             .set(
                 "script_options",
@@ -1809,20 +1851,22 @@ fn compile(
                         let (key, value) = pair?;
                         match (key.as_str(), value) {
                             ("start_paused", Value::Boolean(on)) => set.start_paused = on,
-                            ("start_paused", other) => {
+                            ("app_log", Value::Boolean(on)) => set.app_log = on,
+                            (name @ ("start_paused" | "app_log"), other) => {
                                 return Err(mlua::Error::runtime(format!(
-                                    "script_options: start_paused is true or false, not a {}",
+                                    "script_options: {name} is true or false, not a {}",
                                     other.type_name()
                                 )));
                             }
                             (other, _) => {
                                 return Err(mlua::Error::runtime(format!(
-                                    "script_options: no option `{other}` (there's start_paused)"
+                                    "script_options: no option `{other}` (there are start_paused and app_log)"
                                 )));
                             }
                         }
                     }
                     options.set(set);
+                    log.borrow_mut().script_wants_app_log = set.app_log;
                     Ok(())
                 })
                 .map_err(|e| e.to_string())?,
@@ -3198,7 +3242,16 @@ fn register_globals(
     globals.set(
         "log",
         lua.create_function(move |_, message: String| {
-            history.borrow_mut().push(LogLevel::Info, message);
+            history.borrow_mut().push_from_script(message, false);
+            Ok(())
+        })?,
+    )?;
+
+    let history = Rc::clone(log);
+    globals.set(
+        "log_app",
+        lua.create_function(move |_, message: String| {
+            history.borrow_mut().push_from_script(message, true);
             Ok(())
         })?,
     )?;
@@ -4206,6 +4259,36 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         frame(&mut visualizer, &sample_playback());
         assert_eq!(last_log(&visualizer), "frame 1");
         assert!(visualizer.error().is_none());
+    }
+
+    #[test]
+    fn script_logs_can_go_to_the_app_log() {
+        let mut quiet = LuaVisualizer::new("function render() log('x') end".into(), None, 44_100);
+        frame(&mut quiet, &sample_playback());
+        let history = quiet.compiled.as_ref().unwrap().log.borrow();
+        assert!(!history.to_app_log.get() && !history.script_wants_app_log);
+        drop(history);
+        // The preference outlives a recompile.
+        quiet.set_app_log(true);
+        quiet.set_source("function render() log('y') end".into());
+        assert!(quiet.compiled.as_ref().unwrap().log.borrow().to_app_log.get());
+
+        let script = "script_options({ app_log = true }) function render() log('z') end";
+        let mut asks = LuaVisualizer::new(script.into(), None, 44_100);
+        assert!(asks.options().app_log);
+        assert!(asks.compiled.as_ref().unwrap().log.borrow().script_wants_app_log);
+        let mut history = LogHistory::default();
+        assert!(history.push(LogLevel::Info, "a".into()));
+        assert!(!history.push(LogLevel::Info, "a".into()), "a repeat isn't new");
+        frame(&mut asks, &sample_playback());
+        assert_eq!(last_log(&asks), "z");
+        // log_app: one message, whatever the settings; it shows in the
+        // script's own log too.
+        let mut one = LuaVisualizer::new("function render() log_app('once') end".into(), None, 44_100);
+        frame(&mut one, &sample_playback());
+        assert_eq!(last_log(&one), "once");
+        let bad = LuaVisualizer::new("script_options({ app_log = 1 }) function render() end".into(), None, 44_100);
+        assert!(bad.error().unwrap_or_default().contains("app_log is true or false"), "{:?}", bad.error());
     }
 
     #[test]

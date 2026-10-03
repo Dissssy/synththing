@@ -93,6 +93,7 @@ enum Message {
     Restart,
     Rename { new_name: String, reply: Sender<Result<PathBuf, String>> },
     SetSong { path: PathBuf, id: String, notes: Arc<NoteList> },
+    SetAppLog(bool),
     SetSetting { key: String, value: SettingValue },
     SetActionBindings { index: usize, bindings: Vec<Binding> },
     ClearLog,
@@ -127,6 +128,8 @@ pub struct ScriptHost {
     /// A frame was asked for and hasn't come back yet.
     in_flight: bool,
     last_request: Option<Instant>,
+    /// The "copy script logs to the app log" preference, as last sent.
+    app_log: bool,
 }
 
 fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
@@ -181,6 +184,7 @@ impl ScriptHost {
             path,
             in_flight: false,
             last_request: None,
+            app_log: false,
         }
     }
 
@@ -304,6 +308,14 @@ impl ScriptHost {
     /// The song now playing: its file, id and notes.
     pub fn set_song(&self, path: PathBuf, id: String, notes: Arc<NoteList>) {
         self.send(Message::SetSong { path, id, notes });
+    }
+
+    /// The "copy script logs to the app log" preference (sent on a change).
+    pub fn set_app_log(&mut self, on: bool) {
+        if on != self.app_log {
+            self.app_log = on;
+            self.send(Message::SetAppLog(on));
+        }
     }
 
     /// A value changed in Script Settings (saved to the script's sidecar).
@@ -492,6 +504,7 @@ fn handle(visualizer: &mut LuaVisualizer, message: Message) -> Option<FrameDone>
             visualizer.set_note_list(notes);
             visualizer.set_song(Some(&path), Some(id));
         }
+        Message::SetAppLog(on) => visualizer.set_app_log(on),
         Message::SetSetting { key, value } => visualizer.set_setting(&key, value),
         Message::SetActionBindings { index, bindings } => visualizer.set_action_bindings(index, bindings),
         Message::ClearLog => visualizer.clear_log(),

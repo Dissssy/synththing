@@ -1755,6 +1755,7 @@ impl App {
     /// whatever it asked for.
     fn show_visualizer(&mut self, ui: &mut egui::Ui, notes: &NotesSnapshot, playback: &EngineView, mode: DisplayMode) {
         let transport = self.script_transport();
+        self.visualizer.script_mut().set_app_log(self.config.script_log_to_app);
         self.visualizer.set_pads(self.pad_frame.clone());
         let fixed_size = self.recording.frame_size();
         let (hold, timestep) = self.pace_recording();
@@ -2189,6 +2190,7 @@ impl App {
         let mut hover_preload = self.config.preload_on_hover;
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
         let mut warn_heavy = self.config.warn_heavy_midi.unwrap_or(true);
+        let mut script_log = self.config.script_log_to_app;
         let loaded = self.assets.summary();
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
@@ -2227,6 +2229,16 @@ impl App {
                 "Songs and soundfonts load in the background, and the next playlist track is \
                  loaded ahead of time. Anything loaded that nothing has needed for this long \
                  (not playing, not up next, not hovered) is unloaded to free memory.",
+            );
+
+            ui.add_space(10.0);
+            ui.strong("Scripts");
+            ui.checkbox(&mut script_log, "Copy script logs to the app log");
+            ui.weak(
+                "What visualizer scripts log() shows in their Script Settings tab; with this on, \
+                 it also goes to Help > Log... (and the log file), labelled with the script's \
+                 name. A script can turn it on for itself (script_options), or for single \
+                 messages (log_app).",
             );
 
             ui.add_space(10.0);
@@ -2274,7 +2286,9 @@ impl App {
             || hover_preload != self.config.preload_on_hover
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
             || warn_heavy != self.config.warn_heavy_midi.unwrap_or(true)
+            || script_log != self.config.script_log_to_app
         {
+            self.config.script_log_to_app = script_log;
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
             self.config.check_updates_on_launch = (!check_updates).then_some(false);
             self.config.preload_expiry_secs = expiry;
