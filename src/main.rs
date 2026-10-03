@@ -31,6 +31,7 @@ mod playlist;
 mod png;
 mod recorder;
 mod song_info;
+mod snippets;
 mod spectrum;
 mod sprite_code;
 mod typing;

@@ -266,7 +266,7 @@ impl App {
                 }
             }
             if ui.button("New sprite...").on_hover_text("Add a blank sprite to the script").clicked() {
-                self.sprite.new_sprite = Some(NewSprite { name: "sprite".into(), width: 8, height: 8, frames: 1 });
+                self.open_new_sprite_dialog();
             }
         });
         let Some(call) = sprites.get(self.sprite.selected.min(sprites.len().saturating_sub(1))).cloned() else {
@@ -556,6 +556,19 @@ impl App {
         }
     }
 
+    /// Ask for a new sprite's name, size and frames (Sprite Editor > New
+    /// sprite..., or the code editor's Insert > Sprite...).
+    pub(super) fn open_new_sprite_dialog(&mut self) {
+        // A name the script doesn't use yet: sprite, sprite2, ...
+        let mut name = "sprite".to_string();
+        let mut n = 2;
+        while self.editor_text.contains(&format!("local {name} ")) {
+            name = format!("sprite{n}");
+            n += 1;
+        }
+        self.sprite.new_sprite = Some(NewSprite { name, width: 8, height: 8, frames: 1 });
+    }
+
     /// New sprite...: name, size and frames, then a blank sprite is added
     /// to the script above `function render` and opened here.
     pub(super) fn new_sprite_ui(&mut self, ctx: &egui::Context) {
@@ -620,6 +633,7 @@ impl App {
             }
             self.sprite.color = 1;
             self.status = format!("Added the sprite `{name}` to the script.");
+            self.reveal_section(Section::Sprites);
             close = true;
         }
         if close || response.should_close() {

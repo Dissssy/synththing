@@ -46,7 +46,8 @@
       Ideas: rectangle/line tools, selection and move, flip, frame
       reorder, onion skin.
     - snippets: settings block, input_register controls, sprite
-      template, typing_begin text field
+      template, typing_begin text field - DONE (snippets.rs, Insert menu;
+      Insert > Sprite... uses the Sprite Editor's New sprite dialog)
     - hover help links into the Scripting Reference at that function -
       DONE (lua_docs::find; Ctrl+click too). editor_test.lua (undropped)
       exercises all the editor features.

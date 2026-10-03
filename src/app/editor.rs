@@ -851,6 +851,37 @@ impl App {
                 store_selection(&ctx, editor_id, (end, end));
                 self.editor_changed();
             }
+            let mut snippet = None;
+            let mut new_sprite = false;
+            ui.menu_button("Insert", |ui| {
+                for s in crate::snippets::SNIPPETS {
+                    let where_ = match s.place {
+                        crate::snippets::Place::Cursor => "at the text cursor",
+                        crate::snippets::Place::TopLevel => "above function render",
+                    };
+                    if ui.button(s.name).on_hover_text(format!("{} ({where_})", s.description)).clicked() {
+                        snippet = Some(s);
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button("Sprite...").on_hover_text("A blank sprite of the size you choose, opened in the Sprite Editor").clicked() {
+                    new_sprite = true;
+                    ui.close();
+                }
+            });
+            if let Some(s) = snippet {
+                let ctx = ui.ctx().clone();
+                let (_, cursor) = load_selection(&ctx, editor_id, &self.editor_text);
+                let at = crate::snippets::insert(&mut self.editor_text, cursor, s);
+                store_selection(&ctx, editor_id, (at, at));
+                self.editor.scroll_to = Some(at);
+                ctx.memory_mut(|m| m.request_focus(editor_id));
+                self.editor_changed();
+            }
+            if new_sprite {
+                self.open_new_sprite_dialog();
+            }
             let analysis = self.completion.analysis();
             ui.menu_button("Go to", |ui| {
                 if analysis.functions.is_empty() {
