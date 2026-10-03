@@ -10,6 +10,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - A What's new window after an update, listing what changed since the version you had; Help > Changelog... shows every version.
 
 ### Changed
+- Preferences is organized into categories (General, Songs, Loading, Scripts, Recording, Experimental), one line per setting; the longer explanations show on hover, wherever there's an (i).
 - Only MIDI files are listed as songs by default; Preferences > Songs > "Show audio files" lists MP3, WAV and the rest too (notes-based features don't apply to them).
 - The Listening layout (the first one you see) has the songs and soundfonts on the left and the visualizer on the right. Playlists are a View menu click away (the tour opens them).
 

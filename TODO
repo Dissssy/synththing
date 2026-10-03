@@ -559,7 +559,11 @@ Smaller:
     input_register("jump", { "space", "pad_a" }, { group = "Movement" }) and
     a group option on setting_*; Script Settings shows each group as a
     selectable tab button above its list, ungrouped ones under "General".
-    For scripts like gamepad_demo.lua with dozens of controls.
+    For scripts like gamepad_demo.lua with dozens of controls.
+    Probably as its own modal opened from the Visualizer tab (a Controls
+    button) rather than inside Script Settings, laid out like Preferences:
+    groups down the side, one line per control, reusing its rendering
+    (with_info, the fixed-height body) so the two look alike.
 
 [S][.] very large MIDI warning - DONE
     Over 100,000 notes (song_info::HEAVY_MIDI_NOTES): a red ! by the length

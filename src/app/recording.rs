@@ -496,11 +496,13 @@ impl App {
 
     /// The Recording section of Preferences.
     pub(super) fn recording_preferences_ui(&mut self, ui: &mut egui::Ui) {
-        ui.strong("Recording");
         let mut resolution = self.config.record_resolution;
         let mut fps = self.config.record_fps.filter(|f| FRAME_RATES.contains(f)).unwrap_or(recorder::DEFAULT_FPS);
         let mut quality = self.config.record_quality;
         let recording = self.recording.recorder.is_some();
+        if recording {
+            ui.weak("(Can't be changed while recording.)");
+        }
         ui.add_enabled_ui(!recording, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Size");
@@ -517,29 +519,38 @@ impl App {
                         ui.selectable_value(&mut fps, option, format!("{option} fps"));
                     }
                 });
+                super::info_icon(ui).on_hover_text(
+                    "Records just the visualizer, at this size whatever the window's size, with what you \
+                     hear (your own notes included, before the volume slider). F9 starts and stops, F10 \
+                     pauses. Bigger sizes cost the script more time per frame.",
+                );
             });
-            ui.horizontal(|ui| {
-                ui.label("Quality");
-                egui::ComboBox::from_id_salt("record_quality").selected_text(quality.label()).show_ui(ui, |ui| {
-                    for option in Quality::ALL {
-                        ui.selectable_value(&mut quality, option, option.label());
-                    }
-                });
+            let quality_info = match quality {
+                Quality::Standard => {
+                    "Standard plays everywhere (browsers, Discord, phones). Color is stored at half \
+                     resolution, so single-pixel colored details soften slightly."
+                }
+                Quality::Sharp => {
+                    "Sharp keeps full color resolution: pixel edges stay exact. Plays in desktop players \
+                     (VLC, mpv, Windows' Media Player), not reliably in browsers or Discord's player."
+                }
+                Quality::Lossless => {
+                    "Lossless keeps every pixel exactly, for editing: files are many times bigger, and few \
+                     players besides VLC and mpv open them."
+                }
+            };
+            super::with_info(ui, quality_info, |ui| {
+                let label = ui.label("Quality");
+                let combo = egui::ComboBox::from_id_salt("record_quality").selected_text(quality.label()).show_ui(
+                    ui,
+                    |ui| {
+                        for option in Quality::ALL {
+                            ui.selectable_value(&mut quality, option, option.label());
+                        }
+                    },
+                );
+                label | combo.response
             });
-        });
-        ui.weak(match quality {
-            Quality::Standard => {
-                "Plays everywhere (browsers, Discord, phones). Color is stored at half resolution, \
-                 so single-pixel colored details soften slightly."
-            }
-            Quality::Sharp => {
-                "Full color resolution: pixel edges stay exact. Plays in desktop players (VLC, mpv, \
-                 Windows' Media Player), not reliably in browsers or Discord's player."
-            }
-            Quality::Lossless => {
-                "Every pixel exactly, for editing: files are many times bigger, and few players \
-                 besides VLC and mpv open them."
-            }
         });
         let (width, height) = resolution.size();
         if width * height > 1920 * 1080 {
@@ -581,11 +592,6 @@ impl App {
                 });
             }
         }
-        ui.weak(
-            "Records just the visualizer, at this size whatever the window's size, with what you \
-             hear (your own notes included, before the volume slider). F9 starts and stops, F10 \
-             pauses. Bigger sizes cost the script more time per frame.",
-        );
 
         let fps_setting = (fps != recorder::DEFAULT_FPS).then_some(fps);
         let mut changed = resolution != self.config.record_resolution

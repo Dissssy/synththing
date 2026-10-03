@@ -69,9 +69,6 @@ pub struct Config {
     /// Preference: copy visualizer scripts' log() messages to the app's log.
     #[serde(default)]
     pub script_log_to_app: bool,
-    /// Preference: show the Experimental section in Preferences.
-    #[serde(default)]
-    pub show_experimental: bool,
     /// Experimental preference: start loading a song when the pointer rests
     /// on it, so clicking it plays sooner.
     #[serde(default)]

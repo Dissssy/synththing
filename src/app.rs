@@ -214,6 +214,8 @@ pub struct App {
     changelog: Option<Option<changelog::Version>>,
     /// The welcome window and the starter pack download.
     welcome: welcome::Welcome,
+    /// The category showing in Preferences.
+    preferences_tab: PrefTab,
     /// The guided tour (Help > Tour).
     tour: tour::Tour,
     /// Help > Credits & licenses.
@@ -382,6 +384,7 @@ impl App {
             binding_capture: None,
             changelog: None,
             welcome: welcome::Welcome::default(),
+            preferences_tab: PrefTab::default(),
             tour: tour::Tour::default(),
             credits_open: false,
             contributors: Contributors::default(),
@@ -2308,115 +2311,165 @@ impl App {
         }
         let mut separate = self.config.separate_fullscreen_layout;
         let mut expiry = self.config.preload_expiry_secs.unwrap_or(DEFAULT_PRELOAD_EXPIRY_SECS);
-        let mut show_experimental = self.config.show_experimental;
         let mut hover_preload = self.config.preload_on_hover;
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
         let mut warn_heavy = self.config.warn_heavy_midi.unwrap_or(true);
         let mut script_log = self.config.script_log_to_app;
         let mut audio_files = self.config.show_audio_files;
-        let loaded = self.assets.summary();
         let mut close = false;
+        let mut welcome = false;
+        let mut tour = false;
         let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
-            ui.set_width(400.0);
+            ui.set_width(600.0);
             ui.heading("Preferences");
-            ui.add_space(8.0);
-
-            ui.strong("Layout");
-            ui.checkbox(&mut separate, "Separate layout for fullscreen");
-            ui.weak(
-                "Off: fullscreen shows the same tabs as the window, and rearranging them in \
-                 either changes both. On: fullscreen remembers its own arrangement (starting \
-                 with just the visualizer). Turning this off keeps that arrangement saved for \
-                 if you turn it back on.",
-            );
-
-            ui.add_space(10.0);
-            ui.strong("Updates");
-            ui.checkbox(&mut check_updates, "Check for updates when synththing starts");
-            ui.weak(
-                "Looks for a newer release on GitHub and asks before installing anything. \
-                 Help > Check for updates does it any time.",
-            );
-
-            ui.add_space(10.0);
-            ui.strong("Songs");
-            ui.checkbox(&mut audio_files, "Show audio files (MP3, WAV, OGG, FLAC, ...)");
-            ui.weak(
-                "synththing is built around MIDI. Audio files play, and visualizers that only use the \
-                 sound (waveform, spectrum) work with them, but there are no notes in them: channel \
-                 muting, per-song soundfonts, and visualizers and games that read the notes don't do \
-                 anything with them. Off: only MIDI files are listed, and adding a folder adds only \
-                 its MIDI files (an audio file dragged in by itself is still added).",
-            );
-
-            ui.add_space(10.0);
-            ui.strong("Loading");
-            ui.checkbox(&mut warn_heavy, "Warn before playing a very large MIDI file").on_hover_text(format!(
-                "Over {} notes: scripts that go through every note can stall on them.",
-                crate::song_info::thousands(crate::song_info::HEAVY_MIDI_NOTES)
-            ));
-            ui.horizontal(|ui| {
-                ui.label("Unload preloaded files after");
-                ui.add(egui::Slider::new(&mut expiry, PRELOAD_EXPIRY_RANGE).suffix(" s").logarithmic(true));
-            });
-            ui.weak(
-                "Songs and soundfonts load in the background, and the next playlist track is \
-                 loaded ahead of time. Anything loaded that nothing has needed for this long \
-                 (not playing, not up next, not hovered) is unloaded to free memory.",
-            );
-
-            ui.add_space(10.0);
-            ui.strong("Scripts");
-            ui.checkbox(&mut script_log, "Copy script logs to the app log");
-            ui.weak(
-                "What visualizer scripts log() shows in their Script Settings tab; with this on, \
-                 it also goes to Help > Log... (and the log file), labelled with the script's \
-                 name. A script can turn it on for itself (script_options), or for single \
-                 messages (log_app).",
-            );
-
-            ui.add_space(10.0);
-            self.recording_preferences_ui(ui);
-
-            ui.add_space(10.0);
-            ui.checkbox(&mut show_experimental, "Show experimental settings");
-            if show_experimental {
-                ui.add_space(4.0);
-                ui.strong("Experimental");
-                ui.checkbox(&mut hover_preload, "Preload songs on hover");
-                ui.weak(
-                    "Start loading a song once the pointer rests on it in Songs or a playlist, \
-                     so it starts sooner when clicked. Uses more memory while browsing.",
-                );
-                egui::CollapsingHeader::new(format!("Loaded right now ({})", loaded.len()))
-                    .id_salt("preferences_loaded_files")
-                    .show(ui, |ui| {
-                        if loaded.is_empty() {
-                            ui.weak("(nothing)");
-                        }
-                        egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-                            for (path, kind, state) in &loaded {
-                                ui.label(format!("{} ({kind:?}, {state})", nice_name(path)))
-                                    .on_hover_text(path.display().to_string());
+            ui.add_space(6.0);
+            // A fixed height: the divider takes the height it's given, so
+            // left to size itself, the window grows a little every frame.
+            const BODY_HEIGHT: f32 = 340.0;
+            let body = egui::vec2(ui.available_width(), BODY_HEIGHT);
+            ui.allocate_ui_with_layout(body, egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                ui.set_height(BODY_HEIGHT);
+                // The categories down the side.
+                ui.vertical(|ui| {
+                    ui.set_width(110.0);
+                    // Its own scroll area, for when there are more
+                    // categories than fit.
+                    egui::ScrollArea::vertical().id_salt("preferences_categories").max_height(BODY_HEIGHT).show(
+                        ui,
+                        |ui| {
+                            for tab in PrefTab::ALL {
+                                if ui.selectable_label(self.preferences_tab == tab, tab.title()).clicked() {
+                                    self.preferences_tab = tab;
+                                }
                             }
-                        });
+                        },
+                    );
+                });
+                ui.separator();
+                ui.vertical(|ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("preferences_scroll")
+                        .max_height(BODY_HEIGHT)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 8.0;
+                        match self.preferences_tab {
+                            PrefTab::General => {
+                                with_info(
+                                    ui,
+                                    "Looks for a newer release on GitHub and asks before installing anything. \
+                                     Help > Check for updates does it any time.",
+                                    |ui| ui.checkbox(&mut check_updates, "Check for updates when synththing starts"),
+                                );
+                                with_info(
+                                    ui,
+                                    "Off: fullscreen shows the same tabs as the window, and rearranging them in \
+                                     either changes both. On: fullscreen remembers its own arrangement (starting \
+                                     with just the visualizer). Turning this off keeps that arrangement saved for \
+                                     if you turn it back on.",
+                                    |ui| ui.checkbox(&mut separate, "Separate layout for fullscreen"),
+                                );
+                                ui.add_space(4.0);
+                                ui.horizontal(|ui| {
+                                    welcome = ui
+                                        .button("Welcome & starter pack...")
+                                        .on_hover_text("The first-run window: starter songs and soundfonts")
+                                        .clicked();
+                                    tour = ui.button("Take the tour").on_hover_text("A walk through the app").clicked();
+                                });
+                            }
+                            PrefTab::Songs => {
+                                with_info(
+                                    ui,
+                                    "synththing is built around MIDI. Audio files play, and visualizers that only \
+                                     use the sound (waveform, spectrum) work with them, but there are no notes in \
+                                     them: channel muting, per-song soundfonts, and visualizers and games that read \
+                                     the notes don't do anything with them. Off: only MIDI files are listed, and \
+                                     adding a folder adds only its MIDI files (an audio file dragged in by itself is \
+                                     still added).",
+                                    |ui| ui.checkbox(&mut audio_files, "Show audio files (MP3, WAV, OGG, FLAC, ...)"),
+                                );
+                                with_info(
+                                    ui,
+                                    &format!(
+                                        "Over {} notes: visualizer scripts that go through every note can stall on \
+                                         them. Asks before playing one (they're marked with a red ! in the lists).",
+                                        crate::song_info::thousands(crate::song_info::HEAVY_MIDI_NOTES)
+                                    ),
+                                    |ui| ui.checkbox(&mut warn_heavy, "Warn before playing a very large MIDI file"),
+                                );
+                            }
+                            PrefTab::Loading => {
+                                with_info(
+                                    ui,
+                                    "Songs and soundfonts load in the background, and the next playlist track is \
+                                     loaded ahead of time. Anything loaded that nothing has needed for this long \
+                                     (not playing, not up next, not hovered) is unloaded to free memory.",
+                                    |ui| {
+                                        let label = ui.label("Unload preloaded files after");
+                                        label | ui.add(
+                                            egui::Slider::new(&mut expiry, PRELOAD_EXPIRY_RANGE)
+                                                .suffix(" s")
+                                                .logarithmic(true),
+                                        )
+                                    },
+                                );
+                            }
+                            PrefTab::Scripts => {
+                                with_info(
+                                    ui,
+                                    "What visualizer scripts log() shows in their Script Settings tab; with this \
+                                     on, it also goes to Help > Log... (and the log file), labelled with the \
+                                     script's name. A script can turn it on for itself (script_options), or for \
+                                     single messages (log_app).",
+                                    |ui| ui.checkbox(&mut script_log, "Copy script logs to the app log"),
+                                );
+                            }
+                            PrefTab::Recording => self.recording_preferences_ui(ui),
+                            PrefTab::Experimental => {
+                                ui.weak("Newer features that might change or go away.");
+                                with_info(
+                                    ui,
+                                    "Start loading a song once the pointer rests on it in Songs or a playlist, \
+                                     so it starts sooner when clicked. Uses more memory while browsing.",
+                                    |ui| ui.checkbox(&mut hover_preload, "Preload songs on hover"),
+                                );
+                                let loaded = self.assets.summary();
+                                egui::CollapsingHeader::new(format!("Loaded right now ({})", loaded.len()))
+                                    .id_salt("preferences_loaded_files")
+                                    .show(ui, |ui| {
+                                        if loaded.is_empty() {
+                                            ui.weak("(nothing)");
+                                        }
+                                        for (path, kind, state) in &loaded {
+                                            ui.label(format!("{} ({kind:?}, {state})", nice_name(path)))
+                                                .on_hover_text(path.display().to_string());
+                                        }
+                                    });
+                            }
+                        }
                     });
-            }
-
-            ui.add_space(12.0);
+                });
+            });
+            ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 if ui.button("Close").clicked() {
                     close = true;
                 }
             });
         });
-        if close || response.should_close() {
+        if close || welcome || tour || response.should_close() {
             self.preferences_open = false;
+        }
+        if welcome {
+            self.open_welcome();
+        }
+        if tour {
+            self.start_tour();
         }
         let mut changed = false;
         let expiry = Some(expiry).filter(|&s| s != DEFAULT_PRELOAD_EXPIRY_SECS);
         if expiry != self.config.preload_expiry_secs
-            || show_experimental != self.config.show_experimental
             || hover_preload != self.config.preload_on_hover
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
             || warn_heavy != self.config.warn_heavy_midi.unwrap_or(true)
@@ -2429,7 +2482,6 @@ impl App {
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
             self.config.check_updates_on_launch = (!check_updates).then_some(false);
             self.config.preload_expiry_secs = expiry;
-            self.config.show_experimental = show_experimental;
             self.config.preload_on_hover = hover_preload;
             changed = true;
         }
@@ -3067,6 +3119,60 @@ impl TabViewer for SectionTabs<'_> {
     fn scroll_bars(&self, _tab: &Section) -> [bool; 2] {
         [false, false]
     }
+}
+
+/// The categories of the Preferences window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PrefTab {
+    #[default]
+    General,
+    Songs,
+    Loading,
+    Scripts,
+    Recording,
+    Experimental,
+}
+
+impl PrefTab {
+    const ALL: [PrefTab; 6] =
+        [Self::General, Self::Songs, Self::Loading, Self::Scripts, Self::Recording, Self::Experimental];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Songs => "Songs",
+            Self::Loading => "Loading",
+            Self::Scripts => "Scripts",
+            Self::Recording => "Recording",
+            Self::Experimental => "Experimental",
+        }
+    }
+}
+
+/// A setting on one line (`add`), with an (i) after it: hovering either
+/// shows `info`, the longer explanation.
+fn with_info(ui: &mut egui::Ui, info: &str, add: impl FnOnce(&mut egui::Ui) -> egui::Response) {
+    ui.horizontal(|ui| {
+        add(ui).on_hover_text(info);
+        info_icon(ui).on_hover_text(info);
+    });
+}
+
+/// A small circled "i": there's more to read on hover.
+fn info_icon(ui: &mut egui::Ui) -> egui::Response {
+    let size = ui.text_style_height(&egui::TextStyle::Body).min(16.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let color = if response.hovered() { ui.visuals().strong_text_color() } else { ui.visuals().weak_text_color() };
+    let painter = ui.painter();
+    painter.circle_stroke(rect.center(), size * 0.45, egui::Stroke::new(1.2, color));
+    painter.text(
+        rect.center() + egui::vec2(0.0, 0.5),
+        egui::Align2::CENTER_CENTER,
+        "i",
+        egui::FontId::proportional(size * 0.7),
+        color,
+    );
+    response
 }
 
 /// Reference text as one wrapping label: `prefix`, then `text` with its
