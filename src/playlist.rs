@@ -434,20 +434,24 @@ mod tests {
 
     #[test]
     fn m3u_round_trips_paths_and_soundfont_overrides() {
-        let base = Path::new("C:/music/lists");
+        // Absolute paths on this platform ("C:/..." is relative on Linux).
+        let root = if cfg!(windows) { "C:/" } else { "/" };
+        let at = |path: &str| PathBuf::from(format!("{root}{path}"));
+        let base = at("music/lists");
+        let base = base.as_path();
         let mut playlist = Playlist { name: "Mix".into(), entries: Vec::new() };
-        let mut first = PlaylistEntry::new(PathBuf::from("C:/music/a.mid"));
-        first.soundfont = Some(PathBuf::from("C:/sf/piano.sf2"));
+        let mut first = PlaylistEntry::new(at("music/a.mid"));
+        first.soundfont = Some(at("sf/piano.sf2"));
         playlist.entries.push(first);
-        playlist.entries.push(PlaylistEntry::new(PathBuf::from("C:/music/b.mp3")));
+        playlist.entries.push(PlaylistEntry::new(at("music/b.mp3")));
         let text = to_m3u(&playlist, |p| (p.extension().unwrap() == "mp3").then_some(61.4));
         assert!(text.starts_with("#EXTM3U\n#PLAYLIST:Mix\n#EXTINF:-1,a\n#SYNTHTHING-SOUNDFONT:"), "{text}");
         assert!(text.contains("#EXTINF:61,b\n"));
 
         let back = from_m3u(&text, base);
         assert_eq!(back.len(), 2);
-        assert_eq!(back[0].path, PathBuf::from("C:/music/a.mid"));
-        assert_eq!(back[0].soundfont, Some(PathBuf::from("C:/sf/piano.sf2")));
+        assert_eq!(back[0].path, at("music/a.mid"));
+        assert_eq!(back[0].soundfont, Some(at("sf/piano.sf2")));
         assert_eq!(back[1].soundfont, None);
 
         // Plain M3U from elsewhere: relative paths, a BOM, URLs skipped.

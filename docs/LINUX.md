@@ -1,8 +1,8 @@
 # Porting synththing to Linux
 
-synththing has only ever been built and run on Windows. This file lists what's known (from reading the code, not from running it on Linux) about getting it going there: what should already work, what's likely to need changes, and what has to be decided. It's meant as a starting point for whoever does the port, person or AI: check each item off (or correct it) as it's actually tried.
+synththing has only ever been built and run on Windows. This file lists what's known (from reading the code and the CI build, not from running the app on Linux) about getting it going there: what should already work, what's likely to need changes, and what has to be decided. It's meant as a starting point for whoever does the port, person or AI: check each item off (or correct it) as it's actually tried.
 
-Nothing here has been compiled for Linux yet. The first real step is the first item below.
+Status: CI's `linux` job (ubuntu-latest) builds it, and all but one test passed on the first try (2026-10-03, v0.3.1); that one was a test using Windows paths, fixed since. So it compiles and the logic holds up; nobody has opened the window or heard it play on Linux yet. That's the real first step.
 
 ## 1. Get it compiling
 
