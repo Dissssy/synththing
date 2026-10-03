@@ -7,6 +7,7 @@
 //! buffer so a dense passage can't stall the audio callback or the GUI.
 
 mod app;
+mod changelog;
 mod cli;
 mod headless;
 mod applog;
@@ -118,12 +119,14 @@ fn main() -> Result<()> {
         .spawn(move || audio.run())
         .map_err(|e| anyhow!("could not start the render thread: {e}"))?;
 
+    let ran_before = Config::exists();
     let mut config = Config::load()?;
     config.soundfonts.sort();
 
     let mut app = App::new(command_tx, shared, config, tap, sample_rate);
     app.autoload_first_soundfont();
     app.check_for_updates_on_launch();
+    app.whats_new_on_launch(ran_before);
     if cli.visualizer {
         app.set_visualizer_open(true);
     }

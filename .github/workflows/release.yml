@@ -42,6 +42,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp target/release/synththing.exe synththing-windows-x86_64.exe
+          # The notes are this version's section of CHANGELOG.md.
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '/^## / { on = ($2 == v); next } on' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
           gh release create "$GITHUB_REF_NAME" synththing-windows-x86_64.exe \
             --title "synththing $GITHUB_REF_NAME" \
-            --generate-notes
+            --notes-file notes.md

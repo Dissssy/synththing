@@ -8,3 +8,8 @@ allow-branch = ["master"]
 tag-name = "v{{version}}"
 pre-release-commit-message = "Release {{version}}"
 tag-message = "Release {{version}}"
+# CHANGELOG.md: the Unreleased section becomes the new version's, with a
+# fresh Unreleased heading above it for what comes next.
+pre-release-replacements = [
+  { file = "CHANGELOG.md", search = "## Unreleased", replace = "## Unreleased\n\n## {{version}} ({{date}})", exactly = 1 },
+]

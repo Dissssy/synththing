@@ -56,6 +56,10 @@ pub struct Config {
     /// are unloaded. `None` means `DEFAULT_PRELOAD_EXPIRY_SECS`.
     #[serde(default)]
     pub preload_expiry_secs: Option<u32>,
+    /// The version that last ran, for the What's new window after an
+    /// update (`None`: a config from before it was recorded).
+    #[serde(default)]
+    pub last_version: Option<String>,
     /// Preference: ask before playing a very large MIDI file (`None`: yes).
     #[serde(default)]
     pub warn_heavy_midi: Option<bool>,
@@ -108,6 +112,11 @@ pub const PRELOAD_EXPIRY_RANGE: std::ops::RangeInclusive<u32> = 5..=300;
 impl Config {
     fn file_path() -> Result<PathBuf> {
         Ok(config_dir()?.join("soundfonts.json"))
+    }
+
+    /// Whether there's a saved config (synththing has run here before).
+    pub fn exists() -> bool {
+        Self::file_path().is_ok_and(|path| path.exists())
     }
 
     pub fn load() -> Result<Self> {

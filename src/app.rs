@@ -40,6 +40,7 @@ use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
 use crate::song_info::{format_length, SongInfoCache};
 use crate::updater::{self, UpdateState, Updater};
 use crate::watch::{FolderWatch, Watched};
+use crate::changelog;
 use crate::script_host::{self, ScriptHost};
 use crate::visualizer::{DisplayMode, NotesSnapshot, SampleTap, ShowOutput, VisualizerPanel};
 
@@ -199,6 +200,10 @@ pub struct App {
     /// A Controls binding waiting for a key press: (action index, which of
     /// its keys to replace, or `None` to add one).
     binding_capture: Option<(usize, Option<usize>)>,
+    /// The changelog window: `Some(since)` lists only the versions newer
+    /// than that (What's new, after an update), `None` all of them
+    /// (Help > Changelog...).
+    changelog: Option<Option<changelog::Version>>,
     /// Help > Credits & licenses.
     credits_open: bool,
     contributors: Contributors,
@@ -363,6 +368,7 @@ impl App {
             playlist_selection: Vec::new(),
             selection_anchor: None,
             binding_capture: None,
+            changelog: None,
             credits_open: false,
             contributors: Contributors::default(),
             credits_search: String::new(),
@@ -412,6 +418,94 @@ impl App {
         }
         self.launch_update_check = true;
         self.updater.check();
+    }
+
+    /// After an update, show what's new since the version that ran last,
+    /// and remember this one. A fresh install shows nothing; a config from
+    /// before versions were recorded (`ran_before`, no `last_version`)
+    /// gets this version's changes.
+    pub fn whats_new_on_launch(&mut self, ran_before: bool) {
+        let Some(current) = changelog::current_version() else { return };
+        let last = match self.config.last_version.as_deref() {
+            Some(text) => changelog::parse_version(text),
+            None if ran_before => changelog::previous_version(current),
+            None => None,
+        };
+        if let Some(last) = last
+            && last < current
+            && changelog::newer_than(last).next().is_some()
+        {
+            self.changelog = Some(Some(last));
+        }
+        let version = changelog::format_version(current);
+        if self.config.last_version.as_deref() != Some(version.as_str()) {
+            self.config.last_version = Some(version);
+            if let Err(e) = self.config.save() {
+                log::warn!("couldn't save the config: {e:#}");
+            }
+        }
+    }
+
+    /// What's new (since a version), or the whole changelog.
+    fn changelog_ui(&mut self, ctx: &egui::Context) {
+        let Some(since) = self.changelog else { return };
+        let mut close = false;
+        let mut show_all = false;
+        let response = egui::Modal::new(egui::Id::new("changelog")).show(ctx, |ui| {
+            ui.set_width(560.0);
+            match since {
+                Some(since) => {
+                    ui.heading("What's new");
+                    ui.weak(format!(
+                        "synththing v{}, since v{} (the version you had)",
+                        env!("CARGO_PKG_VERSION"),
+                        changelog::format_version(since)
+                    ));
+                }
+                None => {
+                    ui.heading("Changelog");
+                }
+            }
+            ui.add_space(6.0);
+            let releases: Vec<&changelog::Release> = match since {
+                Some(since) => changelog::newer_than(since).collect(),
+                None => changelog::releases().iter().collect(),
+            };
+            egui::ScrollArea::vertical().id_salt("changelog_scroll").max_height(440.0).show(ui, |ui| {
+                for release in releases {
+                    ui.label(egui::RichText::new(&release.heading).heading().size(17.0));
+                    for block in &release.blocks {
+                        match block {
+                            changelog::Block::Heading(text) => {
+                                ui.add_space(2.0);
+                                ui.strong(text);
+                            }
+                            changelog::Block::Bullet(text) => {
+                                ui.label(inline_code_job(ui, "- ", text));
+                            }
+                            changelog::Block::Paragraph(text) => {
+                                ui.label(inline_code_job(ui, "", text));
+                            }
+                        }
+                    }
+                    ui.add_space(10.0);
+                }
+            });
+            ui.add_space(6.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+                if since.is_some() && ui.button("Full changelog").clicked() {
+                    show_all = true;
+                }
+            });
+        });
+        if show_all {
+            self.changelog = Some(None);
+        } else if close || response.should_close() {
+            self.changelog = None;
+        }
     }
 
     fn send(&self, command: AudioCommand) {
@@ -1076,6 +1170,9 @@ impl App {
                     self.updates_open = true;
                     self.updater.check();
                 }
+                if ui.button("Changelog...").clicked() {
+                    self.changelog = Some(None);
+                }
                 if ui.button("Log...").clicked() {
                     self.log_open = true;
                 }
@@ -1573,6 +1670,7 @@ impl App {
             || self.updates_open
             || self.rename.is_some()
             || self.credits_open
+            || self.changelog.is_some()
             || self.song_info_open.is_some()
             || self.recording.prompt_open
             || self.editor.history_open
@@ -2818,6 +2916,7 @@ impl eframe::App for App {
             self.log_ui(&ctx);
             self.rename_ui(&ctx);
             self.credits_ui(&ctx);
+            self.changelog_ui(&ctx);
             self.song_info_ui(&ctx);
             self.history_ui(&ctx);
             self.layout_save_ui(&ctx);
