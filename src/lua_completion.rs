@@ -47,6 +47,7 @@ pub const HOST_API: &[(&str, &str)] = &[
     ("playback", "playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id}, times in song seconds"),
     ("set_paused", "set_paused(paused): pause or resume playback (applied after this frame)"),
     ("seek", "seek(seconds): jump to a song position, seek(0) restarts (applied after this frame)"),
+    ("script_options", "script_options({start_paused = true}): once, at the top; songs load paused for the script to start"),
     ("set_speed", "set_speed(speed): playback speed, 1.0 is normal (applied after this frame)"),
     ("playlist", "playlist() -> {name, playing, current, entries = {{name, length, missing}, ...}} or nil: the current playlist, read-only"),
     ("play_track", "play_track(index): play the current playlist's index-th song"),

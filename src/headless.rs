@@ -205,7 +205,7 @@ fn load_song(
     if !is_midi {
         let audio = loader::load_audio_file(song).map_err(|e| format!("couldn't read {}: {e}", song.display()))?;
         visualizer.set_song(Some(song), Some(audio.song_id.clone()));
-        engine.load_audio_file(audio, name);
+        engine.load_audio_file(audio, name, visualizer.options().start_paused);
         return Ok(());
     }
 
@@ -223,7 +223,7 @@ fn load_song(
         Err(e) => return Err(format!("couldn't read {}: {e}", soundfont.display())),
     }
     let midi = loader::load_midi(song).map_err(|e| format!("couldn't read {}: {e}", song.display()))?;
-    engine.load_midi(midi.file, name);
+    engine.load_midi(midi.file, name, visualizer.options().start_paused);
     visualizer.set_note_list(midi.notes);
     visualizer.set_song(Some(song), Some(midi.song_id));
     Ok(())

@@ -2,7 +2,7 @@
 
 use std::cmp;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)] // LOCAL PATCH (synththing): Clone, for snapshots
 #[non_exhaustive]
 pub(crate) struct Reverb {
     cfs_l: Vec<CombFilter>,
@@ -237,7 +237,7 @@ impl Reverb {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)] // LOCAL PATCH (synththing): Clone, for snapshots
 #[non_exhaustive]
 struct CombFilter {
     buffer: Vec<f32>,
@@ -325,7 +325,7 @@ impl CombFilter {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)] // LOCAL PATCH (synththing): Clone, for snapshots
 #[non_exhaustive]
 struct AllPassFilter {
     buffer: Vec<f32>,

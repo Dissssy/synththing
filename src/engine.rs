@@ -51,6 +51,19 @@ pub struct EngineView {
     /// Bumps on every seek, every loop back to the start, and every newly
     /// loaded song: anything that makes `position` jump rather than run on.
     pub generation: u64,
+    /// Songs loaded so far: lets the app tell when a song it sent is the
+    /// one playing.
+    pub loads: u64,
+}
+
+/// The MIDI engine as of some point in the rendered audio, to go back to
+/// and render again from (see `AudioEngine::rerender`).
+#[derive(Clone)]
+pub struct Snapshot {
+    seq: MidiFileSequencer,
+    finished: bool,
+    paused: bool,
+    generation: u64,
 }
 
 pub struct Engine {
@@ -75,6 +88,8 @@ pub struct Engine {
     loop_enabled: bool,
     /// See `EngineView::generation`.
     generation: u64,
+    /// See `EngineView::loads`.
+    loads: u64,
     /// Notes scripts play (see `live.rs`); built with the soundfont.
     live: Option<LiveSynth>,
 }
@@ -98,6 +113,7 @@ impl Engine {
             channels_enabled: [true; 16],
             loop_enabled: false,
             generation: 0,
+            loads: 0,
             live: None,
         }
     }
@@ -120,6 +136,7 @@ impl Engine {
             finished: self.finished,
             loop_enabled: self.loop_enabled,
             generation: self.generation,
+            loads: self.loads,
         }
     }
 
@@ -211,14 +228,16 @@ impl Engine {
         Ok(())
     }
 
-    /// Load a MIDI file and start playing it from the top (if a soundfont is loaded).
-    pub fn load_midi(&mut self, midi: Arc<MidiFile>, name: String) {
+    /// Load a MIDI file and start playing it from the top (if a soundfont is
+    /// loaded), or wait at the top, paused, when `paused`.
+    pub fn load_midi(&mut self, midi: Arc<MidiFile>, name: String, paused: bool) {
         self.generation += 1;
+        self.loads += 1;
         self.audio_file = None;
         self.length = midi.get_length();
         self.track_name = Some(name);
         self.finished = false;
-        self.paused = false;
+        self.paused = paused;
         self.detected_channels = midi.note_channels();
         self.channels_enabled = [true; 16];
         self.live_command(LiveCommand::StopAll);
@@ -232,14 +251,16 @@ impl Engine {
     }
 
     /// Load a plain audio file (already decoded) and start playing it from the
-    /// top. No soundfont needed, there's nothing to synthesize.
-    pub fn load_audio_file(&mut self, data: Arc<DecodedAudio>, name: String) {
+    /// top, or wait there when `paused`. No soundfont needed, there's
+    /// nothing to synthesize.
+    pub fn load_audio_file(&mut self, data: Arc<DecodedAudio>, name: String, paused: bool) {
         self.generation += 1;
+        self.loads += 1;
         self.midi = None;
         self.length = data.samples.len() as f64 / data.sample_rate as f64;
         self.track_name = Some(name);
         self.finished = false;
-        self.paused = false;
+        self.paused = paused;
         self.detected_channels.clear();
         self.channels_enabled = [true; 16];
         self.live_command(LiveCommand::StopAll);
@@ -269,6 +290,26 @@ impl Engine {
             (Some(live), Some(seq)) => live.render(seq.get_synthesizer(), out),
             _ => out.fill(0.0),
         }
+    }
+
+    /// The MIDI sequencer's whole state, if a MIDI song is what's playing.
+    pub fn snapshot(&self) -> Option<Snapshot> {
+        if self.audio_file.is_some() || self.midi.is_none() {
+            return None;
+        }
+        Some(Snapshot { seq: self.seq.clone()?, finished: self.finished, paused: self.paused, generation: self.generation })
+    }
+
+    /// Go back to `snapshot`. Settings made since (channels, speed, loop)
+    /// stay as they are now.
+    pub fn restore(&mut self, snapshot: Snapshot) {
+        let mut seq = snapshot.seq;
+        seq.set_speed(self.speed);
+        self.seq = Some(seq);
+        self.finished = snapshot.finished;
+        self.paused = snapshot.paused;
+        self.generation = snapshot.generation;
+        self.apply_channel_mask();
     }
 
     /// Bit N set = channel N audible / visually enabled.

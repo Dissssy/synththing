@@ -28,12 +28,15 @@ end
 
 Anything a script keeps between frames goes in module-level locals (declared outside `render`), which last until the script is reloaded or restarted.
 
+Each section below lists its functions with what they take and return. For exactly what comes back from the ones that return tables or several values (`playback()`, `active_notes()`, `bar()`, `mouse()`, ...), with real example values, see Example calls and results near the end.
+
 ## Managing scripts
 
 Scripts live in the `visualizers` folder of the app's config folder (`%APPDATA%\synththing\config\visualizers` on Windows); the path of the running one is shown above the visualizer. The row of controls above the visualizer (or above the editor, while the visualizer is closed):
 
 - Script: pick which script runs.
-- New: a new script (`untitled-N.lua`) from a template: Blank, or a copy of any bundled script, including the template-only ones like `settings_demo`, `input_demo` and `terminal`.
+- New: a new script (`untitled-N.lua`) from a starting point, grouped as Templates (Blank, `player`, `terminal`), Examples (`settings_demo`, `input_demo`, `editor_test`), and copies of the bundled Visualizers and Games.
+- The script picker lists the bundled Visualizers and Games under their headings, and everything else (your own scripts, and ones made with New) under Your scripts.
 - Restore default: for a bundled script, puts the built-in version back (they're copied into the folder once, on first run, and yours to edit from then on).
 - Restart (or F5, from anywhere): starts the running script over on a fresh Lua VM, all of its own state reset, its settings kept.
 - Rename: renames the running script's file (its settings and saved-data files come along). A renamed bundled script no longer offers Restore default, since it's no longer under the bundled name.
@@ -173,7 +176,7 @@ fft_right(samples) -> spectrum
 
 Windowed magnitude spectrum of a channel's last 1024 samples (about 23 ms at 44.1 kHz, Hann window), computed in Rust so a script never has to do its own FFT (interpreted Lua doing a 1024-point FFT every frame would blow the frame budget by itself). Pass the `left`/`right` tables `render()` was given; the analyzer keeps its own internal sliding window, so calling it with an empty table (e.g. while paused) just returns the same spectrum as last time, not an error.
 
-The result is a table of 512 magnitudes. Entry `i` (1-based) is the frequency `(i - 1) * SAMPLE_RATE / 1024` Hz, so entries are about 43 Hz apart at 44.1 kHz, from 0 Hz up to half the sample rate. A full-volume sine wave reads about 1.0 at its frequency. The table is empty until the first 1024 samples have played.
+The result is a table of 512 magnitudes. Entry `i` (1-based) is the frequency `(i - 1) * SAMPLE_RATE / 1024` Hz, so entries are about 43 Hz apart at 44.1 kHz, from 0 Hz up to half the sample rate. A full-volume sine wave reads about 1.0 at its frequency. It works on the last 1024 samples it's been given, keeping its own window from call to call, so call it every frame with that frame's `left` (or `right`): at 60 fps a frame brings 735 samples, so the first call returns an empty table and from the second on it's always 512 long.
 
 ```lua
 local spectrum = fft_left(left)
@@ -227,7 +230,8 @@ All empty/true for a plain audio file, there's no score to read, so nothing here
 ## Playback & timing
 
 ```lua
-playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id, loop_mode, shuffle}
+playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id, song_loads, loop_mode, shuffle}
+script_options({start_paused = true})  -- once, at the top: songs wait for the script to start them
 set_paused(paused)  -- pause or resume playback
 seek(seconds)       -- jump to a position in the song (seek(0) restarts it)
 set_speed(speed)    -- playback speed, 1.0 is normal
@@ -254,7 +258,28 @@ Everything a script sees follows what's being heard, not what's been prepared: t
 
 `set_paused` and `seek` are carried out by the app right after the frame, and show up in `playback()` from the next frame on (along with a new `generation` for a seek). Unpausing a song that has finished starts it over. Like `set_channel_enabled`, they're meant for things like pausing a game when the player dies, or a "retry this section" practice loop.
 
-A game can hold the song until the player is ready with `set_paused(true)` at the start and `set_paused(false)` on its "start" button, and restart with `seek(0)` (plus `set_paused(false)` if the song had finished).
+`song_loads` goes up by one every time a song is loaded, including the same song clicked again (which `song_id` can't tell apart). Compare it with the previous frame's to know a song just started over from the top, say to go back to a game's menu. Everything about the song changes in the same frame: from the frame `song_loads` goes up, `playback()` (`length`, `position`, `song_id`, ...) and the note functions (`notes_between` and the rest) all describe the new song, so reading `notes_between(0, playback().length)` right then gets all of it.
+
+A game with its own start button calls `script_options({ start_paused = true })` once, at the top of the script: from then on, while it's running, every song (the same one again included) loads paused at the start instead of playing, and waits for the script's `set_paused(false)`. There's no moment where the song starts and has to be caught. It's only while that script is the one running: another script, or the visualizer closed, and songs play as soon as they load as usual. Restart a song with `seek(0)` (plus `set_paused(false)` if it had finished).
+
+```lua
+script_options({ start_paused = true })
+local START = input_register("start", "enter")
+local last_loads = -1
+
+function render(width, height, left, right)
+    local p = playback()
+    if p.song_loads ~= last_loads then
+        last_loads = p.song_loads
+        -- a song was just loaded: show the menu
+    end
+    if p.paused and input(START) == "pressed" then
+        set_paused(false)
+    end
+end
+```
+
+`script_options` only takes the options it knows (`start_paused`, true or false), and an unknown one is an error that says so, so a typo can't go unnoticed.
 
 `TIME` and `FRAME` start over when the script is reloaded or restarted. `TIME` keeps counting while the visualizer isn't being drawn, unlike the sum of `DT`.
 
@@ -557,21 +582,159 @@ The top of the Script Settings tab shows how long `render()` takes (average and 
 - `spectrogram.lua` run-length-merges same-colored cells in a column into one rect instead of one draw per cell, worth copying for any other grid/heatmap-shaped script.
 - Keep history buffers fixed-size ring buffers (see `waveform.lua`), not growing/shrinking arrays, removing from the front of a Lua table is O(n), and doing that every frame adds up.
 
+## Example calls and results
+
+What the functions that hand back tables or several values actually return, as Lua. Each line is a call, then `-->` and what it gives back (several values separated by commas, as Lua returns them). The values are real ones, from a MIDI song 5 seconds in at 60 fps with a 640 x 360 visualizer (the mouse, scroll and playlist ones are made up, as nothing was moving the mouse); long lists are cut short with `...`. Tables are shown with their fields in a sensible order, but Lua tables have none: read fields by name.
+
+The visualizer's frame:
+
+```lua
+function render(width, height, left, right)
+-- width, height --> 640, 360                  (whole buffer pixels)
+-- left, right   --> { -0.0005, 0.0021, ... }  (735 numbers each at 60 fps: 44100 / 60; empty while paused)
+```
+
+Song and playback:
+
+```lua
+playback() --> {
+    position = 5.001, length = 109.9, speed = 1, paused = false, finished = false,
+    loop_enabled = false, loop_mode = "off", shuffle = false, generation = 1,
+    song_name = "145343_1", song_path = "C:/Users/you/Music/145343_1.mid", song_id = "33ee7539d1a6d1e8", song_loads = 1,
+}
+playlist() --> {
+    name = "Evening", playing = true, current = 2,
+    entries = {
+        { name = "Intro", length = 61.5, missing = false },
+        { name = "145343_1", length = 109.9, missing = false },
+        { name = "Old demo", length = nil, missing = true },  -- length nil until it's been read
+    },
+}
+playlist() --> nil                               -- no playlist playing or open
+```
+
+Notes:
+
+```lua
+active_notes() --> {
+    { channel = 0, key = 60, velocity = 100, source = "song" },
+    { channel = 2, key = 64, velocity = 90, source = "script" },  -- one the script is playing
+}
+active_notes() --> {}                            -- nothing held right now
+upcoming_notes() --> {
+    { channel = 1, key = 70, velocity = 50, on = true, seconds_until = 0.03717 },
+    { channel = 1, key = 70, velocity = 0, on = false, seconds_until = 0.2667 },  -- its note-off
+    ...                                          -- 71 in all within NOTE_LOOKAHEAD
+}
+notes_between(5, 6) --> {
+    { id = 45, channel = 1, key = 70, velocity = 50, start = 5.038, stop = 5.267 },
+    { id = 46, channel = 2, key = 56, velocity = 50, start = 5.038, stop = 5.267 },
+    ...                                          -- 11 in all
+}
+midi_channels() --> { 0, 1, 2 }
+channel_enabled(0) --> true
+```
+
+Musical timing (nil for plain audio files):
+
+```lua
+beat() --> 10.92                  -- quarter notes since the start
+bar() --> 3, 2.919                -- bar 3, almost 3 beats into it
+tempo() --> 131                   -- quarter notes per minute
+time_signature() --> 4, 4
+time_at_beat(16) --> 7.328        -- song seconds
+```
+
+Audio:
+
+```lua
+fft_left(left) --> { 0.000416, 0.0002086, 6.115e-05, ... }  -- 512 magnitudes, entry i is (i - 1) * 43.07 Hz
+fft_left(left) --> {}                                 -- the first frame, before 1024 samples have gone in
+level_left() --> 0.004899
+onset() --> false, 0
+onset() --> true, 0.1034          -- a sound just started, this sharply (compare hits, it's not on a fixed scale)
+```
+
+Input:
+
+```lua
+mouse() --> 312.5, 140            -- buffer pixels
+mouse() --> nil, nil              -- the pointer isn't over the visualizer
+mouse_delta() --> 0, 0
+scroll() --> 0, -2.5              -- arrives smoothed: a little each frame
+mouse_down() --> false
+has_focus() --> false
+display_mode() --> "window"       -- or "fullscreen", "dedicated"
+input_register("jump", { "space", "w" }) --> 1   -- an id, 1, 2, 3, ... in order
+input(jump) --> "up"              -- or "pressed", "held", "released"
+input_down(jump) --> false
+text_typed() --> ""               -- or what was typed this frame, e.g. "hi"
+typing_state() --> {
+    active = false, done = false, cancelled = false,
+    text = "", cursor = 0, line = 1, column = 0, key = nil,
+}
+```
+
+Drawing:
+
+```lua
+text(10, 10, "Hi\nthere", color) --> 29, 24     -- width and height drawn: 5 characters wide, 2 lines of 12
+text_size("Score: 120", 24) --> 118, 24
+sprite_register({ image = { { 1, 1, 0 }, { 0, 1, 1 } }, palette = { red } }) --> 1   -- an id
+sprite(heart, 0, 0, 4) --> 12, 8                   -- the size drawn: 3 x 2 sprite pixels, times 4
+sprite_size(heart) --> 3, 2
+```
+
+Settings and saved data:
+
+```lua
+setting_color("accent", { r = 51, g = 204, b = 255 }) --> { r = 51, g = 204, b = 255 }
+setting_int("bins", 36, 8, 96) --> 36
+setting_float("speed", 1.5, 0, 4) --> 1.5
+setting_bool("show", true) --> true
+setting_string("title", "Hello") --> "Hello"
+setting_selection("shapes", { "circle", "square", "star" }, { "circle", "star" }, 2) --> { "circle", "star" }
+store_set("best", { score = 1200, name = "you", runs = { 3, 5 } })
+store_get("best") --> { score = 1200, name = "you", runs = { 3, 5 } }
+store_get("nothing saved") --> nil
+```
+
+Playing notes:
+
+```lua
+notes_playable() --> true          -- false with no MIDI song or soundfont
+play_note(60) --> true             -- false when notes can't play
+sequence_register({ 60, { key = 64, length = 0.5 } }) --> 1   -- an id
+sequence_play(riff) --> 1          -- a handle for sequence_stop; nil when notes can't play
+```
+
 ## Bundled scripts, as reference
 
-The first seven are copied into your scripts folder on first run (one that came out after your first run, like `pulse.lua`, is under New instead); the last two are templates only, made with New when you want them.
+They come in four kinds. Visualizers and games are added to your scripts folder (each one once: a newer release adds the ones that are new, and one you delete stays deleted; "Restore default" brings back the shipped version of one you've changed). Templates and examples are for writing your own: they're only under New, which makes you a copy to change.
+
+Visualizers:
 
 - `waveform.lua`, a scrolling oscilloscope trace; the simplest ring-buffer example
 - `fft.lua`, log-spaced spectrum bars, left/right overlap shown as a third color; frequency labels (text) and loudness meters (`level_left`/`level_right`)
 - `keyboard.lua`, an 88-key piano with falling notes from `notes_between` (exact lengths, adjustable look-ahead), beat and numbered bar lines (`beat`, `bar`, `time_at_beat`), octave labels; two-pass enabled/disabled channel rendering; and play along: with focus, A to L play a major scale on the song's instrument (`note_on`/`note_off`), the arrows move the span and change the key
 - `spectrogram.lua`, a scrolling time/frequency heatmap; run-length merging, pause-awareness, live-tunable resolution, frequency labels, optional onset ticks (`onset`)
 - `letters.lua`, one glyph per channel, colored by pitch; a from-scratch bitmap font
-- `snake.lua`, one snake per channel hunting apples spawned by note-ons; apples are sprites, a text scoreboard, and a `player_channel` setting to steer one snake yourself with rebindable steering actions (best length saved with `store_set`); the most elaborate example, worth reading end to end
-- `disco.lua`, a spinning mirror ball firing a laser per note, colored by channel and aimed by pitch, anticipated with `upcoming_notes()`
-- `game.lua`, a platformer whose level is the music: notes are platforms, channels take turns being solid; rebindable controls, recolored player sprite (`palette`, `tint`), best scores per song (`song_id`)
 - `pulse.lua`, a ring that beats with the song: the time signature's beats around a circle, a polygon turning with the beat and swelling with loudness, eighth-note sprites bursting out on onsets, and a tempo/bar readout
-- `settings_demo.lua`, exercises every setting type; not a music visualizer, a reference for the settings API itself
-- `input_demo.lua`, mouse, keyboard actions and cursor control: a paint toy with its own cursor; not a music visualizer either
-- `player.lua`, a music player drawn by a script: the current playlist to click, previous / play-pause / next, a progress bar to seek, loop and shuffle (`playlist`, `play_track`, `next_track`, `set_loop`, ...); not a music visualizer
-- `editor_test.lua`, not a visualizer at all: a page of things for the script editor to react to (three deliberate problems, color tables, functions for Go to, a badly formatted function), each marked TRY
-- `terminal.lua`, a typing span: a command prompt with history, its prompt and cursor drawn from a sprite sheet; not a music visualizer
+- `disco.lua`, a spinning mirror ball firing a laser per note, colored by channel and aimed by pitch, anticipated with `upcoming_notes()`
+
+Games:
+
+- `highway.lua`, a Guitar Hero style game charted on the fly from any track of the song: chords, sustains, drums by kit piece, difficulties and practice speeds; songs load paused for it (`script_options`), and it switches songs within the playlist (`next_track`)
+- `snake.lua`, one snake per channel hunting apples spawned by note-ons; apples are sprites, a text scoreboard, and a `player_channel` setting to steer one snake yourself with rebindable steering actions (best length saved with `store_set`); worth reading end to end
+- `note_runner.lua`, a platformer whose level is the music: notes are platforms, channels take turns being solid; rebindable controls, recolored player sprite (`palette`, `tint`), best scores per song (`song_id`)
+
+Templates (New):
+
+- `player.lua`, a music player drawn by a script: the current playlist to click, previous / play-pause / next, a progress bar to seek, loop and shuffle (`playlist`, `play_track`, `next_track`, `set_loop`, ...)
+- `terminal.lua`, a typing span: a command prompt with history, its prompt and cursor drawn from a sprite sheet
+
+Examples (New):
+
+- `settings_demo.lua`, exercises every setting type, a reference for the settings API itself
+- `input_demo.lua`, mouse, keyboard actions and cursor control: a paint toy with its own cursor
+- `editor_test.lua`, a page of things for the script editor to react to (three deliberate problems, color tables, functions for Go to, a badly formatted function), each marked TRY

@@ -238,6 +238,10 @@ pub struct App {
     preferences_open: bool,
     /// View > Layout > Save current layout as...: the name being typed.
     layout_save: Option<String>,
+    /// Songs sent to the audio thread, and the latest one waiting to reach
+    /// the script: (its load number, path, notes, id).
+    loads_sent: u64,
+    pending_script_song: Option<(u64, PathBuf, Arc<crate::midi_notes::NoteList>, String)>,
     /// The reference spot to show (section, block), when it was asked for,
     /// and whether it still needs scrolling to.
     docs_target: Option<((usize, usize), Instant, bool)>,
@@ -367,6 +371,8 @@ impl App {
             dock_is_fullscreen_layout: false,
             preferences_open: false,
             layout_save: None,
+            loads_sent: 0,
+            pending_script_song: None,
             docs_target: None,
             pending_focus: None,
             sprite: sprite_editor::SpriteEditorState::default(),
@@ -1767,6 +1773,26 @@ impl App {
         }
     }
 
+    /// A song was just sent to the audio thread: the script gets it (its
+    /// notes, id, path and a new `song_loads`) once the audio thread reports
+    /// it loaded, so everything `playback()` says changes in the same frame
+    /// (`sync_script_song`).
+    pub(super) fn song_for_script(&mut self, path: &Path, notes: Arc<crate::midi_notes::NoteList>, id: String) {
+        self.loads_sent += 1;
+        self.pending_script_song = Some((self.loads_sent, path.to_path_buf(), notes, id));
+    }
+
+    /// Hand the script the song the audio thread now reports as loaded.
+    fn sync_script_song(&mut self, view: &EngineView) {
+        if self.pending_script_song.as_ref().is_some_and(|(target, ..)| view.loads >= *target)
+            && let Some((_, path, notes, id)) = self.pending_script_song.take()
+        {
+            let visualizer = self.visualizer.visualizer_mut();
+            visualizer.set_note_list(notes);
+            visualizer.set_song(Some(&path), Some(id));
+        }
+    }
+
     /// The playlist scripts see (`playlist()`): the one playing, else the
     /// one open in the Playlists tab.
     fn script_playlist(&self) -> Option<usize> {
@@ -1911,13 +1937,30 @@ impl App {
             egui::ComboBox::from_id_salt("visualizer_script_picker")
                 .selected_text(current)
                 .show_ui(ui, |ui| {
-                    for (i, path) in self.available_scripts.iter().enumerate() {
-                        let name = lua_visualizer::display_name(path);
-                        if ui
-                            .selectable_label(Some(i) == self.active_script, name)
-                            .clicked()
-                        {
-                            picked_idx = Some(i);
+                    // Grouped: the bundled visualizers and games, then the
+                    // user's own (and copies of templates and examples).
+                    let category_of = |path: &PathBuf| {
+                        path.file_name()
+                            .and_then(|n| n.to_str())
+                            .and_then(lua_visualizer::bundled_category)
+                            .filter(|c| matches!(*c, "visualizers" | "games"))
+                    };
+                    for group in [Some("visualizers"), Some("games"), None] {
+                        let members: Vec<(usize, &PathBuf)> = self
+                            .available_scripts
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, path)| category_of(path) == group)
+                            .collect();
+                        if members.is_empty() {
+                            continue;
+                        }
+                        ui.label(egui::RichText::new(lua_visualizer::category_title(group.unwrap_or(""))).weak().small());
+                        for (i, path) in members {
+                            let name = lua_visualizer::display_name(path);
+                            if ui.selectable_label(Some(i) == self.active_script, name).clicked() {
+                                picked_idx = Some(i);
+                            }
                         }
                     }
                 });
@@ -1926,7 +1969,12 @@ impl App {
             egui::ComboBox::from_id_salt("visualizer_new_script")
                 .selected_text("New")
                 .show_ui(ui, |ui| {
-                    for (name, content) in lua_visualizer::new_script_templates() {
+                    let mut heading = "";
+                    for (category, name, content) in lua_visualizer::new_script_templates() {
+                        if category != heading {
+                            heading = category;
+                            ui.label(egui::RichText::new(lua_visualizer::category_title(category)).weak().small());
+                        }
                         if ui.selectable_label(false, name).clicked() {
                             new_from = Some(content);
                         }
@@ -2527,6 +2575,7 @@ impl eframe::App for App {
         let shared = self.shared.lock().unwrap().clone();
         let view = &shared.view;
         self.visualizer_drawn = false;
+        self.sync_script_song(view);
 
         // The OS is the final authority on fullscreen state, e.g. the user
         // could leave it some way other than our own button/key.

@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use rustysynth::{MidiFile, SoundFont};
 
-use crate::engine::{DecodedAudio, Engine, EngineView};
+use crate::engine::{DecodedAudio, Engine, EngineView, Snapshot};
 use crate::live::LiveCommand;
 use crate::visualizer::{NotesSnapshot, SampleTap};
 
@@ -42,8 +42,10 @@ pub enum AudioCommand {
     SeekRelative(f64),
     SetSpeed(f64),
     NudgeSpeed(f64),
-    LoadMidi(Arc<MidiFile>, String),
-    LoadAudioFile(Arc<DecodedAudio>, String),
+    /// The song, its name, and whether it starts paused (a script asked
+    /// for that with `script_options`).
+    LoadMidi(Arc<MidiFile>, String, bool),
+    LoadAudioFile(Arc<DecodedAudio>, String, bool),
     SetSoundFont(Arc<SoundFont>, String),
     SetChannelEnabled(u8, bool),
     EnableAllChannels,
@@ -236,6 +238,10 @@ pub struct AudioEngine {
     /// being heard rather than the one just rendered.
     rendered: u64,
     history: VecDeque<Moment>,
+    /// The engine as of the start of each rendered block still waiting to
+    /// be heard (and the one being heard), keyed by `rendered` then: what
+    /// a channel toggle rewinds to.
+    snapshots: VecDeque<(u64, Snapshot)>,
     /// Mirrors the engine: don't feed the ring while paused/finished or with
     /// nothing loaded.
     should_render: bool,
@@ -269,6 +275,7 @@ impl AudioEngine {
             live_block: vec![0.0; LIVE_BLOCK_FRAMES * 2],
             rendered: 0,
             history: VecDeque::new(),
+            snapshots: VecDeque::new(),
             should_render: false,
             last_publish: Instant::now(),
         }
@@ -313,12 +320,12 @@ impl AudioEngine {
             }
             AudioCommand::SetSpeed(speed) => self.engine.set_speed(speed),
             AudioCommand::NudgeSpeed(delta) => self.engine.nudge_speed(delta),
-            AudioCommand::LoadMidi(midi, name) => {
-                self.engine.load_midi(midi, name);
+            AudioCommand::LoadMidi(midi, name, paused) => {
+                self.engine.load_midi(midi, name, paused);
                 self.flush_now();
             }
-            AudioCommand::LoadAudioFile(data, name) => {
-                self.engine.load_audio_file(data, name);
+            AudioCommand::LoadAudioFile(data, name, paused) => {
+                self.engine.load_audio_file(data, name, paused);
                 self.flush_now();
             }
             AudioCommand::SetSoundFont(soundfont, name) => {
@@ -328,17 +335,10 @@ impl AudioEngine {
                 self.flush_now();
             }
             AudioCommand::SetChannelEnabled(channel, enabled) => {
-                self.engine.set_channel_enabled(channel, enabled);
-                self.flush_now();
+                self.rerender(|engine| engine.set_channel_enabled(channel, enabled));
             }
-            AudioCommand::EnableAllChannels => {
-                self.engine.enable_all_channels();
-                self.flush_now();
-            }
-            AudioCommand::SoloChannel(channel) => {
-                self.engine.solo_channel(channel);
-                self.flush_now();
-            }
+            AudioCommand::EnableAllChannels => self.rerender(Engine::enable_all_channels),
+            AudioCommand::SoloChannel(channel) => self.rerender(|engine| engine.solo_channel(channel)),
             AudioCommand::SetLoopEnabled(enabled) => self.engine.set_loop_enabled(enabled),
             AudioCommand::SetVolume(volume) => self.volume = volume.clamp(0.0, 1.0),
             AudioCommand::SetBufferMs(ms) => {
@@ -354,6 +354,7 @@ impl AudioEngine {
     fn flush_now(&mut self) {
         self.ring.flush(&self.flush);
         self.tap.clear_song();
+        self.snapshots.clear();
         // Nothing rendered is waiting to be heard any more: what's heard
         // next is the engine as it is now.
         self.history.clear();
@@ -393,16 +394,75 @@ impl AudioEngine {
             if occupied >= target_samples || occupied + self.block.len() > self.ring.capacity {
                 break;
             }
-            self.engine.render_into(&mut self.block);
-            self.tap.push(&self.block); // pre-volume, for the visualizer
-            self.rendered += (self.block.len() / 2) as u64;
-            self.remember();
-            if (self.volume - 1.0).abs() > f32::EPSILON {
-                for sample in &mut self.block {
-                    *sample = (*sample * self.volume).clamp(-1.0, 1.0);
-                }
+            self.render_block(0);
+        }
+    }
+
+    /// Render the next block: keep a snapshot of the engine from before it
+    /// (for `rerender`), then queue it for the speakers and the visualizer,
+    /// all but its first `skip` frames (already heard: see `rerender`).
+    fn render_block(&mut self, skip: usize) {
+        if let Some(snapshot) = self.engine.snapshot() {
+            self.snapshots.push_back((self.rendered, snapshot));
+            self.prune_snapshots();
+        }
+        self.engine.render_into(&mut self.block);
+        self.rendered += (self.block.len() / 2) as u64;
+        self.remember();
+        let from = (skip * 2).min(self.block.len());
+        let fresh = &mut self.block[from..];
+        self.tap.push(fresh); // pre-volume, for the visualizer
+        if (self.volume - 1.0).abs() > f32::EPSILON {
+            for sample in fresh.iter_mut() {
+                *sample = (*sample * self.volume).clamp(-1.0, 1.0);
             }
-            self.ring.push(&self.block);
+        }
+        self.ring.push(fresh);
+    }
+
+    /// Only snapshots someone could still rewind to: the one at or before
+    /// what's being heard, and later ones.
+    fn prune_snapshots(&mut self) {
+        let heard = self.rendered.saturating_sub(self.ring.backlog().unheard_frames() as u64);
+        while self.snapshots.len() > 1 && self.snapshots[1].0 <= heard {
+            self.snapshots.pop_front();
+        }
+    }
+
+    /// Make a change to the song's playback (a channel muted or unmuted)
+    /// heard right away, without skipping: go back to the engine as it was
+    /// at the moment being heard, make the change there, and render the
+    /// audio that was waiting in the buffer again. Without a MIDI song
+    /// (nothing to rewind), the change just applies from here on.
+    fn rerender(&mut self, change: impl FnOnce(&mut Engine)) {
+        let unheard = self.ring.backlog().unheard_frames() as u64;
+        let heard = self.rendered.saturating_sub(unheard);
+        let start = self.snapshots.iter().rposition(|(at, _)| *at <= heard);
+        let Some(start) = start.filter(|_| unheard > 0 && self.should_render) else {
+            change(&mut self.engine);
+            return;
+        };
+        let (at, snapshot) = self.snapshots[start].clone();
+        let until = self.rendered;
+
+        // Out with what was waiting: the speakers', the visualizer's, and
+        // what was noted about it.
+        self.ring.flush(&self.flush);
+        self.tap.drop_newest_song(unheard as usize);
+        self.snapshots.truncate(start);
+        while self.history.back().is_some_and(|m| m.at > at) {
+            self.history.pop_back();
+        }
+
+        self.engine.restore(snapshot);
+        change(&mut self.engine);
+        self.rendered = at;
+        // Render up to where it had got to, the already heard part of the
+        // first block left out.
+        let mut skip = (heard - at) as usize;
+        while self.rendered < until {
+            self.render_block(skip);
+            skip = skip.saturating_sub(self.block.len() / 2);
         }
     }
 
@@ -456,6 +516,91 @@ impl AudioEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A muted channel is heard muted from the moment of the click, with
+    /// nothing skipped: what comes out is exactly the song played straight
+    /// through up to that moment, then muted from there (as the synth does
+    /// it, from the start of the block being heard).
+    #[test]
+    #[ignore = "needs a soundfont in the app's list and a MIDI in Downloads/Music"]
+    fn muting_a_channel_doesnt_skip() {
+        let config = crate::config::Config::load().unwrap();
+        let sf_path = config.soundfonts.first().expect("no soundfont");
+        let soundfont = Arc::new(SoundFont::new(&mut std::fs::File::open(sf_path).unwrap()).unwrap());
+        let music = directories::UserDirs::new().unwrap().home_dir().join("Downloads/Music/145343_1.mid");
+        let midi = crate::loader::load_midi(&music).unwrap().file;
+        let rate = 44_100;
+        let engine = |muted_at: Option<u64>| {
+            let mut e = Engine::new(rate);
+            e.set_soundfont(Arc::clone(&soundfont), "sf".into()).unwrap();
+            e.load_midi(Arc::clone(&midi), "song".into(), false);
+            (e, muted_at)
+        };
+        // Reference renders, block by block like the render thread.
+        let render_ref = |(mut e, muted_at): (Engine, Option<u64>), frames: u64| {
+            let mut out = Vec::new();
+            let mut block = vec![0.0f32; RENDER_BLOCK_FRAMES * 2];
+            let mut done = 0u64;
+            while done < frames {
+                if muted_at == Some(done) {
+                    e.set_channel_enabled(1, false);
+                }
+                e.render_into(&mut block);
+                out.extend_from_slice(&block);
+                done += RENDER_BLOCK_FRAMES as u64;
+            }
+            out
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ring = AudioRing::new(rate as usize * 4);
+        let mut audio = AudioEngine::new(
+            engine(None).0,
+            SampleTap::new(rate as usize),
+            ring.clone(),
+            AudioRing::new(1024),
+            Arc::new(AtomicBool::new(false)),
+            rx,
+            Arc::default(),
+            rate,
+        );
+        drop(tx);
+        // Skip into the song a few seconds, then fill the buffer.
+        for _ in 0..300 {
+            audio.refresh_flags();
+            audio.render_block(0);
+            let mut sink = Vec::with_capacity(RENDER_BLOCK_FRAMES * 2);
+            ring.pop_into(&mut sink);
+        }
+        let mut heard = Vec::new();
+        let start = audio.rendered as usize * 2;
+        audio.fill_ring();
+        assert!(ring.len() > RENDER_BLOCK_FRAMES * 4, "the buffer should hold several blocks");
+        // The speakers play 3.4 blocks' worth, then the click.
+        let mut taken = Vec::with_capacity(RENDER_BLOCK_FRAMES * 7 / 2 * 2);
+        ring.pop_into(&mut taken);
+        let played = (RENDER_BLOCK_FRAMES * 34 / 10) * 2;
+        heard.extend_from_slice(&taken[..played]);
+        // (The rest of `taken` is "held by the output, unplayed".)
+        ring.backlog.local.store(taken.len() - played, Ordering::Relaxed);
+        let at_click = audio.rendered - ring.backlog().unheard_frames() as u64;
+        audio.apply(AudioCommand::SetChannelEnabled(1, false));
+        let until = audio.rendered;
+        let mut rest = Vec::with_capacity(ring.len());
+        ring.pop_into(&mut rest);
+        heard.extend_from_slice(&rest);
+
+        // The block the click landed in starts here; the synth mutes from it.
+        let block_start = at_click - at_click % RENDER_BLOCK_FRAMES as u64;
+        let straight = render_ref(engine(None), until);
+        let muted = render_ref(engine(Some(block_start)), until);
+        let click = at_click as usize * 2;
+        let mut expected = straight[start..click].to_vec();
+        expected.extend_from_slice(&muted[click..until as usize * 2]);
+        assert_eq!(heard.len(), expected.len(), "nothing skipped or repeated");
+        assert!(heard == expected, "heard exactly the song, muted from the click");
+        assert_ne!(straight[click..], muted[click..], "and the mute did change the sound");
+    }
 
     #[test]
     fn the_visualizer_only_gets_audio_that_has_played() {

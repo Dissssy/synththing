@@ -190,22 +190,26 @@ impl App {
 
         self.pending_play = None;
         let name = nice_name(&path);
+        // A running script can ask for songs to wait for it (its own start
+        // button): `script_options({ start_paused = true })`.
+        let script_running = self.dedicated.is_some() || self.is_open(crate::layout::Section::Visualizer);
+        let paused = script_running && self.visualizer.visualizer().options().start_paused;
         match song {
             Asset::Midi(midi) => {
-                self.send(AudioCommand::LoadMidi(midi.file, name.clone()));
-                self.visualizer.visualizer_mut().set_note_list(midi.notes);
-                self.visualizer.visualizer_mut().set_song(Some(&path), Some(midi.song_id));
+                self.send(AudioCommand::LoadMidi(midi.file, name.clone(), paused));
+                self.song_for_script(&path, midi.notes, midi.song_id);
                 self.status = match sf_error {
                     Some(e) => format!("Playing {name}, but its soundfont didn't load: {e}"),
+                    None if paused => format!("Loaded {name}; the script starts it."),
                     None if self.loaded_sf.is_none() => format!("Loaded {name}, pick a soundfont to hear it."),
                     None => format!("Playing: {name}"),
                 };
             }
             Asset::Audio(audio) => {
-                self.send(AudioCommand::LoadAudioFile(audio.clone(), name.clone()));
-                self.visualizer.visualizer_mut().set_note_list(Default::default());
-                self.visualizer.visualizer_mut().set_song(Some(&path), Some(audio.song_id.clone()));
-                self.status = format!("Playing: {name}");
+                self.send(AudioCommand::LoadAudioFile(audio.clone(), name.clone(), paused));
+                self.song_for_script(&path, Default::default(), audio.song_id.clone());
+                self.status =
+                    if paused { format!("Loaded {name}; the script starts it.") } else { format!("Playing: {name}") };
             }
             Asset::SoundFont(_) => {
                 self.status = format!("'{name}' is a soundfont, not a song.");

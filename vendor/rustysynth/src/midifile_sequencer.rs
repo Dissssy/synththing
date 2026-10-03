@@ -8,7 +8,7 @@ use crate::midifile::MidiFile;
 use crate::synthesizer::Synthesizer;
 
 /// An instance of the MIDI file sequencer.
-#[derive(Debug)]
+#[derive(Clone, Debug)] // LOCAL PATCH (synththing): Clone, for snapshots
 #[non_exhaustive]
 pub struct MidiFileSequencer {
     synthesizer: Synthesizer,

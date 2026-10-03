@@ -4,7 +4,7 @@ use crate::envelope_stage::EnvelopeStage;
 use crate::soundfont_math::SoundFontMath;
 use crate::synthesizer_settings::SynthesizerSettings;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)] // LOCAL PATCH (synththing): Clone, for snapshots
 #[non_exhaustive]
 pub(crate) struct VolumeEnvelope {
     sample_rate: i32,

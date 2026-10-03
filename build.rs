@@ -1,13 +1,12 @@
-//! Generates `$OUT_DIR/bundled_scripts.rs`: two `&[(&str, &str)]` arrays,
-//! `DROPPED_SCRIPTS` and `UNDROPPED_SCRIPTS`, listing every `.lua` file in
-//! `assets/visualizers/dropped` and `assets/visualizers/undropped`
-//! respectively, each paired with an `include_str!` of its contents. Adding
-//! or removing a bundled script is then just a file move, nothing in
-//! `src/` needs editing to pick it up.
+//! Generates `$OUT_DIR/bundled_scripts.rs`: `BUNDLED_SCRIPTS`, a
+//! `&[(&str, &str, &str)]` of (category, file name, contents) for every
+//! `.lua` file in `assets/visualizers/<category>/`, the categories being
+//! `visualizers`, `games`, `templates` and `examples`. Adding or removing a
+//! bundled script is then just a file move, nothing in `src/` needs
+//! editing to pick it up.
 //!
-//! "Dropped" scripts get auto-seeded into the user's script folder on first
-//! launch; "undropped" ones (API demos etc.) only ever show up as "New"
-//! templates. See `lua_visualizer.rs` for how both lists get used.
+//! Visualizers and games are added to the user's script folder; templates
+//! and examples are only offered by "New". See `lua_visualizer.rs`.
 //!
 //! Also generates `$OUT_DIR/scripting_reference.rs` from
 //! `docs/scripting-reference.md`, the in-app Scripting Reference (see
@@ -18,23 +17,25 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
+/// The bundled script folders, in the order they're listed.
+const CATEGORIES: [&str; 4] = ["visualizers", "games", "templates", "examples"];
+
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
 
-    let dropped = list_scripts(&manifest_dir, "dropped");
-    let undropped = list_scripts(&manifest_dir, "undropped");
-
-    let mut generated = String::new();
-    write_array(&mut generated, "DROPPED_SCRIPTS", &dropped);
-    write_array(&mut generated, "UNDROPPED_SCRIPTS", &undropped);
+    let mut generated = String::from("pub static BUNDLED_SCRIPTS: &[(&str, &str, &str)] = &[\n");
+    for category in CATEGORIES {
+        for (name, absolute_path) in list_scripts(&manifest_dir, category) {
+            generated.push_str(&format!("    ({category:?}, {name:?}, include_str!({absolute_path:?})),\n"));
+        }
+        println!("cargo:rerun-if-changed=assets/visualizers/{category}");
+    }
+    generated.push_str("];\n");
 
     let out_path = Path::new(&out_dir).join("bundled_scripts.rs");
     fs::write(&out_path, generated)
         .unwrap_or_else(|e| panic!("writing {}: {e}", out_path.display()));
-
-    println!("cargo:rerun-if-changed=assets/visualizers/dropped");
-    println!("cargo:rerun-if-changed=assets/visualizers/undropped");
 
     generate_reference(&manifest_dir, &out_dir);
 }
@@ -65,17 +66,6 @@ fn list_scripts(manifest_dir: &str, subdir: &str) -> Vec<(String, String)> {
     scripts
 }
 
-/// Emits `pub static {const_name}: &[(&str, &str)] = &[("name.lua",
-/// include_str!("/abs/path/name.lua")), ...];`, `{:?}`-formatting each
-/// string produces a properly escaped Rust string literal, backslashes in
-/// Windows paths included.
-fn write_array(out: &mut String, const_name: &str, scripts: &[(String, String)]) {
-    out.push_str(&format!("pub static {const_name}: &[(&str, &str)] = &[\n"));
-    for (name, absolute_path) in scripts {
-        out.push_str(&format!("    ({name:?}, include_str!({absolute_path:?})),\n"));
-    }
-    out.push_str("];\n");
-}
 
 // --- scripting reference -------------------------------------------------
 

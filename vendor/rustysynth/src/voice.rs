@@ -13,7 +13,7 @@ use crate::soundfont_math::SoundFontMath;
 use crate::synthesizer_settings::SynthesizerSettings;
 use crate::volume_envelope::VolumeEnvelope;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 enum VoiceState {
     Playing = 0,
@@ -21,7 +21,7 @@ enum VoiceState {
     Released = 2,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)] // LOCAL PATCH (synththing): Clone, for snapshots
 #[non_exhaustive]
 pub(crate) struct Voice {
     vol_env: VolumeEnvelope,

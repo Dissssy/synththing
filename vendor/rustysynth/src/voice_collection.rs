@@ -5,7 +5,7 @@ use crate::instrument_region::InstrumentRegion;
 use crate::synthesizer_settings::SynthesizerSettings;
 use crate::voice::Voice;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)] // LOCAL PATCH (synththing): Clone, for snapshots
 #[non_exhaustive]
 pub(crate) struct VoiceCollection {
     voices: Vec<Voice>,

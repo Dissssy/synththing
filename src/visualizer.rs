@@ -145,6 +145,13 @@ impl SampleTap {
     pub fn clear_song(&self) {
         self.inner.lock().unwrap().song.clear();
     }
+
+    /// Drop the newest `frames` song frames (rendered again differently).
+    pub fn drop_newest_song(&self, frames: usize) {
+        let mut buf = self.inner.lock().unwrap();
+        let keep = buf.song.len().saturating_sub(frames);
+        buf.song.truncate(keep);
+    }
 }
 
 /// A MIDI note the score currently holds down.

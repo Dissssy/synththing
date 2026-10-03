@@ -499,6 +499,9 @@ Smaller:
     play_track / next_track / previous_track, set_speed, set_loop,
     set_shuffle; playback() has loop_mode and shuffle. Only songs already
     in the playlist; volume stays the user's.
+    script_options({ start_paused = true }): songs load paused while that
+    script runs (for games with a start button); playback().song_loads
+    counts loads, the same song again included.
 
 [L][.] shared script library (long term)
     A place to share scripts (they're sandboxed: the worst a script can do
@@ -506,3 +509,30 @@ Smaller:
     server (needs a Linux build) that renders each upload with a default
     song through run-script --video's path: a 5 s preview to play in the
     app and a thumbnail from the most striking frame of it.
+
+[S][.] reference: Example calls and results - DONE
+    Real return values (captured with a probe script through run-script)
+    for every function returning a table or several values. Refresh them
+    when a return shape changes.
+
+[M][!] channel mutes without a skip - DONE
+    Toggling a channel used to flush the audio buffer (buffer_ms of
+    rendered-ahead audio thrown away), skipping the song and the visuals
+    forward. Now the render thread keeps a synth snapshot per block still
+    unheard (rustysynth LOCAL PATCH: Clone), and a toggle rewinds to the
+    block being heard, applies it there and re-renders the buffered part:
+    heard at once, nothing skipped (audio::tests::muting_a_channel_doesnt_skip
+    checks it sample for sample against the real synth).
+
+[S][!] bundled scripts by kind - DONE
+    assets/visualizers/{visualizers,games,templates,examples}; build.rs
+    generates BUNDLED_SCRIPTS (category, name, contents). Visualizers and
+    games are added to the user's folder, each once (the .seeded marker
+    lists them; an empty one means an 0.1.8 install); templates and
+    examples only under New. Picker and New are grouped by kind.
+    highway.lua (games) is new; game.lua is now note_runner.lua.
+
+[S][.] scripts see a song switch all at once - DONE
+    The app hands the script a new song's notes/id/path only when the
+    audio thread reports it loaded (EngineView::loads), so playback() never
+    mixes the old song's length with the new song's notes.

@@ -16,7 +16,7 @@ use crate::synthesizer_settings::SynthesizerSettings;
 use crate::voice_collection::VoiceCollection;
 
 /// An instance of the SoundFont synthesizer.
-#[derive(Debug)]
+#[derive(Clone, Debug)] // LOCAL PATCH (synththing): Clone, for snapshots
 #[non_exhaustive]
 pub struct Synthesizer {
     pub(crate) sound_font: Arc<SoundFont>,
@@ -543,7 +543,7 @@ impl Synthesizer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)] // LOCAL PATCH (synththing): Clone, for snapshots
 struct Effects {
     reverb: Reverb,
     reverb_input: Vec<f32>,

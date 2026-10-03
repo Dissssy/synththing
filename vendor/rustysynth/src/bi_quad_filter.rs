@@ -4,7 +4,7 @@ use std::f32::consts;
 
 use crate::synthesizer_settings::SynthesizerSettings;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)] // LOCAL PATCH (synththing): Clone, for snapshots
 #[non_exhaustive]
 pub(crate) struct BiQuadFilter {
     sample_rate: i32,
