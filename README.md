@@ -8,6 +8,8 @@ A MIDI and audio player for Windows with a visualizer you can script in Lua.
 - A sprite editor for the pixel art scripts draw: paint, fill, palettes and sprite sheets, written straight back into the script.
 - Record the visualizer with its sound to a video (MP4, 720p to 4K, 30 or 60 fps): a whole song, a whole playlist, or whatever you play. Uses ffmpeg, which synththing offers to download the first time.
 - Rearrangeable layout: every section is a tab you can drag, split or pop out.
+- Themes: Dark, Light, Frutiger Aero and egui's own look, or make your own from any of them (every color, corners, borders, shadows), plus a UI scale.
+- A welcome window the first time, with a starter pack (two soundfonts and four songs) and a guided tour of the app.
 - Updates itself: new releases are offered in the app.
 
 ## Getting it
@@ -16,16 +18,18 @@ A MIDI and audio player for Windows with a visualizer you can script in Lua.
 2. Run it. It's a single file, no installer; put it wherever you like.
 3. The first time, Windows may show "Windows protected your PC", because the program isn't code-signed. Click **More info**, then **Run anyway**.
 
-After that, synththing checks for new versions when it starts and asks before installing one (you can turn that off in File > Preferences, or check any time from Help > Check for updates).
+After that, synththing checks for new versions when it starts and asks before installing one (you can turn that off in synththing > Preferences, or check any time from Help > Check for updates).
 
 It needs 64-bit Windows 10 or 11.
 
 ## First steps
 
+The first time synththing runs, a welcome window offers a starter pack (the soundfonts download in the background; the songs land in `Music\synththing\Starter songs`) and a tour that walks you through all of this on the real buttons. Help > Welcome... and Help > Tour bring them back. Or, by hand:
+
 1. **Pick your music.** The Songs tab is a file browser: **Browse...** jumps to any folder or drive, **Set as default** makes it open there next time, and the search box finds songs in subfolders too. Click a song to play it.
 2. **Add a soundfont for MIDI.** MIDI files are just notes; a SoundFont supplies the instruments. In the Soundfonts tab, **Add soundfont...** and pick any General MIDI `.sf2` (plenty are free online). Compressed `.sf3` soundfonts aren't supported; Polyphone can convert them to `.sf2`.
-3. **Make a playlist.** Open View > Playlists, then **New playlist**, and drag songs (or folders) in from Songs. Drag a soundfont onto a MIDI entry to give it its own.
-4. **Turn on the visualizer.** View > Visualizer, then pick a script above it. **Fullscreen visualizer** (or F11) fills the screen; Esc comes back.
+3. **Make a playlist.** Open View > Playlists and drag songs (or folders) in from Songs; dropping onto an empty Playlists tab starts a new one. Drag a soundfont onto a MIDI entry to give it its own.
+4. **Watch the visualizer.** It's on the right to begin with (View > Visualizer if you've closed it); pick a script above it. **Fullscreen visualizer** (or F11) fills the screen; Esc comes back.
 
 The View menu shows and hides each section; drag tabs around to arrange them however you like, and the layout is remembered. View > Layout switches between ready-made arrangements (Listening, Watching, Script writing, Sprite editing) and ones you've saved with "Save current layout as...". Each keeps whatever changes you make while it's showing; a changed built-in one has a Reset button to go back to how it comes.
 
@@ -68,6 +72,8 @@ Everything lives in `%APPDATA%\synththing\config`:
 - `soundfonts.json`: settings, the soundfont list, the layout
 - `visualizers\`: scripts, plus each script's settings (`.settings.json`) and saved data (`.store.json`)
 - `playlists\`: one file per playlist
+- `themes\`: your own themes, one file each (colors as `#rrggbb`)
+- `soundfonts\`: the starter pack's soundfonts
 - `synththing.log`: the app's log (also under Help > Log...); the previous run's is `synththing.prev.log`
 
 ## Building from source
@@ -86,4 +92,4 @@ synththing is by [Dissssy](https://github.com/Dissssy) and contributors. It play
 
 ## License
 
-synththing's own code is released under the [WTFPL](LICENSE): do whatever you want with it. The libraries, font and code it's built from keep their own licenses (rustysynth and Lua are MIT, Monogram is CC0, and so on); Help > Credits & licenses lists them all.
+synththing's own code is released under the [WTFPL](LICENSE): do whatever you want with it. The libraries, font and code it's built from keep their own licenses (rustysynth and Lua are MIT, Monogram is CC0, and so on), as do the starter pack's soundfonts (GeneralUser GS's own license, TimGM6mb under the GPL 2.0; see `assets/starter/README.md`); Help > Credits & licenses lists them all.

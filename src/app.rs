@@ -13,6 +13,7 @@ mod loading;
 mod playlist_panel;
 mod recording;
 mod sprite_editor;
+mod themes;
 mod tour;
 mod welcome;
 
@@ -216,6 +217,8 @@ pub struct App {
     welcome: welcome::Welcome,
     /// The category showing in Preferences.
     preferences_tab: PrefTab,
+    /// The Themes window, and your themes.
+    themes: themes::ThemesState,
     /// The guided tour (Help > Tour).
     tour: tour::Tour,
     /// Help > Credits & licenses.
@@ -385,6 +388,7 @@ impl App {
             changelog: None,
             welcome: welcome::Welcome::default(),
             preferences_tab: PrefTab::default(),
+            themes: themes::ThemesState::default(),
             tour: tour::Tour::default(),
             credits_open: false,
             contributors: Contributors::default(),
@@ -1150,9 +1154,12 @@ impl App {
     /// be shown is switched on and off from one place.
     fn top_bar_ui(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
+            ui.menu_button("synththing", |ui| {
                 if ui.button("Preferences...").clicked() {
                     self.preferences_open = true;
+                }
+                if ui.button("Themes...").on_hover_text("Colors, shapes and the UI scale, in a window of its own").clicked() {
+                    self.themes.open = true;
                 }
                 ui.separator();
                 if ui.button("Quit").clicked() {
@@ -1481,6 +1488,24 @@ impl App {
                     egui::CollapsingHeader::new("Monogram's credits").id_salt("credits_monogram").show(ui, |ui| {
                         ui.label(egui::RichText::new(credits::MONOGRAM_CREDITS.trim()).monospace());
                     });
+
+                    ui.separator();
+                    ui.strong("Starter pack soundfonts");
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("GeneralUser GS by S. Christian Collins, used and hosted as its license asks.");
+                        ui.hyperlink_to("schristiancollins.com/generaluser", "https://www.schristiancollins.com/generaluser");
+                    });
+                    egui::CollapsingHeader::new("GeneralUser GS's license").id_salt("credits_generaluser").show(ui, |ui| {
+                        ui.label(egui::RichText::new(credits::GENERALUSER_LICENSE.trim()).monospace());
+                    });
+                    ui.label(
+                        "TimGM6mb by Tim Brechbill (2004), with changes by David Bolton (2010), under the GNU GPL \
+                         version 2. The soundfont file is its own source.",
+                    );
+                    egui::CollapsingHeader::new("TimGM6mb's license (GPL-2.0)").id_salt("credits_timgm6mb").show(ui, |ui| {
+                        ui.label(egui::RichText::new(credits::TIMGM6MB_LICENSE.trim()).monospace());
+                    });
+                    ui.weak("The starter songs are synththing's own arrangements of public-domain music.");
 
                     ui.separator();
                     ui.strong("Lua");
@@ -2866,6 +2891,7 @@ fn settings_row_ui(ui: &mut egui::Ui, d: &SettingDescriptor, changed: &mut Optio
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut Frame) {
         let ctx = ui.ctx().clone();
+        self.sync_theme(&ctx);
         let shared = self.shared.lock().unwrap().clone();
         let view = &shared.view;
         self.visualizer_drawn = false;
@@ -3031,6 +3057,7 @@ impl eframe::App for App {
         self.poll_starter(&ctx);
         self.script_busy_ui(&ctx);
         self.tour_ui(&ctx, &shared);
+        self.themes_window(&ctx);
 
         drag_ghost_ui(&ctx);
 

@@ -15,6 +15,10 @@ use crate::updater::REPO;
 pub const MONOGRAM_CREDITS: &str = include_str!("../assets/fonts/monogram/credits.txt");
 /// Lua's copyright and license notice (from its source).
 pub const LUA_LICENSE: &str = include_str!("../assets/licenses/lua.txt");
+/// The starter pack's soundfonts (downloaded, not built in; see
+/// `assets/starter/README.md`).
+pub const GENERALUSER_LICENSE: &str = include_str!("../assets/starter/soundfonts/GeneralUser-GS LICENSE.txt");
+pub const TIMGM6MB_LICENSE: &str = include_str!("../assets/starter/soundfonts/TimGM6mb LICENSE (GPL-2.0).txt");
 const THIRD_PARTY_JSON: &str = include_str!("../assets/licenses/third_party.json");
 
 #[derive(Deserialize)]

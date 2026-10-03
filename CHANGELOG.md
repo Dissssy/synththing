@@ -7,9 +7,11 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### New
 - A welcome window the first time synththing runs, offering a starter pack: two soundfonts (GeneralUser GS and TimGM6mb, downloaded in the background and ready to use) and four songs to try, arranged for synththing with each instrument on its own channel. Help > Welcome... brings it back.
 - A guided tour (offered by the welcome window, and Help > Tour): it points at the real buttons one at a time, with everything else dimmed, and moves on as you try each thing: playing a song, the controls, soundfonts, visualizers, channels, playlists, a soundfont for one song, fullscreen, and a game.
+- Themes (synththing > Themes..., a window of its own that stays on top while you look around the app): Dark (the new default), Light, Frutiger Aero and Programmer art (egui's own look). Duplicate one to make your own: every color, the corner roundness, borders and shadows, changed live. The UI scale is there too, and Ctrl + / Ctrl - / Ctrl 0 change it anywhere.
 - A What's new window after an update, listing what changed since the version you had; Help > Changelog... shows every version.
 
 ### Changed
+- The File menu is now the synththing menu (Preferences, Themes, Quit).
 - Preferences is organized into categories (General, Songs, Loading, Scripts, Recording, Experimental), one line per setting; the longer explanations show on hover, wherever there's an (i).
 - Only MIDI files are listed as songs by default; Preferences > Songs > "Show audio files" lists MP3, WAV and the rest too (notes-based features don't apply to them).
 - The Listening layout (the first one you see) has the songs and soundfonts on the left and the visualizer on the right. Playlists are a View menu click away (the tour opens them).

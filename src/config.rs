@@ -101,6 +101,12 @@ pub struct Config {
     pub editor_font_size: Option<f32>,
     #[serde(default)]
     pub editor_wrap: Option<bool>,
+    /// The theme in use, by name (`None`: the default, Dark).
+    #[serde(default)]
+    pub theme: Option<String>,
+    /// How big the UI is drawn (`None`: 100%).
+    #[serde(default)]
+    pub ui_scale: Option<f32>,
     /// Where recordings are saved; `None` means Videos\synththing.
     #[serde(default)]
     pub record_dir: Option<PathBuf>,
