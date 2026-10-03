@@ -1191,6 +1191,24 @@ impl Controls {
     }
 }
 
+/// How far an action bound to `bindings` is pressed, 0 to 1: the most any
+/// of them is (keys 0 or 1, triggers and stick directions how far).
+fn action_value(input: &VisualizerInput, bindings: &[Binding]) -> f32 {
+    bindings
+        .iter()
+        .map(|b| match b {
+            Binding::Key(k) => {
+                if input.keys_down.contains(k) {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Binding::Pad(p) => input.pads.value(*p),
+        })
+        .fold(0.0, f32::max)
+}
+
 /// "pressed" (went down this frame), "held", "released" (went up this
 /// frame) or "up", for an action bound to `bindings`.
 fn action_state(input: &VisualizerInput, bindings: &[Binding]) -> &'static str {
@@ -2859,6 +2877,23 @@ fn register_input(
                 return Ok(false);
             }
             Ok(matches!(action_state(&state.borrow(), &action.bindings), "pressed" | "held"))
+        })?,
+    )?;
+    let actions = Rc::clone(controls);
+    let state = Rc::clone(input);
+    let span = Rc::clone(typing);
+    globals.set(
+        "input_value",
+        lua.create_function(move |_, id: usize| {
+            let controls = actions.borrow();
+            let action = id
+                .checked_sub(1)
+                .and_then(|i| controls.actions.get(i))
+                .ok_or_else(|| mlua::Error::runtime(format!("input_value: no action with id {id}")))?;
+            if span.borrow().active {
+                return Ok(0.0);
+            }
+            Ok(action_value(&state.borrow(), &action.bindings))
         })?,
     )?;
 
@@ -4646,6 +4681,25 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         input.pads.connected = vec!["Xbox Controller".into()];
         render_with(&mut pads, &input);
         assert_eq!(last_log(&pads), "1 held -0.5");
+
+        // input_value: how far, from any binding; keys count fully.
+        let script = "local left = input_register('left', { 'a', 'pad_lstick_left' })
+            local right = input_register('right', { 'd', 'pad_lstick_right' })
+            local gas = input_register('gas', { 'pad_rt', 'w' })
+            function render() log(string.format('%.2f %.2f %.2f', input_value(left), input_value(right), input_value(gas))) end";
+        let mut steer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let mut input = keys(&[], &[], &[]);
+        input.pads.axes = [-0.4, 0.0, 0.0, 0.0, 0.0, 0.25];
+        render_with(&mut steer, &input);
+        assert_eq!(last_log(&steer), "0.40 0.00 0.25");
+        let mut input = keys(&[Key::D], &[], &[]);
+        input.pads.axes = [-0.4, 0.0, 0.0, 0.0, 0.0, 0.0];
+        input.pads.down = vec![PadInput::RightTrigger];
+        render_with(&mut steer, &input);
+        assert_eq!(last_log(&steer), "0.40 1.00 1.00", "a key counts fully; a button-only trigger counts fully");
+        steer.set_source("function render() input_value(9) end".into());
+        render_with(&mut steer, &VisualizerInput::default());
+        assert!(steer.error().unwrap_or_default().contains("input_value: no action with id 9"), "{:?}", steer.error());
         let mut bad_pad = LuaVisualizer::new("input_register('x', 'pad_banana') function render() end".into(), None, 44_100);
         assert!(bad_pad.error().unwrap_or_default().contains("unknown controller input"), "{:?}", bad_pad.error());
         bad_pad.set_source("function render() pad_axis('wheel') end".into());

@@ -383,6 +383,7 @@ Both stick until changed (or a different script loads). A hidden cursor only hid
 input_register(name, default_keys) -> id   -- once, outside render()
 input(id) -> state       -- "pressed", "held", "released" or "up"
 input_down(id) -> bool   -- held: "pressed" or "held"
+input_value(id) -> 0..1  -- how far it's pressed: keys 0 or 1, triggers and sticks how far
 pad_axis(name) -> number -- a controller's stick or trigger, read directly
 gamepads() -> names      -- the connected controllers
 ```
@@ -398,7 +399,7 @@ Keyboard and controller input come through actions: a script names each thing it
 
 An unknown name is a script error that says so, as is one of the app's reserved keys (below). An empty list makes an action with no bindings until the user adds some.
 
-Through actions, every controller input is on or off: a stick direction or a trigger counts as pressed once it's past halfway, with a little slack before it lets go so it doesn't flicker at the edge. That's what makes them interchangeable with keys (a "left" action can be the A key, the d-pad or the stick). Any connected controller counts: pressing A on either of two pads presses `pad_a`. Controllers work while synththing's window has focus (no need to click into the visualizer first), and like keys, they don't reach actions while a typing span is open.
+For `input` and `input_down`, every controller input is on or off: a stick direction or a trigger counts as pressed once it's past halfway, with a little slack before it lets go so it doesn't flicker at the edge. That's what makes them interchangeable with keys (a "left" action can be the A key, the d-pad or the stick). Any connected controller counts: pressing A on either of two pads presses `pad_a`. Controllers work while synththing's window has focus (no need to click into the visualizer first), and like keys, they don't reach actions while a typing span is open.
 
 For smooth movement, `pad_axis` reads the sticks and triggers directly: `"lstick_x"`, `"lstick_y"`, `"rstick_x"`, `"rstick_y"` from -1 to 1 (x is right, y is down, like screen coordinates; a small wobble around the middle reads 0), and `"lt"`, `"rt"` from 0 (let go) to 1 (all the way). With several controllers it's the one pushed furthest. Axes aren't rebindable: they're the controller's own. `gamepads()` lists the connected controllers' names, empty when there are none. `gamepad_demo.lua` (New > Examples) shows all of it on a drawn controller.
 
@@ -406,6 +407,17 @@ For smooth movement, `pad_axis` reads the sticks and triggers directly: `"lstick
 local x = 100
 function render(width, height, left, right)
     x = x + pad_axis("lstick_x") * 300 * DT   -- smooth, at the stick's angle
+end
+```
+
+`input_value(id)` is the rebindable way to get the same: how far the action is pressed, from 0 to 1, the most any of its bindings is. A key or button is 0 or 1; a trigger is how far it's pulled, and a stick direction (`"pad_lstick_left"` and so on) how far the stick is pushed that way. So steering made from two actions works the same from the keys, the d-pad or a stick, at the stick's angle, and the player can rebind it:
+
+```lua
+local LEFT = input_register("left", { "left", "a", "pad_lstick_left" })
+local RIGHT = input_register("right", { "right", "d", "pad_lstick_right" })
+local x = 100
+function render(width, height, left, right)
+    x = x + (input_value(RIGHT) - input_value(LEFT)) * 300 * DT
 end
 ```
 
@@ -702,6 +714,7 @@ display_mode() --> "window"       -- or "fullscreen", "dedicated"
 input_register("jump", { "space", "w" }) --> 1   -- an id, 1, 2, 3, ... in order
 input(jump) --> "up"              -- or "pressed", "held", "released"
 input_down(jump) --> false
+input_value(jump) --> 0           -- 0 to 1: 1 for a key, 0.62 for a stick pushed that far
 text_typed() --> ""               -- or what was typed this frame, e.g. "hi"
 typing_state() --> {
     active = false, done = false, cancelled = false,

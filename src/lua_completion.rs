@@ -77,6 +77,7 @@ pub const HOST_API: &[(&str, &str)] = &[
     ("gamepads", "gamepads() -> names: the connected game controllers"),
     ("input", "input(id) -> \"pressed\", \"held\", \"released\" or \"up\": the action's state this frame"),
     ("input_down", "input_down(id) -> bool: the action is held (pressed this frame or earlier)"),
+    ("input_value", "input_value(id) -> 0..1: how far the action is pressed (keys 0 or 1, triggers and stick directions how far)"),
     ("text_typed", "text_typed() -> string: the characters typed this frame, while focused"),
     ("typing_begin", "typing_begin([text], [{max_length, multiline}]): start a typing span; the app edits, you draw"),
     ("typing_state", "typing_state() -> {active, done, cancelled, text, cursor, line, column, key}"),

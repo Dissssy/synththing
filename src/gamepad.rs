@@ -193,6 +193,34 @@ pub struct PadFrame {
     pub connected: Vec<String>,
 }
 
+impl PadFrame {
+    /// How far `input` is pressed, 0 to 1: a trigger how far it's pulled,
+    /// a stick direction how far the stick is pushed that way (past the
+    /// dead zone), anything else 0 or 1.
+    pub fn value(&self, input: PadInput) -> f32 {
+        let a = &self.axes;
+        let analogue = match input {
+            PadInput::LeftStickLeft => Some(-a[0]),
+            PadInput::LeftStickRight => Some(a[0]),
+            PadInput::LeftStickUp => Some(-a[1]),
+            PadInput::LeftStickDown => Some(a[1]),
+            PadInput::RightStickLeft => Some(-a[2]),
+            PadInput::RightStickRight => Some(a[2]),
+            PadInput::RightStickUp => Some(-a[3]),
+            PadInput::RightStickDown => Some(a[3]),
+            PadInput::LeftTrigger => Some(a[4]),
+            PadInput::RightTrigger => Some(a[5]),
+            _ => None,
+        };
+        let held = if self.down.contains(&input) { 1.0 } else { 0.0 };
+        match analogue {
+            // A trigger some pads only report as a button counts as fully pulled.
+            Some(v) if v > 0.0 => v.min(1.0),
+            _ => held,
+        }
+    }
+}
+
 /// Every connected controller, read once a frame.
 pub struct Gamepads {
     gilrs: Option<Gilrs>,

@@ -6,7 +6,10 @@
 -- Controls in Script Settings. A button glows while held, flashes white
 -- the frame it's pressed. The sticks and triggers also show their exact
 -- analogue position, read with pad_axis(); the stick's direction buttons
--- (pad_lstick_left and so on) light up past halfway.
+-- (pad_lstick_left and so on) light up past halfway, and their dots grow
+-- with input_value(), how far each is pushed (0 to 1; a key bound to the
+-- same action counts fully). Steering made from two of them reads the same
+-- from the stick, the d-pad or the keys: see the readout at the bottom.
 --
 -- Controllers count while synththing's window has focus; keys only while
 -- the visualizer does (click it).
@@ -169,7 +172,10 @@ function render(width, height, left, right)
     local reach = 54 * s
     stick(lx, ly, 42 * s, "lstick_x", "lstick_y", "left stick click", ly + reach + 18 * s)
     for _, dir in ipairs({ { "left stick up", 0, -1 }, { "left stick down", 0, 1 }, { "left stick left", -1, 0 }, { "left stick right", 1, 0 } }) do
-        circle(lx + dir[2] * reach, ly + dir[3] * reach, 5 * s, state_color(dir[1]))
+        local dx, dy = lx + dir[2] * reach, ly + dir[3] * reach
+        circle(dx, dy, 5 * s, state_color(dir[1]))
+        local amount = input_value(action[dir[1]])
+        if amount > 0 then circle(dx, dy, (2 + 5 * amount) * s, HELD) end
     end
     local rx, ry = P(410, 260)
     stick(rx, ry, 36 * s, "rstick_x", "rstick_y", "right stick click", ry + 36 * s + 16 * s)
@@ -188,4 +194,7 @@ function render(width, height, left, right)
         or ("Connected: " .. table.concat(pads, ", "))
     text(10, 8, status, #pads == 0 and DIM or LABEL, FONT_HEIGHT * ts)
     text(10, height - 10 - FONT_HEIGHT * ts, "Pressed: " .. table.concat(recent, ", "), DIM, FONT_HEIGHT * ts)
+    local steer = input_value(action["left stick right"]) - input_value(action["left stick left"])
+    local readout = string.format("Steering, input_value(right) - input_value(left): %+.2f", steer)
+    text(10, height - 14 - 2 * FONT_HEIGHT * ts, readout, DIM, FONT_HEIGHT * ts)
 end
