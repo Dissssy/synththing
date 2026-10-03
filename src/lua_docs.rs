@@ -26,6 +26,34 @@ pub fn sections() -> &'static [Section] {
     SECTIONS
 }
 
+/// Where `name` (a function or global) is documented: (section, block).
+/// Its own line in a code block (`rect(x0, ...)`, `FONT_HEIGHT -- 12`)
+/// wins; otherwise the first place text mentions it as `name`.
+pub fn find(name: &str) -> Option<(usize, usize)> {
+    let defines = |code: &str| {
+        code.lines().any(|line| {
+            let line = line.trim_start();
+            line.strip_prefix(name)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('(') || rest.starts_with(char::is_whitespace))
+        })
+    };
+    let mentions = |text: &str| text.contains(&format!("`{name}`")) || text.contains(&format!("`{name}("));
+    let mut mentioned = None;
+    for (s, section) in SECTIONS.iter().enumerate() {
+        for (b, block) in section.blocks.iter().enumerate() {
+            match block {
+                Block::Code(code) if defines(code) => return Some((s, b)),
+                Block::P(text) if mentioned.is_none() && mentions(text) => mentioned = Some((s, b)),
+                Block::Bullets(items) if mentioned.is_none() && items.iter().any(|i| mentions(i)) => {
+                    mentioned = Some((s, b))
+                }
+                _ => {}
+            }
+        }
+    }
+    mentioned
+}
+
 /// Split paragraph or bullet text into `(text, is_code)` spans at its
 /// backticks, so `inline code` can be drawn in a monospace font.
 pub fn inline_spans(text: &str) -> impl Iterator<Item = (&str, bool)> {
@@ -35,6 +63,15 @@ pub fn inline_spans(text: &str) -> impl Iterator<Item = (&str, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_host_function_is_documented() {
+        for (name, _) in crate::lua_completion::HOST_API {
+            assert!(find(name).is_some(), "{name} isn't in docs/scripting-reference.md");
+        }
+        let (section, _) = find("rect").unwrap();
+        assert_eq!(sections()[section].title, "Drawing");
+    }
 
     #[test]
     fn the_markdown_reference_parses_into_sections() {

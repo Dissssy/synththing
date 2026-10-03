@@ -16,7 +16,7 @@ mod recording;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::{egui, Frame};
 use egui_dock::tab_viewer::OnCloseResponse;
@@ -237,6 +237,11 @@ pub struct App {
     preferences_open: bool,
     /// View > Layout > Save current layout as...: the name being typed.
     layout_save: Option<String>,
+    /// The reference spot to show (section, block), when it was asked for,
+    /// and whether it still needs scrolling to.
+    docs_target: Option<((usize, usize), Instant, bool)>,
+    /// A section to bring to the front once the dock is free.
+    pending_focus: Option<Section>,
     sample_rate: u32,
     /// The script editor's state (see `app/editor.rs`).
     editor: editor::EditorState,
@@ -359,6 +364,8 @@ impl App {
             dock_is_fullscreen_layout: false,
             preferences_open: false,
             layout_save: None,
+            docs_target: None,
+            pending_focus: None,
             sample_rate,
             editor: editor::EditorState::default(),
             editor_saved: String::new(),
@@ -421,6 +428,28 @@ impl App {
         }
         self.refresh_open_sections();
         self.save_layout();
+    }
+
+    /// Open `section` if it's closed, and make it the shown tab of its
+    /// group.
+    fn reveal_section(&mut self, section: Section) {
+        if self.dock_in_use {
+            self.pending_layout.push((section, true));
+            self.pending_focus = Some(section);
+            return;
+        }
+        self.set_open(section, true);
+        if let Some(path) = self.dock.find_tab(&section) {
+            let _ = self.dock.set_active_tab(path);
+        }
+    }
+
+    /// Show where `name` is documented in the Scripting Reference.
+    fn open_reference(&mut self, name: &str) -> bool {
+        let Some(target) = lua_docs::find(name) else { return false };
+        self.docs_target = Some((target, Instant::now(), true));
+        self.reveal_section(Section::Reference);
+        true
     }
 
     fn refresh_open_sections(&mut self) {
@@ -1620,6 +1649,9 @@ impl App {
         for (section, open) in std::mem::take(&mut self.pending_layout) {
             self.set_open(section, open);
         }
+        if let Some(section) = self.pending_focus.take() {
+            self.reveal_section(section);
+        }
     }
 
     /// The editor tab: plus the script picker when the visualizer (which
@@ -2294,30 +2326,54 @@ impl App {
     /// `lua_docs.rs`) rather than a hosted wiki, the whole API is a few
     /// dozen functions, not a sprawling product.
     fn docs_ui(&mut self, ui: &mut egui::Ui) {
+        // A spot asked for from the editor: scrolled to once, highlighted
+        // for a moment.
+        const HIGHLIGHT_SECS: f32 = 2.5;
+        let target = self.docs_target.as_mut();
+        let (target_at, fade, mut scroll) = match target {
+            Some((at, since, scroll)) => {
+                let left = 1.0 - since.elapsed().as_secs_f32() / HIGHLIGHT_SECS;
+                (Some(*at), left, std::mem::take(scroll))
+            }
+            None => (None, 0.0, false),
+        };
         egui::ScrollArea::vertical().id_salt("docs_scroll").auto_shrink([false, false]).show(ui, |ui| {
-            for section in lua_docs::sections() {
+            for (s, section) in lua_docs::sections().iter().enumerate() {
                 ui.heading(section.title);
-                for block in section.blocks {
-                    match block {
-                        lua_docs::Block::P(text) => {
-                            ui.label(inline_code_job(ui, "", text));
-                            ui.add_space(4.0);
-                        }
-                        lua_docs::Block::Code(code) => {
-                            ui.code(*code);
-                            ui.add_space(4.0);
-                        }
-                        lua_docs::Block::Bullets(items) => {
-                            for item in *items {
-                                ui.label(inline_code_job(ui, "- ", item));
+                for (b, block) in section.blocks.iter().enumerate() {
+                    let response = ui
+                        .vertical(|ui| match block {
+                            lua_docs::Block::P(text) => {
+                                ui.label(inline_code_job(ui, "", text));
                             }
-                            ui.add_space(4.0);
+                            lua_docs::Block::Code(code) => {
+                                ui.code(*code);
+                            }
+                            lua_docs::Block::Bullets(items) => {
+                                for item in *items {
+                                    ui.label(inline_code_job(ui, "- ", item));
+                                }
+                            }
+                        })
+                        .response;
+                    if target_at == Some((s, b)) {
+                        if std::mem::take(&mut scroll) {
+                            response.scroll_to_me(Some(egui::Align::TOP));
+                        }
+                        if fade > 0.0 {
+                            let color = ui.visuals().selection.stroke.color.gamma_multiply(fade);
+                            ui.painter().rect_stroke(response.rect.expand(3.0), 3.0, egui::Stroke::new(2.0, color), egui::StrokeKind::Outside);
+                            ui.ctx().request_repaint();
                         }
                     }
+                    ui.add_space(4.0);
                 }
                 ui.separator();
             }
         });
+        if fade <= 0.0 && target_at.is_some() {
+            self.docs_target = None;
+        }
     }
 }
 

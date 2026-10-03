@@ -79,6 +79,20 @@ pub struct EditorState {
     /// Ctrl+Space: show completions on the next frame even with nothing
     /// typed.
     force_popup: bool,
+    /// The color picker, while it's open for a color table.
+    color_edit: Option<ColorEdit>,
+}
+
+struct ColorEdit {
+    /// Char index of the table's `{`.
+    start: usize,
+    rgb: [u8; 3],
+    alpha: f32,
+    has_alpha: bool,
+    /// Where the picker shows (under the swatch).
+    at: egui::Pos2,
+    /// Opened this frame: the click that opened it doesn't close it.
+    fresh: bool,
 }
 
 struct Popup {
@@ -417,10 +431,15 @@ impl App {
         let editor_id = egui::Id::new(SCRIPT_EDITOR_ID);
         let ctx = ui.ctx().clone();
 
-        if let Some((word, detail)) = &self.editor_hover_info {
+        if let Some((word, detail)) = self.editor_hover_info.clone() {
             ui.horizontal(|ui| {
-                ui.strong(word);
-                ui.label(detail);
+                ui.strong(&word);
+                ui.label(&detail);
+                if crate::lua_docs::find(&word).is_some()
+                    && ui.link("Reference").on_hover_text("Show it in the Scripting Reference").clicked()
+                {
+                    self.open_reference(&word);
+                }
             });
         } else {
             ui.weak("Hover a function, or press F1 at the text cursor, for info about it.");
@@ -465,7 +484,7 @@ impl App {
         scroll.id_salt("visualizer_editor_scroll").auto_shrink([false, false]).show(ui, |ui| {
             let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
                 let width = if wrap { wrap_width } else { f32::INFINITY };
-                lua_highlight::layout(ui, buf.as_str(), width, error_line, font_size)
+                lua_highlight::layout(ui, buf.as_str(), width, error_line, font_size, true)
             };
             let digits = self.editor_text.lines().count().max(1).to_string().len().max(2);
             let char_width = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
@@ -530,6 +549,41 @@ impl App {
                 }
             }
             ui.painter().set(behind, shapes);
+
+            // Color tables: a swatch in the room the layout left before each
+            // `{`; clicking one opens a picker.
+            let room = lua_highlight::swatch_width(font_size);
+            let pointer = ui.input(|i| i.pointer.interact_pos());
+            let clicked = ui.input(|i| i.pointer.primary_clicked());
+            for literal in code_edit::color_literals(&self.editor_text) {
+                let glyph = output
+                    .galley
+                    .pos_from_cursor(egui::text::CCursor::new(literal.start))
+                    .translate(output.galley_pos.to_vec2());
+                let swatch = egui::Rect::from_min_max(
+                    egui::pos2(glyph.min.x - room + 3.0, glyph.min.y + 2.0),
+                    egui::pos2(glyph.min.x - 3.0, glyph.max.y - 2.0),
+                );
+                if !swatch.intersects(visible) {
+                    continue;
+                }
+                let (rgb, alpha) = literal.rgba();
+                paint_swatch(ui.painter(), swatch, rgb, alpha);
+                if pointer.is_some_and(|p| swatch.contains(p)) {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    if clicked {
+                        self.editor.color_edit = Some(ColorEdit {
+                            start: literal.start,
+                            rgb,
+                            alpha,
+                            has_alpha: literal.has_alpha(),
+                            at: swatch.left_bottom() + egui::vec2(0.0, 4.0),
+                            fresh: true,
+                        });
+                    }
+                }
+            }
+            self.color_picker_ui(ui);
 
             // The error's message, at the end of its line.
             if let (Some(error), Some(line)) = (&error, error_line)
@@ -645,6 +699,57 @@ impl App {
         });
     }
 
+    /// The color picker for a color table: changing it rewrites the
+    /// table's numbers. Esc, Done, or a click elsewhere closes it.
+    fn color_picker_ui(&mut self, ui: &egui::Ui) {
+        let Some(edit) = &mut self.editor.color_edit else { return };
+        let ctx = ui.ctx().clone();
+        let mut color = egui::Color32::from_rgba_unmultiplied(edit.rgb[0], edit.rgb[1], edit.rgb[2], (edit.alpha * 255.0).round() as u8);
+        let mut changed = false;
+        let mut done = false;
+        let alpha_mode = if edit.has_alpha { egui::color_picker::Alpha::OnlyBlend } else { egui::color_picker::Alpha::Opaque };
+        let area = egui::Area::new(egui::Id::new("editor_color_picker"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(edit.at)
+            .show(&ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    changed = egui::color_picker::color_picker_color32(ui, &mut color, alpha_mode);
+                    ui.horizontal(|ui| {
+                        let [r, g, b, a] = color.to_srgba_unmultiplied();
+                        if edit.has_alpha {
+                            ui.weak(format!("r = {r}, g = {g}, b = {b}, a = {:.2}", f32::from(a) / 255.0));
+                        } else {
+                            ui.weak(format!("r = {r}, g = {g}, b = {b}"));
+                        }
+                        if ui.button("Done").clicked() {
+                            done = true;
+                        }
+                    });
+                });
+            });
+        let clicked_outside = ctx.input(|i| {
+            i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p))
+        });
+        let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        if std::mem::take(&mut edit.fresh) {
+            // The click that opened it.
+        } else if done || escape || clicked_outside {
+            self.editor.color_edit = None;
+            return;
+        }
+        if changed {
+            let [r, g, b, a] = color.to_srgba_unmultiplied();
+            edit.rgb = [r, g, b];
+            edit.alpha = f32::from(a) / 255.0;
+            let (start, rgb, alpha) = (edit.start, edit.rgb, edit.alpha);
+            if code_edit::set_color(&mut self.editor_text, start, rgb, alpha) {
+                self.editor_changed();
+            } else {
+                self.editor.color_edit = None;
+            }
+        }
+    }
+
     /// Put the text cursor at char `index` and scroll there.
     fn jump_to(&mut self, ctx: &egui::Context, id: egui::Id, index: usize) {
         store_selection(ctx, id, (index, index));
@@ -671,7 +776,11 @@ impl App {
                 self.jump_to(ctx, id, index);
             }
             None => {
-                if let Some(detail) = lua_completion::lookup(&word) {
+                if self.open_reference(&word) {
+                    if let Some(detail) = lua_completion::lookup(&word) {
+                        self.editor_hover_info = Some((word, detail.to_string()));
+                    }
+                } else if let Some(detail) = lua_completion::lookup(&word) {
                     self.editor_hover_info = Some((word, detail.to_string()));
                 } else {
                     self.status = format!("Couldn't find where `{word}` is defined.");
@@ -973,7 +1082,7 @@ impl App {
                     ui.vertical(|ui| {
                         egui::ScrollArea::both().id_salt("history_preview").max_height(380.0).show(ui, |ui| {
                             let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _: f32| {
-                                lua_highlight::layout(ui, buf.as_str(), f32::INFINITY, None, DEFAULT_FONT_SIZE)
+                                lua_highlight::layout(ui, buf.as_str(), f32::INFINITY, None, DEFAULT_FONT_SIZE, false)
                             };
                             let mut text = snap.text.as_str();
                             ui.add(egui::TextEdit::multiline(&mut text).code_editor().layouter(&mut layouter));
@@ -1176,4 +1285,20 @@ fn signature_help(ui: &egui::Ui, signature: &lua_analysis::Signature, at: egui::
                 ui.label(galley);
             });
         });
+}
+
+/// A color swatch: the color over a checkerboard (so transparency shows),
+/// with a thin border.
+fn paint_swatch(painter: &egui::Painter, rect: egui::Rect, rgb: [u8; 3], alpha: f32) {
+    if alpha < 1.0 {
+        let half = rect.width() / 2.0;
+        let (light, dark) = (egui::Color32::from_gray(200), egui::Color32::from_gray(120));
+        let top = egui::Rect::from_min_size(rect.min, egui::vec2(half, rect.height() / 2.0));
+        painter.rect_filled(rect, 2.0, light);
+        painter.rect_filled(top, 0.0, dark);
+        painter.rect_filled(top.translate(egui::vec2(half, rect.height() / 2.0)), 0.0, dark);
+    }
+    let color = egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], (alpha * 255.0).round() as u8);
+    painter.rect_filled(rect, 2.0, color);
+    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(140)), egui::StrokeKind::Inside);
 }

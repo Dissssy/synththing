@@ -47,15 +47,40 @@ fn color_for(kind: Kind, visuals: &egui::Visuals) -> Color32 {
 ///
 /// `error_line` (1-based), if any, is underlined in red on a faint red
 /// background: where the script's current error points. `font_size` in
-/// points.
-pub fn layout(ui: &Ui, source: &str, wrap_width: f32, error_line: Option<usize>, font_size: f32) -> Arc<Galley> {
+/// points. `swatches`: leave [`swatch_width`] of room before every color
+/// table (`{ r = .., g = .., b = .. }`) for the editor to draw its color in.
+pub fn layout(
+    ui: &Ui,
+    source: &str,
+    wrap_width: f32,
+    error_line: Option<usize>,
+    font_size: f32,
+    swatches: bool,
+) -> Arc<Galley> {
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap_width;
     let visuals = ui.visuals();
     let font_id = FontId::monospace(font_size);
     let error_color = Color32::from_rgb(220, 90, 90);
+    // Byte offsets of the color tables' `{`.
+    let swatch_at: Vec<usize> = if swatches {
+        let literals = crate::code_edit::color_literals(source);
+        let mut starts = Vec::with_capacity(literals.len());
+        let mut wanted = literals.iter().map(|l| l.start).peekable();
+        for (index, (byte, _)) in source.char_indices().enumerate() {
+            if wanted.peek() == Some(&index) {
+                starts.push(byte);
+                wanted.next();
+            }
+        }
+        starts
+    } else {
+        Vec::new()
+    };
+    let room = swatch_width(font_size);
 
     let mut line = 1;
+    let mut offset = 0;
     for (text, kind) in tokenize(source) {
         // A token can span lines (comments, long strings, whitespace), so
         // split it at newlines to mark exactly the error line.
@@ -66,7 +91,22 @@ pub fn layout(ui: &Ui, source: &str, wrap_width: f32, error_line: Option<usize>,
                 format.underline = egui::Stroke::new(1.5, error_color);
                 format.background = error_color.gamma_multiply(0.15);
             }
-            job.append(piece, 0.0, format);
+            // Split where a swatch goes, so its room comes right before
+            // the `{`.
+            let mut from = 0;
+            for &at in swatch_at.iter().filter(|&&at| at >= offset && at < offset + piece.len()) {
+                let cut = at - offset;
+                if cut > from {
+                    job.append(&piece[from..cut], 0.0, format.clone());
+                }
+                let next = piece[cut..].chars().next().map_or(piece.len(), |c| cut + c.len_utf8());
+                job.append(&piece[cut..next], room, format.clone());
+                from = next;
+            }
+            if from < piece.len() {
+                job.append(&piece[from..], 0.0, format);
+            }
+            offset += piece.len();
             if piece.ends_with('\n') {
                 line += 1;
             }
@@ -74,6 +114,11 @@ pub fn layout(ui: &Ui, source: &str, wrap_width: f32, error_line: Option<usize>,
     }
 
     ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// The room left for a color swatch, at this text size.
+pub fn swatch_width(font_size: f32) -> f32 {
+    font_size + 6.0
 }
 
 /// Splits `source` into `(slice, kind)` runs covering every byte exactly

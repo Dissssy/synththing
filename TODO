@@ -37,12 +37,15 @@
 
 [M][.] script editor, group 3: visual tools
     - color swatches next to {r, g, b} tables, click for a picker that
-      rewrites the numbers
+      rewrites the numbers - DONE (room left by the layouter, code_edit
+      color_literals/set_color)
     - sprite editor: open a sprite_register call in a palette + pixel
       grid editor that writes image/palette back into the code
     - snippets: settings block, input_register controls, sprite
       template, typing_begin text field
-    - hover help links into the Scripting Reference at that function
+    - hover help links into the Scripting Reference at that function -
+      DONE (lua_docs::find; Ctrl+click too). editor_test.lua (undropped)
+      exercises all the editor features.
 
 [M][!] layout presets - DONE (layout::PRESETS: Listening, Watching, Script
     writing; saved layouts; each keeps changes made while active, built-ins

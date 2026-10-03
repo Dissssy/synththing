@@ -3585,12 +3585,24 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         let known = crate::lua_analysis::known_globals(host_global_names());
         let mut problems = Vec::new();
         for (name, source) in DROPPED_SCRIPTS.iter().chain(UNDROPPED_SCRIPTS) {
+            if *name == "editor_test.lua" {
+                continue; // has problems on purpose; checked below
+            }
             for d in crate::lua_analysis::analyze(source, &known).diagnostics {
                 problems.push(format!("{name}:{}: {}", d.line, d.message));
             }
         }
         assert!(problems.is_empty(), "{}", problems.join("
 "));
+
+        // The editor test script has exactly the three it says it has.
+        let (_, test) = UNDROPPED_SCRIPTS.iter().find(|(n, _)| *n == "editor_test.lua").unwrap();
+        let found: Vec<String> =
+            crate::lua_analysis::analyze(test, &known).diagnostics.iter().map(|d| d.message.clone()).collect();
+        assert_eq!(found.len(), 3, "{found:?}");
+        assert!(found[0].contains("`spare` is never used"), "{found:?}");
+        assert!(found[1].contains("Did you mean `playback`"), "{found:?}");
+        assert!(found[2].contains("global `stray`"), "{found:?}");
     }
 
     #[test]

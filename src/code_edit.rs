@@ -429,6 +429,125 @@ pub fn matching_bracket(text: &str, cursor: usize) -> Option<(usize, usize)> {
     None
 }
 
+/// A color table written in the code: `{ r = 255, g = 120, b = 0 }`, with
+/// or without `a`, keys in any order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColorLiteral {
+    /// Char index of its `{`.
+    pub start: usize,
+    /// Char index just past its `}`.
+    pub end: usize,
+    /// For r, g, b, a: the char range of the number and its value.
+    pub channels: [Option<((usize, usize), f64)>; 4],
+}
+
+impl ColorLiteral {
+    /// The color, as 0-255 r, g, b and 0-1 alpha.
+    pub fn rgba(&self) -> ([u8; 3], f32) {
+        let channel = |n: usize| self.channels[n].map_or(0.0, |(_, v)| v).clamp(0.0, 255.0).round() as u8;
+        let alpha = self.channels[3].map_or(1.0, |(_, v)| v.clamp(0.0, 1.0)) as f32;
+        ([channel(0), channel(1), channel(2)], alpha)
+    }
+
+    pub fn has_alpha(&self) -> bool {
+        self.channels[3].is_some()
+    }
+}
+
+/// Every color table in `text` outside strings and comments.
+pub fn color_literals(text: &str) -> Vec<ColorLiteral> {
+    let cs = chars(text);
+    let mask = code_mask(&cs);
+    let mut found = Vec::new();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '{' && mask[i] && let Some(literal) = parse_color_at(&cs, i) {
+            i = literal.end;
+            found.push(literal);
+        } else {
+            i += 1;
+        }
+    }
+    found
+}
+
+/// A color table starting at the `{` at `open`: only `r`/`g`/`b`/`a = number`
+/// fields, with r, g and b all there.
+fn parse_color_at(cs: &[char], open: usize) -> Option<ColorLiteral> {
+    let mut channels: [Option<((usize, usize), f64)>; 4] = [None; 4];
+    let mut i = open + 1;
+    let skip_space = |i: &mut usize| {
+        while *i < cs.len() && cs[*i].is_whitespace() {
+            *i += 1;
+        }
+    };
+    loop {
+        skip_space(&mut i);
+        match cs.get(i)? {
+            '}' => break,
+            'r' | 'g' | 'b' | 'a' => {
+                let slot = match cs[i] {
+                    'r' => 0,
+                    'g' => 1,
+                    'b' => 2,
+                    _ => 3,
+                };
+                if cs.get(i + 1).is_some_and(|c| c.is_alphanumeric() || *c == '_') || channels[slot].is_some() {
+                    return None;
+                }
+                i += 1;
+                skip_space(&mut i);
+                if cs.get(i) != Some(&'=') {
+                    return None;
+                }
+                i += 1;
+                skip_space(&mut i);
+                let number_start = i;
+                while i < cs.len() && (cs[i].is_ascii_digit() || cs[i] == '.') {
+                    i += 1;
+                }
+                let number: String = cs[number_start..i].iter().collect();
+                channels[slot] = Some(((number_start, i), number.parse().ok()?));
+                skip_space(&mut i);
+                match cs.get(i)? {
+                    ',' | ';' => i += 1,
+                    '}' => {}
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        }
+        if i - open > 200 {
+            return None;
+        }
+    }
+    (channels[0].is_some() && channels[1].is_some() && channels[2].is_some())
+        .then_some(ColorLiteral { start: open, end: i + 1, channels })
+}
+
+/// Rewrite the numbers of the color table starting at char `start` to
+/// `rgb` (and `alpha`, if it has an `a`), leaving everything else as
+/// written. Returns whether there was one there.
+pub fn set_color(text: &mut String, start: usize, rgb: [u8; 3], alpha: f32) -> bool {
+    let Some(literal) = color_literals(text).into_iter().find(|l| l.start == start) else { return false };
+    let alpha = format!("{:.2}", alpha.clamp(0.0, 1.0));
+    let alpha = alpha.trim_end_matches('0').trim_end_matches('.');
+    let alpha = if alpha.is_empty() { "0" } else { alpha };
+    let values = [rgb[0].to_string(), rgb[1].to_string(), rgb[2].to_string(), alpha.to_string()];
+    // Back to front, so earlier ranges stay put.
+    let mut edits: Vec<((usize, usize), String)> = literal
+        .channels
+        .iter()
+        .zip(values)
+        .filter_map(|(channel, value)| channel.map(|(range, _)| (range, value)))
+        .collect();
+    edits.sort_by_key(|e| std::cmp::Reverse(e.0.0));
+    for (range, value) in edits {
+        replace(text, range, &value);
+    }
+    true
+}
+
 /// Every match of `query` in `text`, as char ranges.
 pub fn find_all(text: &str, query: &str, case_sensitive: bool) -> Vec<(usize, usize)> {
     if query.is_empty() {
@@ -576,6 +695,21 @@ mod tests {
         assert_eq!(matching_bracket(text, 15), Some((14, 1)));
         assert_eq!(matching_bracket(text, 12), Some((11, 13)));
         assert_eq!(matching_bracket("x [[ ( ]] y", 6), None);
+    }
+
+    #[test]
+    fn color_tables_are_found_and_rewritten_in_place() {
+        let text = "clear({ r = 14, g = 14, b = 20 })\nlocal c = {b=1,r=2,g=3, a = 0.5}\n-- { r = 1, g = 2, b = 3 }\nlocal t = { r = 1, x = 2 }";
+        let colors = color_literals(text);
+        assert_eq!(colors.len(), 2);
+        assert_eq!(colors[0].rgba(), ([14, 14, 20], 1.0));
+        assert_eq!(colors[1].rgba(), ([2, 3, 1], 0.5));
+        assert!(colors[1].has_alpha());
+        let mut edited = text.to_string();
+        assert!(set_color(&mut edited, colors[1].start, [200, 100, 50], 0.25));
+        assert!(edited.contains("local c = {b=50,r=200,g=100, a = 0.25}"), "{edited}");
+        assert!(set_color(&mut edited, colors[0].start, [255, 0, 0], 1.0));
+        assert!(edited.starts_with("clear({ r = 255, g = 0, b = 0 })"), "{edited}");
     }
 
     #[test]

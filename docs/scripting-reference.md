@@ -52,7 +52,8 @@ Live reload: editing a script in the Script Editor saves it and recompiles it on
 - Go to: a list of the script's functions to jump between; F12 or Ctrl+click on a name jumps to where it's defined. Hovering one of the script's own names says what it is (a local and its line, a parameter, a function and its parameters).
 - Format (Shift+Alt+F): lays the script out tidily (StyLua, 4-space indents, lines up to 120 wide). It needs the script to parse first.
 - Functions: a dropdown of every host function; picking one inserts its name at the text cursor.
-- Hover a function name, or press F1 with the text cursor on one, to see its one-line description above the editor.
+- Hover a function name, or press F1 with the text cursor on one, to see its one-line description above the editor; "Reference" next to it (or Ctrl+click on the name) shows it in this reference, highlighted for a moment.
+- Color swatches: every color table written out in the code (`{ r = 255, g = 120, b = 0 }`, with or without `a`, keys in any order) gets a little swatch of its color in front of it. Click one for a color picker; changing the color rewrites just the numbers, keeping the table as you wrote it.
 - Errors: the line a compile or runtime error points at is underlined in red, its line number is red, its message is shown at the end of the line, and "Go to line N" next to the error (above the editor, or above the visualizer, which also opens the editor) jumps the text cursor there.
 - History...: synththing keeps a copy of the script when it's opened and about once a minute while you edit (the last 50, in its config folder). The History window shows each with how long ago and how many lines differ from now, previews it, and restores it (keeping the current version in the list).
 - Text size: Ctrl+scroll over the text, or the size box; Wrap turns line wrapping off for long lines (scroll sideways instead).
@@ -534,4 +535,5 @@ The first seven are copied into your scripts folder on first run (one that came 
 - `pulse.lua`, a ring that beats with the song: the time signature's beats around a circle, a polygon turning with the beat and swelling with loudness, eighth-note sprites bursting out on onsets, and a tempo/bar readout
 - `settings_demo.lua`, exercises every setting type; not a music visualizer, a reference for the settings API itself
 - `input_demo.lua`, mouse, keyboard actions and cursor control: a paint toy with its own cursor; not a music visualizer either
+- `editor_test.lua`, not a visualizer at all: a page of things for the script editor to react to (three deliberate problems, color tables, functions for Go to, a badly formatted function), each marked TRY
 - `terminal.lua`, a typing span: a command prompt with history, its prompt and cursor drawn from a sprite sheet; not a music visualizer
