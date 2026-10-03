@@ -27,8 +27,9 @@
 --
 -- Play along: set "player_channel" (Script Settings) to a channel number and
 -- that channel's snake is yours while the visualizer has focus (click it, or
--- use the Fullscreen visualizer): arrow keys or WASD steer, or whatever
--- keys you bind under Controls in Script Settings. It drives itself again
+-- use the Fullscreen visualizer): arrow keys or WASD steer, as do a
+-- controller's d-pad and left stick, or whatever you bind under Controls
+-- in Script Settings. It drives itself again
 -- whenever the visualizer loses focus. Your best length is saved
 -- (store_set), and the scoreboard (text) shows every snake's length.
 -- Apples are sprites, one per snake color.
@@ -127,10 +128,10 @@ local best = store_get("best_length") or 0
 -- Steering actions, rebindable under Controls in Script Settings; the
 -- value is the direction each one turns to.
 local STEER = {
-    [input_register("right", { "right", "d" })] = 1,
-    [input_register("down", { "down", "s" })] = 2,
-    [input_register("left", { "left", "a" })] = 3,
-    [input_register("up", { "up", "w" })] = 4,
+    [input_register("right", { "right", "d", "pad_dpad_right", "pad_lstick_right" })] = 1,
+    [input_register("down", { "down", "s", "pad_dpad_down", "pad_lstick_down" })] = 2,
+    [input_register("left", { "left", "a", "pad_dpad_left", "pad_lstick_left" })] = 3,
+    [input_register("up", { "up", "w", "pad_dpad_up", "pad_lstick_up" })] = 4,
 }
 
 -- Apple sprite: 1 skin, 2 shine, 3 stem, 4 leaf. Registered once per snake

@@ -230,7 +230,7 @@ All empty/true for a plain audio file, there's no score to read, so nothing here
 ## Playback & timing
 
 ```lua
-playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id, song_loads, loop_mode, shuffle}
+playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id, song_loads, loop_mode, shuffle, recording}
 script_options({start_paused = true})  -- once, at the top: songs wait for the script to start them
 script_options({app_log = true})       -- its log() messages also go to the app's log
 set_paused(paused)  -- pause or resume playback
@@ -258,6 +258,8 @@ Everything a script sees follows what's being heard, not what's been prepared: t
 `generation` goes up by one every time the position jumps instead of running on: a seek (by the user or a script), a loop back to the start, or a new song. Compare it with the value from the previous frame to know exactly when to reset anything that tracks position, with no guessing from how far `position` moved.
 
 `set_paused` and `seek` are carried out by the app right after the frame, and show up in `playback()` from the next frame on (along with a new `generation` for a seek). Unpausing a song that has finished starts it over. Like `set_channel_enabled`, they're meant for things like pausing a game when the player dies, or a "retry this section" practice loop.
+
+`recording` is true while the visualizer is being recorded to a video (and not paused), in the app or with `run-script --video`: hide a "press start" hint, a cursor or a debug overlay from the video, say.
 
 `song_loads` goes up by one every time a song is loaded, including the same song clicked again (which `song_id` can't tell apart). Compare it with the previous frame's to know a song just started over from the top, say to go back to a game's menu. Everything about the song changes in the same frame: from the frame `song_loads` goes up, `playback()` (`length`, `position`, `song_id`, ...) and the note functions (`notes_between` and the rest) all describe the new song, so reading `notes_between(0, playback().length)` right then gets all of it.
 
@@ -396,6 +398,8 @@ Keyboard and controller input come through actions: a script names each thing it
 - `"pad_lb"`, `"pad_rb"` (bumpers), `"pad_lt"`, `"pad_rt"` (triggers), `"pad_back"`, `"pad_start"`, `"pad_guide"`, `"pad_lstick_click"`, `"pad_rstick_click"`
 - the d-pad: `"pad_dpad_up"`, `"pad_dpad_down"`, `"pad_dpad_left"`, `"pad_dpad_right"`
 - each stick pushed one way: `"pad_lstick_up"`, `"pad_lstick_down"`, `"pad_lstick_left"`, `"pad_lstick_right"`, and the same for `rstick`
+
+Mouse buttons can be bindings too: `"mouse_left"`, `"mouse_right"`, `"mouse_middle"`, counting while the pointer is over the visualizer (or it has focus), like `mouse_down`. Clicking into the visualizer to give it focus is a press of `"mouse_left"` too.
 
 An unknown name is a script error that says so, as is one of the app's reserved keys (below). An empty list makes an action with no bindings until the user adds some.
 
@@ -643,6 +647,7 @@ playback() --> {
     position = 5.001, length = 109.9, speed = 1, paused = false, finished = false,
     loop_enabled = false, loop_mode = "off", shuffle = false, generation = 1,
     song_name = "145343_1", song_path = "C:/Users/you/Music/145343_1.mid", song_id = "33ee7539d1a6d1e8", song_loads = 1,
+    recording = false,
 }
 playlist() --> {
     name = "Evening", playing = true, current = 2,

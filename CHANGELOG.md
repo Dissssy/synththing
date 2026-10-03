@@ -4,6 +4,11 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### New
+- Mouse buttons can be bound to script actions (`"mouse_left"`, `"mouse_right"`, `"mouse_middle"`), and captured in the Controls list by clicking.
+- `playback().recording`: whether the visualizer is being recorded, so a script can keep hints or overlays out of the video.
+- snake.lua and keyboard.lua take a controller: the d-pad (and the left stick, in snake) steers, or moves the span and key.
+
 ## 0.3.1 (2026-10-03)
 
 ### New

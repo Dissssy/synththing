@@ -989,6 +989,8 @@ struct SongIdentity {
     /// Songs loaded so far (`playback().song_loads`), the same one again
     /// included.
     loads: u64,
+    /// The visualizer is being recorded to a video (`playback().recording`).
+    recording: bool,
 }
 
 /// How a script asks the app to behave while it's running
@@ -1116,14 +1118,22 @@ pub struct Action {
 pub enum Binding {
     Key(egui::Key),
     Pad(PadInput),
+    /// A mouse button over the visualizer: 0 left, 1 right, 2 middle (as
+    /// `MOUSE_BUTTONS`).
+    Mouse(u8),
 }
 
+/// The names of the mouse buttons as bindings, in `MOUSE_BUTTONS` order.
+const MOUSE_BINDINGS: [&str; 3] = ["mouse_left", "mouse_right", "mouse_middle"];
+
 impl Binding {
-    /// The name scripts and the saved controls use: `"space"`, `"pad_a"`.
+    /// The name scripts and the saved controls use: `"space"`, `"pad_a"`,
+    /// `"mouse_left"`.
     pub fn name(self) -> &'static str {
         match self {
             Binding::Key(key) => key.name(),
             Binding::Pad(pad) => pad.name(),
+            Binding::Mouse(button) => MOUSE_BINDINGS[usize::from(button).min(2)],
         }
     }
 
@@ -1132,13 +1142,26 @@ impl Binding {
         match self {
             Binding::Key(key) => key.name(),
             Binding::Pad(pad) => pad.label(),
+            Binding::Mouse(button) => ["Mouse left", "Mouse right", "Mouse middle"][usize::from(button).min(2)],
         }
     }
 }
 
-/// A key or controller input by name (`"a"`, `"space"`, `"pad_a"`,
-/// `"pad_lstick_left"`). `Ok(None)` for a key the app keeps for itself.
+/// A key, controller input or mouse button by name (`"a"`, `"space"`,
+/// `"pad_a"`, `"pad_lstick_left"`, `"mouse_left"`). `Ok(None)` for a key
+/// the app keeps for itself.
 fn parse_binding(name: &str) -> mlua::Result<Option<Binding>> {
+    if name.to_ascii_lowercase().starts_with("mouse_") {
+        return MOUSE_BINDINGS
+            .iter()
+            .position(|m| m.eq_ignore_ascii_case(name))
+            .map(|i| Some(Binding::Mouse(i as u8)))
+            .ok_or_else(|| {
+                mlua::Error::runtime(format!(
+                    "unknown mouse button '{name}' (there's \"mouse_left\", \"mouse_right\", \"mouse_middle\")"
+                ))
+            });
+    }
     if name.to_ascii_lowercase().starts_with("pad_") {
         return PadInput::from_name(name).map(|p| Some(Binding::Pad(p))).ok_or_else(|| {
             mlua::Error::runtime(format!(
@@ -1205,6 +1228,13 @@ fn action_value(input: &VisualizerInput, bindings: &[Binding]) -> f32 {
                 }
             }
             Binding::Pad(p) => input.pads.value(*p),
+            Binding::Mouse(m) => {
+                if input.buttons_down.get(usize::from(*m)).copied().unwrap_or(false) {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
         })
         .fold(0.0, f32::max)
 }
@@ -1212,17 +1242,18 @@ fn action_value(input: &VisualizerInput, bindings: &[Binding]) -> f32 {
 /// "pressed" (went down this frame), "held", "released" (went up this
 /// frame) or "up", for an action bound to `bindings`.
 fn action_state(input: &VisualizerInput, bindings: &[Binding]) -> &'static str {
-    let any = |keys: &[egui::Key], pads: &[PadInput]| {
+    let any = |keys: &[egui::Key], pads: &[PadInput], mouse: &[bool; 3]| {
         bindings.iter().any(|b| match b {
             Binding::Key(k) => keys.contains(k),
             Binding::Pad(p) => pads.contains(p),
+            Binding::Mouse(m) => mouse.get(usize::from(*m)).copied().unwrap_or(false),
         })
     };
-    if any(&input.keys_pressed, &input.pads.pressed) {
+    if any(&input.keys_pressed, &input.pads.pressed, &input.buttons_pressed) {
         "pressed"
-    } else if any(&input.keys_down, &input.pads.down) {
+    } else if any(&input.keys_down, &input.pads.down, &input.buttons_down) {
         "held"
-    } else if any(&input.keys_released, &input.pads.released) {
+    } else if any(&input.keys_released, &input.pads.released, &input.buttons_released) {
         "released"
     } else {
         "up"
@@ -1446,6 +1477,11 @@ impl LuaVisualizer {
         song.path = path.map(|p| p.display().to_string());
         song.id = id;
         song.loads += 1;
+    }
+
+    /// Whether the visualizer is being recorded (`playback().recording`).
+    pub fn set_recording(&mut self, recording: bool) {
+        self.song.borrow_mut().recording = recording;
     }
 
     /// What the running script asked for with `script_options`.
@@ -3260,6 +3296,7 @@ fn register_globals(
             t.raw_set("song_path", song.path.clone())?;
             t.raw_set("song_id", song.id.clone())?;
             t.raw_set("song_loads", song.loads)?;
+            t.raw_set("recording", song.recording)?;
             t.raw_set(
                 "loop_mode",
                 match song.transport.loop_mode {
@@ -4340,6 +4377,13 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         visualizer.set_song(Some(Path::new("a.mid")), Some("x".into()));
         frame(&mut visualizer, &sample_playback());
         assert_eq!(last_log(&visualizer), "2");
+        // playback().recording follows set_recording.
+        visualizer.set_source("function render() log(tostring(playback().recording)) end".into());
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "false");
+        visualizer.set_recording(true);
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "true");
         // Another script without the option: off again.
         visualizer.set_source("function render() end".into());
         assert!(!visualizer.options().start_paused);
@@ -4681,6 +4725,25 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         input.pads.connected = vec!["Xbox Controller".into()];
         render_with(&mut pads, &input);
         assert_eq!(last_log(&pads), "1 held -0.5");
+
+        // Mouse buttons as bindings: states and values like keys.
+        let script = "local fire = input_register('fire', { 'space', 'mouse_left', 'MOUSE_RIGHT' })
+            function render() log(input(fire) .. ' ' .. input_value(fire)) end";
+        let mut mouse = LuaVisualizer::new(script.to_string(), None, 44_100);
+        assert_eq!(
+            mouse.actions()[0].defaults,
+            [Binding::Key(Key::Space), Binding::Mouse(0), Binding::Mouse(1)],
+            "case doesn't matter"
+        );
+        assert_eq!(Binding::Mouse(1).name(), "mouse_right");
+        let mut input = keys(&[], &[], &[]);
+        input.buttons_down = [false, true, false];
+        input.buttons_pressed = [false, true, false];
+        render_with(&mut mouse, &input);
+        assert_eq!(last_log(&mouse), "pressed 1.0");
+        let mut bad_mouse = LuaVisualizer::new("input_register('x', 'mouse_4') function render() end".into(), None, 44_100);
+        render_with(&mut bad_mouse, &VisualizerInput::default());
+        assert!(bad_mouse.error().unwrap_or_default().contains("unknown mouse button"), "{:?}", bad_mouse.error());
 
         // input_value: how far, from any binding; keys count fully.
         let script = "local left = input_register('left', { 'a', 'pad_lstick_left' })

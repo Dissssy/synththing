@@ -1906,6 +1906,8 @@ impl App {
     fn show_visualizer(&mut self, ui: &mut egui::Ui, notes: &NotesSnapshot, playback: &EngineView, mode: DisplayMode) {
         let transport = self.script_transport();
         self.visualizer.script_mut().set_app_log(self.config.script_log_to_app);
+        let recording = self.recording.recorder.as_ref().is_some_and(|r| !r.paused());
+        self.visualizer.script_mut().set_recording(recording);
         self.visualizer.set_pads(self.pad_frame.clone());
         let fixed_size = self.recording.frame_size();
         let (hold, timestep) = self.pace_recording();
@@ -2540,8 +2542,8 @@ impl App {
         ui.separator();
         ui.strong("Controls");
         ui.weak(
-            "Click a binding, then press the new key or controller button. Keys work while the visualizer \
-             has focus; controllers while synththing's window does.",
+            "Click a binding, then press the new key or controller button, or click with a mouse button. \
+             Keys and the mouse work while the visualizer has focus; controllers while synththing's window does.",
         );
         let pads = &self.pad_frame.connected;
         ui.weak(if pads.is_empty() { "No controller connected.".to_string() } else { format!("Controllers: {}", pads.join(", ")) });
@@ -2567,7 +2569,7 @@ impl App {
                     let adding = self.binding_capture == Some((i, None));
                     if ui
                         .selectable_label(adding, if adding { "press a key or button..." } else { "+" })
-                        .on_hover_text("Add another key or controller button")
+                        .on_hover_text("Add another key, controller button or mouse button")
                         .clicked()
                     {
                         start_capture = Some((!adding).then_some((i, None)));
@@ -2595,7 +2597,19 @@ impl App {
                     })
                 })
                 .map(Binding::Key)
-                .or_else(|| self.pad_frame.pressed.first().copied().map(Binding::Pad));
+                .or_else(|| self.pad_frame.pressed.first().copied().map(Binding::Pad))
+                .or_else(|| {
+                    // A left click on one of these buttons is about them
+                    // (cancelling, or starting another), not a binding.
+                    let left_on_button = start_capture.is_some();
+                    ui.input(|input| {
+                        crate::visualizer::MOUSE_BUTTONS
+                            .iter()
+                            .position(|&b| input.pointer.button_pressed(b))
+                            .filter(|&i| i != 0 || !left_on_button)
+                    })
+                    .map(|i| Binding::Mouse(i as u8))
+                });
             if let Some(key) = pressed {
                 captured = true;
                 self.binding_capture = None;

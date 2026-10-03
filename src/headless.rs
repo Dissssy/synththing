@@ -69,6 +69,7 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
     let mut engine = Engine::new(SAMPLE_RATE);
     let mut visualizer = LuaVisualizer::new(source, Some(args.script.clone()), SAMPLE_RATE);
     visualizer.set_fixed_timestep(Some(1.0 / args.fps));
+    visualizer.set_recording(args.video.is_some());
     if !args.save_data {
         visualizer.detach_store();
     }

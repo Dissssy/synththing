@@ -94,6 +94,7 @@ enum Message {
     Rename { new_name: String, reply: Sender<Result<PathBuf, String>> },
     SetSong { path: PathBuf, id: String, notes: Arc<NoteList> },
     SetAppLog(bool),
+    SetRecording(bool),
     SetSetting { key: String, value: SettingValue },
     SetActionBindings { index: usize, bindings: Vec<Binding> },
     ClearLog,
@@ -130,6 +131,8 @@ pub struct ScriptHost {
     last_request: Option<Instant>,
     /// The "copy script logs to the app log" preference, as last sent.
     app_log: bool,
+    /// Whether a recording is running, as last sent.
+    recording: bool,
 }
 
 fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
@@ -185,6 +188,7 @@ impl ScriptHost {
             in_flight: false,
             last_request: None,
             app_log: false,
+            recording: false,
         }
     }
 
@@ -315,6 +319,14 @@ impl ScriptHost {
         if on != self.app_log {
             self.app_log = on;
             self.send(Message::SetAppLog(on));
+        }
+    }
+
+    /// Whether the visualizer is being recorded (sent on a change).
+    pub fn set_recording(&mut self, recording: bool) {
+        if recording != self.recording {
+            self.recording = recording;
+            self.send(Message::SetRecording(recording));
         }
     }
 
@@ -505,6 +517,7 @@ fn handle(visualizer: &mut LuaVisualizer, message: Message) -> Option<FrameDone>
             visualizer.set_song(Some(&path), Some(id));
         }
         Message::SetAppLog(on) => visualizer.set_app_log(on),
+        Message::SetRecording(on) => visualizer.set_recording(on),
         Message::SetSetting { key, value } => visualizer.set_setting(&key, value),
         Message::SetActionBindings { index, bindings } => visualizer.set_action_bindings(index, bindings),
         Message::ClearLog => visualizer.clear_log(),

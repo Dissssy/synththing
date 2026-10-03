@@ -17,8 +17,8 @@
 --
 -- Play along: click the visualizer (or use the Fullscreen visualizer) and
 -- the A S D F G H J K L keys play nine notes of a major scale, marked
--- above the keyboard; Left/Right move that span a note at a time and
--- Up/Down change the key (C major, C# major, ...). Notes hold for as long
+-- above the keyboard; Left/Right (or a controller's d-pad) move that
+-- span a note at a time and Up/Down change the key (C major, C# major, ...). Notes hold for as long
 -- as the key does (note_on/note_off) and sound like the song's own
 -- instrument on the "play_channel" setting's channel (0: the song's
 -- first). Every key can be rebound under Controls in Script Settings.
@@ -57,10 +57,10 @@ for i, key in ipairs({ "a", "s", "d", "f", "g", "h", "j", "k", "l" }) do
     PLAY[i] = input_register("play " .. i, key)
 end
 local PLAY_LETTERS = { "A", "S", "D", "F", "G", "H", "J", "K", "L" }
-local SPAN_LEFT = input_register("span left", "left")
-local SPAN_RIGHT = input_register("span right", "right")
-local KEY_UP = input_register("key up", "up")
-local KEY_DOWN = input_register("key down", "down")
+local SPAN_LEFT = input_register("span left", { "left", "pad_dpad_left" })
+local SPAN_RIGHT = input_register("span right", { "right", "pad_dpad_right" })
+local KEY_UP = input_register("key up", { "up", "pad_dpad_up" })
+local KEY_DOWN = input_register("key down", { "down", "pad_dpad_down" })
 
 local MAJOR = { 0, 2, 4, 5, 7, 9, 11 }
 local NOTE_NAMES = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }

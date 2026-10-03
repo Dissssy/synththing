@@ -165,8 +165,8 @@
     for the asset, swaps the running exe (self-replace), then Restart now /
     Later. Debug builds never check on launch and can't install.
     Not done: code signing (SmartScreen will warn testers on first run of
-    an unsigned exe), release notes beyond GitHub's generated ones, a
-    project README/license.
+    an unsigned exe). Release notes come from CHANGELOG.md; README and
+    LICENSE (WTFPL) are done.
 
 ## Additional/unsorted
 
@@ -198,8 +198,7 @@
     actions are blocked while a span is active). key_down/key_pressed/
     key_released still work but are out of the docs. Examples: snake and
     input_demo use actions, terminal.lua (undropped) is a typing span.
-    Ideas not done: gamepad bindings for actions (the Controls list is
-    where they'd go), mouse buttons as action bindings.
+    Gamepad bindings and mouse buttons as action bindings - DONE.
 
 [M][.] scripts play notes - DONE
     play_note / note_on / note_off / stop_notes / notes_playable and
@@ -492,7 +491,8 @@ Smaller:
     Preferences > Recording: size (720p-4K), 30/60 fps, folder
     (Videos\synththing). run-script --video renders offline with the
     same recorder. Ideas: render a song to video from the app (offline,
-    frame-perfect, any speed), scripts knowing they're being recorded.
+    frame-perfect, any speed). Scripts knowing they're being recorded -
+    DONE (playback().recording).
 
 [S][!] scripts drive playback - DONE
     playlist() (read-only: the playing playlist, else the open one),
@@ -544,7 +544,8 @@ Smaller:
     in the Controls list too). pad_axis() reads sticks/triggers directly
     (not rebindable), gamepads() lists them. Pads count while the window has
     focus. Ideas: rumble, per-player pads (pad 1 vs pad 2) for local
-    multiplayer, pad defaults in the bundled games.
+    multiplayer. Pad defaults in snake and keyboard - DONE (highway and
+    note_runner are their authors' to change).
 
 [M][!] analogue values for actions - DONE (input_value, PadFrame::value)
     input_value(id) -> 0..1 for any action: keys and buttons 0 or 1, a
