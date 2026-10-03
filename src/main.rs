@@ -68,7 +68,7 @@ fn main() -> Result<()> {
         std::process::exit(headless::run(args, &config));
     }
 
-    applog::init();
+    applog::init(cli.console);
     log::info!("synththing v{} starting", env!("CARGO_PKG_VERSION"));
 
     let sample_rate = 44_100u32;

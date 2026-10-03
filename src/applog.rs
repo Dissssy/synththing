@@ -41,6 +41,8 @@ struct Logger {
     entries: Mutex<VecDeque<Entry>>,
     file: Mutex<Option<File>>,
     path: Option<PathBuf>,
+    /// Print each entry to stderr too (`--console`).
+    echo: bool,
 }
 
 static LOGGER: OnceLock<Logger> = OnceLock::new();
@@ -80,6 +82,9 @@ impl Logger {
         {
             let _ = writeln!(file, "{}", entry.line());
         }
+        if self.echo {
+            let _ = writeln!(std::io::stderr(), "{}", entry.line());
+        }
         if let Ok(mut entries) = self.entries.lock() {
             if entries.len() >= MAX_ENTRIES {
                 entries.pop_front();
@@ -90,8 +95,9 @@ impl Logger {
 }
 
 /// Install the logger and the panic hook. Call once, first thing in `main`.
-/// Logging still works in memory if the log file can't be opened.
-pub fn init() {
+/// Logging still works in memory if the log file can't be opened. `echo`:
+/// print everything to the terminal as well (`--console`).
+pub fn init(echo: bool) {
     let path = crate::config::config_dir().ok().map(|dir| dir.join("synththing.log"));
     let file = path.as_ref().and_then(|path| {
         if let Some(dir) = path.parent() {
@@ -107,6 +113,7 @@ pub fn init() {
         entries: Mutex::new(VecDeque::new()),
         file: Mutex::new(file),
         path,
+        echo,
     });
     if log::set_logger(logger).is_ok() {
         log::set_max_level(LevelFilter::Info);

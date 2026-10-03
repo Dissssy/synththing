@@ -7,10 +7,11 @@ Run with no arguments, `synththing.exe` opens the app as usual. With arguments, 
 ## Opening the app
 
 ```
-synththing [--visualizer]
+synththing [--visualizer] [--console]
 ```
 
 - `--visualizer` (or `--viz`): open with the Visualizer tab showing.
+- `--console`: also print the app's log (what Help > Log... shows: script errors, warnings, panics) to the terminal as it happens. Handy for watching a release build, which otherwise has no console (see below).
 - `--version` / `-V`: print the version.
 - `--help` / `-h`: print help. `synththing help run-script` (or `synththing run-script --help`) for a command's options.
 
