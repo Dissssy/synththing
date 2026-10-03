@@ -35,6 +35,7 @@ mod recorder;
 mod song_info;
 mod snippets;
 mod spectrum;
+mod starter;
 mod script_host;
 mod sprite_code;
 mod typing;
@@ -127,6 +128,9 @@ fn main() -> Result<()> {
     app.autoload_first_soundfont();
     app.check_for_updates_on_launch();
     app.whats_new_on_launch(ran_before);
+    if !ran_before {
+        app.open_welcome();
+    }
     if cli.visualizer {
         app.set_visualizer_open(true);
     }

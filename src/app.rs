@@ -13,6 +13,7 @@ mod loading;
 mod playlist_panel;
 mod recording;
 mod sprite_editor;
+mod welcome;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -204,6 +205,8 @@ pub struct App {
     /// than that (What's new, after an update), `None` all of them
     /// (Help > Changelog...).
     changelog: Option<Option<changelog::Version>>,
+    /// The welcome window and the starter pack download.
+    welcome: welcome::Welcome,
     /// Help > Credits & licenses.
     credits_open: bool,
     contributors: Contributors,
@@ -369,6 +372,7 @@ impl App {
             selection_anchor: None,
             binding_capture: None,
             changelog: None,
+            welcome: welcome::Welcome::default(),
             credits_open: false,
             contributors: Contributors::default(),
             credits_search: String::new(),
@@ -1082,6 +1086,7 @@ impl App {
     }
 
     fn soundfont_ui(&mut self, ui: &mut egui::Ui) {
+        self.starter_progress_ui(ui);
         ui.horizontal(|ui| {
             if ui.button("Add soundfont...").clicked() {
                 self.open_soundfont_browser();
@@ -1165,6 +1170,9 @@ impl App {
                 self.set_open(section, open);
             }
             ui.menu_button("Help", |ui| {
+                if ui.button("Welcome...").on_hover_text("The welcome window, and the starter pack").clicked() {
+                    self.open_welcome();
+                }
                 if ui.button("Check for updates...").clicked() {
                     self.launch_update_check = false;
                     self.updates_open = true;
@@ -1671,6 +1679,7 @@ impl App {
             || self.rename.is_some()
             || self.credits_open
             || self.changelog.is_some()
+            || self.welcome.open
             || self.song_info_open.is_some()
             || self.recording.prompt_open
             || self.editor.history_open
@@ -2917,6 +2926,7 @@ impl eframe::App for App {
             self.rename_ui(&ctx);
             self.credits_ui(&ctx);
             self.changelog_ui(&ctx);
+            self.welcome_ui(&ctx);
             self.song_info_ui(&ctx);
             self.history_ui(&ctx);
             self.layout_save_ui(&ctx);
@@ -2934,6 +2944,7 @@ impl eframe::App for App {
         }
         self.apply_cursor_confinement(&ctx);
         self.keep_loaded(&ctx);
+        self.poll_starter(&ctx);
         self.script_busy_ui(&ctx);
 
         drag_ghost_ui(&ctx);
