@@ -569,5 +569,11 @@ Smaller:
     Watchdog - DONE: an mlua hook every 10,000 instructions stops a run of
     script code (top level or one render()) past 3 s with an error, and
     render() isn't called again until the script changes or restarts.
-    Ideas not done: highway charting a few tracks per frame; running scripts
-    on their own thread (see below).
+    Script thread - DONE (script_host.rs): the LuaVisualizer lives on its
+    own thread; the app sends messages and frame requests and reads back a
+    status snapshot, waiting up to 50 ms for each frame (most are shown at
+    once). A frame busy for over 1 s gets a notice in the visualizer's
+    bottom-left with a Stop button (the watchdog's hook also checks a stop
+    flag); anything replacing a busy script stops it first. The watchdog
+    allows 10 s in the app, 3 s in run-script.
+    Idea not done: highway charting a few tracks per frame.

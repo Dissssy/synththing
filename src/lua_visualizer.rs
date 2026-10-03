@@ -91,6 +91,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -268,6 +269,11 @@ pub fn new_script_from_template(dir: &Path, content: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Write a script's source to its file: the error to show, if it failed.
+pub fn save_script(path: &Path, source: &str) -> Option<String> {
+    fs::write(path, source).err().map(|e| format!("failed to save {}: {e}", path.display()))
+}
+
 pub fn display_name(path: &Path) -> String {
     nice_name(path)
 }
@@ -417,9 +423,30 @@ fn tint_color(color: u32, tint: u32) -> u32 {
 }
 
 /// How long one run of a script's code (its top level when it loads, or
-/// one `render()` call) may take before the watchdog stops it.
+/// one `render()` call) may take before the watchdog stops it, unless
+/// `set_watchdog_limit` says otherwise.
 pub const WATCHDOG_LIMIT: Duration = Duration::from_secs(3);
-const WATCHDOG_MESSAGE: &str = "stopped by the watchdog: the script ran for over 3 seconds without finishing (an endless loop, or too much work in one go?). Fix it and save, or press Restart (F5).";
+/// The start of the error a script stopped by the watchdog gets.
+const WATCHDOG_TAG: &str = "stopped by the watchdog";
+/// The start of the error a script stopped with the stop flag gets.
+const STOPPED_TAG: &str = "stopped with the Stop button";
+
+fn watchdog_message(limit: Duration) -> String {
+    format!(
+        "{WATCHDOG_TAG}: the script ran for over {} seconds without finishing (an endless loop, or too much \
+         work in one go?). Fix it and save, or press Restart (F5).",
+        limit.as_secs()
+    )
+}
+
+fn stopped_message() -> String {
+    format!("{STOPPED_TAG} while it was busy. Fix it and save, or press Restart (F5).")
+}
+
+/// Whether `error` is the watchdog or the stop flag stopping the script.
+fn is_stop_error(error: &str) -> bool {
+    error.contains(WATCHDOG_TAG) || error.contains(STOPPED_TAG)
+}
 
 /// Most sprites one script can register: plenty for any real use, and it
 /// turns "registered a sprite inside render() every frame" into an error
@@ -685,7 +712,7 @@ const FRAME_BUDGET_MS: f32 = 1000.0 / 60.0;
 const SLOW_FOR: Duration = Duration::from_secs(3);
 /// Minimum time between renders at the reduced rate: a 30 fps frame, less
 /// a little slack so a repaint arriving slightly early still renders.
-const HALF_RATE_INTERVAL: Duration = Duration::from_micros(29_300);
+pub const HALF_RATE_INTERVAL: Duration = Duration::from_micros(29_300);
 
 /// A script's render times: the last second's for the readout and the
 /// 30 fps fallback, and the whole run's for `run-script`'s summary.
@@ -770,10 +797,13 @@ const MAX_LOG_MESSAGE_LEN: usize = 500;
 #[derive(Default)]
 struct LogHistory {
     entries: Vec<LogEntry>,
+    /// Goes up with every change, so a copy is only needed when it moved.
+    revision: u64,
 }
 
 impl LogHistory {
     fn push(&mut self, level: LogLevel, mut message: String) {
+        self.revision += 1;
         if message.len() > MAX_LOG_MESSAGE_LEN {
             message.truncate(MAX_LOG_MESSAGE_LEN);
             message.push_str("...");
@@ -1210,7 +1240,7 @@ pub struct LuaVisualizer {
     source: String,
     compiled: Option<Compiled>,
     /// Set when the most recent `set_source` call failed (to compile, or,
-    /// from `set_source_and_save`, to write to disk); cleared the next time
+    /// from `set_source_after_save`, to write to disk); cleared the next time
     /// a `set_source` call succeeds outright. Deliberately independent of
     /// `runtime_error`: the old script kept running after a bad edit might
     /// go on rendering perfectly fine, and a successful frame from it
@@ -1252,6 +1282,14 @@ pub struct LuaVisualizer {
     /// Render times, and the 30 fps fallback. Kept through Restart and song
     /// changes; reset when the code changes or another script loads.
     perf: Perf,
+    /// Set from anywhere (another thread) to stop the script's code running
+    /// now, as the watchdog would. Whoever sets it clears it.
+    stop: Arc<AtomicBool>,
+    /// How long the watchdog lets one run of the script's code take.
+    watchdog_limit: Duration,
+    /// Goes up with every compile and restart (a fresh log), for
+    /// `log_revision`.
+    compiles: u64,
 }
 
 impl LuaVisualizer {
@@ -1276,10 +1314,38 @@ impl LuaVisualizer {
             last_render_instant: None,
             fixed_timestep: None,
             perf: Perf::default(),
+            stop: Arc::default(),
+            watchdog_limit: WATCHDOG_LIMIT,
+            compiles: 0,
         };
         visualizer.set_source(source);
         visualizer
     }
+
+    /// The same, with a watchdog limit other than `WATCHDOG_LIMIT` from the
+    /// start (the script's top level runs right away).
+    pub fn with_watchdog(source: String, path: Option<PathBuf>, sample_rate: u32, limit: Duration) -> Self {
+        let mut visualizer = Self::new(String::new(), path, sample_rate);
+        visualizer.watchdog_limit = limit;
+        visualizer.set_source(source);
+        visualizer
+    }
+
+    /// The flag that stops the script's code running now (see `stop`).
+    pub fn stop_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.stop)
+    }
+
+    /// Whether a script is running (it compiled at some point).
+    pub fn is_running(&self) -> bool {
+        self.compiled.is_some()
+    }
+
+    /// Changes whenever the log does (`log_entries`).
+    pub fn log_revision(&self) -> (u64, u64) {
+        (self.compiles, self.compiled.as_ref().map_or(0, |c| c.log.borrow().revision))
+    }
+
 
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
@@ -1393,7 +1459,9 @@ impl LuaVisualizer {
 
     pub fn clear_log(&mut self) {
         if let Some(compiled) = &self.compiled {
-            compiled.log.borrow_mut().entries.clear();
+            let mut log = compiled.log.borrow_mut();
+            log.entries.clear();
+            log.revision += 1;
         }
     }
 
@@ -1434,9 +1502,12 @@ impl LuaVisualizer {
             &self.features,
             self.path.as_deref(),
             pending_settings,
+            &self.stop,
+            self.watchdog_limit,
         ) {
             Ok(compiled) => {
                 self.compiled = Some(compiled);
+                self.compiles += 1;
                 self.live.borrow_mut().stop_all();
                 self.compile_error = None;
                 // New code (or another script): judge its speed afresh.
@@ -1504,9 +1575,12 @@ impl LuaVisualizer {
             &self.features,
             self.path.as_deref(),
             pending_settings,
+            &self.stop,
+            self.watchdog_limit,
         ) {
             Ok(compiled) => {
                 self.compiled = Some(compiled);
+                self.compiles += 1;
                 self.live.borrow_mut().stop_all();
                 self.runtime_error = None;
                 self.last_render_instant = None;
@@ -1523,13 +1597,10 @@ impl LuaVisualizer {
         }
     }
 
-    /// Write `new_source` to this script's file (if it has one) and apply it.
-    pub fn set_source_and_save(&mut self, new_source: String) {
-        let save_error = self.path.as_ref().and_then(|path| {
-            fs::write(path, &new_source)
-                .err()
-                .map(|e| format!("failed to save {}: {e}", path.display()))
-        });
+    /// Apply `new_source`, which the caller has already tried writing to
+    /// the script's file (`save_script`); `save_error` is how that went,
+    /// shown along with any compile error.
+    pub fn set_source_after_save(&mut self, new_source: String, save_error: Option<String>) {
         self.set_source(new_source);
         // Computed before `set_source` (which would otherwise overwrite it
         // the moment the script itself compiles fine) and reapplied after,
@@ -1613,7 +1684,7 @@ impl Visualizer for LuaVisualizer {
         if compiled.stopped.get() {
             return; // stopped by the watchdog: the error stays up
         }
-        compiled.deadline.set(Some(Instant::now() + WATCHDOG_LIMIT));
+        compiled.deadline.set(Some(Instant::now() + self.watchdog_limit));
         let outcome: mlua::Result<()> = match build_tables {
             Ok((left_table, right_table)) => compiled
                 .render
@@ -1624,10 +1695,10 @@ impl Visualizer for LuaVisualizer {
 
         self.runtime_error = outcome.err().map(|e| e.to_string());
         if let Some(e) = &self.runtime_error {
-            if e.contains(WATCHDOG_MESSAGE) {
+            if is_stop_error(e) {
                 compiled.stopped.set(true);
                 compiled.commands.borrow_mut().clear();
-                log::warn!(target: "synththing::script", "{WATCHDOG_MESSAGE}");
+                log::warn!(target: "synththing::script", "{e}");
             }
             compiled.log.borrow_mut().push(LogLevel::Error, e.clone());
         }
@@ -1647,11 +1718,6 @@ impl Visualizer for LuaVisualizer {
     fn cursor_request(&self) -> CursorRequest {
         self.compiled.as_ref().map(|c| *c.cursor.borrow()).unwrap_or_default()
     }
-
-    fn ready_for_frame(&self) -> bool {
-        !self.perf.half_rate
-            || self.last_render_instant.is_none_or(|last| last.elapsed() >= HALF_RATE_INTERVAL)
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1669,6 +1735,8 @@ fn compile(
     features: &Rc<RefCell<AudioFeatures>>,
     script_path: Option<&Path>,
     pending_settings: HashMap<String, serde_json::Value>,
+    stop: &Arc<AtomicBool>,
+    watchdog_limit: Duration,
 ) -> Result<Compiled, String> {
     // No io/os/ffi/debug: a visualizer script has no legitimate reason to
     // touch the filesystem or spawn processes, even one the user just wrote.
@@ -1676,15 +1744,20 @@ fn compile(
     let lua = Lua::new_with(libs, LuaOptions::new()).map_err(|e| e.to_string())?;
 
     // The watchdog: script code that runs past its deadline (an endless
-    // loop, or far too much work in one go) is stopped with an error,
-    // checked every few thousand Lua instructions, instead of freezing the
-    // app. The deadline is set around each run of the script's code.
+    // loop, or far too much work in one go), or that's asked to stop (the
+    // stop flag), is stopped with an error, checked every few thousand Lua
+    // instructions, instead of freezing the app. The deadline is set
+    // around each run of the script's code.
     let deadline: Rc<Cell<Option<Instant>>> = Rc::default();
     {
         let deadline = Rc::clone(&deadline);
+        let stop = Arc::clone(stop);
         lua.set_hook(mlua::HookTriggers::new().every_nth_instruction(10_000), move |_, _| {
+            if stop.load(Ordering::Relaxed) {
+                return Err(mlua::Error::runtime(stopped_message()));
+            }
             match deadline.get() {
-                Some(at) if Instant::now() > at => Err(mlua::Error::runtime(WATCHDOG_MESSAGE)),
+                Some(at) if Instant::now() > at => Err(mlua::Error::runtime(watchdog_message(watchdog_limit))),
                 _ => Ok(mlua::VmState::Continue),
             }
         })
@@ -1759,7 +1832,7 @@ fn compile(
     register_timing_audio_shapes(&lua, note_list, playback, features, &commands).map_err(|e| e.to_string())?;
     register_live_notes(&lua, notes, playback, note_list, live).map_err(|e| e.to_string())?;
 
-    deadline.set(Some(Instant::now() + WATCHDOG_LIMIT));
+    deadline.set(Some(Instant::now() + watchdog_limit));
     let ran = lua.load(source).set_name("visualizer").exec();
     deadline.set(None);
     ran.map_err(|e| e.to_string())?;
@@ -4107,6 +4180,32 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         // An endless loop at the top level is a compile error, not a hang.
         visualizer.set_source("while true do end function render() end".into());
         assert!(visualizer.error().unwrap_or_default().contains("watchdog"), "{:?}", visualizer.error());
+    }
+
+    #[test]
+    fn the_stop_flag_stops_a_busy_script() {
+        let script = "function render() log('frame ' .. FRAME) if FRAME == 2 then while true do end end end";
+        let mut visualizer = LuaVisualizer::with_watchdog(script.to_string(), None, 44_100, Duration::from_secs(60));
+        frame(&mut visualizer, &sample_playback());
+        let stop = visualizer.stop_flag();
+        let revision = visualizer.log_revision();
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            stop.store(true, Ordering::Relaxed);
+        });
+        let started = Instant::now();
+        frame(&mut visualizer, &sample_playback());
+        stopper.join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5), "stopped long before the watchdog");
+        assert!(visualizer.error().unwrap_or_default().contains(STOPPED_TAG), "{:?}", visualizer.error());
+        assert_ne!(visualizer.log_revision(), revision);
+        visualizer.stop_flag().store(false, Ordering::Relaxed);
+        frame(&mut visualizer, &sample_playback());
+        assert!(visualizer.error().is_some(), "stays stopped until restarted");
+        assert!(visualizer.restart());
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "frame 1");
+        assert!(visualizer.error().is_none());
     }
 
     #[test]

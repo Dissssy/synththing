@@ -107,26 +107,22 @@ impl App {
     /// Before the visualizer draws: while recording, render only when a
     /// video frame is due, and step the script's time by exactly the video
     /// time that passed, so the video's motion is even. Returns whether to
-    /// hold (show the last frame instead of rendering).
-    pub(super) fn pace_recording(&mut self) -> bool {
+    /// hold (show the last frame instead of rendering), and the timestep
+    /// for the frame otherwise (`None`: the wall clock).
+    pub(super) fn pace_recording(&mut self) -> (bool, Option<f64>) {
         let now = Instant::now();
         let step = self.recording.last_feed.map_or(0.0, |last| now.duration_since(last).as_secs_f64());
         self.recording.step = step;
         self.recording.last_feed = Some(now);
-        let script = self.visualizer.visualizer_mut();
         let recorder = match &self.recording.recorder {
             Some(recorder) if !recorder.paused() && !self.preferences_open => recorder,
-            _ => {
-                script.set_fixed_timestep(None);
-                return false;
-            }
+            _ => return (false, None),
         };
         let due = recorder.frames_due(step, self.tap.ready_frames());
         if due == 0 {
-            return true;
+            return (true, None);
         }
-        script.set_fixed_timestep(Some(due as f64 / f64::from(recorder.format().fps)));
-        false
+        (false, Some(due as f64 / f64::from(recorder.format().fps)))
     }
 
     /// F9 / the Record and Stop buttons.

@@ -11,6 +11,7 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::audio::Backlog;
 
@@ -18,6 +19,8 @@ use eframe::egui;
 
 use crate::engine::EngineView;
 use crate::gamepad::PadFrame;
+use crate::lua_visualizer::Transport;
+use crate::script_host::{Effects, FrameDone, FrameRequest, ScriptHost};
 use crate::typing::TextEvent;
 
 /// One stereo sample: `.0` is left, `.1` is right. A plain tuple rather than a
@@ -329,12 +332,6 @@ pub trait Visualizer {
         CursorRequest::default()
     }
 
-    /// Whether to render this frame. A visualizer running at a reduced
-    /// frame rate says no in between; the panel keeps showing the last
-    /// frame and saves up the audio and input for the next one.
-    fn ready_for_frame(&self) -> bool {
-        true
-    }
 }
 
 impl VisualizerInput {
@@ -375,13 +372,22 @@ impl VisualizerInput {
 /// render cost that stays flat regardless of window or monitor size.
 const MAX_VISUALIZER_PIXELS: f32 = 1280.0 * 720.0;
 
-/// Owns a fixed-size pixel buffer, a `V`, and the egui texture that mirrors
-/// them, and draws it all as one `ui.image(...)` each time [`show`](Self::show)
-/// is called. The buffer's own resolution can be smaller than the panel it's
-/// displayed in, see [`MAX_VISUALIZER_PIXELS`].
-pub struct VisualizerPanel<V> {
-    visualizer: V,
+/// How long the app waits for a frame it just asked the script for. Most
+/// take a few milliseconds and are shown at once, as if drawn right here;
+/// one that takes longer is shown when it's done, and the last frame stays
+/// up meanwhile, so a slow script never holds up the window.
+const FRAME_WAIT: Duration = Duration::from_millis(50);
+
+/// Shows the frames the script (on its own thread, `ScriptHost`) draws,
+/// as one `ui.image(...)` each time [`show`](Self::show) is called, and
+/// hands it each frame's audio, notes and input. The frames can be smaller
+/// than the panel showing them, see [`MAX_VISUALIZER_PIXELS`].
+pub struct VisualizerPanel {
+    script: ScriptHost,
+    /// The last frame the script drew (`0x00RRGGBB`), `width` by `height`.
     pixels: Vec<u32>,
+    /// An old frame's buffer, for the next frame to draw into.
+    spare: Vec<u32>,
     rgba: Vec<u8>,
     width: usize,
     height: usize,
@@ -389,20 +395,23 @@ pub struct VisualizerPanel<V> {
     /// Take keyboard focus the next time it's drawn (entering the dedicated
     /// fullscreen).
     focus_requested: bool,
-    /// Input from frames that weren't rendered (reduced frame rate), saved
-    /// up for the next one that is.
+    /// Input since the last frame the script was handed (it was busy, or
+    /// running at a reduced frame rate), saved up for the next one.
     pending_input: Option<VisualizerInput>,
-    /// The audio the last rendered frame was given (for recording).
+    /// The audio the last drawn frame was given (for recording).
     last_samples: Vec<StereoFrame>,
     /// This frame's controller input, from the app (`set_pads`).
     pads: PadFrame,
+    /// What the script asked for in the frames drawn since `take_effects`.
+    effects: Effects,
 }
 
-impl<V: Visualizer> VisualizerPanel<V> {
-    pub fn new(visualizer: V, width: usize, height: usize) -> Self {
+impl VisualizerPanel {
+    pub fn new(script: ScriptHost, width: usize, height: usize) -> Self {
         Self {
-            visualizer,
+            script,
             pixels: vec![0; width * height],
+            spare: Vec::new(),
             rgba: vec![0; width * height * 4],
             width,
             height,
@@ -411,6 +420,7 @@ impl<V: Visualizer> VisualizerPanel<V> {
             pending_input: None,
             last_samples: Vec::new(),
             pads: PadFrame::default(),
+            effects: Effects::default(),
         }
     }
 
@@ -419,7 +429,7 @@ impl<V: Visualizer> VisualizerPanel<V> {
         self.pads = pads;
     }
 
-    /// For recording: the audio the last rendered frame was given, and its
+    /// For recording: the audio the last drawn frame was given, and its
     /// pixels (`0x00RRGGBB`). A recorder may swap the pixel buffer out for
     /// another of the same size; the next frame redraws it in full anyway.
     pub fn recording_parts(&mut self) -> (&[StereoFrame], &mut Vec<u32>) {
@@ -431,22 +441,29 @@ impl<V: Visualizer> VisualizerPanel<V> {
         self.focus_requested = true;
     }
 
-    pub fn visualizer(&self) -> &V {
-        &self.visualizer
+    pub fn script(&self) -> &ScriptHost {
+        &self.script
     }
 
-    pub fn visualizer_mut(&mut self) -> &mut V {
-        &mut self.visualizer
+    pub fn script_mut(&mut self) -> &mut ScriptHost {
+        &mut self.script
     }
 
-    /// Render one frame from whatever's been pushed to `tap` since the last
-    /// call, and draw it into `ui`, filling whatever space `ui` currently
-    /// has available, growing or shrinking the pixel buffer to match (e.g. as
-    /// the visualizer panel is resized or the editor is toggled beside it).
-    /// With `fixed_size` (recording), the buffer is exactly that size
-    /// instead, shown as large as fits with black bars around it. `hold`:
-    /// don't render this time, show the last frame again (a recording
-    /// renders exactly when a video frame is due).
+    /// What the script asked the app to do (mute channels, play notes,
+    /// seek, ...) in the frames drawn since the last call.
+    pub fn take_effects(&mut self) -> Effects {
+        std::mem::take(&mut self.effects)
+    }
+
+    /// Hand the script this frame's audio (whatever's been pushed to `tap`
+    /// since the last frame it was handed), notes, playback and input, and
+    /// draw its latest frame into `ui`, filling whatever space `ui`
+    /// currently has, the frames growing or shrinking to match (e.g. as the
+    /// panel is resized or the editor is toggled beside it). With
+    /// `fixed_size` (recording), frames are exactly that size instead,
+    /// shown as large as fits with black bars around them. `hold`: don't
+    /// ask for a frame this time (a recording asks exactly when a video
+    /// frame is due), and `timestep` is the one it's asked for with.
     #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
@@ -454,10 +471,12 @@ impl<V: Visualizer> VisualizerPanel<V> {
         tap: &SampleTap,
         notes: &NotesSnapshot,
         playback: &EngineView,
+        transport: Transport,
         frozen: bool,
         mode: DisplayMode,
         fixed_size: Option<(usize, usize)>,
         hold: bool,
+        timestep: Option<f64>,
     ) -> ShowOutput {
         let available = ui.available_size();
         let (panel_rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
@@ -498,38 +517,68 @@ impl<V: Visualizer> VisualizerPanel<V> {
         }
 
         let (buf_w, buf_h) = fixed_size.unwrap_or_else(|| logical_buffer_size(available));
-        self.resize(buf_w, buf_h);
-        let mut input = gather_input(&ctx, &response, rect, (self.width, self.height), focused, mode);
+        let mut input = gather_input(&ctx, &response, rect, (buf_w, buf_h), focused, mode);
         input.pads = std::mem::take(&mut self.pads);
+        let pointer_over = input.pointer.is_some();
+        match &mut self.pending_input {
+            Some(pending) => pending.absorb(input),
+            None => self.pending_input = Some(input),
+        }
+        self.script.set_repaint_context(&ctx);
 
-        // Reduced frame rate (or held for a recording): show the last frame
-        // again, and keep this frame's input (the audio waits in the tap)
-        // for the next render.
-        if (hold || !self.visualizer.ready_for_frame())
-            && let Some(texture) = &self.texture
-        {
-            match &mut self.pending_input {
-                Some(pending) => pending.absorb(input),
-                None => self.pending_input = Some(input),
-            }
+        // A frame the script finished in the background since last time;
+        // else, unless it's still busy, held for a recording or running at
+        // a reduced frame rate, ask for the next one (the audio waits in
+        // the tap meanwhile).
+        let mut done = self.script.take_frame(Duration::ZERO);
+        if done.is_none() && !hold && self.script.ready_for_frame() {
+            self.script.request_frame(FrameRequest {
+                width: buf_w,
+                height: buf_h,
+                pixels: std::mem::take(&mut self.spare),
+                samples: tap.drain(),
+                notes: notes.clone(),
+                playback: playback.clone(),
+                input: self.pending_input.take().unwrap_or_default(),
+                transport,
+                timestep,
+            });
+            done = self.script.take_frame(FRAME_WAIT);
+        }
+        let rendered = done.is_some();
+        if let Some(done) = done {
+            self.accept(done, &ctx, rect);
+        }
+        if let Some(texture) = &self.texture {
+            // Stretched to the whole allocated rect: the texture can be
+            // smaller than the panel by design (see MAX_VISUALIZER_PIXELS).
             ui.painter().image(texture.id(), rect, uv, egui::Color32::WHITE);
-            return ShowOutput { focused, cursor: self.visualizer.cursor_request(), rendered: false, image_rect: rect };
-        }
-        if let Some(mut pending) = self.pending_input.take() {
-            pending.absorb(input);
-            input = pending;
         }
 
-        self.last_samples = tap.drain();
-        self.visualizer.render(
-            &mut self.pixels,
-            self.width,
-            self.height,
-            &self.last_samples,
-            notes,
-            playback,
-            &input,
-        );
+        let cursor = self.script.cursor();
+        if cursor.hidden && pointer_over {
+            ctx.set_cursor_icon(egui::CursorIcon::None);
+        }
+        ShowOutput { focused, cursor, rendered, image_rect: rect }
+    }
+
+    /// Take a frame the script drew: its pixels into the texture, its
+    /// audio for recording, and what it asked for into `effects`.
+    fn accept(&mut self, done: FrameDone, ctx: &egui::Context, rect: egui::Rect) {
+        if (done.width, done.height) != (self.width, self.height) {
+            self.width = done.width;
+            self.height = done.height;
+            self.rgba = vec![0; done.width * done.height * 4];
+            // Dropped rather than resized in place: simplest way to be sure
+            // the next `load_texture` call picks up the new dimensions.
+            self.texture = None;
+        }
+        self.spare = std::mem::replace(&mut self.pixels, done.pixels);
+        self.last_samples = done.samples;
+        let effects = done.effects;
+        self.effects.channel_requests.extend(effects.channel_requests);
+        self.effects.live_commands.extend(effects.live_commands);
+        self.effects.playback_requests.extend(effects.playback_requests);
 
         // chunks_exact_mut(4) rather than as_chunks_mut::<4>() to stay on stable Rust.
         #[allow(clippy::chunks_exact_to_as_chunks)]
@@ -554,30 +603,6 @@ impl<V: Visualizer> VisualizerPanel<V> {
             Some(texture) => texture.set(image, options),
             None => self.texture = Some(ctx.load_texture("visualizer", image, options)),
         }
-        if let Some(texture) = &self.texture {
-            // Stretched to the whole allocated rect: the texture can be
-            // smaller than the panel by design (see MAX_VISUALIZER_PIXELS).
-            ui.painter().image(texture.id(), rect, uv, egui::Color32::WHITE);
-        }
-
-        let cursor = self.visualizer.cursor_request();
-        if cursor.hidden && input.pointer.is_some() {
-            ctx.set_cursor_icon(egui::CursorIcon::None);
-        }
-        ShowOutput { focused, cursor, rendered: true, image_rect: rect }
-    }
-
-    fn resize(&mut self, width: usize, height: usize) {
-        if width == self.width && height == self.height {
-            return;
-        }
-        self.width = width;
-        self.height = height;
-        self.pixels = vec![0; width * height];
-        self.rgba = vec![0; width * height * 4];
-        // Dropped rather than resized in place: simplest way to be sure the
-        // next `load_texture` call picks up the new dimensions.
-        self.texture = None;
     }
 }
 

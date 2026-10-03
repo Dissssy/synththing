@@ -170,7 +170,7 @@ impl App {
 
         // A very large MIDI: ask first (unless that's turned off, or
         // already answered for this file), as a script going through every
-        // note can freeze the app. The song waits loaded meanwhile.
+        // note can stall on it for seconds. The song waits loaded meanwhile.
         if let Asset::Midi(midi) = &song {
             let notes = midi.notes.note_count();
             let warn = self.config.warn_heavy_midi.unwrap_or(true);
@@ -208,7 +208,7 @@ impl App {
         // A running script can ask for songs to wait for it (its own start
         // button): `script_options({ start_paused = true })`.
         let script_running = self.dedicated.is_some() || self.is_open(crate::layout::Section::Visualizer);
-        let paused = script_running && self.visualizer.visualizer().options().start_paused;
+        let paused = script_running && self.visualizer.script().options().start_paused;
         match song {
             Asset::Midi(midi) => {
                 self.send(AudioCommand::LoadMidi(midi.file, name.clone(), paused));
@@ -370,8 +370,8 @@ impl App {
             ui.label(format!("{} has {} notes.", nice_name(&path), thousands(notes)));
             ui.label(
                 "Playing it is fine, but a visualizer script that goes through every note (charting \
-                 games like highway, falling notes far ahead) can make synththing slow down, stop \
-                 responding or close.",
+                 games like highway, falling notes far ahead) can stall on it for seconds, or \
+                 run so slowly it gets stopped.",
             );
             ui.add_space(6.0);
             ui.checkbox(&mut dont_ask, "Don't warn me again");

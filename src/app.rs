@@ -34,12 +34,13 @@ use crate::loader::{self, Asset, AssetCache, SoundFontProbe};
 use crate::lua_completion::CompletionWorker;
 use crate::lua_docs;
 use crate::lua_visualizer::{
-    self, Binding, DebugVar, LogLevel, LuaVisualizer, PlaybackRequest, SettingDescriptor, SettingKind, SettingValue,
+    self, Binding, DebugVar, LogLevel, PlaybackRequest, SettingDescriptor, SettingKind, SettingValue,
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
 use crate::song_info::{format_length, SongInfoCache};
 use crate::updater::{self, UpdateState, Updater};
 use crate::watch::{FolderWatch, Watched};
+use crate::script_host::{self, ScriptHost};
 use crate::visualizer::{DisplayMode, NotesSnapshot, SampleTap, ShowOutput, VisualizerPanel};
 
 const VISUALIZER_WIDTH: usize = 800;
@@ -62,6 +63,9 @@ struct RenameScript {
     error: Option<String>,
     /// Focus the text box on the first frame only.
     focused_once: bool,
+    /// Sent to the script thread (which saves the script's data first):
+    /// the answer, once it comes.
+    waiting: Option<std::sync::mpsc::Receiver<Result<PathBuf, String>>>,
 }
 
 /// How long the "Esc to exit" hint shows after entering the dedicated
@@ -97,7 +101,7 @@ pub struct App {
     browser: FileBrowser,
     active_sf: Option<usize>,
     tap: SampleTap,
-    visualizer: VisualizerPanel<LuaVisualizer>,
+    visualizer: VisualizerPanel,
     /// Folder holding `.lua` visualizer scripts (bundled defaults + user's own).
     scripts_dir: PathBuf,
     available_scripts: Vec<PathBuf>,
@@ -311,7 +315,7 @@ impl App {
             active_sf: None,
             tap,
             visualizer: VisualizerPanel::new(
-                LuaVisualizer::new(source.clone(), active_path, sample_rate),
+                ScriptHost::spawn(source.clone(), active_path, sample_rate),
                 VISUALIZER_WIDTH,
                 VISUALIZER_HEIGHT,
             ),
@@ -393,7 +397,7 @@ impl App {
             recording: recording::Recording::new(),
             last_recording: None,
         };
-        if let Some(path) = app.visualizer.visualizer().path().map(Path::to_path_buf) {
+        if let Some(path) = app.visualizer.script().path().map(Path::to_path_buf) {
             app.editor_opened(&path);
         }
         app
@@ -813,9 +817,7 @@ impl App {
                 self.editor_text = source.clone();
                 self.completion.request(source.clone());
                 self.editor_hover_info = None;
-                let visualizer = self.visualizer.visualizer_mut();
-                visualizer.set_path(Some(path.clone()));
-                visualizer.set_source(source);
+                self.visualizer.script_mut().load(Some(path.clone()), source);
                 self.active_script = Some(idx);
                 self.editor_opened(&path);
             }
@@ -1467,6 +1469,8 @@ impl App {
         let Some(rename) = &mut self.rename else {
             return;
         };
+        let answer = rename.waiting.as_ref().and_then(|waiting| waiting.try_recv().ok());
+        let waiting = rename.waiting.is_some() && answer.is_none();
         let mut submit = false;
         let mut cancel = false;
         let response = egui::Modal::new(egui::Id::new("rename_script")).show(ctx, |ui| {
@@ -1487,17 +1491,41 @@ impl App {
             if let Some(error) = &rename.error {
                 ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
             }
-            ui.weak("Its settings file is renamed along with it.");
+            if waiting {
+                ui.weak("Renaming, once the script finishes what it's doing...");
+            } else {
+                ui.weak("Its settings file is renamed along with it.");
+            }
             ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if ui.button("Rename").clicked() {
+                if ui.add_enabled(!waiting, egui::Button::new("Rename")).clicked() {
                     submit = true;
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.add_enabled(!waiting, egui::Button::new("Cancel")).clicked() {
                     cancel = true;
                 }
             });
         });
+        if let Some(answer) = answer {
+            rename.waiting = None;
+            let path = rename.path.clone();
+            match answer {
+                Ok(new_path) => {
+                    editor::rename_history(&path, &new_path);
+                    self.available_scripts = lua_visualizer::list_scripts(&self.scripts_dir);
+                    self.active_script = self.available_scripts.iter().position(|p| *p == new_path);
+                    self.visualizer.script_mut().renamed(new_path.clone());
+                    self.status = format!("Renamed script to {}", lua_visualizer::display_name(&new_path));
+                    self.rename = None;
+                }
+                Err(e) => rename.error = Some(e),
+            }
+            return;
+        }
+        if waiting {
+            ctx.request_repaint_after(Duration::from_millis(50));
+            return;
+        }
         if cancel || response.should_close() {
             self.rename = None;
             return;
@@ -1505,24 +1533,13 @@ impl App {
         if !submit {
             return;
         }
-        let (path, name) = (rename.path.clone(), rename.name.clone());
-        // Unsaved script data goes to the old name first, then moves along.
+        let name = rename.name.clone();
+        // Edits still waiting are saved under the old name first; the
+        // script thread saves the script's data, then moves it all along.
         self.flush_editor();
-        self.visualizer.visualizer_mut().flush_store();
-        match lua_visualizer::rename_script(&path, &name) {
-            Ok(new_path) => {
-                editor::rename_history(&path, &new_path);
-                self.available_scripts = lua_visualizer::list_scripts(&self.scripts_dir);
-                self.active_script = self.available_scripts.iter().position(|p| *p == new_path);
-                self.visualizer.visualizer_mut().renamed_to(new_path.clone());
-                self.status = format!("Renamed script to {}", lua_visualizer::display_name(&new_path));
-                self.rename = None;
-            }
-            Err(e) => {
-                if let Some(rename) = &mut self.rename {
-                    rename.error = Some(format!("{e:#}"));
-                }
-            }
+        let answer = self.visualizer.script().rename(name);
+        if let Some(rename) = &mut self.rename {
+            rename.waiting = Some(answer);
         }
     }
 
@@ -1530,7 +1547,7 @@ impl App {
     /// it points at a line. `open_editor`: the button also opens the editor
     /// (for the copy shown above the visualizer).
     fn script_error_ui(&mut self, ui: &mut egui::Ui, open_editor: bool) {
-        let Some(error) = self.visualizer.visualizer().error().map(str::to_string) else {
+        let Some(error) = self.visualizer.script().error() else {
             return;
         };
         let line = lua_visualizer::error_line(&error);
@@ -1586,7 +1603,7 @@ impl App {
     /// new version into the editor and visualizer. The app's own saves
     /// leave the file matching the editor, so they don't reload anything.
     fn rescan_scripts(&mut self) {
-        let current = self.visualizer.visualizer().path().map(Path::to_path_buf);
+        let current = self.visualizer.script().path().map(Path::to_path_buf);
         self.available_scripts = lua_visualizer::list_scripts(&self.scripts_dir);
         self.active_script = current.as_ref().and_then(|p| self.available_scripts.iter().position(|q| q == p));
         let Some(path) = current else {
@@ -1606,7 +1623,7 @@ impl App {
                 self.editor_text = text.clone();
                 self.editor_saved = text.clone();
                 self.completion.request(text.clone());
-                self.visualizer.visualizer_mut().set_source(text);
+                self.visualizer.script_mut().set_source(text, None);
                 self.status = format!("Reloaded {name} (changed on disk).");
             }
             Ok(_) => {}
@@ -1721,7 +1738,7 @@ impl App {
                 self.enter_dedicated(&ctx);
             }
             self.recording_buttons_ui(ui, &playback);
-            if let Some(path) = self.visualizer.visualizer().path() {
+            if let Some(path) = self.visualizer.script().path() {
                 ui.weak(path.display().to_string());
             }
         });
@@ -1738,25 +1755,35 @@ impl App {
     /// whatever it asked for.
     fn show_visualizer(&mut self, ui: &mut egui::Ui, notes: &NotesSnapshot, playback: &EngineView, mode: DisplayMode) {
         let transport = self.script_transport();
-        self.visualizer.visualizer_mut().set_transport(transport);
         self.visualizer.set_pads(self.pad_frame.clone());
         let fixed_size = self.recording.frame_size();
-        let hold = self.pace_recording();
-        self.visualizer_output =
-            self.visualizer.show(ui, &self.tap, notes, playback, self.preferences_open, mode, fixed_size, hold);
+        let (hold, timestep) = self.pace_recording();
+        self.visualizer_output = self.visualizer.show(
+            ui,
+            &self.tap,
+            notes,
+            playback,
+            transport,
+            self.preferences_open,
+            mode,
+            fixed_size,
+            hold,
+            timestep,
+        );
         self.feed_recording(ui);
         self.visualizer_drawn = true;
+        let effects = self.visualizer.take_effects();
 
         // A script can ask to mute/unmute a channel itself (e.g. a game
         // script silencing a dead player's channel), same command the GUI's
         // own checkboxes send, so it's subject to the same "never disable
         // the last channel" rule.
-        for (channel, enabled) in self.visualizer.visualizer_mut().take_channel_requests() {
+        for (channel, enabled) in effects.channel_requests {
             self.send(AudioCommand::SetChannelEnabled(channel, enabled));
         }
 
         // Notes the script played, for the live synth.
-        for command in self.visualizer.visualizer_mut().take_live_commands() {
+        for command in effects.live_commands {
             self.send(AudioCommand::Live(command));
         }
 
@@ -1764,7 +1791,7 @@ impl App {
         // earlier requests this frame, since the engine's view won't
         // reflect them until next frame.
         let mut paused = playback.paused;
-        for request in self.visualizer.visualizer_mut().take_playback_requests() {
+        for request in effects.playback_requests {
             match request {
                 PlaybackRequest::Pause(pause) if pause != paused => {
                     self.send(AudioCommand::TogglePause);
@@ -1800,9 +1827,7 @@ impl App {
         if self.pending_script_song.as_ref().is_some_and(|(target, ..)| view.loads >= *target)
             && let Some((_, path, notes, id)) = self.pending_script_song.take()
         {
-            let visualizer = self.visualizer.visualizer_mut();
-            visualizer.set_note_list(notes);
-            visualizer.set_song(Some(&path), Some(id));
+            self.visualizer.script().set_song(path, id, notes);
         }
     }
 
@@ -1874,8 +1899,8 @@ impl App {
     /// Start the running visualizer script over from scratch (F5, or the
     /// Restart button).
     fn restart_script(&mut self) {
-        let name = self.visualizer.visualizer().path().map(nice_name).unwrap_or_else(|| "script".to_string());
-        self.status = if self.visualizer.visualizer_mut().restart() {
+        let name = self.visualizer.script().path().map(nice_name).unwrap_or_else(|| "script".to_string());
+        self.status = if self.visualizer.script_mut().restart() {
             format!("Restarted {name}.")
         } else {
             "No script running to restart.".to_string()
@@ -1911,6 +1936,41 @@ impl App {
                         ui.label("Press Esc to exit");
                     });
                 });
+        }
+    }
+
+    /// The script has been on one frame (or loading) for a while: say so in
+    /// the visualizer's bottom-left corner, with a button to stop it.
+    fn script_busy_ui(&mut self, ctx: &egui::Context) {
+        let rect = self.visualizer_output.image_rect;
+        let Some(busy) = self.visualizer.script().busy_for() else { return };
+        if !self.visualizer_drawn || busy < script_host::BUSY_NOTICE_AFTER || !rect.is_positive() {
+            return;
+        }
+        let name = self.visualizer.script().path().map(nice_name).unwrap_or_else(|| "The script".to_string());
+        let mut stop = false;
+        egui::Area::new(egui::Id::new("script_busy_notice"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::LEFT_BOTTOM)
+            .fixed_pos(rect.left_bottom() + egui::vec2(12.0, -12.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.colored_label(egui::Color32::from_rgb(230, 180, 80), "!");
+                        ui.label(format!("{name} hasn't finished a frame in {:.1} s", busy.as_secs_f32()));
+                        stop = ui
+                            .button("Stop")
+                            .on_hover_text(format!(
+                                "Stop it now (the watchdog would at {} s). Fix it and save, or press Restart (F5), to run it again.",
+                                script_host::APP_WATCHDOG_LIMIT.as_secs()
+                            ))
+                            .clicked();
+                    });
+                });
+            });
+        if stop {
+            self.visualizer.script().stop();
+            self.status = format!("Stopped {name}.");
         }
     }
 
@@ -2002,7 +2062,7 @@ impl App {
             // won't have newer host features).
             if let Some(name) = self
                 .visualizer
-                .visualizer()
+                .script()
                 .path()
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
@@ -2018,7 +2078,7 @@ impl App {
             {
                 restart = true;
             }
-            if let Some(path) = self.visualizer.visualizer().path()
+            if let Some(path) = self.visualizer.script().path()
                 && ui.button("Rename").on_hover_text("Rename this script's file (its settings come along)").clicked()
             {
                 rename = Some(path.to_path_buf());
@@ -2026,7 +2086,7 @@ impl App {
         });
         if let Some(path) = rename {
             let name = lua_visualizer::display_name(&path);
-            self.rename = Some(RenameScript { path, name, error: None, focused_once: false });
+            self.rename = Some(RenameScript { path, name, error: None, focused_once: false, waiting: None });
         }
         if restart {
             self.restart_script();
@@ -2035,7 +2095,7 @@ impl App {
             self.load_script(idx);
         }
         if let Some(source) = restore_bundled {
-            if let Some(path) = self.visualizer.visualizer().path().map(Path::to_path_buf) {
+            if let Some(path) = self.visualizer.script().path().map(Path::to_path_buf) {
                 self.editor_opened(&path);
             }
             self.editor_text = source;
@@ -2156,7 +2216,7 @@ impl App {
             ui.add_space(10.0);
             ui.strong("Loading");
             ui.checkbox(&mut warn_heavy, "Warn before playing a very large MIDI file").on_hover_text(format!(
-                "Over {} notes: scripts that go through every note can freeze synththing on them.",
+                "Over {} notes: scripts that go through every note can stall on them.",
                 crate::song_info::thousands(crate::song_info::HEAVY_MIDI_NOTES)
             ));
             ui.horizontal(|ui| {
@@ -2244,7 +2304,7 @@ impl App {
     /// press another to rebind it, x to remove, + to add, Reset for the
     /// script's defaults. Saved per script.
     fn controls_ui(&mut self, ui: &mut egui::Ui) {
-        let actions = self.visualizer.visualizer().actions();
+        let actions = self.visualizer.script().actions();
         if actions.is_empty() {
             self.binding_capture = None;
             return;
@@ -2336,14 +2396,14 @@ impl App {
             self.binding_capture = capture;
         }
         if let Some((i, bindings)) = change {
-            self.visualizer.visualizer_mut().set_action_bindings(i, bindings);
+            self.visualizer.script_mut().set_action_bindings(i, bindings);
         }
     }
 
     /// The active script's settings widgets, its `debug_locals()` snapshot,
     /// and its log/error history.
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
-        let descriptors = self.visualizer.visualizer().settings();
+        let descriptors = self.visualizer.script().settings();
         let mut changed: Option<(String, SettingValue)> = None;
         let mut clear_log = false;
 
@@ -2354,7 +2414,7 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 // Performance: render time against the 60 fps budget.
-                let perf = self.visualizer.visualizer().perf_summary();
+                let perf = self.visualizer.script().perf_summary();
                 let mut retry = false;
                 ui.horizontal_wrapped(|ui| {
                     ui.strong("Performance");
@@ -2382,7 +2442,7 @@ impl App {
                     }
                 });
                 if retry {
-                    self.visualizer.visualizer_mut().retry_full_frame_rate();
+                    self.visualizer.script_mut().retry_full_frame_rate();
                 }
                 self.controls_ui(ui);
                 ui.separator();
@@ -2404,7 +2464,7 @@ impl App {
 
                 ui.separator();
                 ui.heading("Variables");
-                match self.visualizer.visualizer().debug_snapshot() {
+                match self.visualizer.script().debug_snapshot() {
                     Some(snapshot) => {
                         if let Some(label) = &snapshot.label {
                             ui.weak(format!("from: {label}"));
@@ -2437,7 +2497,7 @@ impl App {
                     .max_height(180.0)
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
-                        let entries = self.visualizer.visualizer().log_entries();
+                        let entries = self.visualizer.script().log_entries();
                         if entries.is_empty() {
                             ui.weak("(nothing logged yet)");
                         }
@@ -2458,10 +2518,10 @@ impl App {
             });
 
         if let Some((key, value)) = changed {
-            self.visualizer.visualizer_mut().set_setting(&key, value);
+            self.visualizer.script().set_setting(key, value);
         }
         if clear_log {
-            self.visualizer.visualizer_mut().clear_log();
+            self.visualizer.script_mut().clear_log();
         }
     }
 
@@ -2761,6 +2821,7 @@ impl eframe::App for App {
         }
         self.apply_cursor_confinement(&ctx);
         self.keep_loaded(&ctx);
+        self.script_busy_ui(&ctx);
 
         drag_ghost_ui(&ctx);
 
@@ -2786,6 +2847,8 @@ impl eframe::App for App {
     /// hasn't caught yet.
     fn on_exit(&mut self) {
         self.flush_editor();
+        // Stop the script thread, which saves the script's data.
+        self.visualizer.script_mut().shutdown();
         // Don't lose a recording to closing the app: write it out first.
         if let Some(recorder) = self.recording.recorder.take()
             && let Err(e) = recorder.finish_now()
@@ -2889,8 +2952,8 @@ fn song_info_widgets(ui: &mut egui::Ui, cache: &mut SongInfoCache, path: &Path, 
     ui.weak(length);
     if let Some(info) = info.filter(|i| i.is_heavy()) {
         ui.colored_label(egui::Color32::from_rgb(230, 80, 80), "!").on_hover_text(format!(
-            "A very large MIDI file: {} notes. It plays fine, but a script going through every note can \
-             freeze synththing.",
+            "A very large MIDI file: {} notes. It plays fine, but a visualizer script going through every \
+             note can stall on it.",
             crate::song_info::thousands(info.notes.unwrap_or_default())
         ));
     }

@@ -34,6 +34,7 @@ mod recorder;
 mod song_info;
 mod snippets;
 mod spectrum;
+mod script_host;
 mod sprite_code;
 mod typing;
 mod updater;
