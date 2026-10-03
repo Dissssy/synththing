@@ -17,6 +17,7 @@ mod credits;
 mod engine;
 mod ffmpeg;
 mod filebrowser;
+mod gamepad;
 mod layout;
 mod loader;
 mod lua_completion;

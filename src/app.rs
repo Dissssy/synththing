@@ -34,7 +34,7 @@ use crate::loader::{self, Asset, AssetCache, SoundFontProbe};
 use crate::lua_completion::CompletionWorker;
 use crate::lua_docs;
 use crate::lua_visualizer::{
-    self, DebugVar, LogLevel, LuaVisualizer, PlaybackRequest, SettingDescriptor, SettingKind, SettingValue,
+    self, Binding, DebugVar, LogLevel, LuaVisualizer, PlaybackRequest, SettingDescriptor, SettingKind, SettingValue,
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
 use crate::song_info::{format_length, SongInfoCache};
@@ -238,6 +238,9 @@ pub struct App {
     preferences_open: bool,
     /// View > Layout > Save current layout as...: the name being typed.
     layout_save: Option<String>,
+    /// Game controllers, read every frame; this frame's input.
+    gamepads: crate::gamepad::Gamepads,
+    pad_frame: crate::gamepad::PadFrame,
     /// Songs sent to the audio thread, and the latest one waiting to reach
     /// the script: (its load number, path, notes, id).
     loads_sent: u64,
@@ -371,6 +374,8 @@ impl App {
             dock_is_fullscreen_layout: false,
             preferences_open: false,
             layout_save: None,
+            gamepads: crate::gamepad::Gamepads::new(),
+            pad_frame: crate::gamepad::PadFrame::default(),
             loads_sent: 0,
             pending_script_song: None,
             docs_target: None,
@@ -1727,6 +1732,7 @@ impl App {
     fn show_visualizer(&mut self, ui: &mut egui::Ui, notes: &NotesSnapshot, playback: &EngineView, mode: DisplayMode) {
         let transport = self.script_transport();
         self.visualizer.visualizer_mut().set_transport(transport);
+        self.visualizer.set_pads(self.pad_frame.clone());
         let fixed_size = self.recording.frame_size();
         let hold = self.pace_recording();
         self.visualizer_output =
@@ -2231,9 +2237,14 @@ impl App {
         }
         ui.separator();
         ui.strong("Controls");
-        ui.weak("Click a key, then press the new one. Controls work while the visualizer has focus.");
+        ui.weak(
+            "Click a binding, then press the new key or controller button. Keys work while the visualizer \
+             has focus; controllers while synththing's window does.",
+        );
+        let pads = &self.pad_frame.connected;
+        ui.weak(if pads.is_empty() { "No controller connected.".to_string() } else { format!("Controllers: {}", pads.join(", ")) });
 
-        let mut change: Option<(usize, Vec<egui::Key>)> = None;
+        let mut change: Option<(usize, Vec<Binding>)> = None;
         let mut start_capture: Option<Option<(usize, Option<usize>)>> = None;
         egui::Grid::new("script_controls").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
             for (i, action) in actions.iter().enumerate() {
@@ -2241,11 +2252,11 @@ impl App {
                 ui.horizontal_wrapped(|ui| {
                     for (slot, key) in action.bindings.iter().enumerate() {
                         let capturing = self.binding_capture == Some((i, Some(slot)));
-                        let label = if capturing { "press a key...".to_string() } else { key.name().to_string() };
+                        let label = if capturing { "press a key or button...".to_string() } else { key.label().to_string() };
                         if ui.selectable_label(capturing, label).clicked() {
                             start_capture = Some((!capturing).then_some((i, Some(slot))));
                         }
-                        if ui.small_button("x").on_hover_text("Remove this key").clicked() {
+                        if ui.small_button("x").on_hover_text("Remove this binding").clicked() {
                             let mut bindings = action.bindings.clone();
                             bindings.remove(slot);
                             change = Some((i, bindings));
@@ -2253,8 +2264,8 @@ impl App {
                     }
                     let adding = self.binding_capture == Some((i, None));
                     if ui
-                        .selectable_label(adding, if adding { "press a key..." } else { "+" })
-                        .on_hover_text("Add another key")
+                        .selectable_label(adding, if adding { "press a key or button..." } else { "+" })
+                        .on_hover_text("Add another key or controller button")
                         .clicked()
                     {
                         start_capture = Some((!adding).then_some((i, None)));
@@ -2274,16 +2285,20 @@ impl App {
         if let Some((i, slot)) = self.binding_capture
             && let Some(action) = actions.get(i)
         {
-            let pressed = ui.input(|input| {
-                input.events.iter().find_map(|event| match event {
-                    egui::Event::Key { key, pressed: true, repeat: false, .. } => Some(*key),
-                    _ => None,
+            let pressed = ui
+                .input(|input| {
+                    input.events.iter().find_map(|event| match event {
+                        egui::Event::Key { key, pressed: true, repeat: false, .. } => Some(*key),
+                        _ => None,
+                    })
                 })
-            });
+                .map(Binding::Key)
+                .or_else(|| self.pad_frame.pressed.first().copied().map(Binding::Pad));
             if let Some(key) = pressed {
                 captured = true;
                 self.binding_capture = None;
-                if !crate::visualizer::RESERVED_KEYS.contains(&key) {
+                let reserved = matches!(key, Binding::Key(k) if crate::visualizer::RESERVED_KEYS.contains(&k));
+                if !reserved {
                     let mut bindings = action.bindings.clone();
                     match slot {
                         Some(slot) if slot < bindings.len() => bindings[slot] = key,
@@ -2318,44 +2333,46 @@ impl App {
         let mut changed: Option<(String, SettingValue)> = None;
         let mut clear_log = false;
 
-        // Performance: render time against the 60 fps budget.
-        let perf = self.visualizer.visualizer().perf_summary();
-        let mut retry = false;
-        ui.horizontal_wrapped(|ui| {
-            ui.strong("Performance");
-            if perf.frames == 0 {
-                ui.weak("(not rendered yet)");
-                return;
-            }
-            let budget = 1000.0 / 60.0;
-            let color = if perf.avg_ms > budget {
-                egui::Color32::from_rgb(220, 90, 90)
-            } else if perf.avg_ms > budget * 0.6 {
-                egui::Color32::from_rgb(220, 180, 80)
-            } else {
-                ui.visuals().text_color()
-            };
-            ui.colored_label(color, format!("render() {:.1} ms avg, {:.1} ms worst", perf.avg_ms, perf.max_ms))
-                .on_hover_text(format!(
-                    "Over the last second. A 60 fps frame allows {budget:.1} ms; a script averaging more than that for 3 seconds runs at 30 fps until its code changes."
-                ));
-            if perf.half_rate {
-                ui.colored_label(egui::Color32::from_rgb(220, 180, 80), "running at 30 fps");
-                retry = ui.small_button("Try 60 fps again").clicked();
-            } else {
-                ui.weak("60 fps");
-            }
-        });
-        if retry {
-            self.visualizer.visualizer_mut().retry_full_frame_rate();
-        }
-        self.controls_ui(ui);
-        ui.separator();
-
+        // The whole tab scrolls: performance, controls, settings, variables
+        // and the log.
         egui::ScrollArea::vertical()
             .id_salt("visualizer_settings_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                // Performance: render time against the 60 fps budget.
+                let perf = self.visualizer.visualizer().perf_summary();
+                let mut retry = false;
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong("Performance");
+                    if perf.frames == 0 {
+                        ui.weak("(not rendered yet)");
+                        return;
+                    }
+                    let budget = 1000.0 / 60.0;
+                    let color = if perf.avg_ms > budget {
+                        egui::Color32::from_rgb(220, 90, 90)
+                    } else if perf.avg_ms > budget * 0.6 {
+                        egui::Color32::from_rgb(220, 180, 80)
+                    } else {
+                        ui.visuals().text_color()
+                    };
+                    ui.colored_label(color, format!("render() {:.1} ms avg, {:.1} ms worst", perf.avg_ms, perf.max_ms))
+                        .on_hover_text(format!(
+                            "Over the last second. A 60 fps frame allows {budget:.1} ms; a script averaging more than that for 3 seconds runs at 30 fps until its code changes."
+                        ));
+                    if perf.half_rate {
+                        ui.colored_label(egui::Color32::from_rgb(220, 180, 80), "running at 30 fps");
+                        retry = ui.small_button("Try 60 fps again").clicked();
+                    } else {
+                        ui.weak("60 fps");
+                    }
+                });
+                if retry {
+                    self.visualizer.visualizer_mut().retry_full_frame_rate();
+                }
+                self.controls_ui(ui);
+                ui.separator();
+
                 if descriptors.is_empty() {
                     ui.weak("This script hasn't registered any settings.");
                 } else {
@@ -2576,6 +2593,10 @@ impl eframe::App for App {
         let view = &shared.view;
         self.visualizer_drawn = false;
         self.sync_script_song(view);
+        self.pad_frame = self.gamepads.poll(ctx.input(|i| i.focused));
+        if !self.pad_frame.down.is_empty() || !self.pad_frame.released.is_empty() {
+            ctx.request_repaint();
+        }
 
         // The OS is the final authority on fullscreen state, e.g. the user
         // could leave it some way other than our own button/key.

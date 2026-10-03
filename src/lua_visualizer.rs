@@ -103,6 +103,7 @@ use crate::engine::{EngineView, NOTE_LOOKAHEAD_SECS};
 use crate::midi_notes::NoteList;
 use crate::pixel_font;
 use crate::spectrum::{self, OnsetDetector, SpectrumAnalyzer};
+use crate::gamepad::{AXIS_NAMES, PadInput};
 use crate::live::{LiveCommand, LiveNote};
 use crate::playlist::LoopMode;
 use crate::typing::TypingSpan;
@@ -1046,8 +1047,46 @@ fn controls_path(script_path: &Path) -> PathBuf {
 #[derive(Clone, Debug)]
 pub struct Action {
     pub name: String,
-    pub defaults: Vec<egui::Key>,
-    pub bindings: Vec<egui::Key>,
+    pub defaults: Vec<Binding>,
+    pub bindings: Vec<Binding>,
+}
+
+/// What an action can be bound to: a key, or a controller input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Binding {
+    Key(egui::Key),
+    Pad(PadInput),
+}
+
+impl Binding {
+    /// The name scripts and the saved controls use: `"space"`, `"pad_a"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Binding::Key(key) => key.name(),
+            Binding::Pad(pad) => pad.name(),
+        }
+    }
+
+    /// How the Controls list shows it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Binding::Key(key) => key.name(),
+            Binding::Pad(pad) => pad.label(),
+        }
+    }
+}
+
+/// A key or controller input by name (`"a"`, `"space"`, `"pad_a"`,
+/// `"pad_lstick_left"`). `Ok(None)` for a key the app keeps for itself.
+fn parse_binding(name: &str) -> mlua::Result<Option<Binding>> {
+    if name.to_ascii_lowercase().starts_with("pad_") {
+        return PadInput::from_name(name).map(|p| Some(Binding::Pad(p))).ok_or_else(|| {
+            mlua::Error::runtime(format!(
+                "unknown controller input '{name}' (try \"pad_a\", \"pad_dpad_up\", \"pad_lstick_left\", \"pad_start\")"
+            ))
+        });
+    }
+    Ok(parse_key(name)?.map(Binding::Key))
 }
 
 /// A script's actions, plus the bindings saved for it (kept even for
@@ -1071,9 +1110,9 @@ impl Controls {
     }
 
     /// The bindings saved for `name`, if any (unknown key names dropped).
-    fn saved_bindings(&self, name: &str) -> Option<Vec<egui::Key>> {
+    fn saved_bindings(&self, name: &str) -> Option<Vec<Binding>> {
         let list = self.saved.get(name)?.as_array()?;
-        Some(list.iter().filter_map(|v| v.as_str()).filter_map(|k| parse_key(k).ok().flatten()).collect())
+        Some(list.iter().filter_map(|v| v.as_str()).filter_map(|k| parse_binding(k).ok().flatten()).collect())
     }
 
     fn save(&mut self) {
@@ -1094,13 +1133,18 @@ impl Controls {
 
 /// "pressed" (went down this frame), "held", "released" (went up this
 /// frame) or "up", for an action bound to `bindings`.
-fn action_state(input: &VisualizerInput, bindings: &[egui::Key]) -> &'static str {
-    let any = |keys: &[egui::Key]| bindings.iter().any(|k| keys.contains(k));
-    if any(&input.keys_pressed) {
+fn action_state(input: &VisualizerInput, bindings: &[Binding]) -> &'static str {
+    let any = |keys: &[egui::Key], pads: &[PadInput]| {
+        bindings.iter().any(|b| match b {
+            Binding::Key(k) => keys.contains(k),
+            Binding::Pad(p) => pads.contains(p),
+        })
+    };
+    if any(&input.keys_pressed, &input.pads.pressed) {
         "pressed"
-    } else if any(&input.keys_down) {
+    } else if any(&input.keys_down, &input.pads.down) {
         "held"
-    } else if any(&input.keys_released) {
+    } else if any(&input.keys_released, &input.pads.released) {
         "released"
     } else {
         "up"
@@ -1403,7 +1447,7 @@ impl LuaVisualizer {
     }
 
     /// Rebind action `index` (from `actions()`) and save it.
-    pub fn set_action_bindings(&mut self, index: usize, bindings: Vec<egui::Key>) {
+    pub fn set_action_bindings(&mut self, index: usize, bindings: Vec<Binding>) {
         if let Some(compiled) = &self.compiled {
             let mut controls = compiled.controls.borrow_mut();
             if let Some(action) = controls.actions.get_mut(index) {
@@ -2613,8 +2657,9 @@ fn register_input(
             };
             let mut defaults = Vec::new();
             for key_name in &names {
-                match parse_key(key_name)? {
-                    Some(key) => defaults.push(key),
+                match parse_binding(key_name)? {
+                    Some(binding) if !defaults.contains(&binding) => defaults.push(binding),
+                    Some(_) => {}
                     None => {
                         return Err(mlua::Error::runtime(format!(
                             "input_register: '{key_name}' is reserved by the app and can't be bound"
@@ -2659,6 +2704,30 @@ fn register_input(
                 return Ok(false);
             }
             Ok(matches!(action_state(&state.borrow(), &action.bindings), "pressed" | "held"))
+        })?,
+    )?;
+
+    // Controllers, read directly: analogue axes and who's connected.
+    let state = Rc::clone(input);
+    globals.set(
+        "pad_axis",
+        lua.create_function(move |_, name: String| {
+            let index = AXIS_NAMES.iter().position(|n| n.eq_ignore_ascii_case(&name)).ok_or_else(|| {
+                mlua::Error::runtime(format!("pad_axis: no axis '{name}' (there's {})", AXIS_NAMES.join(", ")))
+            })?;
+            Ok(state.borrow().pads.axes[index])
+        })?,
+    )?;
+    let state = Rc::clone(input);
+    globals.set(
+        "gamepads",
+        lua.create_function(move |lua, ()| {
+            let state = state.borrow();
+            let names = lua.create_table_with_capacity(state.pads.connected.len(), 0)?;
+            for (i, name) in state.pads.connected.iter().enumerate() {
+                names.raw_set(i + 1, name.as_str())?;
+            }
+            Ok(names)
         })?,
     )?;
 
@@ -3959,6 +4028,25 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// The gamepad example with a controller in use: buttons held and
+    /// pressed, sticks and triggers pushed.
+    #[test]
+    fn gamepad_example_draws_a_controller_in_use() {
+        let mut visualizer = LuaVisualizer::new(find_script("gamepad_demo.lua").to_string(), None, 44_100);
+        let mut input = keys(&[], &[], &[]);
+        input.pads.down = vec![PadInput::A, PadInput::LeftStickLeft, PadInput::RightTrigger];
+        input.pads.pressed = vec![PadInput::A];
+        input.pads.axes = [-0.8, 0.2, 0.0, -0.5, 0.0, 0.9];
+        input.pads.connected = vec!["Test Pad".into()];
+        let mut buffer = vec![0u32; 960 * 600];
+        for _ in 0..3 {
+            visualizer.render(&mut buffer, 960, 600, &[], &NotesSnapshot::default(), &sample_playback(), &input);
+            assert_eq!(visualizer.error(), None);
+        }
+        assert_eq!(visualizer.actions().len(), 21);
+        assert!(visualizer.actions().iter().all(|a| a.defaults.iter().any(|b| matches!(b, Binding::Pad(_)))));
+    }
+
     #[test]
     fn script_options_and_song_loads() {
         let script = "script_options({ start_paused = true })
@@ -4289,13 +4377,36 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
 
         // Rebind jump to J; a reload of the script keeps it.
         let actions = visualizer.actions();
-        assert_eq!(actions[1].bindings, [Key::A, Key::ArrowLeft]);
-        visualizer.set_action_bindings(0, vec![Key::J]);
+        assert_eq!(actions[1].bindings, [Binding::Key(Key::A), Binding::Key(Key::ArrowLeft)]);
+        visualizer.set_action_bindings(0, vec![Binding::Key(Key::J), Binding::Pad(PadInput::Y)]);
         let mut reloaded = LuaVisualizer::new(script.to_string(), Some(path.clone()), 44_100);
-        assert_eq!(reloaded.actions()[0].bindings, [Key::J]);
-        assert_eq!(reloaded.actions()[0].defaults, [Key::Space]);
+        assert_eq!(reloaded.actions()[0].bindings, [Binding::Key(Key::J), Binding::Pad(PadInput::Y)]);
+        assert_eq!(reloaded.actions()[0].defaults, [Binding::Key(Key::Space)]);
         render_with(&mut reloaded, &keys(&[Key::Space], &[Key::Space], &[]));
         assert_eq!(last_log(&reloaded).split(' ').next(), Some("up"), "space no longer jumps");
+        // The controller button it's bound to now does.
+        let mut pad = keys(&[], &[], &[]);
+        pad.pads.down = vec![PadInput::Y];
+        pad.pads.pressed = vec![PadInput::Y];
+        render_with(&mut reloaded, &pad);
+        assert_eq!(last_log(&reloaded).split(' ').next(), Some("pressed"));
+
+        // Defaults can name controller inputs, and analogue axes read directly.
+        let script = "local fire = input_register('fire', { 'space', 'pad_a', 'pad_south' })
+            function render() log(#gamepads() .. ' ' .. input(fire) .. ' ' .. pad_axis('lstick_x')) end";
+        let mut pads = LuaVisualizer::new(script.to_string(), None, 44_100);
+        assert_eq!(pads.actions()[0].defaults, [Binding::Key(Key::Space), Binding::Pad(PadInput::A)], "aliases don't double up");
+        let mut input = keys(&[], &[], &[]);
+        input.pads.down = vec![PadInput::A];
+        input.pads.axes = [-0.5, 0.0, 0.0, 0.0, 0.0, 0.0];
+        input.pads.connected = vec!["Xbox Controller".into()];
+        render_with(&mut pads, &input);
+        assert_eq!(last_log(&pads), "1 held -0.5");
+        let mut bad_pad = LuaVisualizer::new("input_register('x', 'pad_banana') function render() end".into(), None, 44_100);
+        assert!(bad_pad.error().unwrap_or_default().contains("unknown controller input"), "{:?}", bad_pad.error());
+        bad_pad.set_source("function render() pad_axis('wheel') end".into());
+        render_with(&mut bad_pad, &VisualizerInput::default());
+        assert!(bad_pad.error().unwrap_or_default().contains("no axis 'wheel'"), "{:?}", bad_pad.error());
 
         // Reserved keys can't be bound.
         let mut bad = LuaVisualizer::new("input_register('quit', 'escape') function render() end".to_string(), None, 44_100);

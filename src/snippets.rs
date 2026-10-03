@@ -48,9 +48,9 @@ pub const SNIPPETS: &[Snippet] = &[
         description: "Rebindable keyboard actions, and reading them in render",
         place: Place::TopLevel,
         body: "-- Rebindable under Controls in Script Settings.\n\
-               local LEFT = input_register(\"left\", { \"left\", \"a\" })\n\
-               local RIGHT = input_register(\"right\", { \"right\", \"d\" })\n\
-               local JUMP = input_register(\"jump\", \"space\")\n\
+               local LEFT = input_register(\"left\", { \"left\", \"a\", \"pad_dpad_left\", \"pad_lstick_left\" })\n\
+               local RIGHT = input_register(\"right\", { \"right\", \"d\", \"pad_dpad_right\", \"pad_lstick_right\" })\n\
+               local JUMP = input_register(\"jump\", { \"space\", \"pad_a\" })\n\
                -- In render: if input_down(LEFT) then ... end\n\
                --            if input(JUMP) == \"pressed\" then ... end\n$0",
     },

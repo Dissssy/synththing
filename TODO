@@ -535,4 +535,13 @@ Smaller:
 [S][.] scripts see a song switch all at once - DONE
     The app hands the script a new song's notes/id/path only when the
     audio thread reports it loaded (EngineView::loads), so playback() never
-    mixes the old song's length with the new song's notes.
+    mixes the old song's length with the new song's notes.
+
+[M][!] game controllers - DONE
+    gamepad.rs (gilrs): every connected pad merged; buttons, d-pad, triggers
+    and stick directions as on/off inputs (past halfway, with hysteresis)
+    that actions bind like keys ("pad_a", "pad_lstick_left", ...; captured
+    in the Controls list too). pad_axis() reads sticks/triggers directly
+    (not rebindable), gamepads() lists them. Pads count while the window has
+    focus. Ideas: rumble, per-player pads (pad 1 vs pad 2) for local
+    multiplayer, pad defaults in the bundled games.

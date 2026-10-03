@@ -17,6 +17,7 @@ use crate::audio::Backlog;
 use eframe::egui;
 
 use crate::engine::EngineView;
+use crate::gamepad::PadFrame;
 use crate::typing::TextEvent;
 
 /// One stereo sample: `.0` is left, `.1` is right. A plain tuple rather than a
@@ -250,6 +251,9 @@ pub struct VisualizerInput {
     /// Typing this frame, in order: characters, pastes, and key presses
     /// (with key repeat and modifiers), for typing spans and text_typed().
     pub text_events: Vec<TextEvent>,
+    /// Game controllers (`gamepad.rs`): buttons and stick directions held,
+    /// pressed and released, the analogue axes, and who's connected.
+    pub pads: PadFrame,
 }
 
 impl VisualizerInput {
@@ -352,6 +356,11 @@ impl VisualizerInput {
         self.keys_pressed.extend(later.keys_pressed);
         self.keys_released.extend(later.keys_released);
         self.text_events.extend(later.text_events);
+        self.pads.down = later.pads.down;
+        self.pads.pressed.extend(later.pads.pressed);
+        self.pads.released.extend(later.pads.released);
+        self.pads.axes = later.pads.axes;
+        self.pads.connected = later.pads.connected;
     }
 }
 
@@ -385,6 +394,8 @@ pub struct VisualizerPanel<V> {
     pending_input: Option<VisualizerInput>,
     /// The audio the last rendered frame was given (for recording).
     last_samples: Vec<StereoFrame>,
+    /// This frame's controller input, from the app (`set_pads`).
+    pads: PadFrame,
 }
 
 impl<V: Visualizer> VisualizerPanel<V> {
@@ -399,7 +410,13 @@ impl<V: Visualizer> VisualizerPanel<V> {
             focus_requested: false,
             pending_input: None,
             last_samples: Vec::new(),
+            pads: PadFrame::default(),
         }
+    }
+
+    /// This frame's controller input, for the next `show`.
+    pub fn set_pads(&mut self, pads: PadFrame) {
+        self.pads = pads;
     }
 
     /// For recording: the audio the last rendered frame was given, and its
@@ -483,6 +500,7 @@ impl<V: Visualizer> VisualizerPanel<V> {
         let (buf_w, buf_h) = fixed_size.unwrap_or_else(|| logical_buffer_size(available));
         self.resize(buf_w, buf_h);
         let mut input = gather_input(&ctx, &response, rect, (self.width, self.height), focused, mode);
+        input.pads = std::mem::take(&mut self.pads);
 
         // Reduced frame rate (or held for a recording): show the last frame
         // again, and keep this frame's input (the audio waits in the tap)

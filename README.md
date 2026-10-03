@@ -4,7 +4,7 @@ A MIDI and audio player for Windows with a visualizer you can script in Lua.
 
 - Plays MIDI files through any SoundFont (`.sf2`), and audio files (MP3, WAV, OGG Vorbis, FLAC, M4A/AAC).
 - Playlists: build them by dragging songs or whole folders in, reorder, shuffle and loop, give MIDI tracks their own soundfont, import and export `.m3u`.
-- A visualizer driven by Lua scripts: waveform, spectrum, piano roll, spectrogram, and games that play along: a Guitar Hero style highway charted from any song, a snake game, a platformer, and a piano you can play on with your keyboard. Write your own with a live-reloading editor: scripts can take mouse and keyboard input (with rebindable controls), take typed text, and play notes on the song's instruments, in a window or fullscreen.
+- A visualizer driven by Lua scripts: waveform, spectrum, piano roll, spectrogram, and games that play along: a Guitar Hero style highway charted from any song, a snake game, a platformer, and a piano you can play on with your keyboard. Write your own with a live-reloading editor: scripts can take mouse, keyboard and game controller input (with rebindable controls), take typed text, and play notes on the song's instruments, in a window or fullscreen.
 - A sprite editor for the pixel art scripts draw: paint, fill, palettes and sprite sheets, written straight back into the script.
 - Record the visualizer with its sound to a video (MP4, 720p to 4K, 30 or 60 fps): a whole song, a whole playlist, or whatever you play. Uses ffmpeg, which synththing offers to download the first time.
 - Rearrangeable layout: every section is a tab you can drag, split or pop out.

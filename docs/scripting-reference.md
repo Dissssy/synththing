@@ -382,11 +382,31 @@ Both stick until changed (or a different script loads). A hidden cursor only hid
 input_register(name, default_keys) -> id   -- once, outside render()
 input(id) -> state       -- "pressed", "held", "released" or "up"
 input_down(id) -> bool   -- held: "pressed" or "held"
+pad_axis(name) -> number -- a controller's stick or trigger, read directly
+gamepads() -> names      -- the connected controllers
 ```
 
-Keyboard input comes through actions: a script names each thing it can do ("jump", "left", "clear") and gives it default keys, and the user can rebind them under Controls in the Script Settings tab (click a key, press the new one; x removes a key, + adds another, Reset goes back to the script's keys). Bindings are saved per script, in `<script>.lua.controls.json` next to it.
+Keyboard and controller input come through actions: a script names each thing it can do ("jump", "left", "clear") and gives it default keys or controller buttons, and the user can rebind them under Controls in the Script Settings tab (click a binding, press the new key or controller button; x removes one, + adds another, Reset goes back to the script's). Bindings are saved per script, in `<script>.lua.controls.json` next to it.
 
-`default_keys` is a key name or a list of them: `"space"`, `{ "left", "a" }`. Key names are case-insensitive: letters (`"a"`), digits (`"1"`), `"space"`, `"enter"`, `"tab"`, `"backspace"`, arrows (`"up"`, `"down"`, `"left"`, `"right"`), `"f1"` to `"f20"` and so on; an unknown name is a script error that says so, as is one of the app's reserved keys (below). An empty list makes an action with no keys until the user binds some.
+`default_keys` is a name or a list of them: `"space"`, `{ "left", "a", "pad_dpad_left", "pad_lstick_left" }`. Names are case-insensitive. Keys: letters (`"a"`), digits (`"1"`), `"space"`, `"enter"`, `"tab"`, `"backspace"`, arrows (`"up"`, `"down"`, `"left"`, `"right"`), `"f1"` to `"f20"` and so on. Controller inputs start with `pad_`:
+
+- face buttons `"pad_a"`, `"pad_b"`, `"pad_x"`, `"pad_y"` (Xbox names, by position: A is the bottom one, Cross on a PlayStation pad; `"pad_south"`, `"pad_east"`, `"pad_west"`, `"pad_north"` mean the same)
+- `"pad_lb"`, `"pad_rb"` (bumpers), `"pad_lt"`, `"pad_rt"` (triggers), `"pad_back"`, `"pad_start"`, `"pad_guide"`, `"pad_lstick_click"`, `"pad_rstick_click"`
+- the d-pad: `"pad_dpad_up"`, `"pad_dpad_down"`, `"pad_dpad_left"`, `"pad_dpad_right"`
+- each stick pushed one way: `"pad_lstick_up"`, `"pad_lstick_down"`, `"pad_lstick_left"`, `"pad_lstick_right"`, and the same for `rstick`
+
+An unknown name is a script error that says so, as is one of the app's reserved keys (below). An empty list makes an action with no bindings until the user adds some.
+
+Through actions, every controller input is on or off: a stick direction or a trigger counts as pressed once it's past halfway, with a little slack before it lets go so it doesn't flicker at the edge. That's what makes them interchangeable with keys (a "left" action can be the A key, the d-pad or the stick). Any connected controller counts: pressing A on either of two pads presses `pad_a`. Controllers work while synththing's window has focus (no need to click into the visualizer first), and like keys, they don't reach actions while a typing span is open.
+
+For smooth movement, `pad_axis` reads the sticks and triggers directly: `"lstick_x"`, `"lstick_y"`, `"rstick_x"`, `"rstick_y"` from -1 to 1 (x is right, y is down, like screen coordinates; a small wobble around the middle reads 0), and `"lt"`, `"rt"` from 0 (let go) to 1 (all the way). With several controllers it's the one pushed furthest. Axes aren't rebindable: they're the controller's own. `gamepads()` lists the connected controllers' names, empty when there are none. `gamepad_demo.lua` (New > Examples) shows all of it on a drawn controller.
+
+```lua
+local x = 100
+function render(width, height, left, right)
+    x = x + pad_axis("lstick_x") * 300 * DT   -- smooth, at the stick's angle
+end
+```
 
 `input(id)` says what the action did this frame: `"pressed"` the frame one of its keys went down (key repeat doesn't count), `"held"` while it stays down after that, `"released"` the frame it went up, and `"up"` otherwise. `input_down(id)` is the "is it down" shortcut, for movement. Registering the same name twice gives the same id. Register actions once, at the top level of the script, like sprites; the Controls list shows them in the order they were registered.
 
@@ -658,6 +678,10 @@ onset() --> true, 0.1034          -- a sound just started, this sharply (compare
 Input:
 
 ```lua
+pad_axis("lstick_x") --> -0.62    -- pushed left, a bit over halfway
+pad_axis("rt") --> 0              -- the right trigger let go
+gamepads() --> { "Xbox Wireless Controller" }   -- {} with none connected
+input_register("jump", { "space", "pad_a" }) --> 2   -- a key and a controller button
 mouse() --> 312.5, 140            -- buffer pixels
 mouse() --> nil, nil              -- the pointer isn't over the visualizer
 mouse_delta() --> 0, 0
@@ -737,4 +761,5 @@ Examples (New):
 
 - `settings_demo.lua`, exercises every setting type, a reference for the settings API itself
 - `input_demo.lua`, mouse, keyboard actions and cursor control: a paint toy with its own cursor
+- `gamepad_demo.lua`, a controller drawn on screen that lights up as you use yours: every button an action with a controller default (and a keyboard one), the sticks and triggers' analogue values (`pad_axis`), and the connected controllers (`gamepads`)
 - `editor_test.lua`, a page of things for the script editor to react to (three deliberate problems, color tables, functions for Go to, a badly formatted function), each marked TRY
