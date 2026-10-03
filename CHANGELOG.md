@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.3.3 (2026-10-03)
+
 ### New
 - An experimental Linux build on each release, `synththing-linux-x86_64`, which updates itself like the Windows one. It builds and passes every test on Ubuntu, but hasn't been played with yet: reports welcome (docs/LINUX.md).
 
