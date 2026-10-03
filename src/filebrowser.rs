@@ -113,6 +113,15 @@ impl FileBrowser {
         }
     }
 
+    /// Show only files with these extensions from now on.
+    pub fn set_extensions(&mut self, extensions: &[&str]) {
+        let extensions: Vec<String> = extensions.iter().map(|e| e.to_lowercase()).collect();
+        if extensions != self.extensions {
+            self.extensions = extensions;
+            self.refresh();
+        }
+    }
+
     fn accepts(&self, path: &Path) -> bool {
         if self.extensions.is_empty() {
             return true;

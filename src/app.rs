@@ -54,6 +54,12 @@ const VISUALIZER_HEIGHT: usize = 320;
 const SONG_EXTENSIONS: &[&str] = &["mid", "midi", "wav", "mp3", "ogg", "flac", "m4a", "aac"];
 const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 
+/// The songs listed and added from folders: MIDI files, plus audio files
+/// when that's turned on in Preferences.
+fn listed_song_extensions(config: &Config) -> &'static [&'static str] {
+    if config.show_audio_files { SONG_EXTENSIONS } else { MIDI_EXTENSIONS }
+}
+
 /// "Previous" restarts the current track instead of going back a track
 /// once it's been playing longer than this, the usual player behavior.
 const PREVIOUS_RESTARTS_AFTER_SECS: f64 = 3.0;
@@ -288,7 +294,7 @@ impl App {
         tap: SampleTap,
         sample_rate: u32,
     ) -> Self {
-        let browser = FileBrowser::new("songs", config.browse_start_dir(), SONG_EXTENSIONS);
+        let browser = FileBrowser::new("songs", config.browse_start_dir(), listed_song_extensions(&config));
 
         let scripts_dir = lua_visualizer::scripts_dir().unwrap_or_else(|_| PathBuf::from("."));
         let available_scripts = lua_visualizer::list_scripts(&scripts_dir);
@@ -2298,6 +2304,7 @@ impl App {
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
         let mut warn_heavy = self.config.warn_heavy_midi.unwrap_or(true);
         let mut script_log = self.config.script_log_to_app;
+        let mut audio_files = self.config.show_audio_files;
         let loaded = self.assets.summary();
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
@@ -2320,6 +2327,17 @@ impl App {
             ui.weak(
                 "Looks for a newer release on GitHub and asks before installing anything. \
                  Help > Check for updates does it any time.",
+            );
+
+            ui.add_space(10.0);
+            ui.strong("Songs");
+            ui.checkbox(&mut audio_files, "Show audio files (MP3, WAV, OGG, FLAC, ...)");
+            ui.weak(
+                "synththing is built around MIDI. Audio files play, and visualizers that only use the \
+                 sound (waveform, spectrum) work with them, but there are no notes in them: channel \
+                 muting, per-song soundfonts, and visualizers and games that read the notes don't do \
+                 anything with them. Off: only MIDI files are listed, and adding a folder adds only \
+                 its MIDI files (an audio file dragged in by itself is still added).",
             );
 
             ui.add_space(10.0);
@@ -2394,7 +2412,10 @@ impl App {
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
             || warn_heavy != self.config.warn_heavy_midi.unwrap_or(true)
             || script_log != self.config.script_log_to_app
+            || audio_files != self.config.show_audio_files
         {
+            self.config.show_audio_files = audio_files;
+            self.browser.set_extensions(listed_song_extensions(&self.config));
             self.config.script_log_to_app = script_log;
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
             self.config.check_updates_on_launch = (!check_updates).then_some(false);

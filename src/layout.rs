@@ -79,12 +79,14 @@ enum Column {
 /// Share of the window a side column gets when it's (re)created.
 const SIDE_SHARE: f32 = 0.25;
 
-/// First launch: song browser on the left, playlists on the right, the
-/// two sections needed to start listening. Everything else is a View menu
-/// click away.
+/// First launch: the song browser on the left with the soundfonts below
+/// it, playlists on the right: what's needed to start listening.
+/// Everything else is a View menu click away.
 pub fn default_layout() -> DockState<Section> {
     let mut dock = DockState::new(vec![Section::Songs]);
-    dock.main_surface_mut().split_right(NodeIndex::root(), 0.5, vec![Section::Playlists]);
+    let surface = dock.main_surface_mut();
+    let [left, _] = surface.split_right(NodeIndex::root(), 0.5, vec![Section::Playlists]);
+    surface.split_below(left, 0.7, vec![Section::Soundfonts]);
     dock
 }
 
@@ -99,7 +101,7 @@ pub struct Preset {
 pub const PRESETS: &[Preset] = &[
     Preset {
         name: "Listening",
-        description: "Songs and playlists, to pick music and play it",
+        description: "Songs, soundfonts and playlists, to pick music and play it",
         build: default_layout,
     },
     Preset {
@@ -343,8 +345,8 @@ mod tests {
     }
 
     #[test]
-    fn default_layout_is_songs_and_playlists() {
-        assert_eq!(open(&default_layout()), vec![Section::Songs, Section::Playlists]);
+    fn default_layout_is_songs_soundfonts_and_playlists() {
+        assert_eq!(open(&default_layout()), vec![Section::Songs, Section::Soundfonts, Section::Playlists]);
     }
 
     #[test]
@@ -367,6 +369,7 @@ mod tests {
     fn showing_into_an_empty_layout_works() {
         let mut dock = default_layout();
         hide(&mut dock, Section::Songs);
+        hide(&mut dock, Section::Soundfonts);
         hide(&mut dock, Section::Playlists);
         assert!(open(&dock).is_empty());
         show(&mut dock, Section::Visualizer);
@@ -393,6 +396,7 @@ mod tests {
     fn showing_into_a_reloaded_layout_with_an_empty_main_area_works() {
         let mut dock = default_layout();
         hide(&mut dock, Section::Songs);
+        hide(&mut dock, Section::Soundfonts);
         hide(&mut dock, Section::Playlists);
         let json = serde_json::to_string(&dock).unwrap();
         let mut dock = sanitize(serde_json::from_str(&json).unwrap());

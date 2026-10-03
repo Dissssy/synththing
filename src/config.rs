@@ -63,6 +63,9 @@ pub struct Config {
     /// Preference: ask before playing a very large MIDI file (`None`: yes).
     #[serde(default)]
     pub warn_heavy_midi: Option<bool>,
+    /// Preference: list audio files (MP3, WAV, ...) as songs, not only MIDI.
+    #[serde(default)]
+    pub show_audio_files: bool,
     /// Preference: copy visualizer scripts' log() messages to the app's log.
     #[serde(default)]
     pub script_log_to_app: bool,

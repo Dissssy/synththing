@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
-use super::{is_midi_path, song_info_widgets, App, DraggedSoundfont, PREVIOUS_RESTARTS_AFTER_SECS, SONG_EXTENSIONS};
+use super::{
+    is_midi_path, listed_song_extensions, song_info_widgets, App, DraggedSoundfont, PREVIOUS_RESTARTS_AFTER_SECS,
+    SONG_EXTENSIONS,
+};
 use crate::audio::AudioCommand;
 use crate::config::nice_name;
 use crate::engine::EngineView;
@@ -228,7 +231,9 @@ impl App {
     fn insert_songs(&mut self, list: usize, at: usize, songs: Vec<PathBuf>) {
         let songs: Vec<PathBuf> = songs
             .into_iter()
-            .flat_map(|p| if p.is_dir() { playlist::songs_in_folder(&p, SONG_EXTENSIONS) } else { vec![p] })
+            .flat_map(|p| {
+                if p.is_dir() { playlist::songs_in_folder(&p, listed_song_extensions(&self.config)) } else { vec![p] }
+            })
             .collect();
         if songs.is_empty() {
             self.status = "No songs directly in that folder.".to_string();
@@ -431,7 +436,7 @@ impl App {
             if has_ext(&path, &["sf2", "sf3"]) {
                 self.add_soundfont(path);
             } else if path.is_dir() {
-                songs.extend(playlist::songs_in_folder(&path, SONG_EXTENSIONS));
+                songs.extend(playlist::songs_in_folder(&path, listed_song_extensions(&self.config)));
             } else if has_ext(&path, SONG_EXTENSIONS) {
                 songs.push(path);
             }
@@ -472,7 +477,7 @@ impl App {
                     .on_hover_text("Every song directly in the folder the Songs browser is showing")
                     .clicked()
                 {
-                    let songs = playlist::songs_in_folder(&folder, SONG_EXTENSIONS);
+                    let songs = playlist::songs_in_folder(&folder, listed_song_extensions(&self.config));
                     if songs.is_empty() {
                         self.status = format!("No songs directly in {folder_name}.");
                     } else {
