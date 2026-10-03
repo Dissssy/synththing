@@ -416,6 +416,11 @@ fn tint_color(color: u32, tint: u32) -> u32 {
     channel(24) | channel(16) | channel(8) | channel(0)
 }
 
+/// How long one run of a script's code (its top level when it loads, or
+/// one `render()` call) may take before the watchdog stops it.
+pub const WATCHDOG_LIMIT: Duration = Duration::from_secs(3);
+const WATCHDOG_MESSAGE: &str = "stopped by the watchdog: the script ran for over 3 seconds without finishing (an endless loop, or too much work in one go?). Fix it and save, or press Restart (F5).";
+
 /// Most sprites one script can register: plenty for any real use, and it
 /// turns "registered a sprite inside render() every frame" into an error
 /// instead of memory that grows forever.
@@ -1155,6 +1160,11 @@ struct Compiled {
     /// The source this was compiled from, so `restart` can run the same
     /// script again even after a newer edit failed to compile.
     source: String,
+    /// The watchdog's deadline for the code running now (see `compile`).
+    deadline: Rc<Cell<Option<Instant>>>,
+    /// The watchdog stopped `render()`: it isn't called again until the
+    /// script is changed or restarted, or every frame would freeze too.
+    stopped: Cell<bool>,
     /// What it asked for with `script_options`.
     options: Rc<Cell<ScriptOptions>>,
     lua: Lua,
@@ -1600,15 +1610,25 @@ impl Visualizer for LuaVisualizer {
             ))
         })();
 
+        if compiled.stopped.get() {
+            return; // stopped by the watchdog: the error stays up
+        }
+        compiled.deadline.set(Some(Instant::now() + WATCHDOG_LIMIT));
         let outcome: mlua::Result<()> = match build_tables {
             Ok((left_table, right_table)) => compiled
                 .render
                 .call((width, height, left_table, right_table)),
             Err(e) => Err(e),
         };
+        compiled.deadline.set(None);
 
         self.runtime_error = outcome.err().map(|e| e.to_string());
         if let Some(e) = &self.runtime_error {
+            if e.contains(WATCHDOG_MESSAGE) {
+                compiled.stopped.set(true);
+                compiled.commands.borrow_mut().clear();
+                log::warn!(target: "synththing::script", "{WATCHDOG_MESSAGE}");
+            }
             compiled.log.borrow_mut().push(LogLevel::Error, e.clone());
         }
 
@@ -1654,6 +1674,22 @@ fn compile(
     // touch the filesystem or spawn processes, even one the user just wrote.
     let libs = StdLib::TABLE | StdLib::STRING | StdLib::MATH;
     let lua = Lua::new_with(libs, LuaOptions::new()).map_err(|e| e.to_string())?;
+
+    // The watchdog: script code that runs past its deadline (an endless
+    // loop, or far too much work in one go) is stopped with an error,
+    // checked every few thousand Lua instructions, instead of freezing the
+    // app. The deadline is set around each run of the script's code.
+    let deadline: Rc<Cell<Option<Instant>>> = Rc::default();
+    {
+        let deadline = Rc::clone(&deadline);
+        lua.set_hook(mlua::HookTriggers::new().every_nth_instruction(10_000), move |_, _| {
+            match deadline.get() {
+                Some(at) if Instant::now() > at => Err(mlua::Error::runtime(WATCHDOG_MESSAGE)),
+                _ => Ok(mlua::VmState::Continue),
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    }
 
     let commands: Rc<RefCell<Vec<DrawCommand>>> = Rc::new(RefCell::new(Vec::new()));
     let settings = Rc::new(RefCell::new(SettingsStore {
@@ -1723,10 +1759,10 @@ fn compile(
     register_timing_audio_shapes(&lua, note_list, playback, features, &commands).map_err(|e| e.to_string())?;
     register_live_notes(&lua, notes, playback, note_list, live).map_err(|e| e.to_string())?;
 
-    lua.load(source)
-        .set_name("visualizer")
-        .exec()
-        .map_err(|e| e.to_string())?;
+    deadline.set(Some(Instant::now() + WATCHDOG_LIMIT));
+    let ran = lua.load(source).set_name("visualizer").exec();
+    deadline.set(None);
+    ran.map_err(|e| e.to_string())?;
 
     let render: Function = lua.globals().get("render").map_err(|_| {
         "script must define a `render(width, height, left, right)` function".to_string()
@@ -1738,6 +1774,8 @@ fn compile(
         render,
         commands,
         options,
+        deadline,
+        stopped: Cell::new(false),
         settings,
         log,
         channel_requests,
@@ -4045,6 +4083,30 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         }
         assert_eq!(visualizer.actions().len(), 21);
         assert!(visualizer.actions().iter().all(|a| a.defaults.iter().any(|b| matches!(b, Binding::Pad(_)))));
+    }
+
+    #[test]
+    fn the_watchdog_stops_runaway_scripts() {
+        // An endless loop in render(): stopped, and not run again.
+        let script = "function render() log('frame ' .. FRAME) if FRAME == 2 then while true do end end end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        frame(&mut visualizer, &sample_playback());
+        let started = Instant::now();
+        frame(&mut visualizer, &sample_playback());
+        let took = started.elapsed();
+        assert!(took >= WATCHDOG_LIMIT && took < WATCHDOG_LIMIT + Duration::from_secs(2), "{took:?}");
+        assert!(visualizer.error().unwrap_or_default().contains("watchdog"), "{:?}", visualizer.error());
+        let started = Instant::now();
+        frame(&mut visualizer, &sample_playback());
+        assert!(started.elapsed() < Duration::from_millis(100), "a stopped script isn't run again");
+        assert!(last_log(&visualizer).contains("watchdog"));
+        // Restarting runs it afresh.
+        visualizer.restart();
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "frame 1");
+        // An endless loop at the top level is a compile error, not a hang.
+        visualizer.set_source("while true do end function render() end".into());
+        assert!(visualizer.error().unwrap_or_default().contains("watchdog"), "{:?}", visualizer.error());
     }
 
     #[test]

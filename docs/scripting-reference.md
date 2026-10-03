@@ -604,6 +604,8 @@ The top of the Script Settings tab shows how long `render()` takes (average and 
 
 Watch out for very large MIDI files: some have hundreds of thousands or millions of notes, and `notes_between(0, playback().length)` on one builds a table entry for every one of them, which can take seconds and freeze the app while it does. A script that reads the whole song should spread the work over several frames (a slice of the song per frame) or limit how much it reads. The app marks MIDI files over 100,000 notes with a red ! in the song lists and asks before playing one.
 
+A watchdog keeps a runaway script from freezing the app for good: if one run of the script's code (its top level when it loads, or one `render()` call) goes on for more than 3 seconds, it's stopped with an error saying so, and `render()` isn't called again until the script is changed or restarted (F5). An endless loop ends up there, and so does far too much work in one frame. Time spent inside a single app function (one huge `notes_between`, say) counts, but can only be stopped once it returns.
+
 ## Example calls and results
 
 What the functions that hand back tables or several values actually return, as Lua. Each line is a call, then `-->` and what it gives back (several values separated by commas, as Lua returns them). The values are real ones, from a MIDI song 5 seconds in at 60 fps with a 640 x 360 visualizer (the mouse, scroll and playlist ones are made up, as nothing was moving the mouse); long lists are cut short with `...`. Tables are shown with their fields in a sensible order, but Lua tables have none: read fields by name.
