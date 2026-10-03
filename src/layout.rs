@@ -80,12 +80,13 @@ enum Column {
 const SIDE_SHARE: f32 = 0.25;
 
 /// First launch: the song browser on the left with the soundfonts below
-/// it, playlists on the right: what's needed to start listening.
-/// Everything else is a View menu click away.
+/// it, the visualizer on the right: what's needed to start listening and
+/// watching. Everything else (playlists included) is a View menu click
+/// away.
 pub fn default_layout() -> DockState<Section> {
     let mut dock = DockState::new(vec![Section::Songs]);
     let surface = dock.main_surface_mut();
-    let [left, _] = surface.split_right(NodeIndex::root(), 0.5, vec![Section::Playlists]);
+    let [left, _] = surface.split_right(NodeIndex::root(), 0.4, vec![Section::Visualizer]);
     surface.split_below(left, 0.7, vec![Section::Soundfonts]);
     dock
 }
@@ -101,7 +102,7 @@ pub struct Preset {
 pub const PRESETS: &[Preset] = &[
     Preset {
         name: "Listening",
-        description: "Songs, soundfonts and playlists, to pick music and play it",
+        description: "Songs and soundfonts on the left, the visualizer on the right",
         build: default_layout,
     },
     Preset {
@@ -228,6 +229,13 @@ pub fn hide(dock: &mut DockState<Section>, section: Section) {
     }
 }
 
+/// Bring `section`'s tab to the front of its group, if it's open.
+pub fn focus(dock: &mut DockState<Section>, section: Section) {
+    if let Some(path) = dock.find_tab(&section) {
+        let _ = dock.set_active_tab(path);
+    }
+}
+
 /// Show `section` near its home, if it isn't already open anywhere.
 pub fn show(dock: &mut DockState<Section>, section: Section) {
     if is_open(dock, section) {
@@ -345,8 +353,12 @@ mod tests {
     }
 
     #[test]
-    fn default_layout_is_songs_soundfonts_and_playlists() {
-        assert_eq!(open(&default_layout()), vec![Section::Songs, Section::Soundfonts, Section::Playlists]);
+    fn default_layout_is_songs_soundfonts_and_the_visualizer() {
+        assert_eq!(open(&default_layout()), vec![Section::Songs, Section::Soundfonts, Section::Visualizer]);
+        // Playlists can go in the visualizer's spot, as a tab beside it.
+        let mut dock = default_layout();
+        assert!(tab_alongside(&mut dock, Section::Playlists, Section::Visualizer, true));
+        assert_eq!(dock.find_tab(&Section::Playlists).unwrap().node_path(), dock.find_tab(&Section::Visualizer).unwrap().node_path());
     }
 
     #[test]
@@ -370,7 +382,7 @@ mod tests {
         let mut dock = default_layout();
         hide(&mut dock, Section::Songs);
         hide(&mut dock, Section::Soundfonts);
-        hide(&mut dock, Section::Playlists);
+        hide(&mut dock, Section::Visualizer);
         assert!(open(&dock).is_empty());
         show(&mut dock, Section::Visualizer);
         assert_eq!(open(&dock), vec![Section::Visualizer]);
@@ -397,7 +409,7 @@ mod tests {
         let mut dock = default_layout();
         hide(&mut dock, Section::Songs);
         hide(&mut dock, Section::Soundfonts);
-        hide(&mut dock, Section::Playlists);
+        hide(&mut dock, Section::Visualizer);
         let json = serde_json::to_string(&dock).unwrap();
         let mut dock = sanitize(serde_json::from_str(&json).unwrap());
         show(&mut dock, Section::Visualizer);

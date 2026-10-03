@@ -13,6 +13,7 @@ mod loading;
 mod playlist_panel;
 mod recording;
 mod sprite_editor;
+mod tour;
 mod welcome;
 
 use std::path::{Path, PathBuf};
@@ -213,6 +214,8 @@ pub struct App {
     changelog: Option<Option<changelog::Version>>,
     /// The welcome window and the starter pack download.
     welcome: welcome::Welcome,
+    /// The guided tour (Help > Tour).
+    tour: tour::Tour,
     /// Help > Credits & licenses.
     credits_open: bool,
     contributors: Contributors,
@@ -379,6 +382,7 @@ impl App {
             binding_capture: None,
             changelog: None,
             welcome: welcome::Welcome::default(),
+            tour: tour::Tour::default(),
             credits_open: false,
             contributors: Contributors::default(),
             credits_search: String::new(),
@@ -1179,6 +1183,9 @@ impl App {
                 if ui.button("Welcome...").on_hover_text("The welcome window, and the starter pack").clicked() {
                     self.open_welcome();
                 }
+                if ui.button("Tour").on_hover_text("A walk through the app, one thing at a time").clicked() {
+                    self.start_tour();
+                }
                 if ui.button("Check for updates...").clicked() {
                     self.launch_update_check = false;
                     self.updates_open = true;
@@ -1839,14 +1846,15 @@ impl App {
         mut notes: NotesSnapshot,
         playback: EngineView,
     ) {
-        self.script_picker_ui(ui);
+        let picker = ui.scope(|ui| self.script_picker_ui(ui)).response.rect;
+        self.tour.mark(tour::Target::ScriptPicker, picker);
 
         ui.horizontal(|ui| {
-            if ui
+            let fullscreen = ui
                 .button("Fullscreen visualizer")
-                .on_hover_text("Just the visualizer, filling the screen, with mouse and keyboard going to the script. F11 toggles it, Esc exits.")
-                .clicked()
-            {
+                .on_hover_text("Just the visualizer, filling the screen, with mouse and keyboard going to the script. F11 toggles it, Esc exits.");
+            self.tour.mark(tour::Target::Fullscreen, fullscreen.rect);
+            if fullscreen.clicked() {
                 let ctx = ui.ctx().clone();
                 self.enter_dedicated(&ctx);
             }
@@ -1858,7 +1866,8 @@ impl App {
 
         self.script_error_ui(ui, true);
 
-        self.channels_ui(ui, &mut notes);
+        let channels = ui.scope(|ui| self.channels_ui(ui, &mut notes)).response.rect;
+        self.tour.mark(tour::Target::Channels, channels);
 
         let mode = if self.fullscreen { DisplayMode::Fullscreen } else { DisplayMode::Window };
         self.show_visualizer(ui, &notes, &playback, mode);
@@ -2931,6 +2940,7 @@ impl eframe::App for App {
 
         self.browser.clear_hovered();
         self.hovered_playlist_entry = None;
+        self.tour.begin_frame();
 
         if self.dedicated.is_some() {
             self.dedicated_ui(ui, &shared);
@@ -2938,6 +2948,7 @@ impl eframe::App for App {
             egui::Panel::top("top_bar").show(ui, |ui| self.top_bar_ui(ui));
             egui::Panel::bottom("controls_panel").show(ui, |ui| {
                 self.controls_bar_ui(ui, view);
+                self.tour.mark(tour::Target::Controls, ui.min_rect());
             });
             self.dock_ui(ui, &shared);
             self.autosave_layout(&ctx);
@@ -2967,6 +2978,7 @@ impl eframe::App for App {
         self.keep_loaded(&ctx);
         self.poll_starter(&ctx);
         self.script_busy_ui(&ctx);
+        self.tour_ui(&ctx, &shared);
 
         drag_ghost_ui(&ctx);
 
@@ -3028,6 +3040,7 @@ impl TabViewer for SectionTabs<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Section) {
         let app = &mut *self.app;
+        app.tour.mark(tour::Target::Tab(*tab), ui.max_rect());
         match tab {
             Section::Songs => app.songs_ui(ui),
             Section::Soundfonts => app.soundfont_ui(ui),

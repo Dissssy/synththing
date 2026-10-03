@@ -49,6 +49,7 @@ impl App {
         }
         let state = self.welcome.downloader.state();
         let mut start = false;
+        let mut tour = false;
         let response = egui::Modal::new(egui::Id::new("welcome")).show(ctx, |ui| {
             ui.set_width(470.0);
             ui.heading("Welcome to synththing");
@@ -82,17 +83,23 @@ impl App {
             if let Some(error) = &state.error {
                 ui.colored_label(egui::Color32::from_rgb(220, 90, 90), format!("The last download failed: {error}"));
             }
-            ui.add_space(10.0);
+            ui.add_space(8.0);
+            ui.label("New here? The tour shows you around: playing songs, soundfonts, visualizers, playlists.");
+            ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                let label = if self.welcome.get_pack && !state.running { "Get started" } else { "Close" };
+                tour = ui.button("Take the tour").clicked();
+                let label = if self.welcome.get_pack && !state.running { "Just get started" } else { "Close" };
                 start = ui.button(label).clicked();
             });
         });
-        if start {
+        if start || tour {
             if self.welcome.get_pack && !state.running {
                 self.install_starter();
             }
             self.welcome.open = false;
+            if tour {
+                self.start_tour();
+            }
         } else if response.should_close() {
             self.welcome.open = false;
         }
@@ -124,7 +131,10 @@ impl App {
             if !self.config.soundfonts.iter().any(|p| same_file(p, &path)) {
                 self.add_soundfont(path.clone());
             }
+            // Not while one is still loading: the first one (GeneralUser
+            // GS) is the default, even when the next arrives right after.
             if self.active_sf.is_none()
+                && self.pending_soundfont.is_none()
                 && let Some(idx) = self.config.soundfonts.iter().position(|p| same_file(p, &path))
             {
                 self.activate_soundfont(idx);
