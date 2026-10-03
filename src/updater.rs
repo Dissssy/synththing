@@ -21,8 +21,14 @@ use sha2::{Digest, Sha256};
 
 /// `owner/name` of the GitHub repository releases come from.
 pub const REPO: &str = "Dissssy/synththing";
-/// The release asset holding the Windows exe (named by the release workflow).
+/// The release asset for this platform (named by the release workflow).
+#[cfg(windows)]
 pub const ASSET_NAME: &str = "synththing-windows-x86_64.exe";
+/// Releases don't carry a Linux build yet (see docs/LINUX.md); until one
+/// does, no release has this, so a Linux build finds nothing to install
+/// rather than swapping itself for the Windows exe.
+#[cfg(not(windows))]
+pub const ASSET_NAME: &str = "synththing-linux-x86_64";
 
 pub fn current_version() -> Version {
     Version::parse(env!("CARGO_PKG_VERSION")).expect("Cargo.toml version is valid semver")
