@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### New
+- highway.lua: the track menu plays the song (scroll to seek, Space to pause) and SOLO (I) plays only the selected track, so you can tell which is which. GUITAR mode (G) plays it like Guitar Hero: five frets held and a strum (Up/Down, or a guitar controller's strum bar), with HOPOs and taps that can be fretted without strumming.
+
 ## 0.3.3 (2026-10-03)
 
 ### New

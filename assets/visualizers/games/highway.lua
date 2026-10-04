@@ -14,6 +14,14 @@
 -- become sustains. Drums go by kit piece instead (kick, snare, hats, toms, crashes).
 -- PLAY ALL (songs with 2+ channels) hands the part around the band bar by bar; see medley_for.
 -- Optionally (mute_on_miss_experimental setting), missing a note mutes the track until you hit again.
+--
+-- GUITAR mode (the button, or G) plays it like Guitar Hero: five frets, held, and a strum
+-- (Up/Down, or a guitar controller's strum bar). Strum while holding a note's frets (lower
+-- frets may stay held under a single note); a chord needs exactly its frets. HOPOs (white
+-- centres: a single note close after a different one) can be hit by fretting alone while
+-- the combo's going, taps (dark centres: fast runs) by fretting alone any time. Strumming
+-- with nothing to hit breaks the combo, like a ghost tap. Guitar controllers show up as
+-- gamepads: frets on A, B, Y, X and LB (green to orange), strum on the d-pad.
 
 script_options({ start_paused = true })
 
@@ -24,7 +32,10 @@ local LANE_COLORS = {
     { r = 60,  g = 140, b = 255 },
     { r = 255, g = 140, b = 30 },
 }
-local LANE_KEYS = { { "d", "1" }, { "f", "2" }, { "j", "3" }, { "k", "4" }, { "l", "5" } }
+-- keys, plus a guitar controller's frets (green, red, yellow, blue, orange)
+local LANE_KEYS = {
+    { "d", "1", "pad_a" }, { "f", "2", "pad_b" }, { "j", "3", "pad_y" }, { "k", "4", "pad_x" }, { "l", "5", "pad_lb" },
+}
 local LANE_INPUT = {}
 for i = 1, 5 do
     LANE_INPUT[i] = input_register("lane " .. i, LANE_KEYS[i])
@@ -38,6 +49,8 @@ local HARDER = input_register("harder", { "up" })
 local EASIER = input_register("easier", { "down" })
 local SPEED = input_register("practice speed", { "s" })
 local SOLO = input_register("solo track", { "i" })
+local GUITAR = input_register("guitar mode", { "g" })
+local STRUM = input_register("strum", { "up", "down", "pad_dpad_up", "pad_dpad_down" })
 local NEXT_SONG = input_register("next song", { "n" })
 local PREV_SONG = input_register("previous song", { "b" })
 
@@ -64,6 +77,8 @@ local charts = {}    -- cache, "ch:diff:lanes" -> chart
 local sel_track, sel_diff = 1, 2
 local preview_t = 0
 local solo = false      -- hear only the selected track, in the menu
+local guitar = store_get("guitar") == true -- Guitar Hero mode: frets held, strummed
+local fret_hit_at = -1  -- when frets alone last hit a HOPO or tap (a strum right after is forgiven)
 local solo_muted = {}   -- the channels solo muted, to unmute
 local seek_to, last_seek = nil, -1 -- a scroll seek waiting, and when the last one went
 local game_time = 0
@@ -404,6 +419,56 @@ local function drum_lane(key, lanes)
     return math.min(cat, lanes) - 1
 end
 
+-- For GUITAR mode: which gems strum ("strum"), which are HOPOs (a single note within a
+-- third of a beat of the previous chord, on a lane that wasn't in it) and which are taps
+-- (HOPOs in a fast run: four or more single notes each within a quarter beat of the last).
+-- Every gem of a chord gets the chord's start index as `group`.
+local function beats_at(t)
+    return beat(t) or t * 2 -- (no tempo map: as if 120 bpm)
+end
+
+local function mark_kinds(gems)
+    local groups = {}
+    local i = 1
+    while i <= #gems do
+        local grp = { first = i, t = gems[i].t, lanes = {} }
+        while gems[i] and gems[i].t == grp.t do
+            gems[i].group = grp.first
+            grp.lanes[gems[i].lane] = true
+            grp.size = (grp.size or 0) + 1
+            i = i + 1
+        end
+        grp.last = i - 1
+        groups[#groups + 1] = grp
+    end
+    for gi, grp in ipairs(groups) do
+        local prev = groups[gi - 1]
+        local kind = "strum"
+        if prev and grp.size == 1 and not prev.lanes[gems[grp.first].lane]
+                and beats_at(grp.t) - beats_at(prev.t) <= 1 / 3 + 0.01 then
+            kind = "hopo"
+        end
+        grp.kind = kind
+        grp.gap = prev and beats_at(grp.t) - beats_at(prev.t) or math.huge
+    end
+    -- taps: runs of fast single notes
+    local run_start = nil
+    for gi = 1, #groups + 1 do
+        local grp = groups[gi]
+        local fast = grp and grp.size == 1 and grp.gap <= 0.25 + 0.01
+        if fast and not run_start then run_start = gi end
+        if not fast and run_start then
+            if gi - run_start >= 3 then -- the note before the run, plus 3+ fast ones
+                for k = run_start, gi - 1 do groups[k].kind = "tap" end
+            end
+            run_start = nil
+        end
+    end
+    for _, grp in ipairs(groups) do
+        for k = grp.first, grp.last do gems[k].kind = grp.kind end
+    end
+end
+
 local function build_chart(track, diff, lanes)
     local d = DIFFS[diff]
     local notes = track.medley and medley_for(track, diff).notes or track.notes
@@ -513,7 +578,14 @@ local function build_chart(track, diff, lanes)
             gems[#gems + 1] = { t = g.t, lane = l, tail = tail, ch = g.ch }
         end
     end
+    mark_kinds(gems)
     return { gems = gems, lanes = lanes, ch = track.ch }
+end
+
+-- The lanes in use: always five in GUITAR mode.
+local function lane_count()
+    local chosen = setting_int("lanes", 4, 3, 5) -- (read either way, so it stays in Script Settings)
+    return guitar and 5 or chosen
 end
 
 local function get_chart(track, diff, lanes)
@@ -525,6 +597,7 @@ end
 local function best_key(ch, diff, speed)
     local key = "best:" .. tostring(song_key) .. ":" .. ch .. ":" .. diff
     if speed ~= 1 then key = key .. ":" .. math.floor(speed * 100) end -- practice runs keep their own
+    if guitar then key = key .. ":guitar" end
     return key
 end
 
@@ -560,7 +633,8 @@ local function start_game()
     local tr = tracks[sel_track]
     if not tr then return end
     play_track = tr
-    chart = get_chart(tr, sel_diff, setting_int("lanes", 4, 3, 5))
+    chart = get_chart(tr, sel_diff, lane_count())
+    fret_hit_at = -1
     for _, g in ipairs(chart.gems) do
         g.state, g.holding = nil, false
     end
@@ -961,12 +1035,78 @@ local function miss(g, mute)
     if mute then set_muted(g.ch) end
 end
 
+-- Whether the frets held (`held[lane]`) play the chord starting at gem `first`: exactly its
+-- frets for a chord; for a single note its fret, and none above it (lower ones may be held).
+local function frets_match(gems, first, held)
+    local lanes, top = {}, -1
+    local k = first
+    while gems[k] and gems[k].group == first do
+        lanes[gems[k].lane] = true
+        top = math.max(top, gems[k].lane)
+        k = k + 1
+    end
+    local single = k - first == 1
+    for lane = 0, chart.lanes - 1 do
+        if lanes[lane] and not held[lane] then return false end
+        if held[lane] and not lanes[lane] and (not single or lane > top) then return false end
+    end
+    return true
+end
+
+-- GUITAR mode: frets are held, notes are strummed (HOPOs and taps can be fretted).
+local function update_guitar(p, gems, nowj, win, pspeed, L, ghost_penalty)
+    local held, changed = {}, false
+    for lane = 0, chart.lanes - 1 do
+        held[lane] = input_down(LANE_INPUT[lane + 1])
+        local st = input(LANE_INPUT[lane + 1])
+        if st == "pressed" or st == "released" then changed = true end
+    end
+    local strum = input(STRUM) == "pressed"
+    if p.paused then return end
+    -- the next chord still to play, in the window
+    local first = nil
+    for i = first_live, #gems do
+        local g = gems[i]
+        if g.t > nowj + win then break end
+        if not g.state and math.abs(g.t - nowj) <= win then
+            first = g.group or i
+            break
+        end
+    end
+    local function play(start)
+        local k = start
+        while gems[k] and gems[k].group == start do
+            if not gems[k].state then hit(gems[k], nowj, pspeed, L) end
+            k = k + 1
+        end
+    end
+    if first then
+        local kind = gems[first].kind
+        local fretted = changed and (kind == "tap" or (kind == "hopo" and stats.combo > 0))
+        if fretted and frets_match(gems, first, held) then
+            play(first)
+            fret_hit_at = game_time
+            return
+        end
+        if strum then
+            if frets_match(gems, first, held) then
+                play(first)
+            elseif ghost_penalty then
+                stats.combo = 0 -- strummed the wrong frets
+            end
+        end
+    elseif strum and ghost_penalty and game_time - fret_hit_at > 0.12 * pspeed then
+        stats.combo = 0 -- strummed nothing
+    end
+end
+
 local function update_play(p, pspeed, L, offset, mute_on_miss, ghost_penalty)
     local gems = chart.gems
     local nowj = game_time - offset * pspeed
     local win = WIN_GOOD * pspeed
 
-    for lane = 0, chart.lanes - 1 do
+    if guitar then update_guitar(p, gems, nowj, win, pspeed, L, ghost_penalty) end
+    for lane = 0, guitar and -1 or chart.lanes - 1 do
         local st = input(LANE_INPUT[lane + 1])
         if st == "pressed" and not p.paused then
             local target = nil
@@ -1098,6 +1238,12 @@ local function draw_game(p, L, look, th, width, height)
         if g.state ~= "hit" and z >= L.zb and z <= 1 then
             local missed = g.state == "miss"
             draw_gem(L, g.lane, z, missed and { r = 85, g = 85, b = 95 } or c, missed and 0.6 or 1, i * 2.3)
+            if guitar and not missed and (g.kind == "hopo" or g.kind == "tap") then
+                local cut = CUTS[g.lane + 1]
+                local px, py = project_cut(L, cut, g.lane, z, 0.55)
+                poly(px, py, cut.table, g.kind == "hopo" and { r = 255, g = 255, b = 255, a = 0.9 }
+                    or { r = 15, g = 15, b = 25, a = 0.9 })
+            end
         end
     end
 
@@ -1224,11 +1370,11 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
     centered(info, width / 2, height - th * 4.8, white, th)
 
     -- difficulty buttons and play
-    local bw, bh = th * 6, th * 1.5
-    local total = bw * 7 + 8 * 6
+    local bw, bh = math.min(th * 6, (width - 32 - 8 * 7) / 8), th * 1.5
+    local total = bw * 8 + 8 * 7
     local bx = (width - total) / 2
     local by = height - th * 3.2
-    for i = 1, 7 do
+    for i = 1, 8 do
         local x = bx + (i - 1) * (bw + 8)
         local over = mx and mx >= x and mx < x + bw and my >= by and my < by + bh
         local label, bg
@@ -1241,6 +1387,9 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
         elseif i == 6 then
             label = "SOLO"
             bg = solo and { r = 110, g = 50, b = 110 } or { r = 30, g = 30, b = 44 }
+        elseif i == 7 then
+            label = "GUITAR"
+            bg = guitar and { r = 120, g = 60, b = 20 } or { r = 30, g = 30, b = 44 }
         else
             label = "PLAY"
             bg = { r = 40, g = 120, b = 60 }
@@ -1256,6 +1405,9 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
             elseif i == 6 then
                 solo = not solo
                 apply_solo()
+            elseif i == 7 then
+                guitar = not guitar
+                store_set("guitar", guitar)
             else
                 start_game()
             end
@@ -1264,8 +1416,8 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
 
     local list = playlist()
     local songs = (list and #list.entries > 1) and "   N/B song" or ""
-    local hint = has_focus() and ("LEFT/RIGHT track   UP/DOWN difficulty   S speed   I solo   SCROLL seek   SPACE pause"
-        .. songs .. "   ENTER to start")
+    local hint = has_focus() and ("LEFT/RIGHT track   UP/DOWN difficulty   S speed   I solo   G guitar   SCROLL seek"
+        .. "   SPACE pause" .. songs .. "   ENTER to start")
         or "click here first so the keys reach the game"
     if list and list.current then
         local where = string.format("%s  %d/%d", list.name, list.current, #list.entries)
@@ -1306,7 +1458,7 @@ end
 -- main ----------------------------------------------------------------------
 
 function render(width, height, left, right)
-    local lanes = setting_int("lanes", 4, 3, 5)
+    local lanes = lane_count()
     local hw_secs = setting_float("highway_seconds", 1.6, 0.6, 4)
     local offset_ms = setting_int("input_offset_ms", 0, -250, 250)
     -- off by default for now: toggling a channel causes a jump in playback
@@ -1373,6 +1525,10 @@ function render(width, height, left, right)
             if input(EASIER) == "pressed" then sel_diff = math.max(1, sel_diff - 1) end
             if input(SPEED) == "pressed" then speed_idx = speed_idx % #SPEEDS + 1 end
             if input(SOLO) == "pressed" then solo = not solo end
+            if input(GUITAR) == "pressed" then
+                guitar = not guitar
+                store_set("guitar", guitar)
+            end
             if picked ~= sel_track or input(SOLO) == "pressed" then apply_solo() end
             if input(PAUSE) == "pressed" then set_paused(not p.paused) end
             -- The preview is the song itself: scrolling seeks (a few times a second at most,
