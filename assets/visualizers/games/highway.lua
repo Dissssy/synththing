@@ -1,9 +1,11 @@
 -- highway.lua: a Guitar Hero style game charted on the fly from any track of the song.
 --
 -- Songs load paused while this runs. Every track is previewed side by side, charted the
--- way you'd play it; pick one, a difficulty and a practice speed, then press Enter, click
--- PLAY, or just hit play in the app. The song waits until the first notes have had time
--- to scroll all the way down the highway. N and B change song within the playlist.
+-- way you'd play it, while the song plays from just before the selected track comes in:
+-- scroll to move through it, Space to pause it, and SOLO (I) to hear only the selected
+-- track, to tell which is which. Pick one, a difficulty and a practice speed, then press
+-- Enter or click PLAY. The game starts from the top, waiting until the first notes have
+-- had time to scroll all the way down the highway. N and B change song within the playlist.
 --
 -- Charting: notes that start together become chords. A note's lane comes from its pitch
 -- relative to the notes around it (a few seconds either side), then the melodic contour is
@@ -35,6 +37,7 @@ local NEXT = input_register("next track", { "right" })
 local HARDER = input_register("harder", { "up" })
 local EASIER = input_register("easier", { "down" })
 local SPEED = input_register("practice speed", { "s" })
+local SOLO = input_register("solo track", { "i" })
 local NEXT_SONG = input_register("next song", { "n" })
 local PREV_SONG = input_register("previous song", { "b" })
 
@@ -59,8 +62,10 @@ local borrowed = nil -- the user's speed and loop mode, while a game has changed
 local tracks = {}    -- { ch, notes, nps }
 local charts = {}    -- cache, "ch:diff:lanes" -> chart
 local sel_track, sel_diff = 1, 2
-local menu_seen_paused = false
 local preview_t = 0
+local solo = false      -- hear only the selected track, in the menu
+local solo_muted = {}   -- the channels solo muted, to unmute
+local seek_to, last_seek = nil, -1 -- a scroll seek waiting, and when the last one went
 local game_time = 0
 local chart, play_track = nil, nil
 local first_live = 1
@@ -111,6 +116,24 @@ local function set_muted(ch)
     if ch then set_channel_enabled(ch, false) end
     muted_ch = ch
     store_set("muted", ch) -- remembered so a restart mid-miss can unmute it
+end
+
+-- Solo, in the menu: every other track muted, so the selected one can be told apart.
+-- Called whenever what should be muted might have changed. PLAY ALL has no one channel.
+local function apply_solo()
+    local t = tracks[sel_track]
+    local keep = solo and state == "menu" and t and not t.medley and t.ch
+    for _, ch in ipairs(solo_muted) do set_channel_enabled(ch, true) end
+    solo_muted = {}
+    if keep then
+        for _, other in ipairs(tracks) do
+            if other.ch and other.ch ~= keep and not other.medley then
+                set_channel_enabled(other.ch, false)
+                table.insert(solo_muted, other.ch)
+            end
+        end
+    end
+    store_set("solo_muted", #solo_muted > 0 and solo_muted or nil) -- undone after a restart
 end
 
 -- A game sets its own speed and turns looping off (so the song ends on the results screen
@@ -507,19 +530,26 @@ end
 
 -- state changes -------------------------------------------------------------
 
--- rewind: false right after a song loads, since it's already paused at the start
-local function enter_menu(rewind)
+-- Where the menu's preview plays from: just before the selected track comes in.
+local function preview_start()
+    local t = tracks[sel_track]
+    local notes = t and (t.medley and medley_for(t, sel_diff).notes or t.notes)
+    return notes and notes[1] and math.max(0, notes[1].start - 1) or 0
+end
+
+-- The menu: the song plays as a preview, from just before the selected track.
+local function enter_menu()
     set_muted(nil)
     give_back_playback()
-    if rewind and #tracks > 0 then
-        set_paused(true)
-        seek(0)
-    end
     state = "menu"
-    menu_seen_paused = false
     chart = nil
-    local t = tracks[sel_track]
-    preview_t = t and t.notes[1].start - 0.5 or 0
+    seek_to = nil
+    preview_t = preview_start()
+    if #tracks > 0 then
+        seek(preview_t)
+        set_paused(false)
+    end
+    apply_solo()
 end
 
 local hype, acc_ema = 0.35, 0.8 -- how into it the crowd is, and a running hit rate
@@ -537,6 +567,8 @@ local function start_game()
     stats = { score = 0, combo = 0, max_combo = 0, perfect = 0, good = 0, miss = 0 }
     acc_ema = 0.8
     first_live, holding, particles, popup = 1, {}, {}, nil
+    state = "preroll"
+    apply_solo() -- (out of the menu: everything unmuted)
     set_muted(nil)
     borrow_playback(pspeed)
     local p = playback()
@@ -545,7 +577,6 @@ local function start_game()
     -- start the clock early enough for the first note to travel the whole highway
     local first = chart.gems[1] and chart.gems[1].t or 0
     game_time = math.min(-pspeed, first - look - 0.5 * pspeed)
-    state = "preroll"
 end
 
 local function finish()
@@ -1137,7 +1168,10 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
         local sx = x0 + (i - 1) * sw
         local sel = i == sel_track
         local over = mx and mx >= sx and mx < sx + sw and my >= ytop and my <= ybot
-        if clicked and over then sel_track = i end
+        if clicked and over and sel_track ~= i then
+            sel_track = i
+            apply_solo()
+        end
         rect(sx + 2, ytop, sx + sw - 2, ybot,
             sel and { r = 35, g = 35, b = 55 } or (over and { r = 26, g = 26, b = 38 } or { r = 18, g = 18, b = 26 }))
         if sel then
@@ -1191,10 +1225,10 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
 
     -- difficulty buttons and play
     local bw, bh = th * 6, th * 1.5
-    local total = bw * 6 + 8 * 5
+    local total = bw * 7 + 8 * 6
     local bx = (width - total) / 2
     local by = height - th * 3.2
-    for i = 1, 6 do
+    for i = 1, 7 do
         local x = bx + (i - 1) * (bw + 8)
         local over = mx and mx >= x and mx < x + bw and my >= by and my < by + bh
         local label, bg
@@ -1204,6 +1238,9 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
         elseif i == 5 then
             label = "SPEED " .. math.floor(SPEEDS[speed_idx] * 100) .. "%"
             bg = speed_idx > 1 and { r = 30, g = 60, b = 100 } or { r = 30, g = 30, b = 44 }
+        elseif i == 6 then
+            label = "SOLO"
+            bg = solo and { r = 110, g = 50, b = 110 } or { r = 30, g = 30, b = 44 }
         else
             label = "PLAY"
             bg = { r = 40, g = 120, b = 60 }
@@ -1216,6 +1253,9 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
                 sel_diff = i
             elseif i == 5 then
                 speed_idx = speed_idx % #SPEEDS + 1
+            elseif i == 6 then
+                solo = not solo
+                apply_solo()
             else
                 start_game()
             end
@@ -1224,7 +1264,8 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
 
     local list = playlist()
     local songs = (list and #list.entries > 1) and "   N/B song" or ""
-    local hint = has_focus() and ("LEFT/RIGHT track   UP/DOWN difficulty   S speed" .. songs .. "   ENTER to start")
+    local hint = has_focus() and ("LEFT/RIGHT track   UP/DOWN difficulty   S speed   I solo   SCROLL seek   SPACE pause"
+        .. songs .. "   ENTER to start")
         or "click here first so the keys reach the game"
     if list and list.current then
         local where = string.format("%s  %d/%d", list.name, list.current, #list.entries)
@@ -1285,18 +1326,22 @@ function render(width, height, left, right)
             set_channel_enabled(m, true)
             store_set("muted", nil)
         end
+        for _, ch in ipairs(store_get("solo_muted") or {}) do set_channel_enabled(ch, true) end
+        store_set("solo_muted", nil)
         borrowed = store_get("borrowed")
     end
     if state == "init" or p.song_loads ~= last_loads then
-        -- a song was loaded (the same one again counts): it's paused at the start, so just
-        -- show the menu, rewinding only if the script was started on a song already going
+        -- a song was loaded (the same one again counts): back to the menu, its preview
+        -- playing from the selected track (solo cleared: the channels are new ones)
         local first = state == "init"
         last_loads = p.song_loads
         if p.song_id ~= song_key or first then
             song_key = p.song_id
+            state = "init"
+            apply_solo()
             analyze(p)
         end
-        enter_menu(first)
+        enter_menu()
     end
 
     local focus = has_focus()
@@ -1320,33 +1365,46 @@ function render(width, height, left, right)
     end
 
     if state == "menu" then
-        if p.paused then menu_seen_paused = true end
         if #tracks > 0 then
+            local picked = sel_track
             if input(PREV) == "pressed" then sel_track = (sel_track - 2) % #tracks + 1 end
             if input(NEXT) == "pressed" then sel_track = sel_track % #tracks + 1 end
             if input(HARDER) == "pressed" then sel_diff = math.min(4, sel_diff + 1) end
             if input(EASIER) == "pressed" then sel_diff = math.max(1, sel_diff - 1) end
             if input(SPEED) == "pressed" then speed_idx = speed_idx % #SPEEDS + 1 end
+            if input(SOLO) == "pressed" then solo = not solo end
+            if picked ~= sel_track or input(SOLO) == "pressed" then apply_solo() end
+            if input(PAUSE) == "pressed" then set_paused(not p.paused) end
+            -- The preview is the song itself: scrolling seeks (a few times a second at most,
+            -- the strips following at once), and the end goes round to the track again.
             local _, sy = scroll()
-            preview_t = preview_t + DT - sy * 0.02
-            if p.length and preview_t > p.length then preview_t = tracks[sel_track].notes[1].start - 0.5 end
-            preview_t = math.max(-1, preview_t)
+            if sy ~= 0 then
+                seek_to = math.max(0, math.min((seek_to or p.position) - sy * 0.02, (p.length or 0) - 0.1))
+            end
+            if seek_to and TIME - last_seek > 0.08 then
+                seek(seek_to)
+                last_seek, seek_to = TIME, nil
+            end
+            if p.finished then
+                seek(preview_start())
+                set_paused(false)
+            end
+            preview_t = seek_to or p.position
             draw_menu(width, height, th, lanes, pspeed, look)
-            if state == "menu" and (input(START) == "pressed" or input(PAUSE) == "pressed"
-                    or (menu_seen_paused and not p.paused)) then
-                start_game() -- pressing play in the app starts too
+            if state == "menu" and input(START) == "pressed" then
+                start_game()
             end
         else
             draw_menu(width, height, th, lanes, pspeed, look)
         end
     elseif state == "results" then
         draw_results(width, height, th)
-        if input(START) == "pressed" or mouse_pressed("left") then enter_menu(true) end
+        if input(START) == "pressed" or mouse_pressed("left") then enter_menu() end
     else
         local L = game_layout(width, height, chart.lanes)
 
         if input(BACK) == "pressed" then
-            enter_menu(true)
+            enter_menu()
             return
         end
 
