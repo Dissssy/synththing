@@ -10,7 +10,7 @@
 --   l              toggle cursor locking (only does anything in the
 --                  dedicated fullscreen: "Fullscreen visualizer")
 --
--- The keys are defaults: rebind them under Controls in Script Settings.
+-- The keys are defaults: rebind them with the Controls button.
 -- Keys only arrive while the visualizer has focus: click into it first
 -- (the border turns green). Escape always gets you out, scripts never see it.
 
@@ -44,7 +44,7 @@ local function stamp(cx, cy, value)
 end
 
 -- Keyboard controls are actions: registered once with default keys, and
--- rebindable by the user under Controls in Script Settings.
+-- rebindable by the user with the Controls button.
 local HIDE = input_register("toggle cursor", "h")
 local LOCK = input_register("toggle cursor lock", "l")
 local CLEAR = input_register("clear", "c")

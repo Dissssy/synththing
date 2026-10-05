@@ -21,7 +21,7 @@
 -- span a note at a time and Up/Down change the key (C major, C# major, ...). Notes hold for as long
 -- as the key does (note_on/note_off) and sound like the song's own
 -- instrument on the "play_channel" setting's channel (0: the song's
--- first). Every key can be rebound under Controls in Script Settings.
+-- first). Every key can be rebound with the Controls button.
 
 local FIRST_KEY = 21   -- A0
 local LAST_KEY = 108   -- C8

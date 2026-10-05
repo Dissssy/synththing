@@ -3,7 +3,7 @@
 //! again from the View menu.
 //!
 //! Every section has a home column, songs/soundfonts on the left, the
-//! visualizer, script editor, script settings and scripting reference in the
+//! visualizer, script editor, scripting reference and sprite editor in the
 //! middle, playlists on the right. The
 //! user can drag tabs anywhere afterwards; homes only decide where a section
 //! *reappears*, and only relative to whatever is open at the time, so
@@ -19,19 +19,22 @@ pub enum Section {
     Playlists,
     Visualizer,
     Editor,
+    /// The old Script Settings tab, now the Settings, Controls and Debug
+    /// windows. Only here so layouts saved with it still load; `sanitize`
+    /// drops it.
     Settings,
     Reference,
     Sprites,
 }
 
 impl Section {
-    pub const ALL: [Section; 8] = [
+    /// Every section there is (not the removed `Settings`).
+    pub const ALL: [Section; 7] = [
         Self::Songs,
         Self::Soundfonts,
         Self::Playlists,
         Self::Visualizer,
         Self::Editor,
-        Self::Settings,
         Self::Reference,
         Self::Sprites,
     ];
@@ -112,7 +115,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Script writing",
-        description: "The script editor with the reference beside it, the visualizer and script settings on the right",
+        description: "The script editor with the reference beside it, the visualizer on the right",
         build: script_writing_layout,
     },
     Preset {
@@ -140,9 +143,7 @@ fn watching_layout() -> DockState<Section> {
 
 fn script_writing_layout() -> DockState<Section> {
     let mut dock = DockState::new(vec![Section::Editor, Section::Reference]);
-    let surface = dock.main_surface_mut();
-    let [_, right] = surface.split_right(NodeIndex::root(), 0.58, vec![Section::Visualizer]);
-    surface.split_below(right, 0.55, vec![Section::Settings]);
+    dock.main_surface_mut().split_right(NodeIndex::root(), 0.58, vec![Section::Visualizer]);
     dock
 }
 
@@ -193,11 +194,12 @@ pub fn fullscreen_default() -> DockState<Section> {
 }
 
 /// A layout loaded from the config, cleaned up: a section appearing more
-/// than once (hand-edited config, say) keeps only its first copy.
+/// than once (hand-edited config, say) keeps only its first copy, and the
+/// removed Script Settings tab goes.
 pub fn sanitize(mut dock: DockState<Section>) -> DockState<Section> {
     let mut seen = Vec::new();
     dock.retain_tabs(|tab| {
-        if seen.contains(tab) {
+        if seen.contains(tab) || *tab == Section::Settings {
             false
         } else {
             seen.push(*tab);
@@ -251,16 +253,6 @@ pub fn show(dock: &mut DockState<Section>, section: Section) {
     let tree = dock.main_surface_mut();
     if tree.num_tabs() == 0 {
         *tree = Tree::new(vec![section]);
-        return;
-    }
-
-    // Settings below whatever it's tweaking, the visualizer, so changes are
-    // visible as they're made, else below the editor.
-    if section == Section::Settings
-        && let Some((node, _)) =
-            tree.find_tab(&Section::Visualizer).or_else(|| tree.find_tab(&Section::Editor))
-    {
-        tree.split_below(node, 0.65, vec![section]);
         return;
     }
 
@@ -441,7 +433,7 @@ mod tests {
                 assert!(is_open(&dock, section));
             }
         }
-        assert_eq!(open(&(PRESETS[2].build)()), [Section::Visualizer, Section::Editor, Section::Settings, Section::Reference]);
+        assert_eq!(open(&(PRESETS[2].build)()), [Section::Visualizer, Section::Editor, Section::Reference]);
     }
 
     #[test]
@@ -455,7 +447,7 @@ mod tests {
         }
         assert!(same_arrangement(&a, &b));
         // ...closing a section is.
-        hide(&mut b, Section::Settings);
+        hide(&mut b, Section::Visualizer);
         assert!(!same_arrangement(&a, &b));
     }
 
@@ -464,5 +456,13 @@ mod tests {
         let dock = DockState::new(vec![Section::Songs, Section::Songs, Section::Editor]);
         let dock = sanitize(dock);
         assert_eq!(dock.iter_all_tabs().count(), 2);
+    }
+
+    #[test]
+    fn sanitize_drops_the_old_script_settings_tab() {
+        let mut dock = DockState::new(vec![Section::Editor]);
+        dock.main_surface_mut().split_below(NodeIndex::root(), 0.5, vec![Section::Settings]);
+        let dock = sanitize(dock);
+        assert_eq!(dock.iter_all_tabs().map(|(_, t)| *t).collect::<Vec<_>>(), [Section::Editor]);
     }
 }

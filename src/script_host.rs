@@ -24,7 +24,7 @@ use crate::engine::EngineView;
 use crate::live::LiveCommand;
 use crate::lua_visualizer::{
     self, Action, Binding, DebugSnapshot, HALF_RATE_INTERVAL, LogEntry, LuaVisualizer, PerfSummary,
-    PlaybackRequest, RecordingTake, ScriptOptions, SettingDescriptor, SettingValue, Transport,
+    PlaybackRequest, RecordingTake, ScriptOptions, StateRequest, StateSnapshot, SettingDescriptor, SettingValue, Transport,
 };
 use crate::midi_notes::NoteList;
 use crate::visualizer::{CursorRequest, NotesSnapshot, StereoFrame, Visualizer, VisualizerInput};
@@ -38,6 +38,10 @@ pub const APP_WATCHDOG_LIMIT: Duration = Duration::from_secs(10);
 /// this long is also stopped first by anything that replaces it (another
 /// script, an edit, a restart).
 pub const BUSY_NOTICE_AFTER: Duration = Duration::from_secs(1);
+
+/// How often the script's variables are read while the Debug window shows
+/// them, at most.
+const STATE_EVERY: Duration = Duration::from_millis(250);
 
 /// One frame for the script to draw.
 pub struct FrameRequest {
@@ -95,6 +99,9 @@ enum Message {
     SetSong { path: PathBuf, id: String, notes: Arc<NoteList> },
     SetAppLog(bool),
     SetRecording(bool, Option<RecordingTake>),
+    /// Read the script's variables now and then, as far as the request
+    /// opens them (the Debug window shows them), or stop (`None`).
+    WatchState(Option<StateRequest>),
     SetSetting { key: String, value: SettingValue },
     SetActionBindings { index: usize, bindings: Vec<Binding> },
     ClearLog,
@@ -109,6 +116,8 @@ struct Shared {
     /// When the script thread started what it's doing now (drawing a
     /// frame, loading a script); `None` while it waits for the next thing.
     busy_since: Option<Instant>,
+    /// The script's variables, while they're watched.
+    state: Option<StateSnapshot>,
 }
 
 /// The app's side: owns the script thread.
@@ -133,6 +142,8 @@ pub struct ScriptHost {
     app_log: bool,
     /// Whether a recording is running, and the take, as last sent.
     recording: (bool, Option<RecordingTake>),
+    /// What of the script's variables is being watched, as last sent.
+    watching_state: Option<StateRequest>,
 }
 
 fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
@@ -159,6 +170,8 @@ impl ScriptHost {
             quit: Arc::clone(&quit),
             repaint: Arc::clone(&repaint),
             log_seen: None,
+            watch_state: None,
+            state_taken: None,
         };
         let first_path = path.clone();
         // A big stack: deeply recursive script code (and the Rust it calls
@@ -189,6 +202,7 @@ impl ScriptHost {
             last_request: None,
             app_log: false,
             recording: (false, None),
+            watching_state: None,
         }
     }
 
@@ -243,6 +257,21 @@ impl ScriptHost {
 
     pub fn debug_snapshot(&self) -> Option<DebugSnapshot> {
         self.status().status.debug.clone()
+    }
+
+    /// Have the script thread read the script's variables a few times a
+    /// second, as far as `request` opens them (`state_snapshot`), or stop
+    /// (`None`). Sent on a change.
+    pub fn watch_state(&mut self, request: Option<&StateRequest>) {
+        if request != self.watching_state.as_ref() {
+            self.watching_state = request.cloned();
+            self.send(Message::WatchState(request.cloned()));
+        }
+    }
+
+    /// The script's variables as last read, while watched.
+    pub fn state_snapshot(&self) -> Option<StateSnapshot> {
+        self.status().state.clone()
     }
 
     pub fn log_entries(&self) -> Vec<LogEntry> {
@@ -331,7 +360,7 @@ impl ScriptHost {
         }
     }
 
-    /// A value changed in Script Settings (saved to the script's sidecar).
+    /// A value changed in the Settings window (saved to the script's sidecar).
     pub fn set_setting(&self, key: String, value: SettingValue) {
         // Shown right away, not a frame later, so the widget doesn't jump.
         if let Some(d) = self.status().status.settings.iter_mut().find(|d| d.key == key) {
@@ -412,6 +441,10 @@ struct Worker {
     /// The log revision last published (the log is only copied when it
     /// changes).
     log_seen: Option<(u64, u64)>,
+    /// The script's variables are wanted (`Message::WatchState`), and when
+    /// they were last read.
+    watch_state: Option<StateRequest>,
+    state_taken: Option<Instant>,
 }
 
 impl Worker {
@@ -421,6 +454,17 @@ impl Worker {
         while let Ok(message) = self.messages.recv() {
             if self.quit.load(Ordering::Relaxed) {
                 break;
+            }
+            if let Message::WatchState(request) = message {
+                let on = request.is_some();
+                self.watch_state = request;
+                self.state_taken = None;
+                if on {
+                    self.publish(&visualizer);
+                } else {
+                    lock(&self.shared).state = None;
+                }
+                continue;
             }
             // A stop is for whatever was running when it was asked for.
             stop.store(false, Ordering::Relaxed);
@@ -478,10 +522,20 @@ impl Worker {
             options: visualizer.options(),
             cursor: visualizer.cursor_request(),
         };
+        let state = match &self.watch_state {
+            Some(request) if self.state_taken.is_none_or(|t| t.elapsed() >= STATE_EVERY) => {
+                self.state_taken = Some(Instant::now());
+                Some(visualizer.state_snapshot(request).unwrap_or_default())
+            }
+            _ => None,
+        };
         let mut shared = lock(&self.shared);
         let log = log.unwrap_or_else(|| std::mem::take(&mut shared.status.log));
         shared.status = ScriptStatus { log, ..status };
         shared.busy_since = None;
+        if state.is_some() {
+            shared.state = state;
+        }
     }
 }
 
@@ -519,6 +573,7 @@ fn handle(visualizer: &mut LuaVisualizer, message: Message) -> Option<FrameDone>
         }
         Message::SetAppLog(on) => visualizer.set_app_log(on),
         Message::SetRecording(on, take) => visualizer.set_recording(on, take),
+        Message::WatchState(_) => {} // (handled by the worker)
         Message::SetSetting { key, value } => visualizer.set_setting(&key, value),
         Message::SetActionBindings { index, bindings } => visualizer.set_action_bindings(index, bindings),
         Message::ClearLog => visualizer.clear_log(),

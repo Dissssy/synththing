@@ -74,7 +74,7 @@
 //! `setting_bool/int/float/color/string/selection(key, ...)`, called every
 //! frame, the first call each compile registers the descriptor (default,
 //! range, options); every call after that just returns the live value, so
-//! editing a slider in the Script Settings tab updates the running script
+//! editing a slider in the Settings window updates the running script
 //! immediately, without a recompile or disturbing any history the script is
 //! keeping. Values persist to `<script>.lua.settings.json` next to the
 //! script and are re-applied on the next load, falling back to the script's
@@ -86,7 +86,7 @@
 //! never blanks the view, so a mid-edit typo doesn't stop playback.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -491,6 +491,47 @@ pub struct SettingDescriptor {
     pub key: String,
     pub kind: SettingKind,
     pub value: SettingValue,
+    pub labels: ItemLabels,
+}
+
+/// Where a setting or control is listed, and what it's for: the optional
+/// last argument of `setting_*` and `input_register`,
+/// `{ group = "Movement", info = "..." }`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ItemLabels {
+    /// The group it's listed under (`None`: General).
+    pub group: Option<String>,
+    /// A longer explanation, shown on hover.
+    pub info: Option<String>,
+}
+
+/// Read the `{ group, info }` table `function` was given, if any.
+fn item_labels(function: &str, table: Option<Table>) -> mlua::Result<Option<ItemLabels>> {
+    let Some(table) = table else { return Ok(None) };
+    let mut labels = ItemLabels::default();
+    for pair in table.pairs::<String, Value>() {
+        let (key, value) = pair?;
+        let text = match value {
+            Value::String(s) => s.to_str()?.trim().to_string(),
+            other => {
+                return Err(mlua::Error::runtime(format!(
+                    "{function}: {key} is text, not a {}",
+                    other.type_name()
+                )));
+            }
+        };
+        let text = Some(text).filter(|t| !t.is_empty());
+        match key.as_str() {
+            "group" => labels.group = text,
+            "info" => labels.info = text,
+            other => {
+                return Err(mlua::Error::runtime(format!(
+                    "{function}: no option `{other}` (there are group and info)"
+                )));
+            }
+        }
+    }
+    Ok(Some(labels))
 }
 
 /// Registered settings for one compiled script, seeded from the sidecar file
@@ -510,6 +551,16 @@ impl SettingsStore {
         self.descriptors.iter().find(|d| d.key == key)
     }
 
+    /// Give `key` the group and info a `setting_*` call passed (calls
+    /// without them leave what an earlier one gave).
+    fn label(&mut self, key: &str, labels: Option<ItemLabels>) {
+        if let Some(labels) = labels
+            && let Some(d) = self.descriptors.iter_mut().find(|d| d.key == key)
+        {
+            d.labels = labels;
+        }
+    }
+
     fn get_or_register_bool(&mut self, key: &str, default: bool) -> bool {
         if let Some(SettingValue::Bool(v)) = self.find(key).map(|d| &d.value) {
             return *v;
@@ -519,6 +570,7 @@ impl SettingsStore {
             key: key.to_string(),
             kind: SettingKind::Bool,
             value: SettingValue::Bool(initial),
+            labels: ItemLabels::default(),
         });
         initial
     }
@@ -538,6 +590,7 @@ impl SettingsStore {
             key: key.to_string(),
             kind: SettingKind::Int { min, max },
             value: SettingValue::Int(initial),
+            labels: ItemLabels::default(),
         });
         initial
     }
@@ -557,6 +610,7 @@ impl SettingsStore {
             key: key.to_string(),
             kind: SettingKind::Float { min, max },
             value: SettingValue::Float(initial),
+            labels: ItemLabels::default(),
         });
         initial
     }
@@ -582,6 +636,7 @@ impl SettingsStore {
             key: key.to_string(),
             kind: SettingKind::Color,
             value: SettingValue::Color(initial),
+            labels: ItemLabels::default(),
         });
         initial
     }
@@ -600,6 +655,7 @@ impl SettingsStore {
             key: key.to_string(),
             kind: SettingKind::String,
             value: SettingValue::String(initial.clone()),
+            labels: ItemLabels::default(),
         });
         initial
     }
@@ -629,11 +685,12 @@ impl SettingsStore {
             key: key.to_string(),
             kind: SettingKind::Selection { options, max_selections },
             value: SettingValue::Selection(initial.clone()),
+            labels: ItemLabels::default(),
         });
         initial
     }
 
-    /// Apply a value edited through the Script Settings tab. Selection values are
+    /// Apply a value edited through the Settings window. Selection values are
     /// defensively truncated (keeping the most recent) in case a caller
     /// hands back more than `max_selections`, the UI itself should never do
     /// this, but a setting is cheap to protect either way.
@@ -729,7 +786,7 @@ struct Perf {
     worst_ms: f32,
 }
 
-/// The numbers shown in Script Settings (and at the end of `run-script`).
+/// The numbers shown in the Debug window (and at the end of `run-script`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PerfSummary {
     /// Average and worst render time over the last second, milliseconds.
@@ -880,10 +937,57 @@ pub struct DebugSnapshot {
     pub vars: Vec<DebugVar>,
 }
 
+/// The script's own state, for the Debug window (`state_snapshot`).
+#[derive(Clone, Debug, Default)]
+pub struct StateSnapshot {
+    /// Its top-level `local`s, as its functions hold them (upvalues).
+    pub locals: Vec<StateVar>,
+    /// The globals it made (not the host's API or Lua's libraries).
+    pub globals: Vec<StateVar>,
+}
+
+/// One variable, or one entry of an opened table, in a `StateSnapshot`.
+#[derive(Clone, Debug, Default)]
+pub struct StateVar {
+    pub name: String,
+    /// A short rendering of the value; for a table, "table (N entries)".
+    pub value: String,
+    /// Where it is, for opening it: `"locals"` or `"globals"`, its name,
+    /// then each key down to it.
+    pub path: Vec<String>,
+    /// A table with something in it: it can be opened.
+    pub expandable: bool,
+    /// Its entries, if it's open (`StateRequest`), up to the number asked.
+    pub children: Vec<StateVar>,
+    /// Entries left out past that.
+    pub more: usize,
+}
+
+/// What of the script's state to read: only the tables opened, and only so
+/// many entries of each (more on request), so reading it costs what's on
+/// screen, not what the script holds.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StateRequest {
+    /// Opened tables, by `StateVar::path`, and how many entries to show.
+    pub open: HashMap<Vec<String>, usize>,
+}
+
+/// Entries an opened table shows at first, and how many more "+" adds.
+pub const STATE_PAGE: usize = 50;
+/// Tables are counted up to this many entries ("100000+ entries").
+const MAX_STATE_COUNT: usize = 100_000;
+
 /// Depth/breadth caps so a huge or self-referential table (snake.lua's
 /// `occ`, say) can't make one `debug_locals()` call expensive or hang.
 const MAX_DEBUG_DEPTH: usize = 4;
 const MAX_DEBUG_ENTRIES: usize = 200;
+/// And a cap on the values one `debug_locals()` call describes in all: past
+/// it, tables are shown without their contents (a chart of thousands of
+/// notes, say).
+const MAX_DEBUG_VALUES: usize = 5_000;
+/// How many of the script's functions a state snapshot looks inside for
+/// upvalues.
+const MAX_STATE_FUNCTIONS: usize = 500;
 /// Lua caps a frame's visible locals well below this in practice; it's just
 /// a hard backstop against ever looping on a malformed debug frame.
 const MAX_DEBUG_LOCALS: std::ffi::c_int = 200;
@@ -905,6 +1009,7 @@ fn capture_caller_locals(lua: &Lua) -> Vec<DebugVar> {
         }
 
         let mut vars = Vec::new();
+        let mut budget = MAX_DEBUG_VALUES;
         for n in 1..=MAX_DEBUG_LOCALS {
             let name_ptr = mlua::ffi::lua_getlocal(state, &ar, n);
             if name_ptr.is_null() {
@@ -918,14 +1023,22 @@ fn capture_caller_locals(lua: &Lua) -> Vec<DebugVar> {
             // Lua names its own internal temporaries (loop control state
             // etc.) with a leading '(', not something the script wrote.
             if !name.starts_with('(') {
-                vars.push(describe_value(&name, &value, 0));
+                vars.push(describe_value(&name, &value, 0, &mut budget));
             }
         }
         vars
     })
 }
 
-fn describe_value(name: &str, value: &Value, depth: usize) -> DebugVar {
+/// `value` as a row (and, for a table, its contents as rows under it),
+/// counting each one against `budget`.
+fn describe_value(name: &str, value: &Value, depth: usize, budget: &mut usize) -> DebugVar {
+    *budget = budget.saturating_sub(1);
+    if let Value::Table(_) = value
+        && *budget == 0
+    {
+        return DebugVar { name: name.to_string(), value: "table (not expanded)".to_string(), children: Vec::new() };
+    }
     if let Value::Table(table) = value
         && depth < MAX_DEBUG_DEPTH
     {
@@ -940,11 +1053,140 @@ fn describe_value(name: &str, value: &Value, depth: usize) -> DebugVar {
                 });
                 break;
             }
-            children.push(describe_value(&describe_scalar(&key), &val, depth + 1));
+            children.push(describe_value(&describe_scalar(&key), &val, depth + 1, budget));
         }
         return DebugVar { name: name.to_string(), value: format!("table ({} entries)", children.len()), children };
     }
     DebugVar { name: name.to_string(), value: describe_scalar(value), children: Vec::new() }
+}
+
+/// The upvalues of `function` (name and value), `_ENV` left out; none for
+/// a Rust function. Safety: as `capture_caller_locals`, on mlua's own
+/// state; the function is pushed, each `lua_getupvalue` pushes one value
+/// that's popped straight away, and the function is popped at the end.
+fn upvalues(lua: &Lua, function: &Function) -> Vec<(String, Value)> {
+    lua.exec_raw_lua(|raw| unsafe {
+        let state = raw.state();
+        if mlua::ffi::lua_checkstack(state, 3) == 0 || raw.push(function.clone()).is_err() {
+            return Vec::new();
+        }
+        let mut found = Vec::new();
+        if mlua::ffi::lua_iscfunction(state, -1) == 0 {
+            for n in 1..=255 {
+                let name_ptr = mlua::ffi::lua_getupvalue(state, -1, n);
+                if name_ptr.is_null() {
+                    break;
+                }
+                let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy().into_owned();
+                let value: Value = raw.pop().unwrap_or(Value::Nil);
+                if !name.is_empty() && name != "_ENV" {
+                    found.push((name, value));
+                }
+            }
+        }
+        mlua::ffi::lua_pop(state, 1);
+        found
+    })
+}
+
+/// The script's state: the globals it made (anything not in
+/// `host_globals`), and its top-level locals, found as the upvalues of its
+/// functions (theirs, and those of the functions they hold, and so on).
+/// Functions themselves aren't listed, only looked inside. Tables are only
+/// read into as far as `request` opens them.
+fn script_state(lua: &Lua, host_globals: &HashSet<String>, request: &StateRequest) -> StateSnapshot {
+    let mut globals = Vec::new();
+    let mut queue = Vec::new();
+    let mut own: Vec<(String, Value)> = lua
+        .globals()
+        .pairs::<Value, Value>()
+        .filter_map(Result::ok)
+        .filter_map(|(key, value)| match key {
+            Value::String(name) => Some((name.to_string_lossy(), value)),
+            _ => None,
+        })
+        .filter(|(name, _)| !host_globals.contains(name))
+        .collect();
+    own.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, value) in own {
+        match value {
+            Value::Function(f) => queue.push(f),
+            value => globals.push(describe_state(&name, &value, vec!["globals".into(), name.clone()], request)),
+        }
+    }
+    let mut seen_functions = HashSet::new();
+    let mut found: Vec<(String, Value)> = Vec::new();
+    let mut names = HashSet::new();
+    let mut next = 0;
+    while next < queue.len() && seen_functions.len() < MAX_STATE_FUNCTIONS {
+        let function = queue[next].clone();
+        next += 1;
+        if !seen_functions.insert(function.to_pointer()) {
+            continue;
+        }
+        for (name, value) in upvalues(lua, &function) {
+            match value {
+                Value::Function(f) => queue.push(f),
+                value => {
+                    if names.insert(name.clone()) {
+                        found.push((name, value));
+                    }
+                }
+            }
+        }
+    }
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    let locals = found
+        .iter()
+        .map(|(name, value)| describe_state(name, value, vec!["locals".into(), name.clone()], request))
+        .collect();
+    StateSnapshot { locals, globals }
+}
+
+/// One variable for a `StateSnapshot`: a table's entries only if
+/// `request` has it open, in key order (numbers first), as many as asked.
+fn describe_state(name: &str, value: &Value, path: Vec<String>, request: &StateRequest) -> StateVar {
+    let Value::Table(table) = value else {
+        return StateVar { name: name.to_string(), value: describe_scalar(value), path, ..StateVar::default() };
+    };
+    let count = table.pairs::<Value, Value>().take(MAX_STATE_COUNT).count();
+    let shown = if count == MAX_STATE_COUNT { format!("table ({MAX_STATE_COUNT}+ entries)") } else { format!("table ({count} entries)") };
+    let mut var = StateVar { name: name.to_string(), value: shown, path, expandable: count > 0, ..StateVar::default() };
+    let Some(&limit) = request.open.get(&var.path) else { return var };
+    let mut entries: Vec<(Value, Value)> = table.pairs::<Value, Value>().filter_map(Result::ok).collect();
+    entries.sort_by(|(a, _), (b, _)| state_key_order(a, b));
+    var.more = entries.len().saturating_sub(limit);
+    var.children = entries
+        .iter()
+        .take(limit)
+        .map(|(key, value)| {
+            // (The path tells "1" from 1; the name reads plainly.)
+            let mut path = var.path.clone();
+            path.push(describe_scalar(key));
+            let name = match key {
+                Value::String(s) => s.to_string_lossy(),
+                other => describe_scalar(other),
+            };
+            describe_state(&name, value, path, request)
+        })
+        .collect();
+    var
+}
+
+/// Table keys in a readable order: numbers (by value), then everything
+/// else by how it reads.
+fn state_key_order(a: &Value, b: &Value) -> std::cmp::Ordering {
+    let number = |v: &Value| match v {
+        Value::Integer(i) => Some(*i as f64),
+        Value::Number(n) => Some(*n),
+        _ => None,
+    };
+    match (number(a), number(b)) {
+        (Some(x), Some(y)) => x.total_cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => describe_scalar(a).cmp(&describe_scalar(b)),
+    }
 }
 
 fn describe_scalar(value: &Value) -> String {
@@ -1170,6 +1412,7 @@ pub struct Action {
     pub name: String,
     pub defaults: Vec<Binding>,
     pub bindings: Vec<Binding>,
+    pub labels: ItemLabels,
 }
 
 /// What an action can be bound to: a key, or a controller input.
@@ -1358,6 +1601,9 @@ struct Compiled {
     frame: Cell<u64>,
     /// `TIME`: seconds since its first frame, as of the last render.
     time: Cell<f64>,
+    /// The globals there before the script ran (the host's API, Lua's
+    /// libraries), so its own can be told apart (`state_snapshot`).
+    host_globals: HashSet<String>,
 }
 
 impl Drop for Compiled {
@@ -1591,7 +1837,7 @@ impl LuaVisualizer {
         self.compiled.as_ref().map(|c| c.settings.borrow().descriptors.clone()).unwrap_or_default()
     }
 
-    /// Apply a value edited through the Script Settings tab and persist it to the
+    /// Apply a value edited through the Settings window and persist it to the
     /// script's sidecar file (if it has one, a script with no path yet,
     /// e.g. mid-creation, just keeps the change in memory).
     pub fn set_setting(&mut self, key: &str, value: SettingValue) {
@@ -1619,6 +1865,13 @@ impl LuaVisualizer {
     /// called it since the last compile.
     pub fn debug_snapshot(&self) -> Option<DebugSnapshot> {
         self.compiled.as_ref().and_then(|c| c.debug_snapshot.borrow().clone())
+    }
+
+    /// The script's state as of now: its top-level locals and its own
+    /// globals (the Debug window's Variables), with the tables `request`
+    /// opens. `None` with no script running.
+    pub fn state_snapshot(&self, request: &StateRequest) -> Option<StateSnapshot> {
+        self.compiled.as_ref().map(|c| script_state(&c.lua, &c.host_globals, request))
     }
 
     /// Channel mute/unmute requests the script made via `set_channel_enabled`
@@ -1994,6 +2247,16 @@ fn compile(
     register_timing_audio_shapes(&lua, note_list, playback, features, &commands).map_err(|e| e.to_string())?;
     register_live_notes(&lua, notes, playback, note_list, live).map_err(|e| e.to_string())?;
 
+    let host_globals: HashSet<String> = lua
+        .globals()
+        .pairs::<Value, Value>()
+        .filter_map(Result::ok)
+        .filter_map(|(key, _)| match key {
+            Value::String(name) => Some(name.to_string_lossy()),
+            _ => None,
+        })
+        .collect();
+
     deadline.set(Some(Instant::now() + watchdog_limit));
     let ran = lua.load(source).set_name("visualizer").exec();
     deadline.set(None);
@@ -2023,6 +2286,7 @@ fn compile(
         typing,
         frame: Cell::new(0),
         time: Cell::new(0.0),
+        host_globals,
     })
 }
 
@@ -2942,9 +3206,13 @@ fn register_input(
     let actions = Rc::clone(controls);
     globals.set(
         "input_register",
-        lua.create_function(move |_, (name, default): (String, Value)| {
+        lua.create_function(move |_, (name, default, labels): (String, Value, Option<Table>)| {
+            let labels = item_labels("input_register", labels)?;
             let mut controls = actions.borrow_mut();
             if let Some(i) = controls.actions.iter().position(|a| a.name == name) {
+                if let Some(labels) = labels {
+                    controls.actions[i].labels = labels;
+                }
                 return Ok(i + 1);
             }
             let names: Vec<String> = match default {
@@ -2971,7 +3239,7 @@ fn register_input(
                 }
             }
             let bindings = controls.saved_bindings(&name).unwrap_or_else(|| defaults.clone());
-            controls.actions.push(Action { name, defaults, bindings });
+            controls.actions.push(Action { name, defaults, bindings, labels: labels.unwrap_or_default() });
             Ok(controls.actions.len())
         })?,
     )?;
@@ -3439,33 +3707,48 @@ fn register_globals(
     let store = Rc::clone(settings);
     globals.set(
         "setting_bool",
-        lua.create_function(move |_, (key, default): (String, bool)| {
-            Ok(store.borrow_mut().get_or_register_bool(&key, default))
+        lua.create_function(move |_, (key, default, labels): (String, bool, Option<Table>)| {
+            let labels = item_labels("setting_bool", labels)?;
+            let mut store = store.borrow_mut();
+            let value = store.get_or_register_bool(&key, default);
+            store.label(&key, labels);
+            Ok(value)
         })?,
     )?;
 
     let store = Rc::clone(settings);
     globals.set(
         "setting_int",
-        lua.create_function(move |_, (key, default, min, max): (String, i64, i64, i64)| {
-            Ok(store.borrow_mut().get_or_register_int(&key, default, min, max))
+        lua.create_function(move |_, (key, default, min, max, labels): (String, i64, i64, i64, Option<Table>)| {
+            let labels = item_labels("setting_int", labels)?;
+            let mut store = store.borrow_mut();
+            let value = store.get_or_register_int(&key, default, min, max);
+            store.label(&key, labels);
+            Ok(value)
         })?,
     )?;
 
     let store = Rc::clone(settings);
     globals.set(
         "setting_float",
-        lua.create_function(move |_, (key, default, min, max): (String, f64, f64, f64)| {
-            Ok(store.borrow_mut().get_or_register_float(&key, default, min, max))
+        lua.create_function(move |_, (key, default, min, max, labels): (String, f64, f64, f64, Option<Table>)| {
+            let labels = item_labels("setting_float", labels)?;
+            let mut store = store.borrow_mut();
+            let value = store.get_or_register_float(&key, default, min, max);
+            store.label(&key, labels);
+            Ok(value)
         })?,
     )?;
 
     let store = Rc::clone(settings);
     globals.set(
         "setting_color",
-        lua.create_function(move |lua, (key, default): (String, Table)| {
+        lua.create_function(move |lua, (key, default, labels): (String, Table, Option<Table>)| {
+            let labels = item_labels("setting_color", labels)?;
             let default = table_to_rgb(&default)?;
-            let value = store.borrow_mut().get_or_register_color(&key, default);
+            let mut store = store.borrow_mut();
+            let value = store.get_or_register_color(&key, default);
+            store.label(&key, labels);
             rgb_to_table(lua, value)
         })?,
     )?;
@@ -3473,8 +3756,12 @@ fn register_globals(
     let store = Rc::clone(settings);
     globals.set(
         "setting_string",
-        lua.create_function(move |_, (key, default): (String, String)| {
-            Ok(store.borrow_mut().get_or_register_string(&key, &default))
+        lua.create_function(move |_, (key, default, labels): (String, String, Option<Table>)| {
+            let labels = item_labels("setting_string", labels)?;
+            let mut store = store.borrow_mut();
+            let value = store.get_or_register_string(&key, &default);
+            store.label(&key, labels);
+            Ok(value)
         })?,
     )?;
 
@@ -3482,12 +3769,14 @@ fn register_globals(
     globals.set(
         "setting_selection",
         lua.create_function(
-            move |lua, (key, options, defaults, max_selections): (String, Table, Table, i64)| {
+            move |lua, (key, options, defaults, max_selections, labels): (String, Table, Table, i64, Option<Table>)| {
+                let labels = item_labels("setting_selection", labels)?;
                 let options = table_to_strings(&options)?;
                 let defaults = table_to_strings(&defaults)?;
                 let max_selections = max_selections.max(1) as usize;
-                let value =
-                    store.borrow_mut().get_or_register_selection(&key, options, defaults, max_selections);
+                let mut store = store.borrow_mut();
+                let value = store.get_or_register_selection(&key, options, defaults, max_selections);
+                store.label(&key, labels);
                 strings_to_table(lua, &value)
             },
         )?,
@@ -4455,6 +4744,67 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         assert_eq!(last_log(&one), "once");
         let bad = LuaVisualizer::new("script_options({ app_log = 1 }) function render() end".into(), None, 44_100);
         assert!(bad.error().unwrap_or_default().contains("app_log is true or false"), "{:?}", bad.error());
+    }
+
+    #[test]
+    fn state_snapshot_finds_top_level_locals_and_own_globals() {
+        let script = "local score = 3
+            local hidden = { a = 1 }
+            local function bump() hidden.a = hidden.a + 1 end
+            level = 'one'
+            local unused = 9
+            function render() score = score + 1; bump() end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        render_with(&mut visualizer, &VisualizerInput::default());
+        let closed = visualizer.state_snapshot(&StateRequest::default()).unwrap();
+        let names = |vars: &[StateVar]| vars.iter().map(|v| format!("{}={}", v.name, v.value)).collect::<Vec<_>>();
+        // `hidden` through bump(), held by render(); `unused` isn't held by anything.
+        assert_eq!(names(&closed.locals), ["hidden=table (1 entries)", "score=4"]);
+        assert!(closed.locals[0].expandable && closed.locals[0].children.is_empty(), "closed until asked");
+        assert_eq!(names(&closed.globals), ["level=\"one\""], "no host functions, no render");
+        let mut request = StateRequest::default();
+        request.open.insert(vec!["locals".into(), "hidden".into()], STATE_PAGE);
+        let open = visualizer.state_snapshot(&request).unwrap();
+        assert_eq!(names(&open.locals[0].children), ["a=2"]);
+        assert_eq!(open.locals[0].children[0].path, ["locals", "hidden", "\"a\""]);
+
+        // A big table: only as many entries as asked, in order, the rest counted.
+        let big = "local t = {} for i = 1, 300 do t[i] = { i } end
+            function render() local _ = t end";
+        let mut big = LuaVisualizer::new(big.to_string(), None, 44_100);
+        render_with(&mut big, &VisualizerInput::default());
+        let mut request = StateRequest::default();
+        request.open.insert(vec!["locals".into(), "t".into()], STATE_PAGE);
+        let state = big.state_snapshot(&request).unwrap();
+        let t = &state.locals[0];
+        assert_eq!(t.value, "table (300 entries)");
+        assert_eq!((t.children.len(), t.more), (STATE_PAGE, 300 - STATE_PAGE));
+        assert_eq!((t.children[0].name.as_str(), t.children[9].name.as_str()), ("1", "10"));
+        assert!(t.children[0].children.is_empty(), "entries stay closed");
+    }
+
+    #[test]
+    fn settings_and_controls_take_a_group_and_info() {
+        let script = "local speed = setting_float('speed', 1, 0, 2, { group = 'Play', info = 'How fast' })
+            setting_bool('grid', true)
+            local jump = input_register('jump', 'space', { group = 'Movement' })
+            input_register('jump', 'space')
+            function render() setting_float('speed', 1, 0, 2) end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        render_with(&mut visualizer, &VisualizerInput::default());
+        assert_eq!(visualizer.error(), None);
+        let settings = visualizer.settings();
+        assert_eq!(settings[0].labels, ItemLabels { group: Some("Play".into()), info: Some("How fast".into()) });
+        assert_eq!(settings[1].labels, ItemLabels::default());
+        // A later call without them keeps what the first gave.
+        assert_eq!(visualizer.actions()[0].labels.group.as_deref(), Some("Movement"));
+        for (bad, message) in [
+            ("setting_bool('x', true, { colour = 'red' })", "no option `colour`"),
+            ("input_register('x', 'space', { group = 3 })", "group is text"),
+        ] {
+            let broken = LuaVisualizer::new(format!("{bad} function render() end"), None, 44_100);
+            assert!(broken.error().unwrap_or_default().contains(message), "{bad}: {:?}", broken.error());
+        }
     }
 
     #[test]

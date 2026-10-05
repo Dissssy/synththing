@@ -2,45 +2,46 @@
 -- yours. Not a music visualizer; a reference for controller input.
 --
 -- Every button is an action registered with a controller default (and a
--- keyboard one, to show they're interchangeable): rebind any of them under
--- Controls in Script Settings. A button glows while held, flashes white
--- the frame it's pressed. The sticks and triggers also show their exact
--- analogue position, read with pad_axis(); the stick's direction buttons
--- (pad_lstick_left and so on) light up past halfway, and their dots grow
--- with input_value(), how far each is pushed (0 to 1; a key bound to the
--- same action counts fully). Steering made from two of them reads the same
+-- keyboard one, to show they're interchangeable): rebind any of them with
+-- the Controls button, where they're grouped (`{ group = ... }`) into face
+-- buttons, shoulders, menu buttons, the d-pad and the sticks. A button
+-- glows while held, flashes white the frame it's pressed. The sticks and
+-- triggers also show their exact analogue position, read with pad_axis();
+-- the stick's direction buttons (pad_lstick_left and so on) light up past
+-- halfway, and their dots grow with input_value(), how far each is pushed
+-- (0 to 1; a key bound to the same action counts fully). Steering made from two of them reads the same
 -- from the stick, the d-pad or the keys: see the readout at the bottom.
 --
 -- Controllers count while synththing's window has focus; keys only while
 -- the visualizer does (click it).
 
--- name, controller default, keyboard default
+-- name, controller default, keyboard default, group in the Controls window
 local BUTTONS = {
-    { "a", "pad_a", "j" },
-    { "b", "pad_b", "k" },
-    { "x", "pad_x", "u" },
-    { "y", "pad_y", "i" },
-    { "lb", "pad_lb", "q" },
-    { "rb", "pad_rb", "e" },
-    { "lt", "pad_lt", "1" },
-    { "rt", "pad_rt", "3" },
-    { "back", "pad_back", "tab" },
-    { "start", "pad_start", "enter" },
-    { "guide", "pad_guide", "g" },
-    { "dpad up", "pad_dpad_up", "up" },
-    { "dpad down", "pad_dpad_down", "down" },
-    { "dpad left", "pad_dpad_left", "left" },
-    { "dpad right", "pad_dpad_right", "right" },
-    { "left stick click", "pad_lstick_click", "z" },
-    { "right stick click", "pad_rstick_click", "c" },
-    { "left stick up", "pad_lstick_up", "w" },
-    { "left stick down", "pad_lstick_down", "s" },
-    { "left stick left", "pad_lstick_left", "a" },
-    { "left stick right", "pad_lstick_right", "d" },
+    { "a", "pad_a", "j", "Face buttons" },
+    { "b", "pad_b", "k", "Face buttons" },
+    { "x", "pad_x", "u", "Face buttons" },
+    { "y", "pad_y", "i", "Face buttons" },
+    { "lb", "pad_lb", "q", "Shoulders" },
+    { "rb", "pad_rb", "e", "Shoulders" },
+    { "lt", "pad_lt", "1", "Shoulders" },
+    { "rt", "pad_rt", "3", "Shoulders" },
+    { "back", "pad_back", "tab", "Menu" },
+    { "start", "pad_start", "enter", "Menu" },
+    { "guide", "pad_guide", "g", "Menu" },
+    { "dpad up", "pad_dpad_up", "up", "D-pad" },
+    { "dpad down", "pad_dpad_down", "down", "D-pad" },
+    { "dpad left", "pad_dpad_left", "left", "D-pad" },
+    { "dpad right", "pad_dpad_right", "right", "D-pad" },
+    { "left stick click", "pad_lstick_click", "z", "Sticks" },
+    { "right stick click", "pad_rstick_click", "c", "Sticks" },
+    { "left stick up", "pad_lstick_up", "w", "Sticks" },
+    { "left stick down", "pad_lstick_down", "s", "Sticks" },
+    { "left stick left", "pad_lstick_left", "a", "Sticks" },
+    { "left stick right", "pad_lstick_right", "d", "Sticks" },
 }
 local action = {}
 for _, b in ipairs(BUTTONS) do
-    action[b[1]] = input_register(b[1], { b[2], b[3] })
+    action[b[1]] = input_register(b[1], { b[2], b[3] }, { group = b[4] })
 end
 
 local BODY = { r = 52, g = 56, b = 70 }

@@ -25,11 +25,11 @@
 -- 40x22 cells, then cols/rows are whatever fills the window; leftover pixels
 -- become an even border. The game restarts if the window size changes.
 --
--- Play along: set "player_channel" (Script Settings) to a channel number and
+-- Play along: set "player_channel" (Settings) to a channel number and
 -- that channel's snake is yours while the visualizer has focus (click it, or
 -- use the Fullscreen visualizer): arrow keys or WASD steer, as do a
 -- controller's d-pad and left stick, or whatever you bind under Controls
--- in Script Settings. It drives itself again
+-- (the Controls button). It drives itself again
 -- whenever the visualizer loses focus. Your best length is saved
 -- (store_set), and the scoreboard (text) shows every snake's length.
 -- Apples are sprites, one per snake color.
@@ -125,7 +125,7 @@ local disable_on_death = true
 local player_ch = nil
 local turn_queue = {}
 local best = store_get("best_length") or 0
--- Steering actions, rebindable under Controls in Script Settings; the
+-- Steering actions, rebindable with the Controls button; the
 -- value is the direction each one turns to.
 local STEER = {
     [input_register("right", { "right", "d", "pad_dpad_right", "pad_lstick_right" })] = 1,

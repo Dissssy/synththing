@@ -266,7 +266,11 @@
       and "Go to line N" by the error (editor, or visualizer, which opens
       the editor) moves the text cursor there and scrolls to it.
 
-[S][.] debug variable inspector in the Settings popup - DONE
+[S][.] debug variable inspector in the Settings popup - DONE. Since
+    replaced: the Script Settings tab is gone (Settings / Controls / Debug
+    buttons above the visualizer, app/script_windows.rs); Debug > Variables
+    reads the script's top-level locals (upvalues of its functions) and own
+    globals on demand (StateRequest: opened tables only, 50 entries a page).
     Not a `lua.globals()` dump, every bundled script correctly uses `local`
     for its state, which globals() can't see at all (locals aren't a Lua
     *value* reachable through any table, just stack slots in a running
@@ -574,7 +578,9 @@ Smaller:
     input_value(LEFT), the same from keys or a stick and fully rebindable;
     pad_axis stays as a convenience. Update the docs and gamepad_demo.lua.
 
-[M][.] grouped controls and settings, shown as tabs
+[M][.] grouped controls and settings, shown as tabs - DONE (app/script_windows.rs,
+    categories_body shared with Preferences; { group, info } on setting_*
+    and input_register)
     Let scripts put controls (and settings) in named groups, e.g.
     input_register("jump", { "space", "pad_a" }, { group = "Movement" }) and
     a group option on setting_*; Script Settings shows each group as a

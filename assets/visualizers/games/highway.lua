@@ -584,7 +584,7 @@ end
 
 -- The lanes in use: always five in GUITAR mode.
 local function lane_count()
-    local chosen = setting_int("lanes", 4, 3, 5) -- (read either way, so it stays in Script Settings)
+    local chosen = setting_int("lanes", 4, 3, 5) -- (read either way, so it stays in Settings)
     return guitar and 5 or chosen
 end
 

@@ -8,7 +8,7 @@
 -- channel's color scrolls in ahead of the switch, and that channel's notes
 -- are outlined so you can line up the jump. When the gate reaches the
 -- playhead, the old channel's platforms vanish under you.
--- (Turn "one channel at a time" off in Script Settings for everything solid.)
+-- (Turn "one channel at a time" off in Settings for everything solid.)
 --
 -- Scoring
 --   * A note pays out once, when it starts while you're on it: +50 x mult.
@@ -16,7 +16,7 @@
 --   * Standing on a sounding note trickles points in.
 --   * Multiplier +1 every 4 combo (max x8). Falling resets the combo.
 --
--- Controls are rebindable under Controls in Script Settings. Defaults:
+-- Controls are rebindable with the Controls button. Defaults:
 --   move  arrows / A D      jump  space / up / W / Z / left click (x2)
 --   drop through  down / S  pause  P      restart song  R
 --

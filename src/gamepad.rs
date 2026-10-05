@@ -1,5 +1,5 @@
 //! Game controllers (gilrs), as inputs script actions can be bound to
-//! (`input_register`, the Controls list in Script Settings).
+//! (`input_register`, the Controls window).
 //!
 //! Every connected pad counts the same: pressing A on any of them presses
 //! "pad_a". Buttons, the d-pad, the triggers and each stick pushed one way

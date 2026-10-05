@@ -41,7 +41,7 @@ Scripts live in the `visualizers` folder of the app's config folder (`%APPDATA%\
 - Restart (or F5, from anywhere): starts the running script over on a fresh Lua VM, all of its own state reset, its settings kept.
 - Rename: renames the running script's file (its settings and saved-data files come along). A renamed bundled script no longer offers Restore default, since it's no longer under the bundled name.
 
-Live reload: editing a script in the Script Editor saves it and recompiles it on a fresh Lua VM as you type. Editing the file in another editor works too: when the running script's file changes on disk, the app loads the new version into the editor and visualizer, and the script list updates as files are added, removed or renamed in the folder. A script that fails to compile leaves whatever was running before still running; the error shows above the editor and in this script's log (Script Settings tab) and stays until you fix it or revert. Restart restarts the version that's running, not the broken edit.
+Live reload: editing a script in the Script Editor saves it and recompiles it on a fresh Lua VM as you type. Editing the file in another editor works too: when the running script's file changes on disk, the app loads the new version into the editor and visualizer, and the script list updates as files are added, removed or renamed in the folder. A script that fails to compile leaves whatever was running before still running; the error shows above the editor and in this script's log (Debug > Log) and stays until you fix it or revert. Restart restarts the version that's running, not the broken edit.
 
 ## The editor
 
@@ -424,7 +424,7 @@ Both stick until changed (or a different script loads). A hidden cursor only hid
 ## Controls
 
 ```lua
-input_register(name, default_keys) -> id   -- once, outside render()
+input_register(name, default_keys [, {group, info}]) -> id   -- once, outside render()
 input(id) -> state       -- "pressed", "held", "released" or "up"
 input_down(id) -> bool   -- held: "pressed" or "held"
 input_value(id) -> 0..1  -- how far it's pressed: keys 0 or 1, triggers and sticks how far
@@ -432,7 +432,9 @@ pad_axis(name) -> number -- a controller's stick or trigger, read directly
 gamepads() -> names      -- the connected controllers
 ```
 
-Keyboard and controller input come through actions: a script names each thing it can do ("jump", "left", "clear") and gives it default keys or controller buttons, and the user can rebind them under Controls in the Script Settings tab (click a binding, press the new key or controller button; x removes one, + adds another, Reset goes back to the script's). Bindings are saved per script, in `<script>.lua.controls.json` next to it.
+Keyboard and controller input come through actions: a script names each thing it can do ("jump", "left", "clear") and gives it default keys or controller buttons, and the user can rebind them in the Controls window (the Controls button above the visualizer: each binding is a button, click it to remove it or right-click it to bind something else in its place; + adds one, waiting for the key, button or click to bind, and Reset goes back to the script's). Bindings are saved per script, in `<script>.lua.controls.json` next to it.
+
+The optional last argument groups it and explains it, as for settings (see Settings): `input_register("jump", { "space", "pad_a" }, { group = "Movement", info = "Hold for a higher jump." })`.
 
 `default_keys` is a name or a list of them: `"space"`, `{ "left", "a", "pad_dpad_left", "pad_lstick_left" }`. Names are case-insensitive. Keys: letters (`"a"`), digits (`"1"`), `"space"`, `"enter"`, `"tab"`, `"backspace"`, arrows (`"up"`, `"down"`, `"left"`, `"right"`), `"f1"` to `"f20"` and so on. Controller inputs start with `pad_`:
 
@@ -592,33 +594,44 @@ log(message)
 log_app(message)   -- the same, and always copied to the app's log too
 ```
 
-Appends to this script's log, in the Script Settings tab (View > Script Settings), along with the script's own errors. Identical consecutive messages collapse into one entry with a count instead of flooding the pane, safe to call every single frame.
+Appends to this script's log, in the Debug window (the Debug button above the visualizer, under Log), along with the script's own errors. Identical consecutive messages collapse into one entry with a count instead of flooding the pane, safe to call every single frame.
 
 Help > Log... is the app's own log (also written to `synththing.log`, and printed by `synththing --console`). The script's errors always go there; its `log()` messages do too when "Copy script logs to the app log" is on in Preferences, or when the script asks for it with `script_options({ app_log = true })`, and `log_app()` messages always do (for the odd message worth seeing there, like a chart that failed to build), all labelled with the script's name (`highway: chart ready`). Only new messages are copied, not repeats of the one before, so the app's log doesn't fill up with a message logged every frame.
 
 ## Debugging
 
+The Debug button above the visualizer opens the Debug window: the script's variables, its last `debug_locals()`, its log and how long it takes to draw (Performance).
+
+Variables shows the script's state live, a few times a second while it's on screen: its top-level locals (the `local`s outside any function that its functions use, which is where scripts usually keep their state) and the globals it made itself (not the app's functions or Lua's libraries). Functions aren't listed. A table shows how many entries it has; click it to open it, one level at a time, showing its first 50 entries (numbers first, then names) and a button for more. Only what's open is read, so a huge table costs nothing until it's opened. Nothing is read while the window is closed or on another category.
+
 ```lua
 debug_locals([label])
 ```
 
-Snapshots whatever local variables (and function parameters, Lua treats those the same way) are in scope at the exact point you call it, shown as a nested, expandable tree in the Script Settings tab, under Variables. Call it from wherever in your script you actually want visibility, inside a loop, after a specific branch, wherever, not just at the top level.
+Snapshots whatever local variables (and function parameters, Lua treats those the same way) are in scope at the exact point you call it, shown as a nested, expandable tree in the Debug window (the Debug button above the visualizer), under debug_locals(). Call it from wherever in your script you actually want visibility, inside a loop, after a specific branch, wherever, not just at the top level.
 
 Only one snapshot is kept; calling it again (from the same or a different spot) replaces the previous one. `label` is optional and just shows up next to the snapshot so you can tell which call site it came from.
 
-This only sees true locals and parameters, a module-level value declared with `local` outside any function (the usual way the bundled scripts keep their state, e.g. `waveform.lua`'s `history`) is an upvalue of `render`, not a local inside it, so it won't show up unless you also have a local alias or parameter in scope at the call site.
+This only sees true locals and parameters at that spot: a module-level value declared with `local` outside any function (`waveform.lua`'s `history`, say) isn't one of them, but it's under Variables.
 
 ## Settings
 
-A script can expose typed, user-editable values that show up as widgets in the Script Settings tab. Call the matching function every frame, the first call each compile registers the descriptor (default/range/options); every call after that just returns the live value, so dragging a slider updates the running script immediately, with no recompile and without disturbing any history the script is keeping.
+A script can expose typed, user-editable values that show up as widgets in the Settings window (the Settings button above the visualizer). Call the matching function every frame, the first call each compile registers the descriptor (default/range/options); every call after that just returns the live value, so dragging a slider updates the running script immediately, with no recompile and without disturbing any history the script is keeping.
 
 ```lua
-setting_bool(key, default) -> bool
-setting_int(key, default, min, max) -> integer
-setting_float(key, default, min, max) -> number
-setting_color(key, default) -> {r,g,b}
-setting_string(key, default) -> string
-setting_selection(key, options, defaults, max_selections) -> selected
+setting_bool(key, default [, {group, info}]) -> bool
+setting_int(key, default, min, max [, {group, info}]) -> integer
+setting_float(key, default, min, max [, {group, info}]) -> number
+setting_color(key, default [, {group, info}]) -> {r,g,b}
+setting_string(key, default [, {group, info}]) -> string
+setting_selection(key, options, defaults, max_selections [, {group, info}]) -> selected
+```
+
+The Settings window is laid out like Preferences: the script's groups down the side, its settings beside them. The optional last argument is a table with either or both of `group`, the group it's listed under (anything without one goes under General, listed first), and `info`, a longer explanation shown on hover, with an (i) after its name. Only the call that gives it needs it: a later call without it (each frame, say) keeps what was given. Anything else in the table is an error. Controls take the same table (see Controls), in a Controls window of their own.
+
+```lua
+local speed = setting_float("speed", 1, 0.25, 4, { group = "Motion", info = "How fast the bars fall, in screens per second." })
+local accent = setting_color("accent", { r = 51, g = 204, b = 255 }, { group = "Colors" })
 ```
 
 A selection picks up to `max_selections` of a fixed option list; a pick past the cap evicts whichever option was selected longest ago, so there's no disabled-checkbox state to design around.
@@ -658,7 +671,7 @@ Runs a script with no window, playing the song into it, and prints its errors (w
 
 A script runs on every rendered frame while it's on screen, so the usual budget is the 60fps frame, ~16.7ms, but each draw call's cost scales with how many pixels it actually touches, not just how many calls you make, so a heatmap-style script needs more care than a line plot.
 
-The top of the Script Settings tab shows how long `render()` takes (average and worst over the last second, drawing included), against that budget. A script that averages more than 16.7 ms for 3 seconds straight drops to 30 fps: it renders every other frame, the visualizer keeps showing its last picture in between, and nothing is lost meanwhile (the audio and any key presses arrive with the next render, and `DT` covers the whole gap). It stays at 30 through Restart and song changes, and goes back to 60 when the script's code changes or another script loads, or with "Try 60 fps again". `run-script` prints the same numbers at the end of a run.
+Debug > Performance shows how long `render()` takes (average and worst over the last second, drawing included), against that budget. A script that averages more than 16.7 ms for 3 seconds straight drops to 30 fps: it renders every other frame, the visualizer keeps showing its last picture in between, and nothing is lost meanwhile (the audio and any key presses arrive with the next render, and `DT` covers the whole gap). It stays at 30 through Restart and song changes, and goes back to 60 when the script's code changes or another script loads, or with "Try 60 fps again". `run-script` prints the same numbers at the end of a run.
 
 - The buffer is capped at ~1280x720 worth of pixels and scaled up (nearest-neighbor) to fill larger views, so either fullscreen on a large monitor doesn't multiply your render cost, but it's still worth keeping draw counts sane.
 - `spectrogram.lua` run-length-merges same-colored cells in a column into one rect instead of one draw per cell, worth copying for any other grid/heatmap-shaped script.

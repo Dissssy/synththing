@@ -12,6 +12,7 @@ pub use editor::ApplyMode;
 mod loading;
 mod playlist_panel;
 mod recording;
+mod script_windows;
 mod sprite_editor;
 mod themes;
 mod tour;
@@ -37,7 +38,7 @@ use crate::loader::{self, Asset, AssetCache, SoundFontProbe};
 use crate::lua_completion::CompletionWorker;
 use crate::lua_docs;
 use crate::lua_visualizer::{
-    self, Binding, DebugVar, LogLevel, PlaybackRequest, SettingDescriptor, SettingKind, SettingValue,
+    self, DebugVar, PlaybackRequest, SettingDescriptor, SettingKind, SettingValue,
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
 use crate::song_info::{format_length, SongInfoCache};
@@ -209,6 +210,12 @@ pub struct App {
     /// A Controls binding waiting for a key press: (action index, which of
     /// its keys to replace, or `None` to add one).
     binding_capture: Option<(usize, Option<usize>)>,
+    /// The script's Settings or Controls window, if open.
+    script_window: Option<script_windows::ScriptWindow>,
+    /// The category picked in each (Settings, Controls, Debug).
+    script_window_tab: [usize; 3],
+    /// The tables opened in Debug > Variables.
+    state_request: lua_visualizer::StateRequest,
     /// The changelog window: `Some(since)` lists only the versions newer
     /// than that (What's new, after an update), `None` all of them
     /// (Help > Changelog...).
@@ -385,6 +392,9 @@ impl App {
             playlist_selection: Vec::new(),
             selection_anchor: None,
             binding_capture: None,
+            script_window: None,
+            script_window_tab: [0; 3],
+            state_request: Default::default(),
             changelog: None,
             welcome: welcome::Welcome::default(),
             preferences_tab: PrefTab::default(),
@@ -1182,7 +1192,6 @@ impl App {
                 ui.separator();
                 section_checkbox(ui, Section::Visualizer);
                 section_checkbox(ui, Section::Editor);
-                section_checkbox(ui, Section::Settings);
                 section_checkbox(ui, Section::Reference);
                 section_checkbox(ui, Section::Sprites);
                 ui.separator();
@@ -1726,6 +1735,7 @@ impl App {
             || self.song_info_open.is_some()
             || self.recording.prompt_open
             || self.recording.window.is_some()
+            || self.script_window.is_some()
             || self.editor.history_open
             || self.layout_save.is_some()
             || self.heavy_prompt.is_some()
@@ -1889,6 +1899,7 @@ impl App {
                 let ctx = ui.ctx().clone();
                 self.enter_dedicated(&ctx);
             }
+            self.script_window_buttons_ui(ui);
             self.recording_buttons_ui(ui);
             if let Some(path) = self.visualizer.script().path() {
                 ui.weak(path.display().to_string());
@@ -2357,37 +2368,10 @@ impl App {
             ui.set_width(600.0);
             ui.heading("Preferences");
             ui.add_space(6.0);
-            // A fixed height: the divider takes the height it's given, so
-            // left to size itself, the window grows a little every frame.
-            const BODY_HEIGHT: f32 = 340.0;
-            let body = egui::vec2(ui.available_width(), BODY_HEIGHT);
-            ui.allocate_ui_with_layout(body, egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                ui.set_height(BODY_HEIGHT);
-                // The categories down the side.
-                ui.vertical(|ui| {
-                    ui.set_width(110.0);
-                    // Its own scroll area, for when there are more
-                    // categories than fit.
-                    egui::ScrollArea::vertical().id_salt("preferences_categories").max_height(BODY_HEIGHT).show(
-                        ui,
-                        |ui| {
-                            for tab in PrefTab::ALL {
-                                if ui.selectable_label(self.preferences_tab == tab, tab.title()).clicked() {
-                                    self.preferences_tab = tab;
-                                }
-                            }
-                        },
-                    );
-                });
-                ui.separator();
-                ui.vertical(|ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("preferences_scroll")
-                        .max_height(BODY_HEIGHT)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 8.0;
-                        match self.preferences_tab {
+            let titles = PrefTab::ALL.map(PrefTab::title);
+            let mut index = PrefTab::ALL.iter().position(|&t| t == self.preferences_tab).unwrap_or(0);
+            categories_body(ui, "preferences", &titles, &mut index, |ui, index| {
+                        match PrefTab::ALL[index] {
                             PrefTab::General => {
                                 with_info(
                                     ui,
@@ -2452,7 +2436,7 @@ impl App {
                             PrefTab::Scripts => {
                                 with_info(
                                     ui,
-                                    "What visualizer scripts log() shows in their Script Settings tab; with this \
+                                    "What visualizer scripts log() shows in their Debug window; with this \
                                      on, it also goes to Help > Log... (and the log file), labelled with the \
                                      script's name. A script can turn it on for itself (script_options), or for \
                                      single messages (log_app).",
@@ -2482,9 +2466,8 @@ impl App {
                                     });
                             }
                         }
-                    });
-                });
             });
+            self.preferences_tab = PrefTab::ALL[index];
             ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 if ui.button("Close").clicked() {
@@ -2534,243 +2517,6 @@ impl App {
             if let Err(e) = self.config.save() {
                 self.status = format!("Couldn't save preferences: {e}");
             }
-        }
-    }
-
-    /// The running script's input actions and their keys: click a key and
-    /// press another to rebind it, x to remove, + to add, Reset for the
-    /// script's defaults. Saved per script.
-    fn controls_ui(&mut self, ui: &mut egui::Ui) {
-        let actions = self.visualizer.script().actions();
-        if actions.is_empty() {
-            self.binding_capture = None;
-            return;
-        }
-        ui.separator();
-        ui.strong("Controls");
-        ui.weak(
-            "Click a binding, then press the new key or controller button, or click with a mouse button. \
-             Keys and the mouse work while the visualizer has focus; controllers while synththing's window does.",
-        );
-        let pads = &self.pad_frame.connected;
-        ui.weak(if pads.is_empty() { "No controller connected.".to_string() } else { format!("Controllers: {}", pads.join(", ")) });
-
-        let mut change: Option<(usize, Vec<Binding>)> = None;
-        let mut start_capture: Option<Option<(usize, Option<usize>)>> = None;
-        egui::Grid::new("script_controls").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-            for (i, action) in actions.iter().enumerate() {
-                ui.label(&action.name);
-                ui.horizontal_wrapped(|ui| {
-                    for (slot, key) in action.bindings.iter().enumerate() {
-                        let capturing = self.binding_capture == Some((i, Some(slot)));
-                        let label = if capturing { "press a key or button...".to_string() } else { key.label().to_string() };
-                        if ui.selectable_label(capturing, label).clicked() {
-                            start_capture = Some((!capturing).then_some((i, Some(slot))));
-                        }
-                        if ui.small_button("x").on_hover_text("Remove this binding").clicked() {
-                            let mut bindings = action.bindings.clone();
-                            bindings.remove(slot);
-                            change = Some((i, bindings));
-                        }
-                    }
-                    let adding = self.binding_capture == Some((i, None));
-                    if ui
-                        .selectable_label(adding, if adding { "press a key or button..." } else { "+" })
-                        .on_hover_text("Add another key, controller button or mouse button")
-                        .clicked()
-                    {
-                        start_capture = Some((!adding).then_some((i, None)));
-                    }
-                    if action.bindings != action.defaults
-                        && ui.small_button("Reset").on_hover_text("Back to the script's keys").clicked()
-                    {
-                        change = Some((i, action.defaults.clone()));
-                    }
-                });
-                ui.end_row();
-            }
-        });
-
-        // Waiting for a key: the first press (not a reserved key) binds it.
-        let mut captured = false;
-        if let Some((i, slot)) = self.binding_capture
-            && let Some(action) = actions.get(i)
-        {
-            let pressed = ui
-                .input(|input| {
-                    input.events.iter().find_map(|event| match event {
-                        egui::Event::Key { key, pressed: true, repeat: false, .. } => Some(*key),
-                        _ => None,
-                    })
-                })
-                .map(Binding::Key)
-                .or_else(|| self.pad_frame.pressed.first().copied().map(Binding::Pad))
-                .or_else(|| {
-                    // A left click on one of these buttons is about them
-                    // (cancelling, or starting another), not a binding.
-                    let left_on_button = start_capture.is_some();
-                    ui.input(|input| {
-                        crate::visualizer::MOUSE_BUTTONS
-                            .iter()
-                            .position(|&b| input.pointer.button_pressed(b))
-                            .filter(|&i| i != 0 || !left_on_button)
-                    })
-                    .map(|i| Binding::Mouse(i as u8))
-                });
-            if let Some(key) = pressed {
-                captured = true;
-                self.binding_capture = None;
-                let reserved = matches!(key, Binding::Key(k) if crate::visualizer::RESERVED_KEYS.contains(&k));
-                if !reserved {
-                    let mut bindings = action.bindings.clone();
-                    match slot {
-                        Some(slot) if slot < bindings.len() => bindings[slot] = key,
-                        _ => bindings.push(key),
-                    }
-                    let mut seen = Vec::new();
-                    bindings.retain(|k| {
-                        let first = !seen.contains(k);
-                        seen.push(*k);
-                        first
-                    });
-                    change = Some((i, bindings));
-                }
-            }
-        }
-        // (A key that just got bound can also "click" the focused button;
-        // don't let that start capturing again.)
-        if let Some(capture) = start_capture
-            && !captured
-        {
-            self.binding_capture = capture;
-        }
-        if let Some((i, bindings)) = change {
-            self.visualizer.script_mut().set_action_bindings(i, bindings);
-        }
-    }
-
-    /// The active script's settings widgets, its `debug_locals()` snapshot,
-    /// and its log/error history.
-    fn settings_ui(&mut self, ui: &mut egui::Ui) {
-        let descriptors = self.visualizer.script().settings();
-        let mut changed: Option<(String, SettingValue)> = None;
-        let mut clear_log = false;
-
-        // The whole tab scrolls: performance, controls, settings, variables
-        // and the log.
-        egui::ScrollArea::vertical()
-            .id_salt("visualizer_settings_scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                // Performance: render time against the 60 fps budget.
-                let perf = self.visualizer.script().perf_summary();
-                let mut retry = false;
-                ui.horizontal_wrapped(|ui| {
-                    ui.strong("Performance");
-                    if perf.frames == 0 {
-                        ui.weak("(not rendered yet)");
-                        return;
-                    }
-                    let budget = 1000.0 / 60.0;
-                    let color = if perf.avg_ms > budget {
-                        egui::Color32::from_rgb(220, 90, 90)
-                    } else if perf.avg_ms > budget * 0.6 {
-                        egui::Color32::from_rgb(220, 180, 80)
-                    } else {
-                        ui.visuals().text_color()
-                    };
-                    ui.colored_label(color, format!("render() {:.1} ms avg, {:.1} ms worst", perf.avg_ms, perf.max_ms))
-                        .on_hover_text(format!(
-                            "Over the last second. A 60 fps frame allows {budget:.1} ms; a script averaging more than that for 3 seconds runs at 30 fps until its code changes."
-                        ));
-                    if perf.half_rate {
-                        ui.colored_label(egui::Color32::from_rgb(220, 180, 80), "running at 30 fps");
-                        retry = ui.small_button("Try 60 fps again").clicked();
-                    } else {
-                        ui.weak("60 fps");
-                    }
-                });
-                if retry {
-                    self.visualizer.script_mut().retry_full_frame_rate();
-                }
-                self.controls_ui(ui);
-                ui.separator();
-
-                if descriptors.is_empty() {
-                    ui.weak("This script hasn't registered any settings.");
-                } else {
-                    egui::Grid::new("visualizer_settings_grid")
-                        .num_columns(2)
-                        .spacing([8.0, 6.0])
-                        .show(ui, |ui| {
-                            for d in &descriptors {
-                                ui.label(&d.key);
-                                settings_row_ui(ui, d, &mut changed);
-                                ui.end_row();
-                            }
-                        });
-                }
-
-                ui.separator();
-                ui.heading("Variables");
-                match self.visualizer.script().debug_snapshot() {
-                    Some(snapshot) => {
-                        if let Some(label) = &snapshot.label {
-                            ui.weak(format!("from: {label}"));
-                        }
-                        egui::ScrollArea::vertical()
-                            .id_salt("visualizer_debug_vars_scroll")
-                            .auto_shrink([false, false])
-                            .max_height(160.0)
-                            .show(ui, |ui| {
-                                for (i, var) in snapshot.vars.iter().enumerate() {
-                                    debug_var_ui(ui, var, i);
-                                }
-                            });
-                    }
-                    None => {
-                        ui.weak("(nothing captured yet)");
-                    }
-                }
-
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.heading("Log");
-                    if ui.small_button("Clear").clicked() {
-                        clear_log = true;
-                    }
-                });
-                egui::ScrollArea::vertical()
-                    .id_salt("visualizer_log_scroll")
-                    .auto_shrink([false, false])
-                    .max_height(180.0)
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        let entries = self.visualizer.script().log_entries();
-                        if entries.is_empty() {
-                            ui.weak("(nothing logged yet)");
-                        }
-                        for entry in &entries {
-                            let color = if entry.level == LogLevel::Error {
-                                egui::Color32::from_rgb(220, 90, 90)
-                            } else {
-                                ui.visuals().text_color()
-                            };
-                            let text = if entry.count > 1 {
-                                format!("{} (x{})", entry.message, entry.count)
-                            } else {
-                                entry.message.clone()
-                            };
-                            ui.colored_label(color, text);
-                        }
-                    });
-            });
-
-        if let Some((key, value)) = changed {
-            self.visualizer.script().set_setting(key, value);
-        }
-        if clear_log {
-            self.visualizer.script_mut().clear_log();
         }
     }
 
@@ -3068,6 +2814,7 @@ impl eframe::App for App {
         // fullscreen too.
         self.ffmpeg_prompt_ui(&ctx);
         self.record_window_ui(&ctx, view);
+        self.script_window_ui(&ctx);
         self.heavy_midi_ui(&ctx);
         self.poll_recordings(view);
         if self.status != self.logged_status {
@@ -3150,7 +2897,8 @@ impl TabViewer for SectionTabs<'_> {
                 app.visualizer_preview_ui(ui, self.shared.notes.clone(), self.shared.view.clone());
             }
             Section::Editor => app.editor_section_ui(ui),
-            Section::Settings => app.settings_ui(ui),
+            // (Removed: dropped from layouts as they load.)
+            Section::Settings => {}
             Section::Reference => app.docs_ui(ui),
             Section::Sprites => app.sprite_editor_ui(ui),
         }
@@ -3196,6 +2944,47 @@ impl PrefTab {
             Self::Experimental => "Experimental",
         }
     }
+}
+
+/// The body of a window laid out like Preferences: `categories` down the
+/// side (`selected` the one picked), and `body` drawing the picked one's
+/// contents beside them. Each side scrolls by itself, in a fixed height.
+fn categories_body<S: AsRef<str>>(
+    ui: &mut egui::Ui,
+    id: &str,
+    categories: &[S],
+    selected: &mut usize,
+    body: impl FnOnce(&mut egui::Ui, usize),
+) {
+    // A fixed height: the divider takes the height it's given, so left to
+    // size itself, the window grows a little every frame.
+    const BODY_HEIGHT: f32 = 340.0;
+    *selected = (*selected).min(categories.len().saturating_sub(1));
+    let size = egui::vec2(ui.available_width(), BODY_HEIGHT);
+    ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Min), |ui| {
+        ui.set_height(BODY_HEIGHT);
+        ui.vertical(|ui| {
+            ui.set_width(110.0);
+            egui::ScrollArea::vertical().id_salt((id, "categories")).max_height(BODY_HEIGHT).show(ui, |ui| {
+                for (i, title) in categories.iter().enumerate() {
+                    if ui.selectable_label(*selected == i, title.as_ref()).clicked() {
+                        *selected = i;
+                    }
+                }
+            });
+        });
+        ui.separator();
+        ui.vertical(|ui| {
+            egui::ScrollArea::vertical()
+                .id_salt((id, "body"))
+                .max_height(BODY_HEIGHT)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    body(ui, *selected);
+                });
+        });
+    });
 }
 
 /// A setting on one line (`add`), with an (i) after it: hovering either
