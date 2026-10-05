@@ -4,6 +4,12 @@
 # apps get it through Update (the newest version their app can run).
 # Unchanged scripts are left as they are; deleted ones stay on the server.
 #
+# Fast: nothing is built. The newest release's Linux binary publishes the
+# scripts from this checkout (publish-bundled --dir); a script using
+# something that release doesn't know (a function added since) is skipped,
+# and goes out with the next release instead (release.yml's scripts job,
+# which publishes with the binary it built).
+#
 # Needs the SYNTHTHING_PUBLISH_KEY secret (the official publisher's secret
 # key, in hex); without it, this does nothing.
 name: Publish scripts
@@ -21,9 +27,11 @@ concurrency:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    # (The release binary is built on 22.04, for its glibc.)
+    runs-on: ubuntu-22.04
     env:
       SYNTHTHING_PUBLISH_KEY: ${{ secrets.SYNTHTHING_PUBLISH_KEY }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Is there a key?
         id: key
@@ -33,18 +41,20 @@ jobs:
       - uses: actions/checkout@v5
         if: steps.key.outputs.present == 'true'
 
-      - uses: dtolnay/rust-toolchain@stable
-        if: steps.key.outputs.present == 'true'
-
-      - uses: Swatinem/rust-cache@v2
-        if: steps.key.outputs.present == 'true'
-
-      - name: System libraries
+      - name: The newest release
         if: steps.key.outputs.present == 'true'
         run: |
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern synththing-linux-x86_64
+          chmod +x synththing-linux-x86_64
+          # (It's the app's binary: it links the desktop libraries.)
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev libwayland-dev
+          sudo apt-get install -y --no-install-recommends libgtk-3-0 libasound2 libudev1 libxkbcommon0
 
       - name: Publish
         if: steps.key.outputs.present == 'true'
-        run: cargo run --release -- publish-bundled --server https://synththing.p51.nl
+        run: |
+          if ! ./synththing-linux-x86_64 publish-bundled --help | grep -q -- --dir; then
+            echo "The newest release can't publish from a folder yet (that came after 0.4.1): the next release's scripts job publishes them."
+            exit 0
+          fi
+          ./synththing-linux-x86_64 publish-bundled --dir assets/visualizers --server https://synththing.p51.nl

@@ -63,6 +63,12 @@ pub enum Command {
         /// The server's address.
         #[arg(long, default_value = "https://synththing.p51.nl")]
         server: String,
+
+        /// Publish the scripts in this folder (laid out like
+        /// assets/visualizers) instead of the ones built in. A script using
+        /// something this build doesn't know is skipped.
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
     },
 }
 

@@ -14,7 +14,10 @@ Releases are built by GitHub Actions (`.github/workflows/release.yml`) when a `v
 
 ## Bundled scripts on the library
 
-The scripts in `assets/visualizers` (not the templates) are also published to the official script library, by `.github/workflows/scripts.yml`, on every push to master that changes them: each by its slug (its file name), signed with the official publisher key, so a changed script becomes its next version and apps get it through Update. That needs the `SYNTHTHING_PUBLISH_KEY` repository secret (the publisher's secret key, in hex; its public half is `OFFICIAL_PUBLISHER` in `src/library/mod.rs`); without it the workflow does nothing. By hand: `SYNTHTHING_PUBLISH_KEY=... synththing publish-bundled`.
+The scripts in `assets/visualizers` (not the templates) are also published to the official script library, each by its slug (its file name), signed with the official publisher key, so a changed script becomes its next version and apps get it through Update:
+
+- On every push to master that changes them (`.github/workflows/scripts.yml`): the newest release's binary publishes them from the checkout (`publish-bundled --dir`), without building anything. A script using a function that release doesn't have is skipped.
+- With every release (`release.yml`'s `scripts` job): the release's own binary publishes its built-in scripts, including any skipped before, once the official server runs that release (its update timer installs it within the hour; the job waits). That needs the `SYNTHTHING_PUBLISH_KEY` repository secret (the publisher's secret key, in hex; its public half is `OFFICIAL_PUBLISHER` in `src/library/mod.rs`); without it the workflow does nothing. By hand: `SYNTHTHING_PUBLISH_KEY=... synththing publish-bundled`.
 
 ## Making a release
 

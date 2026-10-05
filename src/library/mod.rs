@@ -66,7 +66,55 @@ fn bundled_upload(category: &str, file_name: &str, source: &str) -> Option<Uploa
         source: source.to_string(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         slug: Some(slugify(stem)),
+        min_app_version: Some(min_app_version(source)),
     })
+}
+
+/// Globals `source` uses that this build doesn't know (not the app's, not
+/// Lua's, not the script's own): most likely functions newer than this
+/// build, so its `min_app_version` can't be trusted.
+pub fn unknown_globals(source: &str) -> Vec<String> {
+    let known = crate::lua_analysis::known_globals(crate::lua_completion::HOST_API.iter().map(|(n, _)| n.to_string()));
+    let analysis = crate::lua_analysis::analyze(source, &known);
+    let mut unknown: Vec<String> = analysis
+        .refs
+        .iter()
+        .filter(|r| r.local.is_none() && !analysis.script_globals.contains(&r.name) && !known.contains(&r.name))
+        .map(|r| r.name.clone())
+        .collect();
+    unknown.sort();
+    unknown.dedup();
+    unknown
+}
+
+/// The bundled scripts, as (category, file name, source): built into this
+/// binary, or read from a folder laid out like `assets/visualizers`.
+fn bundled_scripts(dir: Option<&std::path::Path>) -> Result<Vec<(String, String, String)>, String> {
+    let Some(dir) = dir else {
+        return Ok(crate::lua_visualizer::BUNDLED_SCRIPTS
+            .iter()
+            .map(|&(c, n, s)| (c.to_string(), n.to_string(), s.to_string()))
+            .collect());
+    };
+    let mut scripts = Vec::new();
+    for category in ["visualizers", "games", "templates", "examples"] {
+        let Ok(entries) = std::fs::read_dir(dir.join(category)) else { continue };
+        let mut files: Vec<std::path::PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("lua"))
+            .collect();
+        files.sort();
+        for path in files {
+            let source = std::fs::read_to_string(&path).map_err(|e| format!("couldn't read {}: {e}", path.display()))?;
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            scripts.push((category.to_string(), name, source));
+        }
+    }
+    if scripts.is_empty() {
+        return Err(format!("no scripts in {} (it should have visualizers/, games/, ...)", dir.display()));
+    }
+    Ok(scripts)
 }
 
 /// Mark the bundled visualizers and games in the scripts folder as
@@ -105,8 +153,12 @@ pub fn mark_bundled(dir: &std::path::Path) {
 /// templates) to `server`, signed with the secret key in the
 /// `SYNTHTHING_PUBLISH_KEY` environment variable, each by its slug: one
 /// that's changed becomes a new version, an unchanged one is left as it
-/// is. For CI, on each push that changes them.
-pub fn publish_bundled(server: &str) -> Result<(), String> {
+/// is. The scripts are the ones built into this binary, or with `dir`,
+/// the ones in that folder (CI, between releases, with the newest release's
+/// binary); then a script using something this binary doesn't know (a
+/// function newer than it) is skipped, to be published by the release that
+/// has it.
+pub fn publish_bundled(server: &str, dir: Option<&std::path::Path>) -> Result<(), String> {
     let secret = std::env::var("SYNTHTHING_PUBLISH_KEY").map_err(|_| "SYNTHTHING_PUBLISH_KEY isn't set")?;
     let identity = identity::Identity::from_secret_hex(&secret).ok_or("SYNTHTHING_PUBLISH_KEY isn't a key")?;
     if identity.public() != OFFICIAL_PUBLISHER {
@@ -115,8 +167,13 @@ pub fn publish_bundled(server: &str) -> Result<(), String> {
     let server = client::normalize_url(server);
     let key = client::info(&server)?.key;
     let mut failed = 0;
-    for &(category, file_name, source) in crate::lua_visualizer::BUNDLED_SCRIPTS {
-        let Some(upload) = bundled_upload(category, file_name, source) else { continue };
+    for (category, file_name, source) in bundled_scripts(dir)? {
+        let Some(upload) = bundled_upload(&category, &file_name, &source) else { continue };
+        let unknown = unknown_globals(&source);
+        if dir.is_some() && !unknown.is_empty() {
+            println!("{file_name}: skipped: uses {} (newer than this build; the next release publishes it)", unknown.join(", "));
+            continue;
+        }
         match client::upload(&server, &key, &upload, Some(&identity)) {
             Ok(receipt) => println!("{file_name}: {} version {}", receipt.id, receipt.version),
             Err(e) => {
@@ -252,6 +309,11 @@ pub struct Upload {
     /// they've used before makes this a new version of that script.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
+    /// The oldest app it runs on, as the publishing app worked it out: the
+    /// server keeps the higher of this and its own (an app newer than the
+    /// server knows functions the server doesn't).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_app_version: Option<String>,
 }
 
 /// What an accepted upload comes back with, signed by the server
@@ -863,6 +925,7 @@ mod tests {
             source: "function render() end".into(),
             app_version: "0.4.0".into(),
             slug: Some("bars".into()),
+            min_app_version: None,
         };
         assert_eq!(good.tags, ["chill", "retro"]);
         assert_eq!(check_upload(&good), Ok(()));
@@ -903,6 +966,17 @@ mod tests {
     }
 
     #[test]
+    fn bundled_scripts_read_from_the_repository() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/visualizers");
+        let from_disk = bundled_scripts(Some(&dir)).unwrap();
+        let built_in = bundled_scripts(None).unwrap();
+        assert_eq!(from_disk.len(), built_in.len());
+        for (category, name, _) in &built_in {
+            assert!(from_disk.iter().any(|(c, n, _)| c == category && n == name), "{category}/{name}");
+        }
+    }
+
+    #[test]
     fn minimum_app_versions() {
         // Every host function has a version, and a sane one.
         for (name, _) in crate::lua_completion::HOST_API.iter().filter(|(n, _)| *n != "render") {
@@ -920,6 +994,14 @@ mod tests {
         // Nor does the script's own global function.
         assert_eq!(min_app_version("function seek() end function render() seek() end"), "0.1.1");
         assert!(runs_on("0.4.0", "0.4.1") && runs_on("0.4.0", "0.4.0") && !runs_on("0.4.1", "0.4.0"));
+        // Names this build doesn't know (a newer function), but not the
+        // script's own, Lua's, or locals.
+        let newer = "local x = 1 function helper() end function render() helper() brand_new_thing() math.floor(x) end";
+        assert_eq!(unknown_globals(newer), ["brand_new_thing"]);
+        // (editor_test.lua misspells one on purpose, and isn't published.)
+        for &(_, name, source) in crate::lua_visualizer::BUNDLED_SCRIPTS.iter().filter(|(_, n, _)| *n != "editor_test.lua") {
+            assert!(unknown_globals(source).is_empty(), "{name}: {:?}", unknown_globals(source));
+        }
     }
 
     #[test]

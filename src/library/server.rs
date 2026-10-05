@@ -624,6 +624,15 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
 
     let sha256 = sha256_hex(upload.source.as_bytes());
     let created = now();
+    // The higher of the server's reckoning and the publisher's (a newer
+    // app knows functions this server doesn't; claiming too high only hides
+    // it from older apps).
+    let mut min_app_version = super::min_app_version(&upload.source);
+    if let Some(claimed) = &upload.min_app_version
+        && !super::runs_on(claimed, &min_app_version)
+    {
+        min_app_version = claimed.clone();
+    }
     let mut db = state.db();
     // A slug its author has used before: a new version of that script.
     let existing: rusqlite::Result<Option<(String, u32)>> = match (&author, &slug) {
@@ -720,7 +729,7 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
         tx.execute(
             "INSERT INTO versions (script_id, version, sha256, source, app_version, uploader_ip, created, min_app_version)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            params![id, version, sha256, upload.source, upload.app_version, ip, created, super::min_app_version(&upload.source)],
+            params![id, version, sha256, upload.source, upload.app_version, ip, created, min_app_version],
         )?;
         tx.commit()
     });

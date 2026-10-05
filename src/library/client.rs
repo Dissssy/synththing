@@ -204,6 +204,7 @@ mod tests {
             source: source.into(),
             app_version: env!("CARGO_PKG_VERSION").into(),
             slug: None,
+            min_app_version: None,
         }
     }
 
@@ -301,6 +302,17 @@ mod tests {
         assert_eq!(details.versions[2].min_app_version, "0.4.0");
         assert_eq!(details.newest_for("0.3.3").map(|v| v.version), Some(2));
         assert_eq!(details.newest_for("0.4.0").map(|v| v.version), Some(needs_new.version));
+        // A publisher that knows better (a newer app) raises it; a lower
+        // claim doesn't lower it.
+        bars.source = "function render() local r = recording() end -- 2".into();
+        bars.min_app_version = Some("9.0.0".into());
+        let claimed = upload(&base, &key, &bars, Some(&alice)).unwrap();
+        bars.source = "function render() local r = recording() end -- 3".into();
+        bars.min_app_version = Some("0.1.1".into());
+        upload(&base, &key, &bars, Some(&alice)).unwrap();
+        let details = super::details(&base, &first.id).unwrap();
+        let min = |v: u32| details.versions.iter().find(|x| x.version == v).unwrap().min_app_version.clone();
+        assert_eq!((min(claimed.version), min(claimed.version + 1)), ("9.0.0".to_string(), "0.4.0".to_string()));
         assert_eq!(download(&base, &first.id, Some(1), &key).unwrap().source, "function render() end");
         assert_eq!(by_slug(&base, &alice.id(), "bars").unwrap().map(|s| s.id), Some(first.id.clone()));
         assert_eq!(by_slug(&base, &alice.id(), "nope").unwrap(), None);

@@ -1357,6 +1357,7 @@ impl App {
     /// identity made first if there's none yet).
     fn send_publish(&mut self, draft: &mut PublishDraft, updating: Option<String>) {
         let source = std::fs::read_to_string(&draft.script).unwrap_or_default();
+        let min_app_version = Some(library::min_app_version(&source));
         let slug = if draft.anonymous { None } else { Some(updating.unwrap_or_else(|| draft.slug.trim().to_string())) };
         let upload = Upload {
             name: draft.name.trim().to_string(),
@@ -1366,6 +1367,7 @@ impl App {
             author_name: draft.author_name.trim().to_string(),
             source,
             app_version: env!("CARGO_PKG_VERSION").to_string(),
+            min_app_version,
             slug,
         };
         if let Err(problem) = library::check_upload(&upload) {

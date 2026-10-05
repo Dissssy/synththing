@@ -99,10 +99,10 @@ scripts.example.org {
 ## publish-bundled: publish the bundled scripts
 
 ```
-SYNTHTHING_PUBLISH_KEY=<secret key, hex> synththing publish-bundled [--server URL]
+SYNTHTHING_PUBLISH_KEY=<secret key, hex> synththing publish-bundled [--server URL] [--dir DIR]
 ```
 
-Publishes every script bundled with this build (visualizers, games and examples; not the templates) to a library server, `https://synththing.p51.nl` unless `--server` says otherwise, signed with the secret key in `SYNTHTHING_PUBLISH_KEY`. Each goes by its slug (its file name): a changed script becomes its next version, an unchanged one stays as it is. Prints a line per script; exit code 1 if any failed. CI runs it (`.github/workflows/scripts.yml`, docs/RELEASING.md).
+Publishes every script bundled with this build (visualizers, games and examples; not the templates), or with `--dir` the ones in that folder (laid out like `assets/visualizers`), to a library server, `https://synththing.p51.nl` unless `--server` says otherwise, signed with the secret key in `SYNTHTHING_PUBLISH_KEY`. Each goes by its slug (its file name): a changed script becomes its next version, an unchanged one stays as it is. With `--dir`, a script using something this build doesn't know (a function newer than it) is skipped, since its minimum app version couldn't be worked out. Prints a line per script; exit code 1 if any failed. CI runs it (`.github/workflows/scripts.yml`, docs/RELEASING.md).
 
 ## Environment variables
 

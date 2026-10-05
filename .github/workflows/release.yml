@@ -128,3 +128,32 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=synththing script library server
+
+  # The bundled scripts, published to the official script library with the
+  # Linux build just made (it knows every function they use, so their
+  # minimum app versions come out right). The server works those out too,
+  # with its own binary, so this waits until it's running this release
+  # (its update timer installs it within the hour). Without the
+  # SYNTHTHING_PUBLISH_KEY secret, this does nothing.
+  scripts:
+    needs: linux
+    runs-on: ubuntu-22.04
+    env:
+      SYNTHTHING_PUBLISH_KEY: ${{ secrets.SYNTHTHING_PUBLISH_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Publish
+        run: |
+          if [ -z "$SYNTHTHING_PUBLISH_KEY" ]; then echo "No SYNTHTHING_PUBLISH_KEY secret: nothing to do."; exit 0; fi
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern synththing-linux-x86_64
+          chmod +x synththing-linux-x86_64
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-0 libasound2 libudev1 libxkbcommon0
+          version="${GITHUB_REF_NAME#v}"
+          for i in $(seq 1 40); do
+            running=$(curl -fsS https://synththing.p51.nl/api/v1/info | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' || true)
+            if [ "$running" = "$version" ]; then break; fi
+            echo "the server runs ${running:-?}, waiting for $version..."
+            sleep 120
+          done
+          ./synththing-linux-x86_64 publish-bundled --server https://synththing.p51.nl

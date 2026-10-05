@@ -73,8 +73,8 @@ fn main() -> Result<()> {
         let config = Config::load().unwrap_or_default();
         std::process::exit(headless::run(args, &config));
     }
-    if let Some(Command::PublishBundled { server }) = &cli.command {
-        if let Err(e) = library::publish_bundled(server) {
+    if let Some(Command::PublishBundled { server, dir }) = &cli.command {
+        if let Err(e) = library::publish_bundled(server, dir.as_deref()) {
             eprintln!("error: {e}");
             std::process::exit(1);
         }
