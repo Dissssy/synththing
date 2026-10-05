@@ -57,7 +57,13 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
     // A video sets the size; the frame rate has to be a whole number.
     let (width, height) = match &args.video {
         Some(_) => Resolution::parse(&args.video_size)
-            .ok_or_else(|| format!("--video-size {} isn't one of 720p, 1080p, 1440p, 4k", args.video_size))?
+            .ok_or_else(|| {
+                format!(
+                    "--video-size {} isn't one of 720p, 1080p, 1440p, 4k, vertical, 720p-vertical, square, \
+                     or a WIDTHxHEIGHT from 64 to 4096",
+                    args.video_size
+                )
+            })?
             .size(),
         None => (args.width, args.height),
     };

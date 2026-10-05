@@ -99,7 +99,8 @@ pub struct RunScriptArgs {
     #[arg(long, value_name = "FILE")]
     pub video: Option<std::path::PathBuf>,
 
-    /// The video's size: 720p, 1080p, 1440p or 4k.
+    /// The video's size: 720p, 1080p, 1440p or 4k; vertical (1080x1920),
+    /// 720p-vertical or square (1080x1080); or any WIDTHxHEIGHT.
     #[arg(long, value_name = "SIZE", default_value = "1080p")]
     pub video_size: String,
 

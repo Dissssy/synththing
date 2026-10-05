@@ -41,7 +41,7 @@ It uses the same engine and script code as the app. Each frame it plays `1/fps` 
 | `--quiet`, `-q` | off | Print only errors and the summary, not the script's log. |
 | `--screenshot` | none | Save the last frame as a PNG image at this path, to see what the script drew. |
 | `--video` | none | Record the run to a video at this path (`.mp4`: H.264 video, AAC sound), the same way the app records. The video is `--video-size` instead of `--width`/`--height`, at `--fps` (a whole number). It's written as fast as the script and the encoder allow, faster or slower than real time, and every frame is in it: the same run gives the same video. Needs ffmpeg, on the PATH or downloaded by the app (Preferences > Recording). |
-| `--video-size` | 1080p | The video's size: `720p`, `1080p`, `1440p` or `4k`. |
+| `--video-size` | 1080p | The video's size: `720p`, `1080p`, `1440p` or `4k`; `vertical` (1080 x 1920, for phone-shaped videos), `720p-vertical` or `square` (1080 x 1080); or any `WIDTHxHEIGHT` from 64 to 4096 a side (`800x600`; made even if odd). |
 | `--auto` | off | With `--video`: the script plays itself, if it can (`script_options({ record_auto = true })`; `recording().mode` is `"auto"`). |
 | `--video-quality` | standard | How it's encoded: `standard` (H.264 4:2:0, plays everywhere; single-pixel colored details soften slightly), `sharp` (H.264 4:4:4, exact pixel edges; plays in desktop players, not reliably in browsers or Discord) or `lossless` (every pixel exactly; big files, for editing). |
 

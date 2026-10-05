@@ -28,7 +28,7 @@ use crate::engine::EngineView;
 use crate::ffmpeg::{self, DownloadState};
 use crate::layout::Section;
 use crate::lua_visualizer::{self, RecordKind, RecordPhase, RecordingTake};
-use crate::recorder::{self, Format, Quality, Recorder, Resolution, FRAME_RATES};
+use crate::recorder::{self, CUSTOM_SIZES, Format, Quality, Recorder, Resolution, FRAME_RATES};
 
 /// How long a prepared take goes on after its song ends, if the script
 /// doesn't call `recording_done()` first.
@@ -748,7 +748,17 @@ impl App {
                     .selected_text(resolution.label())
                     .show_ui(ui, |ui| {
                         for option in Resolution::ALL {
+                            if option == Resolution::V720 {
+                                ui.separator();
+                            }
                             ui.selectable_value(&mut resolution, option, option.label());
+                        }
+                        ui.separator();
+                        let custom = matches!(resolution, Resolution::Custom(..));
+                        if ui.selectable_label(custom, "Custom...").clicked() && !custom {
+                            // (starting from the size picked so far)
+                            let (w, h) = resolution.size();
+                            resolution = Resolution::custom(w as u32, h as u32);
                         }
                     });
                 ui.label("at");
@@ -763,6 +773,20 @@ impl App {
                      pauses. Bigger sizes cost the script more time per frame.",
                 );
             });
+            if let Resolution::Custom(w, h) = resolution {
+                let (mut w, mut h) = (w, h);
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    let range = CUSTOM_SIZES;
+                    ui.add(egui::DragValue::new(&mut w).range(range.clone()).speed(2.0).suffix(" wide"));
+                    ui.label("x");
+                    ui.add(egui::DragValue::new(&mut h).range(range).speed(2.0).suffix(" high"));
+                    if ui.small_button("Swap").on_hover_text("Landscape to portrait, or back").clicked() {
+                        std::mem::swap(&mut w, &mut h);
+                    }
+                });
+                resolution = Resolution::custom(w, h);
+            }
             let quality_info = match quality {
                 Quality::Standard => {
                     "Standard plays everywhere (browsers, Discord, phones). Color is stored at half \

@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use crate::ffmpeg;
 use crate::visualizer::StereoFrame;
 
-/// Recording sizes offered in Preferences.
+/// Recording sizes: the presets offered in Preferences, or any size.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Resolution {
     #[serde(rename = "720p")]
@@ -46,10 +46,43 @@ pub enum Resolution {
     P1440,
     #[serde(rename = "2160p")]
     P2160,
+    /// Portrait, for phone-shaped videos (Shorts, Reels, TikTok).
+    #[serde(rename = "720p-vertical")]
+    V720,
+    #[serde(rename = "1080p-vertical")]
+    V1080,
+    #[serde(rename = "1080-square")]
+    Square1080,
+    /// Any width and height (kept even, and within `CUSTOM_SIZES`).
+    #[serde(rename = "custom")]
+    Custom(u32, u32),
+}
+
+/// What a custom size's sides can be.
+pub const CUSTOM_SIZES: std::ops::RangeInclusive<u32> = 64..=4096;
+
+/// A custom size's side, made one the encoder takes: within `CUSTOM_SIZES`,
+/// and even (4:2:0 color needs that).
+fn custom_side(v: u32) -> u32 {
+    v.clamp(*CUSTOM_SIZES.start(), *CUSTOM_SIZES.end()) & !1
 }
 
 impl Resolution {
-    pub const ALL: [Resolution; 4] = [Resolution::P720, Resolution::P1080, Resolution::P1440, Resolution::P2160];
+    /// The presets, in the order they're offered.
+    pub const ALL: [Resolution; 7] = [
+        Resolution::P720,
+        Resolution::P1080,
+        Resolution::P1440,
+        Resolution::P2160,
+        Resolution::V720,
+        Resolution::V1080,
+        Resolution::Square1080,
+    ];
+
+    /// A custom size (see `custom_side`).
+    pub fn custom(width: u32, height: u32) -> Self {
+        Resolution::Custom(custom_side(width), custom_side(height))
+    }
 
     pub fn size(self) -> (usize, usize) {
         match self {
@@ -57,26 +90,48 @@ impl Resolution {
             Resolution::P1080 => (1920, 1080),
             Resolution::P1440 => (2560, 1440),
             Resolution::P2160 => (3840, 2160),
+            Resolution::V720 => (720, 1280),
+            Resolution::V1080 => (1080, 1920),
+            Resolution::Square1080 => (1080, 1080),
+            // (a hand-edited config could hold anything)
+            Resolution::Custom(w, h) => (custom_side(w) as usize, custom_side(h) as usize),
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Resolution::P720 => "720p (1280 x 720)",
-            Resolution::P1080 => "1080p (1920 x 1080)",
-            Resolution::P1440 => "1440p (2560 x 1440)",
-            Resolution::P2160 => "4K (3840 x 2160)",
+            Resolution::P720 => "720p (1280 x 720)".into(),
+            Resolution::P1080 => "1080p (1920 x 1080)".into(),
+            Resolution::P1440 => "1440p (2560 x 1440)".into(),
+            Resolution::P2160 => "4K (3840 x 2160)".into(),
+            Resolution::V720 => "720p vertical (720 x 1280)".into(),
+            Resolution::V1080 => "1080p vertical (1080 x 1920)".into(),
+            Resolution::Square1080 => "Square (1080 x 1080)".into(),
+            Resolution::Custom(..) => {
+                let (w, h) = self.size();
+                format!("Custom ({w} x {h})")
+            }
         }
     }
 
-    /// For `--video-size`: "720p", "1080p", "1440p", "2160p" or "4k".
+    /// For `--video-size`: "720p", "1080p", "1440p", "2160p" or "4k",
+    /// "vertical" (1080 x 1920), "720p-vertical", "square", or any
+    /// "WIDTHxHEIGHT".
     pub fn parse(text: &str) -> Option<Self> {
-        match text.to_ascii_lowercase().as_str() {
+        let text = text.to_ascii_lowercase();
+        match text.as_str() {
             "720p" | "720" => Some(Resolution::P720),
             "1080p" | "1080" => Some(Resolution::P1080),
             "1440p" | "1440" => Some(Resolution::P1440),
             "2160p" | "2160" | "4k" => Some(Resolution::P2160),
-            _ => None,
+            "vertical" | "1080p-vertical" => Some(Resolution::V1080),
+            "720p-vertical" => Some(Resolution::V720),
+            "square" => Some(Resolution::Square1080),
+            _ => {
+                let (w, h) = text.split_once('x')?;
+                let (w, h): (u32, u32) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
+                (CUSTOM_SIZES.contains(&w) && CUSTOM_SIZES.contains(&h)).then(|| Resolution::custom(w, h))
+            }
         }
     }
 }
@@ -665,5 +720,13 @@ mod tests {
         assert_eq!(Resolution::parse("4K").map(Resolution::size), Some((3840, 2160)));
         assert_eq!(Resolution::parse("1080p"), Some(Resolution::P1080));
         assert_eq!(Resolution::parse("999p"), None);
+        assert_eq!(Resolution::parse("vertical").map(Resolution::size), Some((1080, 1920)));
+        assert_eq!(Resolution::parse("1081x1921").map(Resolution::size), Some((1080, 1920)), "kept even");
+        assert_eq!(Resolution::parse("10x10"), None, "too small");
+        assert_eq!(Resolution::custom(9000, 3).size(), (4096, 64));
+        // Saved as before, plus the new ones.
+        assert_eq!(serde_json::to_string(&Resolution::P1080).unwrap(), "\"1080p\"");
+        let custom: Resolution = serde_json::from_str(&serde_json::to_string(&Resolution::custom(800, 600)).unwrap()).unwrap();
+        assert_eq!(custom.size(), (800, 600));
     }
 }
