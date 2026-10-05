@@ -145,6 +145,7 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 -- mouse() / has_focus()                 the mouse over the visualizer (see Docs)
 -- input_register(name, keys) / input(id) rebindable keys; typing_begin() for text
 -- setting_bool/int/float/color/string/selection(key, ...)  user-editable values
+-- recording() / recording_ready() / recording_done()  taking part in recordings
 
 function render(width, height, left, right)
     clear({ r = 16, g = 16, b = 24 })
