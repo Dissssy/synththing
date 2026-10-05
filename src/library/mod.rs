@@ -7,6 +7,7 @@
 
 pub mod admin;
 pub mod client;
+pub mod fingerprint;
 pub mod identity;
 pub mod server;
 
@@ -68,6 +69,7 @@ fn bundled_upload(category: &str, file_name: &str, source: &str) -> Option<Uploa
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         slug: Some(slugify(stem)),
         min_app_version: Some(min_app_version(source)),
+        remix_of: None,
     })
 }
 
@@ -150,6 +152,27 @@ pub fn mark_bundled(dir: &std::path::Path) {
             save_original(source);
         }
     }
+}
+
+/// The bundled visualizer or game `source` is a copy of (changed or not),
+/// as what a remix of it says, if it's one: for a script with no sidecar
+/// (copied by hand, or one from before sidecars).
+pub fn bundled_original(source: &str) -> Option<RemixOf> {
+    let fingerprint = fingerprint::Fingerprint::of(source);
+    crate::lua_visualizer::BUNDLED_SCRIPTS
+        .iter()
+        .filter(|(category, ..)| matches!(*category, "visualizers" | "games"))
+        .map(|&(_, file, original)| (file, original, fingerprint.similarity(&fingerprint::Fingerprint::of(original))))
+        .filter(|(.., similarity)| *similarity >= fingerprint::COPY)
+        .max_by(|a, b| a.2.total_cmp(&b.2))
+        .map(|(file, original, _)| RemixOf {
+            server: OFFICIAL_URL.to_string(),
+            id: String::new(),
+            author_id: Some(official_id()),
+            slug: Some(slugify(file.trim_end_matches(".lua"))),
+            sha256: sha256_hex(original.as_bytes()),
+            name: crate::lua_visualizer::display_name(std::path::Path::new(file)),
+        })
 }
 
 /// `synththing publish-bundled`: publish every bundled script (not the
@@ -328,6 +351,47 @@ pub struct ScriptDetails {
     /// Whether the key asked about (`?viewer=`) has given it an encore.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encored: Option<bool>,
+    /// What it's a remix of, if it's one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remix_of: Option<RemixLink>,
+    /// Its remixes here, newest first.
+    #[serde(default)]
+    pub remixes: Vec<ScriptSummary>,
+}
+
+/// What an upload is a remix of: the original, as its installed copy's
+/// sidecar knows it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct RemixOf {
+    /// The original's server; empty for the server it's uploaded to.
+    pub server: String,
+    /// Its ID; empty for a bundled script's copy that hasn't learned it
+    /// (then its author and slug find it).
+    pub id: String,
+    pub author_id: Option<String>,
+    pub slug: Option<String>,
+    /// The SHA-256 of the version remixed.
+    pub sha256: String,
+    pub name: String,
+}
+
+/// A remix's original, in its details.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RemixLink {
+    /// Empty for a script on the same server.
+    pub server: String,
+    pub id: String,
+    pub name: String,
+    /// The version remixed, when known.
+    pub version: Option<u32>,
+    /// It's been deleted (or hidden).
+    pub gone: bool,
+    /// Its author and slug, to find it by on its server when the ID isn't
+    /// known (a remix of a bundled script's copy).
+    #[serde(default)]
+    pub author_id: Option<String>,
+    #[serde(default)]
+    pub slug: Option<String>,
 }
 
 /// Why something can be reported: (as the API names it, as shown).
@@ -495,6 +559,10 @@ pub struct Upload {
     /// server knows functions the server doesn't).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_app_version: Option<String>,
+    /// What it's a remix of: a near-copy of a script that isn't credited
+    /// this way is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remix_of: Option<RemixOf>,
 }
 
 /// What an accepted upload comes back with, signed by the server
@@ -872,6 +940,7 @@ pub const API_SINCE: &[(&str, &str)] = &[
     ("setting_color", "0.1.1"),
     ("setting_string", "0.1.1"),
     ("setting_selection", "0.1.1"),
+    ("settings_preset", "0.4.3"),
     ("mouse", "0.1.1"),
     ("mouse_delta", "0.1.1"),
     ("scroll", "0.1.1"),
@@ -944,6 +1013,23 @@ pub fn min_app_version(source: &str) -> String {
         }
     }
     min.to_string()
+}
+
+/// The version this build runs scripts as: its own, or, a development
+/// build ahead of its version number, the newest function or option it
+/// has (`API_SINCE`, `OPTION_SINCE` name the release they'll ship in).
+pub fn supported_version() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        API_SINCE
+            .iter()
+            .chain(OPTION_SINCE)
+            .map(|(_, since)| *since)
+            .chain([env!("CARGO_PKG_VERSION")])
+            .filter_map(|v| semver::Version::parse(v).ok())
+            .max()
+            .map_or_else(|| env!("CARGO_PKG_VERSION").to_string(), |v| v.to_string())
+    })
 }
 
 /// Whether an app at `app` (a version) can run something needing `needs`.
@@ -1113,6 +1199,7 @@ mod tests {
             app_version: "0.4.0".into(),
             slug: Some("bars".into()),
             min_app_version: None,
+            remix_of: None,
         };
         assert_eq!(good.tags, ["chill", "retro"]);
         assert_eq!(check_upload(&good), Ok(()));
@@ -1181,6 +1268,11 @@ mod tests {
         // Nor does the script's own global function.
         assert_eq!(min_app_version("function seek() end function render() seek() end"), "0.1.1");
         assert!(runs_on("0.4.0", "0.4.1") && runs_on("0.4.0", "0.4.0") && !runs_on("0.4.1", "0.4.0"));
+        // This build runs every script whose functions it has, released or not.
+        for (name, since) in API_SINCE.iter().chain(OPTION_SINCE) {
+            assert!(runs_on(since, supported_version()), "{name}");
+        }
+        assert!(runs_on(env!("CARGO_PKG_VERSION"), supported_version()));
         // Names this build doesn't know (a newer function), but not the
         // script's own, Lua's, or locals.
         let newer = "local x = 1 function helper() end function render() helper() brand_new_thing() math.floor(x) end";

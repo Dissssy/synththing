@@ -25,6 +25,7 @@
 //! every script without one is queued.
 
 mod moderation;
+mod remixes;
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
@@ -456,6 +457,10 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 6 {
         db.execute_batch(moderation::SCHEMA_V6)?;
     }
+    if version < 7 {
+        db.execute_batch(remixes::SCHEMA_V7)?;
+    }
+    remixes::fingerprint_stored(&db)?;
     Ok(db)
 }
 
@@ -762,7 +767,10 @@ fn details(state: &State, id: &str, query: &HashMap<String, String>) -> Reply {
     match versions {
         Ok(versions) => {
             let encored = query.get("viewer").map(|key| moderation::has_encored(&db, id, key));
-            json(200, &ScriptDetails { summary, versions, encored })
+            match remixes::links(&db, id) {
+                Ok((remix_of, remixes)) => json(200, &ScriptDetails { summary, versions, encored, remix_of, remixes }),
+                Err(e) => error(500, format!("database: {e}")),
+            }
         }
         Err(e) => error(500, format!("database: {e}")),
     }
@@ -922,6 +930,7 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
     {
         return error(400, format!("it doesn't run on synththing {}: {problem}", env!("CARGO_PKG_VERSION")));
     }
+    let fingerprint = super::fingerprint::Fingerprint::of(&upload.source);
     let created = now();
     // The higher of the server's reckoning and the publisher's (a newer
     // app knows functions this server doesn't; claiming too high only hides
@@ -956,6 +965,19 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
         {
             return json(200, &signed_receipt(state, id.clone(), *latest, sha256));
         }
+    }
+    // What it's a remix of; a copy of someone else's script it doesn't
+    // credit that way isn't taken.
+    let remix = match upload.remix_of.as_ref().map(|r| remixes::resolve(&db, r)).transpose() {
+        Ok(remix) => remix,
+        Err(e) => return error(500, format!("database: {e}")),
+    };
+    let same = existing.as_ref().map(|(id, _)| id.as_str());
+    let asked_and_found = upload.remix_of.as_ref().zip(remix.as_ref());
+    match remixes::refuse_copy(&db, &upload.source, &fingerprint, author.as_deref(), same, asked_and_found) {
+        Ok(Some(why)) => return error(400, why),
+        Ok(None) => {}
+        Err(e) => return error(500, format!("database: {e}")),
     }
     // The daily limit, by address, for anything new (keys the server
     // trusts aside: the official publisher, by default).
@@ -1006,10 +1028,18 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
                     id
                 ],
             )?;
+            if let Some(remix) = &remix {
+                tx.execute(
+                    "UPDATE scripts SET remix_server = ?, remix_id = ?, remix_version = ?, remix_name = ?, remix_author_id = ?,
+                     remix_slug = ? WHERE id = ?",
+                    params![remix.server, remix.id, remix.version, remix.name, remix.author_id, remix.slug, id],
+                )?;
+            }
         } else {
             tx.execute(
                 "INSERT INTO scripts (id, name, description, category, tags, author_name, author_key, author_id, slug,
-                 latest, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                 latest, created, updated, remix_server, remix_id, remix_version, remix_name, remix_author_id, remix_slug)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     id,
                     upload.name,
@@ -1021,14 +1051,20 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
                     author_id,
                     slug,
                     created,
-                    created
+                    created,
+                    remix.as_ref().map(|r| r.server.clone()),
+                    remix.as_ref().map(|r| r.id.clone()),
+                    remix.as_ref().and_then(|r| r.version),
+                    remix.as_ref().map(|r| r.name.clone()),
+                    remix.as_ref().and_then(|r| r.author_id.clone()),
+                    remix.as_ref().and_then(|r| r.slug.clone()),
                 ],
             )?;
         }
         tx.execute(
-            "INSERT INTO versions (script_id, version, sha256, source, app_version, uploader_ip, created, min_app_version)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            params![id, version, sha256, upload.source, upload.app_version, ip, created, min_app_version],
+            "INSERT INTO versions (script_id, version, sha256, source, app_version, uploader_ip, created, min_app_version,
+             fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![id, version, sha256, upload.source, upload.app_version, ip, created, min_app_version, fingerprint.to_hex()],
         )?;
         tx.commit()
     });

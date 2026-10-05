@@ -640,6 +640,21 @@ A selection picks up to `max_selections` of a fixed option list; a pick past the
 
 Values persist to `<script>.lua.settings.json` next to the script and are re-applied on the next load (and on Restart), falling back to the script's own default for anything the sidecar doesn't have.
 
+### Presets
+
+```lua
+settings_preset(name, { key = value, ... })
+```
+
+A named set of setting values, offered at the top of the Settings window: picking it sets each setting it names (the rest stay as they are). Values are written as the settings take them: `true`, a number, a string, a color table `{ r, g, b }`, a list of option names for a selection; a value is made to fit its setting (clamped to an int's or float's range, unknown options dropped), and a key that isn't a setting is ignored. Call it once at the top; calling it again with the same name replaces that preset. The defaults in the `setting_*` calls stay the only defaults (Defaults, in the same list, puts every setting back to them).
+
+```lua
+settings_preset("Calm", { speed = 0.5, accent = { r = 120, g = 160, b = 255 } })
+settings_preset("Party", { speed = 3, shapes = { "star" } })
+```
+
+Users can save their own presets too (Save as preset, in the Settings window): kept in `<script>.lua.presets.json` next to the script, with no change to its code. Publishing a script with settings changed from the defaults offers to add them to it as a `settings_preset(...)` line, under its leading comment.
+
 ```lua
 local accent = setting_color("accent", { r = 51, g = 204, b = 255 })
 local bins = setting_int("bins", 36, 8, 96)

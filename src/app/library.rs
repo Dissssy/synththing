@@ -64,6 +64,9 @@ enum Event {
     /// A script's preview: the server, its ID, the version it's of, and
     /// the still and the animation (PNGs).
     Preview(String, String, u32, Result<(Vec<u8>, Option<Vec<u8>>), String>),
+    /// A script opened from a link to another server (a remix's original):
+    /// the server, its details.
+    Opened(String, Result<ScriptDetails, String>),
     /// An encore given or taken back: the server, the script, its encores now.
     Encored(String, String, Result<library::EncoreState, String>),
 }
@@ -144,12 +147,21 @@ struct PublishDraft {
     as_new: bool,
     /// Where the script was published before, if it was.
     published: Option<Installed>,
+    /// What it's a remix of (its `server` the original's), and who made
+    /// that, as shown.
+    remix: Option<(library::RemixOf, String)>,
     error: Option<String>,
     /// When the slug was last edited (looked up once typing pauses), and
     /// what the lookup found: (server, slug, the script using it).
     slug_edited: Option<Instant>,
     slug_asked: Option<(String, String)>,
     slug_found: Option<(String, String, Option<ScriptSummary>)>,
+    /// The script's settings as they are (when it's the one running), and
+    /// whether to add those that differ from the defaults to the script as
+    /// a preset, under this name.
+    settings: Vec<lua_visualizer::SettingDescriptor>,
+    add_preset: bool,
+    preset_name: String,
 }
 
 pub struct LibraryState {
@@ -178,6 +190,9 @@ pub struct LibraryState {
     busy: bool,
     /// An encore is being given or taken back.
     encoring: bool,
+    /// A link to a script on a server that isn't in use, waiting for the
+    /// user to say whether to add it (or turn it on).
+    confirm_server: Option<(String, library::RemixLink)>,
     /// Delete was clicked once (for this script); the next click confirms.
     confirm_delete: Option<(String, String)>,
     publish: Option<PublishDraft>,
@@ -226,6 +241,7 @@ impl LibraryState {
             preview: None,
             busy: false,
             encoring: false,
+            confirm_server: None,
             confirm_delete: None,
             publish: None,
             installed: HashMap::new(),
@@ -243,7 +259,7 @@ impl LibraryState {
     }
 
     pub fn publish_open(&self) -> bool {
-        self.publish.is_some() || self.update.is_some()
+        self.publish.is_some() || self.update.is_some() || self.confirm_server.is_some()
     }
 
     pub(super) fn my_id(&self) -> Option<String> {
@@ -396,6 +412,10 @@ impl App {
                     match result {
                         Ok(listing) => {
                             self.library.totals.insert(server.clone(), listing.total);
+                            // (One opened from a link is there already: this one takes its place.)
+                            self.library.results.retain(|f| {
+                                f.server != server || !listing.scripts.iter().any(|s| s.id == f.summary.id)
+                            });
                             self.library
                                 .results
                                 .extend(listing.scripts.into_iter().map(|summary| Found { server: server.clone(), summary }));
@@ -411,6 +431,10 @@ impl App {
                 Event::Details(server, result) => match result {
                     Ok(details) => {
                         if self.library.selected.as_ref().is_some_and(|(s, id)| *s == server && *id == details.summary.id) {
+                            // (Reached by a remix link: not among the results.)
+                            if !self.library.results.iter().any(|f| f.server == server && f.summary.id == details.summary.id) {
+                                self.library.results.insert(0, Found { server: server.clone(), summary: details.summary.clone() });
+                            }
                             self.fetch_library_preview(&server, &details);
                             self.library.details = Some((server, details));
                         }
@@ -500,6 +524,19 @@ impl App {
                         };
                     }
                 }
+                Event::Opened(server, result) => match result {
+                    Ok(details) => {
+                        let id = details.summary.id.clone();
+                        if !self.library.results.iter().any(|f| f.server == server && f.summary.id == id) {
+                            self.library.results.insert(0, Found { server: server.clone(), summary: details.summary.clone() });
+                        }
+                        self.library.selected = Some((server.clone(), id));
+                        self.library.confirm_delete = None;
+                        self.fetch_library_preview(&server, &details);
+                        self.library.details = Some((server, details));
+                    }
+                    Err(e) => self.status = format!("Couldn't open it: {e}"),
+                },
                 Event::Encored(server, id, result) => {
                     self.library.encoring = false;
                     match result {
@@ -537,11 +574,84 @@ impl App {
         }
     }
 
+    /// Asked before a link puts a server in use: add it (or turn it on) and
+    /// show the script, or not.
+    pub(super) fn confirm_server_ui(&mut self, ctx: &egui::Context) {
+        let Some((server, original)) = self.library.confirm_server.take() else { return };
+        let listed = server == library::official_url() || self.config.library.servers.iter().any(|s| s.url == server);
+        let mut go = false;
+        let mut close = false;
+        let response = egui::Modal::new(egui::Id::new("library_confirm_server")).show(ctx, |ui| {
+            ui.set_width(420.0);
+            if listed {
+                ui.heading(format!("Turn on {}?", host(&server)));
+                ui.label(format!(
+                    "\"{}\" is on {}, which is turned off in your library servers. Turn it on, and show it?",
+                    original.name,
+                    host(&server)
+                ));
+            } else {
+                ui.heading(format!("Add {}?", host(&server)));
+                ui.label(format!(
+                    "\"{}\" is on {}, which isn't one of your library servers. Add it, and show it?",
+                    original.name,
+                    host(&server)
+                ));
+            }
+            ui.weak("Its scripts then show up in your searches too. Preferences > Library turns it off again.");
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(if listed { "Turn on and show" } else { "Add and show" }).clicked() {
+                    go = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if go {
+            self.open_remote(server, original);
+        } else if !(close || response.should_close()) {
+            self.library.confirm_server = Some((server, original));
+        }
+    }
+
+    /// Show a script on another server (a remix's original), putting the
+    /// server in use first if it isn't.
+    fn open_remote(&mut self, server: String, original: library::RemixLink) {
+        if !self.config.library.enabled_servers().contains(&server) {
+            if server == library::official_url() {
+                self.config.library.official = true;
+            } else if let Some(listed) = self.config.library.servers.iter_mut().find(|s| s.url == server) {
+                listed.enabled = true;
+            } else {
+                self.config.library.servers.push(LibraryServer { url: server.clone(), enabled: true });
+            }
+            if let Err(e) = self.config.save() {
+                self.status = format!("Couldn't save preferences: {e}");
+            }
+            self.status = format!("{} is one of your library servers now.", host(&server));
+            // (Its key gets pinned on the way.)
+            self.library_search();
+        }
+        let viewer = self.library.identity.as_ref().map(Identity::public);
+        self.spawn_request(move || {
+            let id = match (original.id.is_empty(), &original.author_id, &original.slug) {
+                (false, ..) => Ok(original.id.clone()),
+                (true, Some(author), Some(slug)) => client::by_slug(&server, author, slug)
+                    .and_then(|found| found.map(|s| s.id).ok_or_else(|| "it isn't on that server (any more)".to_string())),
+                _ => Err("it doesn't say where to find it".to_string()),
+            };
+            let details = id.and_then(|id| client::details_as(&server, &id, viewer.as_deref()));
+            Event::Opened(server, details)
+        });
+    }
+
     /// Fetch the preview of the version of a script that Install would get
     /// (or the newest earlier one's, if it hasn't one).
     fn fetch_library_preview(&mut self, server: &str, details: &ScriptDetails) {
         self.library.preview = None;
-        let target = details.newest_for(env!("CARGO_PKG_VERSION")).or(details.newest()).map_or(0, |v| v.version);
+        let target = details.newest_for(library::supported_version()).or(details.newest()).map_or(0, |v| v.version);
         let pending = details.versions.iter().any(|v| v.version == target && v.preview == library::Preview::Pending);
         let found = details.preview_for(target).map(|v| (v.version, v.preview == library::Preview::Animated));
         let (version, state) = match found {
@@ -806,6 +916,7 @@ impl App {
         let mut show_author = None;
         let mut delete = None;
         let mut encore: Option<(String, String, bool)> = None;
+        let mut open_remote: Option<(String, library::RemixLink)> = None;
         let mut report: Option<(String, String, String, u32)> = None;
         let my_id = self.library.my_id();
         let official_id = library::official_id();
@@ -929,7 +1040,7 @@ impl App {
                 // Encores and reports (not of your own).
                 let here = self.library.details.as_ref().filter(|(ds, d)| *ds == server && d.summary.id == id).map(|(_, d)| d);
                 let encored = here.and_then(|d| d.encored) == Some(true);
-                let reportable = here.and_then(|d| d.newest_for(env!("CARGO_PKG_VERSION")).or(d.newest())).map(|v| v.version);
+                let reportable = here.and_then(|d| d.newest_for(library::supported_version()).or(d.newest())).map(|v| v.version);
                 let mine = s.author_id.is_some() && s.author_id == my_id;
                 ui.horizontal(|ui| {
                     let count = format!("{} encore{}", s.encores, if s.encores == 1 { "" } else { "s" });
@@ -966,7 +1077,7 @@ impl App {
                         "{versions} version{}; first published with synththing {made}",
                         if versions == 1 { "" } else { "s" }
                     ));
-                    let app = env!("CARGO_PKG_VERSION");
+                    let app = library::supported_version();
                     if let Some(newest) = d.newest()
                         && !library::runs_on(&newest.min_app_version, app)
                     {
@@ -978,6 +1089,50 @@ impl App {
                             None => format!("It needs synththing {} or newer.", newest.min_app_version),
                         };
                         ui.colored_label(ui.visuals().warn_fg_color, note);
+                    }
+                    // Where it came from, and what came of it.
+                    if let Some(original) = &d.remix_of {
+                        ui.add_space(6.0);
+                        ui.horizontal_wrapped(|ui| {
+                            if original.gone {
+                                ui.weak("Remixed from a deleted script.");
+                            } else if original.server.is_empty() {
+                                ui.label("Remix of");
+                                if ui.link(&original.name).on_hover_text("Show the original").clicked() {
+                                    pick = Some((server.clone(), original.id.clone()));
+                                }
+                                if let Some(version) = original.version {
+                                    ui.weak(format!("(version {version})"));
+                                }
+                            } else {
+                                // On another server: shown from there (added to the list first, if
+                                // it isn't in use).
+                                let there = library::resolve_server(&original.server);
+                                let in_use = servers.contains(&there);
+                                ui.label("Remix of");
+                                let hover = if in_use {
+                                    format!("Show the original, from {}", host(&there))
+                                } else {
+                                    format!("Add {} to your servers, and show the original from there", host(&there))
+                                };
+                                if ui.link(format!("\"{}\"", original.name)).on_hover_text(hover).clicked() {
+                                    open_remote = Some((there.clone(), original.clone()));
+                                }
+                                ui.label(format!("on {}", host(&there)));
+                            }
+                        });
+                    }
+                    if !d.remixes.is_empty() {
+                        ui.add_space(6.0);
+                        ui.label(format!("Remixes ({})", d.remixes.len()));
+                        for remix in &d.remixes {
+                            ui.horizontal(|ui| {
+                                if ui.link(&remix.name).clicked() {
+                                    pick = Some((server.clone(), remix.id.clone()));
+                                }
+                                ui.weak(format!("by {}", remix.author_name));
+                            });
+                        }
                     }
                 }
             });
@@ -1001,7 +1156,7 @@ impl App {
                     self.spawn_request(move || {
                         // The newest version this app can run.
                         let result = client::details(&server, &summary.id).and_then(|details| {
-                            let Some(version) = details.newest_for(env!("CARGO_PKG_VERSION")) else {
+                            let Some(version) = details.newest_for(library::supported_version()) else {
                                 let needs = details.newest().map(|v| v.min_app_version.clone()).unwrap_or_default();
                                 return Err(format!("it needs synththing {needs} or newer"));
                             };
@@ -1045,6 +1200,13 @@ impl App {
         if let Some((server, id, name, version)) = report {
             self.open_report(&server, &id, &name, version);
         }
+        if let Some((server, original)) = open_remote {
+            if self.config.library.enabled_servers().contains(&server) {
+                self.open_remote(server, original);
+            } else {
+                self.library.confirm_server = Some((server, original));
+            }
+        }
         if let Some(author) = show_author {
             self.library_show_author(Some(author));
         }
@@ -1056,11 +1218,31 @@ impl App {
         }
     }
 
-    fn open_publish(&mut self, script: PathBuf) {
+    /// Publish... (or, with `remix`, Publish remix... for a script
+    /// installed from someone else).
+    fn open_publish(&mut self, script: PathBuf, remix: bool) {
         self.flush_editor();
         let source = std::fs::read_to_string(&script).unwrap_or_default();
         let servers = self.config.library.enabled_servers();
-        let published = Installed::read(&script);
+        let installed = Installed::read(&script);
+        // A remix of what it was installed from; or, with nothing saying
+        // where it's from, of the bundled script it's a copy of, if it's one.
+        let remix = match &installed {
+            Some(original) if remix => Some((
+                library::RemixOf {
+                    server: original.server.clone(),
+                    id: original.id.clone(),
+                    author_id: original.author_id.clone(),
+                    slug: original.slug.clone(),
+                    sha256: original.sha256.clone(),
+                    name: original.name.clone(),
+                },
+                original.author_name.clone().or_else(|| original.author_id.as_ref().map(|id| format!("#{id}"))).unwrap_or_else(|| "someone".into()),
+            )),
+            Some(_) => None,
+            None => library::bundled_original(&source).map(|r| (r, "synththing".to_string())),
+        };
+        let published = if remix.is_some() { None } else { installed };
         let category = script
             .file_name()
             .and_then(|n| n.to_str())
@@ -1071,11 +1253,17 @@ impl App {
                 _ => None,
             })
             .unwrap_or("visualizer");
-        let name = published.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| lua_visualizer::display_name(&script));
-        // (Back to the server it went to before, if that's still in use.)
+        let name = match (&published, &remix) {
+            (Some(p), _) => p.name.clone(),
+            (None, Some((original, _))) if Installed::read(&script).is_some() => format!("{} remix", original.name),
+            _ => lua_visualizer::display_name(&script),
+        };
+        // (Back to the server it went to before, or the original's, if
+        // that's still in use.)
         let server = published
             .as_ref()
             .map(|p| p.server.clone())
+            .or_else(|| remix.as_ref().map(|(r, _)| library::resolve_server(&r.server)))
             .filter(|s| servers.contains(s))
             .or_else(|| servers.first().cloned())
             .unwrap_or_default();
@@ -1090,11 +1278,19 @@ impl App {
             anonymous: false,
             as_new: false,
             published,
+            remix,
             error: None,
             // (Looked up straight away.)
             slug_edited: Some(Instant::now() - SLUG_CHECK_AFTER),
             slug_asked: None,
             slug_found: None,
+            settings: if self.visualizer.script().path() == Some(script.as_path()) {
+                self.visualizer.script().settings()
+            } else {
+                Vec::new()
+            },
+            add_preset: false,
+            preset_name: "My settings".into(),
             script,
         });
     }
@@ -1156,7 +1352,16 @@ impl App {
                     ))
                     .clicked()
                 {
-                    self.start_update(path);
+                    self.start_update(path.clone());
+                }
+                let servers = !self.config.library.enabled_servers().is_empty();
+                if ui
+                    .add_enabled(servers, egui::Button::new("Publish remix..."))
+                    .on_hover_text(format!("Share your take on \"{}\": it's credited as the original", installed.name))
+                    .on_disabled_hover_text("Turn on a library server first (Preferences > Library)")
+                    .clicked()
+                {
+                    self.open_publish(path, true);
                 }
             }
             _ => {
@@ -1167,7 +1372,7 @@ impl App {
                     .on_disabled_hover_text("Turn on a library server first (Preferences > Library)")
                     .clicked()
                 {
-                    self.open_publish(path);
+                    self.open_publish(path, false);
                 }
             }
         }
@@ -1221,7 +1426,7 @@ impl App {
                     }
                 }
                 let details = client::details(&server, &installed.id)?;
-                let app = env!("CARGO_PKG_VERSION");
+                let app = library::supported_version();
                 if installed.version == 0 {
                     installed.version = details.versions.iter().find(|v| v.sha256 == installed.sha256).map_or(0, |v| v.version);
                 }
@@ -1389,8 +1594,21 @@ impl App {
             .filter(|_| !draft.anonymous && !draft.as_new);
         let response = egui::Modal::new(egui::Id::new("library_publish")).show(ctx, |ui| {
             ui.set_width(480.0);
-            ui.heading(if updating.is_some() { "Publish a new version" } else { "Publish a script" });
+            ui.heading(match (&updating, &draft.remix) {
+                (Some(_), _) => "Publish a new version",
+                (None, Some(_)) => "Publish a remix",
+                (None, None) => "Publish a script",
+            });
             ui.weak(draft.script.display().to_string());
+            if let Some((original, by)) = &draft.remix {
+                let credit = format!("A remix of \"{}\" by {by}: it links back to it, crediting it.", original.name);
+                with_info(
+                    ui,
+                    "Scripts here are shared under CC BY: building on one is welcome, as long as the original is \
+                     credited. A near-copy of someone else's script that isn't published as a remix is refused.",
+                    |ui| ui.label(credit),
+                );
+            }
             ui.add_space(6.0);
             egui::Grid::new("publish_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                 ui.label("Name");
@@ -1481,6 +1699,19 @@ impl App {
                     draft.as_new = !as_update;
                 }
             }
+            let changed: Vec<&str> =
+                draft.settings.iter().filter(|d| d.value != d.default).map(|d| d.key.as_str()).collect();
+            if !changed.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut draft.add_preset, "Add your settings to it as a preset:").on_hover_text(format!(
+                        "Your {} ({}) become a settings_preset(...) line in the script, so others can pick them in its \
+                         Settings window. Your copy gets the line too.",
+                        if changed.len() == 1 { "change" } else { "changes" },
+                        changed.join(", ")
+                    ));
+                    ui.add_enabled(draft.add_preset, egui::TextEdit::singleline(&mut draft.preset_name).desired_width(140.0));
+                });
+            }
             ui.add_enabled_ui(!signed_only, |ui| {
                 ui.checkbox(&mut draft.anonymous, "Post anonymously")
                     .on_hover_text(
@@ -1550,7 +1781,22 @@ impl App {
     /// Check the draft and upload it (signed unless it's anonymous, the
     /// identity made first if there's none yet).
     fn send_publish(&mut self, draft: &mut PublishDraft, updating: Option<String>) {
-        let source = std::fs::read_to_string(&draft.script).unwrap_or_default();
+        let mut source = std::fs::read_to_string(&draft.script).unwrap_or_default();
+        // Your settings, as a preset in the script (here too, so your copy
+        // is what's published).
+        let preset_name = draft.preset_name.trim().to_string();
+        if draft.add_preset && !preset_name.is_empty() {
+            let line = lua_visualizer::preset_line(&preset_name, &draft.settings);
+            source = lua_visualizer::with_preset_line(&source, &preset_name, &line);
+            if self.visualizer.script().path() == Some(draft.script.as_path()) {
+                self.editor_text = source.clone();
+                self.apply_editor();
+            } else if let Err(e) = std::fs::write(&draft.script, &source) {
+                draft.error = Some(format!("Couldn't add the preset: {e}"));
+                return;
+            }
+            draft.add_preset = false;
+        }
         let min_app_version = Some(library::min_app_version(&source));
         let slug = if draft.anonymous { None } else { Some(updating.unwrap_or_else(|| draft.slug.trim().to_string())) };
         let upload = Upload {
@@ -1563,6 +1809,15 @@ impl App {
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             min_app_version,
             slug,
+            remix_of: draft.remix.as_ref().map(|(original, _)| library::RemixOf {
+                // (Empty: on the server it's going to.)
+                server: if library::resolve_server(&original.server) == draft.server {
+                    String::new()
+                } else {
+                    original.server.clone()
+                },
+                ..original.clone()
+            }),
         };
         if let Err(problem) = library::check_upload(&upload) {
             draft.error = Some(format!("Can't publish it: {problem}."));

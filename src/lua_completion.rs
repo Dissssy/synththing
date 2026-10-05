@@ -69,6 +69,7 @@ pub const HOST_API: &[(&str, &str)] = &[
     ("setting_color", "setting_color(key, default, [labels]) -> {r,g,b}"),
     ("setting_string", "setting_string(key, default, [labels]) -> string"),
     ("setting_selection", "setting_selection(key, options, defaults, max_selections, [labels]) -> selected"),
+    ("settings_preset", "settings_preset(name, {key = value, ...}): a named set of setting values, picked in the Settings window, once at the top"),
     ("mouse", "mouse() -> x, y (buffer pixels), or nil while the pointer isn't over the visualizer"),
     ("mouse_delta", "mouse_delta() -> dx, dy: pointer movement since last frame, in buffer pixels"),
     ("scroll", "scroll() -> dx, dy: scrolling since last frame (positive y is up)"),

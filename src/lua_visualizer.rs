@@ -145,6 +145,7 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 -- mouse() / has_focus()                 the mouse over the visualizer (see Docs)
 -- input_register(name, keys) / input(id) rebindable keys; typing_begin() for text
 -- setting_bool/int/float/color/string/selection(key, ...)  user-editable values
+-- settings_preset(name, {key = value, ...})  a named set of them to pick
 -- recording() / recording_ready() / recording_done()  taking part in recordings
 
 function render(width, height, left, right)
@@ -302,6 +303,7 @@ pub fn rename_script(old: &Path, new_name: &str) -> Result<PathBuf> {
         (sidecar_path(old), sidecar_path(&new)),
         (store_path(old), store_path(&new)),
         (controls_path(old), controls_path(&new)),
+        (user_presets_path(old), user_presets_path(&new)),
         (crate::library::installed_path(old), crate::library::installed_path(&new)),
     ] {
         if old_sidecar.exists() {
@@ -474,7 +476,7 @@ const MAX_POLYGON_POINTS: usize = 4096;
 /// A setting's current (or default) value. The type is always known from
 /// context (the matching [`SettingKind`] variant), so there's no separate
 /// discriminant check needed beyond the `match` arms already doing one.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SettingValue {
     Bool(bool),
     Int(i64),
@@ -503,7 +505,120 @@ pub struct SettingDescriptor {
     pub key: String,
     pub kind: SettingKind,
     pub value: SettingValue,
+    /// What the script gave as its default (made to fit, like the value).
+    pub default: SettingValue,
     pub labels: ItemLabels,
+}
+
+/// A named set of setting values: one a script offers
+/// (`settings_preset`), or one the user saved (`<script>.lua.presets.json`).
+/// Values are as the settings file keeps them.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, Deserialize)]
+pub struct SettingsPreset {
+    pub name: String,
+    pub values: serde_json::Map<String, serde_json::Value>,
+}
+
+/// `value` (as the settings file and presets keep it) as a value of a
+/// setting of `kind`, made to fit; `None` if it can't be one.
+pub fn setting_from_json(kind: &SettingKind, value: &serde_json::Value) -> Option<SettingValue> {
+    Some(match kind {
+        SettingKind::Bool => SettingValue::Bool(value.as_bool()?),
+        SettingKind::Int { min, max } => SettingValue::Int(value.as_i64().or_else(|| value.as_f64().map(|f| f.round() as i64))?.clamp(*min, *max)),
+        SettingKind::Float { min, max } => SettingValue::Float(value.as_f64()?.clamp(*min, *max)),
+        SettingKind::Color => {
+            let channel = |c: &str| value.get(c).and_then(serde_json::Value::as_f64).map(|v| v.clamp(0.0, 255.0) as u8);
+            SettingValue::Color([channel("r")?, channel("g")?, channel("b")?])
+        }
+        SettingKind::String => SettingValue::String(value.as_str()?.to_string()),
+        SettingKind::Selection { options, max_selections } => {
+            let picked: Vec<String> = value
+                .as_array()?
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .filter(|s| options.contains(s))
+                .take(*max_selections)
+                .collect();
+            SettingValue::Selection(picked)
+        }
+    })
+}
+
+/// A user's presets for a script: `<script>.lua.presets.json`.
+pub fn user_presets_path(script_path: &Path) -> PathBuf {
+    let mut name = script_path.as_os_str().to_os_string();
+    name.push(".presets.json");
+    PathBuf::from(name)
+}
+
+pub fn load_user_presets(script_path: &Path) -> Vec<SettingsPreset> {
+    fs::read_to_string(user_presets_path(script_path)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+pub fn save_user_presets(script_path: &Path, presets: &[SettingsPreset]) -> std::io::Result<()> {
+    let path = user_presets_path(script_path);
+    if presets.is_empty() {
+        return match fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        };
+    }
+    fs::write(path, serde_json::to_string_pretty(presets).unwrap_or_default())
+}
+
+/// The settings that differ from their defaults, as a line of Lua that
+/// offers them as a preset: `settings_preset("name", { speed = 2 })`.
+pub fn preset_line(name: &str, descriptors: &[SettingDescriptor]) -> String {
+    let lua_string = |s: &str| format!("{s:?}");
+    let value = |v: &SettingValue| match v {
+        SettingValue::Bool(b) => b.to_string(),
+        SettingValue::Int(i) => i.to_string(),
+        SettingValue::Float(f) => format!("{f}"),
+        SettingValue::Color([r, g, b]) => format!("{{ r = {r}, g = {g}, b = {b} }}"),
+        SettingValue::String(s) => lua_string(s),
+        SettingValue::Selection(items) => {
+            format!("{{ {} }}", items.iter().map(|s| lua_string(s)).collect::<Vec<_>>().join(", "))
+        }
+    };
+    let is_name = |k: &str| {
+        k.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && !crate::lua_analysis::KEYWORDS.contains(&k)
+    };
+    let fields: Vec<String> = descriptors
+        .iter()
+        .filter(|d| d.value != d.default)
+        .map(|d| {
+            let key = if is_name(&d.key) { d.key.clone() } else { format!("[{}]", lua_string(&d.key)) };
+            format!("{key} = {}", value(&d.value))
+        })
+        .collect();
+    format!("settings_preset({}, {{ {} }})", lua_string(name), fields.join(", "))
+}
+
+/// `source` with `line` (a `settings_preset` call) added under its leading
+/// comment, or in place of the one with the same name.
+pub fn with_preset_line(source: &str, name: &str, line: &str) -> String {
+    let same = format!("settings_preset({:?},", name);
+    let mut lines: Vec<&str> = source.lines().collect();
+    if let Some(at) = lines.iter().position(|l| l.trim_start().starts_with(&same)) {
+        lines[at] = line;
+    } else {
+        let after_comment = lines.iter().position(|l| !l.trim_start().starts_with("--")).unwrap_or(lines.len());
+        let insert = if after_comment > 0 { after_comment } else { 0 };
+        if after_comment > 0 {
+            lines.insert(insert, line);
+            lines.insert(insert, "");
+        } else {
+            lines.insert(0, "");
+            lines.insert(0, line);
+        }
+    }
+    let mut text = lines.join("\n");
+    if source.ends_with('\n') {
+        text.push('\n');
+    }
+    text
 }
 
 /// Where a setting or control is listed, and what it's for: the optional
@@ -556,6 +671,8 @@ struct SettingsStore {
     descriptors: Vec<SettingDescriptor>,
     /// Sidecar values not yet claimed by a registering `setting_*` call.
     pending: HashMap<String, serde_json::Value>,
+    /// What `settings_preset` offered, in order.
+    presets: Vec<SettingsPreset>,
 }
 
 impl SettingsStore {
@@ -582,6 +699,7 @@ impl SettingsStore {
             key: key.to_string(),
             kind: SettingKind::Bool,
             value: SettingValue::Bool(initial),
+            default: SettingValue::Bool(default),
             labels: ItemLabels::default(),
         });
         initial
@@ -602,6 +720,7 @@ impl SettingsStore {
             key: key.to_string(),
             kind: SettingKind::Int { min, max },
             value: SettingValue::Int(initial),
+            default: SettingValue::Int(default.clamp(min, max)),
             labels: ItemLabels::default(),
         });
         initial
@@ -622,6 +741,7 @@ impl SettingsStore {
             key: key.to_string(),
             kind: SettingKind::Float { min, max },
             value: SettingValue::Float(initial),
+            default: SettingValue::Float(default.clamp(min, max)),
             labels: ItemLabels::default(),
         });
         initial
@@ -648,6 +768,7 @@ impl SettingsStore {
             key: key.to_string(),
             kind: SettingKind::Color,
             value: SettingValue::Color(initial),
+            default: SettingValue::Color(default),
             labels: ItemLabels::default(),
         });
         initial
@@ -667,6 +788,7 @@ impl SettingsStore {
             key: key.to_string(),
             kind: SettingKind::String,
             value: SettingValue::String(initial.clone()),
+            default: SettingValue::String(default.to_string()),
             labels: ItemLabels::default(),
         });
         initial
@@ -692,11 +814,12 @@ impl SettingsStore {
                 .take(max_selections)
                 .collect::<Vec<_>>()
         });
-        let initial = from_sidecar.filter(|v| !v.is_empty()).unwrap_or(valid_defaults);
+        let initial = from_sidecar.filter(|v| !v.is_empty()).unwrap_or_else(|| valid_defaults.clone());
         self.descriptors.push(SettingDescriptor {
             key: key.to_string(),
             kind: SettingKind::Selection { options, max_selections },
             value: SettingValue::Selection(initial.clone()),
+            default: SettingValue::Selection(valid_defaults),
             labels: ItemLabels::default(),
         });
         initial
@@ -747,7 +870,7 @@ fn save_sidecar(script_path: &Path, store: &SettingsStore) {
     }
 }
 
-fn setting_value_to_json(v: &SettingValue) -> serde_json::Value {
+pub fn setting_value_to_json(v: &SettingValue) -> serde_json::Value {
     match v {
         SettingValue::Bool(b) => serde_json::Value::Bool(*b),
         SettingValue::Int(i) => serde_json::Value::from(*i),
@@ -1849,6 +1972,11 @@ impl LuaVisualizer {
         self.compiled.as_ref().map(|c| c.settings.borrow().descriptors.clone()).unwrap_or_default()
     }
 
+    /// The presets the script offers (`settings_preset`).
+    pub fn presets(&self) -> Vec<SettingsPreset> {
+        self.compiled.as_ref().map(|c| c.settings.borrow().presets.clone()).unwrap_or_default()
+    }
+
     /// Apply a value edited through the Settings window and persist it to the
     /// script's sidecar file (if it has one, a script with no path yet,
     /// e.g. mid-creation, just keeps the change in memory).
@@ -2192,6 +2320,7 @@ fn compile(
     let settings = Rc::new(RefCell::new(SettingsStore {
         descriptors: Vec::new(),
         pending: pending_settings,
+        presets: Vec::new(),
     }));
     let log = Rc::new(RefCell::new(LogHistory {
         to_app_log: Rc::clone(app_log),
@@ -3780,6 +3909,46 @@ fn register_globals(
             let value = store.get_or_register_string(&key, &default);
             store.label(&key, labels);
             Ok(value)
+        })?,
+    )?;
+
+    let store = Rc::clone(settings);
+    globals.set(
+        "settings_preset",
+        lua.create_function(move |_, (name, values): (String, Table)| {
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                return Err(mlua::Error::runtime("settings_preset: give it a name"));
+            }
+            let mut map = serde_json::Map::new();
+            for pair in values.pairs::<String, Value>() {
+                let (key, value) = pair?;
+                let json = match value {
+                    Value::Boolean(b) => serde_json::Value::Bool(b),
+                    Value::Integer(i) => serde_json::Value::from(i),
+                    Value::Number(n) => serde_json::Value::from(n),
+                    Value::String(s) => serde_json::Value::String(s.to_str()?.to_string()),
+                    Value::Table(t) if t.contains_key("r")? => {
+                        let [r, g, b] = table_to_rgb(&t)?;
+                        serde_json::json!({ "r": r, "g": g, "b": b })
+                    }
+                    Value::Table(t) => serde_json::Value::from(table_to_strings(&t)?),
+                    other => {
+                        return Err(mlua::Error::runtime(format!(
+                            "settings_preset: {key} can't be a {}",
+                            other.type_name()
+                        )));
+                    }
+                };
+                map.insert(key, json);
+            }
+            let mut store = store.borrow_mut();
+            let preset = SettingsPreset { name, values: map };
+            match store.presets.iter_mut().find(|p| p.name == preset.name) {
+                Some(existing) => *existing = preset,
+                None => store.presets.push(preset),
+            }
+            Ok(())
         })?,
     )?;
 
@@ -5475,6 +5644,55 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
             .map(|d| d.value)
             .unwrap();
         assert!(matches!(value, SettingValue::Bool(true)));
+    }
+
+    /// `settings_preset` offers presets (the same name again replaces one),
+    /// each setting remembers its default, presets' values fit the settings
+    /// they're for, and a preset written from changed settings reads back.
+    #[test]
+    fn settings_presets() {
+        let source = "-- A test.\n-- Two lines of comment.\n\n\
+                      settings_preset('Fast', { speed = 9, tint = { r = 1, g = 2, b = 3 } })\n\
+                      settings_preset('Fast', { speed = 3 })\n\
+                      settings_preset('Shapes', { shapes = { 'star', 'nope' }, ['odd key'] = true })\n\
+                      function render()\n\
+                        setting_int('speed', 2, 1, 5)\n\
+                        setting_color('tint', { r = 10, g = 20, b = 30 })\n\
+                        setting_selection('shapes', { 'circle', 'star' }, { 'circle' }, 1)\n\
+                        setting_bool('odd key', false)\n\
+                      end\n";
+        let mut visualizer = LuaVisualizer::new(source.to_string(), None, 44_100);
+        let mut buffer = vec![0u32; 16 * 16];
+        visualizer.render(&mut buffer, 16, 16, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        assert_eq!(visualizer.error(), None);
+        let presets = visualizer.presets();
+        assert_eq!(presets.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Fast", "Shapes"]);
+        assert_eq!(presets[0].values.len(), 1, "replaced");
+        let settings = visualizer.settings();
+        let speed = settings.iter().find(|d| d.key == "speed").unwrap();
+        assert_eq!(speed.default, SettingValue::Int(2));
+        // Made to fit: 9 is past the max; an option that isn't one is dropped.
+        assert_eq!(setting_from_json(&speed.kind, &serde_json::json!(9)), Some(SettingValue::Int(5)));
+        let shapes = settings.iter().find(|d| d.key == "shapes").unwrap();
+        assert_eq!(
+            setting_from_json(&shapes.kind, &presets[1].values["shapes"]),
+            Some(SettingValue::Selection(vec!["star".into()]))
+        );
+
+        // Changed settings, as a preset in the script, under its comment.
+        visualizer.set_setting("speed", SettingValue::Int(4));
+        visualizer.set_setting("odd key", SettingValue::Bool(true));
+        let line = preset_line("Mine", &visualizer.settings());
+        assert_eq!(line, "settings_preset(\"Mine\", { speed = 4, [\"odd key\"] = true })");
+        let with = with_preset_line(source, "Mine", &line);
+        assert!(with.starts_with("-- A test.\n-- Two lines of comment.\n\nsettings_preset(\"Mine\""), "{with}");
+        // Again, changed: replaced in place.
+        let again = with_preset_line(&with, "Mine", "settings_preset(\"Mine\", { speed = 1 })");
+        assert_eq!(again.matches("settings_preset(\"Mine\"").count(), 1);
+        let mut reread = LuaVisualizer::new(with, None, 44_100);
+        reread.render(&mut buffer, 16, 16, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        let mine = reread.presets().into_iter().find(|p| p.name == "Mine").unwrap();
+        assert_eq!((mine.values["speed"].as_i64(), mine.values["odd key"].as_bool()), (Some(4), Some(true)));
     }
 
     /// Not a correctness test, prints how long a `render` call takes for each

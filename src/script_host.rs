@@ -24,7 +24,7 @@ use crate::engine::EngineView;
 use crate::live::LiveCommand;
 use crate::lua_visualizer::{
     self, Action, Binding, DebugSnapshot, HALF_RATE_INTERVAL, LogEntry, LuaVisualizer, PerfSummary,
-    PlaybackRequest, RecordingTake, ScriptOptions, StateRequest, StateSnapshot, SettingDescriptor, SettingValue, Transport,
+    PlaybackRequest, RecordingTake, ScriptOptions, StateRequest, StateSnapshot, SettingDescriptor, SettingValue, SettingsPreset, Transport,
 };
 use crate::midi_notes::NoteList;
 use crate::visualizer::{CursorRequest, NotesSnapshot, StereoFrame, Visualizer, VisualizerInput};
@@ -83,6 +83,7 @@ pub struct ScriptStatus {
     pub running: bool,
     pub error: Option<String>,
     pub settings: Vec<SettingDescriptor>,
+    pub presets: Vec<SettingsPreset>,
     pub actions: Vec<Action>,
     pub perf: PerfSummary,
     pub debug: Option<DebugSnapshot>,
@@ -245,6 +246,11 @@ impl ScriptHost {
 
     pub fn settings(&self) -> Vec<SettingDescriptor> {
         self.status().status.settings.clone()
+    }
+
+    /// The presets the script offers (`settings_preset`).
+    pub fn presets(&self) -> Vec<SettingsPreset> {
+        self.status().status.presets.clone()
     }
 
     pub fn actions(&self) -> Vec<Action> {
@@ -515,6 +521,7 @@ impl Worker {
             running: visualizer.is_running(),
             error: visualizer.error().map(str::to_string),
             settings: visualizer.settings(),
+            presets: visualizer.presets(),
             actions: visualizer.actions(),
             perf: visualizer.perf_summary(),
             debug: visualizer.debug_snapshot(),

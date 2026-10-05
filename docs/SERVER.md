@@ -66,7 +66,7 @@ The code is part of the program; it's off unless the server's config has mail se
 - **License**: everything on a server is under its stated license, CC BY 4.0 on the official server, shown in the publish dialog. Credit is given through remix links.
 - **Categories**: one of Visualizer, Game, Toy (interactive, not a game), Example. The bundled scripts use the same list.
 - **Limits**: a size cap (256 KB, sprites are inline), a few uploads a day per key and per IP.
-- **Copies**: a byte-identical upload (by SHA-256), or one identical once whitespace is normalized, is refused or marked as a copy of the existing one. Uploading any shipped version of a bundled script is refused.
+- **Copies**: each version is fingerprinted (`library/fingerprint.rs`: its Lua tokens, by `full_moon`'s lexer, so spacing and comments don't count, as a MinHash of 5-token runs). An upload that's 80% or more the same as someone else's script here, or a bundled visualizer or game, is refused unless it's a remix of it (or of something that one was remixed from); a remix whose code is exactly the original's is refused too. An author's own scripts, and remixes of them, are never copies of their new ones; scripts under 40 tokens aren't judged.
 - **Versions**: the owner's update adds a version; old versions stay downloadable. Installs record which version they are.
 - **Minimum app version**: every entry in `HOST_API` gets the version it arrived in (a test makes sure new ones have it). At publish, the app's Lua analysis lists the host functions and `script_options` keys the script uses, and the minimum is the newest of those; the server checks it the same way. Indirect calls (`_G["name"]`) aren't seen; the version it was published from is kept as an upper bound. The Library warns about (or hides) scripts the user's app is too old for.
 
@@ -78,7 +78,7 @@ The app still ships them, so a first run works offline. At startup, each bundled
 
 ## Remixes
 
-- An installed script's sidecar records where it came from (server, ID, version). Publishing a script with that sidecar marks it a remix of that version.
+- An installed script's sidecar records where it came from (server, ID, version). Publish remix... (beside Update) publishes it as a remix of that version: the upload's `remix_of` names the original by ID (or, for a bundled script's copy, by author and slug) and the version by its SHA-256. A script on another server is recorded as named (its server, ID, and author and slug), and the app's link to it opens it from there, asking first to add that server, or turn it on, if it isn't in use. A copy of a bundled script with no sidecar is recognized by its fingerprint and published as a remix of it.
 - A script lists its remixes ("Remixes (3)"), and a remix links to its original ("Remix of ..."). Encores aren't shared: the original keeps its own, and a remix earns its own.
 - Deleting a script whose remixes exist: the original goes; the remixes then say "remixed from a deleted script".
 

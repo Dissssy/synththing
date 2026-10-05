@@ -217,6 +217,12 @@ pub struct App {
     script_window: Option<script_windows::ScriptWindow>,
     /// The category picked in each (Settings, Controls, Debug).
     script_window_tab: [usize; 3],
+    /// The Settings window's presets: the user's for the script open
+    /// (read when it changes), the one picked last (theirs or not), and the
+    /// name typed for Save as preset.
+    user_presets: Option<(PathBuf, Vec<lua_visualizer::SettingsPreset>)>,
+    preset_picked: Option<(bool, String)>,
+    preset_name: String,
     /// The tables opened in Debug > Variables.
     state_request: lua_visualizer::StateRequest,
     /// The Script Library tab.
@@ -407,6 +413,9 @@ impl App {
             binding_capture: None,
             script_window: None,
             script_window_tab: [0; 3],
+            user_presets: None,
+            preset_picked: None,
+            preset_name: String::new(),
             state_request: Default::default(),
             library: library::LibraryState::new(),
             script_previews: Default::default(),
@@ -2816,6 +2825,7 @@ impl eframe::App for App {
         self.record_window_ui(&ctx, view);
         self.script_window_ui(&ctx);
         self.publish_ui(&ctx);
+        self.confirm_server_ui(&ctx);
         self.update_ui(&ctx);
         self.report_ui(&ctx);
         self.moderation_ui(&ctx);

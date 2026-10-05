@@ -281,6 +281,7 @@ mod tests {
             app_version: env!("CARGO_PKG_VERSION").into(),
             slug: None,
             min_app_version: None,
+            remix_of: None,
         }
     }
 
@@ -384,6 +385,79 @@ mod tests {
 
     /// Signed uploads: a slug used again is a new version, owned by its
     /// key; deletes need it; signed-only servers refuse anonymous uploads.
+    /// Remixes link both ways; near-copies of someone else's script (or a
+    /// bundled one) are refused unless they're remixes of it, and remixes
+    /// with no changes are refused; your own scripts aren't copies.
+    #[test]
+    fn remixes_and_copies() {
+        use crate::library::RemixOf;
+        let dir = std::env::temp_dir().join(format!("synththing-remix-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false }"#).unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let body: String = (0..30)
+            .map(|i| format!("    rect({i}, {}, {} + w / 9, h - {i}, {{ r = {}, g = 40, b = 90 }})\n", i * 3, i * 2, i * 8))
+            .collect();
+        let original = format!("function render(w, h)\n    clear({{ r = 0, g = 0, b = 0 }})\n{body}end\n");
+        let mut bars = upload_of("Bars", "visualizer", &original);
+        bars.slug = Some("bars".into());
+        let first = upload(&base, &key, &bars, Some(&alice)).unwrap();
+
+        // Bob's take on it: nearly the same.
+        let tweaked = original.replacen("g = 40", "g = 200", 2);
+        let mut take = upload_of("Bars Again", "visualizer", &tweaked);
+        take.slug = Some("bars-again".into());
+        let refused = upload(&base, &key, &take, Some(&bob)).unwrap_err();
+        assert!(refused.contains("\"Bars\"") && refused.contains("remix"), "{refused}");
+        take.remix_of = Some(RemixOf {
+            server: String::new(),
+            id: first.id.clone(),
+            author_id: Some(alice.id()),
+            slug: Some("bars".into()),
+            sha256: first.sha256.clone(),
+            name: "Bars".into(),
+        });
+        let remix = upload(&base, &key, &take, Some(&bob)).unwrap();
+        let original_details = details(&base, &first.id).unwrap();
+        assert_eq!(original_details.remixes.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), [remix.id.as_str()]);
+        let link = details(&base, &remix.id).unwrap().remix_of.unwrap();
+        assert_eq!((link.id.as_str(), link.version, link.gone), (first.id.as_str(), Some(1), false));
+        // A remix of the remix is fine too (it resembles the original).
+        let mut again = upload_of("Bars Thrice", "visualizer", &tweaked.replacen("b = 90", "b = 10", 2));
+        again.remix_of = Some(RemixOf { id: remix.id.clone(), sha256: remix.sha256.clone(), name: "Bars Again".into(), ..Default::default() });
+        assert!(upload(&base, &key, &again, None).is_ok());
+        // No changes: refused.
+        let mut same = upload_of("Same Bars", "visualizer", &original);
+        same.remix_of = Some(RemixOf { id: first.id.clone(), sha256: first.sha256.clone(), name: "Bars".into(), ..Default::default() });
+        assert!(upload(&base, &key, &same, None).unwrap_err().contains("change something"));
+        // Alice's own copy isn't a copy.
+        let mut mine = upload_of("Bars 2", "visualizer", &tweaked);
+        mine.slug = Some("bars-2".into());
+        assert!(upload(&base, &key, &mine, Some(&alice)).is_ok());
+
+        // A bundled script: refused as is, taken as a remix.
+        let disco = crate::lua_visualizer::bundled_default("disco.lua").unwrap().replacen("255", "250", 2);
+        let copy = upload_of("My Disco", "visualizer", &disco);
+        assert!(upload(&base, &key, &copy, None).unwrap_err().contains("comes with synththing"));
+        let credited = Upload { remix_of: crate::library::bundled_original(&disco), ..copy };
+        let mine = upload(&base, &key, &credited, None).unwrap();
+        // Linked to the official server's disco, found there by author and slug.
+        let link = details(&base, &mine.id).unwrap().remix_of.unwrap();
+        assert_eq!(link.server, crate::library::OFFICIAL_URL);
+        assert_eq!(link.author_id, Some(crate::library::official_id()));
+        assert_eq!(link.slug.as_deref(), Some("disco"));
+
+        // The original deleted: the remix says so.
+        delete(&base, &key, &first.id, &alice).unwrap();
+        assert!(details(&base, &remix.id).unwrap().remix_of.unwrap().gone);
+        running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Encores (not your own; given and taken back), reports (one open
     /// per key), and admins: the server's own key, keys it makes admins,
     /// hiding, resolving, banning.

@@ -11,7 +11,8 @@ use eframe::egui;
 
 use super::{App, categories_body, debug_var_ui, info_icon, settings_row_ui};
 use crate::lua_visualizer::{
-    Action, Binding, ItemLabels, LogLevel, STATE_PAGE, SettingValue, StateVar, display_name,
+    self, Action, Binding, ItemLabels, LogLevel, STATE_PAGE, SettingDescriptor, SettingValue, SettingsPreset, StateVar,
+    display_name,
 };
 
 /// Which window is open.
@@ -177,6 +178,8 @@ impl App {
             ui.weak("This script has no settings.");
             return;
         }
+        self.presets_row_ui(ui, &descriptors);
+        ui.separator();
         let groups = groups(descriptors.iter().map(|d| &d.labels));
         let mut changed: Option<(String, SettingValue)> = None;
         let mut index = self.script_window_tab[ScriptWindow::Settings.slot()];
@@ -193,6 +196,103 @@ impl App {
         self.script_window_tab[ScriptWindow::Settings.slot()] = index;
         if let Some((key, value)) = changed {
             self.visualizer.script().set_setting(key, value);
+        }
+    }
+
+    /// Presets: pick one (Defaults, the script's, or yours) to set every
+    /// setting it has; save the settings as one of yours; delete one.
+    fn presets_row_ui(&mut self, ui: &mut egui::Ui, descriptors: &[SettingDescriptor]) {
+        let path = self.visualizer.script().path().map(std::path::Path::to_path_buf);
+        if self.user_presets.as_ref().map(|(p, _)| p) != path.as_ref() {
+            self.user_presets = path.as_ref().map(|p| (p.clone(), lua_visualizer::load_user_presets(p)));
+            self.preset_picked = None;
+        }
+        let script_presets = self.visualizer.script().presets();
+        let yours = self.user_presets.as_ref().map(|(_, p)| p.clone()).unwrap_or_default();
+        let mut apply: Option<Vec<(String, SettingValue)>> = None;
+        let mut picked = self.preset_picked.clone();
+        let values_of = |preset: &SettingsPreset| -> Vec<(String, SettingValue)> {
+            descriptors
+                .iter()
+                .filter_map(|d| {
+                    let value = lua_visualizer::setting_from_json(&d.kind, preset.values.get(&d.key)?)?;
+                    Some((d.key.clone(), value))
+                })
+                .collect()
+        };
+        let mut save = false;
+        let mut delete = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Preset");
+            let shown = picked.as_ref().map_or("Choose...", |(_, name)| name.as_str());
+            egui::ComboBox::from_id_salt("settings_preset").selected_text(shown).show_ui(ui, |ui| {
+                if ui.selectable_label(false, "Defaults").on_hover_text("Every setting back to the script's default").clicked() {
+                    apply = Some(descriptors.iter().map(|d| (d.key.clone(), d.default.clone())).collect());
+                    picked = Some((false, "Defaults".into()));
+                }
+                if !script_presets.is_empty() {
+                    ui.label(egui::RichText::new("From the script").weak().small());
+                }
+                for preset in &script_presets {
+                    if ui.selectable_label(picked.as_ref() == Some(&(false, preset.name.clone())), &preset.name).clicked() {
+                        apply = Some(values_of(preset));
+                        picked = Some((false, preset.name.clone()));
+                    }
+                }
+                if !yours.is_empty() {
+                    ui.label(egui::RichText::new("Yours").weak().small());
+                }
+                for preset in &yours {
+                    if ui.selectable_label(picked.as_ref() == Some(&(true, preset.name.clone())), &preset.name).clicked() {
+                        apply = Some(values_of(preset));
+                        picked = Some((true, preset.name.clone()));
+                    }
+                }
+            });
+            if picked.as_ref().is_some_and(|(theirs, _)| *theirs)
+                && ui.small_button("Delete").on_hover_text("Delete this preset of yours").clicked()
+            {
+                delete = true;
+            }
+            ui.separator();
+            ui.add(egui::TextEdit::singleline(&mut self.preset_name).hint_text("name").desired_width(120.0));
+            if ui
+                .add_enabled(path.is_some() && !self.preset_name.trim().is_empty(), egui::Button::new("Save as preset"))
+                .on_hover_text("Keep the settings as they are now as a preset of yours, next to the script")
+                .clicked()
+            {
+                save = true;
+            }
+        });
+        if let Some(values) = apply {
+            for (key, value) in values {
+                self.visualizer.script().set_setting(key, value);
+            }
+        }
+        self.preset_picked = picked;
+        let Some(path) = path else { return };
+        let mut changed = None;
+        if save {
+            let name = self.preset_name.trim().to_string();
+            let values = descriptors.iter().map(|d| (d.key.clone(), lua_visualizer::setting_value_to_json(&d.value))).collect();
+            let mut presets = yours.clone();
+            let preset = SettingsPreset { name: name.clone(), values };
+            match presets.iter_mut().find(|p| p.name == name) {
+                Some(existing) => *existing = preset,
+                None => presets.push(preset),
+            }
+            self.preset_picked = Some((true, name));
+            self.preset_name.clear();
+            changed = Some(presets);
+        }
+        if delete && let Some((_, name)) = self.preset_picked.take() {
+            changed = Some(yours.into_iter().filter(|p| p.name != name).collect());
+        }
+        if let Some(presets) = changed {
+            match lua_visualizer::save_user_presets(&path, &presets) {
+                Ok(()) => self.user_presets = Some((path, presets)),
+                Err(e) => self.status = format!("Couldn't save the presets: {e}"),
+            }
         }
     }
 
