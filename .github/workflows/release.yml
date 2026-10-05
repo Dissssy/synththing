@@ -91,7 +91,11 @@ jobs:
   # The server's container image (docs/DEPLOY.md): the Linux build just
   # added, in deploy/release.Dockerfile's runtime, pushed to
   # ghcr.io/<owner>/synththing as :<version> and :latest.
+  #
+  # Off for now (it works: 0.4.1's image built): the image goes public with
+  # the lighter server-only build (TODO). Remove the `if` to turn it on.
   docker:
+    if: false
     needs: linux
     runs-on: ubuntu-latest
     permissions:

@@ -551,6 +551,8 @@ Smaller:
     - every `eframe::egui` import outside app becomes `egui`.
     Then CI builds --no-default-features too, and the image
     (deploy/release.Dockerfile, Dockerfile) drops the desktop libraries.
+    Then turn the release workflow's docker job back on (it's `if: false`
+    for now; it worked for 0.4.1) and make the ghcr.io package public.
 
 [L][.] shared script library (long term)
     A place to share scripts (they're sandboxed: the worst a script can do
