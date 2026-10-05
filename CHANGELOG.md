@@ -11,6 +11,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 - The Script Settings tab is gone, to leave room: Settings, Controls and Debug buttons above the visualizer each open a window laid out like Preferences. Scripts can sort their settings and controls into groups and explain them on hover: `{ group = "Movement", info = "..." }` as the last argument of `setting_*` and `input_register` (gamepad_demo and settings_demo show it).
 - In Controls, each binding is a button: click to remove it, right-click to rebind it in place. + adds one and waits for its key.
 - Debug has the script's variables, live: its top-level locals and its own globals, with tables opened one level at a time (50 entries, then more on request), plus its last `debug_locals()`, its log, and how long it takes to draw.
+- Scripts get Lua's `coroutine` library, to spread big jobs over frames (the watchdog covers coroutines too).
+- highway.lua: big songs are read and charted a bit per frame with a progress line, so the visualizer no longer freezes (a 280,000-note song that used to hit the watchdog charts in a few seconds); recordings start when the game does and end after a few seconds of results (or on leaving them), and in Auto it plays itself (the track last played, else PLAY ALL) without keeping the score, the take ending with the song. Its controls and settings are grouped.
 - highway.lua: the track menu plays the song (scroll to seek, Space to pause) and SOLO (I) plays only the selected track, so you can tell which is which. GUITAR mode (G) plays it like Guitar Hero: five frets held and a strum (Up/Down, or a guitar controller's strum bar), with HOPOs and taps that can be fretted without strumming.
 
 ## 0.3.3 (2026-10-03)

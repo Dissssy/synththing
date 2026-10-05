@@ -679,6 +679,26 @@ Debug > Performance shows how long `render()` takes (average and worst over the 
 
 Watch out for very large MIDI files: some have hundreds of thousands or millions of notes, and `notes_between(0, playback().length)` on one builds a table entry for every one of them, which can take seconds, during which the script can't draw anything. A script that reads the whole song should spread the work over several frames (a slice of the song per frame) or limit how much it reads. The app marks MIDI files over 100,000 notes with a red ! in the song lists and asks before playing one.
 
+Lua's `coroutine` library is there for exactly that (along with `math`, `string` and `table`; no `io`, `os` or `debug`): write the work as one function that calls `coroutine.yield()` every so often, and resume it once per frame. It picks up where it left off, and the frame draws as usual in between, a progress bar say. The watchdog covers coroutines too. `highway.lua` reads and charts songs this way (its `work()` and `run_job()`), in 2-second windows of `notes_between`.
+
+```lua
+local job = coroutine.create(function()
+    for t0 = 0, playback().length, 2 do
+        for _, n in ipairs(notes_between(t0, t0 + 2)) do
+            -- ... (n.start >= t0 to take each note once)
+        end
+        coroutine.yield() -- the rest next frame
+    end
+end)
+
+function render(width, height)
+    if coroutine.status(job) ~= "dead" then
+        local ok, err = coroutine.resume(job)
+        if not ok then error(err, 0) end
+    end
+end
+```
+
 Scripts run on a thread of their own, so a slow one never freezes the app: the window, menus and playback carry on, and the visualizer keeps showing the last frame the script finished. When one frame (or loading the script) has taken over a second, a notice in the visualizer's bottom-left corner says so, with a Stop button. Picking another script, applying an edit or restarting stops a script that busy first, rather than waiting for it.
 
 A watchdog stops a runaway script on its own: if one run of the script's code (its top level when it loads, or one `render()` call) goes on for more than 10 seconds (3 seconds in `run-script`), it's stopped with an error saying so. Stopped either way, `render()` isn't called again until the script is changed or restarted (F5). An endless loop ends up there, and so does far too much work in one frame. Time spent inside a single app function (one huge `notes_between`, say) counts, but can only be stopped once it returns.
@@ -833,7 +853,7 @@ Visualizers:
 
 Games:
 
-- `highway.lua`, a Guitar Hero style game charted on the fly from any track of the song: chords, sustains, drums by kit piece, difficulties and practice speeds; songs load paused for it (`script_options`), and it switches songs within the playlist (`next_track`)
+- `highway.lua`, a Guitar Hero style game charted on the fly from any track of the song: chords, sustains, drums by kit piece, difficulties and practice speeds; songs load paused for it (`script_options`), it switches songs within the playlist (`next_track`), charts a bit per frame (coroutines), and takes part in recordings (`record_prepare`, `record_auto`: it can play itself)
 - `snake.lua`, one snake per channel hunting apples spawned by note-ons; apples are sprites, a text scoreboard, and a `player_channel` setting to steer one snake yourself with rebindable steering actions (best length saved with `store_set`); worth reading end to end
 - `note_runner.lua`, a platformer whose level is the music: notes are platforms, channels take turns being solid; rebindable controls, recolored player sprite (`palette`, `tint`), best scores per song (`song_id`)
 

@@ -145,7 +145,7 @@ pub fn shape_of_call(function: &str) -> Option<Shape> {
 }
 
 /// Lua's own globals scripts have (the base library, `math`, `string`,
-/// `table`), with signatures.
+/// `table`, `coroutine`), with signatures.
 pub const LUA_GLOBALS: &[(&str, &str)] = &[
     ("assert", "assert(v, [message]) -> v: error with `message` unless v is truthy"),
     ("error", "error(message, [level]): raise an error"),
@@ -168,6 +168,7 @@ pub const LUA_GLOBALS: &[(&str, &str)] = &[
     ("math", "the math library: math.floor, math.sin, math.random, math.pi, ..."),
     ("string", "the string library: string.format, string.sub, ..."),
     ("table", "the table library: table.insert, table.remove, table.sort, ..."),
+    ("coroutine", "the coroutine library: coroutine.create, coroutine.resume, coroutine.yield, ..."),
 ];
 
 pub const MATH: &[(&str, &str)] = &[
@@ -224,6 +225,17 @@ pub const TABLE: &[(&str, &str)] = &[
     ("unpack", "table.unpack(list, [i, [j]]) -> list[i], ..., list[j]"),
 ];
 
+pub const COROUTINE: &[(&str, &str)] = &[
+    ("create", "coroutine.create(f) -> co: a coroutine that runs f when resumed"),
+    ("resume", "coroutine.resume(co, ...) -> ok, values...: run co until it yields or ends (ok false: it errored)"),
+    ("yield", "coroutine.yield(...): pause the running coroutine, handing ... to resume"),
+    ("status", "coroutine.status(co) -> \"suspended\", \"running\", \"normal\" or \"dead\""),
+    ("wrap", "coroutine.wrap(f) -> a function that resumes a new coroutine running f each call"),
+    ("isyieldable", "coroutine.isyieldable() -> whether the running code can yield (it's in a coroutine)"),
+    ("running", "coroutine.running() -> co, is_main"),
+    ("close", "coroutine.close(co) -> ok: close a suspended or dead coroutine"),
+];
+
 pub const KEYWORDS: &[&str] = &[
     "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in", "local", "nil",
     "not", "or", "repeat", "return", "then", "true", "until", "while",
@@ -234,6 +246,7 @@ fn library(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
         "math" => Some(MATH),
         "string" => Some(STRING),
         "table" => Some(TABLE),
+        "coroutine" => Some(COROUTINE),
         _ => None,
     }
 }

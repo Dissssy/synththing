@@ -2146,7 +2146,9 @@ fn compile(
 ) -> Result<Compiled, String> {
     // No io/os/ffi/debug: a visualizer script has no legitimate reason to
     // touch the filesystem or spawn processes, even one the user just wrote.
-    let libs = StdLib::TABLE | StdLib::STRING | StdLib::MATH;
+    // Coroutines are plain Lua (for spreading work over frames), and the
+    // watchdog's hook carries over into them.
+    let libs = StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::COROUTINE;
     let lua = Lua::new_with(libs, LuaOptions::new()).map_err(|e| e.to_string())?;
 
     // The watchdog: script code that runs past its deadline (an endless
@@ -2158,7 +2160,7 @@ fn compile(
     {
         let deadline = Rc::clone(&deadline);
         let stop = Arc::clone(stop);
-        lua.set_hook(mlua::HookTriggers::new().every_nth_instruction(10_000), move |_, _| {
+        lua.set_global_hook(mlua::HookTriggers::new().every_nth_instruction(10_000), move |_, _| {
             if stop.load(Ordering::Relaxed) {
                 return Err(mlua::Error::runtime(stopped_message()));
             }
@@ -4688,6 +4690,26 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         // An endless loop at the top level is a compile error, not a hang.
         visualizer.set_source("while true do end function render() end".into());
         assert!(visualizer.error().unwrap_or_default().contains("watchdog"), "{:?}", visualizer.error());
+    }
+
+    #[test]
+    fn coroutines_work_and_the_watchdog_reaches_into_them() {
+        let script = "local co = coroutine.create(function() for i = 1, 3 do coroutine.yield(i) end end)
+            local stuck = coroutine.create(function() while true do end end)
+            function render()
+                local _, n = coroutine.resume(co)
+                log('got ' .. tostring(n))
+                if FRAME == 2 then
+                    local ok, err = coroutine.resume(stuck)
+                    log(tostring(ok) .. ' ' .. tostring(err))
+                end
+            end";
+        let mut visualizer = LuaVisualizer::with_watchdog(script.to_string(), None, 44_100, Duration::from_millis(300));
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "got 1");
+        frame(&mut visualizer, &sample_playback());
+        let log = last_log(&visualizer);
+        assert!(log.starts_with("false") && log.contains("watchdog"), "{log}");
     }
 
     #[test]

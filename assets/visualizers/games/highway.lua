@@ -22,8 +22,18 @@
 -- the combo's going, taps (dark centres: fast runs) by fretting alone any time. Strumming
 -- with nothing to hit breaks the combo, like a ghost tap. Guitar controllers show up as
 -- gamepads: frets on A, B, Y, X and LB (green to orange), strum on the d-pad.
+--
+-- A big song is read and charted a bit per frame (a coroutine, see work()), so the menu
+-- shows its progress instead of the visualizer freezing.
+--
+-- Recording (synththing > Record...): the menu isn't in the video. Played by you (Manual),
+-- the video starts when you start the game, countdown included, and the results stay in it
+-- for a few seconds (or until you leave them). Played by itself (Auto), it charts the song,
+-- picks the track you last played on it (else PLAY ALL, else the busiest), plays every note
+-- itself with no high score kept, and the take ends with the song. Then the recording
+-- stops, or a playlist moves on to its next song.
 
-script_options({ start_paused = true })
+script_options({ start_paused = true, record_prepare = true, record_auto = true })
 
 local LANE_COLORS = {
     { r = 60,  g = 220, b = 90 },
@@ -38,21 +48,22 @@ local LANE_KEYS = {
 }
 local LANE_INPUT = {}
 for i = 1, 5 do
-    LANE_INPUT[i] = input_register("lane " .. i, LANE_KEYS[i])
+    LANE_INPUT[i] = input_register("lane " .. i, LANE_KEYS[i], { group = "Lanes" })
 end
-local START = input_register("start", { "enter" })
-local PAUSE = input_register("pause", { "space" })
-local BACK = input_register("back to menu", { "backspace" })
-local PREV = input_register("previous track", { "left" })
-local NEXT = input_register("next track", { "right" })
-local HARDER = input_register("harder", { "up" })
-local EASIER = input_register("easier", { "down" })
-local SPEED = input_register("practice speed", { "s" })
-local SOLO = input_register("solo track", { "i" })
-local GUITAR = input_register("guitar mode", { "g" })
-local STRUM = input_register("strum", { "up", "down", "pad_dpad_up", "pad_dpad_down" })
-local NEXT_SONG = input_register("next song", { "n" })
-local PREV_SONG = input_register("previous song", { "b" })
+local STRUM = input_register("strum", { "up", "down", "pad_dpad_up", "pad_dpad_down" },
+    { group = "Lanes", info = "GUITAR mode: strum while holding a note's frets." })
+local START = input_register("start", { "enter" }, { group = "Menu", info = "Start the game; on the results, back to the menu." })
+local PREV = input_register("previous track", { "left" }, { group = "Menu" })
+local NEXT = input_register("next track", { "right" }, { group = "Menu" })
+local HARDER = input_register("harder", { "up" }, { group = "Menu" })
+local EASIER = input_register("easier", { "down" }, { group = "Menu" })
+local SPEED = input_register("practice speed", { "s" }, { group = "Menu" })
+local SOLO = input_register("solo track", { "i" }, { group = "Menu", info = "Hear only the selected track while the menu plays the song." })
+local GUITAR = input_register("guitar mode", { "g" }, { group = "Menu" })
+local NEXT_SONG = input_register("next song", { "n" }, { group = "Menu", info = "The next song in the playlist." })
+local PREV_SONG = input_register("previous song", { "b" }, { group = "Menu", info = "The previous song in the playlist." })
+local PAUSE = input_register("pause", { "space" }, { group = "Game", info = "In the menu, pauses the song's preview." })
+local BACK = input_register("back to menu", { "backspace" }, { group = "Game" })
 
 -- gap: least time between chords (song seconds), chord: most notes in one chord
 local DIFFS = {
@@ -94,8 +105,44 @@ local particles = {}
 local popup = nil
 local result_best = 0
 local new_best = false
+local auto_play = false -- recording in Auto: the game plays itself
+local bot_press = {}    -- lane -> until when the bot's press shows
+local results_time = 0  -- how long the results have been up (a recording's take ends after a while)
+local RESULTS_IN_VIDEO = 5
+local CROWD_LABELS = { group = "Look", info = "The crowd and lights behind the highway." }
 
 -- helpers -------------------------------------------------------------------
+
+-- Reading and charting a song can take a while for a big one, so it runs as a coroutine,
+-- a bit each frame: the loops call work() as they go, which yields once a frame's worth is
+-- done (and does nothing outside a job, when something needs a chart right away). A
+-- frame's worth is a few milliseconds' (each unit is about a note looked at).
+local WORK_PER_FRAME = 30000
+local job, job_label, job_units = nil, "", 0
+
+local function work(n)
+    job_units = job_units + (n or 1)
+    if job_units >= WORK_PER_FRAME and coroutine.isyieldable() then
+        job_units = 0
+        coroutine.yield()
+    end
+end
+
+local function start_job(label, fn)
+    job, job_label, job_units = coroutine.create(fn), label, 0
+end
+
+-- One frame's worth of the job, if there is one.
+local function run_job()
+    local co = job
+    if not co then return end
+    local ok, err = coroutine.resume(co)
+    if job == co and coroutine.status(co) == "dead" then job = nil end
+    if not ok then
+        job = nil
+        error(err, 0)
+    end
+end
 
 local function fmt(n)
     local s = tostring(math.floor(n))
@@ -220,6 +267,34 @@ local function bar_segments(len)
     return segs
 end
 
+-- A min-heap of notes by when they stop (for medley_analysis's sweep).
+local function heap_push(h, n)
+    h[#h + 1] = n
+    local i = #h
+    while i > 1 do
+        local up = i // 2
+        if h[up].stop <= h[i].stop then break end
+        h[up], h[i] = h[i], h[up]
+        i = up
+    end
+end
+
+local function heap_pop(h)
+    local top = h[1]
+    h[1] = h[#h]
+    h[#h] = nil
+    local i = 1
+    while true do
+        local l, r, m = i * 2, i * 2 + 1, i
+        if h[l] and h[l].stop < h[m].stop then m = l end
+        if h[r] and h[r].stop < h[m].stop then m = r end
+        if m == i then break end
+        h[m], h[i] = h[i], h[m]
+        i = m
+    end
+    return top
+end
+
 local function medley_analysis(real_tracks, len)
     local segs = bar_segments(len)
     local buckets, feats, chans = {}, {}, {}
@@ -229,6 +304,7 @@ local function medley_analysis(real_tracks, len)
         chans[#chans + 1] = tr.ch
         local s = 1
         for _, n in ipairs(tr.notes) do
+            work()
             while segs[s + 1] and n.start >= segs[s + 1].t0 do s = s + 1 end
             local b = buckets[s][tr.ch]
             if not b then
@@ -249,11 +325,18 @@ local function medley_analysis(real_tracks, len)
                 for _, n in ipairs(b) do melodic[#melodic + 1] = n end
             end
         end
+        table.sort(melodic, function(a, b) return a.start < b.start end) -- (for the sweep below)
+        work(#melodic)
         for ch, b in pairs(buckets[s]) do
             local count = #b
             local seen_key, seen_gap = {}, {}
             local distinct, distinct_gap, changes, vel, top = 0, 0, 0, 0, 0
+            -- the other parts' notes sounding as each of this part's starts: a sweep in
+            -- start order, counting the notes sounding by pitch (all of them, and this
+            -- part's own), with a heap to drop each one when it stops
+            local next_m, sounding, by_key, own_key = 1, {}, {}, {}
             for k, n in ipairs(b) do
+                work()
                 if not seen_key[n.key] then
                     seen_key[n.key] = true
                     distinct = distinct + 1
@@ -272,13 +355,27 @@ local function medley_analysis(real_tracks, len)
                     end
                 end
                 if ch ~= 9 then
+                    while melodic[next_m] and melodic[next_m].start <= n.start + 0.03 do
+                        local o = melodic[next_m]
+                        work()
+                        heap_push(sounding, o)
+                        by_key[o.key] = (by_key[o.key] or 0) + 1
+                        if o.channel == ch then own_key[o.key] = (own_key[o.key] or 0) + 1 end
+                        next_m = next_m + 1
+                    end
+                    while sounding[1] and sounding[1].stop <= n.start do
+                        local o = heap_pop(sounding)
+                        by_key[o.key] = by_key[o.key] - 1
+                        if o.channel == ch then own_key[o.key] = own_key[o.key] - 1 end
+                    end
                     local is_top = true
-                    for _, o in ipairs(melodic) do
-                        if o.channel ~= ch and o.key > n.key and o.start <= n.start + 0.03 and o.stop > n.start then
+                    for key = n.key + 1, 127 do
+                        if (by_key[key] or 0) > (own_key[key] or 0) then
                             is_top = false
                             break
                         end
                     end
+                    work(8)
                     if is_top then top = top + 1 end
                 end
             end
@@ -308,6 +405,7 @@ local function medley_for(track, diff)
 
     local best, from = {}, {}
     for s = 1, S do
+        work(#m.chans * #m.chans)
         local seg, f = m.segs[s], m.feats[s]
         local dur = math.max(0.25, seg.t1 - seg.t0)
         local any = next(f) ~= nil
@@ -355,6 +453,7 @@ local function medley_for(track, diff)
             if not last or last.ch ~= pick[s] then
                 result.parts[#result.parts + 1] = { t = m.segs[s].t0, ch = pick[s] }
             end
+            work(#b)
             for _, n in ipairs(b) do result.notes[#result.notes + 1] = n end
         end
     end
@@ -371,36 +470,44 @@ end
 
 -- analysis and charting -----------------------------------------------------
 
+-- The song's tracks, each with its notes (plus PLAY ALL, for two or more).
 local function analyze(p)
-    tracks, charts = {}, {}
-    if not p.song_id or not p.length then return end
+    local found = {}
+    if not p.song_id or not p.length then return found end
     local by_ch = {}
-    for _, n in ipairs(notes_between(0, p.length)) do
-        local t = by_ch[n.channel]
-        if not t then
-            t = { ch = n.channel, notes = {} }
-            by_ch[n.channel] = t
+    -- (in windows, each note in the one it starts in, so a huge song is read a bit at a time)
+    local WINDOW = 2
+    for t0 = 0, p.length, WINDOW do
+        for _, n in ipairs(notes_between(t0, t0 + WINDOW)) do
+            if n.start >= t0 and n.start < t0 + WINDOW then
+                work()
+                local t = by_ch[n.channel]
+                if not t then
+                    t = { ch = n.channel, notes = {} }
+                    by_ch[n.channel] = t
+                end
+                t.notes[#t.notes + 1] = n
+            end
         end
-        t.notes[#t.notes + 1] = n
     end
     for ch = 0, 15 do
         local t = by_ch[ch]
         if t then
             local span = math.max(1, t.notes[#t.notes].start - t.notes[1].start)
             t.nps = #t.notes / span
-            tracks[#tracks + 1] = t
+            found[#found + 1] = t
         end
     end
-    if #tracks >= 2 then
-        local m = { ch = "all", medley = true, by_diff = {}, analysis = medley_analysis(tracks, p.length) }
+    if #found >= 2 then
+        local m = { ch = "all", medley = true, by_diff = {}, analysis = medley_analysis(found, p.length) }
         local r = medley_for(m, 2)
         if #r.notes > 0 then
             m.notes = r.notes
             m.nps = #r.notes / math.max(1, r.notes[#r.notes].start - r.notes[1].start)
-            table.insert(tracks, 1, m)
+            table.insert(found, 1, m)
         end
     end
-    sel_track = math.max(1, math.min(sel_track, #tracks))
+    return found
 end
 
 local function drum_lane(key, lanes)
@@ -431,6 +538,7 @@ local function mark_kinds(gems)
     local groups = {}
     local i = 1
     while i <= #gems do
+        work()
         local grp = { first = i, t = gems[i].t, lanes = {} }
         while gems[i] and gems[i].t == grp.t do
             gems[i].group = grp.first
@@ -442,14 +550,15 @@ local function mark_kinds(gems)
         groups[#groups + 1] = grp
     end
     for gi, grp in ipairs(groups) do
+        work(4)
         local prev = groups[gi - 1]
+        grp.b = beats_at(grp.t)
+        grp.gap = prev and grp.b - prev.b or math.huge
         local kind = "strum"
-        if prev and grp.size == 1 and not prev.lanes[gems[grp.first].lane]
-                and beats_at(grp.t) - beats_at(prev.t) <= 1 / 3 + 0.01 then
+        if prev and grp.size == 1 and not prev.lanes[gems[grp.first].lane] and grp.gap <= 1 / 3 + 0.01 then
             kind = "hopo"
         end
         grp.kind = kind
-        grp.gap = prev and beats_at(grp.t) - beats_at(prev.t) or math.huge
     end
     -- taps: runs of fast single notes
     local run_start = nil
@@ -477,6 +586,7 @@ local function build_chart(track, diff, lanes)
     local groups = {}
     local i = 1
     while i <= #notes do
+        work()
         local g = { t = notes[i].start, notes = {}, stop = 0 }
         g.ch = notes[i].channel
         g.drums = g.ch == 9
@@ -492,6 +602,7 @@ local function build_chart(track, diff, lanes)
     local kept = {}
     local last_t = -math.huge
     for _, g in ipairs(groups) do
+        work()
         if g.t - last_t >= d.gap then
             kept[#kept + 1] = g
             last_t = g.t
@@ -505,6 +616,7 @@ local function build_chart(track, diff, lanes)
     local prev_top, prev_lane, prev_t, prev_ch = nil, nil, -math.huge, nil
     local lo_i, hi_i = 1, 1
     for gi, g in ipairs(kept) do
+        work(hi_i - lo_i + 2)
         local next_t = kept[gi + 1] and kept[gi + 1].t or math.huge
         local glanes = {}
 
@@ -584,14 +696,51 @@ end
 
 -- The lanes in use: always five in GUITAR mode.
 local function lane_count()
-    local chosen = setting_int("lanes", 4, 3, 5) -- (read either way, so it stays in Settings)
+    local chosen = setting_int("lanes", 4, 3, 5, { group = "Gameplay", info = "How many lanes (GUITAR mode always has five)." })
+    -- (read either way, so it stays in Settings)
     return guitar and 5 or chosen
 end
 
+local function chart_key(track, diff, lanes)
+    return track.ch .. ":" .. diff .. ":" .. lanes
+end
+
 local function get_chart(track, diff, lanes)
-    local key = track.ch .. ":" .. diff .. ":" .. lanes
+    local key = chart_key(track, diff, lanes)
     if not charts[key] then charts[key] = build_chart(track, diff, lanes) end
     return charts[key]
+end
+
+-- How many of the tracks are charted at this difficulty and lane count.
+local function charts_ready(diff, lanes)
+    local ready = 0
+    for _, t in ipairs(tracks) do
+        if charts[chart_key(t, diff, lanes)] then ready = ready + 1 end
+    end
+    return ready
+end
+
+-- In the menu: chart whatever's missing for what's picked, a bit per frame.
+local function chart_in_background(lanes)
+    if job or #tracks == 0 or charts_ready(sel_diff, lanes) == #tracks then return end
+    local diff = sel_diff
+    start_job("charting", function()
+        for _, t in ipairs(tracks) do get_chart(t, diff, lanes) end
+    end)
+end
+
+-- The track Auto plays: the one last played on this song, else PLAY ALL, else the busiest.
+local function auto_pick()
+    local last = store_get("pick:" .. tostring(song_key))
+    for i, t in ipairs(tracks) do
+        if t.ch == last then return i end
+    end
+    if tracks[1] and tracks[1].medley then return 1 end
+    local best, pick = -1, 1
+    for i, t in ipairs(tracks) do
+        if t.nps > best then best, pick = t.nps, i end
+    end
+    return pick
 end
 
 local function best_key(ch, diff, speed)
@@ -610,8 +759,15 @@ local function preview_start()
     return notes and notes[1] and math.max(0, notes[1].start - 1) or 0
 end
 
+-- A recording's take is over (the app ends the video, or moves the playlist on).
+local function end_take()
+    local rec = recording()
+    if rec and rec.phase == "recording" then recording_done() end
+end
+
 -- The menu: the song plays as a preview, from just before the selected track.
 local function enter_menu()
+    end_take() -- (back to the menu: the menu isn't part of a video)
     set_muted(nil)
     give_back_playback()
     state = "menu"
@@ -633,6 +789,7 @@ local function start_game()
     local tr = tracks[sel_track]
     if not tr then return end
     play_track = tr
+    if not auto_play then store_set("pick:" .. tostring(song_key), tr.ch) end
     chart = get_chart(tr, sel_diff, lane_count())
     fret_hit_at = -1
     for _, g in ipairs(chart.gems) do
@@ -659,10 +816,12 @@ local function finish()
     give_back_playback()
     local key = best_key(play_track.ch, sel_diff, SPEEDS[speed_idx])
     local prev = store_get(key) or 0
-    new_best = stats.score > prev
+    new_best = stats.score > prev and not auto_play -- (the bot's scores don't count)
     if new_best then store_set(key, stats.score) end
-    result_best = math.max(prev, stats.score)
+    result_best = new_best and stats.score or prev
+    results_time = 0
     state = "results"
+    if auto_play then end_take() end -- (the bot's results aren't worth a video)
 end
 
 -- game geometry -------------------------------------------------------------
@@ -1102,11 +1261,23 @@ end
 
 local function update_play(p, pspeed, L, offset, mute_on_miss, ghost_penalty)
     local gems = chart.gems
-    local nowj = game_time - offset * pspeed
+    local nowj = game_time - (auto_play and 0 or offset) * pspeed
     local win = WIN_GOOD * pspeed
 
-    if guitar then update_guitar(p, gems, nowj, win, pspeed, L, ghost_penalty) end
-    for lane = 0, guitar and -1 or chart.lanes - 1 do
+    if auto_play then
+        -- the bot: every note right on time (sustains held to the end, below)
+        for i = first_live, #gems do
+            local g = gems[i]
+            if g.t > nowj then break end
+            if not g.state and not p.paused then
+                hit(g, g.t, pspeed, L)
+                bot_press[g.lane] = TIME + 0.12
+            end
+        end
+    elseif guitar then
+        update_guitar(p, gems, nowj, win, pspeed, L, ghost_penalty)
+    end
+    for lane = 0, (guitar or auto_play) and -1 or chart.lanes - 1 do
         local st = input(LANE_INPUT[lane + 1])
         if st == "pressed" and not p.paused then
             local target = nil
@@ -1142,7 +1313,7 @@ local function update_play(p, pspeed, L, offset, mute_on_miss, ghost_penalty)
     -- sustains score while held
     for i = #holding, 1, -1 do
         local g = holding[i]
-        if not input_down(LANE_INPUT[g.lane + 1]) or game_time >= g.tail then
+        if not (auto_play or input_down(LANE_INPUT[g.lane + 1])) or game_time >= g.tail then
             g.holding = false
             table.remove(holding, i)
         elseif not p.paused then
@@ -1163,7 +1334,7 @@ local function draw_game(p, L, look, th, width, height)
     local lw = L.bw / lanes
     local zt = 1
 
-    local show_crowd = setting_bool("crowd", true)
+    local show_crowd = setting_bool("crowd", true, CROWD_LABELS)
     if show_crowd then
         draw_backdrop(width, height, (game_time >= 0 and beat(game_time)) or TIME * 2)
     end
@@ -1172,7 +1343,7 @@ local function draw_game(p, L, look, th, width, height)
     polygon({
         x_of(L, 0, zt), y_of(L, zt), x_of(L, lanes, zt), y_of(L, zt),
         x_of(L, lanes, L.zb), height, x_of(L, 0, L.zb), height,
-    }, { r = 18, g = 18, b = 28, a = show_crowd and setting_float("road_opacity", 0.85, 0.3, 1) or 1 })
+    }, { r = 18, g = 18, b = 28, a = show_crowd and setting_float("road_opacity", 0.85, 0.3, 1, { group = "Look" }) or 1 })
 
     -- beat and bar lines
     local b0 = beat(math.max(0, game_time))
@@ -1204,7 +1375,16 @@ local function draw_game(p, L, look, th, width, height)
     -- hit line and sockets
     rect(x_of(L, 0, 0), L.hit_y - 1, x_of(L, lanes, 0), L.hit_y + 1, { r = 200, g = 200, b = 230, a = 0.6 })
     for lane = 0, lanes - 1 do
-        draw_socket(L, lane, input_down(LANE_INPUT[lane + 1]), flash[lane] or 0)
+        local down
+        if auto_play then
+            down = (bot_press[lane] or 0) > TIME
+            for _, g in ipairs(holding) do
+                if g.lane == lane then down = true end
+            end
+        else
+            down = input_down(LANE_INPUT[lane + 1])
+        end
+        draw_socket(L, lane, down, flash[lane] or 0)
     end
 
     -- gems, far to near
@@ -1262,7 +1442,7 @@ local function draw_game(p, L, look, th, width, height)
     local right_txt = string.format("%d%%", math.floor(acc + 0.5))
     local w = text_size(right_txt, th * 2)
     text(width - w - 12, 12, right_txt, hud, th * 2)
-    local label = track_name(play_track) .. "  " .. DIFFS[sel_diff].name
+    local label = track_name(play_track) .. "  " .. DIFFS[sel_diff].name .. (auto_play and "  AUTO" or "")
     w = text_size(label, th)
     text(width - w - 12, 12 + th * 2, label, { r = 150, g = 155, b = 180 }, th)
     if play_track.medley then
@@ -1295,8 +1475,13 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
     text(16 + text_size("HIGHWAY", th * 2) + 16, 12 + th * 0.8, p.song_name or "", dim, th)
 
     if #tracks == 0 then
-        centered("load a MIDI song to play", width / 2, height / 2, white, th)
+        centered(job and (job_label .. "...") or "load a MIDI song to play", width / 2, height / 2, white, th)
         return
+    end
+    local ready = charts_ready(sel_diff, lanes)
+    if ready < #tracks then
+        local msg = string.format("charting %d/%d", ready, #tracks)
+        text(width - text_size(msg, th) - 16, 12 + th * 2, msg, { r = 255, g = 200, b = 80 }, th)
     end
 
     local mx, my = mouse()
@@ -1327,10 +1512,11 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
             line(sx + 2, ytop, sx + 2, ybot, c)
             line(sx + sw - 2, ytop, sx + sw - 2, ybot, c)
         end
-        local ch = get_chart(tr, sel_diff, lanes)
+        local ch = charts[chart_key(tr, sel_diff, lanes)]
         text(sx + 6, ytop + 4, track_name(tr), sel and white or dim, hsc)
-        local sub = #ch.gems .. " gems"
-        if tr.medley then
+        local sub = ch and (#ch.gems .. " gems") or "charting..."
+        ch = ch or { gems = {} }
+        if tr.medley and tr.by_diff[sel_diff] then
             local pt = part_at(medley_for(tr, sel_diff).parts, preview_t)
             if pt then sub = chan_label(pt.ch) end
         end
@@ -1428,7 +1614,7 @@ local function draw_menu(width, height, th, lanes, pspeed, look)
 end
 
 local function draw_results(width, height, th)
-    if setting_bool("crowd", true) then
+    if setting_bool("crowd", true, CROWD_LABELS) then
         draw_backdrop(width, height, TIME * 2)
         rect(0, 0, width, height, { r = 0, g = 0, b = 0, a = 0.55 })
     end
@@ -1438,12 +1624,15 @@ local function draw_results(width, height, th)
     local acc = judged > 0 and (stats.perfect + stats.good) / judged * 100 or 0
     local y = height * 0.2
     local spd = SPEEDS[speed_idx] ~= 1 and ("  " .. math.floor(SPEEDS[speed_idx] * 100) .. "%") or ""
-    centered(track_name(play_track) .. "  " .. DIFFS[sel_diff].name .. spd, width / 2, y, gold, th * 2)
+    centered(track_name(play_track) .. "  " .. DIFFS[sel_diff].name .. spd .. (auto_play and "  AUTO" or ""), width / 2, y,
+        gold, th * 2)
     y = y + th * 3
     centered(fmt(stats.score), width / 2, y, white, th * 4)
     y = y + th * 4.5
     if new_best then
         centered("NEW BEST!", width / 2, y, gold, th)
+    elseif auto_play then
+        centered("played by itself: not counted", width / 2, y, white, th)
     else
         centered("best " .. fmt(result_best), width / 2, y, white, th)
     end
@@ -1452,18 +1641,24 @@ local function draw_results(width, height, th)
         math.floor(acc + 0.5), stats.perfect, stats.good, stats.miss, stats.max_combo), width / 2, y, white, th)
     local list = playlist()
     local more = (list and #list.entries > 1) and "   N next song" or ""
-    centered("ENTER or click to go back" .. more, width / 2, height - th * 2, { r = 140, g = 145, b = 170 }, th)
+    if not recording() then -- (not in a video)
+        centered("ENTER or click to go back" .. more, width / 2, height - th * 2, { r = 140, g = 145, b = 170 }, th)
+    end
 end
 
 -- main ----------------------------------------------------------------------
 
 function render(width, height, left, right)
     local lanes = lane_count()
-    local hw_secs = setting_float("highway_seconds", 1.6, 0.6, 4)
-    local offset_ms = setting_int("input_offset_ms", 0, -250, 250)
+    local hw_secs = setting_float("highway_seconds", 1.6, 0.6, 4,
+        { group = "Look", info = "How long a note takes to come down the highway, in seconds at normal speed." })
+    local offset_ms = setting_int("input_offset_ms", 0, -250, 250,
+        { group = "Gameplay", info = "If hits feel off: positive when you tend to hit late, negative when early." })
     -- off by default for now: toggling a channel causes a jump in playback
-    local mute_on_miss = setting_bool("mute_on_miss_experimental", false)
-    local ghost_penalty = setting_bool("ghost_taps_break_combo", true)
+    local mute_on_miss = setting_bool("mute_on_miss_experimental", false,
+        { group = "Gameplay", info = "Missing a note mutes its track until you hit again (experimental)." })
+    local ghost_penalty = setting_bool("ghost_taps_break_combo", true,
+        { group = "Gameplay", info = "Pressing a lane (or strumming) with nothing to hit resets the combo." })
 
     local p = playback()
     local pspeed = math.max(p.speed or 1, 0.01)
@@ -1491,9 +1686,31 @@ function render(width, height, left, right)
             song_key = p.song_id
             state = "init"
             apply_solo()
-            analyze(p)
+            tracks, charts = {}, {}
+            start_job("reading the song", function()
+                tracks = analyze(p)
+                sel_track = math.max(1, math.min(sel_track, #tracks))
+                if state == "menu" then enter_menu() end -- (now there's a track to preview)
+            end)
         end
         enter_menu()
+    end
+
+    -- Being recorded: the video waits (phase "preparing") until the game starts.
+    local rec = recording()
+    auto_play = rec ~= nil and rec.mode == "auto"
+    if state == "menu" then chart_in_background(lanes) end
+    run_job()
+    if rec and rec.phase == "preparing" then
+        if state == "menu" and auto_play and not job and #tracks > 0 then
+            sel_track = auto_pick()
+            start_game()
+        end
+        if state ~= "menu" and state ~= "init" then recording_ready() end
+    end
+    if rec and rec.phase == "recording" and state == "results" then
+        results_time = results_time + DT
+        if results_time >= RESULTS_IN_VIDEO then end_take() end
     end
 
     local focus = has_focus()
@@ -1600,7 +1817,7 @@ function render(width, height, left, right)
             if state == "play" and p.finished then finish() end
             if state == "play" then
                 if input(PAUSE) == "pressed" then set_paused(not p.paused) end
-                if last_focus and not focus and not p.paused then set_paused(true) end
+                if last_focus and not focus and not p.paused and not auto_play then set_paused(true) end
                 update_play(p, pspeed, L, offset_ms / 1000, mute_on_miss, ghost_penalty)
             end
             last_pos = p.position
@@ -1635,7 +1852,7 @@ function render(width, height, left, right)
                 centered("SPACE to resume   BACKSPACE for the menu", L.cx, height * 0.4 + th * 3.5,
                     { r = 170, g = 175, b = 200 }, th)
             end
-            if not focus then
+            if not focus and not auto_play then
                 centered("click to focus", L.cx, height * 0.55, { r = 255, g = 120, b = 120 }, th)
             end
         end
