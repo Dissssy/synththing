@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.4.3 (2026-10-05)
+
 ### New
 - Encores, in the Script Library: say you liked a script (and take it back); they add up on its author's page.
 - Report... in the Script Library: tell a server's moderators what's wrong with a script, pointing at the lines of its code and the sprites in it that are the problem.
