@@ -45,16 +45,26 @@ pub fn run(args: &AdminArgs) -> Result<(), String> {
         AdminCommand::Hide { script, reason } => done(send(AdminAction::Hide { script: script.clone(), reason: reason.clone() })?),
         AdminCommand::Unhide { script } => done(send(AdminAction::Unhide { script: script.clone() })?),
         AdminCommand::Delete { script } => done(send(AdminAction::Delete { script: script.clone() })?),
-        AdminCommand::Ban { target, reason, hours, hide_scripts } => {
+        AdminCommand::Ban { target, reason, hours, hide_scripts, ban_addresses } => {
             let reply = send(AdminAction::Ban {
                 target: target.clone(),
                 hours: *hours,
                 reason: reason.clone(),
                 hide_scripts: *hide_scripts,
+                ban_addresses: *ban_addresses,
             })?;
             let banned = reply["banned"].as_str().unwrap_or_default();
             let hidden = reply["scripts_hidden"].as_u64().unwrap_or(0);
-            println!("banned {}{}", shown_target(banned), if hidden > 0 { format!(", {hidden} scripts hidden") } else { String::new() });
+            let addresses = reply["addresses_banned"].as_u64().unwrap_or(0);
+            let mut also = Vec::new();
+            if hidden > 0 {
+                also.push(format!("{hidden} scripts hidden"));
+            }
+            if *ban_addresses {
+                also.push(format!("{addresses} addresses banned for 30 days"));
+            }
+            let also = if also.is_empty() { String::new() } else { format!(", {}", also.join(", ")) };
+            println!("banned {}{also}", shown_target(banned));
         }
         AdminCommand::Unban { target } => done(send(AdminAction::Unban { target: target.clone() })?),
         AdminCommand::Bans => {

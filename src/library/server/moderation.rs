@@ -9,7 +9,9 @@
 //! Admins are keys listed in the database, and the server's own key
 //! (which `synththing admin` signs with, reading it from the data folder):
 //! one endpoint, `POST /api/v1/admin`, takes an `AdminAction`. Addresses
-//! are kept 30 days (bans keep theirs until they end).
+//! are kept 30 days (bans keep theirs until they end). A key ban can take
+//! its addresses along: those it was seen on in the last 30 days are
+//! banned for 30 days, and so is any new one it comes back from.
 
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
@@ -59,8 +61,41 @@ COMMIT;
 /// may make in a day.
 const ENCORES_PER_HOUR: usize = 60;
 const REPORTS_PER_DAY: usize = 10;
-/// How long addresses are kept.
+/// How long addresses are kept, and how long a banned key's addresses are
+/// banned for.
 const KEEP_ADDRESSES: i64 = 30 * 24 * 60 * 60;
+
+/// Schema 6: key bans that spread to the key's addresses.
+pub(super) const SCHEMA_V6: &str = "
+BEGIN;
+ALTER TABLE bans ADD COLUMN spreads INTEGER NOT NULL DEFAULT 0;
+PRAGMA user_version = 6;
+COMMIT;
+";
+
+/// Ban `address` until `until` (unless it's banned longer already).
+fn ban_address(db: &Connection, address: &str, until: i64, reason: &str) -> rusqlite::Result<usize> {
+    db.execute(
+        "INSERT INTO bans (target, until, reason, created) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(target) DO UPDATE SET
+             until = CASE WHEN bans.until IS NULL THEN NULL ELSE MAX(bans.until, excluded.until) END,
+             reason = CASE WHEN bans.until IS NULL OR bans.until >= excluded.until THEN bans.reason ELSE excluded.reason END",
+        params![address, until, reason, now()],
+    )
+}
+
+/// The addresses `key` was seen on in the last 30 days.
+fn addresses_of(db: &Connection, key: &str) -> rusqlite::Result<Vec<String>> {
+    let since = now() - KEEP_ADDRESSES;
+    db.prepare(
+        "SELECT v.uploader_ip FROM versions v JOIN scripts s ON s.id = v.script_id
+             WHERE s.author_key = ?1 AND v.created >= ?2 AND v.uploader_ip IS NOT NULL
+         UNION SELECT ip FROM encores WHERE key = ?1 AND created >= ?2 AND ip IS NOT NULL
+         UNION SELECT ip FROM reports WHERE reporter_key = ?1 AND created >= ?2 AND ip IS NOT NULL",
+    )?
+    .query_map(params![key, since], |r| r.get(0))?
+    .collect()
+}
 
 /// One more `bucket` request from `ip`, unless it's had `most` in `window`.
 fn limit(state: &State, bucket: &str, ip: &str, most: usize, window: Duration, what: &str) -> Result<(), Reply> {
@@ -75,21 +110,32 @@ fn limit(state: &State, bucket: &str, ip: &str, most: usize, window: Duration, w
     Ok(())
 }
 
-/// The ban on `target` in force, if there is one: (until, reason).
-fn ban_on(db: &Connection, target: &str) -> Option<(Option<i64>, String)> {
-    db.query_row("SELECT until, reason FROM bans WHERE target = ? AND (until IS NULL OR until > ?)", params![target, now()], |r| {
-        Ok((r.get(0)?, r.get(1)?))
-    })
+/// The ban on `target` in force, if there is one: (until, reason,
+/// whether it spreads to the addresses it's seen on).
+fn ban_on(db: &Connection, target: &str) -> Option<(Option<i64>, String, bool)> {
+    db.query_row(
+        "SELECT until, reason, spreads FROM bans WHERE target = ? AND (until IS NULL OR until > ?)",
+        params![target, now()],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? != 0)),
+    )
     .optional()
     .ok()
     .flatten()
 }
 
-/// Refused if the key or the address is banned.
+/// Refused if the key or the address is banned. A banned key whose ban
+/// spreads bans the address it came from, too, for 30 days.
 pub(super) fn refuse_banned(state: &State, key: Option<&str>, ip: &str) -> Result<(), Reply> {
     let db = state.db();
+    if let Some(key) = key
+        && let Some((_, reason, true)) = ban_on(&db, key)
+        && !ip.is_empty()
+        && ban_address(&db, ip, now() + KEEP_ADDRESSES, &format!("seen with the banned key #{}: {reason}", key_id(key))).is_ok()
+    {
+        println!("banned {ip} for 30 days (seen with the banned key #{})", key_id(key));
+    }
     for target in key.into_iter().chain([ip]) {
-        if let Some((until, reason)) = ban_on(&db, target) {
+        if let Some((until, reason, _)) = ban_on(&db, target) {
             let how_long = until
                 .map(|u| format!(" for another {}", crate::song_info::format_length((u - now()).max(0) as f64)))
                 .unwrap_or_default();
@@ -339,17 +385,26 @@ fn act(state: &State, action: &AdminAction) -> Acted {
             }
             changed(n, "deleted")
         }
-        AdminAction::Ban { target, hours, reason, hide_scripts } => {
+        AdminAction::Ban { target, hours, reason, hide_scripts, ban_addresses } => {
             let target = resolve_target(&db, target)?;
             if target == state.key_hex {
                 return Err((400, "that's this server's own key".into()));
             }
+            let is_key = target.len() == 64;
             let until = hours.map(|h| now() + (h as i64) * 3600);
+            let spreads = *ban_addresses && is_key;
             db.execute(
-                "INSERT OR REPLACE INTO bans (target, until, reason, created) VALUES (?, ?, ?, ?)",
-                params![target, until, reason, now()],
+                "INSERT OR REPLACE INTO bans (target, until, reason, created, spreads) VALUES (?, ?, ?, ?, ?)",
+                params![target, until, reason, now(), spreads],
             )
             .map_err(db_error)?;
+            let mut addresses = 0;
+            if spreads {
+                let why = format!("used by the banned key #{}: {reason}", key_id(&target));
+                for address in addresses_of(&db, &target).map_err(db_error)? {
+                    addresses += ban_address(&db, &address, now() + KEEP_ADDRESSES, &why).map_err(db_error)?;
+                }
+            }
             let hidden = if *hide_scripts {
                 db.execute(
                     "UPDATE scripts SET hidden = 1, hidden_reason = ? WHERE author_key = ? AND hidden = 0",
@@ -359,7 +414,7 @@ fn act(state: &State, action: &AdminAction) -> Acted {
             } else {
                 0
             };
-            Ok(serde_json::json!({ "banned": target, "scripts_hidden": hidden }))
+            Ok(serde_json::json!({ "banned": target, "scripts_hidden": hidden, "addresses_banned": addresses }))
         }
         AdminAction::Unban { target } => {
             let target = resolve_target(&db, target)?;

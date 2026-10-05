@@ -73,6 +73,7 @@ struct BanForm {
     reason: String,
     hours: String,
     hide_scripts: bool,
+    ban_addresses: bool,
 }
 
 /// The Moderation window, for one server.
@@ -812,6 +813,14 @@ fn bans_tab_ui(ui: &mut egui::Ui, window: &mut Window, actions: &mut Vec<(String
         ui.label("");
         ui.checkbox(&mut window.ban.hide_scripts, "Also hide everything they uploaded");
         ui.end_row();
+        ui.label("");
+        ui.checkbox(&mut window.ban.ban_addresses, "Also ban the addresses they've used")
+            .on_hover_text(
+                "Every address the key was seen on in the last 30 days is banned for 30 days, and so is any new one it \
+                 comes back from while it's banned, so a new key on the same connection doesn't get around it. \
+                 Addresses can be shared (a household, a phone network), so use it for the ones who keep at it.",
+            );
+        ui.end_row();
     });
     let hours = window.ban.hours.trim();
     let hours_ok = hours.is_empty() || hours.parse::<u64>().is_ok_and(|h| h > 0);
@@ -824,6 +833,7 @@ fn bans_tab_ui(ui: &mut egui::Ui, window: &mut Window, actions: &mut Vec<(String
                 hours: hours.parse().ok(),
                 reason: window.ban.reason.trim().to_string(),
                 hide_scripts: window.ban.hide_scripts,
+                ban_addresses: window.ban.ban_addresses,
             }],
         ));
         window.ban = BanForm::default();

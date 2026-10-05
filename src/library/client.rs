@@ -454,13 +454,15 @@ mod tests {
 
         // Banned (by ID), with their scripts hidden: no uploads, encores
         // or reports, until unbanned.
-        as_server(AdminAction::Ban {
+        let banned = as_server(AdminAction::Ban {
             target: alice.id(),
             hours: Some(1),
             reason: "spam".into(),
             hide_scripts: true,
+            ban_addresses: false,
         })
         .unwrap();
+        assert_eq!(banned["addresses_banned"], 0);
         let bans: Vec<Ban> = admin(&base, &key, &server_id, &AdminAction::Bans).unwrap();
         assert_eq!(bans[0].target, alice.public());
         assert!(details(&base, &id).is_err());
@@ -468,6 +470,31 @@ mod tests {
         assert!(upload(&base, &key, &bars, Some(&alice)).unwrap_err().contains("banned"));
         as_server(AdminAction::Unban { target: alice.public() }).unwrap();
         assert!(upload(&base, &key, &bars, Some(&alice)).is_ok());
+
+        // Banned with her addresses: the one she uploaded from is banned
+        // too (for 30 days), so a new key from there gets nowhere either.
+        let banned = as_server(AdminAction::Ban {
+            target: alice.public(),
+            hours: None,
+            reason: "evading".into(),
+            hide_scripts: false,
+            ban_addresses: true,
+        })
+        .unwrap();
+        assert_eq!(banned["addresses_banned"], 1);
+        let bans: Vec<Ban> = admin(&base, &key, &server_id, &AdminAction::Bans).unwrap();
+        let address = bans.iter().find(|b| b.target == "127.0.0.1").unwrap();
+        let month = 30 * 24 * 3600;
+        assert!(address.until.is_some_and(|u| (u - address.created - month).abs() < 60), "{address:?}");
+        let carol = Identity::generate().unwrap();
+        assert!(encore(&base, &key, &id, &carol, true).unwrap_err().contains("banned"));
+        as_server(AdminAction::Unban { target: "127.0.0.1".into() }).unwrap();
+        // She comes back: the address is banned again, from her.
+        assert!(encore(&base, &key, &id, &alice, true).unwrap_err().contains("banned"));
+        let bans: Vec<Ban> = admin(&base, &key, &server_id, &AdminAction::Bans).unwrap();
+        assert!(bans.iter().any(|b| b.target == "127.0.0.1" && b.reason.contains("seen with the banned key")));
+        as_server(AdminAction::Unban { target: "127.0.0.1".into() }).unwrap();
+        as_server(AdminAction::Unban { target: alice.public() }).unwrap();
         as_server(AdminAction::Delete { script: id.clone() }).unwrap();
         let info = as_server(AdminAction::Info { script: id.clone() });
         assert!(info.unwrap_err().contains("no such script"));

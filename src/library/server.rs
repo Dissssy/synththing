@@ -453,6 +453,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 5 {
         db.execute_batch(moderation::SCHEMA_V5)?;
     }
+    if version < 6 {
+        db.execute_batch(moderation::SCHEMA_V6)?;
+    }
     Ok(db)
 }
 

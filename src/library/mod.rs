@@ -453,8 +453,18 @@ pub enum AdminAction {
     /// Every version, for good (its reports stay).
     Delete { script: String },
     /// A key (hex, or an ID the server's seen) or an address, for `hours`
-    /// (for good without), optionally hiding everything the key uploaded.
-    Ban { target: String, hours: Option<u64>, reason: String, hide_scripts: bool },
+    /// (for good without), optionally hiding everything the key uploaded,
+    /// and with `ban_addresses`, the addresses the key was seen on in the
+    /// last 30 days, for 30 days, and any new one it shows up from while
+    /// it's banned.
+    Ban {
+        target: String,
+        hours: Option<u64>,
+        reason: String,
+        hide_scripts: bool,
+        #[serde(default)]
+        ban_addresses: bool,
+    },
     Unban { target: String },
     /// `[Ban]`, those in force.
     Bans,

@@ -150,6 +150,10 @@ pub enum AdminCommand {
         /// Also hide everything the key uploaded.
         #[arg(long)]
         hide_scripts: bool,
+        /// Also ban the addresses the key was seen on in the last 30 days,
+        /// for 30 days, and any new one it shows up from while banned.
+        #[arg(long)]
+        ban_addresses: bool,
     },
     Unban { target: String },
     /// The bans in force.

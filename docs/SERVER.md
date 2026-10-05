@@ -100,7 +100,7 @@ Rendered by the server on each upload and each new version, through a queue (one
 - An **encore** is the only vote: one per key per script, signed, can be taken back, not for your own scripts. A user's total is the sum over their uploads.
 - A **report** (signed) goes to the admins: a reason (malicious; defamatory or derogatory; intense flashing without a warning; someone else's work, uncredited; spam; other), optional details, and what it's about: the version, lines of its code, and sprites written in it (by the line they're registered on). One open report per key per script. There's no downvote.
 - Limits per address: 60 encores an hour, 10 reports a day. Banned keys and addresses can't upload, give encores or report (they can still browse and download).
-- Keys cost nothing to make, so encores can be faked with many keys, and a banned key can be swapped for a new one (an address ban covers that, as far as addresses go). Still to do: encores from new keys counting less at first, and a small proof-of-work the first time a key uploads or votes. Not perfect; fine at this scale.
+- Keys cost nothing to make, so encores can be faked with many keys, and a banned key can be swapped for a new one. A key ban can take its addresses along: those it was seen on in the last 30 days are banned for 30 days, and any new address the banned key comes back from is banned for 30 days too, so the ban follows it as long as it keeps coming back (new keys on a banned address are refused while that lasts, but aren't banned themselves, since addresses are shared). Still to do: encores from new keys counting less at first, and on servers with email verification (authorities), stricter rate limits for unverified keys. Not perfect; fine at this scale.
 
 ## Moderation
 

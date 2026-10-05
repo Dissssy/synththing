@@ -125,7 +125,7 @@ Moderates a running library server from the machine it runs on: each command goe
 | `info SCRIPT` | A script, hidden or not: its uploader's key, each version with the address it came from (kept 30 days), its reports. |
 | `hide SCRIPT [--reason TEXT]`, `unhide SCRIPT` | Take it out of listings and downloads, or put it back. |
 | `delete SCRIPT` | Delete it, every version, for good (its reports stay). |
-| `ban TARGET --reason TEXT [--hours N] [--hide-scripts]` | Ban a key (an ID like `#k3f9q2xa` the server has seen, or the whole key in hex) or an address, for N hours or for good, optionally hiding everything the key uploaded. Banned keys and addresses can't upload, give encores or report; they can still browse and download. |
+| `ban TARGET --reason TEXT [--hours N] [--hide-scripts] [--ban-addresses]` | Ban a key (an ID like `#k3f9q2xa` the server has seen, or the whole key in hex) or an address, for N hours or for good, optionally hiding everything the key uploaded. With `--ban-addresses`, the addresses the key was seen on in the last 30 days are banned for 30 days too, and so is any new one it comes back from while banned (so a new key on the same connection gets nowhere). Banned keys and addresses can't upload, give encores or report; they can still browse and download. |
 | `unban TARGET`, `bans` | Lift a ban; list the bans in force. |
 | `add-admin KEY`, `remove-admin KEY`, `admins` | Who can moderate from the app (an ID the server has seen, or a whole key). |
 | `resolve REPORT [--note TEXT]` | Mark a report dealt with. |
