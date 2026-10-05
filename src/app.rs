@@ -11,6 +11,7 @@ mod editor;
 pub use editor::ApplyMode;
 mod loading;
 mod playlist_panel;
+mod moderation;
 mod previews;
 mod library;
 mod recording;
@@ -223,6 +224,8 @@ pub struct App {
     /// The script picker's previews (behind a RefCell: the picker's list is
     /// drawn from `&self`).
     script_previews: std::cell::RefCell<previews::LocalPreviews>,
+    /// Reports, and the Moderation window.
+    moderation: moderation::ModerationState,
     /// The changelog window: `Some(since)` lists only the versions newer
     /// than that (What's new, after an update), `None` all of them
     /// (Help > Changelog...).
@@ -407,6 +410,7 @@ impl App {
             state_request: Default::default(),
             library: library::LibraryState::new(),
             script_previews: Default::default(),
+            moderation: Default::default(),
             changelog: None,
             welcome: welcome::Welcome::default(),
             preferences_tab: PrefTab::default(),
@@ -1750,6 +1754,7 @@ impl App {
             || self.recording.window.is_some()
             || self.script_window.is_some()
             || self.library.publish_open()
+            || self.moderation.open()
             || self.editor.history_open
             || self.layout_save.is_some()
             || self.heavy_prompt.is_some()
@@ -2812,7 +2817,10 @@ impl eframe::App for App {
         self.script_window_ui(&ctx);
         self.publish_ui(&ctx);
         self.update_ui(&ctx);
+        self.report_ui(&ctx);
+        self.moderation_ui(&ctx);
         self.poll_library();
+        self.poll_moderation();
         self.heavy_midi_ui(&ctx);
         self.poll_recordings(view);
         if self.status != self.logged_status {

@@ -67,6 +67,14 @@ pub enum Command {
     /// the script has an error, 2 if something couldn't be loaded.
     Preview(PreviewArgs),
 
+    /// Moderate a script library server, from the machine it runs on.
+    ///
+    /// Talks to the running server (at server.json's address, or --server),
+    /// signed with the server's own key from its data folder, so it works
+    /// over SSH, under systemd and in Docker (docker exec). Admins can do
+    /// the same from the app's Library tab.
+    Admin(AdminArgs),
+
     /// Publish the scripts bundled with this build to a library server.
     ///
     /// For CI: each visualizer, game and example (not the templates) is
@@ -97,6 +105,65 @@ pub struct ServeArgs {
     /// 127.0.0.1:7381).
     #[arg(long, value_name = "ADDR")]
     pub bind: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct AdminArgs {
+    /// The server's data folder (as for serve).
+    #[arg(long, value_name = "DIR")]
+    pub data: Option<PathBuf>,
+
+    /// The server's address, instead of http:// and server.json's bind.
+    #[arg(long, value_name = "URL")]
+    pub server: Option<String>,
+
+    #[command(subcommand)]
+    pub command: AdminCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AdminCommand {
+    /// Open reports, newest first (all of them with --all).
+    Reports {
+        #[arg(long)]
+        all: bool,
+    },
+    /// A script: its uploader's key and addresses, versions, reports.
+    Info { script: String },
+    /// Hide a script: it's no longer listed or downloadable.
+    Hide {
+        script: String,
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
+    Unhide { script: String },
+    /// Delete a script, every version, for good.
+    Delete { script: String },
+    /// Ban a key (hex, or an ID the server has seen) or an address.
+    Ban {
+        target: String,
+        #[arg(long)]
+        reason: String,
+        /// For this many hours (for good without).
+        #[arg(long)]
+        hours: Option<u64>,
+        /// Also hide everything the key uploaded.
+        #[arg(long)]
+        hide_scripts: bool,
+    },
+    Unban { target: String },
+    /// The bans in force.
+    Bans,
+    /// Make a key an admin (hex, or an ID the server has seen).
+    AddAdmin { key: String },
+    RemoveAdmin { key: String },
+    Admins,
+    /// Mark a report dealt with.
+    Resolve {
+        report: i64,
+        #[arg(long, default_value = "")]
+        note: String,
+    },
 }
 
 #[derive(Args, Debug)]

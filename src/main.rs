@@ -129,6 +129,13 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
+    if let Some(Command::Admin(args)) = &cli.command {
+        if let Err(e) = library::admin::run(args) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(Command::Serve(args)) = &cli.command {
         let data = args.data.clone().unwrap_or_else(library::server::default_data_dir);
         if let Err(e) = library::server::run(&data, args.bind.clone()) {

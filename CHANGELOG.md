@@ -4,6 +4,11 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### New
+- Encores, in the Script Library: say you liked a script (and take it back); they add up on its author's page.
+- Report... in the Script Library: tell a server's moderators what's wrong with a script, pointing at the lines of its code and the sprites in it that are the problem.
+- Moderation, for a library server's admins (in the Script Library): reports with what they point at highlighted, hiding, deleting, bans (a key or an address, for a while or for good) and admins. `synththing admin` does the same on the server itself.
+
 ## 0.4.2 (2026-10-05)
 
 ### New

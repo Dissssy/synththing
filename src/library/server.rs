@@ -13,6 +13,8 @@
 //! its author can delete it. Listing and search, details, user pages, and
 //! sources and receipts signed with the server's key.
 //!
+//! Encores, reports, bans and the admin endpoint are in `moderation`.
+//!
 //! Previews (`preview.rs`): after each upload, the new version's preview
 //! is made by `synththing preview` in a process of its own, one at a time,
 //! with a time limit (`preview_seconds`); a script that stalls keeps the
@@ -21,6 +23,8 @@
 //! TimGM6mb soundfont (downloaded into `soundfonts/` the first time) unless
 //! `preview_soundfont` says otherwise. At startup, the newest version of
 //! every script without one is queued.
+
+mod moderation;
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
@@ -173,8 +177,20 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
         db: Mutex::new(db),
         uploads: Mutex::default(),
         seen_signatures: Mutex::default(),
+        limits: Mutex::default(),
         previews: Mutex::new(previews.then_some(queue)),
     });
+    moderation::forget_old_addresses(&state);
+    {
+        let state = Arc::clone(&state);
+        std::thread::Builder::new()
+            .name("housekeeping".into())
+            .spawn(move || loop {
+                std::thread::sleep(Duration::from_secs(24 * 60 * 60));
+                moderation::forget_old_addresses(&state);
+            })
+            .map_err(|e| format!("couldn't start: {e}"))?;
+    }
     if previews {
         let state = Arc::clone(&state);
         std::thread::Builder::new()
@@ -209,6 +225,9 @@ struct State {
     /// Signatures of signed requests in the last while: the same one
     /// again is a replay.
     seen_signatures: Mutex<HashMap<String, Instant>>,
+    /// Recent requests by kind and address, for their limits (encores,
+    /// reports).
+    limits: Mutex<HashMap<(String, String), Vec<Instant>>>,
     /// Versions to make previews of (none if previews are off).
     previews: Mutex<Option<Sender<(String, u32)>>>,
 }
@@ -371,7 +390,7 @@ fn remove_previews(state: &State, id: &str) {
     }
 }
 
-fn load_config(path: &Path) -> Result<ServerConfig, String> {
+pub(super) fn load_config(path: &Path) -> Result<ServerConfig, String> {
     match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text).map_err(|e| format!("{} isn't valid: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -430,6 +449,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 4 {
         // Each version's preview: NULL until it's been made.
         db.execute_batch("BEGIN; ALTER TABLE versions ADD COLUMN preview TEXT; PRAGMA user_version = 4; COMMIT;")?;
+    }
+    if version < 5 {
+        db.execute_batch(moderation::SCHEMA_V5)?;
     }
     Ok(db)
 }
@@ -521,7 +543,7 @@ fn handle(state: &State, mut request: Request) {
     let reply = match (&method, parts.as_slice()) {
         (Method::Get, ["api", "v1", "info"]) => json(200, &info(state)),
         (Method::Get, ["api", "v1", "scripts"]) => list(state, &query),
-        (Method::Get, ["api", "v1", "scripts", id]) => details(state, id),
+        (Method::Get, ["api", "v1", "scripts", id]) => details(state, id, &query),
         (Method::Get, ["api", "v1", "scripts", id, "source"]) => source(state, id, &query),
         (Method::Get, ["api", "v1", "scripts", id, "preview.png"]) => preview(state, id, &query, false),
         (Method::Get, ["api", "v1", "scripts", id, "preview-sheet.png"]) => preview(state, id, &query, true),
@@ -535,6 +557,15 @@ fn handle(state: &State, mut request: Request) {
             let id = id.to_string();
             delete(state, &mut request, &id)
         }
+        (Method::Post | Method::Delete, ["api", "v1", "scripts", id, "encore"]) => {
+            let (id, ip) = (id.to_string(), client_ip(state, &request));
+            moderation::encore(state, &mut request, &id, method == Method::Post, &ip)
+        }
+        (Method::Post, ["api", "v1", "scripts", id, "report"]) => {
+            let (id, ip) = (id.to_string(), client_ip(state, &request));
+            moderation::report(state, &mut request, &id, &ip)
+        }
+        (Method::Post, ["api", "v1", "admin"]) => moderation::admin(state, &mut request),
         (Method::Get, [""]) => Response::from_string(format!(
             "{}: a synththing script library. Add this address under Preferences > Library in the app.\n",
             state.config.name
@@ -691,7 +722,7 @@ fn find_summary(db: &Connection, id: &str) -> rusqlite::Result<Option<ScriptSumm
         .optional()
 }
 
-fn details(state: &State, id: &str) -> Reply {
+fn details(state: &State, id: &str, query: &HashMap<String, String>) -> Reply {
     let db = state.db();
     let summary = match find_summary(&db, id) {
         Ok(Some(summary)) => summary,
@@ -726,7 +757,10 @@ fn details(state: &State, id: &str) -> Reply {
                 .collect::<rusqlite::Result<Vec<_>>>()
         });
     match versions {
-        Ok(versions) => json(200, &ScriptDetails { summary, versions }),
+        Ok(versions) => {
+            let encored = query.get("viewer").map(|key| moderation::has_encored(&db, id, key));
+            json(200, &ScriptDetails { summary, versions, encored })
+        }
         Err(e) => error(500, format!("database: {e}")),
     }
 }
@@ -849,6 +883,9 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
     };
     if author.is_none() && state.config.mode != "open" {
         return error(403, "this server only takes signed uploads");
+    }
+    if let Err(reply) = moderation::refuse_banned(state, author.as_deref(), ip) {
+        return reply;
     }
     let mut upload: Upload = match serde_json::from_slice(&body) {
         Ok(upload) => upload,

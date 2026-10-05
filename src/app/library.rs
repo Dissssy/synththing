@@ -64,6 +64,8 @@ enum Event {
     /// A script's preview: the server, its ID, the version it's of, and
     /// the still and the animation (PNGs).
     Preview(String, String, u32, Result<(Vec<u8>, Option<Vec<u8>>), String>),
+    /// An encore given or taken back: the server, the script, its encores now.
+    Encored(String, String, Result<library::EncoreState, String>),
 }
 
 /// The selected script's preview, from its server.
@@ -174,6 +176,8 @@ pub struct LibraryState {
     preview: Option<LibraryPreview>,
     /// A download, upload or delete is under way.
     busy: bool,
+    /// An encore is being given or taken back.
+    encoring: bool,
     /// Delete was clicked once (for this script); the next click confirms.
     confirm_delete: Option<(String, String)>,
     publish: Option<PublishDraft>,
@@ -221,6 +225,7 @@ impl LibraryState {
             details: None,
             preview: None,
             busy: false,
+            encoring: false,
             confirm_delete: None,
             publish: None,
             installed: HashMap::new(),
@@ -307,7 +312,7 @@ impl App {
     }
 
     /// Search every server in use (with what's typed and picked).
-    fn library_search(&mut self) {
+    pub(super) fn library_search(&mut self) {
         let servers: Vec<(String, client::Search)> = self
             .config
             .library
@@ -323,8 +328,13 @@ impl App {
         lib.searched = true;
         lib.searching = servers.len();
         let generation = lib.generation;
+        // (Made an admin since? Each search asks again.)
+        self.forget_admin_answers();
         for (server, search) in servers {
             let known = self.library.infos.contains_key(&server);
+            if known {
+                self.check_admin(&server);
+            }
             self.spawn_request(move || {
                 // (The server's info first, the first time: its key gets pinned.)
                 if !known {
@@ -490,6 +500,26 @@ impl App {
                         };
                     }
                 }
+                Event::Encored(server, id, result) => {
+                    self.library.encoring = false;
+                    match result {
+                        Ok(state) => {
+                            for found in &mut self.library.results {
+                                if found.server == server && found.summary.id == id {
+                                    found.summary.encores = state.encores;
+                                }
+                            }
+                            if let Some((ds, d)) = &mut self.library.details
+                                && *ds == server
+                                && d.summary.id == id
+                            {
+                                d.summary.encores = state.encores;
+                                d.encored = Some(state.encored);
+                            }
+                        }
+                        Err(e) => self.status = format!("Couldn't do that: {e}"),
+                    }
+                }
                 Event::Deleted(server, id, result) => {
                     self.library.busy = false;
                     match result {
@@ -636,6 +666,7 @@ impl App {
             }
         }
         self.library.infos.insert(server.clone(), info);
+        self.check_admin(&server);
         let generation = self.library.generation;
         let Some(search) = self.library_query(&server) else {
             self.library.searching = self.library.searching.saturating_sub(1);
@@ -699,6 +730,7 @@ impl App {
     pub(super) fn library_ui(&mut self, ui: &mut egui::Ui) {
         let servers = self.config.library.enabled_servers();
         let mut search = false;
+        let mut open_moderation = false;
         ui.horizontal_wrapped(|ui| {
             let edit = ui.add(egui::TextEdit::singleline(&mut self.library.query).hint_text("Search scripts").desired_width(220.0));
             if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -718,10 +750,18 @@ impl App {
                 }
             });
             search |= ui.button("Search").clicked();
+            if self.moderation.is_admin_anywhere()
+                && ui.button("Moderation").on_hover_text("Reports, bans and admins, on the servers you moderate").clicked()
+            {
+                open_moderation = true;
+            }
             if self.library.searching > 0 {
                 ui.spinner();
             }
         });
+        if open_moderation {
+            self.open_moderation();
+        }
         if servers.is_empty() {
             ui.weak("No servers in use: turn one on in Preferences > Library.");
             return;
@@ -765,6 +805,8 @@ impl App {
         let mut use_script = None;
         let mut show_author = None;
         let mut delete = None;
+        let mut encore: Option<(String, String, bool)> = None;
+        let mut report: Option<(String, String, String, u32)> = None;
         let my_id = self.library.my_id();
         let official_id = library::official_id();
         ui.columns(2, |columns| {
@@ -884,6 +926,29 @@ impl App {
                         }
                     }
                 });
+                // Encores and reports (not of your own).
+                let here = self.library.details.as_ref().filter(|(ds, d)| *ds == server && d.summary.id == id).map(|(_, d)| d);
+                let encored = here.and_then(|d| d.encored) == Some(true);
+                let reportable = here.and_then(|d| d.newest_for(env!("CARGO_PKG_VERSION")).or(d.newest())).map(|v| v.version);
+                let mine = s.author_id.is_some() && s.author_id == my_id;
+                ui.horizontal(|ui| {
+                    let count = format!("{} encore{}", s.encores, if s.encores == 1 { "" } else { "s" });
+                    if mine {
+                        ui.weak(count);
+                        return;
+                    }
+                    let label = if encored { format!("Encored ({})", s.encores) } else { format!("Encore ({})", s.encores) };
+                    let hover = if encored { "Take your encore back" } else { "Say you liked it: the only vote there is" };
+                    let ready = here.is_some() && !self.library.encoring;
+                    if ui.add_enabled_ui(ready, |ui| ui.selectable_label(encored, label)).inner.on_hover_text(hover).clicked() {
+                        encore = Some((server.clone(), id.clone(), !encored));
+                    }
+                    if let Some(version) = reportable
+                        && ui.button("Report...").on_hover_text("Tell this server's moderators something's wrong with it").clicked()
+                    {
+                        report = Some((server.clone(), id.clone(), s.name.clone(), version));
+                    }
+                });
                 ui.add_space(6.0);
                 let description = match &self.library.details {
                     Some((ds, d)) if *ds == server && d.summary.id == id => d.summary.description.clone(),
@@ -925,7 +990,8 @@ impl App {
             }
             self.library.selected = Some(selected);
             self.library.details = None;
-            self.spawn_request(move || Event::Details(server.clone(), client::details(&server, &id)));
+            let viewer = self.library.identity.as_ref().map(Identity::public);
+            self.spawn_request(move || Event::Details(server.clone(), client::details_as(&server, &id, viewer.as_deref())));
         }
         if let Some((server, summary)) = install {
             match self.config.library.pinned.get(&server).cloned() {
@@ -962,6 +1028,22 @@ impl App {
         }
         if let Some(script) = update {
             self.start_update(script);
+        }
+        if let Some((server, id, give)) = encore {
+            match (self.ensure_identity(), self.config.library.pinned.get(&server).cloned()) {
+                (Ok(identity), Some(key)) => {
+                    self.library.encoring = true;
+                    self.spawn_request(move || {
+                        let result = client::encore(&server, &key, &id, &identity, give);
+                        Event::Encored(server, id, result)
+                    });
+                }
+                (Err(e), _) => self.status = format!("Couldn't make your identity: {e}"),
+                (_, None) => self.status = "That server's key isn't known yet: search again.".to_string(),
+            }
+        }
+        if let Some((server, id, name, version)) = report {
+            self.open_report(&server, &id, &name, version);
         }
         if let Some(author) = show_author {
             self.library_show_author(Some(author));
@@ -1518,7 +1600,7 @@ impl App {
 
     /// The identity (a fresh copy for a request's thread), made and saved
     /// first if there isn't one.
-    fn ensure_identity(&mut self) -> Result<Identity, String> {
+    pub(super) fn ensure_identity(&mut self) -> Result<Identity, String> {
         if self.library.identity.is_none() {
             let identity = Identity::generate()?;
             identity.save()?;

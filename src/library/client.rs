@@ -12,8 +12,9 @@ use ureq::Agent;
 
 use super::identity::Identity;
 use super::{
-    receipt_message, request_message, source_message, verify_hex, ApiError, Info, Listing, Receipt, ScriptDetails,
-    Upload, UserInfo, KEY_HEADER, NONCE_HEADER, SHA256_HEADER, SIGNATURE_HEADER, TIME_HEADER, VERSION_HEADER,
+    receipt_message, request_message, source_message, verify_hex, AdminAction, ApiError, EncoreState, Info, Listing,
+    Receipt, ReportRequest, ScriptDetails, Upload, UserInfo, KEY_HEADER, NONCE_HEADER, SHA256_HEADER,
+    SIGNATURE_HEADER, TIME_HEADER, VERSION_HEADER,
 };
 
 fn now() -> i64 {
@@ -115,7 +116,68 @@ pub fn by_slug(base: &str, author_id: &str, slug: &str) -> Result<Option<super::
 }
 
 pub fn details(base: &str, id: &str) -> Result<ScriptDetails, String> {
-    read(check(agent().get(format!("{base}/api/v1/scripts/{id}")).call())?)
+    details_as(base, id, None)
+}
+
+/// The same, saying whether `viewer` (a public key, hex) gave it an encore.
+pub fn details_as(base: &str, id: &str, viewer: Option<&str>) -> Result<ScriptDetails, String> {
+    let mut request = agent().get(format!("{base}/api/v1/scripts/{id}"));
+    if let Some(viewer) = viewer {
+        request = request.query("viewer", viewer);
+    }
+    read(check(request.call())?)
+}
+
+/// `request`, signed by `identity` for the server whose key is `server_key`.
+fn signed<B>(
+    request: ureq::RequestBuilder<B>,
+    server_key: &str,
+    identity: &Identity,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> ureq::RequestBuilder<B> {
+    let (time, nonce) = (now(), super::new_nonce());
+    let signature = identity.sign(&request_message(server_key, method, path, time, &nonce, body));
+    request
+        .header(KEY_HEADER, identity.public())
+        .header(TIME_HEADER, time.to_string())
+        .header(NONCE_HEADER, nonce)
+        .header(SIGNATURE_HEADER, signature)
+}
+
+/// Give a script an encore (`give`), or take it back.
+pub fn encore(base: &str, server_key: &str, id: &str, identity: &Identity, give: bool) -> Result<EncoreState, String> {
+    let path = format!("/api/v1/scripts/{id}/encore");
+    let url = format!("{base}{path}");
+    let response = if give {
+        signed(agent().post(url), server_key, identity, "POST", &path, &[]).send_empty()
+    } else {
+        signed(agent().delete(url), server_key, identity, "DELETE", &path, &[]).call()
+    };
+    read(check(response)?)
+}
+
+/// Report a script to the server's admins; the report's number.
+pub fn report(base: &str, server_key: &str, id: &str, identity: &Identity, report: &ReportRequest) -> Result<i64, String> {
+    let path = format!("/api/v1/scripts/{id}/report");
+    let body = serde_json::to_vec(report).map_err(|e| e.to_string())?;
+    let request = agent().post(format!("{base}{path}")).header("Content-Type", "application/json");
+    let reply: serde_json::Value = read(check(signed(request, server_key, identity, "POST", &path, &body).send(&body[..]))?)?;
+    reply["report"].as_i64().ok_or_else(|| "the server sent something unexpected".to_string())
+}
+
+/// An admin action, signed by `identity` (an admin's, or the server's own).
+pub fn admin<T: serde::de::DeserializeOwned>(
+    base: &str,
+    server_key: &str,
+    identity: &Identity,
+    action: &AdminAction,
+) -> Result<T, String> {
+    let path = "/api/v1/admin";
+    let body = serde_json::to_vec(action).map_err(|e| e.to_string())?;
+    let request = agent().post(format!("{base}{path}")).header("Content-Type", "application/json");
+    read(check(signed(request, server_key, identity, "POST", path, &body).send(&body[..]))?)
 }
 
 /// A script's preview for `version` (the newest version's up to it that
@@ -322,6 +384,97 @@ mod tests {
 
     /// Signed uploads: a slug used again is a new version, owned by its
     /// key; deletes need it; signed-only servers refuse anonymous uploads.
+    /// Encores (not your own; given and taken back), reports (one open
+    /// per key), and admins: the server's own key, keys it makes admins,
+    /// hiding, resolving, banning.
+    #[test]
+    fn encores_reports_and_moderation() {
+        use crate::library::{AdminAction, AdminScriptInfo, Ban, Report, ReportRequest};
+        let dir = std::env::temp_dir().join(format!("synththing-moderation-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false }"#).unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let server_id = Identity::from_secret_hex(&std::fs::read_to_string(dir.join("server.key")).unwrap()).unwrap();
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let mut bars = upload_of("Bars", "visualizer", "function render() end");
+        bars.slug = Some("bars".into());
+        let id = upload(&base, &key, &bars, Some(&alice)).unwrap().id;
+
+        // Encores.
+        assert!(encore(&base, &key, &id, &alice, true).unwrap_err().contains("own"));
+        assert_eq!(encore(&base, &key, &id, &bob, true).unwrap(), EncoreState { encores: 1, encored: true });
+        assert_eq!(encore(&base, &key, &id, &bob, true).unwrap().encores, 1, "once per key");
+        assert_eq!(details_as(&base, &id, Some(&bob.public())).unwrap().encored, Some(true));
+        assert_eq!(details_as(&base, &id, Some(&alice.public())).unwrap().encored, Some(false));
+        assert_eq!(details(&base, &id).unwrap().summary.encores, 1);
+        assert_eq!(encore(&base, &key, &id, &bob, false).unwrap(), EncoreState { encores: 0, encored: false });
+
+        // Reports.
+        let complaint = ReportRequest {
+            reason: "derogatory".into(),
+            details: "line 2 says rude things".into(),
+            version: 1,
+            lines: vec![(2, 3)],
+            sprites: vec![5],
+        };
+        let number = report(&base, &key, &id, &bob, &complaint).unwrap();
+        assert!(report(&base, &key, &id, &bob, &complaint).unwrap_err().contains("already"));
+        let made_up = ReportRequest { reason: "vibes".into(), ..complaint.clone() };
+        assert!(report(&base, &key, &id, &alice, &made_up).unwrap_err().contains("reason"));
+
+        // Admins: not bob, until the server's key makes him one.
+        let as_server = |action: AdminAction| admin::<serde_json::Value>(&base, &key, &server_id, &action);
+        assert!(admin::<serde_json::Value>(&base, &key, &bob, &AdminAction::Whoami).unwrap_err().contains("admins"));
+        let reports: Vec<Report> = admin(&base, &key, &server_id, &AdminAction::Reports { all: false }).unwrap();
+        assert_eq!((reports.len(), reports[0].id), (1, number));
+        assert_eq!(reports[0].request, complaint);
+        assert_eq!(reports[0].reporter_id, bob.id());
+        as_server(AdminAction::AddAdmin { key: format!("#{}", bob.id()) }).unwrap();
+        assert!(admin::<serde_json::Value>(&base, &key, &bob, &AdminAction::Whoami).is_ok());
+
+        // Hidden: gone from listings and downloads, still there for admins.
+        admin::<serde_json::Value>(&base, &key, &bob, &AdminAction::Hide { script: id.clone(), reason: "rude".into() })
+            .unwrap();
+        assert!(details(&base, &id).is_err());
+        assert_eq!(list(&base, &search("", None, "new")).unwrap().total, 0);
+        let info: AdminScriptInfo = admin(&base, &key, &bob, &AdminAction::Info { script: id.clone() }).unwrap();
+        assert!(info.hidden && info.reports[0].hidden && info.author_key == Some(alice.public()));
+        assert_eq!(info.uploads[0].1.as_deref(), Some("127.0.0.1"));
+        let source: serde_json::Value =
+            admin(&base, &key, &bob, &AdminAction::Source { script: id.clone(), version: None }).unwrap();
+        assert_eq!(source["source"], "function render() end");
+        as_server(AdminAction::Unhide { script: id.clone() }).unwrap();
+        assert!(details(&base, &id).is_ok());
+        as_server(AdminAction::Resolve { report: number, note: "talked to them".into() }).unwrap();
+        let open: Vec<Report> = admin(&base, &key, &server_id, &AdminAction::Reports { all: false }).unwrap();
+        assert!(open.is_empty());
+
+        // Banned (by ID), with their scripts hidden: no uploads, encores
+        // or reports, until unbanned.
+        as_server(AdminAction::Ban {
+            target: alice.id(),
+            hours: Some(1),
+            reason: "spam".into(),
+            hide_scripts: true,
+        })
+        .unwrap();
+        let bans: Vec<Ban> = admin(&base, &key, &server_id, &AdminAction::Bans).unwrap();
+        assert_eq!(bans[0].target, alice.public());
+        assert!(details(&base, &id).is_err());
+        bars.source = "function render() end -- 2".into();
+        assert!(upload(&base, &key, &bars, Some(&alice)).unwrap_err().contains("banned"));
+        as_server(AdminAction::Unban { target: alice.public() }).unwrap();
+        assert!(upload(&base, &key, &bars, Some(&alice)).is_ok());
+        as_server(AdminAction::Delete { script: id.clone() }).unwrap();
+        let info = as_server(AdminAction::Info { script: id.clone() });
+        assert!(info.unwrap_err().contains("no such script"));
+        running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn signed_uploads_belong_to_their_key() {
         let dir = std::env::temp_dir().join(format!("synththing-signed-test-{}", std::process::id()));

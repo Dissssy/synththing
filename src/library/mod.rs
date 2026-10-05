@@ -5,6 +5,7 @@
 //! takes, the categories, and how a server signs what it serves. `server`
 //! is `synththing serve`; `client` is the app's requests.
 
+pub mod admin;
 pub mod client;
 pub mod identity;
 pub mod server;
@@ -324,6 +325,145 @@ pub struct ScriptDetails {
     #[serde(flatten)]
     pub summary: ScriptSummary,
     pub versions: Vec<VersionInfo>,
+    /// Whether the key asked about (`?viewer=`) has given it an encore.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encored: Option<bool>,
+}
+
+/// Why something can be reported: (as the API names it, as shown).
+pub const REPORT_REASONS: [(&str, &str); 6] = [
+    ("malicious", "Malicious: meant to harm, freeze or trick"),
+    ("derogatory", "Defamatory or derogatory content"),
+    ("flashing", "Intense flashing without a warning"),
+    ("copied", "Someone else's work, uncredited"),
+    ("spam", "Spam"),
+    ("other", "Other"),
+];
+pub const MAX_REPORT_DETAILS: usize = 2000;
+/// Marked lines and sprites a report may point at.
+pub const MAX_REPORT_MARKS: usize = 50;
+
+/// How long ago a time (Unix seconds) was: "5 min ago".
+pub fn ago(time: i64) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let secs = (now - time).max(0);
+    match secs {
+        0..60 => "just now".to_string(),
+        60..3600 => format!("{} min ago", secs / 60),
+        3600..86_400 => format!("{} h ago", secs / 3600),
+        _ => format!("{} days ago", secs / 86_400),
+    }
+}
+
+/// Line ranges as written: "3-5, 9".
+pub fn lines_text(lines: &[(u32, u32)]) -> String {
+    lines
+        .iter()
+        .map(|&(a, b)| if a == b { a.to_string() } else { format!("{a}-{b}") })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+pub fn report_reason_title(reason: &str) -> &str {
+    REPORT_REASONS.iter().find(|(r, _)| *r == reason).map_or(reason, |(_, title)| title)
+}
+
+/// `POST /api/v1/scripts/{id}/report`, signed: what's wrong with a
+/// version of it, and where (lines of its code, sprites in it by the line
+/// they're registered on), for the server's admins.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ReportRequest {
+    pub reason: String,
+    pub details: String,
+    pub version: u32,
+    /// Line ranges (1-based, inclusive).
+    #[serde(default)]
+    pub lines: Vec<(u32, u32)>,
+    /// Sprites, by the line their `sprite_register` is on.
+    #[serde(default)]
+    pub sprites: Vec<u32>,
+}
+
+/// A script's encores after giving or taking back one.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EncoreState {
+    pub encores: u64,
+    pub encored: bool,
+}
+
+/// A report, as admins see it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Report {
+    pub id: i64,
+    pub script_id: String,
+    /// Its name when it was reported (it may have gone since).
+    pub script_name: String,
+    #[serde(flatten)]
+    pub request: ReportRequest,
+    /// The reporter's ID.
+    pub reporter_id: String,
+    pub created: i64,
+    pub resolved: Option<i64>,
+    pub resolution: Option<String>,
+    /// The script now: still there, hidden.
+    pub exists: bool,
+    pub hidden: bool,
+}
+
+/// What admins see of a script beyond its details.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AdminScriptInfo {
+    #[serde(flatten)]
+    pub summary: ScriptSummary,
+    pub hidden: bool,
+    pub hidden_reason: Option<String>,
+    /// The uploader's key (hex), for a signed upload.
+    pub author_key: Option<String>,
+    /// Each version: its number, the address it came from (kept 30 days)
+    /// and when.
+    pub uploads: Vec<(u32, Option<String>, i64)>,
+    pub reports: Vec<Report>,
+}
+
+/// A ban: a key (hex) or an address, until when (forever if not).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Ban {
+    pub target: String,
+    pub until: Option<i64>,
+    pub reason: String,
+    pub created: i64,
+}
+
+/// `POST /api/v1/admin`, signed by an admin's key (or the server's own,
+/// which `synththing admin` uses): one moderation action.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "action", rename_all = "kebab-case")]
+pub enum AdminAction {
+    /// Whether the signer is an admin here (`{"admin": true}`).
+    Whoami,
+    /// Open reports (all, with `all`), newest first: `[Report]`.
+    Reports { all: bool },
+    /// `AdminScriptInfo`, hidden or not.
+    Info { script: String },
+    /// A version's source (the newest without one), hidden or not:
+    /// `{"version": n, "source": "..."}`.
+    Source { script: String, version: Option<u32> },
+    Hide { script: String, reason: String },
+    Unhide { script: String },
+    /// Every version, for good (its reports stay).
+    Delete { script: String },
+    /// A key (hex, or an ID the server's seen) or an address, for `hours`
+    /// (for good without), optionally hiding everything the key uploaded.
+    Ban { target: String, hours: Option<u64>, reason: String, hide_scripts: bool },
+    Unban { target: String },
+    /// `[Ban]`, those in force.
+    Bans,
+    AddAdmin { key: String },
+    RemoveAdmin { key: String },
+    /// `[[key, id]]`.
+    Admins,
+    /// Mark a report dealt with.
+    Resolve { report: i64, note: String },
 }
 
 /// `POST /api/v1/scripts`: a new script.

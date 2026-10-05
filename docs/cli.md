@@ -111,6 +111,25 @@ scripts.example.org {
 }
 ```
 
+## admin: moderate a library server
+
+```
+synththing admin [--data DIR] [--server URL] <command>
+```
+
+Moderates a running library server from the machine it runs on: each command goes to the server (at `server.json`'s `bind`, or `--server`), signed with the server's own key from `--data` (the same folder as `serve`'s). Over SSH, run it as a user that can read `server.key`; in Docker, `docker exec <container> synththing admin --data /data <command>`. Admins can do the same from the app (Moderation, in the Library tab).
+
+| Command | |
+|---|---|
+| `reports [--all]` | Open reports (and dealt-with ones), newest first: the script, version, reason, reporter, details, and the lines and sprites it points at. |
+| `info SCRIPT` | A script, hidden or not: its uploader's key, each version with the address it came from (kept 30 days), its reports. |
+| `hide SCRIPT [--reason TEXT]`, `unhide SCRIPT` | Take it out of listings and downloads, or put it back. |
+| `delete SCRIPT` | Delete it, every version, for good (its reports stay). |
+| `ban TARGET --reason TEXT [--hours N] [--hide-scripts]` | Ban a key (an ID like `#k3f9q2xa` the server has seen, or the whole key in hex) or an address, for N hours or for good, optionally hiding everything the key uploaded. Banned keys and addresses can't upload, give encores or report; they can still browse and download. |
+| `unban TARGET`, `bans` | Lift a ban; list the bans in force. |
+| `add-admin KEY`, `remove-admin KEY`, `admins` | Who can moderate from the app (an ID the server has seen, or a whole key). |
+| `resolve REPORT [--note TEXT]` | Mark a report dealt with. |
+
 ## publish-bundled: publish the bundled scripts
 
 ```

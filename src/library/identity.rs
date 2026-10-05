@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{hex, key_id, sign_hex, unhex};
 
+#[derive(Clone)]
 pub struct Identity {
     key: SigningKey,
 }

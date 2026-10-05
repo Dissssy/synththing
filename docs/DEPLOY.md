@@ -71,6 +71,10 @@ systemctl enable --now synththing-update.timer
 
 `systemctl list-timers synththing-update` shows when it runs next; `journalctl -u synththing-update` what it did.
 
+## Moderating
+
+`synththing admin` on the server talks to it, signed with its own key (docs/cli.md): `synththing admin --data /var/lib/synththing reports` under systemd (as root, or the synththing user), `docker exec <container> synththing admin --data /data reports` in Docker. To moderate from the app instead, make your identity an admin: `synththing admin --data ... add-admin '#yourid'` (the server needs to have seen your key: give something an encore first, or pass the whole key). The Library tab then has Moderation.
+
 ## Reverse proxy
 
 Caddy (HTTPS certificates are automatic):

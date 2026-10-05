@@ -97,15 +97,17 @@ Rendered by the server on each upload and each new version, through a queue (one
 
 ## Encores and reports
 
-- An **encore** is the only vote: one per key per script, signed, can be taken back. A user's total is the sum over their uploads.
-- A **report** (signed, with a reason) goes to the admins. There's no downvote.
-- Keys cost nothing to make, so encores can be faked with many keys. Mitigations: rate limits per IP, encores from new keys counting less at first, and a small proof-of-work the first time a key uploads or votes. Not perfect; fine at this scale.
+- An **encore** is the only vote: one per key per script, signed, can be taken back, not for your own scripts. A user's total is the sum over their uploads.
+- A **report** (signed) goes to the admins: a reason (malicious; defamatory or derogatory; intense flashing without a warning; someone else's work, uncredited; spam; other), optional details, and what it's about: the version, lines of its code, and sprites written in it (by the line they're registered on). One open report per key per script. There's no downvote.
+- Limits per address: 60 encores an hour, 10 reports a day. Banned keys and addresses can't upload, give encores or report (they can still browse and download).
+- Keys cost nothing to make, so encores can be faked with many keys, and a banned key can be swapped for a new one (an address ban covers that, as far as addresses go). Still to do: encores from new keys counting less at first, and a small proof-of-work the first time a key uploads or votes. Not perfect; fine at this scale.
 
 ## Moderation
 
-- **Admins** are keys listed by the server (added with `synththing admin add-admin <id>`).
-- **`synththing admin <command>`**: `add-admin`, `remove-admin`, `reports`, `hide`, `unhide`, `delete`, `ban` (a key or an IP, for a while or for good), `info`, `update`, `login`. It talks to the running server over a Unix socket in the data folder (a localhost port on Windows), so it works from SSH, under systemd, and in Docker (`docker exec <container> synththing admin ...`).
-- **Admin tab** in the app, for admin keys: open reports, a script's extra metadata (uploader key and IPs, versions, copies, remix chain), and the actions above, signed with the admin's key.
+- **Admins** are keys listed by the server (added with `synththing admin add-admin <id>`), and the server's own key.
+- One endpoint, `POST /api/v1/admin`, signed by an admin, takes an action (`AdminAction`): reports, a script's extra metadata (uploader key and addresses, versions, its reports) and source (hidden or not), hide, unhide, delete, ban (a key or an address, for a while or for good, optionally hiding everything the key uploaded), unban, bans, add-admin, remove-admin, admins, resolve.
+- **`synththing admin <command>`** on the server sends those, signed with the server's own key from its data folder, to the running server at its configured address: it works from SSH, under systemd, and in Docker (`docker exec <container> synththing admin ...`). Still to come: `update`, `login`.
+- **Moderation** in the app's Library tab, for admin keys: reports with the lines they point at highlighted in the code and the sprites drawn, and the actions above, signed with the admin's key.
 - **Web admin panel** (later): localhost only unless turned on in the config; signed in with a one-time link from `synththing admin login`.
 - **Rules page** and a contact address in `/api/v1/info` (contact@p51.nl on the official server), for reports and takedown requests.
 
@@ -120,7 +122,7 @@ Rendered by the server on each upload and each new version, through a queue (one
 ```
 GET  /api/v1/info                         name, version, server key, mode, license, rules, contact, authority?
 GET  /api/v1/scripts?q=&category=&tag=&sort=new|top&page=
-GET  /api/v1/scripts/{id}                 details, versions, author ID and names, encores, remix of, remixes
+GET  /api/v1/scripts/{id}                 details, versions, author ID and names, encores (?viewer=key: whether they gave one), remix of, remixes
 GET  /api/v1/scripts/{id}/source          ?version=  (signed by the server)
 GET  /api/v1/scripts/{id}/preview.png     the still
 GET  /api/v1/scripts/{id}/preview-sheet.png
@@ -129,6 +131,7 @@ POST /api/v1/scripts/{id}/versions        new version (owner)
 DELETE /api/v1/scripts/{id}               owner or admin
 POST /api/v1/scripts/{id}/encore          (and DELETE to take it back)
 POST /api/v1/scripts/{id}/report
+POST /api/v1/admin                        an admin action (signed by an admin)
 GET  /api/v1/users/{id}                   names, uploads, total encores
 POST /api/v1/identity/rotate              key-signed rotation (authorities)
 POST /api/v1/identity/email               attach or change an email (authorities)
