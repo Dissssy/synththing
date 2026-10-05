@@ -526,6 +526,9 @@ Smaller:
     `synththing serve` below: a shared backend, with the plugin as one
     client and the web library as another.
 
+[L][!] shared script library - IN PROGRESS, designed in docs/SERVER.md
+    (identity keys, authorities, previews, encores, moderation, the
+    Library tab; built in the order listed there). Original note:
 [L][.] shared script library (long term)
     A place to share scripts (they're sandboxed: the worst a script can do
     is spam notes or mute channels). Maybe `synththing serve` as a web
