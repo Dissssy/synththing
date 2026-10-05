@@ -82,7 +82,7 @@ Runs a script library server (the design is in docs/SERVER.md): the app's Script
 - `name`: shown in the app.
 - `bind`: where it listens. Behind a reverse proxy, leave it on 127.0.0.1.
 - `behind_proxy`: true when a reverse proxy (Caddy, nginx) passes requests on, so the client's address is taken from `X-Forwarded-For` (for upload limits).
-- `mode`: `"open"`: anyone can upload, anonymously (signed uploads come later).
+- `mode`: `"open"` (anyone can upload, signed or anonymously) or `"signed"` (only uploads signed with the uploader's identity).
 - `license`, `rules`, `contact`: shown to people publishing (CC BY 4.0 by default).
 - `uploads_per_day`: per address (10).
 - `threads`: request workers (4).

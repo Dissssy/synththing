@@ -4532,8 +4532,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
                 problems.push(format!("{name}:{}: {}", d.line, d.message));
             }
         }
-        assert!(problems.is_empty(), "{}", problems.join("
-"));
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
 
         // The editor test script has exactly the three it says it has.
         let &(_, _, test) = BUNDLED_SCRIPTS.iter().find(|(_, n, _)| *n == "editor_test.lua").unwrap();

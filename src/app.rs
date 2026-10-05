@@ -2265,6 +2265,7 @@ impl App {
             {
                 rename = Some(path.to_path_buf());
             }
+            self.script_share_button(ui);
         });
         if let Some(path) = rename {
             let name = lua_visualizer::display_name(&path);
@@ -2828,6 +2829,7 @@ impl eframe::App for App {
         self.record_window_ui(&ctx, view);
         self.script_window_ui(&ctx);
         self.publish_ui(&ctx);
+        self.update_ui(&ctx);
         self.poll_library();
         self.heavy_midi_ui(&ctx);
         self.poll_recordings(view);

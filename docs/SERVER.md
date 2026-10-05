@@ -128,7 +128,7 @@ POST /api/v1/identity/apply               present a rotation record (any server)
 DELETE /api/v1/identity                   delete everything about a key
 ```
 
-Errors are JSON (`{ "error": "...", "retry_after": ... }`). Requests are signed with headers (`X-Synththing-Key`, `X-Synththing-Signature`, `X-Synththing-Time`).
+Errors are JSON (`{ "error": "...", "retry_after": ... }`). Requests are signed with headers (`X-Synththing-Key`, `X-Synththing-Time`, `X-Synththing-Nonce`, `X-Synththing-Signature`); the signature covers the server's key, the method and path, the time, the nonce (random per request, so a replay is spotted) and the body's SHA-256.
 
 ## In the app
 

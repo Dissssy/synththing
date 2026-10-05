@@ -7,9 +7,11 @@
 //! few worker threads (`tiny_http`), sharing one database connection; at
 //! the sizes a script library gets, that's plenty.
 //!
-//! What's here so far is the first step of the plan: open uploads
-//! (anonymous, unsigned), listing and search, details, and sources signed
-//! with the server's key.
+//! What's here so far: uploads, anonymous or signed by the uploader's key
+//! (`"mode": "signed"` takes only signed ones); a signed upload with a
+//! slug its author used before is a new version of that script, and only
+//! its author can delete it. Listing and search, details, user pages, and
+//! sources and receipts signed with the server's key.
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
@@ -25,9 +27,10 @@ use serde::{Deserialize, Serialize};
 use tiny_http::{Header, Method, Request, Response};
 
 use super::{
-    check_upload, hex, sha256_hex, sign_hex, source_message, unhex, ApiError, Info, Listing, Receipt,
-    ScriptDetails, ScriptSummary, Upload, VersionInfo, MAX_SOURCE_BYTES, PAGE_SIZE, SHA256_HEADER,
-    SIGNATURE_HEADER, VERSION_HEADER,
+    check_upload, hex, key_id, receipt_message, request_message, sha256_hex, sign_hex, source_message, unhex,
+    verify_hex, ApiError, Info, Listing, Receipt, ScriptDetails, ScriptSummary, Upload, UserInfo, VersionInfo,
+    KEY_HEADER, MAX_SOURCE_BYTES, NONCE_HEADER, PAGE_SIZE, REQUEST_WINDOW_SECONDS, SHA256_HEADER, SIGNATURE_HEADER,
+    TIME_HEADER, VERSION_HEADER,
 };
 
 /// A server's settings (`server.json` in its data folder).
@@ -42,7 +45,8 @@ pub struct ServerConfig {
     /// Requests come through a reverse proxy: the client's address is the
     /// first one in `X-Forwarded-For`, not the connection's.
     pub behind_proxy: bool,
-    /// `"open"` (unsigned uploads allowed, anonymously) or `"signed"`.
+    /// `"open"` (unsigned uploads allowed, anonymously) or `"signed"`
+    /// (only signed ones).
     pub mode: String,
     /// What uploads are shared under (an SPDX name).
     pub license: String,
@@ -130,7 +134,14 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
     let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
     let http = Arc::new(http);
     let workers = config.threads.max(1);
-    let state = Arc::new(State { config, key, key_hex, db: Mutex::new(db), uploads: Mutex::default() });
+    let state = Arc::new(State {
+        config,
+        key,
+        key_hex,
+        db: Mutex::new(db),
+        uploads: Mutex::default(),
+        seen_signatures: Mutex::default(),
+    });
     let threads = (0..workers)
         .map(|_| {
             let http = Arc::clone(&http);
@@ -152,6 +163,9 @@ struct State {
     db: Mutex<Connection>,
     /// Recent uploads by address, for the daily limit.
     uploads: Mutex<HashMap<String, Vec<Instant>>>,
+    /// Signatures of signed requests in the last while: the same one
+    /// again is a replay.
+    seen_signatures: Mutex<HashMap<String, Instant>>,
 }
 
 impl State {
@@ -198,8 +212,23 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 1 {
         db.execute_batch(SCHEMA_V1)?;
     }
+    if version < 2 {
+        db.execute_batch(SCHEMA_V2)?;
+    }
     Ok(db)
 }
+
+/// Signed uploads: who posted (the key's short ID, to look them up by),
+/// and the slug each script has among its author's.
+const SCHEMA_V2: &str = "
+BEGIN;
+ALTER TABLE scripts ADD COLUMN slug TEXT;
+ALTER TABLE scripts ADD COLUMN author_id TEXT;
+CREATE UNIQUE INDEX scripts_author_slug ON scripts(author_key, slug) WHERE author_key IS NOT NULL;
+CREATE INDEX scripts_author_id ON scripts(author_id);
+PRAGMA user_version = 2;
+COMMIT;
+";
 
 const SCHEMA_V1: &str = "
 BEGIN;
@@ -278,9 +307,15 @@ fn handle(state: &State, mut request: Request) {
         (Method::Get, ["api", "v1", "scripts"]) => list(state, &query),
         (Method::Get, ["api", "v1", "scripts", id]) => details(state, id),
         (Method::Get, ["api", "v1", "scripts", id, "source"]) => source(state, id, &query),
+        (Method::Get, ["api", "v1", "users", id]) => user(state, id),
+        (Method::Get, ["api", "v1", "users", id, "scripts", slug]) => by_slug(state, id, slug),
         (Method::Post, ["api", "v1", "scripts"]) => {
             let ip = client_ip(state, &request);
             upload(state, &mut request, &ip)
+        }
+        (Method::Delete, ["api", "v1", "scripts", id]) => {
+            let id = id.to_string();
+            delete(state, &mut request, &id)
         }
         (Method::Get, [""]) => Response::from_string(format!(
             "{}: a synththing script library. Add this address under Preferences > Library in the app.\n",
@@ -348,7 +383,7 @@ fn percent_decode(text: &str) -> String {
 }
 
 const SUMMARY_COLUMNS: &str =
-    "id, name, description, category, tags, author_name, author_key, latest, encores, created, updated";
+    "id, name, description, category, tags, author_name, author_key, latest, encores, created, updated, slug";
 
 fn summary_from_row(row: &rusqlite::Row) -> rusqlite::Result<ScriptSummary> {
     let tags: String = row.get(4)?;
@@ -365,6 +400,7 @@ fn summary_from_row(row: &rusqlite::Row) -> rusqlite::Result<ScriptSummary> {
         encores: row.get::<_, i64>(8)?.max(0) as u64,
         created: row.get(9)?,
         updated: row.get(10)?,
+        slug: row.get(11)?,
     })
 }
 
@@ -386,6 +422,10 @@ fn list(state: &State, query: &HashMap<String, String>) -> Reply {
     if let Some(category) = query.get("category").filter(|c| !c.is_empty()) {
         clauses.push("category = ?".into());
         args.push(category.clone().into());
+    }
+    if let Some(author) = query.get("author").filter(|a| !a.is_empty()) {
+        clauses.push("author_id = ?".into());
+        args.push(author.clone().into());
     }
     if let Some(tag) = query.get("tag").filter(|t| !t.is_empty()) {
         clauses.push("(',' || tags || ',') LIKE ?".into());
@@ -482,9 +522,61 @@ fn source(state: &State, id: &str, query: &HashMap<String, String>) -> Reply {
     }
 }
 
+/// Read a request's body, up to `limit` bytes.
+fn read_body(request: &mut Request, limit: usize) -> Result<Vec<u8>, Reply> {
+    let mut body = Vec::new();
+    if request.as_reader().take(limit as u64 + 1).read_to_end(&mut body).is_err() {
+        return Err(error(400, "couldn't read the request"));
+    }
+    if body.len() > limit {
+        return Err(error(413, format!("too big: scripts can be up to {} KB", MAX_SOURCE_BYTES / 1024)));
+    }
+    Ok(body)
+}
+
+/// The signer of a signed request (their public key, hex), `None` for an
+/// unsigned one, or why a signed one isn't accepted.
+fn signer(state: &State, request: &Request, method: &str, path: &str, body: &[u8]) -> Result<Option<String>, Reply> {
+    let get = |name: &'static str| {
+        request.headers().iter().find(|h| h.field.equiv(name)).map(|h| h.value.as_str().trim().to_string())
+    };
+    let (Some(key), Some(time), Some(signature)) = (get(KEY_HEADER), get(TIME_HEADER), get(SIGNATURE_HEADER)) else {
+        return Ok(None);
+    };
+    let nonce = get(NONCE_HEADER).ok_or_else(|| error(400, "a signed request needs a nonce"))?;
+    let time: i64 = time.parse().map_err(|_| error(400, "a signed request's time isn't a number"))?;
+    if (now() - time).abs() > REQUEST_WINDOW_SECONDS {
+        return Err(error(401, "the request's time is too far from the server's: is the computer's clock right?"));
+    }
+    if !verify_hex(&key, &request_message(&state.key_hex, method, path, time, &nonce, body), &signature) {
+        return Err(error(401, "the request's signature doesn't match its key"));
+    }
+    let mut seen = state.seen_signatures.lock().unwrap_or_else(|p| p.into_inner());
+    let window = Duration::from_secs(REQUEST_WINDOW_SECONDS as u64 * 2);
+    seen.retain(|_, at| at.elapsed() < window);
+    if seen.insert(signature, Instant::now()).is_some() {
+        return Err(error(409, "that request was already made"));
+    }
+    Ok(Some(key))
+}
+
+fn signed_receipt(state: &State, id: String, version: u32, sha256: String) -> Receipt {
+    let mut receipt = Receipt { id, version, sha256, time: now(), signature: String::new() };
+    receipt.signature = sign_hex(&state.key, &receipt_message(&state.key_hex, &receipt));
+    receipt
+}
+
 fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
-    if state.config.mode != "open" {
-        return error(403, "this server only takes signed uploads, which this version of synththing can't make yet");
+    let body = match read_body(request, MAX_SOURCE_BYTES + 64 * 1024) {
+        Ok(body) => body,
+        Err(reply) => return reply,
+    };
+    let author = match signer(state, request, "POST", "/api/v1/scripts", &body) {
+        Ok(author) => author,
+        Err(reply) => return reply,
+    };
+    if author.is_none() && state.config.mode != "open" {
+        return error(403, "this server only takes signed uploads");
     }
     // The daily limit, by address.
     {
@@ -500,14 +592,6 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
             );
         }
     }
-    let mut body = Vec::new();
-    let limit = (MAX_SOURCE_BYTES + 64 * 1024) as u64;
-    if request.as_reader().take(limit + 1).read_to_end(&mut body).is_err() {
-        return error(400, "couldn't read the upload");
-    }
-    if body.len() as u64 > limit {
-        return error(413, format!("too big: scripts can be up to {} KB", MAX_SOURCE_BYTES / 1024));
-    }
     let mut upload: Upload = match serde_json::from_slice(&body) {
         Ok(upload) => upload,
         Err(e) => return error(400, format!("not an upload: {e}")),
@@ -518,31 +602,96 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
     if let Err(problem) = check_upload(&upload) {
         return error(400, problem);
     }
+    // Slugs belong to signed uploads: an anonymous one can't be updated.
+    let slug = match (&author, upload.slug.take()) {
+        (Some(_), Some(slug)) => Some(slug),
+        (Some(_), None) => return error(400, "a signed upload needs a slug"),
+        (None, _) => None,
+    };
 
     let sha256 = sha256_hex(upload.source.as_bytes());
     let created = now();
     let mut db = state.db();
-    let id = loop {
-        let mut bytes = [0u8; 5];
-        if getrandom::fill(&mut bytes).is_err() {
-            return error(500, "couldn't make an ID");
-        }
-        let id = super::base32(&bytes);
-        match db.query_row("SELECT 1 FROM scripts WHERE id = ?", [&id], |_| Ok(())).optional() {
-            Ok(None) => break id,
-            Ok(Some(())) => continue,
-            Err(e) => return error(500, format!("database: {e}")),
-        }
+    // A slug its author has used before: a new version of that script.
+    let existing: rusqlite::Result<Option<(String, u32)>> = match (&author, &slug) {
+        (Some(key), Some(slug)) => db
+            .query_row("SELECT id, latest FROM scripts WHERE author_key = ? AND slug = ?", params![key, slug], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional(),
+        _ => Ok(None),
     };
+    let existing = match existing {
+        Ok(existing) => existing,
+        Err(e) => return error(500, format!("database: {e}")),
+    };
+    if let Some((id, latest)) = &existing {
+        // The same source as the newest version: nothing to add.
+        let same: rusqlite::Result<Option<String>> = db
+            .query_row("SELECT sha256 FROM versions WHERE script_id = ? AND version = ?", params![id, latest], |r| r.get(0))
+            .optional();
+        if let Ok(Some(newest)) = same
+            && newest == sha256
+        {
+            return json(200, &signed_receipt(state, id.clone(), *latest, sha256));
+        }
+    }
+    let id = match &existing {
+        Some((id, _)) => id.clone(),
+        None => loop {
+            let mut bytes = [0u8; 5];
+            if getrandom::fill(&mut bytes).is_err() {
+                return error(500, "couldn't make an ID");
+            }
+            let id = super::base32(&bytes);
+            match db.query_row("SELECT 1 FROM scripts WHERE id = ?", [&id], |_| Ok(())).optional() {
+                Ok(None) => break id,
+                Ok(Some(())) => continue,
+                Err(e) => return error(500, format!("database: {e}")),
+            }
+        },
+    };
+    let version = existing.as_ref().map_or(1, |(_, latest)| latest + 1);
+    let author_id = author.as_deref().map(key_id);
     let stored = db.transaction().and_then(|tx| {
+        if existing.is_some() {
+            tx.execute(
+                "UPDATE scripts SET name = ?, description = ?, category = ?, tags = ?, author_name = ?, latest = ?,
+                 updated = ? WHERE id = ?",
+                params![
+                    upload.name,
+                    upload.description,
+                    upload.category,
+                    upload.tags.join(","),
+                    upload.author_name,
+                    version,
+                    created,
+                    id
+                ],
+            )?;
+        } else {
+            tx.execute(
+                "INSERT INTO scripts (id, name, description, category, tags, author_name, author_key, author_id, slug,
+                 latest, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                params![
+                    id,
+                    upload.name,
+                    upload.description,
+                    upload.category,
+                    upload.tags.join(","),
+                    upload.author_name,
+                    author,
+                    author_id,
+                    slug,
+                    created,
+                    created
+                ],
+            )?;
+        }
         tx.execute(
-            "INSERT INTO scripts (id, name, description, category, tags, author_name, author_key, latest, created, updated)
-             VALUES (?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)",
-            params![id, upload.name, upload.description, upload.category, upload.tags.join(","), upload.author_name, created, created],
-        )?;
-        tx.execute(
-            "INSERT INTO versions (script_id, version, sha256, source, app_version, uploader_ip, created) VALUES (?, 1, ?, ?, ?, ?, ?)",
-            params![id, sha256, upload.source, upload.app_version, ip, created],
+            "INSERT INTO versions (script_id, version, sha256, source, app_version, uploader_ip, created)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![id, version, sha256, upload.source, upload.app_version, ip, created],
         )?;
         tx.commit()
     });
@@ -550,6 +699,72 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
         return error(500, format!("database: {e}"));
     }
     state.uploads.lock().unwrap_or_else(|p| p.into_inner()).entry(ip.to_string()).or_default().push(Instant::now());
-    println!("uploaded {id} \"{}\" by {} from {ip}", upload.name, upload.author_name);
-    json(201, &Receipt { id, version: 1, sha256 })
+    let who = author_id.map(|id| format!(" (#{id})")).unwrap_or_default();
+    println!("uploaded {id} v{version} \"{}\" by {}{who} from {ip}", upload.name, upload.author_name);
+    json(201, &signed_receipt(state, id, version, sha256))
+}
+
+/// `DELETE /api/v1/scripts/{id}`, signed by its author.
+fn delete(state: &State, request: &mut Request, id: &str) -> Reply {
+    let path = format!("/api/v1/scripts/{id}");
+    let key = match signer(state, request, "DELETE", &path, &[]) {
+        Ok(Some(key)) => key,
+        Ok(None) => return error(401, "deleting a script needs its author's signature"),
+        Err(reply) => return reply,
+    };
+    let db = state.db();
+    let owner: rusqlite::Result<Option<Option<String>>> =
+        db.query_row("SELECT author_key FROM scripts WHERE id = ?", [id], |r| r.get(0)).optional();
+    match owner {
+        Ok(None) => error(404, "no such script"),
+        Ok(Some(owner)) if owner.as_deref() != Some(key.as_str()) => error(403, "only its author can delete it"),
+        Ok(Some(_)) => match db.execute("DELETE FROM scripts WHERE id = ?", [id]) {
+            Ok(_) => {
+                println!("deleted {id} (by #{})", key_id(&key));
+                json(200, &serde_json::json!({ "deleted": id }))
+            }
+            Err(e) => error(500, format!("database: {e}")),
+        },
+        Err(e) => error(500, format!("database: {e}")),
+    }
+}
+
+/// `GET /api/v1/users/{id}/scripts/{slug}`: one of their scripts, by slug.
+fn by_slug(state: &State, author_id: &str, slug: &str) -> Reply {
+    let found = state
+        .db()
+        .query_row(
+            &format!("SELECT {SUMMARY_COLUMNS} FROM scripts WHERE author_id = ? AND slug = ? AND hidden = 0"),
+            params![author_id, slug],
+            summary_from_row,
+        )
+        .optional();
+    match found {
+        Ok(Some(summary)) => json(200, &summary),
+        Ok(None) => error(404, "no script with that slug"),
+        Err(e) => error(500, format!("database: {e}")),
+    }
+}
+
+/// `GET /api/v1/users/{id}`: the names they've posted under, and how much.
+fn user(state: &State, id: &str) -> Reply {
+    let db = state.db();
+    let names = db
+        .prepare(
+            "SELECT author_name FROM scripts WHERE author_id = ? AND hidden = 0 GROUP BY author_name ORDER BY COUNT(*) DESC",
+        )
+        .and_then(|mut statement| statement.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>());
+    let totals: rusqlite::Result<(i64, i64)> = db.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(encores), 0) FROM scripts WHERE author_id = ? AND hidden = 0",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    );
+    match (names, totals) {
+        (Ok(names), Ok((scripts, encores))) if scripts > 0 => json(
+            200,
+            &UserInfo { id: id.to_string(), names, scripts: scripts as u64, encores: encores.max(0) as u64 },
+        ),
+        (Ok(_), Ok(_)) => error(404, "no uploads by that ID"),
+        (Err(e), _) | (_, Err(e)) => error(500, format!("database: {e}")),
+    }
 }
