@@ -43,6 +43,28 @@ pub enum Command {
     /// loaded. The script's saved data (store_set) isn't written unless
     /// --save-data is given.
     RunScript(RunScriptArgs),
+
+    /// Run a script library server (docs/SERVER.md).
+    ///
+    /// Serves the library's API over HTTP until stopped (Ctrl+C). Its data
+    /// (settings in server.json, its key, the database) lives in the --data
+    /// folder, made on first run with default settings to edit. For the
+    /// internet, run it behind a reverse proxy for HTTPS (Caddy, nginx) and
+    /// set behind_proxy in server.json.
+    Serve(ServeArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ServeArgs {
+    /// The folder the server keeps its data in. Defaults to "server" in
+    /// the app's config folder.
+    #[arg(long, value_name = "DIR")]
+    pub data: Option<PathBuf>,
+
+    /// Address and port to listen on, instead of server.json's (default
+    /// 127.0.0.1:7381).
+    #[arg(long, value_name = "ADDR")]
+    pub bind: Option<String>,
 }
 
 #[derive(Args, Debug)]

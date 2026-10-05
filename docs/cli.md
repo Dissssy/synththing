@@ -64,6 +64,37 @@ Exit codes:
 
 Not simulated: mouse, keyboard and typed input (scripts see no pointer, no keys and no typing, and `display_mode()` is `"window"`), and the app's own UI.
 
+## serve: run a script library server
+
+```
+synththing serve [--data DIR] [--bind ADDR]
+```
+
+Runs a script library server (the design is in docs/SERVER.md): the app's Script Library tab browses, installs and publishes scripts on it once its address is added under Preferences > Library. It serves until stopped (Ctrl+C), printing a line per upload.
+
+| Option | Default | |
+|---|---|---|
+| `--data` | `server` in the app's config folder | The folder it keeps everything in: `server.json` (its settings), `server.key` (its signing key) and `library.db` (the scripts). Made on first run, with default settings to edit. |
+| `--bind` | `server.json`'s `bind` (127.0.0.1:7381) | The address and port to listen on. |
+
+`server.json`:
+
+- `name`: shown in the app.
+- `bind`: where it listens. Behind a reverse proxy, leave it on 127.0.0.1.
+- `behind_proxy`: true when a reverse proxy (Caddy, nginx) passes requests on, so the client's address is taken from `X-Forwarded-For` (for upload limits).
+- `mode`: `"open"`: anyone can upload, anonymously (signed uploads come later).
+- `license`, `rules`, `contact`: shown to people publishing (CC BY 4.0 by default).
+- `uploads_per_day`: per address (10).
+- `threads`: request workers (4).
+
+For the internet, put it behind a reverse proxy for HTTPS. With Caddy:
+
+```
+scripts.example.org {
+    reverse_proxy localhost:7381
+}
+```
+
 ## Running from a terminal on Windows
 
 Release builds are Windows GUI programs, so they don't own a console. When run with arguments, synththing attaches to the terminal it was started from and prints there. Two things follow from that:

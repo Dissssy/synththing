@@ -114,6 +114,45 @@ pub struct Config {
     /// Where recordings are saved; `None` means Videos\synththing.
     #[serde(default)]
     pub record_dir: Option<PathBuf>,
+    /// The script library: which servers, their keys, the name to post
+    /// under.
+    #[serde(default)]
+    pub library: LibrarySettings,
+}
+
+/// The script library's servers (Preferences > Library).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LibrarySettings {
+    /// The official server is used (it can't be removed, only turned off).
+    pub official: bool,
+    /// Other servers, by address.
+    pub servers: Vec<LibraryServer>,
+    /// Each server's key (hex) as first seen, by address: a server whose
+    /// key changes isn't trusted until the user says so.
+    pub pinned: std::collections::BTreeMap<String, String>,
+    /// The name last posted under.
+    pub author_name: String,
+}
+
+impl Default for LibrarySettings {
+    fn default() -> Self {
+        Self { official: true, servers: Vec::new(), pinned: Default::default(), author_name: String::new() }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LibraryServer {
+    pub url: String,
+    pub enabled: bool,
+}
+
+impl LibrarySettings {
+    /// The servers in use, the official one first.
+    pub fn enabled_servers(&self) -> Vec<String> {
+        let official = self.official.then(|| crate::library::OFFICIAL_URL.to_string());
+        official.into_iter().chain(self.servers.iter().filter(|s| s.enabled).map(|s| s.url.clone())).collect()
+    }
 }
 
 pub const DEFAULT_PRELOAD_EXPIRY_SECS: u32 = 30;

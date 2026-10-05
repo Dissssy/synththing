@@ -33,6 +33,10 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }  #
 stylua = { version = "2.5.2", default-features = false, features = ["lua54"] }
 full_moon = { version = "2.2", default-features = false, features = ["lua54"] }
 gilrs = "0.11"
+tiny_http = "0.12"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+ed25519-dalek = "3.0.0"
+getrandom = "0.4.3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_SystemInformation"] }  # re-attach to the terminal for CLI use; local time for recording names

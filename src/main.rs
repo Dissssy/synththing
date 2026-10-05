@@ -20,6 +20,7 @@ mod ffmpeg;
 mod filebrowser;
 mod gamepad;
 mod layout;
+mod library;
 mod loader;
 mod lua_completion;
 mod lua_docs;
@@ -71,6 +72,14 @@ fn main() -> Result<()> {
     if let Some(Command::RunScript(args)) = &cli.command {
         let config = Config::load().unwrap_or_default();
         std::process::exit(headless::run(args, &config));
+    }
+    if let Some(Command::Serve(args)) = &cli.command {
+        let data = args.data.clone().unwrap_or_else(library::server::default_data_dir);
+        if let Err(e) = library::server::run(&data, args.bind.clone()) {
+            eprintln!("error: {e}");
+            std::process::exit(2);
+        }
+        return Ok(());
     }
 
     applog::init(cli.console);

@@ -302,6 +302,7 @@ pub fn rename_script(old: &Path, new_name: &str) -> Result<PathBuf> {
         (sidecar_path(old), sidecar_path(&new)),
         (store_path(old), store_path(&new)),
         (controls_path(old), controls_path(&new)),
+        (crate::library::installed_path(old), crate::library::installed_path(&new)),
     ] {
         if old_sidecar.exists() {
             fs::rename(&old_sidecar, &new_sidecar)

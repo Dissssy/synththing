@@ -11,6 +11,7 @@ mod editor;
 pub use editor::ApplyMode;
 mod loading;
 mod playlist_panel;
+mod library;
 mod recording;
 mod script_windows;
 mod sprite_editor;
@@ -216,6 +217,8 @@ pub struct App {
     script_window_tab: [usize; 3],
     /// The tables opened in Debug > Variables.
     state_request: lua_visualizer::StateRequest,
+    /// The Script Library tab.
+    library: library::LibraryState,
     /// The changelog window: `Some(since)` lists only the versions newer
     /// than that (What's new, after an update), `None` all of them
     /// (Help > Changelog...).
@@ -395,6 +398,7 @@ impl App {
             script_window: None,
             script_window_tab: [0; 3],
             state_request: Default::default(),
+            library: library::LibraryState::new(),
             changelog: None,
             welcome: welcome::Welcome::default(),
             preferences_tab: PrefTab::default(),
@@ -1194,6 +1198,7 @@ impl App {
                 section_checkbox(ui, Section::Editor);
                 section_checkbox(ui, Section::Reference);
                 section_checkbox(ui, Section::Sprites);
+                section_checkbox(ui, Section::Library);
                 ui.separator();
                 ui.menu_button("Layout", |ui| self.layout_menu_ui(ui));
             });
@@ -1736,6 +1741,7 @@ impl App {
             || self.recording.prompt_open
             || self.recording.window.is_some()
             || self.script_window.is_some()
+            || self.library.publish_open()
             || self.editor.history_open
             || self.layout_save.is_some()
             || self.heavy_prompt.is_some()
@@ -2449,6 +2455,7 @@ impl App {
                                 );
                             }
                             PrefTab::Recording => self.recording_preferences_ui(ui),
+                            PrefTab::Library => self.library_preferences_ui(ui),
                             PrefTab::Experimental => {
                                 ui.weak("Newer features that might change or go away.");
                                 with_info(
@@ -2820,6 +2827,8 @@ impl eframe::App for App {
         self.ffmpeg_prompt_ui(&ctx);
         self.record_window_ui(&ctx, view);
         self.script_window_ui(&ctx);
+        self.publish_ui(&ctx);
+        self.poll_library();
         self.heavy_midi_ui(&ctx);
         self.poll_recordings(view);
         if self.status != self.logged_status {
@@ -2906,6 +2915,7 @@ impl TabViewer for SectionTabs<'_> {
             Section::Settings => {}
             Section::Reference => app.docs_ui(ui),
             Section::Sprites => app.sprite_editor_ui(ui),
+            Section::Library => app.library_ui(ui),
         }
     }
 
@@ -2932,12 +2942,13 @@ enum PrefTab {
     Loading,
     Scripts,
     Recording,
+    Library,
     Experimental,
 }
 
 impl PrefTab {
-    const ALL: [PrefTab; 6] =
-        [Self::General, Self::Songs, Self::Loading, Self::Scripts, Self::Recording, Self::Experimental];
+    const ALL: [PrefTab; 7] =
+        [Self::General, Self::Songs, Self::Loading, Self::Scripts, Self::Recording, Self::Library, Self::Experimental];
 
     fn title(self) -> &'static str {
         match self {
@@ -2946,6 +2957,7 @@ impl PrefTab {
             Self::Loading => "Loading",
             Self::Scripts => "Scripts",
             Self::Recording => "Recording",
+            Self::Library => "Library",
             Self::Experimental => "Experimental",
         }
     }
