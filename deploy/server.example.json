@@ -10,5 +10,9 @@
   "unlimited_keys": [
     "3fc0018f1b43c6b4708b9ac49736be1835fe4c469647bd3b28cac9e4d5746d04"
   ],
-  "threads": 4
+  "threads": 4,
+  "check_uploads": true,
+  "previews": true,
+  "preview_soundfont": null,
+  "preview_seconds": 120
 }

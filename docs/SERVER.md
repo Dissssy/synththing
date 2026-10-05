@@ -84,13 +84,16 @@ The app still ships them, so a first run works offline. At startup, each bundled
 
 ## Previews
 
-Rendered by the server on each upload and each new version, through a queue (one at a time), each in a separate `run-script` process with a time limit, so a hostile script can't take the server down.
+Rendered by the server on each upload and each new version, through a queue (one at a time), each in a separate `synththing preview` process with a time limit and a Lua memory limit, so a hostile script can't take the server down (`preview.rs`).
 
-- No audio is encoded and ffmpeg isn't needed: frames are drawn with `offline::Stage` (the synth still runs, since scripts react to the sound), and only images are kept.
-- Material: about 20 seconds from the middle of each of a few standard songs (the starter pack), drawn small (e.g. 320 x 180, or the script's own shape if it's vertical).
-- Each frame is scored for how much there is to see: contrast, colour variety, how much changed since the previous frame. The best-scoring 6 seconds becomes the animation, the single best frame the still.
+- No audio is encoded and ffmpeg isn't needed: frames are drawn with `offline::Stage` (the synth still runs, since scripts react to the sound, with the starter pack's TimGM6mb), and only images are kept.
+- Material: about 12 seconds from the middle of each starter song, at 320 x 180, run at 24 fps and kept at 12.
+- Each frame is scored for how much there is to see: contrast, colour variety, how much changed since the previous frame. The best-scoring 48 frames in a row (4 seconds) become the animation, the single best frame the still.
 - A script with `record_auto` is rendered in Auto, so a game shows itself being played, not its menu.
-- Stored as a PNG sprite sheet (about 48 frames in a grid) plus the still PNG. The app animates the sheet by drawing one cell at a time; a web page can do the same with CSS.
+- The first frame with anything on it is kept as the still straight away, so a script that stalls (stopped at the time limit) or breaks later still has one. A script that never draws anything has no preview, and the app says so.
+- Stored as a PNG sprite sheet (8 frames to a row) plus the still PNG, per version. The app animates the sheet by drawing one cell at a time; a web page can do the same with CSS. Only the newest version's is made; asking for a version without one gets the newest earlier one's.
+- Before an upload is taken, the server checks it runs on its version (`preview --check`: it compiles and plays a few seconds without an error), and refuses it with the error if not.
+- The app's script picker shows previews too: installed scripts keep the server's, and any other script gets one made by the app the first time it's looked at (cached by its source's SHA-256).
 
 ## Encores and reports
 
@@ -144,7 +147,7 @@ Errors are JSON (`{ "error": "...", "retry_after": ... }`). Requests are signed 
 - **Installing** saves the `.lua` to the scripts folder with a sidecar (`<script>.lua.source.json`: server, ID, version, the installed source's hash) and caches its preview, description and category.
 - **Updating** (on request, "Check for updates"): if the script was changed since it was installed, the app says so and shows a diff before overwriting. **Restore original** puts back the installed version, like Restore default for bundled scripts, and only shows when there's something to restore.
 - **Publishing** ("Publish..." by the script picker): name, description, category, tags, the name to post under, which server; the license; the minimum app version it worked out. If the user's settings differ from the script's defaults, it offers to add them as a preset (below).
-- **The script picker** becomes a list with a sidebar: the selected script's preview animation, description (its leading comment block for local scripts), author and category.
+- **The script picker** has a sidebar: the preview of the script under the mouse (or the selected one), its description (its leading comment block), author and category.
 
 ### Presets
 

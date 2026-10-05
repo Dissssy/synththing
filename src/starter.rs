@@ -157,6 +157,19 @@ impl Downloader {
     }
 }
 
+/// `soundfont` at `target`, downloaded (and checked) unless it's there
+/// already. Blocks; for a library server's previews.
+#[cfg_attr(test, expect(dead_code))] // (tests use the repository's copy)
+pub fn fetch(soundfont: &StarterSoundFont, target: &Path) -> Result<()> {
+    if is_downloaded(target, soundfont) {
+        return Ok(());
+    }
+    if let Some(dir) = target.parent() {
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    download(&Downloader::default(), soundfont, target)
+}
+
 /// Bytes in the soundfonts up to and including `soundfont`.
 fn done_through(soundfont: &StarterSoundFont) -> u64 {
     let mut total = 0;

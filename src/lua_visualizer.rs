@@ -91,7 +91,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -428,6 +428,16 @@ fn tint_color(color: u32, tint: u32) -> u32 {
 /// one `render()` call) may take before the watchdog stops it, unless
 /// `set_watchdog_limit` says otherwise.
 pub const WATCHDOG_LIMIT: Duration = Duration::from_secs(3);
+/// The most memory each script's Lua may use, in bytes (0: no limit).
+/// Set for the whole process by one that runs scripts it can't trust
+/// (`synththing preview`, which a library server runs on uploads).
+static MEMORY_LIMIT: AtomicUsize = AtomicUsize::new(0);
+
+/// Limit the memory of scripts compiled from now on (see `MEMORY_LIMIT`).
+pub fn set_memory_limit(bytes: usize) {
+    MEMORY_LIMIT.store(bytes, Ordering::Relaxed);
+}
+
 /// The start of the error a script stopped by the watchdog gets.
 const WATCHDOG_TAG: &str = "stopped by the watchdog";
 /// The start of the error a script stopped with the stop flag gets.
@@ -2152,6 +2162,10 @@ fn compile(
     // watchdog's hook carries over into them.
     let libs = StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::COROUTINE;
     let lua = Lua::new_with(libs, LuaOptions::new()).map_err(|e| e.to_string())?;
+    let memory_limit = MEMORY_LIMIT.load(Ordering::Relaxed);
+    if memory_limit > 0 {
+        lua.set_memory_limit(memory_limit).map_err(|e| e.to_string())?;
+    }
 
     // The watchdog: script code that runs past its deadline (an endless
     // loop, or far too much work in one go), or that's asked to stop (the

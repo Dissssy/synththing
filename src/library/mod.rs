@@ -141,6 +141,8 @@ pub fn mark_bundled(dir: &std::path::Path) {
             name: upload.name,
             slug: upload.slug,
             author_id: Some(official_id()),
+            author_name: Some(upload.author_name),
+            category: Some(upload.category),
             receipt: None,
         };
         if installed.write(&path).is_ok() {
@@ -269,6 +271,26 @@ pub struct VersionInfo {
     #[serde(default = "oldest_version")]
     pub min_app_version: String,
     pub created: i64,
+    /// Its preview, as far as the server's got with it.
+    #[serde(default)]
+    pub preview: Preview,
+}
+
+/// A version's preview (`preview.rs`): made by the server after each
+/// upload, an animation and a still (`/preview-sheet.png`,
+/// `/preview.png`), or only a still.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Preview {
+    /// Waiting to be made.
+    Pending,
+    Still,
+    Animated,
+    /// None was made (an older version, a script that doesn't run, or a
+    /// server that doesn't make them).
+    #[default]
+    #[serde(other)]
+    None,
 }
 
 fn oldest_version() -> String {
@@ -284,6 +306,15 @@ impl ScriptDetails {
     /// The newest version of all.
     pub fn newest(&self) -> Option<&VersionInfo> {
         self.versions.iter().max_by_key(|v| v.version)
+    }
+
+    /// The preview to show for `version`: its own, or the newest earlier
+    /// version's that has one (what the server sends for it).
+    pub fn preview_for(&self, version: u32) -> Option<&VersionInfo> {
+        self.versions
+            .iter()
+            .filter(|v| v.version <= version && matches!(v.preview, Preview::Still | Preview::Animated))
+            .max_by_key(|v| v.version)
     }
 }
 
@@ -558,6 +589,12 @@ pub struct Installed {
     pub slug: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author_id: Option<String>,
+    /// The name its author posted under, and its category (for the script
+    /// picker's sidebar).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
     /// The server's signed receipt, for something you published.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt: Option<Receipt>,

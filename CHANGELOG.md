@@ -4,6 +4,12 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### New
+- Previews: the Script Library shows each script playing, a few looping seconds picked from the liveliest part of the starter songs (a game is seen playing itself). The server makes them after each upload.
+- The script picker has a sidebar: the script under the mouse, playing, with where it's from, who made it and its description. Scripts without a preview from a library get one made here the first time they're looked at (and again after they're changed).
+- Library servers refuse a script that doesn't run (it doesn't compile, or errors in its first seconds), saying why.
+- `synththing preview` makes a script's preview from the command line (`--check` only checks it runs).
+
 ## 0.4.1 (2026-10-05)
 
 ### New

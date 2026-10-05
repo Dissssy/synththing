@@ -32,7 +32,7 @@ mod midi_notes;
 mod offline;
 mod pixel_font;
 mod playlist;
-mod png;
+mod preview;
 mod recorder;
 mod song_info;
 mod snippets;
@@ -61,6 +61,51 @@ use crate::config::Config;
 use crate::engine::Engine;
 use crate::visualizer::SampleTap;
 
+/// `synththing preview`: 0 made (an animation, or a still), 1 the script
+/// has an error, 2 something couldn't be loaded.
+fn preview_command(args: &cli::PreviewArgs, config: &Config) -> i32 {
+    let Some(soundfont) = args.soundfont.clone().or_else(|| config.soundfonts.iter().find(|p| p.exists()).cloned())
+    else {
+        eprintln!("error: previews play MIDI songs: pass --soundfont, or add a soundfont in the app");
+        return 2;
+    };
+    lua_visualizer::set_memory_limit(preview::MEMORY_LIMIT);
+    if args.check {
+        return match preview::check(&args.script, &soundfont, &args.out) {
+            Ok(()) => {
+                println!("it runs");
+                0
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                if e.starts_with(preview::SCRIPT_ERROR) { 1 } else { 2 }
+            }
+        };
+    }
+    match preview::render(&args.script, &soundfont, &args.out) {
+        Ok(made) => {
+            let what = match made {
+                preview::Made::Animated => format!("{} and {}", preview::STILL, preview::SHEET),
+                preview::Made::Still => format!("{} (it didn't draw for long enough to animate)", preview::STILL),
+                preview::Made::Nothing => {
+                    println!("no preview: it never drew anything");
+                    return 0;
+                }
+            };
+            println!("wrote {what} in {}", args.out.display());
+            0
+        }
+        Err(e) if e.starts_with(preview::SCRIPT_ERROR) => {
+            eprintln!("error: {e}");
+            1
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            2
+        }
+    }
+}
+
 fn main() -> Result<()> {
     // Arguments mean someone ran this from a terminal: attach to it first,
     // so --help, errors and run-script output show up there.
@@ -72,6 +117,10 @@ fn main() -> Result<()> {
     if let Some(Command::RunScript(args)) = &cli.command {
         let config = Config::load().unwrap_or_default();
         std::process::exit(headless::run(args, &config));
+    }
+    if let Some(Command::Preview(args)) = &cli.command {
+        let config = Config::load().unwrap_or_default();
+        std::process::exit(preview_command(args, &config));
     }
     if let Some(Command::PublishBundled { server, dir }) = &cli.command {
         if let Err(e) = library::publish_bundled(server, dir.as_deref()) {

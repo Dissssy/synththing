@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
+use super::previews::{self, PreviewImage};
 use super::{info_icon, with_info, App};
 use crate::config::LibraryServer;
 use crate::library::identity::Identity;
@@ -60,6 +61,28 @@ enum Event {
     /// (With where the script came from, as worked out on the way: a
     /// bundled one learns its ID and version on the server.)
     UpdateChecked(PathBuf, Box<Installed>, Result<Option<Box<Newer>>, String>),
+    /// A script's preview: the server, its ID, the version it's of, and
+    /// the still and the animation (PNGs).
+    Preview(String, String, u32, Result<(Vec<u8>, Option<Vec<u8>>), String>),
+}
+
+/// The selected script's preview, from its server.
+struct LibraryPreview {
+    server: String,
+    id: String,
+    /// The version it's of.
+    version: u32,
+    state: PreviewState,
+}
+
+enum PreviewState {
+    Loading,
+    /// The server hasn't made it yet.
+    Pending,
+    /// It hasn't one (it didn't draw anything).
+    None,
+    Failed(String),
+    Ready { still: Vec<u8>, sheet: Option<Vec<u8>>, image: Option<Result<PreviewImage, String>> },
 }
 
 /// A newer version found by an update check, and the installed version's
@@ -91,8 +114,8 @@ struct UpdateDraft {
 }
 
 /// Official scripts' author, and what hovering it says.
-const OFFICIAL_GOLD: egui::Color32 = egui::Color32::from_rgb(230, 180, 60);
-const OFFICIAL_HOVER: &str = "Official: one of the scripts that come with synththing, published by its makers";
+pub(super) const OFFICIAL_GOLD: egui::Color32 = egui::Color32::from_rgb(230, 180, 60);
+pub(super) const OFFICIAL_HOVER: &str = "Official: one of the scripts that come with synththing, published by its makers";
 
 /// How long typing pauses before a slug is looked up.
 const SLUG_CHECK_AFTER: Duration = Duration::from_millis(400);
@@ -148,6 +171,7 @@ pub struct LibraryState {
     key_changed: HashMap<String, String>,
     selected: Option<(String, String)>,
     details: Option<(String, ScriptDetails)>,
+    preview: Option<LibraryPreview>,
     /// A download, upload or delete is under way.
     busy: bool,
     /// Delete was clicked once (for this script); the next click confirms.
@@ -195,6 +219,7 @@ impl LibraryState {
             key_changed: HashMap::new(),
             selected: None,
             details: None,
+            preview: None,
             busy: false,
             confirm_delete: None,
             publish: None,
@@ -216,7 +241,7 @@ impl LibraryState {
         self.publish.is_some() || self.update.is_some()
     }
 
-    fn my_id(&self) -> Option<String> {
+    pub(super) fn my_id(&self) -> Option<String> {
         self.identity.as_ref().map(Identity::id)
     }
 }
@@ -257,7 +282,7 @@ fn diff_ui(ui: &mut egui::Ui, diff: &[(Change, String)]) {
 }
 
 /// A server's address as shown: its host.
-fn host(url: &str) -> &str {
+pub(super) fn host(url: &str) -> &str {
     url.split("://").nth(1).unwrap_or(url)
 }
 
@@ -376,6 +401,7 @@ impl App {
                 Event::Details(server, result) => match result {
                     Ok(details) => {
                         if self.library.selected.as_ref().is_some_and(|(s, id)| *s == server && *id == details.summary.id) {
+                            self.fetch_library_preview(&server, &details);
                             self.library.details = Some((server, details));
                         }
                     }
@@ -452,6 +478,18 @@ impl App {
                         Err(e) => self.status = format!("Couldn't check for an update: {e}"),
                     }
                 }
+                Event::Preview(server, id, version, result) => {
+                    if let Some(preview) = &mut self.library.preview
+                        && preview.server == server
+                        && preview.id == id
+                        && preview.version == version
+                    {
+                        preview.state = match result {
+                            Ok((still, sheet)) => PreviewState::Ready { still, sheet, image: None },
+                            Err(e) => PreviewState::Failed(e),
+                        };
+                    }
+                }
                 Event::Deleted(server, id, result) => {
                     self.library.busy = false;
                     match result {
@@ -467,6 +505,61 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Fetch the preview of the version of a script that Install would get
+    /// (or the newest earlier one's, if it hasn't one).
+    fn fetch_library_preview(&mut self, server: &str, details: &ScriptDetails) {
+        self.library.preview = None;
+        let target = details.newest_for(env!("CARGO_PKG_VERSION")).or(details.newest()).map_or(0, |v| v.version);
+        let pending = details.versions.iter().any(|v| v.version == target && v.preview == library::Preview::Pending);
+        let found = details.preview_for(target).map(|v| (v.version, v.preview == library::Preview::Animated));
+        let (version, state) = match found {
+            Some((version, animated)) => {
+                let (server, id) = (server.to_string(), details.summary.id.clone());
+                self.spawn_request(move || {
+                    let result = client::preview(&server, &id, version, false).and_then(|still| {
+                        let sheet = if animated { Some(client::preview(&server, &id, version, true)?) } else { None };
+                        Ok((still, sheet))
+                    });
+                    Event::Preview(server, id, version, result)
+                });
+                (version, PreviewState::Loading)
+            }
+            None if pending => (target, PreviewState::Pending),
+            None => (target, PreviewState::None),
+        };
+        self.library.preview =
+            Some(LibraryPreview { server: server.to_string(), id: details.summary.id.clone(), version, state });
+    }
+
+    /// The selected script's preview, at the top of its details: always
+    /// the same space, loading or not, so nothing below it jumps.
+    fn library_preview_ui(&mut self, ui: &mut egui::Ui, server: &str, id: &str) {
+        let width = ui.available_width().min(480.0);
+        let Some(preview) = self.library.preview.as_mut().filter(|p| p.server == server && p.id == id) else {
+            // (Its details aren't back yet.)
+            previews::placeholder_ui(ui, width, "Loading...", true);
+            ui.separator();
+            return;
+        };
+        match &mut preview.state {
+            PreviewState::Loading => previews::placeholder_ui(ui, width, "Loading...", true),
+            PreviewState::Pending => previews::placeholder_ui(ui, width, "The server is still making its preview.", false),
+            PreviewState::None => previews::placeholder_ui(ui, width, "No preview.", false),
+            PreviewState::Failed(e) => previews::placeholder_ui(ui, width, &format!("Couldn't get its preview: {e}"), false),
+            PreviewState::Ready { still, sheet, image } => {
+                let name = format!("library-{server}-{id}-{}", preview.version);
+                let image = image.get_or_insert_with(|| PreviewImage::from_png(ui.ctx(), &name, still, sheet.as_deref()));
+                match image {
+                    Ok(image) => {
+                        image.ui(ui, width);
+                    }
+                    Err(e) => previews::placeholder_ui(ui, width, &format!("Its preview didn't load: {e}"), false),
+                }
+            }
+        }
+        ui.separator();
     }
 
     /// An upload finished: on success, note where it went beside the
@@ -495,6 +588,8 @@ impl App {
             name: upload.name.clone(),
             slug: upload.slug.clone(),
             author_id: signed.then(|| self.library.my_id()).flatten(),
+            author_name: Some(upload.author_name.clone()),
+            category: Some(upload.category.clone()),
             receipt: Some(receipt.clone()),
         };
         if let Err(e) = installed.write(&script) {
@@ -574,9 +669,20 @@ impl App {
             name: summary.name.clone(),
             slug: summary.slug.clone(),
             author_id: summary.author_id.clone(),
+            author_name: Some(summary.author_name.clone()),
+            category: Some(summary.category.clone()),
             receipt: None,
         };
         let written = std::fs::write(&path, &download.source).and_then(|()| installed.write(&path));
+        // Its preview, from the server, for the script picker.
+        if let Some(LibraryPreview { state: PreviewState::Ready { still, sheet, .. }, .. }) = self
+            .library
+            .preview
+            .as_ref()
+            .filter(|p| p.server == server && p.id == summary.id && p.version == download.version)
+        {
+            previews::keep(&download.sha256, still, sheet.as_deref());
+        }
         match written {
             Ok(()) => {
                 library::save_original(&download.source);
@@ -708,6 +814,10 @@ impl App {
                     ui.weak("Pick a script to see more.");
                     return;
                 };
+                if !self.library.results.iter().any(|f| f.server == server && f.summary.id == id) {
+                    return;
+                }
+                self.library_preview_ui(ui, &server, &id);
                 let Some(found) = self.library.results.iter().find(|f| f.server == server && f.summary.id == id) else {
                     return;
                 };
@@ -1154,6 +1264,8 @@ impl App {
             name: summary.name.clone(),
             slug: summary.slug.clone(),
             author_id: summary.author_id.clone(),
+            author_name: Some(summary.author_name.clone()),
+            category: Some(summary.category.clone()),
             ..installed
         };
         match std::fs::write(&script, &text).and_then(|()| updated.write(&script)) {

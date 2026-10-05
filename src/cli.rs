@@ -53,6 +53,20 @@ pub enum Command {
     /// set behind_proxy in server.json.
     Serve(ServeArgs),
 
+    /// Make a script's preview: a short looping animation and a still.
+    ///
+    /// The script plays a stretch of each starter song at 320x180, in Auto
+    /// if it can play itself, and the liveliest frames are kept: the still
+    /// (preview.png) and the animation (preview-sheet.png, a sprite sheet
+    /// of 48 frames, 8 to a row, played at 12 per second). The first frame
+    /// with anything on it is written as the still straight away; a script
+    /// that never draws anything gets none. Library servers make these for
+    /// every upload; the app makes them for the script picker. With
+    /// --check, only checks it runs (what a library server does before
+    /// taking an upload). Exit code 0 if it made one (or checked out), 1 if
+    /// the script has an error, 2 if something couldn't be loaded.
+    Preview(PreviewArgs),
+
     /// Publish the scripts bundled with this build to a library server.
     ///
     /// For CI: each visualizer, game and example (not the templates) is
@@ -83,6 +97,26 @@ pub struct ServeArgs {
     /// 127.0.0.1:7381).
     #[arg(long, value_name = "ADDR")]
     pub bind: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct PreviewArgs {
+    /// The script (a .lua file).
+    pub script: PathBuf,
+
+    /// The folder to write preview.png and preview-sheet.png in.
+    #[arg(long, value_name = "DIR", default_value = ".")]
+    pub out: PathBuf,
+
+    /// Soundfont for the songs. Defaults to the first one in the app's
+    /// Soundfonts list.
+    #[arg(long)]
+    pub soundfont: Option<PathBuf>,
+
+    /// Only check that it runs: it compiles, and plays a few seconds of a
+    /// song without an error. Writes no images.
+    #[arg(long)]
+    pub check: bool,
 }
 
 #[derive(Args, Debug)]

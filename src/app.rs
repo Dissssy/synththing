@@ -11,6 +11,7 @@ mod editor;
 pub use editor::ApplyMode;
 mod loading;
 mod playlist_panel;
+mod previews;
 mod library;
 mod recording;
 mod script_windows;
@@ -219,6 +220,9 @@ pub struct App {
     state_request: lua_visualizer::StateRequest,
     /// The Script Library tab.
     library: library::LibraryState,
+    /// The script picker's previews (behind a RefCell: the picker's list is
+    /// drawn from `&self`).
+    script_previews: std::cell::RefCell<previews::LocalPreviews>,
     /// The changelog window: `Some(since)` lists only the versions newer
     /// than that (What's new, after an update), `None` all of them
     /// (Help > Changelog...).
@@ -402,6 +406,7 @@ impl App {
             script_window_tab: [0; 3],
             state_request: Default::default(),
             library: library::LibraryState::new(),
+            script_previews: Default::default(),
             changelog: None,
             welcome: welcome::Welcome::default(),
             preferences_tab: PrefTab::default(),
@@ -2179,34 +2184,6 @@ impl App {
     /// Active script picker, "New" from template, and "Restore default" for
     /// a bundled script. Shown above the visualizer, or above the editor
     /// when the visualizer is off.
-    /// The scripts to pick from, for a combo box: grouped, the bundled
-    /// visualizers and games, then the user's own (and copies of templates
-    /// and examples). Returns the one clicked.
-    fn script_list_ui(&self, ui: &mut egui::Ui) -> Option<usize> {
-        let mut picked = None;
-        let category_of = |path: &PathBuf| {
-            path.file_name()
-                .and_then(|n| n.to_str())
-                .and_then(lua_visualizer::bundled_category)
-                .filter(|c| matches!(*c, "visualizers" | "games"))
-        };
-        for group in [Some("visualizers"), Some("games"), None] {
-            let members: Vec<(usize, &PathBuf)> =
-                self.available_scripts.iter().enumerate().filter(|(_, path)| category_of(path) == group).collect();
-            if members.is_empty() {
-                continue;
-            }
-            ui.label(egui::RichText::new(lua_visualizer::category_title(group.unwrap_or(""))).weak().small());
-            for (i, path) in members {
-                let name = lua_visualizer::display_name(path);
-                if ui.selectable_label(Some(i) == self.active_script, name).clicked() {
-                    picked = Some(i);
-                }
-            }
-        }
-        picked
-    }
-
     fn script_picker_ui(&mut self, ui: &mut egui::Ui) {
         let mut picked_idx = None;
         let mut restore_bundled: Option<String> = None;
@@ -2221,6 +2198,7 @@ impl App {
                 .unwrap_or_else(|| "(none)".to_string());
             egui::ComboBox::from_id_salt("visualizer_script_picker")
                 .selected_text(current)
+                .height(f32::INFINITY)
                 .show_ui(ui, |ui| picked_idx = self.script_list_ui(ui));
 
             let mut new_from: Option<&'static str> = None;

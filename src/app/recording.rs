@@ -1114,7 +1114,7 @@ impl App {
                         .and_then(|i| self.available_scripts.get(i))
                         .map(|p| lua_visualizer::display_name(p))
                         .unwrap_or_else(|| "(none)".to_string());
-                    egui::ComboBox::from_id_salt("record_script").selected_text(current).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt("record_script").selected_text(current).height(f32::INFINITY).show_ui(ui, |ui| {
                         picked_script = self.script_list_ui(ui);
                     });
                     ui.weak("Picking one here switches the visualizer to it.");

@@ -126,8 +126,8 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
         if frame == args.frames
             && let Some(path) = &args.screenshot
         {
-            std::fs::write(path, crate::png::encode_rgb(&stage.pixels, width, height))
-                .map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
+            let png = crate::preview::encode_png(&stage.pixels, width, height)?;
+            std::fs::write(path, png).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
             println!("saved the last frame to {}", path.display());
         }
         if let Some(recording) = &mut recorder

@@ -12,11 +12,21 @@
 //! slug its author used before is a new version of that script, and only
 //! its author can delete it. Listing and search, details, user pages, and
 //! sources and receipts signed with the server's key.
+//!
+//! Previews (`preview.rs`): after each upload, the new version's preview
+//! is made by `synththing preview` in a process of its own, one at a time,
+//! with a time limit (`preview_seconds`); a script that stalls keeps the
+//! still of its first frame. They're kept in `previews/` in the data
+//! folder (`<id>-<version>.png`, `-sheet.png`), made with the starter pack's
+//! TimGM6mb soundfont (downloaded into `soundfonts/` the first time) unless
+//! `preview_soundfont` says otherwise. At startup, the newest version of
+//! every script without one is queued.
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -28,7 +38,7 @@ use tiny_http::{Header, Method, Request, Response};
 
 use super::{
     check_upload, hex, key_id, receipt_message, request_message, sha256_hex, sign_hex, source_message, unhex,
-    verify_hex, ApiError, Info, Listing, Receipt, ScriptDetails, ScriptSummary, Upload, UserInfo, VersionInfo,
+    verify_hex, ApiError, Info, Listing, Preview, Receipt, ScriptDetails, ScriptSummary, Upload, UserInfo, VersionInfo,
     KEY_HEADER, MAX_SOURCE_BYTES, NONCE_HEADER, PAGE_SIZE, REQUEST_WINDOW_SECONDS, SHA256_HEADER, SIGNATURE_HEADER,
     TIME_HEADER, VERSION_HEADER,
 };
@@ -60,6 +70,17 @@ pub struct ServerConfig {
     pub unlimited_keys: Vec<String>,
     /// Worker threads.
     pub threads: usize,
+    /// Make previews of uploads.
+    pub previews: bool,
+    /// The soundfont previews play the starter songs with; none for the
+    /// starter pack's TimGM6mb (downloaded the first time).
+    pub preview_soundfont: Option<PathBuf>,
+    /// How long making one preview may take before it's stopped (the
+    /// script keeps the still of its first frame).
+    pub preview_seconds: u64,
+    /// Refuse uploads that don't run here: they don't compile, or error in
+    /// their first seconds (`synththing preview --check`).
+    pub check_uploads: bool,
 }
 
 impl Default for ServerConfig {
@@ -77,6 +98,10 @@ impl Default for ServerConfig {
             uploads_per_day: 10,
             unlimited_keys: vec![super::OFFICIAL_PUBLISHER.to_string()],
             threads: 4,
+            previews: true,
+            preview_soundfont: None,
+            preview_seconds: 120,
+            check_uploads: true,
         }
     }
 }
@@ -138,14 +163,26 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
     let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
     let http = Arc::new(http);
     let workers = config.threads.max(1);
+    let (queue, jobs) = mpsc::channel();
+    let previews = config.previews;
     let state = Arc::new(State {
         config,
         key,
         key_hex,
+        data: data.to_path_buf(),
         db: Mutex::new(db),
         uploads: Mutex::default(),
         seen_signatures: Mutex::default(),
+        previews: Mutex::new(previews.then_some(queue)),
     });
+    if previews {
+        let state = Arc::clone(&state);
+        std::thread::Builder::new()
+            .name("previews".into())
+            .stack_size(16 << 20)
+            .spawn(move || make_previews(&state, jobs))
+            .map_err(|e| format!("couldn't start making previews: {e}"))?;
+    }
     let threads = (0..workers)
         .map(|_| {
             let http = Arc::clone(&http);
@@ -164,17 +201,173 @@ struct State {
     config: ServerConfig,
     key: SigningKey,
     key_hex: String,
+    /// The data folder.
+    data: PathBuf,
     db: Mutex<Connection>,
     /// Recent uploads by address, for the daily limit.
     uploads: Mutex<HashMap<String, Vec<Instant>>>,
     /// Signatures of signed requests in the last while: the same one
     /// again is a replay.
     seen_signatures: Mutex<HashMap<String, Instant>>,
+    /// Versions to make previews of (none if previews are off).
+    previews: Mutex<Option<Sender<(String, u32)>>>,
 }
 
 impl State {
     fn db(&self) -> MutexGuard<'_, Connection> {
         self.db.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn queue_preview(&self, id: &str, version: u32) {
+        if let Some(queue) = &*self.previews.lock().unwrap_or_else(|p| p.into_inner()) {
+            let _ = queue.send((id.to_string(), version));
+        }
+    }
+
+    fn previews_dir(&self) -> PathBuf {
+        self.data.join("previews")
+    }
+
+    fn preview_file(&self, id: &str, version: u32, sheet: bool) -> PathBuf {
+        self.previews_dir().join(format!("{id}-{version}{}.png", if sheet { "-sheet" } else { "" }))
+    }
+}
+
+/// The previews thread: those never made (at startup), then each upload's.
+fn make_previews(state: &State, jobs: Receiver<(String, u32)>) {
+    let soundfont = match preview_soundfont(state) {
+        Ok(soundfont) => soundfont,
+        Err(e) => {
+            println!("not making previews: {e}");
+            return;
+        }
+    };
+    let waiting: Vec<(String, u32)> = state
+        .db()
+        .prepare(
+            "SELECT s.id, s.latest FROM scripts s JOIN versions v ON v.script_id = s.id AND v.version = s.latest
+             WHERE v.preview IS NULL ORDER BY s.updated DESC",
+        )
+        .and_then(|mut statement| {
+            statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .unwrap_or_default();
+    if !waiting.is_empty() {
+        println!("making {} preview{} not made yet", waiting.len(), if waiting.len() == 1 { "" } else { "s" });
+    }
+    for (id, version) in waiting.into_iter().chain(jobs.iter()) {
+        make_preview(state, &soundfont, &id, version);
+    }
+}
+
+fn preview_soundfont(state: &State) -> Result<PathBuf, String> {
+    if let Some(path) = &state.config.preview_soundfont {
+        return if path.exists() { Ok(path.clone()) } else { Err(format!("{} isn't there", path.display())) };
+    }
+    #[cfg(test)]
+    return Ok(Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/starter/soundfonts/TimGM6mb.sf2"));
+    #[cfg(not(test))]
+    {
+        let soundfont = &crate::starter::SOUNDFONTS[1];
+        let path = state.data.join("soundfonts").join(soundfont.file);
+        crate::starter::fetch(soundfont, &path)
+            .map_err(|e| format!("couldn't get the {} soundfont: {e:#}", soundfont.name))?;
+        Ok(path)
+    }
+}
+
+/// Make one version's preview (unless it has one), and note what came of it.
+fn make_preview(state: &State, soundfont: &Path, id: &str, version: u32) {
+    let source: Option<String> = state
+        .db()
+        .query_row(
+            "SELECT source FROM versions WHERE script_id = ? AND version = ? AND preview IS NULL",
+            params![id, version],
+            |r| r.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let Some(source) = source else { return };
+    let work = state.previews_dir().join("work");
+    let _ = std::fs::remove_dir_all(&work);
+    let script = work.join(format!("{id}.lua"));
+    if let Err(e) = std::fs::create_dir_all(&work).and_then(|()| std::fs::write(&script, source)) {
+        println!("couldn't make previews: {e}");
+        return;
+    }
+    let started = Instant::now();
+    let limit = Duration::from_secs(state.config.preview_seconds.max(5));
+    #[cfg(not(test))]
+    let result = crate::preview::run_process(&script, soundfont, &work, limit, false);
+    #[cfg(test)]
+    let result = {
+        let _ = limit;
+        crate::preview::render(&script, soundfont, &work).map(|_| ())
+    };
+    let keep = |name: &str, sheet: bool| {
+        let made = work.join(name);
+        made.exists() && std::fs::rename(&made, state.preview_file(id, version, sheet)).is_ok()
+    };
+    let preview = match (keep(crate::preview::STILL, false), keep(crate::preview::SHEET, true)) {
+        (true, true) => "animated",
+        (true, false) => "still",
+        _ => "none",
+    };
+    let _ = std::fs::remove_dir_all(&work);
+    let db = state.db();
+    let updated = db
+        .execute("UPDATE versions SET preview = ? WHERE script_id = ? AND version = ?", params![preview, id, version])
+        .unwrap_or(0);
+    drop(db);
+    // (Deleted meanwhile.)
+    if updated == 0 {
+        remove_previews(state, id);
+    }
+    let why = result.err().map(|e| format!(" ({e})")).unwrap_or_default();
+    println!("preview of {id} v{version}: {preview} in {:.1} s{why}", started.elapsed().as_secs_f64());
+}
+
+/// How long checking an upload runs may take; one that takes longer is
+/// slow, not broken, and taken.
+const CHECK_LIMIT: Duration = Duration::from_secs(12);
+
+/// Whether `source` runs (on this server's version of the app): `Err` with
+/// its error if it doesn't. Anything else going wrong lets it through.
+fn check_runs(state: &State, source: &str) -> Result<(), String> {
+    let Ok(soundfont) = preview_soundfont(state) else { return Ok(()) };
+    let mut nonce = [0u8; 6];
+    let _ = getrandom::fill(&mut nonce);
+    let work = state.data.join("checks").join(hex(&nonce));
+    let script = work.join("upload.lua");
+    if std::fs::create_dir_all(&work).and_then(|()| std::fs::write(&script, source)).is_err() {
+        return Ok(());
+    }
+    #[cfg(not(test))]
+    let result = crate::preview::run_process(&script, &soundfont, &work, CHECK_LIMIT, true);
+    #[cfg(test)]
+    let result = {
+        let _ = CHECK_LIMIT;
+        crate::preview::check(&script, &soundfont, &work)
+    };
+    let _ = std::fs::remove_dir_all(&work);
+    match result {
+        Err(e) if e.starts_with(crate::preview::SCRIPT_ERROR) => {
+            Err(e.trim_start_matches(crate::preview::SCRIPT_ERROR).to_string())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Every preview of a script (it's been deleted).
+fn remove_previews(state: &State, id: &str) {
+    let prefix = format!("{id}-");
+    if let Ok(entries) = std::fs::read_dir(state.previews_dir()) {
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
     }
 }
 
@@ -233,6 +426,10 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
             )?;
         }
         db.execute_batch("PRAGMA user_version = 3;")?;
+    }
+    if version < 4 {
+        // Each version's preview: NULL until it's been made.
+        db.execute_batch("BEGIN; ALTER TABLE versions ADD COLUMN preview TEXT; PRAGMA user_version = 4; COMMIT;")?;
     }
     Ok(db)
 }
@@ -326,6 +523,8 @@ fn handle(state: &State, mut request: Request) {
         (Method::Get, ["api", "v1", "scripts"]) => list(state, &query),
         (Method::Get, ["api", "v1", "scripts", id]) => details(state, id),
         (Method::Get, ["api", "v1", "scripts", id, "source"]) => source(state, id, &query),
+        (Method::Get, ["api", "v1", "scripts", id, "preview.png"]) => preview(state, id, &query, false),
+        (Method::Get, ["api", "v1", "scripts", id, "preview-sheet.png"]) => preview(state, id, &query, true),
         (Method::Get, ["api", "v1", "users", id]) => user(state, id),
         (Method::Get, ["api", "v1", "users", id, "scripts", slug]) => by_slug(state, id, slug),
         (Method::Post, ["api", "v1", "scripts"]) => {
@@ -499,9 +698,11 @@ fn details(state: &State, id: &str) -> Reply {
         Ok(None) => return error(404, "no such script"),
         Err(e) => return error(500, format!("database: {e}")),
     };
+    let latest = summary.version;
     let versions = db
         .prepare(
-            "SELECT version, sha256, app_version, created, min_app_version FROM versions WHERE script_id = ? ORDER BY version",
+            "SELECT version, sha256, app_version, created, min_app_version, preview FROM versions WHERE script_id = ?
+             ORDER BY version",
         )
         .and_then(|mut statement| {
             statement
@@ -512,6 +713,14 @@ fn details(state: &State, id: &str) -> Reply {
                         app_version: r.get(2)?,
                         created: r.get(3)?,
                         min_app_version: r.get(4)?,
+                        preview: match r.get::<_, Option<String>>(5)?.as_deref() {
+                            Some("animated") => Preview::Animated,
+                            Some("still") => Preview::Still,
+                            Some(_) => Preview::None,
+                            // Only the newest version's is ever made.
+                            None if latest == r.get::<_, u32>(0)? && state.config.previews => Preview::Pending,
+                            None => Preview::None,
+                        },
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()
@@ -545,6 +754,42 @@ fn source(state: &State, id: &str, query: &HashMap<String, String>) -> Reply {
                 .with_header(header(SIGNATURE_HEADER, &signature))
         }
         Ok(None) => error(404, "no such version"),
+        Err(e) => error(500, format!("database: {e}")),
+    }
+}
+
+/// `GET /api/v1/scripts/{id}/preview.png` (or `preview-sheet.png`):
+/// `?version=`'s preview, or the newest earlier version's that has one;
+/// without a version, the newest's.
+fn preview(state: &State, id: &str, query: &HashMap<String, String>, sheet: bool) -> Reply {
+    let db = state.db();
+    let summary = match find_summary(&db, id) {
+        Ok(Some(summary)) => summary,
+        Ok(None) => return error(404, "no such script"),
+        Err(e) => return error(500, format!("database: {e}")),
+    };
+    let upto: u32 = query.get("version").and_then(|v| v.parse().ok()).unwrap_or(summary.version);
+    let kinds = if sheet { "('animated')" } else { "('still', 'animated')" };
+    let found: rusqlite::Result<Option<u32>> = db
+        .query_row(
+            &format!(
+                "SELECT version FROM versions WHERE script_id = ? AND version <= ? AND preview IN {kinds}
+                 ORDER BY version DESC LIMIT 1"
+            ),
+            params![id, upto],
+            |r| r.get(0),
+        )
+        .optional();
+    drop(db);
+    match found {
+        Ok(Some(version)) => match std::fs::read(state.preview_file(id, version, sheet)) {
+            Ok(bytes) => Response::from_data(bytes)
+                .with_header(header("Content-Type", "image/png"))
+                .with_header(header("Cache-Control", "public, max-age=3600"))
+                .with_header(header(VERSION_HEADER, &version.to_string())),
+            Err(_) => error(404, "its preview is missing"),
+        },
+        Ok(None) => error(404, "no preview yet"),
         Err(e) => error(500, format!("database: {e}")),
     }
 }
@@ -623,6 +868,20 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
     };
 
     let sha256 = sha256_hex(upload.source.as_bytes());
+    // It has to run (unless this very source was taken before).
+    let known = state
+        .db()
+        .query_row("SELECT 1 FROM versions WHERE sha256 = ? LIMIT 1", [&sha256], |_| Ok(()))
+        .optional()
+        .ok()
+        .flatten()
+        .is_some();
+    if state.config.check_uploads
+        && !known
+        && let Err(problem) = check_runs(state, &upload.source)
+    {
+        return error(400, format!("it doesn't run on synththing {}: {problem}", env!("CARGO_PKG_VERSION")));
+    }
     let created = now();
     // The higher of the server's reckoning and the publisher's (a newer
     // app knows functions this server doesn't; claiming too high only hides
@@ -739,6 +998,8 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
     if limited {
         state.uploads.lock().unwrap_or_else(|p| p.into_inner()).entry(ip.to_string()).or_default().push(Instant::now());
     }
+    drop(db);
+    state.queue_preview(&id, version);
     let who = author_id.map(|id| format!(" (#{id})")).unwrap_or_default();
     println!("uploaded {id} v{version} \"{}\" by {}{who} from {ip}", upload.name, upload.author_name);
     json(201, &signed_receipt(state, id, version, sha256))
@@ -760,6 +1021,7 @@ fn delete(state: &State, request: &mut Request, id: &str) -> Reply {
         Ok(Some(owner)) if owner.as_deref() != Some(key.as_str()) => error(403, "only its author can delete it"),
         Ok(Some(_)) => match db.execute("DELETE FROM scripts WHERE id = ?", [id]) {
             Ok(_) => {
+                remove_previews(state, id);
                 println!("deleted {id} (by #{})", key_id(&key));
                 json(200, &serde_json::json!({ "deleted": id }))
             }

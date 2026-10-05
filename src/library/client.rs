@@ -118,6 +118,20 @@ pub fn details(base: &str, id: &str) -> Result<ScriptDetails, String> {
     read(check(agent().get(format!("{base}/api/v1/scripts/{id}")).call())?)
 }
 
+/// A script's preview for `version` (the newest version's up to it that
+/// has one): the animation (`sheet`), or the still. PNG.
+pub fn preview(base: &str, id: &str, version: u32, sheet: bool) -> Result<Vec<u8>, String> {
+    let file = if sheet { "preview-sheet.png" } else { "preview.png" };
+    let request = agent().get(format!("{base}/api/v1/scripts/{id}/{file}")).query("version", version.to_string());
+    let mut response = check(request.call())?;
+    response
+        .body_mut()
+        .with_config()
+        .limit(16 * 1024 * 1024)
+        .read_to_vec()
+        .map_err(|e| format!("couldn't read the preview ({e})"))
+}
+
 /// A downloaded script, checked against the server's signature.
 #[derive(Clone, Debug)]
 pub struct Download {
@@ -257,6 +271,51 @@ mod tests {
         let base = format!("http://{}", running.addr);
         assert_eq!(super::info(&base).unwrap().key, info.key);
         assert_eq!(list(&base, &search("", None, "new")).unwrap().total, 2);
+        running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Each upload's preview is made after it: pending, then animated (or
+    /// only a still); a later version without one yet shows the earlier's.
+    #[test]
+    fn previews_are_made_for_uploads() {
+        let dir = std::env::temp_dir().join(format!("synththing-preview-server-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let wait_for = |id: &str, version: u32| {
+            for _ in 0..600 {
+                let details = details(&base, id).unwrap();
+                let v = details.versions.iter().find(|v| v.version == version).unwrap();
+                if v.preview != crate::library::Preview::Pending {
+                    return v.preview;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            panic!("no preview of {id} v{version}");
+        };
+        let moving = "function render(w, h) clear({ r = 0, g = 0, b = 0 }) \
+                      rect((FRAME * 5) % w, 10, (FRAME * 5) % w + 30, 40, { r = 255, g = 200, b = 0 }) end";
+        let bars = upload(&base, &key, &upload_of("Moving", "visualizer", moving), None).unwrap();
+        let quitter = "function render() rect(0, 0, 9, 9, { r = 255, g = 0, b = 0 }) recording_done() end";
+        let blank = upload(&base, &key, &upload_of("Quitter", "visualizer", quitter), None).unwrap();
+        let nothing = upload(&base, &key, &upload_of("Nothing", "visualizer", "function render() end"), None).unwrap();
+        assert_eq!(wait_for(&bars.id, 1), crate::library::Preview::Animated);
+        assert_eq!(wait_for(&blank.id, 1), crate::library::Preview::Still);
+        assert_eq!(wait_for(&nothing.id, 1), crate::library::Preview::None);
+        assert!(preview(&base, &nothing.id, 1, false).unwrap_err().contains("no preview"));
+        // One that doesn't run isn't taken.
+        let broken = upload_of("Broken", "visualizer", "function render() if FRAME > 2 then nope() end end");
+        let refused = upload(&base, &key, &broken, None).unwrap_err();
+        assert!(refused.contains("doesn't run") && refused.contains("nope"), "{refused}");
+        let sheet = preview(&base, &bars.id, 1, true).unwrap();
+        let (w, h, _) = crate::preview::decode_png(&sheet).unwrap();
+        assert_eq!((w, h), (crate::preview::WIDTH * crate::preview::COLUMNS, crate::preview::HEIGHT * 6));
+        assert!(crate::preview::decode_png(&preview(&base, &blank.id, 1, false).unwrap()).is_ok());
+        assert!(preview(&base, &blank.id, 1, true).unwrap_err().contains("no preview"));
+        // A later version asked for: the newest one up to it with a preview.
+        assert!(preview(&base, &bars.id, 7, false).is_ok());
         running.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }
