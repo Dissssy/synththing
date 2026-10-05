@@ -14,10 +14,16 @@
 //! when the song's take is over (after its own outro, say), or the take
 //! ends `TAKE_TAIL` after the song does. A playlist moves on only then.
 //! The Record window picks what to record, the script, the video format,
-//! and for a script with `record_auto`, whether it plays itself.
+//! and for a script with `record_auto`, whether it plays itself; and Live
+//! (recorded as it plays) or Render: made in the background, frame by
+//! frame, by its own copy of the script and the synth (`offline::Render`),
+//! so no frame can repeat whatever the size, with its progress shown in
+//! the visualizer's place meanwhile.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+use eframe::egui::TextureHandle;
 
 use eframe::egui;
 
@@ -28,11 +34,8 @@ use crate::engine::EngineView;
 use crate::ffmpeg::{self, DownloadState};
 use crate::layout::Section;
 use crate::lua_visualizer::{self, RecordKind, RecordPhase, RecordingTake};
+use crate::offline::{Render, RenderJob, RenderSong, TAKE_TAIL};
 use crate::recorder::{self, CUSTOM_SIZES, Format, Quality, Recorder, Resolution, FRAME_RATES};
-
-/// How long a prepared take goes on after its song ends, if the script
-/// doesn't call `recording_done()` first.
-const TAKE_TAIL: Duration = Duration::from_secs(10);
 
 /// Recording state the app keeps.
 pub struct Recording {
@@ -42,10 +45,10 @@ pub struct Recording {
     last_feed: Option<Instant>,
     /// Seconds since the last feed, worked out before the frame is drawn.
     step: f64,
-    /// The recorder's repeated-frame count, and when it last went up, for
-    /// the "script too slow" warning.
-    repeats_seen: u64,
-    repeating_since: Option<Instant>,
+    /// The recorder's repeated-frame counts, and when and why they last
+    /// went up, for the "frames repeating" warning.
+    repeats_seen: recorder::Repeats,
+    repeating_since: Option<(Instant, Lag)>,
     download: ffmpeg::Downloader,
     /// The "recording needs ffmpeg" modal is up.
     pub prompt_open: bool,
@@ -55,6 +58,19 @@ pub struct Recording {
     session: Option<Session>,
     /// The Record window is up, with what's picked in it.
     pub window: Option<RecordDraft>,
+    /// A background render, while one is running.
+    pub render: Option<Render>,
+    /// Its preview, as a texture, and the revision it shows.
+    render_preview: Option<(u64, TextureHandle)>,
+}
+
+/// Why a recording's frames are repeating.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lag {
+    /// Pictures arrive after their frame was due.
+    Drawing,
+    /// The encoder had no room for them.
+    Encoder,
 }
 
 /// What to record, as picked in the Record window.
@@ -67,6 +83,8 @@ pub struct RecordDraft {
     /// The soundfont a MIDI song plays with.
     soundfont: Option<PathBuf>,
     auto: bool,
+    /// Rendered in the background rather than recorded live.
+    render: bool,
 }
 
 struct Session {
@@ -102,13 +120,15 @@ impl Recording {
             finishing: Vec::new(),
             last_feed: None,
             step: 0.0,
-            repeats_seen: 0,
+            repeats_seen: recorder::Repeats::default(),
             repeating_since: None,
             download: ffmpeg::Downloader::new(),
             prompt_open: false,
             start_after_download: None,
             session: None,
             window: None,
+            render: None,
+            render_preview: None,
         }
     }
 
@@ -132,8 +152,12 @@ impl Recording {
             })
     }
 
-    /// Block until recordings being saved are done (closing the app).
+    /// Block until recordings being saved are done, and stop a render,
+    /// keeping what it's done (closing the app).
     pub fn wait_for_saves(&mut self) {
+        if let Some(render) = self.render.take() {
+            render.stop_and_wait();
+        }
         for finishing in self.finishing.drain(..) {
             if let Err(e) = finishing.wait() {
                 log::warn!("recording failed: {e:#}");
@@ -145,6 +169,22 @@ impl Recording {
     pub fn frame_size(&self) -> Option<(usize, usize)> {
         self.recorder.as_ref().map(|r| (r.format().width, r.format().height))
     }
+}
+
+/// How big a saved video is, to say so ("160 MB").
+fn file_size(path: &std::path::Path) -> String {
+    let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) as f64;
+    if bytes >= 1024.0 * 1024.0 * 1024.0 {
+        format!("{:.1} GB", bytes / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024.0 * 1024.0 {
+        format!("{:.0} MB", bytes / (1024.0 * 1024.0))
+    } else {
+        format!("{:.0} KB", (bytes / 1024.0).max(1.0))
+    }
+}
+
+fn fmt_clock(seconds: f64) -> String {
+    clock(seconds.max(0.0))
 }
 
 fn clock(seconds: f64) -> String {
@@ -187,7 +227,7 @@ impl App {
             self.stop_recording();
         } else {
             let auto = self.record_auto();
-            self.start_session(RecordDraft { kind: RecordKind::Free, song: None, soundfont: None, auto }, view);
+            self.start_session(RecordDraft { kind: RecordKind::Free, song: None, soundfont: None, auto, render: false }, view);
         }
     }
 
@@ -212,7 +252,7 @@ impl App {
                 recorder.set_paused(true);
                 self.recording.recorder = Some(recorder);
                 self.recording.last_feed = None;
-                self.recording.repeats_seen = 0;
+                self.recording.repeats_seen = recorder::Repeats::default();
                 self.recording.repeating_since = None;
                 true
             }
@@ -238,6 +278,14 @@ impl App {
     /// track (both stopping by themselves at the end), or free.
     pub(super) fn start_session(&mut self, draft: RecordDraft, view: &EngineView) {
         if self.recording.recorder.is_some() {
+            return;
+        }
+        if self.recording.render.is_some() {
+            self.status = "A render is running: stop it first (synththing > Stop rendering).".to_string();
+            return;
+        }
+        if draft.render && draft.kind != RecordKind::Free {
+            self.start_render(draft);
             return;
         }
         let kind = draft.kind;
@@ -316,6 +364,132 @@ impl App {
             Some(r) => format!("{how} Saving to {}.", r.output().display()),
             None => how.to_string(),
         };
+    }
+
+    /// Render `draft` in the background: the script's file as saved (edits
+    /// waiting are saved first), its song or the playlist's, each with its
+    /// soundfont.
+    fn start_render(&mut self, draft: RecordDraft) {
+        let Some(ffmpeg) = ffmpeg::find() else {
+            self.recording.prompt_open = true;
+            self.recording.start_after_download = Some(draft);
+            return;
+        };
+        self.flush_editor();
+        let Some(script) = self.visualizer.script().path().map(PathBuf::from) else {
+            self.status = "Save the script to a file first: a render runs its own copy of it.".to_string();
+            return;
+        };
+        let songs: Vec<RenderSong> = match draft.kind {
+            RecordKind::Song => draft
+                .song
+                .iter()
+                .map(|path| RenderSong {
+                    path: path.clone(),
+                    soundfont: draft.soundfont.clone().or_else(|| self.soundfont_for(path, None)),
+                })
+                .collect(),
+            RecordKind::Playlist => {
+                let list = self.now_playing.as_ref().map(|np| np.list).or(self.viewed_playlist);
+                list.and_then(|l| self.playlists.lists.get(l))
+                    .map(|l| {
+                        l.playlist
+                            .entries
+                            .iter()
+                            .filter(|e| e.path.exists())
+                            .map(|e| RenderSong {
+                                path: e.path.clone(),
+                                soundfont: self.soundfont_for(&e.path, e.soundfont.as_deref()),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+            RecordKind::Free => Vec::new(),
+        };
+        if songs.is_empty() {
+            self.status = "Nothing to render: pick a song, or a playlist with songs in it.".to_string();
+            return;
+        }
+        let job = RenderJob {
+            script,
+            songs,
+            kind: draft.kind,
+            // (Nobody can play along with a render: a script that can play
+            // itself does.)
+            auto: true,
+            format: self.record_format(),
+            output: recorder::output_path(&self.config.recordings_dir()),
+            fallback_soundfonts: self.config.soundfonts.clone(),
+        };
+        log::info!("rendering {} song(s) to {}", job.songs.len(), job.output.display());
+        self.status = format!("Rendering to {} in the background.", job.output.display());
+        self.recording.render_preview = None;
+        self.recording.render = Some(Render::start(job, ffmpeg));
+    }
+
+    /// Where the visualizer would be, while a render runs: what it's on,
+    /// how far, how fast, a glimpse of it, and Stop.
+    pub(super) fn render_progress_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(render) = &self.recording.render else { return };
+        let status = render.status();
+        let elapsed = render.started().elapsed().as_secs_f64();
+        let stopping = render.stopping();
+        let mut stop = false;
+        if let Some((w, h, pixels)) = &status.preview
+            && self.recording.render_preview.as_ref().is_none_or(|(rev, _)| *rev != status.preview_revision)
+        {
+            let image = egui::ColorImage::new(
+                [*w, *h],
+                pixels
+                    .iter()
+                    .map(|&p| egui::Color32::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8))
+                    .collect(),
+            );
+            let texture = ui.ctx().load_texture("render_preview", image, egui::TextureOptions::NEAREST);
+            self.recording.render_preview = Some((status.preview_revision, texture));
+        }
+        ui.vertical_centered(|ui| {
+            ui.add_space(12.0);
+            ui.heading("Rendering");
+            let song = if status.songs > 1 {
+                format!("{} ({} of {})", status.name, status.song + 1, status.songs)
+            } else {
+                status.name.clone()
+            };
+            ui.label(song);
+            ui.add_space(6.0);
+            let (fraction, text) = if status.finishing {
+                (1.0, "finishing the video...".to_string())
+            } else if status.preparing {
+                (0.0, "the script is getting ready...".to_string())
+            } else {
+                let done = (status.position / status.length.max(0.001)).clamp(0.0, 1.0) as f32;
+                (done, format!("{} of {}", fmt_clock(status.position), fmt_clock(status.length)))
+            };
+            ui.add(egui::ProgressBar::new(fraction).text(text).desired_width(ui.available_width().min(420.0)));
+            let speed = if elapsed > 0.5 { status.seconds / elapsed } else { 0.0 };
+            ui.weak(format!(
+                "{} of video so far, {speed:.1}x real time. Every frame is drawn, however long it takes.",
+                fmt_clock(status.seconds)
+            ));
+            ui.add_space(6.0);
+            if let Some((_, texture)) = &self.recording.render_preview {
+                let room = egui::vec2(ui.available_width() - 16.0, (ui.available_height() - 48.0).max(60.0));
+                let size = texture.size_vec2();
+                let scale = (room.x / size.x).min(room.y / size.y).min(2.0);
+                ui.image((texture.id(), size * scale));
+            }
+            ui.add_space(6.0);
+            let label = if stopping { "Stopping..." } else { "Stop (keeps what's done)" };
+            if ui.add_enabled(!stopping, egui::Button::new(label)).clicked() {
+                stop = true;
+            }
+        });
+        if stop && let Some(render) = &self.recording.render {
+            render.stop();
+        }
+        ui.ctx().request_repaint_after(Duration::from_millis(250));
     }
 
     /// `recording_ready()`, or "Start now": a prepared take starts.
@@ -479,13 +653,17 @@ impl App {
             recorder.feed(dt, &[], None)
         };
         let (seconds, paused) = (recorder.seconds(), recorder.paused());
-        // Pictures repeating: the script can't draw this size fast enough.
+        // Pictures repeating: drawn too late (the script and the app's own
+        // drawing together take longer than a video frame), or skipped (the
+        // encoder can't keep up).
         let repeats = recorder.repeated_frames();
-        if repeats > self.recording.repeats_seen + 2 {
+        let seen = self.recording.repeats_seen;
+        if repeats.late > seen.late + 2 || repeats.behind > seen.behind + 2 {
+            let cause = if repeats.behind > seen.behind + 2 { Lag::Encoder } else { Lag::Drawing };
             self.recording.repeats_seen = repeats;
-            self.recording.repeating_since = Some(Instant::now());
+            self.recording.repeating_since = Some((Instant::now(), cause));
         }
-        let slow = self.recording.repeating_since.is_some_and(|t| t.elapsed().as_secs_f64() < 2.0);
+        let slow = self.recording.repeating_since.filter(|(t, _)| t.elapsed().as_secs_f64() < 2.0).map(|(_, c)| c);
         let waiting = self.recording.session.as_ref().filter(|s| s.phase == RecordPhase::Preparing).map(|s| s.prepared);
         if let Err(e) = result {
             self.status = format!("Recording stopped: {e:#}");
@@ -510,8 +688,12 @@ impl App {
                 "REC"
             };
             let mut text = format!("{state} {}", clock(seconds));
-            if slow {
-                text.push_str("  - frames repeating: the script is too slow at this size");
+            match slow {
+                Some(Lag::Drawing) => text.push_str(
+                    "  - frames repeating: drawing this size takes longer than a frame (script and app together)",
+                ),
+                Some(Lag::Encoder) => text.push_str("  - frames repeating: the encoder can't keep up at this size"),
+                None => {}
             }
             let galley = painter.layout_no_wrap(text, egui::FontId::proportional(14.0), egui::Color32::WHITE);
             let badge = egui::Rect::from_min_size(at, galley.size() + egui::vec2(30.0, 8.0));
@@ -527,6 +709,21 @@ impl App {
     /// finished writing (say where they went).
     pub(super) fn poll_recordings(&mut self, view: &EngineView) {
         self.session_tick(view);
+        if let Some(result) = self.recording.render.as_mut().and_then(Render::poll) {
+            self.recording.render = None;
+            self.recording.render_preview = None;
+            match result {
+                Ok(path) => {
+                    log::info!("rendered {}", path.display());
+                    self.status = format!("Rendered: {} ({})", path.display(), file_size(&path));
+                    self.last_recording = Some(path);
+                }
+                Err(e) => {
+                    log::warn!("render failed: {e}");
+                    self.status = format!("The render didn't finish: {e}");
+                }
+            }
+        }
         let mut done = Vec::new();
         self.recording.finishing.retain(|f| match f.poll() {
             Some(result) => {
@@ -539,7 +736,7 @@ impl App {
             match result {
                 Ok(path) => {
                     log::info!("saved recording {}", path.display());
-                    self.status = format!("Saved the recording: {}", path.display());
+                    self.status = format!("Saved the recording: {} ({})", path.display(), file_size(&path));
                     self.last_recording = Some(path);
                 }
                 Err(e) => {
@@ -562,12 +759,19 @@ impl App {
             let kind = if self.current_song.is_some() { RecordKind::Song } else { RecordKind::Free };
             let auto = self.record_auto();
             let soundfont = self.loaded_sf.clone().or_else(|| self.selected_soundfont());
-            self.recording.window = Some(RecordDraft { kind, song: self.current_song.clone(), soundfont, auto });
+            let render = self.recording.window.as_ref().is_some_and(|d| d.render);
+            self.recording.window = Some(RecordDraft { kind, song: self.current_song.clone(), soundfont, auto, render });
         }
     }
 
     /// The synththing menu's recording items.
     pub(super) fn recording_menu_ui(&mut self, ui: &mut egui::Ui) {
+        if let Some(render) = &self.recording.render {
+            if ui.add_enabled(!render.stopping(), egui::Button::new("Stop rendering")).clicked() {
+                render.stop();
+            }
+            return;
+        }
         match &self.recording.recorder {
             None => {
                 if ui.button("Record...").on_hover_text("Record the visualizer to a video. F9 starts a free recording straight away.").clicked() {
@@ -611,7 +815,10 @@ impl App {
             ui.weak("Saving...");
         } else if let Some(path) = self.last_recording.clone()
             && self.recording.recorder.is_none()
-            && ui.small_button("Show last recording").on_hover_text(path.display().to_string()).clicked()
+            && ui
+                .small_button("Show last recording")
+                .on_hover_text(format!("{} ({})", path.display(), file_size(&path)))
+                .clicked()
         {
             open_in_file_manager(&path);
         }
@@ -682,7 +889,7 @@ impl App {
                     if self.recording.start_after_download.is_none() {
                         let auto = self.record_auto();
                         self.recording.start_after_download =
-                            Some(RecordDraft { kind: RecordKind::Free, song: None, soundfont: None, auto });
+                            Some(RecordDraft { kind: RecordKind::Free, song: None, soundfont: None, auto, render: false });
                     }
                 }
             });
@@ -914,6 +1121,23 @@ impl App {
                 });
                 ui.end_row();
 
+                ui.label("How");
+                ui.vertical(|ui| {
+                    let free = draft.kind == RecordKind::Free;
+                    ui.radio_value(&mut draft.render, false, "Live: recorded as it plays")
+                        .on_hover_text("What you see and hear, as it happens; you can play along.");
+                    ui.add_enabled_ui(!free, |ui| {
+                        ui.radio_value(&mut draft.render, true, "Render: made in the background")
+                            .on_hover_text(
+                                "Every frame drawn, however long each takes, with the sound exactly in step: no \
+                                 repeated frames at any size. Faster or slower than real time; the visualizer \
+                                 shows its progress meanwhile. Nothing to play along with.",
+                            )
+                            .on_disabled_hover_text("A song or a playlist, not a free recording.");
+                    });
+                });
+                ui.end_row();
+
                 ui.label("Video");
                 ui.vertical(|ui| {
                     self.record_format_ui(ui);
@@ -923,9 +1147,14 @@ impl App {
 
                 ui.label("Playing");
                 ui.vertical(|ui| {
-                    if options.record_auto {
+                    let rendering = draft.render && draft.kind != RecordKind::Free;
+                    if options.record_auto && rendering {
+                        ui.weak("Rendered, it plays itself (Auto).");
+                    } else if options.record_auto {
                         ui.radio_value(&mut draft.auto, true, "Auto: the script plays itself");
                         ui.radio_value(&mut draft.auto, false, "Manual: you play it");
+                    } else if rendering {
+                        ui.weak("Rendered, it runs on its own: input isn't recorded.");
                     } else {
                         ui.weak("This script doesn't play itself: what you do is what's recorded.");
                     }
@@ -945,7 +1174,9 @@ impl App {
                     RecordKind::Playlist => has_playlist,
                     RecordKind::Free => true,
                 };
-                let label = egui::RichText::new("Record").color(egui::Color32::from_rgb(230, 70, 70));
+                let rendering = draft.render && draft.kind != RecordKind::Free;
+                let label = egui::RichText::new(if rendering { "Render" } else { "Record" })
+                    .color(egui::Color32::from_rgb(230, 70, 70));
                 if ui.add_enabled(ok && !script_error, egui::Button::new(label)).clicked() {
                     start = true;
                 }

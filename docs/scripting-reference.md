@@ -302,7 +302,9 @@ recording_ready()   -- done preparing: the video starts now
 recording_done()    -- this song's take is over (after an outro or a results screen, say)
 ```
 
-synththing > Record... opens the Record window: what to record (a song from the start, the one playing or another you choose, with its soundfont; this playlist from the start; or free), the script, the video's size, frame rate and quality, and, for a script that can play itself, Auto or Manual. F9 starts a free recording straight away.
+synththing > Record... opens the Record window: what to record (a song from the start, the one playing or another you choose, with its soundfont; this playlist from the start; or free), how (Live, or Render), the script, the video's size, frame rate and quality, and, for a script that can play itself, Auto or Manual. F9 starts a free recording straight away.
+
+Live records what's on screen as it plays. Render makes the video in the background instead: a copy of the script and the synth on a thread of their own, one video frame at a time, however long each takes, with the visualizer showing its progress meanwhile. Every frame gets its own picture and the sound is exactly in step, at any size, so nothing repeats, and it can be faster or slower than real time. Nobody can play along with a render: `recording().mode` is `"auto"` for a script with `record_auto`, and any other script just runs. A render reads the script's file (saved first), its settings and its saved data, but never writes the saved data.
 
 `recording()` is nil unless the visualizer is being recorded. While it is:
 
@@ -332,7 +334,7 @@ function render(width, height)
 end
 ```
 
-`run-script --video` records the same way: the frames a script spends preparing aren't in the video (or counted in `--frames`), `recording_done()` ends the run, and `--auto` picks Auto.
+Render and `run-script --video` work the same way: the frames a script spends preparing aren't in the video (or counted in `--frames`), `recording_done()` ends the take (and a `run-script` run), and `run-script --auto` picks Auto.
 
 ## Playlist
 

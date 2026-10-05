@@ -28,6 +28,7 @@ mod live;
 mod lua_analysis;
 mod lua_visualizer;
 mod midi_notes;
+mod offline;
 mod pixel_font;
 mod playlist;
 mod png;

@@ -502,9 +502,9 @@ Smaller:
     script_options record_prepare/record_auto, recording_ready(),
     recording_done() (else the take ends 10 s after the song); prepared
     playlists load each track paused and advance at each take's end;
-    run-script --video does the same, plus --auto. Ideas: render a song to
-    video from the app (offline, frame-perfect, any speed), for Auto
-    scripts, through run-script --video's path.
+    run-script --video does the same, plus --auto. Render in the
+    background - DONE (offline.rs: Stage shared with run-script, Render
+    on its own thread, progress and a preview in the visualizer's place).
 
 [S][!] scripts drive playback - DONE
     playlist() (read-only: the playing playlist, else the open one),

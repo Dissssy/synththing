@@ -215,6 +215,15 @@ const IDLE_BEFORE_SILENCE: f64 = 0.1;
 /// Longest step one feed counts: a gap longer than this (the visualizer
 /// hidden, the app stalled) isn't recorded as time passing.
 const MAX_STEP: f64 = 0.1;
+/// Repeated video frames, by cause (`Recorder::repeated_frames`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Repeats {
+    /// No new picture was drawn in time for them.
+    pub late: u64,
+    /// A new picture was skipped: the encoder's queue was full.
+    pub behind: u64,
+}
+
 /// Frames queued for the writer before the recorder starts repeating
 /// instead.
 const QUEUE_FRAMES: usize = 6;
@@ -239,8 +248,11 @@ pub struct Recorder {
     video_frames: u64,
     /// Frames owed to the writer that didn't fit in its queue.
     owed: u64,
-    /// Video frames that repeated a picture rather than showing a new one.
-    repeated: u64,
+    /// Video frames that repeated a picture rather than showing a new one:
+    /// because no new one was drawn in time (`late`), or because the
+    /// encoder's queue was full (`behind`).
+    late: u64,
+    behind: u64,
     /// Block until the encoder takes each frame, rather than repeating.
     wait_for_encoder: bool,
     idle: f64,
@@ -297,7 +309,8 @@ impl Recorder {
             audio: Wav::create(&temp_audio, sample_rate)?,
             video_frames: 0,
             owed: 0,
-            repeated: 0,
+            late: 0,
+            behind: 0,
             wait_for_encoder: false,
             idle: 0.0,
             paused: false,
@@ -332,10 +345,10 @@ impl Recorder {
         self.idle = 0.0;
     }
 
-    /// Video frames so far that repeated the previous picture (the
-    /// visualizer didn't draw a new one in time).
-    pub fn repeated_frames(&self) -> u64 {
-        self.repeated
+    /// Video frames so far that repeated the previous picture: those with
+    /// no new picture drawn in time, and those the encoder had no room for.
+    pub fn repeated_frames(&self) -> Repeats {
+        Repeats { late: self.late, behind: self.behind }
     }
 
     /// How many video frames a `feed(dt, samples)` with `incoming` samples
@@ -386,7 +399,7 @@ impl Recorder {
             return Ok(());
         }
         self.video_frames = due_total;
-        self.repeated += if pixels.is_some() { due - 1 } else { due };
+        self.late += if pixels.is_some() { due - 1 } else { due };
 
         while let Ok(spare) = self.returned.try_recv() {
             self.spares.push(spare);
@@ -406,12 +419,14 @@ impl Recorder {
                     // the writer has stands in.
                     self.spares.push(frame);
                     self.owed += due;
+                    self.behind += 1;
                 } else {
                     match self.frames.try_send(VideoMsg::Frame(frame, due)) {
                         Ok(()) => {}
                         Err(TrySendError::Full(VideoMsg::Frame(frame, _))) => {
                             self.spares.push(frame);
                             self.owed += due;
+                            self.behind += 1;
                         }
                         Err(_) => return Err(self.writer_gone()),
                     }

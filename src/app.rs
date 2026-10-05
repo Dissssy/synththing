@@ -1918,6 +1918,11 @@ impl App {
     /// Draw (and run) the visualizer into the rest of `ui`, and pass on
     /// whatever it asked for.
     fn show_visualizer(&mut self, ui: &mut egui::Ui, notes: &NotesSnapshot, playback: &EngineView, mode: DisplayMode) {
+        // A render has its own copy of the script: this one rests meanwhile.
+        if self.recording.render.is_some() {
+            self.render_progress_ui(ui);
+            return;
+        }
         let transport = self.script_transport();
         self.visualizer.script_mut().set_app_log(self.config.script_log_to_app);
         let recording = self.recording.recorder.as_ref().is_some_and(|r| !r.paused());

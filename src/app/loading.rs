@@ -51,7 +51,7 @@ impl App {
 
     /// The soundfont `song` should play with: none for plain audio, else
     /// its override, else the selected one.
-    fn soundfont_for(&self, song: &Path, soundfont_override: Option<&Path>) -> Option<PathBuf> {
+    pub(super) fn soundfont_for(&self, song: &Path, soundfont_override: Option<&Path>) -> Option<PathBuf> {
         if !is_midi_path(song) {
             return None;
         }

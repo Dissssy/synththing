@@ -4,6 +4,13 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### New
+- Render, in the Record window: the video is made in the background, frame by frame, by its own copy of the script and the synth, with the visualizer showing its progress (and a glimpse of it) meanwhile. Every frame is drawn and the sound is exactly in step at any size, so frames never repeat, whatever the script or the encoder can manage live. A song or a whole playlist; Stop keeps what's done.
+- A saved recording says how big the file is.
+
+### Fixed
+- A live recording's "frames repeating" warning blamed the script even when the encoder was the one behind, and didn't count frames skipped for the encoder at all. It now says which.
+
 ## 0.4.0 (2026-10-05)
 
 ### New
