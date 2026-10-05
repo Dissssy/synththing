@@ -1,0 +1,14 @@
+{
+  "name": "synththing library",
+  "bind": "127.0.0.1:7381",
+  "behind_proxy": true,
+  "mode": "open",
+  "license": "CC-BY-4.0",
+  "rules": "Scripts here are shared under CC BY 4.0: anyone may use, change and share them, crediting the original (remixes link back to it). Nothing hateful, nothing meant to cause harm.",
+  "contact": "you@example.org",
+  "uploads_per_day": 10,
+  "unlimited_keys": [
+    "3fc0018f1b43c6b4708b9ac49736be1835fe4c469647bd3b28cac9e4d5746d04"
+  ],
+  "threads": 4
+}

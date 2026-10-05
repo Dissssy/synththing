@@ -2,7 +2,9 @@
 # release does that, see release.toml). The Windows exe is attached to the
 # GitHub Release as synththing-windows-x86_64.exe and the Linux build
 # (experimental, docs/LINUX.md) as synththing-linux-x86_64: the names the
-# in-app updater (src/updater.rs, ASSET_NAME) looks for.
+# in-app updater (src/updater.rs, ASSET_NAME) looks for. The Linux build
+# also goes into the library server's container image
+# (ghcr.io/<owner>/synththing, docs/DEPLOY.md).
 name: Release
 
 on:
@@ -85,3 +87,44 @@ jobs:
           cp target/release/synththing synththing-linux-x86_64
           chmod +x synththing-linux-x86_64
           gh release upload "$GITHUB_REF_NAME" synththing-linux-x86_64
+
+  # The server's container image (docs/DEPLOY.md): the Linux build just
+  # added, in deploy/release.Dockerfile's runtime, pushed to
+  # ghcr.io/<owner>/synththing as :<version> and :latest.
+  docker:
+    needs: linux
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Fetch the Linux build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --pattern synththing-linux-x86_64 --dir deploy
+          chmod +x deploy/synththing-linux-x86_64
+
+      - name: Image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/synththing" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: deploy
+          file: deploy/release.Dockerfile
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ github.ref_name }}
+            ${{ steps.image.outputs.name }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=synththing script library server

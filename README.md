@@ -10,6 +10,7 @@ A MIDI and audio player for Windows with a visualizer you can script in Lua.
 - Rearrangeable layout: every section is a tab you can drag, split or pop out.
 - Themes: Dark, Light, Frutiger Aero and egui's own look, or make your own from any of them (every color, corners, borders, shadows), plus a UI scale.
 - A welcome window the first time, with a starter pack (two soundfonts and four songs) and a guided tour of the app.
+- A script library: find and install scripts other people have shared, publish your own (signed with a key the app makes; no account), and get updates to them. Anyone can run a library server (docs/DEPLOY.md).
 - Updates itself: new releases are offered in the app.
 
 ## Getting it

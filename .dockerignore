@@ -1,0 +1,4 @@
+target/
+.git/
+*.mp4
+*.wav

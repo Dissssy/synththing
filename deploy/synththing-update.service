@@ -1,0 +1,10 @@
+# Runs synththing-update.sh once (docs/DEPLOY.md); started by
+# synththing-update.timer.
+[Unit]
+Description=Update the synththing server to the newest release
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/synththing/synththing-update.sh

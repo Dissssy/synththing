@@ -1,0 +1,14 @@
+# Checks for a new synththing release every hour (docs/DEPLOY.md).
+# Install with synththing-update.service, then
+#   systemctl daemon-reload && systemctl enable --now synththing-update.timer
+[Unit]
+Description=Check for a new synththing release hourly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,20 @@
+# A synththing script library server from the published image
+# (docs/DEPLOY.md). To build it yourself instead, use
+# docker-compose.build.yml (the same, with a build: section).
+#
+# Its data (settings in server.json, its key, the database) is in ./data,
+# made on first run: edit data/server.json then (behind_proxy, contact,
+# name) and restart. For the internet, put a reverse proxy in front for
+# HTTPS (Caddy, nginx, Traefik), pointed at port 7381.
+#
+# Admin commands: docker exec synththing synththing <command>
+
+services:
+  synththing:
+    image: ghcr.io/dissssy/synththing:latest
+    container_name: synththing
+    restart: unless-stopped
+    ports:
+      - "7381:7381"
+    volumes:
+      - ./data:/data

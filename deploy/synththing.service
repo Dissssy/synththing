@@ -1,0 +1,24 @@
+# A synththing script library server under systemd (docs/DEPLOY.md).
+# Install: copy to /etc/systemd/system/, then
+#   systemctl daemon-reload && systemctl enable --now synththing
+[Unit]
+Description=synththing script library server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=synththing
+Group=synththing
+ExecStart=/opt/synththing/synththing serve --data /var/lib/synththing
+Restart=on-failure
+RestartSec=5
+
+# It only needs its own data folder.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/synththing
+
+[Install]
+WantedBy=multi-user.target

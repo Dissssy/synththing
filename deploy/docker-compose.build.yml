@@ -1,0 +1,27 @@
+# A synththing script library server built from this repository's source
+# (docs/DEPLOY.md). To use the published image instead, use
+# docker-compose.yml (the same, without the build: section).
+#
+# Run from this folder: docker compose -f docker-compose.build.yml up -d
+# (the first build compiles everything: expect several minutes). In
+# Portainer, as a stack from the repository, with this file's path.
+#
+# Its data (settings in server.json, its key, the database) is in ./data,
+# made on first run: edit data/server.json then (behind_proxy, contact,
+# name) and restart. For the internet, put a reverse proxy in front for
+# HTTPS (Caddy, nginx, Traefik), pointed at port 7381.
+#
+# Admin commands: docker exec synththing synththing <command>
+
+services:
+  synththing:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: synththing:local
+    container_name: synththing
+    restart: unless-stopped
+    ports:
+      - "7381:7381"
+    volumes:
+      - ./data:/data

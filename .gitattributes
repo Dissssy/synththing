@@ -1,2 +1,8 @@
 *.sf2 binary
 *.mid binary
+# Run on Linux: keep Unix line endings.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.Dockerfile text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
