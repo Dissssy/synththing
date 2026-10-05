@@ -18,3 +18,18 @@ services:
       - "7381:7381"
     volumes:
       - ./data:/data
+    # (Watchtower, below, only updates containers with this label.)
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  # To keep it up to date by itself: Watchtower pulls new releases of the
+  # image and restarts the container (here, checking every 6 hours, and
+  # only containers labelled as above). Uncomment to use it.
+  #
+  # watchtower:
+  #   image: containrrr/watchtower
+  #   container_name: watchtower
+  #   restart: unless-stopped
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   command: --label-enable --cleanup --interval 21600

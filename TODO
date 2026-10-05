@@ -529,6 +529,29 @@ Smaller:
 [L][!] shared script library - IN PROGRESS, designed in docs/SERVER.md
     (identity keys, authorities, previews, encores, moderation, the
     Library tab; built in the order listed there). Original note:
+[M][.] server-only build (for official container images)
+    The Docker image carries GTK, ALSA and udev (about 300 MB) only because
+    the server is the app's binary. Plan: a default `gui` feature making
+    eframe, rfd, rodio and gilrs optional (egui and egui_dock are pure Rust
+    and stay, as a direct egui dependency instead of eframe::egui), so
+    `cargo build --release --no-default-features` gives serve,
+    publish-bundled and run-script with no desktop libraries. What needs
+    splitting (mapped 2026-10-05):
+    - main.rs: the GUI launch and GUI-only modules (app, audio,
+      script_host, filebrowser, theme, watch, updater, starter, credits,
+      changelog) behind the feature; with no command, a server build says
+      what it can do.
+    - visualizer.rs: VisualizerPanel and SampleTap (they use audio::Backlog
+      and script_host) are GUI; the shared types (StereoFrame,
+      VisualizerInput, NotesSnapshot, DisplayMode, Visualizer) aren't.
+    - gamepad.rs: PadInput/PadFrame/AXIS_NAMES stay; Gamepads (the gilrs
+      poller) is GUI.
+    - loader.rs, song_info.rs: audio files decode through rodio; a server
+      build plays MIDI only (enough for run-script and previews).
+    - every `eframe::egui` import outside app becomes `egui`.
+    Then CI builds --no-default-features too, and the image
+    (deploy/release.Dockerfile, Dockerfile) drops the desktop libraries.
+
 [L][.] shared script library (long term)
     A place to share scripts (they're sandboxed: the worst a script can do
     is spam notes or mute channels). Maybe `synththing serve` as a web
