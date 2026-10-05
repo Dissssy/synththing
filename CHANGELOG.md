@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.4.0 (2026-10-05)
+
 ### New
 - Recording moved to synththing > Record..., a window to pick what to record (a song from the start, the one playing or any other, and for MIDI its soundfont; the playlist; or free), which script, the video's size, frame rate and quality, and for scripts that can play themselves, Auto or Manual. F9 still starts a free recording at once, and a recording's Pause and Stop stay above the visualizer.
 - Scripts can take part: `recording()` says what's being recorded and whether to play themselves, and with `script_options({ record_prepare = true })` a script gets ready before each song (nothing recorded meanwhile), says `recording_ready()` to start the video and `recording_done()` to end each take. Playlists move on only once each take is over.
