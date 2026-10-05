@@ -7,6 +7,12 @@
 -- Not auto-installed like the real visualizers, create it from the "New"
 -- button's template list when you want to poke at it.
 
+-- Presets: named sets of setting values, picked at the top of the Settings
+-- window (with Defaults, and any the user saved). Each sets the settings it
+-- names and leaves the rest; values are written as the settings take them.
+settings_preset("Warm", { tint = { r = 255, g = 140, b = 60 }, count = 8, label = "toasty", fruits = { "Cherry", "Date" } })
+settings_preset("Minimal", { count = 2, gain = 0.2 })
+
 local frame = 0
 
 function render(width, height, left, right)

@@ -33,6 +33,10 @@
 -- itself with no high score kept, and the take ends with the song. Then the recording
 -- stops, or a playlist moves on to its next song.
 
+settings_preset("Relaxed", { highway_seconds = 2.4, lanes = 3, ghost_taps_break_combo = false })
+settings_preset("Expert", { highway_seconds = 1.0, lanes = 5 })
+settings_preset("Focus", { crowd = false })
+
 script_options({ start_paused = true, record_prepare = true, record_auto = true })
 
 local LANE_COLORS = {

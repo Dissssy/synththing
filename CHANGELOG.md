@@ -9,7 +9,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Report... in the Script Library: tell a server's moderators what's wrong with a script, pointing at the lines of its code and the sprites in it that are the problem.
 - Remixes: Publish remix... (by Update, for a script installed from someone else) shares your take on it, credited to the original. A script lists its remixes, and a remix links back to what it came from (or says it was remixed from a deleted script), even on another server: following the link asks to add that server (or turn it on) if it isn't in use.
 - Library servers refuse a near-copy of someone else's script (or of one that comes with synththing) unless it's published as a remix of it, and a remix with nothing changed. A copy of a bundled script is published as a remix of it by itself.
-- Presets: `settings_preset(name, {...})` in a script offers named sets of setting values, picked at the top of the Settings window (with Defaults). Save your own there too, and publishing offers to add your settings to the script as a preset.
+- Presets: `settings_preset(name, {...})` in a script offers named sets of setting values, picked at the top of the Settings window (with Defaults). Save your own there too, and publishing offers to add your settings to the script as a preset. highway.lua has Relaxed, Expert and Focus; settings_demo.lua shows how.
 - Moderation, for a library server's admins (in the Script Library): reports with what they point at highlighted, hiding, deleting, bans (a key or an address, for a while or for good; a key's ban can follow it to the addresses it uses) and admins. `synththing admin` does the same on the server itself.
 
 ## 0.4.2 (2026-10-05)
