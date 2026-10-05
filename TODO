@@ -554,6 +554,15 @@ Smaller:
     Then turn the release workflow's docker job back on (it's `if: false`
     for now; it worked for 0.4.1) and make the ghcr.io package public.
 
+[L][.] the app on the web (WebAssembly; very long term)
+    egui runs in a browser, so a wasm build of the app could be a web
+    page: browsing the script library, and moderating it (the Library
+    tab's Moderation, as is), without a separate web admin panel to keep
+    in step with the app. Touches nearly everything: audio output, file
+    access (scripts, soundfonts, songs), threads (the script host, the
+    render thread), networking (ureq), the config folder. Parked: the
+    in-app tools cover moderation for now.
+
 [L][.] shared script library (long term)
     A place to share scripts (they're sandboxed: the worst a script can do
     is spam notes or mute channels). Maybe `synththing serve` as a web

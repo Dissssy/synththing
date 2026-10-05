@@ -106,9 +106,9 @@ Rendered by the server on each upload and each new version, through a queue (one
 
 - **Admins** are keys listed by the server (added with `synththing admin add-admin <id>`), and the server's own key.
 - One endpoint, `POST /api/v1/admin`, signed by an admin, takes an action (`AdminAction`): reports, a script's extra metadata (uploader key and addresses, versions, its reports) and source (hidden or not), hide, unhide, delete, ban (a key or an address, for a while or for good, optionally hiding everything the key uploaded), unban, bans, add-admin, remove-admin, admins, resolve.
-- **`synththing admin <command>`** on the server sends those, signed with the server's own key from its data folder, to the running server at its configured address: it works from SSH, under systemd, and in Docker (`docker exec <container> synththing admin ...`). Still to come: `update`, `login`.
+- **`synththing admin <command>`** on the server sends those, signed with the server's own key from its data folder, to the running server at its configured address: it works from SSH, under systemd, and in Docker (`docker exec <container> synththing admin ...`). Still to come: `update`.
 - **Moderation** in the app's Library tab, for admin keys: reports with the lines they point at highlighted in the code and the sprites drawn, and the actions above, signed with the admin's key.
-- **Web admin panel** (later): localhost only unless turned on in the config; signed in with a one-time link from `synththing admin login`.
+- **Web admin panel**: parked. Moderation in the app does the job and stays in step with it; if the app ever builds for the web (egui runs in a browser, see TODO), that's the web version.
 - **Rules page** and a contact address in `/api/v1/info` (contact@p51.nl on the official server), for reports and takedown requests.
 
 ## Deletion and retention
@@ -181,4 +181,4 @@ Errors are JSON (`{ "error": "...", "retry_after": ... }`). Requests are signed 
 6. **Updates and diffs** for installed scripts.
 7. **Authorities**: rotation records, applying them, email attach and recovery.
 8. **Deployment**: the official server on the VPS, Docker image, in-place updates.
-9. Later: the web admin panel, a public web page for browsing.
+9. Later, maybe: the app itself on the web (WebAssembly), for browsing and moderating without installing it.
