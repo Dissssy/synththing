@@ -490,9 +490,17 @@ Smaller:
     playlist from the start (stops after the last track), or free; F9/F10.
     Preferences > Recording: size (720p-4K), 30/60 fps, folder
     (Videos\synththing). run-script --video renders offline with the
-    same recorder. Ideas: render a song to video from the app (offline,
-    frame-perfect, any speed). Scripts knowing they're being recorded -
-    DONE (playback().recording).
+    same recorder. Scripts knowing they're being recorded - DONE
+    (playback().recording). Record window and script-prepared recordings -
+    DONE: Record... opens a modal (song / playlist / free, script, format,
+    Auto/Manual for record_auto scripts, remembered per script in
+    config.record_manual); recording() {phase, kind, mode},
+    script_options record_prepare/record_auto, recording_ready(),
+    recording_done() (else the take ends 10 s after the song); prepared
+    playlists load each track paused and advance at each take's end;
+    run-script --video does the same, plus --auto. Ideas: render a song to
+    video from the app (offline, frame-perfect, any speed), for Auto
+    scripts, through run-script --video's path.
 
 [S][!] scripts drive playback - DONE
     playlist() (read-only: the playing playlist, else the open one),
@@ -502,6 +510,17 @@ Smaller:
     script_options({ start_paused = true }): songs load paused while that
     script runs (for games with a start button); playback().song_loads
     counts loads, the same song again included.
+
+[L][!] VS Code support, through a local API server
+    Script writing has outgrown the built-in editor for some. A VS Code
+    extension the app can download into a folder (with instructions for
+    installing it), talking to the running app over a local API server
+    (localhost only, off unless turned on in Preferences): open/save the
+    running script, live reload, errors and the script log in VS Code's
+    problems/output panes, completions and hover docs from HOST_API, maybe
+    restart/record commands. That server is also the first piece of
+    `synththing serve` below: a shared backend, with the plugin as one
+    client and the web library as another.
 
 [L][.] shared script library (long term)
     A place to share scripts (they're sandboxed: the worst a script can do

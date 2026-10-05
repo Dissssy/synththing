@@ -206,9 +206,11 @@ impl App {
         self.pending_play = None;
         let name = nice_name(&path);
         // A running script can ask for songs to wait for it (its own start
-        // button): `script_options({ start_paused = true })`.
+        // button): `script_options({ start_paused = true })`. So does a
+        // recording the script prepares each song for.
         let script_running = self.dedicated.is_some() || self.is_open(crate::layout::Section::Visualizer);
-        let paused = script_running && self.visualizer.script().options().start_paused;
+        let paused =
+            script_running && (self.visualizer.script().options().start_paused || self.recording.loads_paused());
         match song {
             Asset::Midi(midi) => {
                 self.send(AudioCommand::LoadMidi(midi.file, name.clone(), paused));
@@ -235,6 +237,7 @@ impl App {
         self.current_song = Some(path);
         self.advance_armed = false;
         self.skips_in_a_row = 0;
+        self.recording_song_loaded();
     }
 
     fn fail_pending_play(&mut self, error: String) {

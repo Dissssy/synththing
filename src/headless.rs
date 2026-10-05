@@ -4,7 +4,9 @@
 //! of audio, hand it to the script with the current notes and playback
 //! state, apply anything the script asked for (pause, seek, channel
 //! toggles, notes to play), repeat. With `--video`, every frame and its
-//! audio also go to a `Recorder`, the same one the app records with.
+//! audio also go to a `Recorder`, the same one the app records with; a
+//! script with `record_prepare` gets ready first (those frames aren't
+//! recorded or counted), and can end the run with `recording_done()`.
 //!
 //! Exit codes: 0 ran cleanly, 1 the script had errors, 2 something
 //! couldn't be loaded.
@@ -15,11 +17,15 @@ use crate::cli::RunScriptArgs;
 use crate::config::{nice_name, Config};
 use crate::engine::Engine;
 use crate::loader::{self, SoundFontProbe};
-use crate::lua_visualizer::{LuaVisualizer, PlaybackRequest};
+use crate::lua_visualizer::{LuaVisualizer, PlaybackRequest, RecordKind, RecordPhase, RecordingTake};
 use crate::recorder::{Format, Quality, Recorder, Resolution};
 use crate::visualizer::{DisplayMode, StereoFrame, Visualizer, VisualizerInput};
 
 const SAMPLE_RATE: u32 = 44_100;
+
+/// How long a script may prepare before recording starts anyway, in
+/// seconds of frames.
+const PREPARE_LIMIT_SECONDS: f64 = 120.0;
 
 pub fn run(args: &RunScriptArgs, config: &Config) -> i32 {
     match run_inner(args, config) {
@@ -29,6 +35,14 @@ pub fn run(args: &RunScriptArgs, config: &Config) -> i32 {
             eprintln!("error: {message}");
             2
         }
+    }
+}
+
+/// A prepared recording starts: the script is told, and frames count.
+fn start_take(take: &mut Option<RecordingTake>, visualizer: &mut LuaVisualizer) {
+    if let Some(t) = take {
+        t.phase = RecordPhase::Recording;
+        visualizer.set_recording(true, *take);
     }
 }
 
@@ -69,7 +83,17 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
     let mut engine = Engine::new(SAMPLE_RATE);
     let mut visualizer = LuaVisualizer::new(source, Some(args.script.clone()), SAMPLE_RATE);
     visualizer.set_fixed_timestep(Some(1.0 / args.fps));
-    visualizer.set_recording(args.video.is_some());
+    // A video is a recording: of the song, or free without one.
+    let options = visualizer.options();
+    let mut take = args.video.is_some().then(|| RecordingTake {
+        phase: if options.record_prepare { RecordPhase::Preparing } else { RecordPhase::Recording },
+        kind: if args.song.is_some() { RecordKind::Song } else { RecordKind::Free },
+        auto: args.auto && options.record_auto,
+    });
+    if args.auto && !options.record_auto {
+        println!("note: --auto, but the script doesn't play itself (script_options record_auto)");
+    }
+    visualizer.set_recording(take.is_some_and(|t| t.phase == RecordPhase::Recording), take);
     if !args.save_data {
         visualizer.detach_store();
     }
@@ -93,7 +117,21 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
     let mut pixels = vec![0u32; width * height];
     let input = VisualizerInput { mode: DisplayMode::Window, ..Default::default() };
 
-    for frame in 1..=args.frames {
+    let prepare_limit = (PREPARE_LIMIT_SECONDS * args.fps) as u32;
+    let mut prepared_frames = 0u32;
+    let mut frame = 0u32;
+    while frame < args.frames {
+        let preparing = take.is_some_and(|t| t.phase == RecordPhase::Preparing);
+        if preparing {
+            prepared_frames += 1;
+            if prepared_frames > prepare_limit {
+                println!("the script didn't call recording_ready() in {PREPARE_LIMIT_SECONDS} s; recording anyway");
+                start_take(&mut take, &mut visualizer);
+            }
+        } else {
+            frame += 1;
+        }
+        let preparing = take.is_some_and(|t| t.phase == RecordPhase::Preparing);
         engine.render_into(&mut audio);
         // Notes the script plays, mixed in as the app's output does.
         if engine.live_busy() {
@@ -117,7 +155,9 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
                 .map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
             println!("saved the last frame to {}", path.display());
         }
-        if let Some(recording) = &mut recorder {
+        if let Some(recording) = &mut recorder
+            && !preparing
+        {
             recording.feed(1.0 / args.fps, &samples, Some(&mut pixels)).map_err(|e| format!("{e:#}"))?;
         }
 
@@ -137,8 +177,12 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
         for command in visualizer.take_live_commands() {
             engine.live_command(command);
         }
+        let mut done = false;
         for request in visualizer.take_playback_requests() {
             match request {
+                PlaybackRequest::RecordingReady if preparing => start_take(&mut take, &mut visualizer),
+                PlaybackRequest::RecordingDone if options.record_prepare && take.is_some() && !preparing => done = true,
+                PlaybackRequest::RecordingReady | PlaybackRequest::RecordingDone => {}
                 PlaybackRequest::Pause(pause) if pause != engine.view().paused => engine.toggle_pause(),
                 PlaybackRequest::Pause(_) => {}
                 PlaybackRequest::Seek(seconds) => engine.seek(seconds),
@@ -150,6 +194,10 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
                 | PlaybackRequest::Loop(_)
                 | PlaybackRequest::Shuffle(_) => {}
             }
+        }
+        if done {
+            println!("frame {frame} ({:.2}s): the script ended the take (recording_done)", engine.view().position);
+            break;
         }
     }
 
@@ -181,7 +229,7 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
     let view = engine.view();
     println!(
         "ran {} frames at {} fps, song at {:.2}s of {:.2}s, {} error{}",
-        args.frames,
+        frame,
         args.fps,
         view.position,
         view.length,

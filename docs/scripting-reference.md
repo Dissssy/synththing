@@ -259,7 +259,7 @@ Everything a script sees follows what's being heard, not what's been prepared: t
 
 `set_paused` and `seek` are carried out by the app right after the frame, and show up in `playback()` from the next frame on (along with a new `generation` for a seek). Unpausing a song that has finished starts it over. Like `set_channel_enabled`, they're meant for things like pausing a game when the player dies, or a "retry this section" practice loop.
 
-`recording` is true while the visualizer is being recorded to a video (and not paused), in the app or with `run-script --video`: hide a "press start" hint, a cursor or a debug overlay from the video, say.
+`recording` is true while the visualizer is being recorded to a video (and not paused), in the app or with `run-script --video`: hide a "press start" hint, a cursor or a debug overlay from the video, say. See Recording for more a script can do about it.
 
 `song_loads` goes up by one every time a song is loaded, including the same song clicked again (which `song_id` can't tell apart). Compare it with the previous frame's to know a song just started over from the top, say to go back to a game's menu. Everything about the song changes in the same frame: from the frame `song_loads` goes up, `playback()` (`length`, `position`, `song_id`, ...) and the note functions (`notes_between` and the rest) all describe the new song, so reading `notes_between(0, playback().length)` right then gets all of it.
 
@@ -282,7 +282,7 @@ function render(width, height, left, right)
 end
 ```
 
-`script_options` only takes the options it knows (`start_paused` and `app_log`, each true or false; see Logging for `app_log`), and an unknown one is an error that says so, so a typo can't go unnoticed. Several can go in one call: `script_options({ start_paused = true, app_log = true })`.
+`script_options` only takes the options it knows (`start_paused`, `app_log`, `record_prepare` and `record_auto`, each true or false; see Logging for `app_log`, Recording for the other two), and an unknown one is an error that says so, so a typo can't go unnoticed. Several can go in one call: `script_options({ start_paused = true, app_log = true })`.
 
 `TIME` and `FRAME` start over when the script is reloaded or restarted. `TIME` keeps counting while the visualizer isn't being drawn, unlike the sum of `DT`.
 
@@ -291,6 +291,48 @@ Check `playback().paused` before writing into a scrolling history buffer, otherw
 `DT` is for frame-rate-independent animation (e.g. a smooth sweep or a moving player), not for gating logic, a visualizer should look right regardless of how fast frames are actually arriving.
 
 `render()` only runs while the visualizer is on screen: not while its tab is closed or hidden behind another tab, and not while Preferences is open (the visualizer freezes on its last frame, and playback pauses). `DT` is capped at 0.25 so the first frame back after a gap like that doesn't make animations jump.
+
+## Recording
+
+```lua
+script_options({record_prepare = true})  -- recordings wait for the script before each song, and for it to end each take
+script_options({record_auto = true})     -- it can play itself: the Record window offers Auto
+recording() -> nil, or {phase, kind, mode}
+recording_ready()   -- done preparing: the video starts now
+recording_done()    -- this song's take is over (after an outro or a results screen, say)
+```
+
+synththing > Record... opens the Record window: what to record (a song from the start, the one playing or another you choose, with its soundfont; this playlist from the start; or free), the script, the video's size, frame rate and quality, and, for a script that can play itself, Auto or Manual. F9 starts a free recording straight away.
+
+`recording()` is nil unless the visualizer is being recorded. While it is:
+
+- `phase` is `"preparing"` before anything goes into the video (the script getting ready, or the song starting), then `"recording"`.
+- `kind` is `"song"`, `"playlist"` or `"free"`.
+- `mode` is `"auto"` when the script should play itself (it said `record_auto`, and Auto was picked), else `"manual"`: someone's playing it. A game in auto mode plays every note itself, say, and keeps its scores out of the high score table.
+
+Most scripts need none of this: a recording starts once its song is playing, and stops at the end. A script with real work to do before a song (building a chart, say) or a menu to get through says `record_prepare`, and then decides when the video starts and stops:
+
+- Before each song (the first, and each playlist track), the song loads paused and nothing is recorded: `phase` is `"preparing"`. Draw progress if you like; it isn't in the video. When ready, call `recording_ready()`: the video starts with the next frame, and the script starts the song itself (`set_paused(false)`), when it wants to, so an intro or count-in can be in the video.
+- When the song's take is over, after a results screen say, call `recording_done()`. The recording ends there, or a playlist moves on to its next track (preparing again). A script that doesn't call it gets 10 seconds after the song ends.
+- Above the video, Start now skips waiting for `recording_ready()`, for a script that never says.
+
+```lua
+script_options({ start_paused = true, record_prepare = true, record_auto = true })
+
+function render(width, height)
+    local r = recording()
+    if r and r.phase == "preparing" then
+        -- build what's needed, a bit per frame; then:
+        recording_ready()
+        set_paused(false)
+    end
+    local auto = r and r.mode == "auto"
+    -- ... play, by itself if auto; at the end (after the results):
+    -- if r then recording_done() end
+end
+```
+
+`run-script --video` records the same way: the frames a script spends preparing aren't in the video (or counted in `--frames`), `recording_done()` ends the run, and `--auto` picks Auto.
 
 ## Playlist
 
@@ -368,7 +410,7 @@ For the keyboard, see Controls (rebindable actions) and Typing (text entry) belo
 
 Five keys always belong to the app, and are never reported to a script in any mode: Escape means "get me out" (releases focus, and goes from either fullscreen straight back to windowed), F11 toggles the dedicated fullscreen, F5 restarts the running script, F9 starts and stops recording, and F10 pauses recording.
 
-While the visualizer is being recorded (the Record button above it), `render()` gets the recording's size as `width` and `height` (1920 x 1080, say) whatever the panel's size, and the picture is shown letterboxed in the panel, with `mouse()` still in the picture's own pixels. It's also called once per video frame rather than once per screen refresh, with `DT` the video time that passed (1/60 s at 60 fps, more if it had to catch up), so motion in the video is perfectly even. A script that lays itself out from `width` and `height` and moves things by `DT` needs nothing special; a bigger recording size just costs more time per frame, and a script too slow for it makes the video repeat frames.
+While the visualizer is being recorded (synththing > Record...), `render()` gets the recording's size as `width` and `height` (1920 x 1080, say) whatever the panel's size, and the picture is shown letterboxed in the panel, with `mouse()` still in the picture's own pixels. It's also called once per video frame rather than once per screen refresh, with `DT` the video time that passed (1/60 s at 60 fps, more if it had to catch up), so motion in the video is perfectly even. A script that lays itself out from `width` and `height` and moves things by `DT` needs nothing special; a bigger recording size just costs more time per frame, and a script too slow for it makes the video repeat frames.
 
 `display_mode()` tells a script where it's being shown: `"window"` (a tab in the normal window), `"fullscreen"` (a tab, with the whole app fullscreen), or `"dedicated"` (the Fullscreen visualizer button or F11: nothing but the visualizer, filling the screen, with focus).
 
@@ -649,6 +691,8 @@ playback() --> {
     song_name = "145343_1", song_path = "C:/Users/you/Music/145343_1.mid", song_id = "33ee7539d1a6d1e8", song_loads = 1,
     recording = false,
 }
+recording() --> { phase = "recording", kind = "song", mode = "auto" }
+recording() --> nil                              -- not being recorded
 playlist() --> {
     name = "Evening", playing = true, current = 2,
     entries = {

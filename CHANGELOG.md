@@ -5,6 +5,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### New
+- Recording moved to synththing > Record..., a window to pick what to record (a song from the start, the one playing or any other, and for MIDI its soundfont; the playlist; or free), which script, the video's size, frame rate and quality, and for scripts that can play themselves, Auto or Manual. F9 still starts a free recording at once, and a recording's Pause and Stop stay above the visualizer.
+- Scripts can take part: `recording()` says what's being recorded and whether to play themselves, and with `script_options({ record_prepare = true })` a script gets ready before each song (nothing recorded meanwhile), says `recording_ready()` to start the video and `recording_done()` to end each take. Playlists move on only once each take is over.
+- `run-script --video` records prepared scripts the same way, and takes `--auto`.
 - highway.lua: the track menu plays the song (scroll to seek, Space to pause) and SOLO (I) plays only the selected track, so you can tell which is which. GUITAR mode (G) plays it like Guitar Hero: five frets held and a strum (Up/Down, or a guitar controller's strum bar), with HOPOs and taps that can be fretted without strumming.
 
 ## 0.3.3 (2026-10-03)

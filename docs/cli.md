@@ -21,7 +21,7 @@ synththing [--visualizer] [--console]
 synththing run-script <SCRIPT> [--song FILE] [--soundfont FILE] [--frames N] [--fps N]
                                [--width PX] [--height PX] [--start SECONDS] [--save-data] [--quiet]
                                [--screenshot FILE] [--video FILE] [--video-size SIZE]
-                               [--video-quality QUALITY]
+                               [--video-quality QUALITY] [--auto]
 ```
 
 Runs a script the way the app does, with a song playing into it, but with no window, then prints what happened. It's for catching errors in a script without opening the app and playing through the song by hand, for example in an automated check.
@@ -42,6 +42,7 @@ It uses the same engine and script code as the app. Each frame it plays `1/fps` 
 | `--screenshot` | none | Save the last frame as a PNG image at this path, to see what the script drew. |
 | `--video` | none | Record the run to a video at this path (`.mp4`: H.264 video, AAC sound), the same way the app records. The video is `--video-size` instead of `--width`/`--height`, at `--fps` (a whole number). It's written as fast as the script and the encoder allow, faster or slower than real time, and every frame is in it: the same run gives the same video. Needs ffmpeg, on the PATH or downloaded by the app (Preferences > Recording). |
 | `--video-size` | 1080p | The video's size: `720p`, `1080p`, `1440p` or `4k`. |
+| `--auto` | off | With `--video`: the script plays itself, if it can (`script_options({ record_auto = true })`; `recording().mode` is `"auto"`). |
 | `--video-quality` | standard | How it's encoded: `standard` (H.264 4:2:0, plays everywhere; single-pixel colored details soften slightly), `sharp` (H.264 4:4:4, exact pixel edges; plays in desktop players, not reliably in browsers or Discord) or `lossless` (every pixel exactly; big files, for editing). |
 
 Output: each distinct error once, with the frame and song position it happened at; then the script's log (each line prefixed `log: `, repeats shown as `(xN)`), unless `--quiet`; then how long `render()` took (average and worst, real time on this machine, and whether the app would drop the script to 30 fps for averaging over 16.7 ms); then a summary line:
@@ -53,7 +54,7 @@ render() took 4.03 ms on average, 6.45 ms at worst (a 60 fps frame allows 16.7 m
 ran 600 frames at 60 fps, song at 10.00s of 109.92s, 1 error
 ```
 
-With `--video`, a line before the log says where it went: `saved a 10.0 s video to clip.mp4`.
+With `--video`, a line before the log says where it went: `saved a 10.0 s video to clip.mp4`. A script with `script_options({ record_prepare = true })` is recorded the way the app records it (see Recording in the Scripting Reference): the frames before its `recording_ready()` aren't in the video or counted in `--frames` (it gets 2 minutes of them at most), and its `recording_done()` ends the run early, with a line saying so.
 
 Exit codes:
 

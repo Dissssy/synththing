@@ -93,6 +93,10 @@ pub struct Config {
     pub record_fps: Option<u32>,
     #[serde(default)]
     pub record_quality: crate::recorder::Quality,
+    /// Scripts (by file name) recorded in Manual the last time, where they
+    /// could play themselves (Auto, the default otherwise).
+    #[serde(default)]
+    pub record_manual: Vec<String>,
     /// The script editor: when edits apply, text size, wrapping (`None`:
     /// the defaults).
     #[serde(default)]

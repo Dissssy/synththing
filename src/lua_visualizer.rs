@@ -991,6 +991,52 @@ struct SongIdentity {
     loads: u64,
     /// The visualizer is being recorded to a video (`playback().recording`).
     recording: bool,
+    /// The recording the script is part of (`recording()`).
+    take: Option<RecordingTake>,
+}
+
+/// What a recording asks of the script (`recording()`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordingTake {
+    pub phase: RecordPhase,
+    pub kind: RecordKind,
+    /// The script plays itself ("auto"), rather than being played
+    /// ("manual"). Only ever true for a script with `record_auto`.
+    pub auto: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordPhase {
+    /// Nothing's going into the video yet: the script gets ready (with
+    /// `record_prepare`) or the song is starting.
+    Preparing,
+    Recording,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordKind {
+    Song,
+    Playlist,
+    Free,
+}
+
+impl RecordPhase {
+    fn name(self) -> &'static str {
+        match self {
+            RecordPhase::Preparing => "preparing",
+            RecordPhase::Recording => "recording",
+        }
+    }
+}
+
+impl RecordKind {
+    fn name(self) -> &'static str {
+        match self {
+            RecordKind::Song => "song",
+            RecordKind::Playlist => "playlist",
+            RecordKind::Free => "free",
+        }
+    }
 }
 
 /// How a script asks the app to behave while it's running
@@ -1002,7 +1048,16 @@ pub struct ScriptOptions {
     /// Its `log()` messages are copied to the app's log, whatever the
     /// preference says.
     pub app_log: bool,
+    /// A recording waits for it to say it's ready (`recording_ready`)
+    /// before each song, and for it to say the take is over
+    /// (`recording_done`).
+    pub record_prepare: bool,
+    /// It can play itself, for recording (the Record window offers Auto).
+    pub record_auto: bool,
 }
+
+/// The `script_options` keys, for the error naming them.
+const SCRIPT_OPTIONS: &str = "start_paused, app_log, record_prepare and record_auto";
 
 /// What a script can see of the app's playback beyond the engine: the
 /// loop and shuffle modes, and the current playlist (read-only).
@@ -1044,6 +1099,10 @@ pub enum PlaybackRequest {
     Speed(f64),
     Loop(LoopMode),
     Shuffle(bool),
+    /// `recording_ready()`: done preparing, record from here.
+    RecordingReady,
+    /// `recording_done()`: this song's take is over.
+    RecordingDone,
 }
 
 /// Saved data a script owns (`store_get`/`store_set`), in
@@ -1479,9 +1538,12 @@ impl LuaVisualizer {
         song.loads += 1;
     }
 
-    /// Whether the visualizer is being recorded (`playback().recording`).
-    pub fn set_recording(&mut self, recording: bool) {
-        self.song.borrow_mut().recording = recording;
+    /// Whether the visualizer is being recorded (`playback().recording`),
+    /// and the recording it's part of (`recording()`).
+    pub fn set_recording(&mut self, recording: bool, take: Option<RecordingTake>) {
+        let mut song = self.song.borrow_mut();
+        song.recording = recording;
+        song.take = take;
     }
 
     /// What the running script asked for with `script_options`.
@@ -1906,7 +1968,9 @@ fn compile(
                         match (key.as_str(), value) {
                             ("start_paused", Value::Boolean(on)) => set.start_paused = on,
                             ("app_log", Value::Boolean(on)) => set.app_log = on,
-                            (name @ ("start_paused" | "app_log"), other) => {
+                            ("record_prepare", Value::Boolean(on)) => set.record_prepare = on,
+                            ("record_auto", Value::Boolean(on)) => set.record_auto = on,
+                            (name @ ("start_paused" | "app_log" | "record_prepare" | "record_auto"), other) => {
                                 return Err(mlua::Error::runtime(format!(
                                     "script_options: {name} is true or false, not a {}",
                                     other.type_name()
@@ -1914,7 +1978,7 @@ fn compile(
                             }
                             (other, _) => {
                                 return Err(mlua::Error::runtime(format!(
-                                    "script_options: no option `{other}` (there are start_paused and app_log)"
+                                    "script_options: no option `{other}` (there are {SCRIPT_OPTIONS})"
                                 )));
                             }
                         }
@@ -2378,6 +2442,36 @@ fn register_song_and_state(
         "set_shuffle",
         lua.create_function(move |_, on: bool| {
             requests.borrow_mut().push(PlaybackRequest::Shuffle(on));
+            Ok(())
+        })?,
+    )?;
+
+    // Recording: what the recording asks of the script, and its answers.
+    let view = Rc::clone(song);
+    globals.set(
+        "recording",
+        lua.create_function(move |lua, ()| {
+            let Some(take) = view.borrow().take else { return Ok(Value::Nil) };
+            let t = lua.create_table_with_capacity(0, 3)?;
+            t.raw_set("phase", take.phase.name())?;
+            t.raw_set("kind", take.kind.name())?;
+            t.raw_set("mode", if take.auto { "auto" } else { "manual" })?;
+            Ok(Value::Table(t))
+        })?,
+    )?;
+    let requests = Rc::clone(playback_requests);
+    globals.set(
+        "recording_ready",
+        lua.create_function(move |_, ()| {
+            requests.borrow_mut().push(PlaybackRequest::RecordingReady);
+            Ok(())
+        })?,
+    )?;
+    let requests = Rc::clone(playback_requests);
+    globals.set(
+        "recording_done",
+        lua.create_function(move |_, ()| {
+            requests.borrow_mut().push(PlaybackRequest::RecordingDone);
             Ok(())
         })?,
     )?;
@@ -4381,9 +4475,32 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         visualizer.set_source("function render() log(tostring(playback().recording)) end".into());
         frame(&mut visualizer, &sample_playback());
         assert_eq!(last_log(&visualizer), "false");
-        visualizer.set_recording(true);
+        visualizer.set_recording(true, None);
         frame(&mut visualizer, &sample_playback());
         assert_eq!(last_log(&visualizer), "true");
+        // recording(): nil outside a recording, else what it asks.
+        visualizer.set_source(
+            "script_options({ record_prepare = true, record_auto = true })
+            function render()
+                local r = recording()
+                log(r and (r.phase .. ' ' .. r.kind .. ' ' .. r.mode) or 'none')
+                if r and r.phase == 'preparing' then recording_ready() else recording_done() end
+            end"
+            .into(),
+        );
+        assert!(visualizer.options().record_prepare && visualizer.options().record_auto);
+        visualizer.set_recording(false, None);
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "none");
+        let take = RecordingTake { phase: RecordPhase::Preparing, kind: RecordKind::Playlist, auto: true };
+        visualizer.set_recording(false, Some(take));
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "preparing playlist auto");
+        assert!(visualizer.take_playback_requests().contains(&PlaybackRequest::RecordingReady));
+        visualizer.set_recording(true, Some(RecordingTake { phase: RecordPhase::Recording, kind: RecordKind::Song, auto: false }));
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "recording song manual");
+        assert!(visualizer.take_playback_requests().contains(&PlaybackRequest::RecordingDone));
         // Another script without the option: off again.
         visualizer.set_source("function render() end".into());
         assert!(!visualizer.options().start_paused);

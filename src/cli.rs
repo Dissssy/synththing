@@ -107,6 +107,11 @@ pub struct RunScriptArgs {
     /// exact pixel edges) or lossless.
     #[arg(long, value_name = "QUALITY", default_value = "standard")]
     pub video_quality: String,
+
+    /// With --video: the script plays itself, if it can
+    /// (script_options record_auto); recording().mode is "auto".
+    #[arg(long, requires = "video")]
+    pub auto: bool,
 }
 
 /// If launched with arguments from a terminal, attach to it so output and

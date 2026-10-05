@@ -59,7 +59,8 @@ impl App {
     /// finishes, and keep the engine's own looping in step with the loop
     /// mode.
     pub(super) fn playlist_tick(&mut self, view: &EngineView) {
-        if self.now_playing.is_some() {
+        // (A recording the script prepares moves on itself, at each take's end.)
+        if self.now_playing.is_some() && !self.recording.holds_advance() {
             if !view.finished {
                 self.advance_armed = true;
             } else if self.advance_armed {

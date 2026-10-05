@@ -1162,6 +1162,8 @@ impl App {
                     self.themes.open = true;
                 }
                 ui.separator();
+                self.recording_menu_ui(ui);
+                ui.separator();
                 if ui.button("Quit").clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -1723,6 +1725,7 @@ impl App {
             || self.welcome.open
             || self.song_info_open.is_some()
             || self.recording.prompt_open
+            || self.recording.window.is_some()
             || self.editor.history_open
             || self.layout_save.is_some()
             || self.heavy_prompt.is_some()
@@ -1886,7 +1889,7 @@ impl App {
                 let ctx = ui.ctx().clone();
                 self.enter_dedicated(&ctx);
             }
-            self.recording_buttons_ui(ui, &playback);
+            self.recording_buttons_ui(ui);
             if let Some(path) = self.visualizer.script().path() {
                 ui.weak(path.display().to_string());
             }
@@ -1907,7 +1910,8 @@ impl App {
         let transport = self.script_transport();
         self.visualizer.script_mut().set_app_log(self.config.script_log_to_app);
         let recording = self.recording.recorder.as_ref().is_some_and(|r| !r.paused());
-        self.visualizer.script_mut().set_recording(recording);
+        let take = self.recording.take();
+        self.visualizer.script_mut().set_recording(recording, take);
         self.visualizer.set_pads(self.pad_frame.clone());
         let fixed_size = self.recording.frame_size();
         let (hold, timestep) = self.pace_recording();
@@ -1962,6 +1966,8 @@ impl App {
                 PlaybackRequest::Speed(speed) => self.send(AudioCommand::SetSpeed(speed)),
                 PlaybackRequest::Loop(mode) => self.set_loop_mode(mode),
                 PlaybackRequest::Shuffle(on) => self.set_shuffle(on),
+                PlaybackRequest::RecordingReady => self.recording_ready(),
+                PlaybackRequest::RecordingDone => self.recording_take_done(),
             }
         }
     }
@@ -2148,6 +2154,34 @@ impl App {
     /// Active script picker, "New" from template, and "Restore default" for
     /// a bundled script. Shown above the visualizer, or above the editor
     /// when the visualizer is off.
+    /// The scripts to pick from, for a combo box: grouped, the bundled
+    /// visualizers and games, then the user's own (and copies of templates
+    /// and examples). Returns the one clicked.
+    fn script_list_ui(&self, ui: &mut egui::Ui) -> Option<usize> {
+        let mut picked = None;
+        let category_of = |path: &PathBuf| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(lua_visualizer::bundled_category)
+                .filter(|c| matches!(*c, "visualizers" | "games"))
+        };
+        for group in [Some("visualizers"), Some("games"), None] {
+            let members: Vec<(usize, &PathBuf)> =
+                self.available_scripts.iter().enumerate().filter(|(_, path)| category_of(path) == group).collect();
+            if members.is_empty() {
+                continue;
+            }
+            ui.label(egui::RichText::new(lua_visualizer::category_title(group.unwrap_or(""))).weak().small());
+            for (i, path) in members {
+                let name = lua_visualizer::display_name(path);
+                if ui.selectable_label(Some(i) == self.active_script, name).clicked() {
+                    picked = Some(i);
+                }
+            }
+        }
+        picked
+    }
+
     fn script_picker_ui(&mut self, ui: &mut egui::Ui) {
         let mut picked_idx = None;
         let mut restore_bundled: Option<String> = None;
@@ -2162,34 +2196,7 @@ impl App {
                 .unwrap_or_else(|| "(none)".to_string());
             egui::ComboBox::from_id_salt("visualizer_script_picker")
                 .selected_text(current)
-                .show_ui(ui, |ui| {
-                    // Grouped: the bundled visualizers and games, then the
-                    // user's own (and copies of templates and examples).
-                    let category_of = |path: &PathBuf| {
-                        path.file_name()
-                            .and_then(|n| n.to_str())
-                            .and_then(lua_visualizer::bundled_category)
-                            .filter(|c| matches!(*c, "visualizers" | "games"))
-                    };
-                    for group in [Some("visualizers"), Some("games"), None] {
-                        let members: Vec<(usize, &PathBuf)> = self
-                            .available_scripts
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, path)| category_of(path) == group)
-                            .collect();
-                        if members.is_empty() {
-                            continue;
-                        }
-                        ui.label(egui::RichText::new(lua_visualizer::category_title(group.unwrap_or(""))).weak().small());
-                        for (i, path) in members {
-                            let name = lua_visualizer::display_name(path);
-                            if ui.selectable_label(Some(i) == self.active_script, name).clicked() {
-                                picked_idx = Some(i);
-                            }
-                        }
-                    }
-                });
+                .show_ui(ui, |ui| picked_idx = self.script_list_ui(ui));
 
             let mut new_from: Option<&'static str> = None;
             egui::ComboBox::from_id_salt("visualizer_new_script")
@@ -2940,7 +2947,7 @@ impl eframe::App for App {
                 )
             });
             if f9 {
-                self.toggle_recording();
+                self.toggle_recording(view);
             }
             if f10 {
                 self.toggle_recording_pause();
@@ -3060,6 +3067,7 @@ impl eframe::App for App {
         // Outside the layout: F9 can ask for ffmpeg from the dedicated
         // fullscreen too.
         self.ffmpeg_prompt_ui(&ctx);
+        self.record_window_ui(&ctx, view);
         self.heavy_midi_ui(&ctx);
         self.poll_recordings(view);
         if self.status != self.logged_status {
