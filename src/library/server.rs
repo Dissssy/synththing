@@ -55,6 +55,9 @@ pub struct ServerConfig {
     pub contact: String,
     /// Uploads one address may make in a day.
     pub uploads_per_day: usize,
+    /// Keys (hex) whose uploads aren't limited: the official publisher's,
+    /// by default, for the bundled scripts CI publishes.
+    pub unlimited_keys: Vec<String>,
     /// Worker threads.
     pub threads: usize,
 }
@@ -72,6 +75,7 @@ impl Default for ServerConfig {
                 .into(),
             contact: String::new(),
             uploads_per_day: 10,
+            unlimited_keys: vec![super::OFFICIAL_PUBLISHER.to_string()],
             threads: 4,
         }
     }
@@ -214,6 +218,21 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     }
     if version < 2 {
         db.execute_batch(SCHEMA_V2)?;
+    }
+    if version < 3 {
+        // Each version's oldest app, worked out for those already stored.
+        db.execute_batch("ALTER TABLE versions ADD COLUMN min_app_version TEXT NOT NULL DEFAULT '0.1.1';")?;
+        let stored: Vec<(String, u32, String)> = db
+            .prepare("SELECT script_id, version, source FROM versions")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        for (id, number, source) in stored {
+            db.execute(
+                "UPDATE versions SET min_app_version = ? WHERE script_id = ? AND version = ?",
+                params![super::min_app_version(&source), id, number],
+            )?;
+        }
+        db.execute_batch("PRAGMA user_version = 3;")?;
     }
     Ok(db)
 }
@@ -481,11 +500,19 @@ fn details(state: &State, id: &str) -> Reply {
         Err(e) => return error(500, format!("database: {e}")),
     };
     let versions = db
-        .prepare("SELECT version, sha256, app_version, created FROM versions WHERE script_id = ? ORDER BY version")
+        .prepare(
+            "SELECT version, sha256, app_version, created, min_app_version FROM versions WHERE script_id = ? ORDER BY version",
+        )
         .and_then(|mut statement| {
             statement
                 .query_map([id], |r| {
-                    Ok(VersionInfo { version: r.get(0)?, sha256: r.get(1)?, app_version: r.get(2)?, created: r.get(3)? })
+                    Ok(VersionInfo {
+                        version: r.get(0)?,
+                        sha256: r.get(1)?,
+                        app_version: r.get(2)?,
+                        created: r.get(3)?,
+                        min_app_version: r.get(4)?,
+                    })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()
         });
@@ -578,20 +605,6 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
     if author.is_none() && state.config.mode != "open" {
         return error(403, "this server only takes signed uploads");
     }
-    // The daily limit, by address.
-    {
-        let mut uploads = state.uploads.lock().unwrap_or_else(|p| p.into_inner());
-        let recent = uploads.entry(ip.to_string()).or_default();
-        let day = Duration::from_secs(24 * 60 * 60);
-        recent.retain(|t| t.elapsed() < day);
-        if recent.len() >= state.config.uploads_per_day {
-            let wait = recent.first().map(|t| day.saturating_sub(t.elapsed()).as_secs()).unwrap_or(0);
-            return json(
-                429,
-                &ApiError { error: "that's all the uploads for today from here".into(), retry_after: Some(wait) },
-            );
-        }
-    }
     let mut upload: Upload = match serde_json::from_slice(&body) {
         Ok(upload) => upload,
         Err(e) => return error(400, format!("not an upload: {e}")),
@@ -634,6 +647,22 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
             && newest == sha256
         {
             return json(200, &signed_receipt(state, id.clone(), *latest, sha256));
+        }
+    }
+    // The daily limit, by address, for anything new (keys the server
+    // trusts aside: the official publisher, by default).
+    let limited = !author.as_ref().is_some_and(|key| state.config.unlimited_keys.contains(key));
+    if limited {
+        let mut uploads = state.uploads.lock().unwrap_or_else(|p| p.into_inner());
+        let recent = uploads.entry(ip.to_string()).or_default();
+        let day = Duration::from_secs(24 * 60 * 60);
+        recent.retain(|t| t.elapsed() < day);
+        if recent.len() >= state.config.uploads_per_day {
+            let wait = recent.first().map(|t| day.saturating_sub(t.elapsed()).as_secs()).unwrap_or(0);
+            return json(
+                429,
+                &ApiError { error: "that's all the uploads for today from here".into(), retry_after: Some(wait) },
+            );
         }
     }
     let id = match &existing {
@@ -689,16 +718,18 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
             )?;
         }
         tx.execute(
-            "INSERT INTO versions (script_id, version, sha256, source, app_version, uploader_ip, created)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![id, version, sha256, upload.source, upload.app_version, ip, created],
+            "INSERT INTO versions (script_id, version, sha256, source, app_version, uploader_ip, created, min_app_version)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![id, version, sha256, upload.source, upload.app_version, ip, created, super::min_app_version(&upload.source)],
         )?;
         tx.commit()
     });
     if let Err(e) = stored {
         return error(500, format!("database: {e}"));
     }
-    state.uploads.lock().unwrap_or_else(|p| p.into_inner()).entry(ip.to_string()).or_default().push(Instant::now());
+    if limited {
+        state.uploads.lock().unwrap_or_else(|p| p.into_inner()).entry(ip.to_string()).or_default().push(Instant::now());
+    }
     let who = author_id.map(|id| format!(" (#{id})")).unwrap_or_default();
     println!("uploaded {id} v{version} \"{}\" by {}{who} from {ip}", upload.name, upload.author_name);
     json(201, &signed_receipt(state, id, version, sha256))

@@ -1,0 +1,50 @@
+# Publishes the bundled scripts to the official script library whenever
+# they change on master (docs/SERVER.md): each by its slug, signed with the
+# official publisher key, so a changed script becomes its next version and
+# apps get it through Update (the newest version their app can run).
+# Unchanged scripts are left as they are; deleted ones stay on the server.
+#
+# Needs the SYNTHTHING_PUBLISH_KEY secret (the official publisher's secret
+# key, in hex); without it, this does nothing.
+name: Publish scripts
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "assets/visualizers/**"
+  workflow_dispatch:
+
+concurrency:
+  group: publish-scripts
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      SYNTHTHING_PUBLISH_KEY: ${{ secrets.SYNTHTHING_PUBLISH_KEY }}
+    steps:
+      - name: Is there a key?
+        id: key
+        run: |
+          if [ -n "$SYNTHTHING_PUBLISH_KEY" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "No SYNTHTHING_PUBLISH_KEY secret: nothing to do."; fi
+
+      - uses: actions/checkout@v5
+        if: steps.key.outputs.present == 'true'
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.key.outputs.present == 'true'
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.key.outputs.present == 'true'
+
+      - name: System libraries
+        if: steps.key.outputs.present == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev libwayland-dev
+
+      - name: Publish
+        if: steps.key.outputs.present == 'true'
+        run: cargo run --release -- publish-bundled --server https://synththing.p51.nl

@@ -9,6 +9,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 - A saved recording says how big the file is.
 - The Script Library (View > Script Library), first steps: search scripts shared on library servers, install them, and publish your own (anonymously for now). Servers are set up in Preferences > Library; anyone can run one with `synththing serve` (docs/cli.md). The official server isn't up yet.
 - Library identities: what you publish is signed with a key the app makes (no account, no email), shown as an ID like `#k3f9q2xa`. Publishing the same script again (by its slug) adds a new version, only you can delete your uploads, and clicking an author's ID lists everything they've posted. Export and import it (sealed with a passphrase) in Preferences > Library. Posting anonymously is still an option, except on servers that only take signed uploads.
+- The visualizer's script row has Publish... (your scripts) or Update (scripts installed from a library): an update shows what the author changed and, separately, what you changed in your copy; changes that don't overlap can be kept. Restore original undoes your changes to an installed script.
+- The bundled scripts are also on the official library, published from the repository whenever they change, so fixes and new versions arrive through Update without waiting for a release. Scripts get the newest version your app can run: each version records the oldest synththing it needs.
 
 ### Fixed
 - A live recording's "frames repeating" warning blamed the script even when the encoder was the one behind, and didn't count frames skipped for the encoder at all. It now says which.

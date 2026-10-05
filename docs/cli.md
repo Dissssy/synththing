@@ -84,7 +84,8 @@ Runs a script library server (the design is in docs/SERVER.md): the app's Script
 - `behind_proxy`: true when a reverse proxy (Caddy, nginx) passes requests on, so the client's address is taken from `X-Forwarded-For` (for upload limits).
 - `mode`: `"open"` (anyone can upload, signed or anonymously) or `"signed"` (only uploads signed with the uploader's identity).
 - `license`, `rules`, `contact`: shown to people publishing (CC BY 4.0 by default).
-- `uploads_per_day`: per address (10).
+- `uploads_per_day`: per address (10). Unchanged re-uploads don't count.
+- `unlimited_keys`: keys (hex) whose uploads aren't limited: by default the official publisher's, which publishes the bundled scripts.
 - `threads`: request workers (4).
 
 For the internet, put it behind a reverse proxy for HTTPS. With Caddy:
@@ -94,6 +95,18 @@ scripts.example.org {
     reverse_proxy localhost:7381
 }
 ```
+
+## publish-bundled: publish the bundled scripts
+
+```
+SYNTHTHING_PUBLISH_KEY=<secret key, hex> synththing publish-bundled [--server URL]
+```
+
+Publishes every script bundled with this build (visualizers, games and examples; not the templates) to a library server, `https://synththing.p51.nl` unless `--server` says otherwise, signed with the secret key in `SYNTHTHING_PUBLISH_KEY`. Each goes by its slug (its file name): a changed script becomes its next version, an unchanged one stays as it is. Prints a line per script; exit code 1 if any failed. CI runs it (`.github/workflows/scripts.yml`, docs/RELEASING.md).
+
+## Environment variables
+
+- `SYNTHTHING_OFFICIAL_URL`: use another server as the official one (for trying things against a server of your own, e.g. `http://127.0.0.1:7381`). What's recorded about installed scripts still names the real one.
 
 ## Running from a terminal on Windows
 

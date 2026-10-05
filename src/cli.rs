@@ -52,6 +52,18 @@ pub enum Command {
     /// internet, run it behind a reverse proxy for HTTPS (Caddy, nginx) and
     /// set behind_proxy in server.json.
     Serve(ServeArgs),
+
+    /// Publish the scripts bundled with this build to a library server.
+    ///
+    /// For CI: each visualizer, game and example (not the templates) is
+    /// uploaded by its slug (its file name), signed with the secret key in
+    /// the SYNTHTHING_PUBLISH_KEY environment variable; a changed one
+    /// becomes a new version, an unchanged one stays as it is.
+    PublishBundled {
+        /// The server's address.
+        #[arg(long, default_value = "https://synththing.p51.nl")]
+        server: String,
+    },
 }
 
 #[derive(Args, Debug)]

@@ -70,6 +70,12 @@ The code is part of the program; it's off unless the server's config has mail se
 - **Versions**: the owner's update adds a version; old versions stay downloadable. Installs record which version they are.
 - **Minimum app version**: every entry in `HOST_API` gets the version it arrived in (a test makes sure new ones have it). At publish, the app's Lua analysis lists the host functions and `script_options` keys the script uses, and the minimum is the newest of those; the server checks it the same way. Indirect calls (`_G["name"]`) aren't seen; the version it was published from is kept as an upper bound. The Library warns about (or hides) scripts the user's app is too old for.
 
+## Official scripts
+
+The scripts that come with synththing are published on the official server too, by CI from the repository (`synththing publish-bundled`, `.github/workflows/scripts.yml`) on every push that changes them, signed with the official publisher key, whose public half is built into the app (`OFFICIAL_PUBLISHER`): scripts signed by it show as official. Each goes by its slug (its file name), so a changed script is its next version; one deleted from the repository stays on the server.
+
+The app still ships them, so a first run works offline. At startup, each bundled visualizer and game in the scripts folder is marked as installed from the official server (a `.source.json` naming it by slug, its bundled source kept as its original), so Update and Restore original work on it like on anything installed. The first update check finds its ID by slug, and which version it is by its contents; a bundled copy matching no published version is taken to be newer than what's published if the app it came with is (a development build), and isn't offered an older one.
+
 ## Remixes
 
 - An installed script's sidecar records where it came from (server, ID, version). Publishing a script with that sidecar marks it a remix of that version.

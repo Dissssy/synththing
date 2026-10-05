@@ -150,8 +150,14 @@ pub struct LibraryServer {
 impl LibrarySettings {
     /// The servers in use, the official one first.
     pub fn enabled_servers(&self) -> Vec<String> {
-        let official = self.official.then(|| crate::library::OFFICIAL_URL.to_string());
-        official.into_iter().chain(self.servers.iter().filter(|s| s.enabled).map(|s| s.url.clone())).collect()
+        let official = self.official.then(crate::library::official_url);
+        let mut servers: Vec<String> = Vec::new();
+        for url in official.into_iter().chain(self.servers.iter().filter(|s| s.enabled).map(|s| s.url.clone())) {
+            if !servers.contains(&url) {
+                servers.push(url);
+            }
+        }
+        servers
     }
 }
 

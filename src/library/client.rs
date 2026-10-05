@@ -293,6 +293,14 @@ mod tests {
         assert_eq!(details.summary.author_id, Some(alice.id()));
         assert_eq!(details.summary.slug.as_deref(), Some("bars"));
         assert_eq!(details.versions.len(), 2);
+        assert_eq!(details.versions[1].min_app_version, "0.1.1");
+        // A version needing a newer app than this one is skipped.
+        bars.source = "function render() local r = recording() end".into();
+        let needs_new = upload(&base, &key, &bars, Some(&alice)).unwrap();
+        let details = super::details(&base, &first.id).unwrap();
+        assert_eq!(details.versions[2].min_app_version, "0.4.0");
+        assert_eq!(details.newest_for("0.3.3").map(|v| v.version), Some(2));
+        assert_eq!(details.newest_for("0.4.0").map(|v| v.version), Some(needs_new.version));
         assert_eq!(download(&base, &first.id, Some(1), &key).unwrap().source, "function render() end");
         assert_eq!(by_slug(&base, &alice.id(), "bars").unwrap().map(|s| s.id), Some(first.id.clone()));
         assert_eq!(by_slug(&base, &alice.id(), "nope").unwrap(), None);

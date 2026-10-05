@@ -315,6 +315,9 @@ impl App {
         let browser = FileBrowser::new("songs", config.browse_start_dir(), listed_song_extensions(&config));
 
         let scripts_dir = lua_visualizer::scripts_dir().unwrap_or_else(|_| PathBuf::from("."));
+        // (The bundled visualizers and games count as installed from the
+        // official library: Update and Restore original work on them.)
+        crate::library::mark_bundled(&scripts_dir);
         let available_scripts = lua_visualizer::list_scripts(&scripts_dir);
         let active_path = available_scripts.first().cloned();
         let source = active_path
@@ -2249,6 +2252,7 @@ impl App {
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
                 && let Some(bundled) = lua_visualizer::bundled_default(name)
+                && self.visualizer.script().path().is_some_and(|p| !crate::library::installed_path(p).exists())
                 && ui.button("Restore default").clicked()
             {
                 restore_bundled = Some(bundled.to_string());

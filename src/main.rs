@@ -73,6 +73,13 @@ fn main() -> Result<()> {
         let config = Config::load().unwrap_or_default();
         std::process::exit(headless::run(args, &config));
     }
+    if let Some(Command::PublishBundled { server }) = &cli.command {
+        if let Err(e) = library::publish_bundled(server) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(Command::Serve(args)) = &cli.command {
         let data = args.data.clone().unwrap_or_else(library::server::default_data_dir);
         if let Err(e) = library::server::run(&data, args.bind.clone()) {

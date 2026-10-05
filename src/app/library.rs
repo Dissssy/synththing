@@ -57,6 +57,8 @@ enum Event {
     SlugChecked(String, String, Result<Option<ScriptSummary>, String>),
     /// An update check: the script, where it came from, the server's key,
     /// and the newer version if there is one.
+    /// (With where the script came from, as worked out on the way: a
+    /// bundled one learns its ID and version on the server.)
     UpdateChecked(PathBuf, Box<Installed>, Result<Option<Box<Newer>>, String>),
 }
 
@@ -87,6 +89,10 @@ struct UpdateDraft {
     /// overlap the author's.
     merged: Option<String>,
 }
+
+/// Official scripts' author, and what hovering it says.
+const OFFICIAL_GOLD: egui::Color32 = egui::Color32::from_rgb(230, 180, 60);
+const OFFICIAL_HOVER: &str = "Official: one of the scripts that come with synththing, published by its makers";
 
 /// How long typing pauses before a slug is looked up.
 const SLUG_CHECK_AFTER: Duration = Duration::from_millis(400);
@@ -147,8 +153,11 @@ pub struct LibraryState {
     /// Delete was clicked once (for this script); the next click confirms.
     confirm_delete: Option<(String, String)>,
     publish: Option<PublishDraft>,
-    /// Installed scripts by (server, id): their file and version.
+    /// Installed scripts by (server, id), and by (server, author ID, slug)
+    /// (bundled ones don't know their ID until they're first checked):
+    /// their file and version.
     installed: HashMap<(String, String), (PathBuf, u32)>,
+    installed_by_slug: HashMap<(String, String, String), (PathBuf, u32)>,
     /// The user's identity, once there is one.
     identity: Option<Identity>,
     /// Preferences > Library: the address typed in, the passphrase for
@@ -190,6 +199,7 @@ impl LibraryState {
             confirm_delete: None,
             publish: None,
             installed: HashMap::new(),
+            installed_by_slug: HashMap::new(),
             identity: Identity::load(),
             new_server: String::new(),
             passphrase: String::new(),
@@ -314,11 +324,28 @@ impl App {
 
     /// Which scripts in the scripts folder came from (or went to) a server.
     fn refresh_installed(&mut self) {
-        self.library.installed = self
-            .available_scripts
+        let all: Vec<(PathBuf, Installed)> =
+            self.available_scripts.iter().filter_map(|p| Installed::read(p).map(|i| (p.clone(), i))).collect();
+        self.library.installed = all
             .iter()
-            .filter_map(|path| Installed::read(path).map(|i| ((i.server, i.id), (path.clone(), i.version))))
+            .filter(|(_, i)| !i.id.is_empty())
+            .map(|(p, i)| ((library::resolve_server(&i.server), i.id.clone()), (p.clone(), i.version)))
             .collect();
+        self.library.installed_by_slug = all
+            .iter()
+            .filter_map(|(p, i)| {
+                Some(((library::resolve_server(&i.server), i.author_id.clone()?, i.slug.clone()?), (p.clone(), i.version)))
+            })
+            .collect();
+    }
+
+    /// The installed copy of a script found on `server`, if there is one.
+    fn installed_copy(&self, server: &str, script: &ScriptSummary) -> Option<(PathBuf, u32)> {
+        let lib = &self.library;
+        lib.installed.get(&(server.to_string(), script.id.clone())).cloned().or_else(|| {
+            let key = (server.to_string(), script.author_id.clone()?, script.slug.clone()?);
+            lib.installed_by_slug.get(&key).cloned()
+        })
     }
 
     /// Per frame: requests that finished.
@@ -380,7 +407,16 @@ impl App {
                 Event::UpdateChecked(script, installed, result) => {
                     self.library.busy = false;
                     let installed = *installed;
+                    // What was worked out about it (a bundled script's ID).
+                    if Installed::read(&script).is_some_and(|before| before != installed) {
+                        let _ = installed.write(&script);
+                        self.library.sidecar = None;
+                        self.refresh_installed();
+                    }
                     match result.map(|found| found.map(|newer| *newer)) {
+                        Ok(None) if installed.version == 0 => {
+                            self.status = format!("\"{}\" is up to date.", installed.name);
+                        }
                         Ok(None) => {
                             self.status = format!("\"{}\" is up to date (version {}).", installed.name, installed.version);
                         }
@@ -517,9 +553,8 @@ impl App {
     /// over the copy installed before), note where it came from, and list
     /// it in the script picker.
     fn install(&mut self, server: &str, summary: &ScriptSummary, download: client::Download) {
-        let key = (server.to_string(), summary.id.clone());
-        let path = match self.library.installed.get(&key) {
-            Some((path, _)) => path.clone(),
+        let path = match self.installed_copy(server, summary) {
+            Some((path, _)) => path,
             None => {
                 let stem = library::file_stem_for(&summary.name);
                 let mut path = self.scripts_dir.join(format!("{stem}.lua"));
@@ -625,6 +660,7 @@ impl App {
         let mut show_author = None;
         let mut delete = None;
         let my_id = self.library.my_id();
+        let official_id = library::official_id();
         ui.columns(2, |columns| {
             let ui = &mut columns[0];
             egui::ScrollArea::vertical().id_salt("library_results").auto_shrink([false, false]).show(ui, |ui| {
@@ -641,16 +677,18 @@ impl App {
                     let mut text = egui::text::LayoutJob::default();
                     let style = ui.style();
                     egui::RichText::new(&s.name).strong().append_to(&mut text, style, egui::FontSelection::Default, egui::Align::LEFT);
-                    egui::RichText::new(format!(
-                        "\n{} by {}  ·  {} encore{}",
-                        library::category_title(&s.category),
-                        s.author_name,
-                        s.encores,
-                        if s.encores == 1 { "" } else { "s" }
-                    ))
-                    .weak()
-                    .append_to(&mut text, style, egui::FontSelection::Default, egui::Align::LEFT);
+                    let official = s.author_id.as_deref() == Some(official_id.as_str());
+                    let weak = |text: String, job: &mut egui::text::LayoutJob| {
+                        egui::RichText::new(text).weak().append_to(job, style, egui::FontSelection::Default, egui::Align::LEFT);
+                    };
+                    weak(format!("\n{} by ", library::category_title(&s.category)), &mut text);
+                    // An official script's author in gold.
+                    let author = egui::RichText::new(&s.author_name);
+                    let author = if official { author.color(OFFICIAL_GOLD) } else { author.weak() };
+                    author.append_to(&mut text, style, egui::FontSelection::Default, egui::Align::LEFT);
+                    weak(format!("  ·  {} encore{}", s.encores, if s.encores == 1 { "" } else { "s" }), &mut text);
                     let response = ui.selectable_label(selected, text);
+                    let response = if official { response.on_hover_text(OFFICIAL_HOVER) } else { response };
                     let response = if servers.len() > 1 { response.on_hover_text(host(&found.server)) } else { response };
                     if response.clicked() {
                         pick = Some((found.server.clone(), s.id.clone()));
@@ -676,7 +714,12 @@ impl App {
                 let s = &found.summary;
                 ui.heading(&s.name);
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(format!("by {}", s.author_name));
+                    ui.label("by");
+                    if s.author_id.as_deref() == Some(official_id.as_str()) {
+                        ui.label(egui::RichText::new(&s.author_name).strong().color(OFFICIAL_GOLD)).on_hover_text(OFFICIAL_HOVER);
+                    } else {
+                        ui.label(&s.author_name);
+                    }
                     match &s.author_id {
                         Some(author) => {
                             let label = if my_id.as_deref() == Some(author) { format!("#{author} (you)") } else { format!("#{author}") };
@@ -694,7 +737,7 @@ impl App {
                     ui.weak(s.tags.join(", "));
                 }
                 ui.add_space(6.0);
-                let installed = self.library.installed.get(&(server.clone(), id.clone())).cloned();
+                let installed = self.installed_copy(&server, s);
                 ui.horizontal(|ui| {
                     match &installed {
                         Some((path, version)) if *version >= s.version => {
@@ -748,6 +791,19 @@ impl App {
                         "{versions} version{}; first published with synththing {made}",
                         if versions == 1 { "" } else { "s" }
                     ));
+                    let app = env!("CARGO_PKG_VERSION");
+                    if let Some(newest) = d.newest()
+                        && !library::runs_on(&newest.min_app_version, app)
+                    {
+                        let note = match d.newest_for(app) {
+                            Some(v) => format!(
+                                "Version {} needs synththing {}; this app gets version {}.",
+                                newest.version, newest.min_app_version, v.version
+                            ),
+                            None => format!("It needs synththing {} or newer.", newest.min_app_version),
+                        };
+                        ui.colored_label(ui.visuals().warn_fg_color, note);
+                    }
                 }
             });
         });
@@ -767,7 +823,14 @@ impl App {
                     self.library.busy = true;
                     self.status = format!("Installing \"{}\"...", summary.name);
                     self.spawn_request(move || {
-                        let result = client::download(&server, &summary.id, None, &key);
+                        // The newest version this app can run.
+                        let result = client::details(&server, &summary.id).and_then(|details| {
+                            let Some(version) = details.newest_for(env!("CARGO_PKG_VERSION")) else {
+                                let needs = details.newest().map(|v| v.min_app_version.clone()).unwrap_or_default();
+                                return Err(format!("it needs synththing {needs} or newer"));
+                            };
+                            client::download(&server, &summary.id, Some(version.version), &key)
+                        });
                         Event::Downloaded(server, summary, result)
                     });
                 }
@@ -942,21 +1005,46 @@ impl App {
             return;
         };
         self.flush_editor();
-        let pinned = self.config.library.pinned.get(&installed.server).cloned();
+        let pinned = self.config.library.pinned.get(&library::resolve_server(&installed.server)).cloned();
         self.library.busy = true;
         self.status = format!("Looking for a newer \"{}\"...", installed.name);
         self.spawn_request(move || {
-            let server = installed.server.clone();
+            let mut installed = installed;
+            let server = library::resolve_server(&installed.server);
             let result = (|| {
                 let key = match pinned {
                     Some(key) => key,
                     None => client::info(&server)?.key,
                 };
+                // A bundled script: found by its slug, its version by its
+                // contents (none matching: it's newer than what's
+                // published, or older, by the app it came with).
+                if installed.id.is_empty() {
+                    let (Some(author), Some(slug)) = (installed.author_id.clone(), installed.slug.clone()) else {
+                        return Err("it doesn't say what it is on the server".to_string());
+                    };
+                    match client::by_slug(&server, &author, &slug)? {
+                        Some(found) => installed.id = found.id,
+                        None => return Ok(None), // (not published yet)
+                    }
+                }
                 let details = client::details(&server, &installed.id)?;
-                if details.summary.version <= installed.version {
+                let app = env!("CARGO_PKG_VERSION");
+                if installed.version == 0 {
+                    installed.version = details.versions.iter().find(|v| v.sha256 == installed.sha256).map_or(0, |v| v.version);
+                }
+                let offered: Vec<&library::VersionInfo> = details
+                    .versions
+                    .iter()
+                    .filter(|v| library::runs_on(&v.min_app_version, app))
+                    .filter(|v| installed.version > 0 || !library::runs_on(&v.app_version, app) || v.app_version == app)
+                    .collect();
+                // The newest version this app can run.
+                let newest = offered.iter().map(|v| v.version).max().unwrap_or(0);
+                if newest <= installed.version {
                     return Ok(None);
                 }
-                let download = client::download(&server, &installed.id, None, &key)?;
+                let download = client::download(&server, &installed.id, Some(newest), &key)?;
                 // The installed version as it came: kept locally, or else
                 // the server still has it.
                 let original = library::read_original(&installed.sha256).or_else(|| {
@@ -1060,6 +1148,7 @@ impl App {
         let text = if keep { merged.unwrap_or_else(|| download.source.clone()) } else { download.source.clone() };
         library::save_original(&download.source);
         let updated = Installed {
+            id: summary.id.clone(),
             version: download.version,
             sha256: download.sha256.clone(),
             name: summary.name.clone(),
@@ -1332,7 +1421,7 @@ impl App {
         with_info(
             ui,
             "The official script library. It can be turned off, but not removed.",
-            |ui| ui.checkbox(&mut self.config.library.official, format!("Official server ({})", host(library::OFFICIAL_URL))),
+            |ui| ui.checkbox(&mut self.config.library.official, format!("Official server ({})", host(&library::official_url()))),
         );
         let mut remove = None;
         for (i, server) in self.config.library.servers.iter_mut().enumerate() {
@@ -1355,7 +1444,7 @@ impl App {
                     .desired_width(220.0),
             );
             let url = client::normalize_url(&self.library.new_server);
-            let known = url == library::OFFICIAL_URL || self.config.library.servers.iter().any(|s| s.url == url);
+            let known = url == library::official_url() || self.config.library.servers.iter().any(|s| s.url == url);
             if ui.add_enabled(!self.library.new_server.trim().is_empty() && !known, egui::Button::new("Add")).clicked() {
                 self.config.library.servers.push(LibraryServer { url, enabled: true });
                 self.library.new_server.clear();

@@ -56,6 +56,11 @@ impl Identity {
         crate::config::config_dir().ok().map(|d| d.join("identity.key"))
     }
 
+    /// An identity from its secret key, in hex (as CI is given it).
+    pub fn from_secret_hex(text: &str) -> Option<Self> {
+        Self::from_hex(text)
+    }
+
     fn from_hex(text: &str) -> Option<Self> {
         let bytes = <[u8; 32]>::try_from(unhex(text.trim())?).ok()?;
         Some(Self { key: SigningKey::from_bytes(&bytes) })
