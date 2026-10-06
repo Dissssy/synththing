@@ -117,6 +117,17 @@ Check it from anywhere with `curl https://scripts.example.org/api/v1/info`, then
 
 synththing.p51.nl runs the systemd setup above, with the update timer, behind Caddy. It's the identity authority (with SendGrid mail, from synththing@p51.nl), and its publisher is the official one (the default), whose key `.github/workflows/scripts.yml` publishes the bundled scripts with (the `SYNTHTHING_PUBLISH_KEY` secret).
 
+Its EULA and privacy policy are `deploy/official/eula.md` and `privacy.md`, copied to `/var/lib/synththing/` and listed in its `server.json`:
+
+```json
+"documents": [
+  { "title": "EULA", "icon": "scroll", "file": "eula.md" },
+  { "title": "Privacy Policy", "icon": "shield-check", "file": "privacy.md" }
+]
+```
+
+They're read fresh each time, so an edit shows straight away (no restart needed for the text; a change to the list needs one).
+
 ### Replacing the publisher key
 
 If the publisher key might have got out, `deploy/rotate-publisher.sh` (copied to `/opt/synththing/`) moves the official publisher to a new key: run `sh /opt/synththing/rotate-publisher.sh` as root on the VPS and paste the current secret key when asked (it isn't shown). The official scripts move to the new key, the old one stops working, and apps follow along the next time they talk to the server. The new secret goes to GitHub's `SYNTHTHING_PUBLISH_KEY` with `gh` if it's installed and signed in there, and into `/root/synththing-publish.key` either way: put it in Bitwarden (and GitHub, if `gh` didn't), then `shred -u` the file. This is for the official server's setup; elsewhere, `synththing publisher-rotate` does the same (docs/cli.md).

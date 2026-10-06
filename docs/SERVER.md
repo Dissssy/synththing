@@ -112,7 +112,8 @@ Rendered by the server on each upload and each new version, through a queue (one
 - **`synththing admin <command>`** on the server sends those, signed with the server's own key from its data folder, to the running server at its configured address: it works from SSH, under systemd, and in Docker (`docker exec <container> synththing admin ...`). Still to come: `update`.
 - **Moderation** in the app's Library tab, for admin keys: reports with the lines they point at highlighted in the code and the sprites drawn, and the actions above, signed with the admin's key.
 - **Web admin panel**: parked. Moderation in the app does the job and stays in step with it; if the app ever builds for the web (egui runs in a browser, see TODO), that's the web version.
-- **Rules page** and a contact address in `/api/v1/info` (contact@p51.nl on the official server), for reports and takedown requests.
+- **Rules** and a contact address in `/api/v1/info` (contact@p51.nl on the official server), for reports and takedown requests.
+- **Documents**: a server can offer documents (`documents` in `server.json`: a title, a Phosphor icon, a Markdown file), like its EULA and privacy policy; `/api/v1/info` lists them, `GET /api/v1/documents/{slug}` serves them, and the app's Script Library has an icon button for each (hover: "Read EULA") that opens it, rendered (`egui_commonmark`). The official server's are in `deploy/official/`.
 
 ## Deletion and retention
 

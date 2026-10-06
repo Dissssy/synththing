@@ -64,6 +64,9 @@ enum Event {
     /// A script's preview: the server, its ID, the version it's of, and
     /// the still and the animation (PNGs).
     Preview(String, String, u32, Result<(Vec<u8>, Option<Vec<u8>>), String>),
+    /// One of a server's documents (EULA, privacy policy): the server, its
+    /// slug, its Markdown.
+    Document(String, String, Result<String, String>),
     /// A script opened from a link to another server (a remix's original):
     /// the server, its details.
     Opened(String, Result<ScriptDetails, String>),
@@ -124,6 +127,15 @@ pub(super) const OFFICIAL_HOVER: &str = "Official: one of the scripts that come 
 
 /// How long typing pauses before a slug is looked up.
 const SLUG_CHECK_AFTER: Duration = Duration::from_millis(400);
+
+/// A server's document, open to read.
+struct OpenDocument {
+    server: String,
+    slug: String,
+    title: String,
+    text: Option<Result<String, String>>,
+    cache: egui_commonmark::CommonMarkCache,
+}
 
 /// A script found on a server.
 struct Found {
@@ -193,6 +205,8 @@ pub struct LibraryState {
     /// A link to a script on a server that isn't in use, waiting for the
     /// user to say whether to add it (or turn it on).
     confirm_server: Option<(String, library::RemixLink)>,
+    /// A server's document being read.
+    document: Option<OpenDocument>,
     /// Delete was clicked once (for this script); the next click confirms.
     confirm_delete: Option<(String, String)>,
     publish: Option<PublishDraft>,
@@ -242,6 +256,7 @@ impl LibraryState {
             busy: false,
             encoring: false,
             confirm_server: None,
+            document: None,
             confirm_delete: None,
             publish: None,
             installed: HashMap::new(),
@@ -259,7 +274,7 @@ impl LibraryState {
     }
 
     pub fn publish_open(&self) -> bool {
-        self.publish.is_some() || self.update.is_some() || self.confirm_server.is_some()
+        self.publish.is_some() || self.update.is_some() || self.confirm_server.is_some() || self.document.is_some()
     }
 
     pub(super) fn my_id(&self) -> Option<String> {
@@ -524,6 +539,14 @@ impl App {
                         };
                     }
                 }
+                Event::Document(server, slug, result) => {
+                    if let Some(open) = &mut self.library.document
+                        && open.server == server
+                        && open.slug == slug
+                    {
+                        open.text = Some(result);
+                    }
+                }
                 Event::Opened(server, result) => match result {
                     Ok(details) => {
                         let id = details.summary.id.clone();
@@ -571,6 +594,41 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// A server's document, rendered from its Markdown.
+    pub(super) fn document_ui(&mut self, ctx: &egui::Context) {
+        let Some(mut open) = self.library.document.take() else { return };
+        let mut close = false;
+        let response = egui::Modal::new(egui::Id::new("library_document")).show(ctx, |ui| {
+            ui.set_width(640.0);
+            ui.horizontal(|ui| {
+                ui.heading(&open.title);
+                ui.weak(host(&open.server));
+            });
+            ui.separator();
+            egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.7).auto_shrink([false, true]).show(
+                ui,
+                |ui| match &open.text {
+                    None => {
+                        ui.spinner();
+                    }
+                    Some(Err(e)) => {
+                        ui.colored_label(ui.visuals().warn_fg_color, format!("Couldn't get it: {e}"));
+                    }
+                    Some(Ok(text)) => {
+                        egui_commonmark::CommonMarkViewer::new().show(ui, &mut open.cache, text);
+                    }
+                },
+            );
+            ui.separator();
+            if ui.button("Close").clicked() {
+                close = true;
+            }
+        });
+        if !(close || response.should_close()) {
+            self.library.document = Some(open);
         }
     }
 
@@ -855,6 +913,7 @@ impl App {
         let servers = self.config.library.enabled_servers();
         let mut search = false;
         let mut open_moderation = false;
+        let mut open_document: Option<(String, library::ServerDocument)> = None;
         ui.horizontal_wrapped(|ui| {
             let edit = ui.add(egui::TextEdit::singleline(&mut self.library.query).hint_text("Search scripts").desired_width(220.0));
             if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -874,6 +933,20 @@ impl App {
                 }
             });
             search |= ui.button("Search").clicked();
+            // Each server's documents (its EULA, privacy policy), to read.
+            for server in &servers {
+                let Some(info) = self.library.infos.get(server) else { continue };
+                for document in &info.documents {
+                    let hover = if servers.len() > 1 {
+                        format!("Read {} ({})", document.title, host(server))
+                    } else {
+                        format!("Read {}", document.title)
+                    };
+                    if ui.button(super::icon(&document.icon)).on_hover_text(hover).clicked() {
+                        open_document = Some((server.clone(), document.clone()));
+                    }
+                }
+            }
             if self.moderation.is_admin_anywhere()
                 && ui.button("Moderation").on_hover_text("Reports, bans and admins, on the servers you moderate").clicked()
             {
@@ -885,6 +958,20 @@ impl App {
         });
         if open_moderation {
             self.open_moderation();
+        }
+        if let Some((server, document)) = open_document {
+            self.library.document = Some(OpenDocument {
+                server: server.clone(),
+                slug: document.slug.clone(),
+                title: document.title.clone(),
+                text: None,
+                cache: Default::default(),
+            });
+            let slug = document.slug;
+            self.spawn_request(move || {
+                let text = client::document(&server, &slug);
+                Event::Document(server, slug, text)
+            });
         }
         if servers.is_empty() {
             ui.weak("No servers in use: turn one on in Preferences > Library.");

@@ -108,6 +108,10 @@ pub struct ServerConfig {
     /// On an authority with mail: uploads a day for a key without an email
     /// attached (or an anonymous upload), instead of `uploads_per_day`.
     pub unverified_uploads_per_day: usize,
+    /// Documents to offer (an EULA, a privacy policy): each a title, a
+    /// Phosphor icon's name and a Markdown file (in the data folder unless
+    /// it's a full path). The app has a button for each.
+    pub documents: Vec<DocumentConfig>,
     /// Refuse uploads that don't run here: they don't compile, or error in
     /// their first seconds (`synththing preview --check`).
     pub check_uploads: bool,
@@ -138,6 +142,38 @@ impl Default for ServerConfig {
             authorities: vec![super::rotation::OFFICIAL_AUTHORITY.to_string()],
             mail: None,
             unverified_uploads_per_day: 3,
+            documents: Vec::new(),
+        }
+    }
+}
+
+/// A document a server offers (`server.json`'s `documents`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DocumentConfig {
+    pub title: String,
+    pub icon: String,
+    pub file: String,
+}
+
+impl DocumentConfig {
+    fn slug(&self) -> String {
+        super::slugify(&self.title)
+    }
+}
+
+/// `GET /api/v1/documents/{slug}`: one of the documents, as Markdown.
+fn document(state: &State, slug: &str) -> Reply {
+    let Some(document) = state.config.documents.iter().find(|d| d.slug() == slug) else {
+        return error(404, "no such document");
+    };
+    match std::fs::read_to_string(state.data.join(&document.file)) {
+        Ok(text) => Response::from_data(text.into_bytes())
+            .with_header(header("Content-Type", "text/markdown; charset=utf-8"))
+            .with_header(header("Cache-Control", "public, max-age=300")),
+        Err(e) => {
+            println!("couldn't read the document {}: {e}", document.file);
+            error(404, "that document is missing")
         }
     }
 }
@@ -657,6 +693,7 @@ fn handle(state: &State, mut request: Request) {
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
     let reply = match (&method, parts.as_slice()) {
         (Method::Get, ["api", "v1", "info"]) => json(200, &info(state)),
+        (Method::Get, ["api", "v1", "documents", slug]) => document(state, slug),
         (Method::Get, ["api", "v1", "scripts"]) => list(state, &query),
         (Method::Get, ["api", "v1", "scripts", id]) => details(state, id, &query),
         (Method::Get, ["api", "v1", "scripts", id, "source"]) => source(state, id, &query),
@@ -731,7 +768,14 @@ fn client_ip(state: &State, request: &Request) -> String {
 
 fn info(state: &State) -> Info {
     let publisher_rotations = authority::chain_from(&state.db(), &state.config.publisher);
+    let documents = state
+        .config
+        .documents
+        .iter()
+        .map(|d| super::ServerDocument { title: d.title.clone(), icon: d.icon.clone(), slug: d.slug() })
+        .collect();
     Info {
+        documents,
         publisher_rotations,
         name: state.config.name.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),

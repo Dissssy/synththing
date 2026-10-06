@@ -2869,6 +2869,7 @@ impl eframe::App for App {
         self.script_window_ui(&ctx);
         self.publish_ui(&ctx);
         self.confirm_server_ui(&ctx);
+        self.document_ui(&ctx);
         self.update_ui(&ctx);
         self.report_ui(&ctx);
         self.identity_flow_ui(&ctx);
@@ -3053,6 +3054,23 @@ fn categories_body<S: AsRef<str>>(
 
 /// A setting on one line (`add`), with an (i) after it: hovering either
 /// shows `info`, the longer explanation.
+/// The fonts: egui's own, with the Phosphor icons (`icon`) mixed in.
+pub fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    ctx.set_fonts(fonts);
+}
+
+/// A Phosphor icon by its name (`shield-check`, `SCROLL`), for text: the
+/// scroll if there's no such icon.
+pub fn icon(name: &str) -> &'static str {
+    let wanted = name.trim().replace('-', "_").to_uppercase();
+    egui_phosphor::regular::ICONS
+        .iter()
+        .find(|(n, _)| *n == wanted)
+        .map_or(egui_phosphor::regular::SCROLL, |(_, glyph)| glyph)
+}
+
 fn with_info(ui: &mut egui::Ui, info: &str, add: impl FnOnce(&mut egui::Ui) -> egui::Response) {
     ui.horizontal(|ui| {
         add(ui).on_hover_text(info);

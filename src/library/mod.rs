@@ -313,6 +313,10 @@ pub struct Info {
     pub license: String,
     pub rules: String,
     pub contact: String,
+    /// Documents it offers (its EULA, its privacy policy), to read in the
+    /// app (`GET /api/v1/documents/{slug}`, Markdown).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documents: Vec<ServerDocument>,
     /// The rotations of the server's publisher (the one whose scripts are
     /// official), from its first key, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -323,6 +327,16 @@ pub struct Info {
     pub authority: bool,
     #[serde(default)]
     pub mail: bool,
+}
+
+/// A document a server offers, in `/api/v1/info`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ServerDocument {
+    /// As shown: "Read EULA".
+    pub title: String,
+    /// A Phosphor icon's name (`scroll`, `shield-check`).
+    pub icon: String,
+    pub slug: String,
 }
 
 /// One script in a listing.

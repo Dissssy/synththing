@@ -220,7 +220,14 @@ fn main() -> Result<()> {
         viewport: egui::ViewportBuilder::default().with_inner_size([1100.0, 750.0]),
         ..Default::default()
     };
-    eframe::run_native("synththing", options, Box::new(|_cc| Ok(Box::new(app))))
+    eframe::run_native(
+        "synththing",
+        options,
+        Box::new(|cc| {
+            app::install_fonts(&cc.egui_ctx);
+            Ok(Box::new(app))
+        }),
+    )
         .map_err(|e| anyhow!("failed to run the GUI: {e}"))?;
 
     // App drops here, closing the command channel; the render thread sees the

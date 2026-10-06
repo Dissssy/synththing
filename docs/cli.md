@@ -107,6 +107,7 @@ Runs a script library server (the design is in docs/SERVER.md): the app's Script
 - `authority`: this server is an identity authority itself (false): it issues rotations (an identity moving to a new key), and with `mail`, attaches recovery emails and recovers identities by them (docs/SERVER.md).
 - `public_url`: the address people reach it at, for links in its emails (e.g. `https://scripts.example.org`).
 - `mail`: sending email, for an authority: `{ "from": "synththing@example.org", "from_name": "synththing", "api_key_file": "sendgrid.key" }`. Mail goes through SendGrid, with the API key read from `api_key_file` (in the data folder unless it's a full path). Without it, an authority does rotations only.
+- `documents`: documents to offer, like an EULA and a privacy policy: `[{ "title": "EULA", "icon": "scroll", "file": "eula.md" }]`. Each is a Markdown file (in the data folder unless it's a full path), read fresh each time, served at `/api/v1/documents/<slug of the title>`; the app has a button for each in the Script Library, showing the [Phosphor icon](https://phosphoricons.com) named, that opens it.
 - `unverified_uploads_per_day`: on an authority with mail, uploads a day for a key without an email (and anonymous ones), instead of `uploads_per_day` (3).
 
 For the internet, put it behind a reverse proxy for HTTPS. With Caddy:

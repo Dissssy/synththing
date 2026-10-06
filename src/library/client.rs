@@ -102,6 +102,17 @@ pub fn list(base: &str, search: &Search) -> Result<Listing, String> {
     read(check(request.call())?)
 }
 
+/// One of a server's documents (`Info::documents`), as Markdown.
+pub fn document(base: &str, slug: &str) -> Result<String, String> {
+    let mut response = check(agent().get(format!("{base}/api/v1/documents/{slug}")).call())?;
+    response
+        .body_mut()
+        .with_config()
+        .limit(512 * 1024)
+        .read_to_string()
+        .map_err(|e| format!("couldn't read it ({e})"))
+}
+
 pub fn user(base: &str, id: &str) -> Result<UserInfo, String> {
     read(check(agent().get(format!("{base}/api/v1/users/{id}")).call())?)
 }
@@ -442,6 +453,7 @@ mod tests {
 
         let info = info(&base).unwrap();
         assert_eq!((info.mode.as_str(), info.license.as_str()), ("open", "CC-BY-4.0"));
+        assert!(info.documents.is_empty());
         assert_eq!(info.key.len(), 64);
 
         let bars = upload(&base, &info.key, &upload_of("Neon Bars", "visualizer", "function render() clear({r=1,g=2,b=3}) end"), None).unwrap();
@@ -472,10 +484,23 @@ mod tests {
         assert!(download(&base, "nothere", None, &info.key).unwrap_err().contains("no such script"));
 
         running.stop();
+        // Documents, offered from the settings.
+        std::fs::write(dir.join("eula.md"), "# EULA\n\nBe *nice*.\n").unwrap();
+        let mut config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("server.json")).unwrap()).unwrap();
+        config["documents"] = serde_json::json!([
+            { "title": "EULA", "icon": "scroll", "file": "eula.md" },
+            { "title": "Privacy Policy", "icon": "shield-check", "file": "missing.md" }
+        ]);
+        std::fs::write(dir.join("server.json"), config.to_string()).unwrap();
         // The data stays: a restart serves the same scripts with the same key.
         let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
         let base = format!("http://{}", running.addr);
         assert_eq!(super::info(&base).unwrap().key, info.key);
+        let documents = super::info(&base).unwrap().documents;
+        assert_eq!(documents.iter().map(|d| d.slug.as_str()).collect::<Vec<_>>(), ["eula", "privacy-policy"]);
+        assert_eq!(document(&base, "eula").unwrap(), "# EULA\n\nBe *nice*.\n");
+        assert!(document(&base, "privacy-policy").unwrap_err().contains("missing"));
+        assert!(document(&base, "nope").unwrap_err().contains("no such"));
         assert_eq!(list(&base, &search("", None, "new")).unwrap().total, 2);
         running.stop();
         let _ = std::fs::remove_dir_all(&dir);
