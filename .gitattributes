@@ -6,3 +6,4 @@ Dockerfile text eol=lf
 *.Dockerfile text eol=lf
 *.service text eol=lf
 *.timer text eol=lf
+*.path text eol=lf
