@@ -260,6 +260,47 @@ pub fn recover_confirm(base: &str, server_key: &str, new: &Identity, code: &str)
     checked_rotation(server_key, record)
 }
 
+/// How a request to delete an identity's data went.
+#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
+pub struct Deletion {
+    /// Deleted: for good after this time (Unix seconds), unless restored.
+    #[serde(default)]
+    pub deleted: Option<i64>,
+    /// A code went to the attached email: confirm with it.
+    #[serde(default)]
+    pub sent: bool,
+}
+
+fn signed_post<T: serde::de::DeserializeOwned>(
+    base: &str,
+    server_key: &str,
+    identity: &Identity,
+    path: &str,
+    body: &serde_json::Value,
+) -> Result<T, String> {
+    let body = serde_json::to_vec(body).map_err(|e| e.to_string())?;
+    let request = agent().post(format!("{base}{path}")).header("Content-Type", "application/json");
+    read(check(signed(request, server_key, identity, "POST", path, &body).send(&body[..]))?)
+}
+
+/// Delete what the server has of `identity`'s (undoable for 30 days):
+/// where it has an email attached, `address` has to be it, and a code
+/// goes to it first (`delete_confirm`).
+pub fn delete_identity(base: &str, server_key: &str, identity: &Identity, address: Option<&str>) -> Result<Deletion, String> {
+    signed_post(base, server_key, identity, "/api/v1/identity/delete", &serde_json::json!({ "address": address }))
+}
+
+/// The emailed code, to finish a deletion.
+pub fn delete_confirm(base: &str, server_key: &str, identity: &Identity, code: &str) -> Result<Deletion, String> {
+    signed_post(base, server_key, identity, "/api/v1/identity/delete/confirm", &serde_json::json!({ "code": code.trim() }))
+}
+
+/// Undo a deletion: how many scripts came back.
+pub fn restore_identity(base: &str, server_key: &str, identity: &Identity) -> Result<u64, String> {
+    let reply: serde_json::Value = signed_post(base, server_key, identity, "/api/v1/identity/restore", &serde_json::json!({}))?;
+    Ok(reply["restored"].as_u64().unwrap_or(0))
+}
+
 /// Report a script to the server's admins; the report's number.
 pub fn report(base: &str, server_key: &str, id: &str, identity: &Identity, report: &ReportRequest) -> Result<i64, String> {
     let path = format!("/api/v1/scripts/{id}/report");
@@ -669,6 +710,70 @@ mod tests {
         assert_eq!(running.outbox().len(), sent);
         running.stop();
         other.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Deleting an identity's data: gone from listings at once, the key
+    /// refused, all of it back with a restore; with an email attached on a
+    /// server with mail, only with a code sent to it.
+    #[test]
+    fn identities_are_deleted_and_restored() {
+        use crate::library::rotation::{EmailConfirm, EmailRequest};
+        let dir = std::env::temp_dir().join(format!("synththing-deletion-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("server.json"),
+            r#"{ "previews": false, "check_uploads": false, "authority": true, "public_url": "http://authority.test",
+                 "mail": { "from": "codes@example.org" } }"#,
+        )
+        .unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let mut mine = upload_of("Mine", "visualizer", "function render() end");
+        mine.slug = Some("mine".into());
+        let mine = upload(&base, &key, &mine, Some(&alice)).unwrap();
+        let mut theirs = upload_of("Theirs", "visualizer", "function render() end -- theirs");
+        theirs.slug = Some("theirs".into());
+        let theirs = upload(&base, &key, &theirs, Some(&bob)).unwrap();
+        encore(&base, &key, &theirs.id, &alice, true).unwrap();
+
+        // No email: deleted at once (for 30 days).
+        let deleted = delete_identity(&base, &key, &alice, None).unwrap();
+        assert!(deleted.deleted.is_some_and(|t| t > 29 * 24 * 3600) && !deleted.sent);
+        assert!(details(&base, &mine.id).is_err());
+        assert_eq!(list(&base, &search("", None, "new")).unwrap().total, 1);
+        assert_eq!(details(&base, &theirs.id).unwrap().summary.encores, 0);
+        assert!(encore(&base, &key, &theirs.id, &alice, false).unwrap_err().contains("being deleted"));
+        // Restored: all of it back.
+        assert_eq!(restore_identity(&base, &key, &alice).unwrap(), 1);
+        assert!(details(&base, &mine.id).is_ok());
+        assert_eq!(details(&base, &theirs.id).unwrap().summary.encores, 1);
+        assert!(restore_identity(&base, &key, &alice).unwrap_err().contains("nothing"));
+
+        // With an email attached: the address, then its code.
+        email(&base, &key, &alice, &EmailRequest { address: Some("alice@example.org".into()), current: None }).unwrap();
+        let code = |running: &server::Running| running.outbox().last().unwrap().subject.rsplit(' ').next().unwrap().to_string();
+        email_confirm(&base, &key, &alice, &EmailConfirm { code: Some(code(&running)), ..Default::default() }).unwrap();
+        assert!(delete_identity(&base, &key, &alice, None).unwrap_err().contains("email attached"));
+        assert!(delete_identity(&base, &key, &alice, Some("wrong@example.org")).unwrap_err().contains("email attached"));
+        assert!(delete_identity(&base, &key, &alice, Some("Alice@Example.org")).unwrap().sent);
+        let mail = running.outbox().last().unwrap().clone();
+        assert!(mail.text.contains("to delete your identity's data") && mail.text.contains("cancel?token="));
+        assert!(details(&base, &mine.id).is_ok(), "not until the code");
+        assert!(delete_confirm(&base, &key, &alice, &code(&running)).unwrap().deleted.is_some());
+        assert!(details(&base, &mine.id).is_err());
+
+        // 30 days on: gone for good, the email too; the key's new here.
+        running.purge_as_if_later();
+        assert!(restore_identity(&base, &key, &alice).unwrap_err().contains("nothing"));
+        assert!(!identity_status(&base, &key, &alice).unwrap().email);
+        assert_eq!(details(&base, &theirs.id).unwrap().summary.encores, 0);
+        let again = upload_of("Mine", "visualizer", "function render() end -- again");
+        assert!(upload(&base, &key, &Upload { slug: Some("mine".into()), ..again }, Some(&alice)).is_ok());
+        running.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

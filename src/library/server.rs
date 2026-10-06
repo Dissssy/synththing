@@ -25,6 +25,7 @@
 //! every script without one is queued.
 
 mod authority;
+mod deletion;
 mod mail;
 
 #[cfg(test)]
@@ -206,6 +207,12 @@ pub struct Running {
 }
 
 impl Running {
+    /// Purge deletions as if 30 days had gone by (tests).
+    #[cfg(test)]
+    pub fn purge_as_if_later(&self) {
+        deletion::purge_as_of(&self.state, i64::MAX);
+    }
+
     /// The emails it's "sent" (tests).
     #[cfg(test)]
     pub fn outbox(&self) -> Vec<mail::Mail> {
@@ -271,6 +278,7 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
         mailer,
     });
     moderation::forget_old_addresses(&state);
+    deletion::purge(&state);
     {
         let state = Arc::clone(&state);
         std::thread::Builder::new()
@@ -278,6 +286,7 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
             .spawn(move || loop {
                 std::thread::sleep(Duration::from_secs(24 * 60 * 60));
                 moderation::forget_old_addresses(&state);
+                deletion::purge(&state);
             })
             .map_err(|e| format!("couldn't start: {e}"))?;
     }
@@ -555,6 +564,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 8 {
         db.execute_batch(authority::SCHEMA_V8)?;
     }
+    if version < 9 {
+        db.execute_batch(deletion::SCHEMA_V9)?;
+    }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
 }
@@ -688,6 +700,12 @@ fn handle(state: &State, mut request: Request) {
             authority::recover(state, &mut request, &ip)
         }
         (Method::Post, ["api", "v1", "identity", "recover", "confirm"]) => authority::recover_confirm(state, &mut request),
+        (Method::Post, ["api", "v1", "identity", "delete"]) => {
+            let ip = client_ip(state, &request);
+            deletion::delete(state, &mut request, &ip)
+        }
+        (Method::Post, ["api", "v1", "identity", "delete", "confirm"]) => deletion::confirm(state, &mut request),
+        (Method::Post, ["api", "v1", "identity", "restore"]) => deletion::restore(state, &mut request),
         (Method::Get, ["api", "v1", "identity", "cancel"]) => {
             authority::cancel(state, query.get("token").map(String::as_str).unwrap_or_default())
         }
@@ -974,7 +992,23 @@ fn read_body(request: &mut Request, limit: usize) -> Result<Vec<u8>, Reply> {
 
 /// The signer of a signed request (their public key, hex), `None` for an
 /// unsigned one, or why a signed one isn't accepted.
+/// The signer of a signed request (as `signer_any`), unless their
+/// identity's data is being deleted here: then only restoring it works.
 fn signer(state: &State, request: &Request, method: &str, path: &str, body: &[u8]) -> Result<Option<String>, Reply> {
+    let key = signer_any(state, request, method, path, body)?;
+    if let Some(key) = &key
+        && let Some(until) = deletion::pending(&state.db(), key)
+    {
+        let left = crate::song_info::format_length((until - now()).max(0) as f64);
+        return Err(error(
+            403,
+            format!("your identity's data here is being deleted: restore it first (Preferences > Library) if you want it back (another {left} to change your mind)"),
+        ));
+    }
+    Ok(key)
+}
+
+fn signer_any(state: &State, request: &Request, method: &str, path: &str, body: &[u8]) -> Result<Option<String>, Reply> {
     let get = |name: &'static str| {
         request.headers().iter().find(|h| h.field.equiv(name)).map(|h| h.value.as_str().trim().to_string())
     };

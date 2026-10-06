@@ -1874,6 +1874,11 @@ impl App {
 
     /// The identity (a fresh copy for a request's thread), made and saved
     /// first if there isn't one.
+    /// Whether `server` sends email (as it last said).
+    pub(super) fn library_server_mail(&self, server: &str) -> bool {
+        self.library.infos.get(server).is_some_and(|i| i.mail)
+    }
+
     /// The identity, for the Preferences' recovery part (`identity.rs`).
     pub(super) fn library_identity(&self) -> Option<Identity> {
         self.library.identity.clone()

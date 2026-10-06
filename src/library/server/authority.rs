@@ -52,7 +52,7 @@ CREATE TABLE identities (           -- an authority's: keys with an email
 CREATE UNIQUE INDEX identities_email ON identities(email_hash) WHERE email_hash IS NOT NULL;
 CREATE TABLE codes (
     key TEXT NOT NULL,              -- the identity (its current key)
-    purpose TEXT NOT NULL,          -- attach, current, recover
+    purpose TEXT NOT NULL,          -- attach, current, recover, delete
     code_hash TEXT NOT NULL,
     email_hash TEXT,                -- attach: the address being attached
     new_key TEXT,                   -- recover: the key recovering to
@@ -300,7 +300,7 @@ pub(super) fn apply(state: &State, request: &mut Request, ip: &str) -> Reply {
 }
 
 /// The hash an address is kept as.
-fn email_hash(state: &State, address: &str) -> String {
+pub(super) fn email_hash(state: &State, address: &str) -> String {
     let mut out = [0u8; 32];
     let params = argon2::Params::new(19 * 1024, 2, 1, Some(32)).expect("valid Argon2 parameters");
     let argon = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
@@ -314,7 +314,7 @@ fn code_hash(code: &str) -> String {
 }
 
 /// A code: eight letters and digits, `ABCD-EFGH`.
-fn new_code() -> Result<String, Reply> {
+pub(super) fn new_code() -> Result<String, Reply> {
     let mut bytes = [0u8; 5];
     getrandom::fill(&mut bytes).map_err(|_| error(500, "couldn't make a code"))?;
     let code = base32(&bytes).to_uppercase();
@@ -323,7 +323,7 @@ fn new_code() -> Result<String, Reply> {
 
 /// Store a code for `key` and `purpose` (replacing one sent before).
 #[allow(clippy::too_many_arguments)]
-fn store_code(
+pub(super) fn store_code(
     db: &Connection,
     key: &str,
     purpose: &str,
@@ -344,7 +344,7 @@ fn store_code(
 
 /// Check `code` against `key`'s code for `purpose`: the row (email hash,
 /// new key), or why not. A wrong code uses up a try.
-fn check_code(db: &Connection, key: &str, purpose: &str, code: &str) -> Result<(Option<String>, Option<String>), Reply> {
+pub(super) fn check_code(db: &Connection, key: &str, purpose: &str, code: &str) -> Result<(Option<String>, Option<String>), Reply> {
     // (Its hash, email hash, new key, when, tries.)
     type Row = (String, Option<String>, Option<String>, i64, i64);
     let row: Option<Row> = db
@@ -384,7 +384,7 @@ pub(super) fn status(state: &State, request: &mut Request) -> Reply {
 
 /// A token for a code's "that wasn't me" link, and the link (none without
 /// a `public_url`).
-fn cancel_link(state: &State) -> Result<(String, Option<String>), Reply> {
+pub(super) fn cancel_link(state: &State) -> Result<(String, Option<String>), Reply> {
     let mut token = [0u8; 16];
     getrandom::fill(&mut token).map_err(|_| error(500, "couldn't make a link"))?;
     let token = hex(&token);
@@ -631,19 +631,21 @@ pub(super) fn cancel(state: &State, token: &str) -> Reply {
              day. Your key and your email are as they were.",
         );
     }
-    let _ = db.execute("DELETE FROM codes WHERE key = ? AND purpose IN ('attach', 'current')", [&key]);
+    let _ = db.execute("DELETE FROM codes WHERE key = ? AND purpose IN ('attach', 'current', 'delete')", [&key]);
     let _ = db.execute(
         "INSERT INTO identities (key, changes_paused_until) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET changes_paused_until = ?2",
         params![key, now() + DAY],
     );
-    println!("email change for #{} cancelled", key_id(&key));
+    println!("{purpose} for #{} cancelled", key_id(&key));
     page(
         200,
-        if purpose == "attach" {
-            "Cancelled: your address won't be attached, and that identity can't try again for the next day."
-        } else {
-            "Cancelled: your identity's email stays as it is, and it can't be changed or taken off for the next day."
+        match purpose.as_str() {
+            "attach" => "Cancelled: your address won't be attached, and that identity can't try again for the next day.",
+            "delete" => {
+                "Cancelled: nothing of your identity's is deleted, and nobody can ask to delete it for the next day."
+            }
+            _ => "Cancelled: your identity's email stays as it is, and it can't be changed or taken off for the next day.",
         },
     )
 }

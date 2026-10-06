@@ -117,7 +117,7 @@ Rendered by the server on each upload and each new version, through a queue (one
 ## Deletion and retention
 
 - **Deleting a script**: by its owner (signed) or an admin.
-- **Deleting an identity**: signed by the key, or confirmed by email. Removes its names, email hash, encores given, and its scripts (remixes of them then say "remixed from a deleted script").
+- **Deleting an identity's data** (`server/deletion.rs`, Delete my data... in Preferences > Library): asked for with the key, on each server separately; where the identity has an email attached on a server with mail, confirmed with a code sent to it too (with a "that wasn't me" link). Nothing goes at once: its scripts are hidden (deleted by their author: out of every listing, search and download), the encores it gave set aside, its admin rights taken away, and the key refused for anything but restoring, for 30 days, during which Restore my data puts it all back. Then a daily job deletes it for good: its scripts (remixes of them then say "remixed from a deleted script") and their previews, the encores, the email hash, and its key on the reports it made. Bans stay: deleting is no way out of one. (Lost the key? Recover it by email first.)
 - **IP addresses** are kept only for rate limits and bans, and deleted after 30 days (bans keep theirs until they end).
 
 ## API (v1)
@@ -145,7 +145,9 @@ POST /api/v1/identity/recover             start a recovery: a code to the email 
 POST /api/v1/identity/recover/confirm     the code: the rotation to the new key (authorities)
 GET  /api/v1/identity/cancel?token=       a code email's "that wasn't me" link (authorities)
 POST /api/v1/identity/apply               present rotation records (any server)
-DELETE /api/v1/identity                   delete everything about a key (not yet)
+POST /api/v1/identity/delete              signed: delete the key's data here (in 30 days), or send a code first
+POST /api/v1/identity/delete/confirm      signed: the code
+POST /api/v1/identity/restore             signed: undo a deletion
 ```
 
 Errors are JSON (`{ "error": "...", "retry_after": ... }`). Requests are signed with headers (`X-Synththing-Key`, `X-Synththing-Time`, `X-Synththing-Nonce`, `X-Synththing-Signature`); the signature covers the server's key, the method and path, the time, the nonce (random per request, so a replay is spotted) and the body's SHA-256.

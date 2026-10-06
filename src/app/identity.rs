@@ -24,6 +24,9 @@ enum Event {
     /// to it.
     NewKey(Box<Result<(Identity, Vec<Rotation>), String>>, &'static str),
     RecoverSent(Result<(), String>),
+    /// A deletion asked for (or confirmed), or a restore: what happened.
+    Deleted(Result<client::Deletion, String>),
+    Restored(Result<u64, String>),
     Applied(String, Result<u64, String>),
 }
 
@@ -42,6 +45,9 @@ enum Flow {
     Rotate,
     /// Recover, to `new`: the address, then the code it got.
     Recover { address: String, new: Identity, sent: bool, code: String },
+    /// Delete the identity's data from `server` (the attached email, and
+    /// the code it got, where it has one), or (`restore`) undo that.
+    Delete { server: String, restore: bool, address: String, sent: bool, code: String, done: Option<String> },
 }
 
 struct FlowState {
@@ -135,6 +141,37 @@ impl App {
                         }
                     }
                 },
+                Event::Deleted(result) => {
+                    if let Some(FlowState { flow: Flow::Delete { sent, done, server, .. }, busy, error }) = flow {
+                        *busy = false;
+                        match result {
+                            Ok(client::Deletion { deleted: Some(until), .. }) => {
+                                let date = crate::song_info::format_length((until - unix_now()).max(0) as f64);
+                                *done = Some(format!(
+                                    "Deleted from {}: it all goes for good in {date}, unless you restore it before then.",
+                                    host(server)
+                                ));
+                            }
+                            Ok(_) => *sent = true,
+                            Err(e) => *error = Some(e),
+                        }
+                    }
+                }
+                Event::Restored(result) => {
+                    if let Some(FlowState { flow: Flow::Delete { done, server, .. }, busy, error }) = flow {
+                        *busy = false;
+                        match result {
+                            Ok(n) => {
+                                *done = Some(format!(
+                                    "Restored on {}: {n} script{} back, with everything else.",
+                                    host(server),
+                                    if n == 1 { "" } else { "s" }
+                                ))
+                            }
+                            Err(e) => *error = Some(e),
+                        }
+                    }
+                }
                 Event::RecoverSent(result) => {
                     if let Some(FlowState { flow: Flow::Recover { sent, .. }, busy, error }) = flow {
                         *busy = false;
@@ -275,6 +312,25 @@ impl App {
                 }
             }
         });
+        if current.is_some() {
+            ui.horizontal(|ui| {
+                for (restore, label, hover) in [
+                    (false, "Delete my data...", "Have a server delete what it has of yours: your scripts, encores, email"),
+                    (true, "Restore my data...", "Undo a deletion, within 30 days of it"),
+                ] {
+                    if ui.button(label).on_hover_text(hover).clicked() {
+                        open = Some(Flow::Delete {
+                            server: authority.clone(),
+                            restore,
+                            address: String::new(),
+                            sent: false,
+                            code: String::new(),
+                            done: None,
+                        });
+                    }
+                }
+            });
+        }
         if let Some(flow) = open {
             self.identity.flow = Some(FlowState { flow, busy: false, error: None });
         }
@@ -339,6 +395,47 @@ impl App {
                     ));
                     ui.weak("Export the new one afterwards: an export of the old key won't work any more.");
                 }
+                Flow::Delete { server, restore, address, sent, code, done } => {
+                    ui.heading(if *restore { "Restore your data" } else { "Delete your data" });
+                    if let Some(done) = done {
+                        ui.label(done.as_str());
+                    } else {
+                        if !*sent {
+                            ui.horizontal(|ui| {
+                                ui.label("On");
+                                egui::ComboBox::from_id_salt("delete_server").selected_text(host(server)).show_ui(ui, |ui| {
+                                    for s in self.config.library.enabled_servers() {
+                                        let label = host(&s).to_string();
+                                        ui.selectable_value(server, s, label);
+                                    }
+                                });
+                            });
+                        }
+                        if *restore {
+                            ui.label(format!(
+                                "Puts back what {} was going to delete: your scripts, encores, admin rights. Within \
+                                 30 days of deleting.",
+                                host(server)
+                            ));
+                        } else if *sent {
+                            ui.label("The code sent to your email:");
+                            ui.add(egui::TextEdit::singleline(code).hint_text("ABCD-EFGH").desired_width(160.0));
+                            ui.weak("It works for 30 minutes. No email? Check the spam folder.");
+                        } else {
+                            ui.label(format!(
+                                "{} deletes what it has of yours: your scripts (their remixes then say they were \
+                                 remixed from a deleted script), the encores you gave, your admin rights, your \
+                                 email. It all goes from listings straight away, and for good after 30 days: until \
+                                 then, Restore my data puts it back. Bans stay, and so do reports (without your key).",
+                                host(server)
+                            ));
+                            if self.library_server_mail(server) {
+                                ui.label("If your identity has an email attached here, type it (a code goes to it):");
+                                ui.add(egui::TextEdit::singleline(address).desired_width(f32::INFINITY));
+                            }
+                        }
+                    }
+                }
                 Flow::Recover { address, sent, code, .. } => {
                     ui.heading("Recover your identity");
                     if *sent {
@@ -367,17 +464,21 @@ impl App {
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
+                let finished = matches!(&state.flow, Flow::Delete { done: Some(_), .. });
                 let label = match &state.flow {
+                    Flow::Delete { restore: true, .. } => "Restore",
+                    Flow::Delete { sent: true, .. } => "Confirm",
+                    Flow::Delete { .. } => "Delete",
                     Flow::Email { sent: None, .. } => "Send code",
                     Flow::Email { .. } => "Confirm",
                     Flow::Rotate => "Make a new key",
                     Flow::Recover { sent: false, .. } => "Send code",
                     Flow::Recover { .. } => "Recover",
                 };
-                if ui.add_enabled(!state.busy, egui::Button::new(label)).clicked() {
+                if !finished && ui.add_enabled(!state.busy, egui::Button::new(label)).clicked() {
                     go = true;
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(if finished { "Close" } else { "Cancel" }).clicked() {
                     close = true;
                 }
                 if state.busy {
@@ -385,7 +486,28 @@ impl App {
                 }
             });
         });
-        if go {
+        if go && let Flow::Delete { server, restore, address, sent, code, .. } = &state.flow {
+            state.error = None;
+            match (current.clone(), self.config.library.pinned.get(server).cloned()) {
+                (Some(identity), Some(server_key)) => {
+                    state.busy = true;
+                    let (server, address, code, restore, sent) =
+                        (server.clone(), address.trim().to_string(), code.trim().to_string(), *restore, *sent);
+                    self.spawn_identity(move || {
+                        if restore {
+                            Event::Restored(client::restore_identity(&server, &server_key, &identity))
+                        } else if sent {
+                            Event::Deleted(client::delete_confirm(&server, &server_key, &identity, &code))
+                        } else {
+                            let address = Some(address.as_str()).filter(|a| !a.is_empty());
+                            Event::Deleted(client::delete_identity(&server, &server_key, &identity, address))
+                        }
+                    });
+                }
+                (None, _) => state.error = Some("There's no identity here.".into()),
+                (_, None) => state.error = Some("That server hasn't been reached yet: open the Script Library first.".into()),
+            }
+        } else if go {
             state.error = None;
             state.busy = true;
             let key = key.unwrap_or_default();
@@ -401,7 +523,7 @@ impl App {
         }
     }
 
-    /// The next step of a flow, on a thread.
+    /// The next step of a flow, on a thread (all but Delete, done above).
     fn identity_step(&mut self, state: &mut FlowState, authority: String, key: String, current: Option<Identity>) {
         match &state.flow {
             Flow::Email { removing, address, current: current_address, sent, code, current_code } => {
@@ -440,6 +562,7 @@ impl App {
                     Event::NewKey(Box::new(result), "a new key")
                 });
             }
+            Flow::Delete { .. } => {}
             Flow::Recover { address, new, sent, code } => {
                 let (address, new, code) = (address.trim().to_string(), new.clone(), code.trim().to_string());
                 if !*sent {
@@ -461,4 +584,8 @@ impl App {
             }
         }
     }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }

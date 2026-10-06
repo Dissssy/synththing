@@ -374,7 +374,8 @@ fn act(state: &State, action: &AdminAction) -> Acted {
         }
         AdminAction::Unhide { script } => {
             let n = db
-                .execute("UPDATE scripts SET hidden = 0, hidden_reason = NULL WHERE id = ?", [script])
+                // (Not one its author deleted: hidden = 2.)
+                .execute("UPDATE scripts SET hidden = 0, hidden_reason = NULL WHERE id = ? AND hidden = 1", [script])
                 .map_err(db_error)?;
             changed(n, "unhidden")
         }
