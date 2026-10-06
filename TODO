@@ -8,6 +8,18 @@
 
 ## Tier 2 - solid value, moderate effort
 
+[M][!] favorites for games (asked for by a player)
+    Favorite a specific combination for a game script, not just a song:
+    say highway's song + track + difficulty (+ mode, lanes), to come back
+    to without building a playlist for it (a playlist is the wrong shape:
+    it's a list of songs, disconnected from the script's own choices).
+    Probably like a playlist underneath (a list of entries, saved per
+    script), with an API for scripts: favorite_add(song, data),
+    favorites() -> { {song, name, data}, ... }, favorite_remove(id), the
+    `data` table the script's own (its track, difficulty), and the app's
+    side for playing one (load the song, hand the script its data). A
+    Favorites list in the app too, maybe, per script.
+
 [M][!] script editor, group 1: everyday editing comfort - DONE (code_edit.rs,
     app/editor.rs)
     - line numbers, the error marked in the gutter and its message at
