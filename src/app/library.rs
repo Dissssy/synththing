@@ -776,6 +776,7 @@ impl App {
             }
         }
         self.library.infos.insert(server.clone(), info);
+        self.apply_rotations(&server);
         self.check_admin(&server);
         let generation = self.library.generation;
         let Some(search) = self.library_query(&server) else {
@@ -1855,6 +1856,19 @@ impl App {
 
     /// The identity (a fresh copy for a request's thread), made and saved
     /// first if there isn't one.
+    /// The identity, for the Preferences' recovery part (`identity.rs`).
+    pub(super) fn library_identity(&self) -> Option<Identity> {
+        self.library.identity.clone()
+    }
+
+    pub(super) fn set_library_identity(&mut self, identity: Identity) {
+        self.library.identity = Some(identity);
+    }
+
+    pub(super) fn library_identity_message(&mut self, message: &str) {
+        self.library.identity_message = Some(message.to_string());
+    }
+
     pub(super) fn ensure_identity(&mut self) -> Result<Identity, String> {
         if self.library.identity.is_none() {
             let identity = Identity::generate()?;
@@ -1994,6 +2008,9 @@ impl App {
         if let Some(message) = &lib.identity_message {
             ui.weak(message.as_str());
         }
+        let current = self.library.identity.clone();
+        ui.add_space(4.0);
+        self.recovery_ui(ui, current.as_ref());
         if make {
             self.library.identity_message = match self.ensure_identity() {
                 Ok(identity) => Some(format!("Made #{}: export it somewhere safe.", identity.id())),
@@ -2027,7 +2044,10 @@ impl App {
                         if passphrase.is_empty() && Identity::needs_passphrase(&text) {
                             return Err("it's sealed: type its passphrase above first".to_string());
                         }
-                        Identity::import(&text, &passphrase)
+                        let identity = Identity::import(&text, &passphrase)?;
+                        // (With how it came to be this key, if it was rotated.)
+                        library::identity::save_rotations(&library::identity::exported_rotations(&text))?;
+                        Ok(identity)
                     })
                     .and_then(|identity| identity.save().map(|()| identity));
                 self.library.identity_message = Some(match result {

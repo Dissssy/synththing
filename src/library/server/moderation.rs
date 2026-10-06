@@ -98,7 +98,7 @@ fn addresses_of(db: &Connection, key: &str) -> rusqlite::Result<Vec<String>> {
 }
 
 /// One more `bucket` request from `ip`, unless it's had `most` in `window`.
-fn limit(state: &State, bucket: &str, ip: &str, most: usize, window: Duration, what: &str) -> Result<(), Reply> {
+pub(super) fn limit(state: &State, bucket: &str, ip: &str, most: usize, window: Duration, what: &str) -> Result<(), Reply> {
     let mut limits = state.limits.lock().unwrap_or_else(|p| p.into_inner());
     let recent = limits.entry((bucket.to_string(), ip.to_string())).or_default();
     recent.retain(|t| t.elapsed() < window);

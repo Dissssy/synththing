@@ -4,6 +4,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### New
+- A recovery email for your library identity (Preferences > Library): attach one, and if you lose your key, Recover... gets your identity back with a code sent to it. The server keeps only a hash of the address.
+- New key... moves your identity to a fresh key, if the old one might have got out: your scripts, encores and admin rights follow it, and the old key stops working. Other servers catch up the next time the app talks to them.
+
 ## 0.4.3 (2026-10-05)
 
 ### New

@@ -24,6 +24,11 @@
 //! `preview_soundfont` says otherwise. At startup, the newest version of
 //! every script without one is queued.
 
+mod authority;
+mod mail;
+
+#[cfg(test)]
+pub use mail::Mail;
 mod moderation;
 mod remixes;
 
@@ -83,6 +88,20 @@ pub struct ServerConfig {
     /// How long making one preview may take before it's stopped (the
     /// script keeps the still of its first frame).
     pub preview_seconds: u64,
+    /// This server is an identity authority: it issues rotations, and with
+    /// `mail`, attaches emails and recovers identities by them.
+    pub authority: bool,
+    /// Its address as people reach it (for links in emails), e.g.
+    /// `https://synththing.p51.nl`.
+    pub public_url: String,
+    /// The authorities whose rotations it takes (keys, hex): the official
+    /// server's, by default.
+    pub authorities: Vec<String>,
+    /// Sending email (an authority's codes), through SendGrid.
+    pub mail: Option<MailConfig>,
+    /// On an authority with mail: uploads a day for a key without an email
+    /// attached (or an anonymous upload), instead of `uploads_per_day`.
+    pub unverified_uploads_per_day: usize,
     /// Refuse uploads that don't run here: they don't compile, or error in
     /// their first seconds (`synththing preview --check`).
     pub check_uploads: bool,
@@ -107,8 +126,47 @@ impl Default for ServerConfig {
             preview_soundfont: None,
             preview_seconds: 120,
             check_uploads: true,
+            authority: false,
+            public_url: String::new(),
+            authorities: vec![super::rotation::OFFICIAL_AUTHORITY.to_string()],
+            mail: None,
+            unverified_uploads_per_day: 3,
         }
     }
+}
+
+/// Email settings (`server.json`'s `mail`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MailConfig {
+    /// The address emails come from (one SendGrid lets you send as).
+    pub from: String,
+    pub from_name: String,
+    /// The file the SendGrid API key is in (in the data folder unless
+    /// it's a full path).
+    pub api_key_file: String,
+}
+
+impl Default for MailConfig {
+    fn default() -> Self {
+        Self { from: String::new(), from_name: "synththing".into(), api_key_file: "sendgrid.key".into() }
+    }
+}
+
+/// The secret addresses are hashed with: `email.pepper`, made on first run.
+fn load_pepper(path: &Path) -> Result<Vec<u8>, String> {
+    if let Ok(text) = std::fs::read_to_string(path) {
+        return unhex(text.trim()).filter(|b| b.len() >= 16).ok_or_else(|| format!("{} isn't valid", path.display()));
+    }
+    let mut pepper = [0u8; 32];
+    getrandom::fill(&mut pepper).map_err(|e| format!("couldn't make {}: {e}", path.display()))?;
+    std::fs::write(path, hex(&pepper)).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(pepper.to_vec())
 }
 
 /// The folder a server keeps its data in when none is given.
@@ -142,6 +200,12 @@ pub struct Running {
 }
 
 impl Running {
+    /// The emails it's "sent" (tests).
+    #[cfg(test)]
+    pub fn outbox(&self) -> Vec<mail::Mail> {
+        self.state.mailer.outbox()
+    }
+
     /// Stop it, waiting for requests under way.
     #[cfg_attr(not(test), expect(dead_code))]
     pub fn stop(self) {
@@ -170,6 +234,11 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
     let workers = config.threads.max(1);
     let (queue, jobs) = mpsc::channel();
     let previews = config.previews;
+    let pepper = load_pepper(&data.join("email.pepper"))?;
+    let mailer = mail::Mailer::new(config.mail.as_ref(), data)?;
+    if config.authority {
+        println!("an identity authority{}", if mailer.on() { ", sending email" } else { " (no email: rotations only)" });
+    }
     let state = Arc::new(State {
         config,
         key,
@@ -180,6 +249,8 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
         seen_signatures: Mutex::default(),
         limits: Mutex::default(),
         previews: Mutex::new(previews.then_some(queue)),
+        pepper,
+        mailer,
     });
     moderation::forget_old_addresses(&state);
     {
@@ -231,6 +302,9 @@ struct State {
     limits: Mutex<HashMap<(String, String), Vec<Instant>>>,
     /// Versions to make previews of (none if previews are off).
     previews: Mutex<Option<Sender<(String, u32)>>>,
+    /// What email addresses are hashed with, and the mail sender.
+    pepper: Vec<u8>,
+    mailer: mail::Mailer,
 }
 
 impl State {
@@ -460,6 +534,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 7 {
         db.execute_batch(remixes::SCHEMA_V7)?;
     }
+    if version < 8 {
+        db.execute_batch(authority::SCHEMA_V8)?;
+    }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
 }
@@ -574,6 +651,28 @@ fn handle(state: &State, mut request: Request) {
             moderation::report(state, &mut request, &id, &ip)
         }
         (Method::Post, ["api", "v1", "admin"]) => moderation::admin(state, &mut request),
+        (Method::Post, ["api", "v1", "identity", "rotate"]) => authority::rotate(state, &mut request),
+        (Method::Post, ["api", "v1", "identity", "apply"]) => {
+            let ip = client_ip(state, &request);
+            authority::apply(state, &mut request, &ip)
+        }
+        (Method::Post, ["api", "v1", "identity", "status"]) => authority::status(state, &mut request),
+        (Method::Get, ["api", "v1", "identity", "rotations"]) => {
+            authority::lineage(state, query.get("key").map(String::as_str).unwrap_or_default())
+        }
+        (Method::Post, ["api", "v1", "identity", "email"]) => {
+            let ip = client_ip(state, &request);
+            authority::email(state, &mut request, &ip)
+        }
+        (Method::Post, ["api", "v1", "identity", "email", "confirm"]) => authority::email_confirm(state, &mut request),
+        (Method::Post, ["api", "v1", "identity", "recover"]) => {
+            let ip = client_ip(state, &request);
+            authority::recover(state, &mut request, &ip)
+        }
+        (Method::Post, ["api", "v1", "identity", "recover", "confirm"]) => authority::recover_confirm(state, &mut request),
+        (Method::Get, ["api", "v1", "identity", "recover", "cancel"]) => {
+            authority::recover_cancel(state, query.get("token").map(String::as_str).unwrap_or_default())
+        }
         (Method::Get, [""]) => Response::from_string(format!(
             "{}: a synththing script library. Add this address under Preferences > Library in the app.\n",
             state.config.name
@@ -603,6 +702,8 @@ fn info(state: &State) -> Info {
         license: state.config.license.clone(),
         rules: state.config.rules.clone(),
         contact: state.config.contact.clone(),
+        authority: state.config.authority,
+        mail: state.config.authority && state.mailer.on(),
     }
 }
 
@@ -868,6 +969,12 @@ fn signer(state: &State, request: &Request, method: &str, path: &str, body: &[u8
     if !verify_hex(&key, &request_message(&state.key_hex, method, path, time, &nonce, body), &signature) {
         return Err(error(401, "the request's signature doesn't match its key"));
     }
+    if authority::is_retired(&state.db(), &key) {
+        return Err(error(
+            401,
+            "this key was replaced by a newer one (a rotation or a recovery): the app with the new key can carry on",
+        ));
+    }
     let mut seen = state.seen_signatures.lock().unwrap_or_else(|p| p.into_inner());
     let window = Duration::from_secs(REQUEST_WINDOW_SECONDS as u64 * 2);
     seen.retain(|_, at| at.elapsed() < window);
@@ -987,7 +1094,14 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
         let recent = uploads.entry(ip.to_string()).or_default();
         let day = Duration::from_secs(24 * 60 * 60);
         recent.retain(|t| t.elapsed() < day);
-        if recent.len() >= state.config.uploads_per_day {
+        // (An authority with mail is stricter with keys it can't recover.)
+        let verified = author.as_deref().is_some_and(|key| authority::has_email(&db, key));
+        let per_day = if state.config.authority && state.mailer.on() && !verified {
+            state.config.unverified_uploads_per_day.min(state.config.uploads_per_day)
+        } else {
+            state.config.uploads_per_day
+        };
+        if recent.len() >= per_day {
             let wait = recent.first().map(|t| day.saturating_sub(t.elapsed()).as_secs()).unwrap_or(0);
             return json(
                 429,

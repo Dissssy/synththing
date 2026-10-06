@@ -158,6 +158,108 @@ pub fn encore(base: &str, server_key: &str, id: &str, identity: &Identity, give:
     read(check(response)?)
 }
 
+/// A rotation record the authority (`server_key`) sent back, checked.
+fn checked_rotation(server_key: &str, record: super::rotation::Rotation) -> Result<super::rotation::Rotation, String> {
+    if record.verify(&[server_key.to_string()]) {
+        Ok(record)
+    } else {
+        Err("the authority's rotation record isn't signed by its key".into())
+    }
+}
+
+/// Replace `old` with `new` at the authority whose key is `server_key`:
+/// the record of it, to keep (and show other servers).
+pub fn rotate(base: &str, server_key: &str, old: &Identity, new: &Identity) -> Result<super::rotation::Rotation, String> {
+    let time = now();
+    let ask = super::rotation::RotateRequest {
+        new: new.public(),
+        time,
+        new_signature: new.sign(&super::rotation::new_key_message(server_key, &old.public(), &new.public(), time)),
+    };
+    let path = "/api/v1/identity/rotate";
+    let body = serde_json::to_vec(&ask).map_err(|e| e.to_string())?;
+    let request = agent().post(format!("{base}{path}")).header("Content-Type", "application/json");
+    let record = read(check(signed(request, server_key, old, "POST", path, &body).send(&body[..]))?)?;
+    checked_rotation(server_key, record)
+}
+
+/// The rotations that led to `key` (oldest first), from the authority,
+/// each checked against its key.
+pub fn lineage(base: &str, server_key: &str, key: &str) -> Result<Vec<super::rotation::Rotation>, String> {
+    let chain: Vec<super::rotation::Rotation> =
+        read(check(agent().get(format!("{base}/api/v1/identity/rotations")).query("key", key).call())?)?;
+    super::rotation::verify_chain(&chain, &[server_key.to_string()])?;
+    if chain.last().is_some_and(|last| last.new != key) {
+        return Err("the authority sent rotations for another key".into());
+    }
+    Ok(chain)
+}
+
+/// Show a server the rotations an identity went through (oldest first):
+/// how many were new to it.
+pub fn apply(base: &str, chain: &[super::rotation::Rotation]) -> Result<u64, String> {
+    let reply: serde_json::Value = read(check(agent().post(format!("{base}/api/v1/identity/apply")).send_json(chain))?)?;
+    Ok(reply["applied"].as_u64().unwrap_or(0))
+}
+
+/// What the authority knows of `identity`.
+pub fn identity_status(base: &str, server_key: &str, identity: &Identity) -> Result<super::rotation::IdentityStatus, String> {
+    let path = "/api/v1/identity/status";
+    let request = agent().post(format!("{base}{path}")).header("Content-Type", "application/json");
+    read(check(signed(request, server_key, identity, "POST", path, b"{}").send(&b"{}"[..]))?)
+}
+
+/// Ask for codes to attach, change or take off `identity`'s email: which
+/// addresses got one ("new", "current").
+pub fn email(
+    base: &str,
+    server_key: &str,
+    identity: &Identity,
+    ask: &super::rotation::EmailRequest,
+) -> Result<Vec<String>, String> {
+    let path = "/api/v1/identity/email";
+    let body = serde_json::to_vec(ask).map_err(|e| e.to_string())?;
+    let request = agent().post(format!("{base}{path}")).header("Content-Type", "application/json");
+    let reply: serde_json::Value = read(check(signed(request, server_key, identity, "POST", path, &body).send(&body[..]))?)?;
+    Ok(reply["sent"].as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect()).unwrap_or_default())
+}
+
+/// The codes, to finish an email change: whether one's attached now.
+pub fn email_confirm(
+    base: &str,
+    server_key: &str,
+    identity: &Identity,
+    confirm: &super::rotation::EmailConfirm,
+) -> Result<bool, String> {
+    let path = "/api/v1/identity/email/confirm";
+    let body = serde_json::to_vec(confirm).map_err(|e| e.to_string())?;
+    let request = agent().post(format!("{base}{path}")).header("Content-Type", "application/json");
+    let status: super::rotation::IdentityStatus =
+        read(check(signed(request, server_key, identity, "POST", path, &body).send(&body[..]))?)?;
+    Ok(status.email)
+}
+
+/// Ask to recover the identity `address` is attached to, to `new`: a code
+/// goes to the address (if it's attached to one).
+pub fn recover(base: &str, server_key: &str, address: &str, new: &Identity) -> Result<(), String> {
+    let time = now();
+    let ask = super::rotation::RecoverRequest {
+        address: address.trim().to_string(),
+        new: new.public(),
+        time,
+        new_signature: new.sign(&super::rotation::new_key_message(server_key, "", &new.public(), time)),
+    };
+    check(agent().post(format!("{base}/api/v1/identity/recover")).send_json(&ask))?;
+    Ok(())
+}
+
+/// The emailed code, to finish a recovery to `new`: the rotation record.
+pub fn recover_confirm(base: &str, server_key: &str, new: &Identity, code: &str) -> Result<super::rotation::Rotation, String> {
+    let confirm = super::rotation::RecoverConfirm { new: new.public(), code: code.trim().to_string() };
+    let record = read(check(agent().post(format!("{base}/api/v1/identity/recover/confirm")).send_json(&confirm))?)?;
+    checked_rotation(server_key, record)
+}
+
 /// Report a script to the server's admins; the report's number.
 pub fn report(base: &str, server_key: &str, id: &str, identity: &Identity, report: &ReportRequest) -> Result<i64, String> {
     let path = format!("/api/v1/scripts/{id}/report");
@@ -455,6 +557,107 @@ mod tests {
         delete(&base, &key, &first.id, &alice).unwrap();
         assert!(details(&base, &remix.id).unwrap().remix_of.unwrap().gone);
         running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An authority: emails attached with a code (changing one needs the
+    /// current address's too), key-signed rotations, recovery by email
+    /// (and cancelling one), and another server taking the records.
+    #[test]
+    fn rotations_and_recovery() {
+        use crate::library::rotation::{EmailConfirm, EmailRequest};
+        let dir = std::env::temp_dir().join(format!("synththing-authority-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("server.json"),
+            r#"{ "previews": false, "check_uploads": false, "authority": true, "public_url": "http://authority.test",
+                 "mail": { "from": "codes@example.org" } }"#,
+        )
+        .unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        assert!(info(&base).unwrap().authority);
+        // Another server that trusts this authority.
+        let other_dir = dir.join("other");
+        std::fs::create_dir_all(&other_dir).unwrap();
+        std::fs::write(other_dir.join("server.json"), format!(r#"{{ "previews": false, "check_uploads": false, "authorities": ["{key}"] }}"#))
+            .unwrap();
+        let other = server::start(&other_dir, Some("127.0.0.1:0".into())).unwrap();
+        let other_base = format!("http://{}", other.addr);
+        let other_key = info(&other_base).unwrap().key;
+        let code_in = |mail: &crate::library::server::Mail| mail.subject.rsplit(' ').next().unwrap().to_string();
+
+        let alice = Identity::generate().unwrap();
+        let mut bars = upload_of("Bars", "visualizer", "function render() end");
+        bars.slug = Some("bars".into());
+        let here = upload(&base, &key, &bars, Some(&alice)).unwrap();
+        let there = upload(&other_base, &other_key, &bars, Some(&alice)).unwrap();
+
+        // An email, attached with its code.
+        assert!(!identity_status(&base, &key, &alice).unwrap().email);
+        let ask = EmailRequest { address: Some("Alice@Example.org".into()), current: None };
+        assert_eq!(email(&base, &key, &alice, &ask).unwrap(), ["new"]);
+        let mail = running.outbox().last().unwrap().clone();
+        assert_eq!(mail.to, "Alice@Example.org");
+        assert!(!email_confirm(&base, &key, &alice, &EmailConfirm { code: Some("WRONG-CODE".into()), ..Default::default() })
+            .is_ok_and(|e| e));
+        assert!(email_confirm(&base, &key, &alice, &EmailConfirm { code: Some(code_in(&mail)), ..Default::default() }).unwrap());
+        // Changing it needs the current address.
+        let change = EmailRequest { address: Some("new@example.org".into()), current: Some("wrong@example.org".into()) };
+        assert!(email(&base, &key, &alice, &change).unwrap_err().contains("isn't the address"));
+
+        // A key-signed rotation: the old key is refused, the new one owns the script.
+        let alice2 = Identity::generate().unwrap();
+        let first = rotate(&base, &key, &alice, &alice2).unwrap();
+        assert_eq!((first.how.as_str(), first.new.as_str()), ("key", alice2.public().as_str()));
+        assert!(identity_status(&base, &key, &alice).unwrap_err().contains("replaced"));
+        assert_eq!(details(&base, &here.id).unwrap().summary.author_id, Some(alice2.id()));
+        assert!(identity_status(&base, &key, &alice2).unwrap().email, "the email came along");
+
+        // Lost: recovered by email, to a third key.
+        let alice3 = Identity::generate().unwrap();
+        recover(&base, &key, " alice@example.org ", &alice3).unwrap();
+        let mail = running.outbox().last().unwrap().clone();
+        assert!(mail.text.contains("http://authority.test/api/v1/identity/recover/cancel?token="));
+        // (An address that isn't attached: the same answer, no email.)
+        let sent = running.outbox().len();
+        recover(&base, &key, "nobody@example.org", &Identity::generate().unwrap()).unwrap();
+        assert_eq!(running.outbox().len(), sent);
+        let second = recover_confirm(&base, &key, &alice3, &code_in(&mail)).unwrap();
+        assert_eq!((second.old.as_str(), second.how.as_str()), (alice2.public().as_str(), "email"));
+        assert_eq!(details(&base, &here.id).unwrap().summary.author_id, Some(alice3.id()));
+
+        // The whole history, from the authority.
+        assert_eq!(lineage(&base, &key, &alice3.public()).unwrap(), [first.clone(), second.clone()]);
+        // The other server takes the chain: alice3 owns it there too.
+        assert_eq!(apply(&other_base, &[first.clone(), second.clone()]).unwrap(), 2);
+        assert_eq!(apply(&other_base, &[first, second]).unwrap(), 0, "once");
+        assert_eq!(details(&other_base, &there.id).unwrap().summary.author_id, Some(alice3.id()));
+        bars.source = "function render() end -- 2".into();
+        assert!(upload(&other_base, &other_key, &bars, Some(&alice)).unwrap_err().contains("replaced"));
+        assert_eq!(upload(&other_base, &other_key, &bars, Some(&alice3)).unwrap().version, 2);
+        // A record from an authority it doesn't trust: refused.
+        let mut forged = rotate(&base, &key, &alice3, &Identity::generate().unwrap()).unwrap();
+        forged.authority = other_key.clone();
+        assert!(apply(&other_base, &[forged]).unwrap_err().contains("trusts"));
+
+        // "That wasn't me": cancelled, and recovery paused for a day.
+        let alice5 = Identity::generate().unwrap();
+        recover(&base, &key, "alice@example.org", &alice5).unwrap();
+        let mail = running.outbox().last().unwrap().clone();
+        let link = mail.text.lines().find(|l| l.contains("cancel?token=")).unwrap().trim().to_string();
+        let path = link.trim_start_matches("http://authority.test");
+        let page = agent().get(format!("{base}{path}")).call().unwrap().body_mut().read_to_string().unwrap();
+        assert!(page.contains("Cancelled"), "{page}");
+        assert!(recover_confirm(&base, &key, &alice5, &code_in(&mail)).is_err());
+        // (Paused: the usual answer, but no email.)
+        let sent = running.outbox().len();
+        recover(&base, &key, "alice@example.org", &Identity::generate().unwrap()).unwrap();
+        assert_eq!(running.outbox().len(), sent);
+        running.stop();
+        other.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

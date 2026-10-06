@@ -8,6 +8,7 @@
 pub mod admin;
 pub mod client;
 pub mod fingerprint;
+pub mod rotation;
 pub mod identity;
 pub mod server;
 
@@ -249,6 +250,12 @@ pub struct Info {
     pub license: String,
     pub rules: String,
     pub contact: String,
+    /// It's an identity authority (rotations, recovery), and it sends
+    /// email (recovery and attaching an address need it).
+    #[serde(default)]
+    pub authority: bool,
+    #[serde(default)]
+    pub mail: bool,
 }
 
 /// One script in a listing.

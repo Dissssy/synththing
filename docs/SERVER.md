@@ -47,18 +47,20 @@ Every server has its own Ed25519 key (separate from HTTPS), made on first run:
 
 An authority is a server whose key is trusted for identity changes. The app and every server keep a list of trusted authority keys, by default only the official one's. Anyone can run their own authority and trust it instead, so identity doesn't have to rely on the official server either.
 
-- **Rotation**: replacing a key with a new one. A rotation record says "key A is now key B", signed by key A (a normal rotation) or confirmed by email (recovery), and countersigned by the authority, which keeps every record.
-- **Applying it elsewhere**: servers aren't told. When a user first acts on another server with the new key, the app presents the signed record (or the chain of them); the server checks the authority's signature (no network call needed) and moves everything from the old key to the new one. A server that was down or unreachable catches up whenever the user next uses it. Records already issued keep working even if the authority is down; only new rotations wait for it.
-- **Precedence**: an email recovery can replace whatever the current key is, including one rotated in by a thief. A key-signed rotation sends a notice to the attached email (if any) with a "not you? recover" link.
+- **Rotation** (`library/rotation.rs`, `server/authority.rs`): replacing a key with a new one. A rotation record says "key A is now key B": asked for with key A (the request signed by A, and B's signature showing B is held) or confirmed by email (recovery), and signed by the authority, which keeps every record (`GET /api/v1/identity/rotations?key=` gives the chain that led to a key). The new key has to be one the authority hasn't seen.
+- **Applying it elsewhere**: servers aren't told. The app keeps the chain beside the key (`identity.rotations.json`, and in an export) and shows it to each server the first time it talks to it in a session (`POST /api/v1/identity/apply`); the server checks the authority's signature (no network call needed) and moves everything from the old key to the new one: scripts, encores, reports, admin rights, and bans (a rotation is no way out of one). The old key is refused from then on. A server that was down or unreachable catches up whenever the app next uses it. Records already issued keep working even if the authority is down; only new rotations wait for it.
+- **Precedence**: an email recovery replaces whatever the current key is, including one rotated in by a thief, and a stolen key can't take the email off or change it (that needs a code sent to the address). There's no notice email for a key-signed rotation: the authority keeps only a hash of the address, so it can't write to it unasked.
+- Each server has a list of authorities it trusts (`authorities` in `server.json`, the official server's key by default); an authority trusts itself too.
 
 ### Email (authorities only, and only when configured)
 
-The code is part of the program; it's off unless the server's config has mail settings (SMTP) and marks the server as an authority.
+The code is part of the program (`server/mail.rs`); it's off unless the server's config has `mail` settings and marks the server as an authority. Mail goes through SendGrid's HTTP API (with `ureq`, which the program already has), its API key in a file in the data folder.
 
-- Attaching an email: signed by the key, confirmed by a code sent to the address.
-- Changing it: needs a code sent to the current address.
-- Stored only as a salted hash, never the address. Recovery works like a password check: the user types their email, the server hashes it to find the identity, and sends the code to the address just typed.
-- Recovery requests are unsigned (the key may be gone) and rate limited: at most 3 a day per identity and per IP. The rotation happens only when the emailed code is entered. Every recovery email has a "that wasn't me" link: it cancels the request, counts a strike against the requesting IP (enough strikes ban it for a while), and pauses recovery for that identity for 24 hours.
+- Attaching an email: signed by the key, confirmed by a code sent to the address. Codes are eight letters and digits (`ABCD-EFGH`), work for 30 minutes, five tries.
+- Changing it, or taking it off: needs a code sent to the current address too (typed in, since the server doesn't have it).
+- Stored only as a hash, never the address: Argon2id, salted with a secret of the server's (`email.pepper` in its data folder). Recovery works like a password check: the user types their email, the server hashes it to find the identity, and sends the code to the address just typed.
+- Recovery requests are unsigned (the key may be gone) and limited: 5 a day per address asking, 3 a day per identity. The answer is the same whether the address is attached to anything or not (and when an identity's recovery is paused or used up, no email goes, but the answer doesn't say so). The rotation happens only when the emailed code is entered. Every recovery email has a "that wasn't me" link: it cancels the request, counts a strike against the requesting address (three in a week ban it for a week), and pauses recovery for that identity for 24 hours.
+- On an authority with mail, keys without an email attached (and anonymous uploads) get `unverified_uploads_per_day` (3) instead of `uploads_per_day`.
 
 ## Uploads
 
@@ -100,7 +102,7 @@ Rendered by the server on each upload and each new version, through a queue (one
 - An **encore** is the only vote: one per key per script, signed, can be taken back, not for your own scripts. A user's total is the sum over their uploads.
 - A **report** (signed) goes to the admins: a reason (malicious; defamatory or derogatory; intense flashing without a warning; someone else's work, uncredited; spam; other), optional details, and what it's about: the version, lines of its code, and sprites written in it (by the line they're registered on). One open report per key per script. There's no downvote.
 - Limits per address: 60 encores an hour, 10 reports a day. Banned keys and addresses can't upload, give encores or report (they can still browse and download).
-- Keys cost nothing to make, so encores can be faked with many keys, and a banned key can be swapped for a new one. A key ban can take its addresses along: those it was seen on in the last 30 days are banned for 30 days, and any new address the banned key comes back from is banned for 30 days too, so the ban follows it as long as it keeps coming back (new keys on a banned address are refused while that lasts, but aren't banned themselves, since addresses are shared). Still to do: encores from new keys counting less at first, and on servers with email verification (authorities), stricter rate limits for unverified keys. Not perfect; fine at this scale.
+- Keys cost nothing to make, so encores can be faked with many keys, and a banned key can be swapped for a new one (a rotation carries its bans along; a fresh key doesn't, which is what address bans are for). A key ban can take its addresses along: those it was seen on in the last 30 days are banned for 30 days, and any new address the banned key comes back from is banned for 30 days too, so the ban follows it as long as it keeps coming back (new keys on a banned address are refused while that lasts, but aren't banned themselves, since addresses are shared). An authority with mail is stricter with keys without an email (fewer uploads a day). Still to do: encores from new keys counting less at first. Not perfect; fine at this scale.
 
 ## Moderation
 
@@ -133,11 +135,16 @@ POST /api/v1/scripts/{id}/encore          (and DELETE to take it back)
 POST /api/v1/scripts/{id}/report
 POST /api/v1/admin                        an admin action (signed by an admin)
 GET  /api/v1/users/{id}                   names, uploads, total encores
-POST /api/v1/identity/rotate              key-signed rotation (authorities)
-POST /api/v1/identity/email               attach or change an email (authorities)
-POST /api/v1/identity/recover             start a recovery (authorities)
-POST /api/v1/identity/apply               present a rotation record (any server)
-DELETE /api/v1/identity                   delete everything about a key
+POST /api/v1/identity/rotate              a key-signed rotation (authorities)
+GET  /api/v1/identity/rotations?key=      the rotations that led to a key (authorities)
+POST /api/v1/identity/status              signed: whether an email's attached (authorities)
+POST /api/v1/identity/email               signed: codes to attach, change or take off an email (authorities)
+POST /api/v1/identity/email/confirm       signed: the codes (authorities)
+POST /api/v1/identity/recover             start a recovery: a code to the email (authorities)
+POST /api/v1/identity/recover/confirm     the code: the rotation to the new key (authorities)
+GET  /api/v1/identity/recover/cancel      the email's "that wasn't me" link (authorities)
+POST /api/v1/identity/apply               present rotation records (any server)
+DELETE /api/v1/identity                   delete everything about a key (not yet)
 ```
 
 Errors are JSON (`{ "error": "...", "retry_after": ... }`). Requests are signed with headers (`X-Synththing-Key`, `X-Synththing-Time`, `X-Synththing-Nonce`, `X-Synththing-Signature`); the signature covers the server's key, the method and path, the time, the nonce (random per request, so a replay is spotted) and the body's SHA-256.

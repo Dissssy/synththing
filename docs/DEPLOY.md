@@ -71,6 +71,17 @@ systemctl enable --now synththing-update.timer
 
 `systemctl list-timers synththing-update` shows when it runs next; `journalctl -u synththing-update` what it did.
 
+## Email (an identity authority)
+
+An authority sends codes, for attaching a recovery email and recovering an identity, through SendGrid:
+
+1. In SendGrid, Settings > Sender Authentication: authenticate the domain the mail comes from (its CNAME records go in the DNS; on Cloudflare, DNS only, not proxied).
+2. Settings > API Keys > Create API Key, Restricted Access, with only Mail Send (Full Access). It's shown once.
+3. Put it in the data folder, readable only by the server: `install -m 600 -o synththing -g synththing /dev/stdin /var/lib/synththing/sendgrid.key`, paste the key, then Ctrl+D.
+4. In `server.json`: `"authority": true`, `"public_url": "https://scripts.example.org"` (for the links in the emails), and `"mail": { "from": "synththing@example.org" }`. Restart; it says "an identity authority, sending email" as it starts.
+
+Keep `email.pepper` (made in the data folder on first run) with the backups: without it, the attached emails can't be recognised.
+
 ## Moderating
 
 `synththing admin` on the server talks to it, signed with its own key (docs/cli.md): `synththing admin --data /var/lib/synththing reports` under systemd (as root, or the synththing user), `docker exec <container> synththing admin --data /data reports` in Docker. To moderate from the app instead, make your identity an admin: `synththing admin --data ... add-admin '#yourid'` (the server needs to have seen your key: give something an encore first, or pass the whole key). The Library tab then has Moderation.

@@ -11,6 +11,7 @@ mod editor;
 pub use editor::ApplyMode;
 mod loading;
 mod playlist_panel;
+mod identity;
 mod moderation;
 mod previews;
 mod library;
@@ -232,6 +233,8 @@ pub struct App {
     script_previews: std::cell::RefCell<previews::LocalPreviews>,
     /// Reports, and the Moderation window.
     moderation: moderation::ModerationState,
+    /// The identity's recovery email, new keys and recovery.
+    identity: identity::IdentityState,
     /// The changelog window: `Some(since)` lists only the versions newer
     /// than that (What's new, after an update), `None` all of them
     /// (Help > Changelog...).
@@ -420,6 +423,7 @@ impl App {
             library: library::LibraryState::new(),
             script_previews: Default::default(),
             moderation: Default::default(),
+            identity: Default::default(),
             changelog: None,
             welcome: welcome::Welcome::default(),
             preferences_tab: PrefTab::default(),
@@ -1764,6 +1768,7 @@ impl App {
             || self.script_window.is_some()
             || self.library.publish_open()
             || self.moderation.open()
+            || self.identity.open()
             || self.editor.history_open
             || self.layout_save.is_some()
             || self.heavy_prompt.is_some()
@@ -2828,9 +2833,11 @@ impl eframe::App for App {
         self.confirm_server_ui(&ctx);
         self.update_ui(&ctx);
         self.report_ui(&ctx);
+        self.identity_flow_ui(&ctx);
         self.moderation_ui(&ctx);
         self.poll_library();
         self.poll_moderation();
+        self.poll_identity();
         self.heavy_midi_ui(&ctx);
         self.poll_recordings(view);
         if self.status != self.logged_status {

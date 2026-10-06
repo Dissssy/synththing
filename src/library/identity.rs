@@ -5,6 +5,11 @@
 //! (`identity.key`). Exported, it's a small JSON file, sealed with a
 //! passphrase if one is given (Argon2id stretches the passphrase into a
 //! key, ChaCha20-Poly1305 seals the secret with it).
+//!
+//! A key replaced by a newer one (a rotation, or a recovery by email) has
+//! the records of how, from the authority, beside it
+//! (`identity.rotations.json`, and in an export): the app shows them to
+//! each server, which moves what the older keys had to this one.
 
 use std::path::{Path, PathBuf};
 
@@ -14,6 +19,7 @@ use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 
+use super::rotation::Rotation;
 use super::{hex, key_id, sign_hex, unhex};
 
 #[derive(Clone)]
@@ -37,6 +43,38 @@ struct Exported {
     nonce: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sealed: Option<String>,
+    /// How it came to be this key (`rotations`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    rotations: Vec<Rotation>,
+}
+
+/// Where the rotation records are kept.
+fn rotations_path() -> Option<PathBuf> {
+    crate::config::config_dir().ok().map(|d| d.join("identity.rotations.json"))
+}
+
+/// The records of how the saved identity came to be its key (oldest
+/// first; none for a key that was never replaced).
+pub fn load_rotations() -> Vec<Rotation> {
+    rotations_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_rotations(rotations: &[Rotation]) -> Result<(), String> {
+    let path = rotations_path().ok_or("no config folder")?;
+    if rotations.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return Ok(());
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(rotations).unwrap_or_default())
+        .map_err(|e| format!("couldn't write {}: {e}", path.display()))
+}
+
+/// The rotation records in an exported identity.
+pub fn exported_rotations(text: &str) -> Vec<Rotation> {
+    serde_json::from_str::<Exported>(text).map(|e| e.rotations).unwrap_or_default()
 }
 
 fn random<const N: usize>() -> Result<[u8; N], String> {
@@ -100,8 +138,18 @@ impl Identity {
     /// it's empty.
     pub fn export(&self, passphrase: &str) -> Result<String, String> {
         let secret = self.key.to_bytes();
-        let mut exported =
-            Exported { synththing_identity: 1, id: self.id(), key: None, salt: None, nonce: None, sealed: None };
+        let rotations = load_rotations();
+        // (Only if they lead here: an imported identity's own.)
+        let rotations = if rotations.last().is_some_and(|r| r.new == self.public()) { rotations } else { Vec::new() };
+        let mut exported = Exported {
+            synththing_identity: 1,
+            id: self.id(),
+            key: None,
+            salt: None,
+            nonce: None,
+            sealed: None,
+            rotations,
+        };
         if passphrase.is_empty() {
             exported.key = Some(hex(&secret));
         } else {
