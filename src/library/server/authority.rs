@@ -12,10 +12,11 @@
 //! `email.pepper`), so a recovery is like a password check: the address
 //! typed is hashed to find the identity, and the code goes to it. Adding,
 //! changing or taking off an email needs a code sent to the current one,
-//! so a stolen key can't take recovery away. A recovery email can be
-//! cancelled from a link in it: that pauses recovery for the identity for
-//! a day and counts against the address that asked (three in a week ban
-//! it for a week).
+//! so a stolen key can't take recovery away. Every code's email has a
+//! "that wasn't me" link that cancels it: a recovery's pauses recovery for
+//! the identity for a day, an email change's pauses changes to its email
+//! for a day, and either counts against the address that asked (three in
+//! a week ban it for a week).
 
 use std::time::Duration;
 
@@ -45,7 +46,8 @@ CREATE TABLE rotations (
 CREATE TABLE identities (           -- an authority's: keys with an email
     key TEXT PRIMARY KEY,
     email_hash TEXT,
-    recovery_paused_until INTEGER
+    recovery_paused_until INTEGER,
+    changes_paused_until INTEGER    -- email changes, after one was cancelled
 );
 CREATE UNIQUE INDEX identities_email ON identities(email_hash) WHERE email_hash IS NOT NULL;
 CREATE TABLE codes (
@@ -54,7 +56,7 @@ CREATE TABLE codes (
     code_hash TEXT NOT NULL,
     email_hash TEXT,                -- attach: the address being attached
     new_key TEXT,                   -- recover: the key recovering to
-    cancel_token TEXT,              -- recover: the email's cancel link
+    cancel_token TEXT,              -- the email's cancel link
     ip TEXT,
     created INTEGER NOT NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
@@ -348,6 +350,33 @@ pub(super) fn status(state: &State, request: &mut Request) -> Reply {
     }
 }
 
+/// A token for a code's "that wasn't me" link, and the link (none without
+/// a `public_url`).
+fn cancel_link(state: &State) -> Result<(String, Option<String>), Reply> {
+    let mut token = [0u8; 16];
+    getrandom::fill(&mut token).map_err(|_| error(500, "couldn't make a link"))?;
+    let token = hex(&token);
+    let base = state.config.public_url.trim_end_matches('/');
+    let link = (!base.is_empty()).then(|| format!("{base}/api/v1/identity/cancel?token={token}"));
+    Ok((token, link))
+}
+
+/// A strike against `ip` (a cancelled code): three in a week ban it for a
+/// week.
+fn strike(db: &Connection, ip: &str) {
+    let _ = db.execute("INSERT INTO strikes (ip, created) VALUES (?, ?)", params![ip, now()]);
+    let strikes: i64 = db
+        .query_row("SELECT COUNT(*) FROM strikes WHERE ip = ? AND created > ?", params![ip, now() - 7 * DAY], |r| r.get(0))
+        .unwrap_or(0);
+    if strikes >= 3 {
+        let _ = db.execute(
+            "INSERT OR REPLACE INTO bans (target, until, reason, created) VALUES (?, ?, ?, ?)",
+            params![ip, now() + 7 * DAY, "codes cancelled by the people they were sent to", now()],
+        );
+        println!("banned {ip} for a week (cancelled codes)");
+    }
+}
+
 /// `POST /api/v1/identity/email`: signed; send the codes.
 pub(super) fn email(state: &State, request: &mut Request, ip: &str) -> Reply {
     let result = (|| {
@@ -355,11 +384,19 @@ pub(super) fn email(state: &State, request: &mut Request, ip: &str) -> Reply {
         let (key, ask): (String, EmailRequest) = signed_json(state, request, "/api/v1/identity/email")?;
         super::moderation::limit(state, "email", ip, EMAILS_PER_DAY, Duration::from_secs(DAY as u64), "email requests")?;
         let db = state.db();
-        let attached: Option<String> = db
-            .query_row("SELECT email_hash FROM identities WHERE key = ?", [&key], |r| r.get(0))
+        let (attached, paused): (Option<String>, Option<i64>) = db
+            .query_row("SELECT email_hash, changes_paused_until FROM identities WHERE key = ?", [&key], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .optional()
             .map_err(|e| error(500, format!("database: {e}")))?
-            .flatten();
+            .unwrap_or_default();
+        if paused.is_some_and(|until| until > now()) {
+            return Err(error(
+                429,
+                "changes to your identity's email are paused for a day (one was cancelled from its email)",
+            ));
+        }
         let mut sent = Vec::new();
         let mut mails = Vec::new();
         if let Some(attached) = &attached {
@@ -367,9 +404,11 @@ pub(super) fn email(state: &State, request: &mut Request, ip: &str) -> Reply {
                 return Err(error(403, "that isn't the address attached to your identity"));
             };
             let code = new_code()?;
-            store_code(&db, &key, "current", &code, None, None, None, ip)?;
+            let (token, link) = cancel_link(state)?;
+            store_code(&db, &key, "current", &code, None, None, Some(&token), ip)?;
             let what = if ask.address.is_some() { "to change your identity's email" } else { "to take the email off your identity" };
-            mails.push(code_mail(current.trim(), &state.config.name, &code, what, None));
+            let cancel = link.as_deref().map(|l| (l, "which also pauses changes to your identity's email for a day"));
+            mails.push(code_mail(current.trim(), &state.config.name, &code, what, cancel));
             sent.push("current");
         } else {
             let _ = db.execute("DELETE FROM codes WHERE key = ? AND purpose = 'current'", [&key]);
@@ -388,8 +427,12 @@ pub(super) fn email(state: &State, request: &mut Request, ip: &str) -> Reply {
                     return Err(error(409, "that address is attached to another identity"));
                 }
                 let code = new_code()?;
-                store_code(&db, &key, "attach", &code, Some(&hash), None, None, ip)?;
-                mails.push(code_mail(address.trim(), &state.config.name, &code, "to attach this address to your identity", None));
+                let (token, link) = cancel_link(state)?;
+                store_code(&db, &key, "attach", &code, Some(&hash), None, Some(&token), ip)?;
+                let cancel = link
+                    .as_deref()
+                    .map(|l| (l, "and this address won't be attached (whoever asked can't try again for a day)"));
+                mails.push(code_mail(address.trim(), &state.config.name, &code, "to attach this address to your identity", cancel));
                 sent.push("new");
             }
             None if attached.is_none() => return Err(error(400, "there's no email attached to take off")),
@@ -481,21 +524,12 @@ pub(super) fn recover(state: &State, request: &mut Request, ip: &str) -> Reply {
             return Ok(());
         }
         let code = new_code()?;
-        let mut token = [0u8; 16];
-        getrandom::fill(&mut token).map_err(|_| error(500, "couldn't make a link"))?;
-        let token = hex(&token);
+        let (token, link) = cancel_link(state)?;
         store_code(&db, &key, "recover", &code, None, Some(&ask.new), Some(&token), ip)?;
         let _ = db.execute("INSERT INTO recoveries (key, created) VALUES (?, ?)", params![key, now()]);
         drop(db);
-        let base = state.config.public_url.trim_end_matches('/');
-        let cancel = format!("{base}/api/v1/identity/recover/cancel?token={token}");
-        let mail = code_mail(
-            ask.address.trim(),
-            &state.config.name,
-            &code,
-            "to recover your identity (with a new key)",
-            (!base.is_empty()).then_some(cancel.as_str()),
-        );
+        let cancel = link.as_deref().map(|l| (l, "which also pauses recovery of your identity for a day"));
+        let mail = code_mail(ask.address.trim(), &state.config.name, &code, "to recover your identity (with a new key)", cancel);
         state.mailer.send(mail).map_err(|e| error(502, e))?;
         println!("recovery of #{} asked for from {ip}", key_id(&key));
         Ok(())
@@ -538,39 +572,46 @@ fn page(status: u16, text: &str) -> Reply {
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
 }
 
-/// `GET /api/v1/identity/recover/cancel?token=`: the email's "that wasn't
-/// me" link.
-pub(super) fn recover_cancel(state: &State, token: &str) -> Reply {
+/// `GET /api/v1/identity/cancel?token=`: a code email's "that wasn't me"
+/// link.
+pub(super) fn cancel(state: &State, token: &str) -> Reply {
     let db = state.db();
-    let found: Option<(String, Option<String>)> = db
-        .query_row("SELECT key, ip FROM codes WHERE purpose = 'recover' AND cancel_token = ?", [token], |r| {
-            Ok((r.get(0)?, r.get(1)?))
+    let found: Option<(String, String, Option<String>)> = db
+        .query_row("SELECT key, purpose, ip FROM codes WHERE cancel_token = ?", [token], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .optional()
         .ok()
         .flatten();
-    let Some((key, ip)) = found.filter(|_| !token.is_empty()) else {
+    let Some((key, purpose, ip)) = found.filter(|_| !token.is_empty()) else {
         return page(404, "That link has been used already, or the code expired: nothing more to do.");
     };
-    let _ = db.execute("DELETE FROM codes WHERE key = ? AND purpose = 'recover'", [&key]);
-    let _ = db.execute("UPDATE identities SET recovery_paused_until = ? WHERE key = ?", params![now() + DAY, key]);
-    if let Some(ip) = ip {
-        let _ = db.execute("INSERT INTO strikes (ip, created) VALUES (?, ?)", params![ip, now()]);
-        let strikes: i64 = db
-            .query_row("SELECT COUNT(*) FROM strikes WHERE ip = ? AND created > ?", params![ip, now() - 7 * DAY], |r| r.get(0))
-            .unwrap_or(0);
-        if strikes >= 3 {
-            let _ = db.execute(
-                "INSERT OR REPLACE INTO bans (target, until, reason, created) VALUES (?, ?, ?, ?)",
-                params![ip, now() + 7 * DAY, "recovery requests cancelled by their owners", now()],
-            );
-            println!("banned {ip} for a week (cancelled recoveries)");
-        }
+    if let Some(ip) = &ip {
+        strike(&db, ip);
     }
-    println!("recovery of #{} cancelled", key_id(&key));
+    if purpose == "recover" {
+        let _ = db.execute("DELETE FROM codes WHERE key = ? AND purpose = 'recover'", [&key]);
+        let _ = db.execute("UPDATE identities SET recovery_paused_until = ? WHERE key = ?", params![now() + DAY, key]);
+        println!("recovery of #{} cancelled", key_id(&key));
+        return page(
+            200,
+            "Cancelled: that code doesn't work any more, and nobody can ask to recover your identity for the next \
+             day. Your key and your email are as they were.",
+        );
+    }
+    let _ = db.execute("DELETE FROM codes WHERE key = ? AND purpose IN ('attach', 'current')", [&key]);
+    let _ = db.execute(
+        "INSERT INTO identities (key, changes_paused_until) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET changes_paused_until = ?2",
+        params![key, now() + DAY],
+    );
+    println!("email change for #{} cancelled", key_id(&key));
     page(
         200,
-        "Cancelled: that code doesn't work any more, and nobody can ask to recover your identity for the next day. \
-         Your key and your email are as they were.",
+        if purpose == "attach" {
+            "Cancelled: your address won't be attached, and that identity can't try again for the next day."
+        } else {
+            "Cancelled: your identity's email stays as it is, and it can't be changed or taken off for the next day."
+        },
     )
 }

@@ -607,6 +607,16 @@ mod tests {
         // Changing it needs the current address.
         let change = EmailRequest { address: Some("new@example.org".into()), current: Some("wrong@example.org".into()) };
         assert!(email(&base, &key, &alice, &change).unwrap_err().contains("isn't the address"));
+        // A change cancelled from the current address's email: changes pause.
+        let change = EmailRequest { address: Some("new@example.org".into()), current: Some("alice@example.org".into()) };
+        assert_eq!(email(&base, &key, &alice, &change).unwrap(), ["current", "new"]);
+        let to_current = running.outbox().into_iter().find(|m| m.to == "alice@example.org").unwrap();
+        assert!(to_current.text.contains("pauses changes to your identity's email"));
+        let link = to_current.text.lines().find(|l| l.contains("cancel?token=")).unwrap().trim().to_string();
+        let path = link.trim_start_matches("http://authority.test");
+        let page = agent().get(format!("{base}{path}")).call().unwrap().body_mut().read_to_string().unwrap();
+        assert!(page.contains("stays as it is"), "{page}");
+        assert!(email(&base, &key, &alice, &change).unwrap_err().contains("paused"));
 
         // A key-signed rotation: the old key is refused, the new one owns the script.
         let alice2 = Identity::generate().unwrap();
@@ -620,7 +630,7 @@ mod tests {
         let alice3 = Identity::generate().unwrap();
         recover(&base, &key, " alice@example.org ", &alice3).unwrap();
         let mail = running.outbox().last().unwrap().clone();
-        assert!(mail.text.contains("http://authority.test/api/v1/identity/recover/cancel?token="));
+        assert!(mail.text.contains("http://authority.test/api/v1/identity/cancel?token="));
         // (An address that isn't attached: the same answer, no email.)
         let sent = running.outbox().len();
         recover(&base, &key, "nobody@example.org", &Identity::generate().unwrap()).unwrap();
@@ -648,6 +658,7 @@ mod tests {
         recover(&base, &key, "alice@example.org", &alice5).unwrap();
         let mail = running.outbox().last().unwrap().clone();
         let link = mail.text.lines().find(|l| l.contains("cancel?token=")).unwrap().trim().to_string();
+        assert!(mail.text.contains("pauses recovery"));
         let path = link.trim_start_matches("http://authority.test");
         let page = agent().get(format!("{base}{path}")).call().unwrap().body_mut().read_to_string().unwrap();
         assert!(page.contains("Cancelled"), "{page}");

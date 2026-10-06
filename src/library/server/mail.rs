@@ -21,7 +21,6 @@ pub struct Mail {
 
 pub enum Mailer {
     Off,
-    #[cfg_attr(test, expect(dead_code))]
     SendGrid { key: String, from: String, name: String },
     /// What would have been sent (tests).
     #[cfg_attr(not(test), expect(dead_code))]
@@ -108,22 +107,22 @@ fn escape(text: &str) -> String {
 }
 
 /// An email with a code in it: `what` it's for ("to attach this address
-/// to your identity"), and, for a recovery, a link that cancels it.
-pub fn code_mail(to: &str, server_name: &str, code: &str, what: &str, cancel: Option<&str>) -> Mail {
+/// to your identity"), and a link that cancels it, with what else that
+/// does ("which also pauses ...").
+pub fn code_mail(to: &str, server_name: &str, code: &str, what: &str, cancel: Option<(&str, &str)>) -> Mail {
     let subject = format!("Your synththing code: {code}");
     let mut text = format!(
         "Your code {what} on {server_name}:\n\n    {code}\n\nType it into synththing. It works for 30 minutes.\n\n\
          If you didn't ask for this, ignore this email: nothing changes without the code.\n"
     );
     let mut cancel_html = String::new();
-    if let Some(link) = cancel {
-        text.push_str(&format!(
-            "\nThat wasn't you? This cancels it, and pauses recovery of your identity for a day:\n{link}\n"
-        ));
+    if let Some((link, also)) = cancel {
+        text.push_str(&format!("\nThat wasn't you? Cancel it, {also}:\n{link}\n"));
         cancel_html = format!(
             "<p style=\"margin:24px 0 0;color:#555\">That wasn't you? <a href=\"{0}\" style=\"color:#2f6fde\">Cancel it</a>, \
-             which also pauses recovery of your identity for a day.</p>",
-            escape(link)
+             {1}.</p>",
+            escape(link),
+            escape(also)
         );
     }
     let html = format!(
@@ -142,4 +141,28 @@ pub fn code_mail(to: &str, server_name: &str, code: &str, what: &str, cancel: Op
         code = escape(code),
     );
     Mail { to: to.to_string(), subject, text, html }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sends the real emails through SendGrid, to see how they look.
+    /// `SYNTHTHING_TEST_MAIL_KEY` names a file with the API key,
+    /// `SYNTHTHING_TEST_MAIL_FROM` and `SYNTHTHING_TEST_MAIL_TO` the
+    /// addresses: `cargo test --bin synththing sends_real_emails -- --ignored`.
+    #[test]
+    #[ignore = "sends real email"]
+    fn sends_real_emails() {
+        let var = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
+        let key = std::fs::read_to_string(var("SYNTHTHING_TEST_MAIL_KEY")).unwrap().trim().to_string();
+        let to = var("SYNTHTHING_TEST_MAIL_TO");
+        let mailer = Mailer::SendGrid { key, from: var("SYNTHTHING_TEST_MAIL_FROM"), name: "synththing".into() };
+        let server = "synththing official library";
+        let cancel = "https://synththing.p51.nl/api/v1/identity/cancel?token=0123456789abcdef";
+        let attach = (cancel, "and this address won't be attached (whoever asked can't try again for a day)");
+        mailer.send(code_mail(&to, server, "K3F9-Q2XA", "to attach this address to your identity", Some(attach))).unwrap();
+        let recover = (cancel, "which also pauses recovery of your identity for a day");
+        mailer.send(code_mail(&to, server, "B7RD-M4WZ", "to recover your identity (with a new key)", Some(recover))).unwrap();
+    }
 }

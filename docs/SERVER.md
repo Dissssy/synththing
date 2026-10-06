@@ -59,7 +59,7 @@ The code is part of the program (`server/mail.rs`); it's off unless the server's
 - Attaching an email: signed by the key, confirmed by a code sent to the address. Codes are eight letters and digits (`ABCD-EFGH`), work for 30 minutes, five tries.
 - Changing it, or taking it off: needs a code sent to the current address too (typed in, since the server doesn't have it).
 - Stored only as a hash, never the address: Argon2id, salted with a secret of the server's (`email.pepper` in its data folder). Recovery works like a password check: the user types their email, the server hashes it to find the identity, and sends the code to the address just typed.
-- Recovery requests are unsigned (the key may be gone) and limited: 5 a day per address asking, 3 a day per identity. The answer is the same whether the address is attached to anything or not (and when an identity's recovery is paused or used up, no email goes, but the answer doesn't say so). The rotation happens only when the emailed code is entered. Every recovery email has a "that wasn't me" link: it cancels the request, counts a strike against the requesting address (three in a week ban it for a week), and pauses recovery for that identity for 24 hours.
+- Recovery requests are unsigned (the key may be gone) and limited: 5 a day per address asking, 3 a day per identity. The answer is the same whether the address is attached to anything or not (and when an identity's recovery is paused or used up, no email goes, but the answer doesn't say so). The rotation happens only when the emailed code is entered. Every code's email has a "that wasn't me" link (`GET /api/v1/identity/cancel`): it cancels the code and counts a strike against the address that asked for it (three in a week ban it for a week). Cancelling a recovery pauses recovery for that identity for 24 hours; cancelling an email change (from the current address) or an attachment (from the new one) pauses changes to that identity's email for 24 hours.
 - On an authority with mail, keys without an email attached (and anonymous uploads) get `unverified_uploads_per_day` (3) instead of `uploads_per_day`.
 
 ## Uploads
@@ -142,7 +142,7 @@ POST /api/v1/identity/email               signed: codes to attach, change or tak
 POST /api/v1/identity/email/confirm       signed: the codes (authorities)
 POST /api/v1/identity/recover             start a recovery: a code to the email (authorities)
 POST /api/v1/identity/recover/confirm     the code: the rotation to the new key (authorities)
-GET  /api/v1/identity/recover/cancel      the email's "that wasn't me" link (authorities)
+GET  /api/v1/identity/cancel?token=       a code email's "that wasn't me" link (authorities)
 POST /api/v1/identity/apply               present rotation records (any server)
 DELETE /api/v1/identity                   delete everything about a key (not yet)
 ```

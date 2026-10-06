@@ -670,8 +670,8 @@ fn handle(state: &State, mut request: Request) {
             authority::recover(state, &mut request, &ip)
         }
         (Method::Post, ["api", "v1", "identity", "recover", "confirm"]) => authority::recover_confirm(state, &mut request),
-        (Method::Get, ["api", "v1", "identity", "recover", "cancel"]) => {
-            authority::recover_cancel(state, query.get("token").map(String::as_str).unwrap_or_default())
+        (Method::Get, ["api", "v1", "identity", "cancel"]) => {
+            authority::cancel(state, query.get("token").map(String::as_str).unwrap_or_default())
         }
         (Method::Get, [""]) => Response::from_string(format!(
             "{}: a synththing script library. Add this address under Preferences > Library in the app.\n",

@@ -1,2 +1,5 @@
 /target
 /synththing.exe
+# Secrets: API keys, signing keys (never in the repository)
+/sendgrid
+*.key
