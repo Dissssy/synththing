@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.4.6 (2026-10-06)
+
 ### New
 - Library servers can offer documents to read, like their EULA and privacy policy: icon buttons in the Script Library (hover for which) open them. The official server has both.
 - Delete my data... (Preferences > Library) has a library server delete what it has of yours: your scripts, encores, admin rights and email. It's out of sight at once and gone for good after 30 days; until then, Restore my data puts it back. Where your identity has an email attached, a code sent to it confirms it.
