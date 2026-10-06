@@ -433,14 +433,18 @@ impl App {
                 .is_some_and(|e| exts.iter().any(|x| e.eq_ignore_ascii_case(x)))
         };
         let mut songs = Vec::new();
+        let mut soundfonts = Vec::new();
         for path in dropped {
             if has_ext(&path, &["sf2", "sf3"]) {
-                self.add_soundfont(path);
+                soundfonts.push(path);
             } else if path.is_dir() {
                 songs.extend(playlist::songs_in_folder(&path, listed_song_extensions(&self.config)));
             } else if has_ext(&path, SONG_EXTENSIONS) {
                 songs.push(path);
             }
+        }
+        if !soundfonts.is_empty() {
+            self.add_soundfonts(soundfonts);
         }
         if songs.is_empty() {
             return;

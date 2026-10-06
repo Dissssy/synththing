@@ -902,39 +902,75 @@ impl App {
 
     fn add_soundfont(&mut self, path: PathBuf) {
         let name = nice_name(&path);
+        self.status = match self.try_add_soundfont(&path) {
+            Ok(Some(note)) => format!("Added '{name}', but {note}"),
+            Ok(None) => format!("Added soundfont: {name}"),
+            Err(problem) => problem,
+        };
+    }
 
-        // Only refuse files that aren't SoundFont containers at all. A valid
-        // container that this build of rustysynth can't render yet (e.g. a
-        // compressed SF3) is still added to the list, with a note.
-        let note = match loader::probe_soundfont(&path) {
+    /// Add `paths` to the soundfont list, saying how it went in one line.
+    fn add_soundfonts(&mut self, paths: Vec<PathBuf>) {
+        if let [path] = paths.as_slice() {
+            self.add_soundfont(path.clone());
+            return;
+        }
+        let mut added = 0;
+        let mut problems = Vec::new();
+        for path in &paths {
+            match self.try_add_soundfont(path) {
+                Ok(note) => {
+                    added += 1;
+                    if let Some(note) = note {
+                        problems.push(format!("'{}' was added, but {note}", nice_name(path)));
+                    }
+                }
+                Err(problem) => problems.push(problem),
+            }
+        }
+        for problem in &problems {
+            log::info!("adding soundfonts: {problem}");
+        }
+        let plural = |n: usize| if n == 1 { "" } else { "s" };
+        self.status = match problems.as_slice() {
+            [] => format!("Added {added} soundfont{}.", plural(added)),
+            [one] => format!("Added {added} soundfont{}. {one}", plural(added)),
+            more => format!(
+                "Added {added} soundfont{}; {} had problems (Help > Log has them all). {}",
+                plural(added),
+                more.len(),
+                more[0]
+            ),
+        };
+    }
+
+    /// Add one soundfont to the list: `Ok` with a note if it's added but
+    /// can't be played by this build, or why it wasn't added. Only files
+    /// that aren't SoundFont containers at all are refused: a valid one
+    /// this build of rustysynth can't render yet (a compressed SF3, say) is
+    /// still added, with a note.
+    fn try_add_soundfont(&mut self, path: &Path) -> Result<Option<String>, String> {
+        let name = nice_name(path);
+        let note = match loader::probe_soundfont(path) {
             Ok(SoundFontProbe::Playable(soundfont)) => {
                 // Already parsed it, so keep it rather than parse it again
                 // when it's picked.
-                self.assets.insert_ready(&path, Asset::SoundFont(soundfont), std::time::Instant::now());
+                self.assets.insert_ready(path, Asset::SoundFont(soundfont), std::time::Instant::now());
                 None
             }
             Ok(SoundFontProbe::Unplayable(reason)) => Some(reason),
             Ok(SoundFontProbe::NotSoundFont) => {
-                self.status = format!("'{name}' is not a SoundFont file (no RIFF/sfbk header).");
-                return;
+                return Err(format!("'{name}' is not a SoundFont file (no RIFF/sfbk header)."));
             }
-            Err(e) => {
-                self.status = format!("Failed to read '{name}': {e}");
-                return;
-            }
+            Err(e) => return Err(format!("Failed to read '{name}': {e}")),
         };
-
-        if !self.config.add_soundfont(&path) {
-            self.status = "That soundfont is already in the list.".to_string();
-            return;
+        if !self.config.add_soundfont(path) {
+            return Err(format!("'{name}' is already in the list."));
         }
-        let save_err = self.config.save().err();
-
-        self.status = match (note, save_err) {
-            (Some(reason), _) => format!("Added '{name}', but {reason}"),
-            (None, Some(e)) => format!("Added '{name}', but failed to save the list: {e}"),
-            (None, None) => format!("Added soundfont: {name}"),
-        };
+        if let Err(e) = self.config.save() {
+            return Ok(Some(format!("the list couldn't be saved: {e}")));
+        }
+        Ok(note)
     }
 
     fn remove_soundfont(&mut self, idx: usize) {
@@ -951,13 +987,14 @@ impl App {
         self.pending_soundfont = None;
     }
 
+    /// Browse for soundfonts to add: one or several at once.
     fn open_soundfont_browser(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
+        if let Some(paths) = rfd::FileDialog::new()
             .add_filter("SoundFont", &["sf2"])
             .set_directory(self.config.browse_start_dir())
-            .pick_file()
+            .pick_files()
         {
-            self.add_soundfont(path);
+            self.add_soundfonts(paths);
         }
     }
 
