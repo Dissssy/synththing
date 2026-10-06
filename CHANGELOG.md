@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.4.5 (2026-10-06)
+
 ### New
 - Adding soundfonts takes several at once: pick as many as you like in the file dialog (or drop them on the window), and the status line says how many were added and what went wrong with any that weren't.
 - The official scripts' publisher key can be replaced, should it ever get out (`synththing publisher-rotate`); the app learns the new one from the official server, so official scripts stay marked and updatable.
