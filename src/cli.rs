@@ -75,6 +75,19 @@ pub enum Command {
     /// the same from the app's Library tab.
     Admin(AdminArgs),
 
+    /// Move the official publisher to a new key (if the old one got out).
+    ///
+    /// Reads the current secret key from SYNTHTHING_PUBLISH_KEY, has the
+    /// identity authority (the official server) rotate it to a new key,
+    /// and prints the new secret key, and nothing else, to stdout, for
+    /// `gh secret set SYNTHTHING_PUBLISH_KEY`. The official scripts move to
+    /// the new key, the old one stops working, and apps follow along.
+    PublisherRotate {
+        /// The authority's address.
+        #[arg(long, default_value = "https://synththing.p51.nl")]
+        server: String,
+    },
+
     /// Publish the scripts bundled with this build to a library server.
     ///
     /// For CI: each visualizer, game and example (not the templates) is

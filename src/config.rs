@@ -133,11 +133,20 @@ pub struct LibrarySettings {
     pub pinned: std::collections::BTreeMap<String, String>,
     /// The name last posted under.
     pub author_name: String,
+    /// The official publisher's keys, oldest first, as the official server
+    /// last said (empty: never rotated).
+    pub official_publishers: Vec<String>,
 }
 
 impl Default for LibrarySettings {
     fn default() -> Self {
-        Self { official: true, servers: Vec::new(), pinned: Default::default(), author_name: String::new() }
+        Self {
+            official: true,
+            servers: Vec::new(),
+            pinned: Default::default(),
+            author_name: String::new(),
+            official_publishers: Vec::new(),
+        }
     }
 }
 

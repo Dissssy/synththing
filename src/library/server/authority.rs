@@ -83,6 +83,38 @@ pub(super) fn is_retired(db: &Connection, key: &str) -> bool {
     db.query_row("SELECT 1 FROM rotations WHERE old = ?", [key], |_| Ok(())).optional().ok().flatten().is_some()
 }
 
+/// The rotations that followed `key`, oldest first (the records applied
+/// here).
+pub(super) fn chain_from(db: &Connection, key: &str) -> Vec<Rotation> {
+    let mut chain: Vec<Rotation> = Vec::new();
+    let mut at = key.to_string();
+    while chain.len() < 64 {
+        let next: Option<Rotation> = db
+            .query_row("SELECT old, new, time, how, authority, signature FROM rotations WHERE old = ?", [&at], |r| {
+                Ok(Rotation {
+                    old: r.get(0)?,
+                    new: r.get(1)?,
+                    time: r.get(2)?,
+                    how: r.get(3)?,
+                    authority: r.get(4)?,
+                    signature: r.get(5)?,
+                })
+            })
+            .optional()
+            .ok()
+            .flatten();
+        let Some(record) = next else { break };
+        at = record.new.clone();
+        chain.push(record);
+    }
+    chain
+}
+
+/// What `key` is now, after any rotations.
+pub(super) fn current_key(db: &Connection, key: &str) -> String {
+    chain_from(db, key).last().map_or_else(|| key.to_string(), |r| r.new.clone())
+}
+
 /// Whether `key` has an email attached here (an authority's own record).
 pub(super) fn has_email(db: &Connection, key: &str) -> bool {
     db.query_row("SELECT 1 FROM identities WHERE key = ? AND email_hash IS NOT NULL", [key], |_| Ok(()))

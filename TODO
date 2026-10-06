@@ -561,7 +561,9 @@ Smaller:
     in step with the app. Touches nearly everything: audio output, file
     access (scripts, soundfonts, songs), threads (the script host, the
     render thread), networking (ureq), the config folder. Parked: the
-    in-app tools cover moderation for now.
+    in-app tools cover moderation for now. If it happens: admin permission
+    tiers (the highest could rotate the publisher key from it, which is
+    deploy/rotate-publisher.sh on the VPS for now).
 
 [L][.] shared script library (long term)
     A place to share scripts (they're sandboxed: the worst a script can do

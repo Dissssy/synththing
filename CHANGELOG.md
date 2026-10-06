@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### New
+- The official scripts' publisher key can be replaced, should it ever get out (`synththing publisher-rotate`); the app learns the new one from the official server, so official scripts stay marked and updatable.
+
 ## 0.4.4 (2026-10-06)
 
 ### New

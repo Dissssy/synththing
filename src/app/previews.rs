@@ -337,7 +337,7 @@ impl super::App {
             _ => "visualizer",
         });
         let category = installed.as_ref().and_then(|i| i.category.clone()).or(bundled.map(str::to_string));
-        let official = library::official_id();
+        let official = |id: &Option<String>| id.as_deref().is_some_and(library::is_official_id);
         let mine = self.library.my_id();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -345,7 +345,7 @@ impl super::App {
                 ui.weak(format!("{} ·", library::category_title(category)));
             }
             match &installed {
-                Some(i) if i.author_id.as_deref() == Some(official.as_str()) || (i.id.is_empty() && bundled.is_some()) => {
+                Some(i) if official(&i.author_id) || (i.id.is_empty() && bundled.is_some()) => {
                     ui.weak("by");
                     ui.label(egui::RichText::new(i.author_name.as_deref().unwrap_or("synththing")).color(super::library::OFFICIAL_GOLD))
                         .on_hover_text(super::library::OFFICIAL_HOVER);

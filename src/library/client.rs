@@ -672,6 +672,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A server's publisher is followed through its rotations: its new key
+    /// isn't limited either, owns the scripts, and the server says so.
+    #[test]
+    fn the_publisher_rotates() {
+        let dir = std::env::temp_dir().join(format!("synththing-publisher-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let publisher = Identity::generate().unwrap();
+        std::fs::write(
+            dir.join("server.json"),
+            format!(
+                r#"{{ "previews": false, "check_uploads": false, "authority": true, "uploads_per_day": 1,
+                     "unlimited_keys": [], "publisher": "{}" }}"#,
+                publisher.public()
+            ),
+        )
+        .unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let publish = |who: &Identity, n: u32| {
+            let mut script = upload_of("Disco", "visualizer", &format!("function render() end -- {n}"));
+            script.slug = Some("disco".into());
+            upload(&base, &key, &script, Some(who))
+        };
+        for n in 0..3 {
+            assert!(publish(&publisher, n).is_ok(), "the publisher isn't limited");
+        }
+        assert!(info(&base).unwrap().publisher_rotations.is_empty());
+        let next = Identity::generate().unwrap();
+        let record = rotate(&base, &key, &publisher, &next).unwrap();
+        assert_eq!(info(&base).unwrap().publisher_rotations, [record]);
+        assert!(publish(&publisher, 9).unwrap_err().contains("replaced"));
+        for n in 10..13 {
+            assert_eq!(publish(&next, n).unwrap().version, n - 6, "the new key carries on, unlimited");
+        }
+        running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Encores (not your own; given and taken back), reports (one open
     /// per key), and admins: the server's own key, keys it makes admins,
     /// hiding, resolving, banning.

@@ -333,6 +333,7 @@ impl App {
         let scripts_dir = lua_visualizer::scripts_dir().unwrap_or_else(|_| PathBuf::from("."));
         // (The bundled visualizers and games count as installed from the
         // official library: Update and Restore original work on them.)
+        crate::library::set_official_publishers(config.library.official_publishers.clone());
         crate::library::mark_bundled(&scripts_dir);
         let available_scripts = lua_visualizer::list_scripts(&scripts_dir);
         let active_path = available_scripts.first().cloned();

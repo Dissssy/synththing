@@ -775,6 +775,19 @@ impl App {
                 }
             }
         }
+        // The official server says who the official publisher is now.
+        if server == library::official_url() && !info.publisher_rotations.is_empty() {
+            match library::publishers_from(&info.publisher_rotations) {
+                Ok(keys) if keys != self.config.library.official_publishers => {
+                    log::info!("the official publisher is #{} now", library::key_id(keys.last().map_or("", String::as_str)));
+                    library::set_official_publishers(keys.clone());
+                    self.config.library.official_publishers = keys;
+                    let _ = self.config.save();
+                }
+                Ok(_) => {}
+                Err(e) => log::warn!("the official server's publisher rotations didn't check out: {e}"),
+            }
+        }
         self.library.infos.insert(server.clone(), info);
         self.apply_rotations(&server);
         self.check_admin(&server);
@@ -1418,7 +1431,12 @@ impl App {
                 // contents (none matching: it's newer than what's
                 // published, or older, by the app it came with).
                 if installed.id.is_empty() {
-                    let (Some(author), Some(slug)) = (installed.author_id.clone(), installed.slug.clone()) else {
+                    // (The official publisher's moved to a newer key: found by that.)
+                    let author = installed
+                        .author_id
+                        .clone()
+                        .map(|a| if library::is_official_id(&a) { library::official_id() } else { a });
+                    let (Some(author), Some(slug)) = (author, installed.slug.clone()) else {
                         return Err("it doesn't say what it is on the server".to_string());
                     };
                     match client::by_slug(&server, &author, &slug)? {

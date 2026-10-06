@@ -78,6 +78,10 @@ pub struct ServerConfig {
     /// Keys (hex) whose uploads aren't limited: the official publisher's,
     /// by default, for the bundled scripts CI publishes.
     pub unlimited_keys: Vec<String>,
+    /// The publisher whose scripts are official here, as first published
+    /// (the official one's by default): it's followed through its
+    /// rotations, its current key isn't limited, and apps hear of it.
+    pub publisher: String,
     /// Worker threads.
     pub threads: usize,
     /// Make previews of uploads.
@@ -121,6 +125,7 @@ impl Default for ServerConfig {
             contact: String::new(),
             uploads_per_day: 10,
             unlimited_keys: vec![super::OFFICIAL_PUBLISHER.to_string()],
+            publisher: super::OFFICIAL_PUBLISHER.to_string(),
             threads: 4,
             previews: true,
             preview_soundfont: None,
@@ -694,7 +699,9 @@ fn client_ip(state: &State, request: &Request) -> String {
 }
 
 fn info(state: &State) -> Info {
+    let publisher_rotations = authority::chain_from(&state.db(), &state.config.publisher);
     Info {
+        publisher_rotations,
         name: state.config.name.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         key: state.key_hex.clone(),
@@ -1081,14 +1088,18 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
     };
     let same = existing.as_ref().map(|(id, _)| id.as_str());
     let asked_and_found = upload.remix_of.as_ref().zip(remix.as_ref());
-    match remixes::refuse_copy(&db, &upload.source, &fingerprint, author.as_deref(), same, asked_and_found) {
+    let publisher = authority::chain_from(&db, &state.config.publisher)
+        .last()
+        .map_or_else(|| state.config.publisher.clone(), |r| r.new.clone());
+    match remixes::refuse_copy(&db, &upload.source, &fingerprint, author.as_deref(), same, asked_and_found, &publisher) {
         Ok(Some(why)) => return error(400, why),
         Ok(None) => {}
         Err(e) => return error(500, format!("database: {e}")),
     }
     // The daily limit, by address, for anything new (keys the server
     // trusts aside: the official publisher, by default).
-    let limited = !author.as_ref().is_some_and(|key| state.config.unlimited_keys.contains(key));
+    let publisher = authority::current_key(&db, &state.config.publisher);
+    let limited = !author.as_ref().is_some_and(|key| state.config.unlimited_keys.contains(key) || *key == publisher);
     if limited {
         let mut uploads = state.uploads.lock().unwrap_or_else(|p| p.into_inner());
         let recent = uploads.entry(ip.to_string()).or_default();

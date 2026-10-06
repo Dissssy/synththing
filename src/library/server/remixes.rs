@@ -19,7 +19,7 @@ use std::sync::OnceLock;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::library::fingerprint::{tokens, Fingerprint, COPY};
-use crate::library::{RemixLink, RemixOf, ScriptSummary, OFFICIAL_PUBLISHER};
+use crate::library::{RemixLink, RemixOf, ScriptSummary};
 
 pub(super) const SCHEMA_V7: &str = "
 BEGIN;
@@ -159,6 +159,7 @@ pub(super) fn refuse_copy(
     uploader: Option<&str>,
     same: Option<&str>,
     remix: Option<(&RemixOf, &Remix)>,
+    publisher: &str,
 ) -> rusqlite::Result<Option<String>> {
     // What it may resemble: what it's a remix of, and that one's own
     // originals (and the bundled scripts the official ones among them are).
@@ -166,7 +167,7 @@ pub(super) fn refuse_copy(
     let mut credited_bundled: HashSet<String> = HashSet::new();
     // (An official script, here or on the official server: the bundled one.)
     if let Some((asked, _)) = remix
-        && asked.author_id.as_deref() == Some(crate::library::official_id().as_str())
+        && asked.author_id.as_deref().is_some_and(crate::library::is_official_id)
         && let Some(slug) = &asked.slug
     {
         credited_bundled.insert(slug.clone());
@@ -178,7 +179,7 @@ pub(super) fn refuse_copy(
                 .query_row("SELECT author_key, slug FROM scripts WHERE id = ?", [&id], |r| Ok((r.get(0)?, r.get(1)?)))
                 .optional()?;
             if let Some((Some(key), Some(slug))) = official
-                && key == OFFICIAL_PUBLISHER
+                && key == publisher
             {
                 credited_bundled.insert(slug);
             }
@@ -237,7 +238,7 @@ pub(super) fn refuse_copy(
             consider(similarity, what);
         }
     }
-    if uploader != Some(OFFICIAL_PUBLISHER) {
+    if uploader != Some(publisher) {
         for (slug, name, bundled) in bundled() {
             if !credited_bundled.contains(slug) {
                 consider(bundled.similarity(fingerprint), format!("\"{name}\", which comes with synththing"));

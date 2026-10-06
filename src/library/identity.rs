@@ -120,6 +120,11 @@ impl Identity {
         save_secret(&path, &hex(&self.key.to_bytes()))
     }
 
+    /// The secret key, in hex (for `publisher-rotate`, to hand to CI).
+    pub fn secret_hex(&self) -> String {
+        hex(&self.key.to_bytes())
+    }
+
     /// The public key, in hex.
     pub fn public(&self) -> String {
         hex(&self.key.verifying_key().to_bytes())

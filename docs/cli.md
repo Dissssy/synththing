@@ -98,6 +98,7 @@ Runs a script library server (the design is in docs/SERVER.md): the app's Script
 - `license`, `rules`, `contact`: shown to people publishing (CC BY 4.0 by default).
 - `uploads_per_day`: per address (10). Unchanged re-uploads don't count.
 - `unlimited_keys`: keys (hex) whose uploads aren't limited: by default the official publisher's, which publishes the bundled scripts.
+- `publisher`: the key (hex) whose scripts are official here, as first published (the official publisher's by default). It's followed through its rotations: its current key isn't limited either, and `/api/v1/info` lists its rotations, which the app uses (for the official server) to know the official publisher's current key.
 - `threads`: request workers (4).
 - `check_uploads`: refuse uploads that don't run on this server's version (`preview --check`): they don't compile, or error in their first seconds (true). One whose check takes over 12 seconds is taken: slow isn't broken.
 - `previews`: make a preview of each upload (true), one at a time, each by `synththing preview` in a process of its own; at startup, any script's newest version without one is queued. They play the starter songs with TimGM6mb, downloaded into `soundfonts/` the first time, unless `preview_soundfont` names another.
@@ -134,6 +135,14 @@ Moderates a running library server from the machine it runs on: each command goe
 | `unban TARGET`, `bans` | Lift a ban; list the bans in force. |
 | `add-admin KEY`, `remove-admin KEY`, `admins` | Who can moderate from the app (an ID the server has seen, or a whole key). |
 | `resolve REPORT [--note TEXT]` | Mark a report dealt with. |
+
+## publisher-rotate: move the official publisher to a new key
+
+```
+SYNTHTHING_PUBLISH_KEY=<current secret key, hex> synththing publisher-rotate [--server URL] | gh secret set SYNTHTHING_PUBLISH_KEY
+```
+
+If the publisher key (the one the bundled scripts are published with) might have got out: makes a new key and has the identity authority (`https://synththing.p51.nl` unless `--server` says otherwise) rotate the publisher to it. The official scripts move to the new key, the old one stops working, and apps learn of the new key from the official server. Prints the new secret key, and only that, to stdout (everything else goes to stderr), so it can be piped into `gh secret set`; keep a copy somewhere safe too. For the official server, `deploy/rotate-publisher.sh` wraps this (docs/DEPLOY.md).
 
 ## publish-bundled: publish the bundled scripts
 

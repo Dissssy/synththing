@@ -36,14 +36,54 @@ pub fn resolve_server(url: &str) -> String {
     if url == OFFICIAL_URL { official_url() } else { url.to_string() }
 }
 
-/// The key the official scripts are published with (the ones bundled with
-/// the app, published by CI from the repository: `publish_bundled`).
-/// Scripts signed by it are marked official.
+/// The key the official scripts were first published with (the ones
+/// bundled with the app, published by CI from the repository:
+/// `publish_bundled`). Scripts signed by it, or by a key it was rotated to
+/// (`official_publishers`), are marked official.
 pub const OFFICIAL_PUBLISHER: &str = "3fc0018f1b43c6b4708b9ac49736be1835fe4c469647bd3b28cac9e4d5746d04";
 
-/// The official publisher's ID.
+/// The official publisher's keys, oldest first: `OFFICIAL_PUBLISHER`, then
+/// each it was rotated to, as the official server says (checked against
+/// the official authority: `publishers_from`). Set by the app from its
+/// preferences, and again when it hears from the official server.
+static PUBLISHERS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+/// The official publisher's keys, from rotation records: they have to start
+/// at `OFFICIAL_PUBLISHER`, follow on, and be signed by the official
+/// authority.
+pub fn publishers_from(chain: &[rotation::Rotation]) -> Result<Vec<String>, String> {
+    rotation::verify_chain(chain, &[rotation::OFFICIAL_AUTHORITY.to_string()])?;
+    if chain.first().is_some_and(|r| r.old != OFFICIAL_PUBLISHER) {
+        return Err("the publisher's rotations don't start at the official publisher".into());
+    }
+    Ok(std::iter::once(OFFICIAL_PUBLISHER.to_string()).chain(chain.iter().map(|r| r.new.clone())).collect())
+}
+
+pub fn set_official_publishers(keys: Vec<String>) {
+    if let Ok(mut publishers) = PUBLISHERS.write() {
+        *publishers = keys;
+    }
+}
+
+/// The official publisher's keys, oldest first.
+pub fn official_publishers() -> Vec<String> {
+    let known = PUBLISHERS.read().map(|p| p.clone()).unwrap_or_default();
+    if known.is_empty() { vec![OFFICIAL_PUBLISHER.to_string()] } else { known }
+}
+
+/// The official publisher's current key.
+pub fn official_publisher() -> String {
+    official_publishers().pop().unwrap_or_else(|| OFFICIAL_PUBLISHER.to_string())
+}
+
+/// The official publisher's ID (its current key's).
 pub fn official_id() -> String {
-    key_id(OFFICIAL_PUBLISHER)
+    key_id(&official_publisher())
+}
+
+/// Whether `id` is the official publisher's, now or before a rotation.
+pub fn is_official_id(id: &str) -> bool {
+    official_publishers().iter().any(|key| key_id(key) == id)
 }
 
 /// What a bundled script is on the library: its slug (from its file
@@ -176,6 +216,29 @@ pub fn bundled_original(source: &str) -> Option<RemixOf> {
         })
 }
 
+/// `synththing publisher-rotate`: move the official publisher (the key in
+/// `SYNTHTHING_PUBLISH_KEY`) to a new key at `server` (the official
+/// authority), and print the new key's secret, only, to stdout (for
+/// `gh secret set`); everything else goes to stderr.
+pub fn publisher_rotate(server: &str) -> Result<(), String> {
+    let secret = std::env::var("SYNTHTHING_PUBLISH_KEY").map_err(|_| "SYNTHTHING_PUBLISH_KEY isn't set")?;
+    let old = identity::Identity::from_secret_hex(&secret).ok_or("SYNTHTHING_PUBLISH_KEY isn't a key")?;
+    let server = client::normalize_url(server);
+    let info = client::info(&server)?;
+    if resolve_server(&server) == official_url() && info.key != rotation::OFFICIAL_AUTHORITY {
+        return Err(format!("{server} doesn't have the official authority's key: not rotating there"));
+    }
+    if !info.authority {
+        return Err(format!("{server} isn't an identity authority"));
+    }
+    let new = identity::Identity::generate()?;
+    let record = client::rotate(&server, &info.key, &old, &new)?;
+    eprintln!("the publisher #{} is #{} now (rotated at {})", old.id(), new.id(), record.time);
+    eprintln!("its new secret key follows on stdout: put it in the SYNTHTHING_PUBLISH_KEY secret, and somewhere safe");
+    println!("{}", new.secret_hex());
+    Ok(())
+}
+
 /// `synththing publish-bundled`: publish every bundled script (not the
 /// templates) to `server`, signed with the secret key in the
 /// `SYNTHTHING_PUBLISH_KEY` environment variable, each by its slug: one
@@ -188,7 +251,7 @@ pub fn bundled_original(source: &str) -> Option<RemixOf> {
 pub fn publish_bundled(server: &str, dir: Option<&std::path::Path>) -> Result<(), String> {
     let secret = std::env::var("SYNTHTHING_PUBLISH_KEY").map_err(|_| "SYNTHTHING_PUBLISH_KEY isn't set")?;
     let identity = identity::Identity::from_secret_hex(&secret).ok_or("SYNTHTHING_PUBLISH_KEY isn't a key")?;
-    if identity.public() != OFFICIAL_PUBLISHER {
+    if identity.public() != official_publisher() {
         println!("note: this isn't the official publisher key (it's #{})", identity.id());
     }
     let server = client::normalize_url(server);
@@ -250,6 +313,10 @@ pub struct Info {
     pub license: String,
     pub rules: String,
     pub contact: String,
+    /// The rotations of the server's publisher (the one whose scripts are
+    /// official), from its first key, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub publisher_rotations: Vec<rotation::Rotation>,
     /// It's an identity authority (rotations, recovery), and it sends
     /// email (recovery and attaching an address need it).
     #[serde(default)]

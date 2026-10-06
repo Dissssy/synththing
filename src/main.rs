@@ -129,6 +129,13 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
+    if let Some(Command::PublisherRotate { server }) = &cli.command {
+        if let Err(e) = library::publisher_rotate(server) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(Command::Admin(args)) = &cli.command {
         if let Err(e) = library::admin::run(args) {
             eprintln!("error: {e}");
