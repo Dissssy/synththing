@@ -612,6 +612,23 @@ pub enum AdminAction {
     Admins,
     /// Mark a report dealt with.
     Resolve { report: i64, note: String },
+    /// `ServerVersion`: the version running, the newest release.
+    UpdateCheck,
+    /// Update to the newest release (how depends on how it's run):
+    /// `{"done": "what's happening"}`.
+    Update,
+}
+
+/// A server's version, as admins see it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ServerVersion {
+    pub current: String,
+    /// The newest release, if GitHub could be asked.
+    pub latest: Option<String>,
+    pub newer: bool,
+    /// `"docker"`, `"systemd"` or `"by hand"`.
+    pub how: String,
+    pub error: Option<String>,
 }
 
 /// `POST /api/v1/scripts`: a new script.

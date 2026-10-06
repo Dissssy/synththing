@@ -257,6 +257,16 @@ fn verify(release: &Release, downloaded: u64, sha256: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// The newest release, asked for now (blocking: for a server).
+pub fn latest_release() -> Result<Release> {
+    fetch_latest()
+}
+
+/// Download, check and swap in `release` now (blocking: for a server).
+pub fn install_now(release: &Release) -> Result<()> {
+    download_and_replace(release, &Updater::new())
+}
+
 /// Start the (now updated) exe again with the same arguments. The caller
 /// then closes this instance.
 pub fn relaunch() -> Result<()> {

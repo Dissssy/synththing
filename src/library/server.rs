@@ -31,6 +31,7 @@ mod mail;
 pub use mail::Mail;
 mod moderation;
 mod remixes;
+mod update;
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
@@ -233,7 +234,19 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
     let db = open_db(&data.join("library.db")).map_err(|e| format!("couldn't open the database: {e}"))?;
     let key_hex = hex(&key.verifying_key().to_bytes());
     let bind = bind.unwrap_or_else(|| config.bind.clone());
-    let http = tiny_http::Server::http(&bind).map_err(|e| format!("couldn't listen on {bind}: {e}"))?;
+    // (An update run by hand starts the new version as the old one stops:
+    // the port takes a moment to come free.)
+    let mut tries = 0;
+    let http = loop {
+        match tiny_http::Server::http(&bind) {
+            Ok(http) => break http,
+            Err(_) if tries < 40 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            Err(e) => return Err(format!("couldn't listen on {bind}: {e}")),
+        }
+    };
     let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
     let http = Arc::new(http);
     let workers = config.threads.max(1);

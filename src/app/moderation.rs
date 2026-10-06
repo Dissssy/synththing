@@ -33,6 +33,7 @@ enum Event {
     Reports(String, Result<Vec<Report>, String>),
     Bans(String, Result<Vec<Ban>, String>),
     Admins(String, Result<Vec<(String, String)>, String>),
+    Version(String, Result<library::ServerVersion, String>),
     /// A reported version's source, for an admin: (server, script, version).
     Source(String, String, u32, Result<String, String>),
     /// A script's author's key (or, anonymous, the address it came from),
@@ -65,6 +66,7 @@ enum Tab {
     Reports,
     Bans,
     Admins,
+    Server,
 }
 
 #[derive(Default)]
@@ -84,6 +86,7 @@ struct Window {
     reports: Option<Result<Vec<Report>, String>>,
     bans: Option<Result<Vec<Ban>, String>>,
     admins: Option<Result<Vec<(String, String)>, String>>,
+    version: Option<Result<library::ServerVersion, String>>,
     /// Reports showing what they point at.
     shown: HashSet<i64>,
     sources: HashMap<(String, u32), Result<String, String>>,
@@ -241,6 +244,7 @@ impl App {
             reports: None,
             bans: None,
             admins: None,
+            version: None,
             shown: HashSet::new(),
             sources: HashMap::new(),
             confirm_delete: None,
@@ -263,16 +267,18 @@ impl App {
             Tab::Reports => window.reports = None,
             Tab::Bans => window.bans = None,
             Tab::Admins => window.admins = None,
+            Tab::Server => window.version = None,
         }
         self.spawn_moderation(move || match tab {
             Tab::Reports => Event::Reports(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Reports { all })),
             Tab::Bans => Event::Bans(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Bans)),
             Tab::Admins => Event::Admins(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Admins)),
+            Tab::Server => Event::Version(server.clone(), client::admin(&server, &key, &identity, &AdminAction::UpdateCheck)),
         });
     }
 
     /// Run admin actions in turn (stopping at one that fails), then say how
-    /// it went as `what`.
+    /// it went as `what` (or, empty, as the server put it).
     fn moderate(&mut self, what: &str, actions: Vec<AdminAction>) {
         let Some(window) = &self.moderation.window else { return };
         let (Some(identity), Some(key)) = (Identity::load(), self.config.library.pinned.get(&window.server).cloned()) else {
@@ -280,9 +286,13 @@ impl App {
         };
         let (server, what) = (window.server.clone(), what.to_string());
         self.spawn_moderation(move || {
-            let result = actions
-                .iter()
-                .try_for_each(|action| client::admin::<serde_json::Value>(&server, &key, &identity, action).map(|_| ()));
+            let mut said = String::new();
+            let result = actions.iter().try_for_each(|action| {
+                let reply = client::admin::<serde_json::Value>(&server, &key, &identity, action)?;
+                said = reply["done"].as_str().unwrap_or("Done.").to_string();
+                Ok(())
+            });
+            let what = if what.is_empty() { said } else { what };
             Event::Done(server, what, result)
         });
     }
@@ -331,6 +341,11 @@ impl App {
                 Event::Bans(server, result) => {
                     if let Some(w) = window.filter(|w| w.server == server) {
                         w.bans = Some(result);
+                    }
+                }
+                Event::Version(server, result) => {
+                    if let Some(w) = window.filter(|w| w.server == server) {
+                        w.version = Some(result);
                     }
                 }
                 Event::Admins(server, result) => {
@@ -540,7 +555,9 @@ impl App {
                 }
             });
             ui.horizontal(|ui| {
-                for (tab, title) in [(Tab::Reports, "Reports"), (Tab::Bans, "Bans"), (Tab::Admins, "Admins")] {
+                for (tab, title) in
+                    [(Tab::Reports, "Reports"), (Tab::Bans, "Bans"), (Tab::Admins, "Admins"), (Tab::Server, "Server")]
+                {
                     if ui.selectable_label(window.tab == tab, title).clicked() && window.tab != tab {
                         window.tab = tab;
                         refresh = true;
@@ -563,6 +580,7 @@ impl App {
                     Tab::Reports => self.reports_tab_ui(ui, ctx, &mut window, &mut actions, &mut fetch_source, &mut ban_author),
                     Tab::Bans => bans_tab_ui(ui, &mut window, &mut actions),
                     Tab::Admins => admins_tab_ui(ui, &mut window, &mut actions),
+                    Tab::Server => server_tab_ui(ui, &window, &mut actions),
                 }
             });
             ui.separator();
@@ -901,6 +919,47 @@ fn admins_tab_ui(ui: &mut egui::Ui, window: &mut Window, actions: &mut Vec<(Stri
             window.new_admin.clear();
         }
     });
+}
+
+/// The server's version, and updating it.
+fn server_tab_ui(ui: &mut egui::Ui, window: &Window, actions: &mut Vec<(String, Vec<AdminAction>)>) {
+    let version = match &window.version {
+        None => {
+            ui.spinner();
+            return;
+        }
+        Some(Err(e)) => {
+            ui.colored_label(ui.visuals().warn_fg_color, format!("Couldn't ask it: {e}"));
+            return;
+        }
+        Some(Ok(version)) => version,
+    };
+    ui.label(format!("Running synththing {}, {}.", version.current, match version.how.as_str() {
+        "docker" => "in Docker",
+        "systemd" => "as a systemd service",
+        _ => "started by hand",
+    }));
+    match (&version.latest, &version.error) {
+        (Some(latest), _) if version.newer => {
+            ui.label(format!("{latest} is out."));
+            if version.how == "docker" {
+                ui.weak("In Docker, the image is what updates: pull it and recreate the container.");
+            } else if ui
+                .button(format!("Update to {latest}"))
+                .on_hover_text("Downloads it, checks it against the checksum GitHub publishes, swaps it in and restarts")
+                .clicked()
+            {
+                actions.push((String::new(), vec![AdminAction::Update]));
+            }
+        }
+        (Some(_), _) => {
+            ui.weak("That's the newest release.");
+        }
+        (None, Some(error)) => {
+            ui.weak(format!("Couldn't ask GitHub for the newest release: {error}"));
+        }
+        (None, None) => {}
+    }
 }
 
 fn now() -> i64 {

@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### New
+- Library servers can be updated by their admins: the Moderation window's Server tab (and `synththing admin update`) says when a newer release is out and updates to it.
+
 ## 0.4.5 (2026-10-06)
 
 ### New

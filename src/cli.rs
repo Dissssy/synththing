@@ -181,6 +181,13 @@ pub enum AdminCommand {
         #[arg(long, default_value = "")]
         note: String,
     },
+    /// Update the server to the newest release (under systemd, through
+    /// the update service; under Docker it says to pull the image).
+    Update {
+        /// Only say which version's running and which is newest.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[derive(Args, Debug)]

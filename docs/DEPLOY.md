@@ -64,12 +64,14 @@ systemctl enable --now synththing
 ```
 cp synththing-update.sh /opt/synththing/
 chmod 755 /opt/synththing/synththing-update.sh
-cp synththing-update.service synththing-update.timer /etc/systemd/system/
+cp synththing-update.service synththing-update.timer synththing-update.path /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now synththing-update.timer
+systemctl enable --now synththing-update.timer synththing-update.path
 ```
 
 `systemctl list-timers synththing-update` shows when it runs next; `journalctl -u synththing-update` what it did.
+
+`synththing-update.path` runs it straight away when an admin asks the server to update (`synththing admin update`, or the app's Moderation > Server tab): the service can't write its own binary, so it leaves `update.request` in its data folder for the update script, which runs as root. Without the path unit, the timer picks the request up within the hour.
 
 ## Email (an identity authority)
 

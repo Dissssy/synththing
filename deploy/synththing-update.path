@@ -1,0 +1,15 @@
+# Runs the update script as soon as an admin asks the server to update
+# (synththing admin update, or the app's Moderation > Server tab): the
+# server, which can't write its own binary, writes update.request in its
+# data folder, and this starts synththing-update.service (as root).
+# Install: copy beside synththing-update.service, then
+#   systemctl daemon-reload && systemctl enable --now synththing-update.path
+[Unit]
+Description=Update the synththing server when an admin asks
+
+[Path]
+PathModified=/var/lib/synththing/update.request
+Unit=synththing-update.service
+
+[Install]
+WantedBy=paths.target

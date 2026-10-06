@@ -95,6 +95,17 @@ pub fn run(args: &AdminArgs) -> Result<(), String> {
             }
         }
         AdminCommand::Resolve { report, note } => done(send(AdminAction::Resolve { report: *report, note: note.clone() })?),
+        AdminCommand::Update { check } => {
+            let version: crate::library::ServerVersion = client::admin(&base, &key, &server, &AdminAction::UpdateCheck)?;
+            match (&version.latest, &version.error) {
+                (Some(latest), _) => println!("running {}, newest release {latest} (run {})", version.current, version.how),
+                (None, Some(error)) => println!("running {}; couldn't check GitHub: {error}", version.current),
+                (None, None) => println!("running {}", version.current),
+            }
+            if !*check && version.newer {
+                done(send(AdminAction::Update)?);
+            }
+        }
     }
     Ok(())
 }

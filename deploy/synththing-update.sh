@@ -11,6 +11,8 @@ REPO="Dissssy/synththing"
 ASSET="synththing-linux-x86_64"
 BINARY="/opt/synththing/synththing"
 SERVICE="synththing"
+# (An admin's "update now", from the server: synththing-update.path.)
+rm -f /var/lib/synththing/update.request
 
 installed=$("$BINARY" --version 2>/dev/null | awk '{print $2}')
 # The newest release's version, and its Linux build's address and SHA-256.
