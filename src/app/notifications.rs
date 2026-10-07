@@ -400,6 +400,7 @@ mod tests {
             read: false,
             needs_action: false,
             handled: false,
+            resolution: None,
         };
         assert_eq!(text(&unknown), "Something new: x (brand_new)");
     }

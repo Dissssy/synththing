@@ -25,6 +25,7 @@
 //! every script without one is queued.
 
 mod authority;
+mod copyright;
 mod deletion;
 mod mail;
 
@@ -319,6 +320,7 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
     });
     moderation::forget_old_addresses(&state);
     deletion::purge(&state);
+    copyright::expire(&state);
     {
         let state = Arc::clone(&state);
         std::thread::Builder::new()
@@ -328,6 +330,7 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
                 moderation::forget_old_addresses(&state);
                 deletion::purge(&state);
                 notifications::forget_old(&state);
+                copyright::expire(&state);
             })
             .map_err(|e| format!("couldn't start: {e}"))?;
     }
@@ -614,6 +617,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 10 {
         db.execute_batch(notifications::SCHEMA_V10)?;
     }
+    if version < 11 {
+        db.execute_batch(copyright::SCHEMA_V11)?;
+    }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
 }
@@ -709,6 +715,22 @@ fn handle(state: &Arc<State>, mut request: Request) {
     }
     let reply = match (&method, parts.as_slice()) {
         (Method::Post, ["api", "v1", "notifications"]) => notifications::list(state, &mut request),
+        (Method::Post, ["api", "v1", "notices"]) => {
+            let ip = client_ip(state, &request);
+            copyright::file(state, &mut request, &ip)
+        }
+        (Method::Post, ["api", "v1", "notices", id]) => match id.parse() {
+            Ok(id) => copyright::view(state, &mut request, id),
+            Err(_) => error(404, "no such notice"),
+        },
+        (Method::Post, ["api", "v1", "notices", id, "dispute"]) => match id.parse() {
+            Ok(id) => copyright::dispute(state, &mut request, id),
+            Err(_) => error(404, "no such notice"),
+        },
+        (Method::Post, ["api", "v1", "notices", id, "accept"]) => match id.parse() {
+            Ok(id) => copyright::accept(state, &mut request, id),
+            Err(_) => error(404, "no such notice"),
+        },
         (Method::Post, ["api", "v1", "notifications", "mark"]) => notifications::mark(state, &mut request),
         (Method::Get, ["api", "v1", "info"]) => json(200, &info(state)),
         (Method::Get, ["api", "v1", "documents", slug]) => document(state, slug),
@@ -1201,6 +1223,13 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
     let publisher = authority::chain_from(&db, &state.config.publisher)
         .last()
         .map_or_else(|| state.config.publisher.clone(), |r| r.new.clone());
+    match copyright::blocked(&db, &fingerprint) {
+        Ok(true) if crate::library::fingerprint::tokens(&upload.source).len() >= 40 => {
+            return error(400, "it's the same as a script taken down after a copyright notice");
+        }
+        Ok(_) => {}
+        Err(e) => return error(500, format!("database: {e}")),
+    }
     match remixes::refuse_copy(&db, &upload.source, &fingerprint, author.as_deref(), same, asked_and_found, &publisher) {
         Ok(Some(why)) => return error(400, why),
         Ok(None) => {}

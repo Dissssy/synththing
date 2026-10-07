@@ -315,6 +315,7 @@ pub(super) fn admin(state: &State, request: &mut Request) -> Reply {
                     | AdminAction::Bans
                     | AdminAction::Admins
                     | AdminAction::UpdateCheck
+                    | AdminAction::Notices { .. }
             ) {
                 println!("admin {who}: {}", serde_json::to_string(&action).unwrap_or_default());
             }
@@ -470,6 +471,11 @@ fn act(state: &State, action: &AdminAction) -> Acted {
                 .and_then(|mut s| s.query_map([], |r| r.get(0))?.collect())
                 .map_err(db_error)?;
             Ok(serde_json::json!(keys.iter().map(|k| [k.clone(), key_id(k)]).collect::<Vec<_>>()))
+        }
+        AdminAction::Notices { all } => value(serde_json::to_value(super::copyright::list(&db, *all).map_err(db_error)?)),
+        AdminAction::Copyright { notice, decision, note } => {
+            let what = super::copyright::decide(state, &db, *notice, decision, note)?;
+            Ok(serde_json::json!({ "done": what }))
         }
         AdminAction::UpdateCheck => {
             drop(db);

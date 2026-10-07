@@ -371,6 +371,42 @@ pub fn notification_stream(
     Ok(())
 }
 
+/// File a copyright notice: its number, and `"taken_down"` (or
+/// `"queued"`, for a script locked after an upheld dispute).
+pub fn file_notice(
+    base: &str,
+    server_key: &str,
+    identity: &Identity,
+    notice: &super::CopyrightNotice,
+) -> Result<(i64, String), String> {
+    let body = serde_json::to_value(notice).map_err(|e| e.to_string())?;
+    let reply: serde_json::Value = signed_post(base, server_key, identity, "/api/v1/notices", &body)?;
+    Ok((reply["notice"].as_i64().unwrap_or(0), reply["status"].as_str().unwrap_or_default().to_string()))
+}
+
+/// A copyright notice, as its uploader or claimant may see it.
+pub fn notice(base: &str, server_key: &str, identity: &Identity, id: i64) -> Result<super::NoticeView, String> {
+    signed_post(base, server_key, identity, &format!("/api/v1/notices/{id}"), &serde_json::json!({}))
+}
+
+/// Dispute a copyright notice on your upload (a counter-notice).
+pub fn dispute_notice(
+    base: &str,
+    server_key: &str,
+    identity: &Identity,
+    id: i64,
+    counter: &super::CounterNotice,
+) -> Result<(), String> {
+    let body = serde_json::to_value(counter).map_err(|e| e.to_string())?;
+    signed_post::<serde_json::Value>(base, server_key, identity, &format!("/api/v1/notices/{id}/dispute"), &body).map(|_| ())
+}
+
+/// Let a copyright notice on your upload stand.
+pub fn accept_notice(base: &str, server_key: &str, identity: &Identity, id: i64) -> Result<(), String> {
+    signed_post::<serde_json::Value>(base, server_key, identity, &format!("/api/v1/notices/{id}/accept"), &serde_json::json!({}))
+        .map(|_| ())
+}
+
 /// How long one notification stream is kept before it's opened again (so a
 /// connection that's quietly died is noticed).
 pub const STREAM_FOR: Duration = Duration::from_secs(10 * 60);
@@ -949,6 +985,154 @@ mod tests {
         assert!(notifications(&base, &key, &alice, None).unwrap().iter().all(|n| n.read));
         // Nobody else's.
         assert!(mark_notifications(&base, &key, &bob, &[all[2].id], false, false).is_ok());
+        running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Copyright notices: down at once, disputed and upheld (back up,
+    /// locked: a later notice only queues), let stand (blocklisted), three
+    /// standing make a ban, bogus ones undone; who sees what.
+    #[test]
+    fn copyright_notices() {
+        use crate::library::{AdminAction, CopyrightNotice, CounterNotice, NoticeView};
+        let dir = std::env::temp_dir().join(format!("synththing-copyright-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false, "check_uploads": false, "uploads_per_day": 100 }"#)
+            .unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let server_id = Identity::from_secret_hex(&std::fs::read_to_string(dir.join("server.key")).unwrap()).unwrap();
+        let (alice, carol, mod_, bob) =
+            (Identity::generate().unwrap(), Identity::generate().unwrap(), Identity::generate().unwrap(), Identity::generate().unwrap());
+        let code = |n: u32| -> String {
+            // (Every number differs from one n to the next: different scripts.)
+            let body: String = (0..30)
+                .map(|i| {
+                    format!(
+                        "    rect({}, {}, {} + w / {}, h - {}, {{ r = {n}, g = {}, b = {} }})
+",
+                        i * n,
+                        i * 3 + n,
+                        i * 2 * n,
+                        9 + n,
+                        i + n * 7,
+                        40 + n,
+                        90 + n * 11
+                    )
+                })
+                .collect();
+            format!("function render(w, h)
+    clear({{ r = {n}, g = 0, b = 0 }})
+{body}end
+")
+        };
+        let publish = |who: &Identity, slug: &str, n: u32| {
+            let mut script = upload_of(slug, "visualizer", &code(n));
+            script.slug = Some(slug.into());
+            upload(&base, &key, &script, Some(who))
+        };
+        let disco = publish(&alice, "disco", 1).unwrap();
+        encore(&base, &key, &disco.id, &mod_, true).unwrap();
+        admin::<serde_json::Value>(&base, &key, &server_id, &AdminAction::AddAdmin { key: mod_.public() }).unwrap();
+        let claim = |item: &str| CopyrightNotice {
+            item: item.into(),
+            name: "Carol Claimant".into(),
+            on_behalf_of: "Big Label Records".into(),
+            address: "1 Label Street, Music City".into(),
+            email: "carol@example.org".into(),
+            phone: "+1 555 0100".into(),
+            work: "The Hit Song".into(),
+            work_location: "https://example.org/hit".into(),
+            good_faith: true,
+            accurate: true,
+            signature: "Carol Claimant".into(),
+        };
+        let decide = |notice: i64, decision: &str| {
+            admin::<serde_json::Value>(
+                &base,
+                &key,
+                &mod_,
+                &AdminAction::Copyright { notice, decision: decision.into(), note: "checked".into() },
+            )
+        };
+        let latest = |who: &Identity, kind: &str| {
+            notifications(&base, &key, who, None).unwrap().into_iter().find(|n| n.kind == kind).unwrap()
+        };
+
+        // Incomplete: refused.
+        let mut partial = claim(&disco.id);
+        partial.accurate = false;
+        assert!(file_notice(&base, &key, &carol, &partial).unwrap_err().contains("statements"));
+        assert!(file_notice(&base, &key, &alice, &claim(&disco.id)).unwrap_err().contains("your own"));
+
+        // Filed: down at once; alice is told (without carol's contact details).
+        let (first, status) = file_notice(&base, &key, &carol, &claim(&disco.id)).unwrap();
+        assert_eq!(status, "taken_down");
+        assert!(details(&base, &disco.id).is_err());
+        let told = latest(&alice, "copyright_notice");
+        assert!(told.needs_action && !told.handled && told.data["on_behalf_of"] == "Big Label Records");
+        assert_eq!(latest(&mod_, "new_notice").data["notice"].as_i64(), Some(first));
+        let seen: NoticeView = notice(&base, &key, &alice, first).unwrap();
+        assert!(seen.notice.address.is_empty() && seen.notice.phone.is_empty() && seen.notice.name == "Carol Claimant");
+        assert_eq!(notice(&base, &key, &carol, first).unwrap().notice.phone, "+1 555 0100");
+        assert!(notice(&base, &key, &bob, first).unwrap_err().contains("not a notice"));
+
+        // Disputed: carol gets the counter-notice; alice's notification shows what she did.
+        let counter = CounterNotice {
+            name: "Alice Author".into(),
+            address: "2 Code Road".into(),
+            email: "alice@example.org".into(),
+            phone: String::new(),
+            explanation: "I wrote every line.".into(),
+            mistake: true,
+            consent: true,
+            signature: "Alice Author".into(),
+        };
+        assert!(dispute_notice(&base, &key, &bob, first, &counter).unwrap_err().contains("uploader"));
+        dispute_notice(&base, &key, &alice, first, &counter).unwrap();
+        let handled = latest(&alice, "copyright_notice");
+        assert!(handled.handled && handled.resolution.as_deref() == Some("disputed"));
+        assert_eq!(latest(&carol, "notice_disputed").data["address"], "2 Code Road");
+        assert_eq!(notice(&base, &key, &carol, first).unwrap().counter.unwrap().name, "Alice Author");
+        // Upheld: back up, locked: the next notice only queues.
+        decide(first, "uphold_dispute").unwrap();
+        assert!(details(&base, &disco.id).is_ok());
+        assert_eq!(latest(&alice, "dispute_upheld").data["name"], "disco");
+        let (second, status) = file_notice(&base, &key, &carol, &claim(&disco.id)).unwrap();
+        assert_eq!(status, "queued");
+        assert!(details(&base, &disco.id).is_ok(), "locked: still up");
+        assert!(decide(second, "uphold_dispute").unwrap_err().contains("queued"));
+        // Taken down after all, and alice lets it stand: blocklisted.
+        decide(second, "take_down").unwrap();
+        assert!(details(&base, &disco.id).is_err());
+        accept_notice(&base, &key, &alice, second).unwrap();
+        assert_eq!(latest(&alice, "copyright_notice").resolution.as_deref(), Some("let stand"));
+        assert_eq!(latest(&alice, "takedown_stood").data["how"], "let stand");
+        assert!(publish(&bob, "again", 1).unwrap_err().contains("taken down after a copyright notice"));
+
+        // Two more stand: alice is banned (a repeat infringer).
+        for (slug, n) in [("two", 2), ("three", 3)] {
+            let script = publish(&alice, slug, n).unwrap();
+            let (id, _) = file_notice(&base, &key, &carol, &claim(&script.id)).unwrap();
+            accept_notice(&base, &key, &alice, id).unwrap();
+        }
+        assert!(publish(&alice, "four", 4).unwrap_err().contains("banned"));
+
+        // A bogus one: undone.
+        let bobs = publish(&bob, "bobs", 5).unwrap();
+        let (bogus, _) = file_notice(&base, &key, &carol, &claim(&bobs.id)).unwrap();
+        assert!(details(&base, &bobs.id).is_err());
+        decide(bogus, "bogus").unwrap();
+        assert!(details(&base, &bobs.id).is_ok());
+        assert_eq!(latest(&bob, "copyright_notice").resolution.as_deref(), Some("found bogus"));
+        assert_eq!(latest(&carol, "notice_rejected").data["notice"].as_i64(), Some(bogus));
+        let open: Vec<NoticeView> = admin(&base, &key, &mod_, &AdminAction::Notices { all: false }).unwrap();
+        assert!(open.is_empty(), "{open:?}");
+        let all: Vec<NoticeView> = admin(&base, &key, &mod_, &AdminAction::Notices { all: true }).unwrap();
+        assert_eq!(all.len(), 5);
+        assert!(all.iter().all(|n| n.claimant_id.is_some() && !n.notice.phone.is_empty()), "moderators see it all");
         running.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }

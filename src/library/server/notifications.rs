@@ -33,7 +33,8 @@ CREATE TABLE notifications (
     created INTEGER NOT NULL,
     read INTEGER NOT NULL DEFAULT 0,
     needs_action INTEGER NOT NULL DEFAULT 0,
-    handled INTEGER NOT NULL DEFAULT 0
+    handled INTEGER NOT NULL DEFAULT 0,
+    resolution TEXT                 -- what was done about it, once handled
 );
 CREATE INDEX notifications_key ON notifications(key, id);
 ALTER TABLE scripts ADD COLUMN downloads INTEGER NOT NULL DEFAULT 0;
@@ -69,6 +70,14 @@ fn template(kind: &str) -> &'static str {
         "remixed" => "{by} published a remix of \"{name}\": \"{remix_name}\"",
         "report_handled" => "Your report of \"{name}\" was dealt with: {outcome}",
         "new_report" => "New report of \"{name}\": {reason}",
+        "copyright_notice" => "\"{name}\" was taken down: a copyright notice from {claimant}, for {on_behalf_of}",
+        "notice_disputed" => "{uploader} disputed your copyright notice on \"{name}\"",
+        "dispute_upheld" => "Your dispute was upheld: \"{name}\" is back up",
+        "notice_rejected" => "Your copyright notice on \"{name}\" was turned down",
+        "notice_withdrawn" => "The copyright notice on \"{name}\" was found bogus: it's back up",
+        "takedown_stood" => "The takedown of \"{name}\" stands ({how})",
+        "new_notice" => "New copyright notice on \"{name}\"",
+        "new_dispute" => "A copyright notice on \"{name}\" was disputed",
         _ => "{kind}",
     }
 }
@@ -92,6 +101,7 @@ pub(super) fn notify(state: &State, db: &Connection, key: &str, kind: &str, data
         read: false,
         needs_action,
         handled: false,
+        resolution: None,
     };
     let message = serde_json::to_string(&notification).unwrap_or_default();
     let mut streams = state.streams.lock().unwrap_or_else(|p| p.into_inner());
@@ -131,6 +141,35 @@ pub(super) fn downloaded(state: &State, db: &Connection, script: &str) {
     if let Some(count) = milestone(before.max(0) as u64, before.max(0) as u64 + 1) {
         author_notify(state, db, script, "download_milestone", |name| serde_json::json!({ "script": script, "name": name, "count": count }));
     }
+}
+
+/// Tell a script's author (a signed upload's), with these fields; one
+/// that `needs_action` stays until it's handled.
+pub(super) fn author_notify_any(
+    state: &State,
+    db: &Connection,
+    script: &str,
+    kind: &str,
+    fields: serde_json::Value,
+    needs_action: bool,
+) {
+    let author: Option<Option<String>> =
+        db.query_row("SELECT author_key FROM scripts WHERE id = ?", [script], |r| r.get(0)).ok();
+    if let Some(Some(author)) = author {
+        notify(state, db, &author, kind, fields, needs_action);
+    }
+}
+
+/// Mark `key`'s notifications of `kind` about `field` = `value` handled,
+/// with what was done.
+pub(super) fn resolve(db: &Connection, key: &str, kind: &str, field: &str, value: i64, resolution: &str) {
+    let _ = db.execute(
+        &format!(
+            "UPDATE notifications SET handled = 1, read = 1, resolution = ? WHERE key = ? AND kind = ?
+             AND json_extract(data, '$.{field}') = ?"
+        ),
+        params![resolution, key, kind, value],
+    );
 }
 
 /// Tell a script's author (a signed upload's), with fields made from its
@@ -174,6 +213,9 @@ struct MarkRequest {
     /// Done with (for those that need something done), not just read.
     #[serde(default)]
     handled: bool,
+    /// What was done, to show in place of what could be.
+    #[serde(default)]
+    resolution: Option<String>,
 }
 
 fn signed_json<T: serde::de::DeserializeOwned + Default>(state: &State, request: &mut Request, path: &str) -> Result<(String, T), Reply> {
@@ -196,7 +238,7 @@ pub(super) fn list(state: &State, request: &mut Request) -> Reply {
     let rows = state
         .db()
         .prepare(
-            "SELECT id, kind, data, template, created, read, needs_action, handled FROM notifications
+            "SELECT id, kind, data, template, created, read, needs_action, handled, resolution FROM notifications
              WHERE key = ? AND id > ? ORDER BY id DESC LIMIT 200",
         )
         .and_then(|mut s| {
@@ -210,6 +252,7 @@ pub(super) fn list(state: &State, request: &mut Request) -> Reply {
                     read: r.get::<_, i64>(5)? != 0,
                     needs_action: r.get::<_, i64>(6)? != 0,
                     handled: r.get::<_, i64>(7)? != 0,
+                    resolution: r.get(8)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()
@@ -227,12 +270,13 @@ pub(super) fn mark(state: &State, request: &mut Request) -> Reply {
         Err(reply) => return reply,
     };
     let db = state.db();
-    let column = if ask.handled { "handled = 1, read = 1" } else { "read = 1" };
+    let column = if ask.handled { "handled = 1, read = 1, resolution = COALESCE(?2, resolution)" } else { "read = 1" };
     let result = if ask.all {
-        db.execute(&format!("UPDATE notifications SET {column} WHERE key = ?"), [&key])
+        db.execute(&format!("UPDATE notifications SET {column} WHERE key = ?1"), params![key, ask.resolution])
     } else {
         ask.ids.iter().try_fold(0, |n, id| {
-            db.execute(&format!("UPDATE notifications SET {column} WHERE key = ? AND id = ?"), params![key, id]).map(|m| n + m)
+            db.execute(&format!("UPDATE notifications SET {column} WHERE key = ?1 AND id = ?3"), params![key, ask.resolution, id])
+                .map(|m| n + m)
         })
     };
     match result {

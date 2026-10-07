@@ -343,6 +343,9 @@ pub struct Notification {
     /// It asks for something to be done (a dispute, say), and it has been.
     pub needs_action: bool,
     pub handled: bool,
+    /// What was done about it ("disputed"), once it's handled.
+    #[serde(default)]
+    pub resolution: Option<String>,
 }
 
 /// A document a server offers, in `/api/v1/info`.
@@ -647,6 +650,83 @@ pub enum AdminAction {
     /// Update to the newest release (how depends on how it's run):
     /// `{"done": "what's happening"}`.
     Update,
+    /// Copyright notices (open ones, or `all`), newest first, with
+    /// everything in them: `[NoticeView]`.
+    Notices { all: bool },
+    /// Decide a copyright notice: `"uphold_dispute"` (the item comes back,
+    /// locked against notices), `"reject_dispute"` (the takedown stands),
+    /// `"bogus"` (the notice was no good: the item comes back), or
+    /// `"take_down"` (a notice queued on a locked item, taken down after
+    /// all).
+    Copyright { notice: i64, decision: String, note: String },
+}
+
+/// A copyright notice, as a rights holder (or someone acting for one)
+/// files it: what a DMCA notice needs. Signed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct CopyrightNotice {
+    /// The script (or song) it's about.
+    pub item: String,
+    pub name: String,
+    /// Who the rights belong to (themselves, or whom they act for).
+    pub on_behalf_of: String,
+    pub address: String,
+    pub email: String,
+    pub phone: String,
+    /// The copyrighted work, and where it's from (a link, a release).
+    pub work: String,
+    pub work_location: String,
+    /// "I have a good faith belief that the use isn't authorized by the
+    /// owner, its agent, or the law."
+    pub good_faith: bool,
+    /// "The notice is accurate, and under penalty of perjury, I'm
+    /// authorized to act for the owner."
+    pub accurate: bool,
+    /// Their full name, typed, as their signature.
+    pub signature: String,
+}
+
+/// A dispute of a copyright notice (a counter-notice), by the item's
+/// uploader. Signed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct CounterNotice {
+    pub name: String,
+    pub address: String,
+    pub email: String,
+    pub phone: String,
+    /// What they'd like the moderators to know.
+    pub explanation: String,
+    /// "Under penalty of perjury, I have a good faith belief it was taken
+    /// down by mistake or misidentification."
+    pub mistake: bool,
+    /// "I consent to the jurisdiction of the courts where I live (or, outside
+    /// the US, any where the server's provider may be found), and will
+    /// accept service of process from the person who sent the notice."
+    pub consent: bool,
+    pub signature: String,
+}
+
+/// A copyright notice as it's shown: to the uploader without the
+/// claimant's address, email and phone; to the claimant with the
+/// uploader's counter-notice in full (it's sent to them); to moderators
+/// with everything.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct NoticeView {
+    pub id: i64,
+    pub item: String,
+    pub item_name: String,
+    /// "taken_down", "queued", "disputed", "upheld", "stood", "bogus".
+    pub status: String,
+    pub created: i64,
+    /// When it stands if it isn't disputed.
+    pub deadline: i64,
+    pub notice: CopyrightNotice,
+    pub counter: Option<CounterNotice>,
+    /// The moderators' note on their decision.
+    pub decision_note: Option<String>,
+    /// The claimant's ID, and the uploader's (moderators only).
+    pub claimant_id: Option<String>,
+    pub uploader_id: Option<String>,
 }
 
 /// A server's version, as admins see it.
