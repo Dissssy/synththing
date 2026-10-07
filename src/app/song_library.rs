@@ -5,6 +5,12 @@
 //! Downloaded songs tab, and Publish song... (the song browser's
 //! right-click menu). Searching, encores, reports and deleting are the
 //! Library's own (`library.rs`), the same for songs as for scripts.
+//!
+//! The selected song's preview is played here, not fetched as images: its
+//! file is downloaded and `song_preview` plays its preview stretch with the
+//! keyboard visualizer and the soundfont in use, muted (the speaker icon
+//! over it) until it's clicked. It stops when the Library isn't on screen,
+//! and is muted again the next time it is.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -14,11 +20,21 @@ use eframe::egui;
 
 use super::library::host;
 use super::{info_icon, App};
+use crate::audio::AudioCommand;
 use crate::library::songs::{self, SongSource, SongUpload};
 use crate::library::{self, client, Info, Receipt, ScriptSummary};
+use crate::loader::{Asset, LoadState};
+use crate::song_preview::{PreviewOutput, SongPreview};
+
+/// A song on a server, as previewed: (server, ID, version).
+type SongKey = (String, String, u32);
+/// A song's file, or why it couldn't be had.
+type SongFile = Result<Vec<u8>, String>;
 
 enum Event {
     Info(String, Result<Info, String>),
+    /// The selected song's file, for its preview.
+    File(SongKey, Result<Vec<u8>, String>),
     Downloaded(String, Box<ScriptSummary>, Result<client::SongDownload, String>),
     /// An upload finished: the server, its key, the file, the upload, the result.
     Published(String, String, PathBuf, Box<SongUpload>, Result<Receipt, String>),
@@ -63,10 +79,29 @@ pub struct SongLibraryState {
     busy: bool,
     /// Delete was clicked once (for this file); the next click confirms.
     confirm_delete: Option<PathBuf>,
+    /// Where previews play.
+    output: PreviewOutput,
+    /// The selected song's file (`None` while it's coming).
+    file: Option<(SongKey, Option<SongFile>)>,
+    playing: Option<Playing>,
+    /// Previews are muted (each time the Library is opened); clicking one
+    /// unmutes it, and the next one played.
+    muted: bool,
+    /// The pass a preview was last drawn in.
+    drawn_at: u64,
 }
 
-impl Default for SongLibraryState {
-    fn default() -> Self {
+/// A preview playing: whose, with which soundfont, and its picture so far.
+struct Playing {
+    key: SongKey,
+    soundfont: PathBuf,
+    preview: SongPreview,
+    texture: Option<egui::TextureHandle>,
+    seen: u64,
+}
+
+impl SongLibraryState {
+    pub fn new(output: PreviewOutput) -> Self {
         Self {
             events: mpsc::channel(),
             publish: None,
@@ -74,6 +109,11 @@ impl Default for SongLibraryState {
             scanned: None,
             busy: false,
             confirm_delete: None,
+            output,
+            file: None,
+            playing: None,
+            muted: true,
+            drawn_at: 0,
         }
     }
 }
@@ -149,6 +189,13 @@ impl App {
                         self.note_server_info(server, info);
                     }
                 }
+                Event::File(key, result) => {
+                    if let Some((wanted, file)) = &mut self.song_library.file
+                        && *wanted == key
+                    {
+                        *file = Some(result);
+                    }
+                }
                 Event::Downloaded(server, summary, result) => {
                     self.song_library.busy = false;
                     match result {
@@ -202,6 +249,121 @@ impl App {
             }
             Err(e) => self.status = format!("Couldn't save {}: {e}", path.display()),
         }
+    }
+
+    /// The selected song's preview, at the top of its details: the
+    /// keyboard visualizer playing its preview stretch, muted until it's
+    /// clicked. Always the same space, so nothing below it jumps.
+    pub(super) fn song_preview_ui(&mut self, ui: &mut egui::Ui, server: &str, summary: &ScriptSummary) {
+        let width = ui.available_width().min(480.0);
+        let size = egui::vec2(width, width * crate::preview::HEIGHT as f32 / crate::preview::WIDTH as f32);
+        let placeholder = |ui: &mut egui::Ui, text: &str, spinner: bool| super::previews::placeholder_ui(ui, width, text, spinner);
+        let Some(song) = &summary.song else { return placeholder(ui, "No preview.", false) };
+        self.song_library.drawn_at = ui.ctx().cumulative_pass_nr();
+        let key: SongKey = (server.to_string(), summary.id.clone(), summary.version);
+        // Its file.
+        if self.song_library.file.as_ref().map(|(k, _)| k) != Some(&key) {
+            self.song_library.file = Some((key.clone(), None));
+            self.song_library.playing = None;
+            match self.config.library.pinned.get(server).cloned() {
+                Some(server_key) => {
+                    let key = key.clone();
+                    self.spawn_songs(move || {
+                        let result = client::download_song(&key.0, &key.1, Some(key.2), &server_key).map(|d| d.bytes);
+                        Event::File(key, result)
+                    });
+                }
+                None => self.song_library.file = Some((key.clone(), Some(Err("the server's key isn't known yet".into())))),
+            }
+        }
+        let bytes = match self.song_library.file.as_ref().and_then(|(_, f)| f.as_ref()) {
+            None => return placeholder(ui, "Loading...", true),
+            Some(Err(e)) => return placeholder(ui, &format!("Couldn't get the song: {e}"), false),
+            Some(Ok(bytes)) => bytes.clone(),
+        };
+        // The soundfont it's heard with: the one in use.
+        let Some(soundfont_path) = self.loaded_sf.clone() else {
+            return placeholder(ui, "Load a soundfont to see and hear its preview.", false);
+        };
+        let soundfont = match self.assets.get(&soundfont_path) {
+            Some(LoadState::Ready(Asset::SoundFont(soundfont))) => soundfont.clone(),
+            _ => return placeholder(ui, "Loading the soundfont...", true),
+        };
+        let current = self.song_library.playing.as_ref().is_some_and(|p| p.key == key && p.soundfont == soundfont_path);
+        if !current {
+            // (The old one stops first, so the two never overlap.)
+            self.song_library.playing = None;
+            let preview = SongPreview::start(
+                &self.song_library.output,
+                bytes,
+                soundfont,
+                song.preview_start,
+                crate::preview::WIDTH * 2,
+                crate::preview::HEIGHT * 2,
+            );
+            self.song_library.playing = Some(Playing { key, soundfont: soundfont_path, preview, texture: None, seen: 0 });
+        }
+        let Some(playing) = self.song_library.playing.as_mut() else { return };
+        if let Some(e) = playing.preview.error() {
+            return placeholder(ui, &format!("Its preview didn't play: {e}"), false);
+        }
+        if let Some((seen, pixels)) = playing.preview.picture_after(playing.seen) {
+            playing.seen = seen;
+            let rgba: Vec<u8> = pixels.iter().flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8, 255]).collect();
+            let image = egui::ColorImage::from_rgba_unmultiplied([playing.preview.width, playing.preview.height], &rgba);
+            match &mut playing.texture {
+                Some(texture) => texture.set(image, egui::TextureOptions::LINEAR),
+                None => playing.texture = Some(ui.ctx().load_texture("song-preview", image, egui::TextureOptions::LINEAR)),
+            }
+        }
+        ui.ctx().request_repaint();
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        let painter = ui.painter_at(rect);
+        match &playing.texture {
+            Some(texture) => {
+                let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                egui::Image::new((texture.id(), size)).uv(uv).corner_radius(4.0).paint_at(ui, rect);
+            }
+            None => {
+                painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
+            }
+        }
+        // The speaker: big while it's muted, small in the corner once it isn't.
+        let muted = self.song_library.muted;
+        let (center, radius, glyph) = if muted {
+            (rect.center(), 30.0, super::icon("speaker-slash"))
+        } else {
+            (rect.right_bottom() - egui::vec2(22.0, 22.0), 14.0, super::icon("speaker-high"))
+        };
+        let shade = if response.hovered() { 200 } else { 150 };
+        painter.circle_filled(center, radius, egui::Color32::from_black_alpha(shade));
+        painter.text(center, egui::Align2::CENTER_CENTER, glyph, egui::FontId::proportional(radius * 1.1), egui::Color32::WHITE);
+        let response = response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(if muted { "Click to hear it (with the soundfont in use)" } else { "Click to mute it" });
+        if response.clicked() {
+            self.song_library.muted = !muted;
+            // (One song at a time: the one playing pauses.)
+            if muted {
+                let view = self.shared.lock().unwrap_or_else(|p| p.into_inner()).view.clone();
+                if !view.paused && !view.finished && view.length > 0.0 {
+                    self.send(AudioCommand::TogglePause);
+                }
+            }
+        }
+    }
+
+    /// Per frame, after the tabs are drawn: a preview not on screen stops
+    /// (and the next one starts muted), and the gate follows the mute and
+    /// the volume.
+    pub(super) fn song_preview_tick(&mut self, ctx: &egui::Context) {
+        let lib = &mut self.song_library;
+        if lib.playing.is_some() && lib.drawn_at < ctx.cumulative_pass_nr() {
+            lib.playing = None;
+            lib.muted = true;
+        }
+        let gain = if lib.muted || lib.playing.is_none() { 0.0 } else { self.volume };
+        lib.output.set_gain(gain);
     }
 
     /// A song's Download (or Play, once it's downloaded), in its details.

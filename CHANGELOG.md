@@ -8,9 +8,11 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Library servers can host songs (MIDI files), when their owner turns it on (`"songs": true` in `server.json`): each upload declares the poster's right to share it, says where it's from, and is checked by its notes, so the same song posted again by someone else isn't taken.
 - Songs in the Online Library: a Songs side beside Scripts, for the servers that take them, with each song's credits, where it's from and the rights it's shared under. Download saves one in a Library folder beside your songs, and the new Downloaded songs tab (View menu) plays them, shows them in their folder, or deletes them.
 - Publish song..., in the song browser's right-click menu: share a MIDI file on a library server that takes songs. Its title, composer and arranger are filled in from the file when it says.
+- Song previews: the selected song plays its liveliest stretch on the keyboard visualizer, muted; click it to hear it with your soundfont.
 
 ### Changed
 - The Script Library is the Online Library now, since it has songs too.
+- The keyboard visualizer's keys keep a grand piano's shape (about 6.4 times as long as they're wide) whatever the window's, instead of always taking 28% of its height.
 
 ## 0.4.7 (2026-10-07)
 

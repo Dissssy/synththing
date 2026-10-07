@@ -35,6 +35,7 @@ mod playlist;
 mod preview;
 mod recorder;
 mod song_info;
+mod song_preview;
 mod snippets;
 mod spectrum;
 mod theme;
@@ -194,6 +195,9 @@ fn main() -> Result<()> {
     stream
         .mixer()
         .add(SynthSource::new(live_ring.clone(), Arc::new(AtomicBool::new(false)), sample_rate));
+    // Songs' previews in the Online Library: their own ring, muted until clicked.
+    let (preview_output, preview_source) = song_preview::PreviewOutput::new();
+    stream.mixer().add(preview_source);
 
     // Render thread, owns the engine, produces into the ring.
     let audio = AudioEngine::new(
@@ -215,7 +219,7 @@ fn main() -> Result<()> {
     let mut config = Config::load()?;
     config.soundfonts.sort();
 
-    let mut app = App::new(command_tx, shared, config, tap, sample_rate);
+    let mut app = App::new(command_tx, shared, config, tap, sample_rate, preview_output);
     app.autoload_first_soundfont();
     app.check_for_updates_on_launch();
     app.whats_new_on_launch(ran_before);

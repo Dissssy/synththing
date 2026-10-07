@@ -1185,7 +1185,7 @@ impl App {
                 let s = &s;
                 let song = s.song.clone();
                 if song.is_some() {
-                    previews::placeholder_ui(ui, ui.available_width().min(480.0), "Song previews are on their way.", false);
+                    self.song_preview_ui(ui, &server, s);
                     ui.separator();
                 } else {
                     self.library_preview_ui(ui, &server, &id);

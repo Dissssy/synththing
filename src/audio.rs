@@ -127,7 +127,7 @@ impl AudioRing {
         self.backlog.queued.load(Ordering::Relaxed)
     }
 
-    fn push(&self, block: &[f32]) {
+    pub(crate) fn push(&self, block: &[f32]) {
         let mut queue = self.inner.lock().unwrap();
         queue.extend(block.iter().copied());
         self.backlog.queued.store(queue.len(), Ordering::Relaxed);
@@ -149,7 +149,7 @@ impl AudioRing {
     /// Render side: drop everything queued, and tell the consumer (through
     /// `flush`) to drop what it holds too. Done under the lock, so audio
     /// rendered right after (from the new position) is kept.
-    fn flush(&self, flush: &AtomicBool) {
+    pub(crate) fn flush(&self, flush: &AtomicBool) {
         let mut queue = self.inner.lock().unwrap();
         queue.clear();
         self.backlog.queued.store(0, Ordering::Relaxed);

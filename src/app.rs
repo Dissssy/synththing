@@ -335,6 +335,7 @@ impl App {
         config: Config,
         tap: SampleTap,
         sample_rate: u32,
+        preview_output: crate::song_preview::PreviewOutput,
     ) -> Self {
         let browser = FileBrowser::new("songs", config.browse_start_dir(), listed_song_extensions(&config));
 
@@ -435,7 +436,7 @@ impl App {
             identity: Default::default(),
             notifications: Default::default(),
             copyright: Default::default(),
-            song_library: Default::default(),
+            song_library: song_library::SongLibraryState::new(preview_output),
             changelog: None,
             welcome: welcome::Welcome::default(),
             preferences_tab: PrefTab::default(),
@@ -2908,6 +2909,7 @@ impl eframe::App for App {
         self.notification_ui(&ctx);
         self.copyright_ui(&ctx);
         self.publish_song_ui(&ctx);
+        self.song_preview_tick(&ctx);
         self.moderation_ui(&ctx);
         self.poll_library();
         self.poll_moderation();

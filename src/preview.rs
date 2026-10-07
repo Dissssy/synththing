@@ -63,7 +63,7 @@ const CHECK_SECONDS: f64 = 4.0;
 pub const SONG_SECONDS: f64 = crate::library::songs::PREVIEW_SECONDS;
 pub const SONG_FRAMES: usize = (SONG_SECONDS * FPS) as usize;
 /// What draws songs' previews (bundled).
-const SONG_SCRIPT: &str = "keyboard.lua";
+pub const SONG_SCRIPT: &str = "keyboard.lua";
 /// The start of the error for a script that doesn't run.
 pub const SCRIPT_ERROR: &str = "the script has an error: ";
 /// The most memory a script may use while its preview is made.

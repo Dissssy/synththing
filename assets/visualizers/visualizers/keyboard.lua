@@ -25,7 +25,13 @@
 
 local FIRST_KEY = 21   -- A0
 local LAST_KEY = 108   -- C8
-local KEYBOARD_FRACTION = 0.28
+-- A grand piano's white keys are about 6.4 times as long as they're wide
+-- (23.5 mm by 150 mm): the keyboard's height follows from the keys' width,
+-- so they keep that shape whatever the window's. Never more than
+-- MAX_KEYBOARD_FRACTION of the height, so a very wide, short window still
+-- has room for the falling notes.
+local WHITE_KEY_ASPECT = 150 / 23.5
+local MAX_KEYBOARD_FRACTION = 0.4
 
 -- Pitch classes (note % 12) that are white keys: C D E F G A B.
 local WHITE_PCS = { [0] = true, [2] = true, [4] = true, [5] = true, [7] = true, [9] = true, [11] = true }
@@ -122,7 +128,7 @@ local function play_along(channel, velocity)
 end
 
 -- Per-key horizontal layout, rebuilt only when the window width changes.
-local layout = { width = -1, keys = {} }
+local layout = { width = -1, keys = {}, white_w = 1 }
 
 local function rebuild_layout(width)
     layout.width = width
@@ -133,6 +139,7 @@ local function rebuild_layout(width)
         if is_white(k) then white_total = white_total + 1 end
     end
     local white_w = width / white_total
+    layout.white_w = white_w
 
     local whites_seen = 0
     for k = FIRST_KEY, LAST_KEY do
@@ -180,7 +187,10 @@ function render(width, height, left, right)
 
     clear(background)
 
-    local kb_h = math.max(1, math.floor(height * KEYBOARD_FRACTION))
+    if layout.width ~= width then
+        rebuild_layout(width)
+    end
+    local kb_h = math.max(1, math.floor(math.min(layout.white_w * WHITE_KEY_ASPECT, height * MAX_KEYBOARD_FRACTION)))
     local kb_top = height - kb_h
     local lane_height = math.max(1, kb_top)
 
