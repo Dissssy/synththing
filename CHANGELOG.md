@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.5.0 (2026-10-07)
+
 ### Fixed
 - On Windows, the app has room to read very large scripts (in the editor, or publishing one) without crashing: its main thread's stack is 16 MB, as on the threads that run scripts, instead of Windows' 1 MB.
 
