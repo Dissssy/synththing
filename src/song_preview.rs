@@ -220,15 +220,15 @@ mod tests {
         let soundfont = SoundFont::new(&mut std::fs::File::open(root.join("assets/starter/soundfonts/TimGM6mb.sf2")).unwrap()).unwrap();
         let (output, mut source) = PreviewOutput::new();
         let speakers = std::thread::spawn(move || {
-            // About a second of sound, taken a little faster than it plays.
+            // A second of sound, taken as it plays: 10 ms at a time.
             let mut loud = 0usize;
-            for i in 0..(SAMPLE_RATE as usize * 2) {
-                if source.next().is_some_and(|s| s != 0.0) {
-                    loud += 1;
+            for _ in 0..100 {
+                for _ in 0..(SAMPLE_RATE as usize / 100 * 2) {
+                    if source.next().is_some_and(|s| s != 0.0) {
+                        loud += 1;
+                    }
                 }
-                if i.is_multiple_of(4096) {
-                    std::thread::yield_now();
-                }
+                std::thread::sleep(Duration::from_millis(10));
             }
             loud
         });
