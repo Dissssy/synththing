@@ -90,6 +90,7 @@ pub struct ScriptStatus {
     pub log: Vec<LogEntry>,
     pub options: ScriptOptions,
     pub cursor: CursorRequest,
+    pub channel_colors: crate::lua_visualizer::ChannelColors,
 }
 
 enum Message {
@@ -290,6 +291,10 @@ impl ScriptHost {
 
     pub fn cursor(&self) -> CursorRequest {
         self.status().status.cursor
+    }
+
+    pub fn channel_colors(&self) -> crate::lua_visualizer::ChannelColors {
+        self.status().status.channel_colors
     }
 
     /// How long the script has been busy with what it's doing now, if it
@@ -528,6 +533,7 @@ impl Worker {
             log: Vec::new(),
             options: visualizer.options(),
             cursor: visualizer.cursor_request(),
+            channel_colors: visualizer.channel_colors(),
         };
         let state = match &self.watch_state {
             Some(request) if self.state_taken.is_none_or(|t| t.elapsed() >= STATE_EVERY) => {

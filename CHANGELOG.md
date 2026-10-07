@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### New
+- Channel toggles in color: the toggles above the visualizer are filled with each channel's color while it's on, and outlined in it while it's off. They're the keyboard visualizer's colors (as in song previews), unless the script says which it draws each channel in (`channel_colors`).
+
 ## 0.5.0 (2026-10-07)
 
 ### Fixed

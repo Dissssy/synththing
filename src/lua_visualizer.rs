@@ -136,6 +136,7 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 -- active_notes() / upcoming_notes()     notes held now / changing soon
 -- midi_channels() / channel_enabled(c)  the file's channels and their toggles
 -- set_channel_enabled(c, enabled)       mute/unmute a channel from the script
+-- channel_colors({ [c] = color, ... })   color the app's channel toggles to match
 -- play_note(key, {channel, velocity, duration})  play a note on the song's instruments
 -- playback() / set_paused(p) / seek(t)  transport state and control
 -- playlist() / play_track(i) / next_track()  the current playlist
@@ -1717,6 +1718,8 @@ struct Compiled {
     /// by the host once per frame and turned into real `AudioCommand`s, the
     /// script can't touch the engine directly, just ask.
     channel_requests: Rc<RefCell<Vec<(u8, bool)>>>,
+    /// The colors the script gave channels (`channel_colors`).
+    channel_colors: Rc<RefCell<ChannelColors>>,
     /// The most recent `debug_locals()` snapshot: an optional label plus
     /// whatever was in scope at that call site. `None` until the script
     /// calls it at least once.
@@ -2020,6 +2023,11 @@ impl LuaVisualizer {
     pub fn take_channel_requests(&mut self) -> Vec<(u8, bool)> {
         let Some(compiled) = &self.compiled else { return Vec::new() };
         compiled.channel_requests.borrow_mut().drain(..).collect()
+    }
+
+    /// The colors the script gave channels (`channel_colors`), if any.
+    pub fn channel_colors(&self) -> ChannelColors {
+        self.compiled.as_ref().map(|c| *c.channel_colors.borrow()).unwrap_or_default()
     }
 
     /// Recompile against `new_source` on a fresh Lua VM. On success the new
@@ -2328,6 +2336,7 @@ fn compile(
         ..LogHistory::default()
     }));
     let channel_requests: Rc<RefCell<Vec<(u8, bool)>>> = Rc::new(RefCell::new(Vec::new()));
+    let channel_colors: Rc<RefCell<ChannelColors>> = Rc::default();
     let debug_snapshot: Rc<RefCell<Option<DebugSnapshot>>> = Rc::new(RefCell::new(None));
 
     register_globals(
@@ -2342,6 +2351,7 @@ fn compile(
         &settings,
         &log,
         &channel_requests,
+        &channel_colors,
         &debug_snapshot,
     )
     .map_err(|e| e.to_string())?;
@@ -2424,6 +2434,7 @@ fn compile(
         settings,
         log,
         channel_requests,
+        channel_colors,
         debug_snapshot,
         cursor,
         playback_requests,
@@ -3636,6 +3647,7 @@ fn register_globals(
     settings: &Rc<RefCell<SettingsStore>>,
     log: &Rc<RefCell<LogHistory>>,
     channel_requests: &Rc<RefCell<Vec<(u8, bool)>>>,
+    channel_colors: &Rc<RefCell<ChannelColors>>,
     debug_snapshot: &Rc<RefCell<Option<DebugSnapshot>>>,
 ) -> mlua::Result<()> {
     let globals = lua.globals();
@@ -3762,6 +3774,27 @@ fn register_globals(
         "set_channel_enabled",
         lua.create_function(move |_, (channel, enabled): (i64, bool)| {
             requests.borrow_mut().push((channel.clamp(0, 15) as u8, enabled));
+            Ok(())
+        })?,
+    )?;
+
+    // The colors the script draws channels in, for the app's channel
+    // toggles: `{ [channel] = color, ... }`, each call the whole mapping
+    // (channels left out, or nil for all, go back to the default colors).
+    let colors = Rc::clone(channel_colors);
+    globals.set(
+        "channel_colors",
+        lua.create_function(move |_, given: Option<Table>| {
+            let mut mapping = ChannelColors::default();
+            if let Some(given) = given {
+                for pair in given.pairs::<i64, Table>() {
+                    let (channel, color) = pair?;
+                    if (0..16).contains(&channel) {
+                        mapping[channel as usize] = Some(table_to_rgb(&color)?);
+                    }
+                }
+            }
+            *colors.borrow_mut() = mapping;
             Ok(())
         })?,
     )?;
@@ -3970,6 +4003,28 @@ fn register_globals(
     )?;
 
     Ok(())
+}
+
+/// The colors a script gave channels 0 to 15 (`channel_colors`), shown on
+/// the app's channel toggles.
+pub type ChannelColors = [Option<[u8; 3]>; 16];
+
+/// The channel toggles' colors where the script hasn't given one: the
+/// keyboard visualizer's (its CHANNEL_COLORS), which song previews show
+/// too, repeating every eight channels.
+const DEFAULT_CHANNEL_COLORS: [[u8; 3]; 8] = [
+    [90, 170, 255],
+    [255, 130, 90],
+    [120, 230, 140],
+    [240, 210, 90],
+    [200, 120, 255],
+    [90, 230, 230],
+    [255, 110, 170],
+    [170, 200, 120],
+];
+
+pub fn default_channel_color(channel: u8) -> [u8; 3] {
+    DEFAULT_CHANNEL_COLORS[channel as usize % DEFAULT_CHANNEL_COLORS.len()]
 }
 
 /// A color table `{r, g, b}` or `{r, g, b, a}` packed as `0xAARRGGBB`. `a` is
@@ -4311,6 +4366,48 @@ fn draw_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `channel_colors` keeps the whole mapping (channels 0 to 15 only),
+    /// and a call without one clears it.
+    #[test]
+    fn channel_colors_are_kept() {
+        let source = "channel_colors({ [0] = { r = 10, g = 20, b = 30 }, [15] = { r = 300, g = 0, b = 0 }, [16] = { r = 1, g = 1, b = 1 } })
+                      function render() end";
+        let mut visualizer = LuaVisualizer::new(source.to_string(), None, 44_100);
+        assert_eq!(visualizer.error(), None);
+        let colors = visualizer.channel_colors();
+        assert_eq!(colors[0], Some([10, 20, 30]));
+        assert_eq!(colors[15], Some([255, 0, 0]), "clamped");
+        assert!(colors[1..15].iter().all(Option::is_none));
+        visualizer.set_source("channel_colors() function render() end".to_string());
+        assert!(visualizer.channel_colors().iter().all(Option::is_none));
+    }
+
+    /// The toggles' default colors are the keyboard visualizer's, as its
+    /// CHANNEL_COLORS lists them (change one, change both).
+    #[test]
+    fn default_channel_colors_are_the_keyboards() {
+        let keyboard = bundled_default("keyboard.lua").unwrap();
+        let start = keyboard.find("local CHANNEL_COLORS = {").unwrap();
+        let end = start + keyboard[start..].find("\n}").unwrap();
+        let colors: Vec<[u8; 3]> = keyboard[start..end]
+            .lines()
+            .filter(|line| line.contains("r ="))
+            .map(|line| {
+                let numbers: Vec<u8> = line
+                    .split(|c: char| !c.is_ascii_digit())
+                    .filter(|n| !n.is_empty())
+                    .map(|n| n.parse().unwrap())
+                    .collect();
+                [numbers[0], numbers[1], numbers[2]]
+            })
+            .collect();
+        assert_eq!(colors.len(), 8);
+        for (channel, color) in colors.iter().enumerate() {
+            assert_eq!(default_channel_color(channel as u8), *color, "channel {channel}");
+            assert_eq!(default_channel_color(channel as u8 + 8), *color, "channel {}", channel + 8);
+        }
+    }
 
     /// Bundled scripts are embedded with Unix line endings whatever the
     /// checkout has (build.rs), so each one's hash is the published copy's.

@@ -1133,6 +1133,7 @@ pub const API_SINCE: &[(&str, &str)] = &[
     ("midi_channels", "0.1.1"),
     ("channel_enabled", "0.1.1"),
     ("set_channel_enabled", "0.1.1"),
+    ("channel_colors", "0.5.1"),
     ("playback", "0.1.1"),
     ("set_paused", "0.1.4"),
     ("seek", "0.1.4"),

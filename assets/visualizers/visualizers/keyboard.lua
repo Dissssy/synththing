@@ -36,6 +36,9 @@ local MAX_KEYBOARD_FRACTION = 0.4
 -- Pitch classes (note % 12) that are white keys: C D E F G A B.
 local WHITE_PCS = { [0] = true, [2] = true, [4] = true, [5] = true, [7] = true, [9] = true, [11] = true }
 
+-- (The app's channel toggles use these colors by default too, so they
+-- match without channel_colors(): change them here, and call
+-- channel_colors() with the new ones.)
 local CHANNEL_COLORS = {
     { r = 90,  g = 170, b = 255 },
     { r = 255, g = 130, b = 90 },

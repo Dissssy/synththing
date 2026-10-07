@@ -44,6 +44,7 @@ pub const HOST_API: &[(&str, &str)] = &[
     ("midi_channels", "midi_channels() -> channels, channels the current file uses"),
     ("channel_enabled", "channel_enabled(channel) -> bool, is this channel enabled"),
     ("set_channel_enabled", "set_channel_enabled(channel, enabled), mute/unmute a channel"),
+    ("channel_colors", "channel_colors({ [channel] = color, ... }), color the app's channel toggles"),
     ("playback", "playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id, song_loads, loop_mode, shuffle, recording}, times in song seconds"),
     ("set_paused", "set_paused(paused): pause or resume playback (applied after this frame)"),
     ("seek", "seek(seconds): jump to a song position, seek(0) restarts (applied after this frame)"),

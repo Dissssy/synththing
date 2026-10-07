@@ -2376,6 +2376,9 @@ impl App {
                 .filter(|&&c| notes.enabled_channels[c as usize])
                 .count();
 
+            // In the colors the script draws them in, if it said; else
+            // the keyboard visualizer's.
+            let colors = self.visualizer.script().channel_colors();
             ui.horizontal_wrapped(|ui| {
                 ui.label("Channels:")
                     .on_hover_text("Left-click to toggle, right-click to solo");
@@ -2385,10 +2388,13 @@ impl App {
                 for &channel in &notes.detected_channels {
                     let mut enabled = notes.enabled_channels[channel as usize];
                     let is_only_one_left = enabled && enabled_count == 1;
-                    let response = ui.add_enabled(
-                        !is_only_one_left,
-                        egui::Checkbox::new(&mut enabled, format!("{}", channel + 1)),
-                    );
+                    let [r, g, b] = colors[channel as usize].unwrap_or_else(|| lua_visualizer::default_channel_color(channel));
+                    let label = format!("{}", channel + 1);
+                    let response = ui
+                        .add_enabled_ui(!is_only_one_left, |ui| {
+                            channel_toggle(ui, &mut enabled, &label, egui::Color32::from_rgb(r, g, b))
+                        })
+                        .inner;
                     if response.changed() {
                         toggle = Some((channel, enabled));
                     }
@@ -3200,6 +3206,30 @@ fn char_index_of_line(text: &str, line: usize) -> usize {
         }
     }
     text.chars().count()
+}
+
+/// A channel's toggle in its color: egui's own checkbox (so it's the
+/// same size and shape as any other), filled with the color while the
+/// channel's on (the check mark black or white, whichever reads better on
+/// it), outlined in it while it's off.
+fn channel_toggle(ui: &mut egui::Ui, on: &mut bool, label: &str, color: egui::Color32) -> egui::Response {
+    ui.scope(|ui| {
+        // (Relative luminance: black on light colors, white on dark ones.)
+        let [r, g, b, _] = color.to_array();
+        let light = 0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b) > 140.0;
+        let mark = if light { egui::Color32::BLACK } else { egui::Color32::WHITE };
+        let visuals = ui.visuals_mut();
+        // (The label keeps its usual color: the check mark's is the widget's.)
+        visuals.override_text_color = Some(visuals.widgets.inactive.text_color());
+        let fill = if *on { color } else { color.gamma_multiply(0.15) };
+        for state in [&mut visuals.widgets.inactive, &mut visuals.widgets.hovered, &mut visuals.widgets.active] {
+            state.bg_fill = fill;
+            state.bg_stroke = egui::Stroke::new(state.bg_stroke.width.max(1.0), color);
+            state.fg_stroke.color = mark;
+        }
+        ui.checkbox(on, label)
+    })
+    .inner
 }
 
 /// Show `path` in the system file manager (selected, on Windows).
