@@ -505,7 +505,7 @@ impl App {
                     });
                 }
                 (None, _) => state.error = Some("There's no identity here.".into()),
-                (_, None) => state.error = Some("That server hasn't been reached yet: open the Script Library first.".into()),
+                (_, None) => state.error = Some("That server hasn't been reached yet: open the Online Library first.".into()),
             }
         } else if go {
             state.error = None;
@@ -513,7 +513,7 @@ impl App {
             let key = key.unwrap_or_default();
             if key.is_empty() {
                 state.busy = false;
-                state.error = Some(format!("{} hasn't been reached yet: open the Script Library first.", host(&authority)));
+                state.error = Some(format!("{} hasn't been reached yet: open the Online Library first.", host(&authority)));
             } else {
                 self.identity_step(&mut state, authority, key, current);
             }

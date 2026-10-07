@@ -10,7 +10,7 @@ The official library server is run by the makers of synththing. Questions, reque
 
 ## What the server keeps
 
-**When you only browse** (search, read, install), the server keeps nothing about you, apart from counting how often each script is installed. The app talks to the server while the Script Library is open, when you publish, when you check a script for updates, and, while its Notifications preference is on and you have an identity, to fetch your notifications when it starts and to keep a connection open for new ones while it runs.
+**When you only browse** (search, read, install), the server keeps nothing about you, apart from counting how often each script is installed. The app talks to the server while the Online Library is open, when you publish, when you check a script for updates, and, while its Notifications preference is on and you have an identity, to fetch your notifications when it starts and to keep a connection open for new ones while it runs.
 
 **Notifications** the server keeps for you (encores and installs adding up, your scripts hidden or back, remixes of them, your reports dealt with) are deleted 90 days after you've read them.
 

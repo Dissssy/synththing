@@ -1,4 +1,4 @@
-//! Previews in the app (`preview.rs`): the server's, in the Script Library,
+//! Previews in the app (`preview.rs`): the server's, in the Online Library,
 //! and one for every script in the script picker's sidebar. Those are made
 //! here in the background the first time a script is looked at (by
 //! `synththing preview`, as a process of its own), or kept from the server

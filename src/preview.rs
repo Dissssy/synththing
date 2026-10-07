@@ -1,5 +1,5 @@
 //! Script previews (docs/SERVER.md): a short looping animation of what a
-//! script draws, and a still, for the Script Library and the script picker.
+//! script draws, and a still, for the Online Library and the script picker.
 //!
 //! The script plays a stretch from the middle of each starter song
 //! (`starter::SONGS`) at `WIDTH` x `HEIGHT`, drawn by `offline::Stage` (the

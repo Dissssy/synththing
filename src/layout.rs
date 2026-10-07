@@ -55,7 +55,7 @@ impl Section {
             Self::Settings => "Script Settings",
             Self::Reference => "Scripting Reference",
             Self::Sprites => "Sprite Editor",
-            Self::Library => "Script Library",
+            Self::Library => "Online Library",
             Self::Downloads => "Downloaded songs",
         }
     }

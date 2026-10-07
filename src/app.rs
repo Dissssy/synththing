@@ -229,7 +229,7 @@ pub struct App {
     preset_name: String,
     /// The tables opened in Debug > Variables.
     state_request: lua_visualizer::StateRequest,
-    /// The Script Library tab.
+    /// The Online Library tab.
     library: library::LibraryState,
     /// The script picker's previews (behind a RefCell: the picker's list is
     /// drawn from `&self`).

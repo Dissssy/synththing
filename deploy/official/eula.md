@@ -26,7 +26,7 @@ Don't publish, or use the library for:
 
 ## Moderation
 
-The library's moderators may hide or delete scripts, and ban identities or addresses, for breaking these rules or to protect the library and the people using it. Report anything that breaks them with Report... in the Script Library.
+The library's moderators may hide or delete scripts, and ban identities or addresses, for breaking these rules or to protect the library and the people using it. Report anything that breaks them with Report... in the Online Library.
 
 ## Copyright
 

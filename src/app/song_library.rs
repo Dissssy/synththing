@@ -240,13 +240,8 @@ impl App {
         self.status = format!("Downloading \"{}\"...", summary.name);
         let (server, summary) = (server.to_string(), Box::new(summary.clone()));
         self.spawn_songs(move || {
-            let result = client::details(&server, &summary.id).and_then(|details| {
-                let Some(version) = details.newest_for(library::supported_version()) else {
-                    let needs = details.newest().map(|v| v.min_app_version.clone()).unwrap_or_default();
-                    return Err(format!("it needs synththing {needs} or newer"));
-                };
-                client::download_song(&server, &summary.id, Some(version.version), &key)
-            });
+            // (The newest: any app plays any MIDI file.)
+            let result = client::download_song(&server, &summary.id, None, &key);
             Event::Downloaded(server, summary, result)
         });
     }

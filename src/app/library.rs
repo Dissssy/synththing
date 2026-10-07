@@ -1,4 +1,4 @@
-//! The Script Library tab (docs/SERVER.md): scripts shared on library
+//! The Online Library tab (docs/SERVER.md): scripts shared on library
 //! servers, searched across every server in use, installed into the
 //! scripts folder (with a `.source.json` beside each, saying where it came
 //! from), and the current script published (Publish...). Servers and the
@@ -989,7 +989,7 @@ impl App {
         }
     }
 
-    /// The Script Library tab.
+    /// The Online Library tab.
     pub(super) fn library_ui(&mut self, ui: &mut egui::Ui) {
         let servers = self.config.library.enabled_servers();
         let mut search = false;
@@ -1291,9 +1291,11 @@ impl App {
                         pick = Some((server.clone(), script));
                     }
                 }
+                // (Versions and what they need are a script's: any app plays any MIDI file.)
                 if let Some((ds, d)) = &self.library.details
                     && *ds == server
                     && d.summary.id == id
+                    && song.is_none()
                 {
                     ui.add_space(6.0);
                     let versions = d.versions.len();
@@ -1594,7 +1596,7 @@ impl App {
                 let servers = !self.config.library.enabled_servers().is_empty();
                 if ui
                     .add_enabled(servers, egui::Button::new("Publish..."))
-                    .on_hover_text("Share this script in the Script Library")
+                    .on_hover_text("Share this script in the Online Library")
                     .on_disabled_hover_text("Turn on a library server first (Preferences > Library)")
                     .clicked()
                 {
