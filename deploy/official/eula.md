@@ -2,16 +2,18 @@
 
 *synththing official library (synththing.p51.nl). Last updated 2026-10-07.*
 
-These terms cover using the official synththing script library: browsing, installing, publishing, giving encores and reporting. By using it, you agree to them. (synththing itself, the app, is free software under its own license; see Help > Credits & licenses.)
+These terms cover using the official synththing library of scripts and songs: browsing, installing and downloading, publishing, giving encores and reporting. By using it, you agree to them. (synththing itself, the app, is free software under its own license; see Help > Credits & licenses.)
 
 ## The library
 
-The library is free to use, with no account: your identity is a key your app makes. It's provided **as is**, without warranties of any kind. It may be changed, paused or ended at any time, and scripts may be lost.
+The library is free to use, with no account: your identity is a key your app makes. It's provided **as is**, without warranties of any kind. It may be changed, paused or ended at any time, and scripts and songs may be lost.
 
 ## What you publish
 
-- Everything published here is shared under the **Creative Commons Attribution 4.0** license (CC BY 4.0): anyone may use, change and share it, crediting the original. Publishing a script means you agree to share it that way, and that you have the right to.
+- **Scripts** published here are shared under the **Creative Commons Attribution 4.0** license (CC BY 4.0): anyone may use, change and share them, crediting the original. Publishing a script means you agree to share it that way, and that you have the right to.
 - Building on someone else's script is welcome: publish it as a remix (Publish remix...), so the original is credited. A near-copy of someone else's work that isn't credited is refused.
+- **Songs** (MIDI files) aren't under CC BY: each keeps its own rights. Publishing one, you declare your right to share it: it's your own composition, an arrangement of a public-domain work, or released under a license you name. That declaration is shown with it, and it must be true.
+- Publishing a song gives the library, and everyone using it, permission to host, download and play it, including in synththing and in recordings or videos of it playing. Anything more (changing it, or sharing it elsewhere) is only as its declared rights allow: its license's terms, or, for someone's own composition, their permission.
 - An anonymous upload can't be changed or deleted afterwards, even by you.
 
 ## Rules
@@ -21,12 +23,12 @@ Don't publish, or use the library for:
 - anything hateful, harassing, defamatory or derogatory;
 - scripts meant to harm, freeze, deceive or exploit the people who run them;
 - intense flashing without a clear warning in the script's description;
-- other people's work without credit, or anything you don't have the right to share;
+- other people's work without credit, or anything you don't have the right to share (a MIDI version of a song still under copyright, say, unless it was released for sharing);
 - spam, or attempts to game encores, reports or the limits.
 
 ## Moderation
 
-The library's moderators may hide or delete scripts, and ban identities or addresses, for breaking these rules or to protect the library and the people using it. Report anything that breaks them with Report... in the Online Library.
+The library's moderators may hide or delete scripts and songs, and ban identities or addresses, for breaking these rules or to protect the library and the people using it. Report anything that breaks them with Report... in the Online Library.
 
 ## Copyright
 

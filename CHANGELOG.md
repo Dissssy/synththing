@@ -14,6 +14,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 - The Script Library is the Online Library now, since it has songs too.
 - The keyboard visualizer's keys keep a grand piano's shape (about 6.4 times as long as they're wide) whatever the window's, instead of always taking 28% of its height.
 
+### Fixed
+- A preview's "Loading..." (or "No preview.") space no longer overlaps what's below it in the Online Library.
+- Notifications stop asking a library server that doesn't have them (one running an older version), instead of trying every half minute.
+
 ## 0.4.7 (2026-10-07)
 
 ### New
