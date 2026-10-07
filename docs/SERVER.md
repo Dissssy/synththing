@@ -121,6 +121,29 @@ Rendered by the server on each upload and each new version, through a queue (one
 - **Deleting an identity's data** (`server/deletion.rs`, Delete my data... in Preferences > Library): asked for with the key, on each server separately; where the identity has an email attached on a server with mail, confirmed with a code sent to it too (with a "that wasn't me" link). Nothing goes at once: its scripts are hidden (deleted by their author: out of every listing, search and download), the encores it gave set aside, its admin rights taken away, and the key refused for anything but restoring, for 30 days, during which Restore my data puts it all back. Then a daily job deletes it for good: its scripts (remixes of them then say "remixed from a deleted script") and their previews, the encores, the email hash, and its key on the reports it made. Bans stay: deleting is no way out of one. (Lost the key? Recover it by email first.)
 - **IP addresses** are kept only for rate limits and bans, and deleted after 30 days (bans keep theirs until they end).
 
+## Songs
+
+A server can host MIDI songs too (`"songs": true` in `server.json`; off by default, so each server's owner decides). Not audio files: they're large, and almost always a recording someone owns.
+
+- **What's uploaded**: one `.mid` file (up to 4 MB), checked by parsing it with the app's own MIDI reader (`midi_notes`) before it's taken, with metadata: title, composer (or artist), the arranger (the name posted under, as for scripts), description, tags, and optionally a script it's made for (highway, say).
+- **Rights, declared on every upload**, one of: **my own composition**; **an arrangement of a public-domain work** (the composer died long enough ago, or the work was released to it); **released under a license** (named: CC BY, CC0, ...). It's shown on the song. There's no "other": a song that's someone else's and not released for sharing isn't to be uploaded (the EULA says so), and copyright notices (below) deal with the ones that are.
+- **Shown** from what the parse found: length, notes, tracks, tempo; downloads come signed by the server like sources.
+- **Like scripts**: signed uploads owned by their key (deletable by it), anonymous ones permanent; listing, search, encores, reports, moderation, rate limits, and identity deletion all cover songs. A near-copy check uses the notes, not the bytes: the parsed notes (pitch, start and length, quantized) fingerprinted like scripts, so re-saving a file doesn't make it new.
+- **In the app**: the Script Library tab becomes the Library, with Scripts and Songs. Songs can be played straight away (downloaded to a cache) or saved to the songs folder (a `Library` folder in the browser's default one), and published from the song browser's right-click menu (Publish song...).
+
+## Copyright notices
+
+Formal notices from a rights holder (or someone acting for one), as the US DMCA has them, for any song or script. Separate from reports: a report goes to the moderators; a notice takes the item down at once.
+
+- **A notice** (signed, from the app: Report... > It's my copyrighted work) needs everything a DMCA notice does: the claimant's full name, who they act for, their postal address, email and phone, the copyrighted work and where it's from, a statement that they believe in good faith the use isn't authorized, a statement under penalty of perjury that the notice is accurate and they're authorized to act, and a signature (their full name, typed). Asking for all of that, and saying it's a legal statement, is what keeps it from being abused.
+- **The item is hidden at once** (`hidden = 3`, under a copyright notice), and its uploader sees the notice (from whom, for whom, the work named; not the claimant's address or phone) the next time the app talks to the server, with **Dispute...**.
+- **Unless it's locked**: an item whose dispute was upheld before can't be taken down by another notice without a moderator: the notice goes to the moderators' queue instead, and the item stays up. That's what stops one bogus claimant (or several) from keeping something down.
+- **A dispute** (a counter-notice: the uploader's name, address, a statement under penalty of perjury that it was taken down by mistake or misidentification, consent to the jurisdiction, a signature) goes to the moderators with the notice. They **uphold** it (the item comes back, locked against further notices) or **reject** it (it stays down). With no dispute in 14 days, the takedown stands.
+- **Taken down for good**: the notes' fingerprint (or a script's) goes on a blocklist, so the same song can't simply be uploaded again ("taken down after a copyright notice").
+- **Bogus notices**: moderators can mark a notice bogus (the item comes back, and the claimant's key or address can be banned). Notices are limited per key and address.
+- **Repeat infringers**: a key with three takedowns that stood is banned (DMCA asks for a policy like this).
+- **The official server** registers a DMCA agent with the US Copyright Office (contact@p51.nl), and the EULA has a Copyright section: how to send a notice (in the app, or by email), what a dispute needs, and the repeat-infringer policy.
+
 ## API (v1)
 
 ```
@@ -192,4 +215,6 @@ Errors are JSON (`{ "error": "...", "retry_after": ... }`). Requests are signed 
 6. **Updates and diffs** for installed scripts.
 7. **Authorities**: rotation records, applying them, email attach and recovery.
 8. **Deployment**: the official server on the VPS, Docker image, in-place updates.
-9. Later, maybe: the app itself on the web (WebAssembly), for browsing and moderating without installing it.
+9. **Songs**: hosting MIDI songs (opt-in per server): uploads with declared rights, the parse check and note fingerprints, listing and download; the Library's Songs side, playing and saving, Publish song....
+10. **Copyright notices**: notices that take an item down at once, the uploader's notices and disputes, the moderators' queue, locks, the blocklist, the repeat-infringer ban; the EULA's Copyright section.
+11. Later, maybe: the app itself on the web (WebAssembly), for browsing and moderating without installing it.
