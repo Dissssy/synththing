@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.4.7 (2026-10-07)
+
 ### New
 - Copyright notices on library servers: Report... has "It's my copyrighted work", a legal notice (as the US DMCA has them) that takes the script down at once. Its uploader is notified, and can dispute it (a counter-notice) or let it stand; moderators decide disputes (in Moderation's new Copyright tab), an upheld one keeping the script safe from further notices. Takedowns that stand can't simply be published again, and three of them get an identity banned.
 - Notifications you haven't read stand out in the list, and once you've acted on one (disputed a notice, say), it says what you did instead of offering it again.
