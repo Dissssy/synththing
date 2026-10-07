@@ -13,6 +13,7 @@ mod loading;
 mod playlist_panel;
 mod identity;
 mod moderation;
+mod notifications;
 mod previews;
 mod library;
 mod recording;
@@ -235,6 +236,8 @@ pub struct App {
     moderation: moderation::ModerationState,
     /// The identity's recovery email, new keys and recovery.
     identity: identity::IdentityState,
+    /// Notifications from library servers.
+    notifications: notifications::NotificationsState,
     /// The changelog window: `Some(since)` lists only the versions newer
     /// than that (What's new, after an update), `None` all of them
     /// (Help > Changelog...).
@@ -425,6 +428,7 @@ impl App {
             script_previews: Default::default(),
             moderation: Default::default(),
             identity: Default::default(),
+            notifications: Default::default(),
             changelog: None,
             welcome: welcome::Welcome::default(),
             preferences_tab: PrefTab::default(),
@@ -1292,6 +1296,8 @@ impl App {
                 ui.separator();
                 ui.weak(format!("synththing v{}", env!("CARGO_PKG_VERSION")));
             });
+            // Notifications, at the far right.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.notifications_button_ui(ui));
         });
     }
 
@@ -1807,6 +1813,7 @@ impl App {
             || self.library.publish_open()
             || self.moderation.open()
             || self.identity.open()
+            || self.notifications.open()
             || self.editor.history_open
             || self.layout_save.is_some()
             || self.heavy_prompt.is_some()
@@ -2873,10 +2880,12 @@ impl eframe::App for App {
         self.update_ui(&ctx);
         self.report_ui(&ctx);
         self.identity_flow_ui(&ctx);
+        self.notification_ui(&ctx);
         self.moderation_ui(&ctx);
         self.poll_library();
         self.poll_moderation();
         self.poll_identity();
+        self.poll_notifications(&ctx);
         self.heavy_midi_ui(&ctx);
         self.poll_recordings(view);
         if self.status != self.logged_status {

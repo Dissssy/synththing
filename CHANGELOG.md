@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### New
+- Notifications from library servers: the envelope at the right of the header turns red with a count when there's news about your things (encores and installs adding up, a script hidden or back, a remix of yours, a report of yours dealt with; for moderators, new reports). Click it for the list, every server's together, and one for what can be done about it. Preferences > Library > Notifications turns it off.
 - `--config-dir DIR` (or `SYNTHTHING_CONFIG_DIR`) keeps everything in a folder of its own, for trying a build without touching your real setup.
 
 ### Changed

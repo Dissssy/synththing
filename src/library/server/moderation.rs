@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use rusqlite::{params, Connection, OptionalExtension};
 use tiny_http::Request;
 
-use super::{error, json, now, read_body, remove_previews, signer, Reply, State};
+use super::{error, json, notifications, now, read_body, remove_previews, signer, Reply, State};
 use crate::library::{
     key_id, AdminAction, AdminScriptInfo, ApiError, Ban, EncoreState, Report, ReportRequest, MAX_REPORT_DETAILS,
     MAX_REPORT_MARKS, REPORT_REASONS,
@@ -169,6 +169,7 @@ pub(super) fn encore(state: &State, request: &mut Request, id: &str, give: bool,
         Ok(Some(_)) => {}
         Err(e) => return error(500, format!("database: {e}")),
     }
+    let before: i64 = db.query_row("SELECT encores FROM scripts WHERE id = ?", [id], |r| r.get(0)).unwrap_or(0);
     let changed = if give {
         db.execute("INSERT OR IGNORE INTO encores (script_id, key, ip, created) VALUES (?, ?, ?, ?)", params![id, key, ip, now()])
     } else {
@@ -179,7 +180,10 @@ pub(super) fn encore(state: &State, request: &mut Request, id: &str, give: bool,
     })
     .and_then(|_| db.query_row("SELECT encores FROM scripts WHERE id = ?", [id], |r| r.get::<_, i64>(0)));
     match changed {
-        Ok(encores) => json(200, &EncoreState { encores: encores.max(0) as u64, encored: give }),
+        Ok(encores) => {
+            super::notifications::encores_changed(state, &db, id, before.max(0) as u64, encores.max(0) as u64);
+            json(200, &EncoreState { encores: encores.max(0) as u64, encored: give })
+        }
         Err(e) => error(500, format!("database: {e}")),
     }
 }
@@ -264,6 +268,12 @@ pub(super) fn report(state: &State, request: &mut Request, id: &str, ip: &str) -
         Ok(_) => {
             let number = db.last_insert_rowid();
             println!("report #{number} of {id} \"{name}\" ({}) by #{}", report.reason, key_id(&key));
+            super::notifications::notify_admins(
+                state,
+                &db,
+                "new_report",
+                serde_json::json!({ "report": number, "script": id, "name": name, "reason": report.reason }),
+            );
             json(201, &serde_json::json!({ "report": number }))
         }
         Err(e) => error(500, format!("database: {e}")),
@@ -368,8 +378,13 @@ fn act(state: &State, action: &AdminAction) -> Acted {
         }
         AdminAction::Hide { script, reason } => {
             let n = db
-                .execute("UPDATE scripts SET hidden = 1, hidden_reason = ? WHERE id = ?", params![reason, script])
+                .execute("UPDATE scripts SET hidden = 1, hidden_reason = ? WHERE id = ? AND hidden = 0", params![reason, script])
                 .map_err(db_error)?;
+            if n > 0 {
+                notifications::author_notify(state, &db, script, "hidden", |name| {
+                    serde_json::json!({ "script": script, "name": name, "reason": reason })
+                });
+            }
             changed(n, "hidden")
         }
         AdminAction::Unhide { script } => {
@@ -377,9 +392,15 @@ fn act(state: &State, action: &AdminAction) -> Acted {
                 // (Not one its author deleted: hidden = 2.)
                 .execute("UPDATE scripts SET hidden = 0, hidden_reason = NULL WHERE id = ? AND hidden = 1", [script])
                 .map_err(db_error)?;
+            if n > 0 {
+                notifications::author_notify(state, &db, script, "reinstated", |name| {
+                    serde_json::json!({ "script": script, "name": name })
+                });
+            }
             changed(n, "unhidden")
         }
         AdminAction::Delete { script } => {
+            notifications::author_notify(state, &db, script, "removed", |name| serde_json::json!({ "script": script, "name": name }));
             let n = db.execute("DELETE FROM scripts WHERE id = ?", [script]).map_err(db_error)?;
             drop(db);
             if n > 0 {
@@ -466,6 +487,19 @@ fn act(state: &State, action: &AdminAction) -> Acted {
                     params![now(), note, report],
                 )
                 .map_err(db_error)?;
+            // (Its reporter hears how it went.)
+            let reporter: Option<(String, String, String)> = db
+                .query_row("SELECT reporter_key, script_id, script_name FROM reports WHERE id = ?", [report], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })
+                .optional()
+                .map_err(db_error)?;
+            if n > 0
+                && let Some((key, script, name)) = reporter.filter(|(key, ..)| !key.is_empty())
+            {
+                let fields = serde_json::json!({ "report": report, "script": script, "name": name, "outcome": note });
+                notifications::notify(state, &db, &key, "report_handled", fields, false);
+            }
             changed(n, "resolved")
         }
     }

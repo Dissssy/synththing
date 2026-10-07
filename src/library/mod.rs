@@ -329,6 +329,22 @@ pub struct Info {
     pub mail: bool,
 }
 
+/// A notification (`/api/v1/notifications`): what happened, as a kind and
+/// its fields; the app words it (`template` is the server's wording, for
+/// a kind the app doesn't know).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Notification {
+    pub id: i64,
+    pub kind: String,
+    pub data: serde_json::Value,
+    pub template: String,
+    pub created: i64,
+    pub read: bool,
+    /// It asks for something to be done (a dispute, say), and it has been.
+    pub needs_action: bool,
+    pub handled: bool,
+}
+
 /// A document a server offers, in `/api/v1/info`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ServerDocument {

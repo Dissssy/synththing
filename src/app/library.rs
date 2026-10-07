@@ -681,7 +681,7 @@ impl App {
     }
 
     /// Show a script in the Library's details (a server in use).
-    fn library_open_script(&mut self, server: String, id: String) {
+    pub(super) fn library_open_script(&mut self, server: String, id: String) {
         self.library.confirm_delete = None;
         self.library.selected = Some((server.clone(), id.clone()));
         self.library.details = None;
@@ -2104,6 +2104,18 @@ impl App {
             })
             .response
         });
+        with_info(
+            ui,
+            "Hear from the servers you use about your things: encores and installs adding up, your scripts \
+             hidden or back, remixes of them, your reports dealt with. While this is on (and you have an \
+             identity), the app checks in with them when it starts and keeps a connection open for new ones; \
+             the envelope at the right of the header shows them.",
+            |ui| {
+                let response = ui.checkbox(&mut self.config.library.notifications, "Notifications");
+                changed |= response.changed();
+                response
+            },
+        );
         changed |= before != (self.config.library.official, self.config.library.author_name.clone());
         if changed {
             self.library.searched = false;

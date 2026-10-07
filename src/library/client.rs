@@ -312,6 +312,66 @@ pub fn restore_identity(base: &str, server_key: &str, identity: &Identity) -> Re
     Ok(reply["restored"].as_u64().unwrap_or(0))
 }
 
+/// `identity`'s notifications on a server, newest first (after `after`).
+pub fn notifications(
+    base: &str,
+    server_key: &str,
+    identity: &Identity,
+    after: Option<i64>,
+) -> Result<Vec<super::Notification>, String> {
+    signed_post(base, server_key, identity, "/api/v1/notifications", &serde_json::json!({ "after": after }))
+}
+
+/// Mark notifications read (or `handled`): these, or `all` of them.
+pub fn mark_notifications(
+    base: &str,
+    server_key: &str,
+    identity: &Identity,
+    ids: &[i64],
+    all: bool,
+    handled: bool,
+) -> Result<(), String> {
+    let body = serde_json::json!({ "ids": ids, "all": all, "handled": handled });
+    signed_post::<serde_json::Value>(base, server_key, identity, "/api/v1/notifications/mark", &body).map(|_| ())
+}
+
+/// Listen for new notifications, calling `each` with every one as it
+/// comes, until the server or the connection ends it (or `each` says to
+/// stop, with false).
+pub fn notification_stream(
+    base: &str,
+    server_key: &str,
+    identity: &Identity,
+    mut each: impl FnMut(super::Notification) -> bool,
+) -> Result<(), String> {
+    use std::io::BufRead;
+    // (No overall timeout: it stays open. The server sends a keep-alive
+    // every 25 seconds; a minute of nothing means the line's dead.)
+    static STREAMING: OnceLock<Agent> = OnceLock::new();
+    let agent = STREAMING.get_or_init(|| {
+        Agent::config_builder()
+            .http_status_as_error(false)
+            .timeout_connect(Some(Duration::from_secs(15)))
+            .timeout_recv_body(Some(Duration::from_secs(60)))
+            .user_agent(format!("synththing/{}", env!("CARGO_PKG_VERSION")))
+            .build()
+            .into()
+    });
+    let path = "/api/v1/notifications/stream";
+    let response = check(signed(agent.get(format!("{base}{path}")), server_key, identity, "GET", path, &[]).call())?;
+    let reader = std::io::BufReader::new(response.into_body().into_reader());
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("the stream ended ({e})"))?;
+        if let Some(data) = line.strip_prefix("data: ")
+            && let Ok(notification) = serde_json::from_str(data)
+            && !each(notification)
+        {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
 /// Report a script to the server's admins; the report's number.
 pub fn report(base: &str, server_key: &str, id: &str, identity: &Identity, report: &ReportRequest) -> Result<i64, String> {
     let path = format!("/api/v1/scripts/{id}/report");
@@ -798,6 +858,94 @@ mod tests {
         assert_eq!(details(&base, &theirs.id).unwrap().summary.encores, 0);
         let again = upload_of("Mine", "visualizer", "function render() end -- again");
         assert!(upload(&base, &key, &Upload { slug: Some("mine".into()), ..again }, Some(&alice)).is_ok());
+        running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Notifications: milestones, moderation, remixes, reports for the
+    /// moderators and back to their reporters; pushed over the stream as
+    /// they happen, listed, marked read.
+    #[test]
+    fn notifications_are_kept_and_pushed() {
+        use crate::library::{AdminAction, ReportRequest};
+        let dir = std::env::temp_dir().join(format!("synththing-notifications-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false, "check_uploads": false }"#).unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let server_id = Identity::from_secret_hex(&std::fs::read_to_string(dir.join("server.key")).unwrap()).unwrap();
+        let (alice, bob, mod_) = (Identity::generate().unwrap(), Identity::generate().unwrap(), Identity::generate().unwrap());
+        let mut bars = upload_of("Bars", "visualizer", "function render() end");
+        bars.slug = Some("bars".into());
+        let bars = upload(&base, &key, &bars, Some(&alice)).unwrap();
+        // (The moderator needs to have been seen, to be made one.)
+        encore(&base, &key, &bars.id, &mod_, true).unwrap();
+        admin::<serde_json::Value>(&base, &key, &server_id, &AdminAction::AddAdmin { key: mod_.public() }).unwrap();
+
+        // Alice listens.
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let (base, key, alice) = (base.clone(), key.clone(), alice.clone());
+            std::thread::spawn(move || {
+                let _ = notification_stream(&base, &key, &alice, |n| tx.send(n).is_ok());
+            });
+        }
+        std::thread::sleep(Duration::from_millis(300));
+
+        // Ten encores: a milestone, pushed.
+        for _ in 0..9 {
+            encore(&base, &key, &bars.id, &Identity::generate().unwrap(), true).unwrap();
+        }
+        let pushed = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!((pushed.kind.as_str(), pushed.data["count"].as_u64()), ("encore_milestone", Some(10)));
+        assert_eq!(pushed.data["name"], "Bars");
+        // Ten downloads: another.
+        for _ in 0..10 {
+            download(&base, &bars.id, None, &key).unwrap();
+        }
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap().kind, "download_milestone");
+
+        // Bob reports it: the moderator hears; it's hidden and resolved:
+        // alice hears, then bob does.
+        let complaint = ReportRequest { reason: "spam".into(), version: 1, ..Default::default() };
+        let number = report(&base, &key, &bars.id, &bob, &complaint).unwrap();
+        let theirs = notifications(&base, &key, &mod_, None).unwrap();
+        assert_eq!((theirs[0].kind.as_str(), theirs[0].data["report"].as_i64()), ("new_report", Some(number)));
+        admin::<serde_json::Value>(&base, &key, &mod_, &AdminAction::Hide { script: bars.id.clone(), reason: "spam".into() })
+            .unwrap();
+        let hidden = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!((hidden.kind.as_str(), hidden.data["reason"].as_str()), ("hidden", Some("spam")));
+        admin::<serde_json::Value>(&base, &key, &mod_, &AdminAction::Resolve { report: number, note: "hidden".into() })
+            .unwrap();
+        let bobs = notifications(&base, &key, &bob, None).unwrap();
+        assert_eq!((bobs[0].kind.as_str(), bobs[0].data["outcome"].as_str()), ("report_handled", Some("hidden")));
+        admin::<serde_json::Value>(&base, &key, &mod_, &AdminAction::Unhide { script: bars.id.clone() }).unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap().kind, "reinstated");
+
+        // A remix of it: alice hears who.
+        let mut take = upload_of("Bars Again", "visualizer", "function render() clear({ r = 1, g = 2, b = 3 }) end");
+        take.slug = Some("bars-again".into());
+        take.remix_of = Some(crate::library::RemixOf { id: bars.id.clone(), name: "Bars".into(), ..Default::default() });
+        upload(&base, &key, &take, Some(&bob)).unwrap();
+        let remixed = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!((remixed.kind.as_str(), remixed.data["remix_name"].as_str()), ("remixed", Some("Bars Again")));
+
+        // Listed, newest first, unread until marked.
+        let all = notifications(&base, &key, &alice, None).unwrap();
+        assert_eq!(
+            all.iter().map(|n| n.kind.as_str()).collect::<Vec<_>>(),
+            ["remixed", "reinstated", "hidden", "download_milestone", "encore_milestone"]
+        );
+        assert!(all.iter().all(|n| !n.read) && all[0].template.contains("{remix_name}"));
+        assert_eq!(notifications(&base, &key, &alice, Some(all[1].id)).unwrap().len(), 1, "after");
+        mark_notifications(&base, &key, &alice, &[all[0].id], false, false).unwrap();
+        assert!(notifications(&base, &key, &alice, None).unwrap()[0].read);
+        mark_notifications(&base, &key, &alice, &[], true, false).unwrap();
+        assert!(notifications(&base, &key, &alice, None).unwrap().iter().all(|n| n.read));
+        // Nobody else's.
+        assert!(mark_notifications(&base, &key, &bob, &[all[2].id], false, false).is_ok());
         running.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }

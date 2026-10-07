@@ -31,6 +31,7 @@ mod mail;
 #[cfg(test)]
 pub use mail::Mail;
 mod moderation;
+mod notifications;
 mod remixes;
 mod update;
 
@@ -38,6 +39,7 @@ use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -309,6 +311,8 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
         uploads: Mutex::default(),
         seen_signatures: Mutex::default(),
         limits: Mutex::default(),
+        streams: Mutex::default(),
+        open_streams: AtomicUsize::new(0),
         previews: Mutex::new(previews.then_some(queue)),
         pepper,
         mailer,
@@ -323,6 +327,7 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
                 std::thread::sleep(Duration::from_secs(24 * 60 * 60));
                 moderation::forget_old_addresses(&state);
                 deletion::purge(&state);
+                notifications::forget_old(&state);
             })
             .map_err(|e| format!("couldn't start: {e}"))?;
     }
@@ -363,6 +368,9 @@ struct State {
     /// Recent requests by kind and address, for their limits (encores,
     /// reports).
     limits: Mutex<HashMap<(String, String), Vec<Instant>>>,
+    /// The notification streams open, by key, and how many in all.
+    streams: Mutex<notifications::Streams>,
+    open_streams: AtomicUsize,
     /// Versions to make previews of (none if previews are off).
     previews: Mutex<Option<Sender<(String, u32)>>>,
     /// What email addresses are hashed with, and the mail sender.
@@ -603,6 +611,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 9 {
         db.execute_batch(deletion::SCHEMA_V9)?;
     }
+    if version < 10 {
+        db.execute_batch(notifications::SCHEMA_V10)?;
+    }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
 }
@@ -685,13 +696,20 @@ fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or_default()
 }
 
-fn handle(state: &State, mut request: Request) {
+fn handle(state: &Arc<State>, mut request: Request) {
     let method = request.method().clone();
     let url = request.url().to_string();
     let (path, query) = url.split_once('?').unwrap_or((&url, ""));
     let query = parse_query(query);
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
+    // (A stream keeps its connection, on a thread of its own.)
+    if method == Method::Get && parts == ["api", "v1", "notifications", "stream"] {
+        notifications::stream(state, request);
+        return;
+    }
     let reply = match (&method, parts.as_slice()) {
+        (Method::Post, ["api", "v1", "notifications"]) => notifications::list(state, &mut request),
+        (Method::Post, ["api", "v1", "notifications", "mark"]) => notifications::mark(state, &mut request),
         (Method::Get, ["api", "v1", "info"]) => json(200, &info(state)),
         (Method::Get, ["api", "v1", "documents", slug]) => document(state, slug),
         (Method::Get, ["api", "v1", "scripts"]) => list(state, &query),
@@ -974,6 +992,7 @@ fn source(state: &State, id: &str, query: &HashMap<String, String>) -> Reply {
         .optional();
     match found {
         Ok(Some((source, sha256))) => {
+            notifications::downloaded(state, &db, id);
             let signature = sign_hex(&state.key, &source_message(&state.key_hex, id, version, &sha256));
             Response::from_data(source.into_bytes())
                 .with_header(header("Content-Type", "text/plain; charset=utf-8"))
@@ -1289,6 +1308,15 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
     }
     if limited {
         state.uploads.lock().unwrap_or_else(|p| p.into_inner()).entry(ip.to_string()).or_default().push(Instant::now());
+    }
+    // (A new remix here: its original's author hears of it.)
+    if existing.is_none()
+        && let Some(remix) = remix.as_ref().filter(|r| r.server.is_empty() && !r.id.is_empty())
+    {
+        let (by, remix_id, remix_name) = (upload.author_name.clone(), id.clone(), upload.name.clone());
+        notifications::author_notify(state, &db, &remix.id, "remixed", |name| {
+            serde_json::json!({ "script": remix.id, "name": name, "remix": remix_id, "remix_name": remix_name, "by": by })
+        });
     }
     drop(db);
     state.queue_preview(&id, version);

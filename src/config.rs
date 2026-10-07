@@ -136,6 +136,9 @@ pub struct LibrarySettings {
     /// The official publisher's keys, oldest first, as the official server
     /// last said (empty: never rotated).
     pub official_publishers: Vec<String>,
+    /// Keep in touch with the servers in use for notifications (while
+    /// there's an identity): a check at launch, and a stream while open.
+    pub notifications: bool,
 }
 
 impl Default for LibrarySettings {
@@ -146,6 +149,7 @@ impl Default for LibrarySettings {
             pinned: Default::default(),
             author_name: String::new(),
             official_publishers: Vec::new(),
+            notifications: true,
         }
     }
 }

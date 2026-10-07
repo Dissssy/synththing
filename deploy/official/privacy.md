@@ -1,6 +1,6 @@
 # Privacy Policy
 
-*synththing official library (synththing.p51.nl). Last updated 2026-10-06.*
+*synththing official library (synththing.p51.nl). Last updated 2026-10-07.*
 
 The synththing library is built to need as little about you as possible: there are no accounts, no passwords, no ads and no tracking. This page says what the server does keep, why, for how long, and how to have it deleted.
 
@@ -10,7 +10,9 @@ The official library server is run by the makers of synththing. Questions, reque
 
 ## What the server keeps
 
-**When you only browse** (search, read, install), the server keeps nothing about you. The app only talks to the server while the Script Library is open, when you publish, or when you check a script for updates.
+**When you only browse** (search, read, install), the server keeps nothing about you, apart from counting how often each script is installed. The app talks to the server while the Script Library is open, when you publish, when you check a script for updates, and, while its Notifications preference is on and you have an identity, to fetch your notifications when it starts and to keep a connection open for new ones while it runs.
+
+**Notifications** the server keeps for you (encores and installs adding up, your scripts hidden or back, remixes of them, your reports dealt with) are deleted 90 days after you've read them.
 
 **Your identity** is a key your app makes; the server sees its public half (shown as an ID like `#k3f9q2xa`) on anything you sign. It's not linked to your name, email or device.
 
