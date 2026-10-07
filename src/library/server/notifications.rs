@@ -270,14 +270,21 @@ pub(super) fn mark(state: &State, request: &mut Request) -> Reply {
         Err(reply) => return reply,
     };
     let db = state.db();
-    let column = if ask.handled { "handled = 1, read = 1, resolution = COALESCE(?2, resolution)" } else { "read = 1" };
+    // (?1 the key, ?2 the resolution, ?3 the id; each only where it's used.)
+    let set = if ask.handled { "handled = 1, read = 1, resolution = COALESCE(?2, resolution)" } else { "read = 1" };
+    let run = |which: &str, id: Option<i64>| {
+        let sql = format!("UPDATE notifications SET {set} WHERE key = ?1{which}");
+        match (ask.handled, id) {
+            (true, Some(id)) => db.execute(&sql, params![key, ask.resolution, id]),
+            (true, None) => db.execute(&sql, params![key, ask.resolution]),
+            (false, Some(id)) => db.execute(&sql.replace("?3", "?2"), params![key, id]),
+            (false, None) => db.execute(&sql, params![key]),
+        }
+    };
     let result = if ask.all {
-        db.execute(&format!("UPDATE notifications SET {column} WHERE key = ?1"), params![key, ask.resolution])
+        run("", None)
     } else {
-        ask.ids.iter().try_fold(0, |n, id| {
-            db.execute(&format!("UPDATE notifications SET {column} WHERE key = ?1 AND id = ?3"), params![key, ask.resolution, id])
-                .map(|m| n + m)
-        })
+        ask.ids.iter().try_fold(0, |n, &id| run(" AND id = ?3", Some(id)).map(|m| n + m))
     };
     match result {
         Ok(n) => json(200, &serde_json::json!({ "marked": n })),
