@@ -72,6 +72,33 @@ pub(super) fn info(db: &Connection, id: &str) -> Option<SongInfo> {
     .flatten()
 }
 
+/// A song's details as text: what moderators see in place of a script's
+/// source.
+pub(super) fn describe(song: &SongInfo) -> String {
+    let mut lines = vec!["A song (a MIDI file), not a script.".to_string(), String::new()];
+    lines.push(format!("Composer: {}", song.composer));
+    lines.push(format!("Arranged by: {}", song.arranger));
+    if !song.from_title.is_empty() {
+        lines.push(format!("From: {}", song.from_title));
+    }
+    let license = if song.license.is_empty() { String::new() } else { format!(" ({})", song.license) };
+    lines.push(format!("Rights declared: {}{license}", songs::rights_title(&song.rights)));
+    lines.push(format!(
+        "Length: {}, {} notes in {} tracks, {} channels",
+        crate::song_info::format_length(song.length),
+        song.notes,
+        song.tracks,
+        song.channels
+    ));
+    if let Some(copyright) = &song.copyright {
+        lines.push(format!("The file says: {copyright}"));
+    }
+    if let Some(script) = &song.made_for {
+        lines.push(format!("Made for: script {script}"));
+    }
+    lines.join("\n")
+}
+
 /// Why a song's notes can't be taken: someone else's song (nearly), or one
 /// taken down for good.
 fn refuse_copy(db: &Connection, fingerprint: &Fingerprint, notes: u64, uploader: Option<&str>, same: Option<&str>) -> rusqlite::Result<Option<String>> {
@@ -234,7 +261,7 @@ pub(super) fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
             )?;
             tx.execute(
                 "INSERT INTO versions (script_id, version, sha256, source, app_version, uploader_ip, created, min_app_version,
-                 fingerprint, data) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?)",
+                 fingerprint, data, preview) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, 'none')",
                 params![id, version, sha256, upload.app_version, ip, created, SONGS_SINCE, facts.fingerprint.to_hex(), bytes],
             )?;
             tx.commit()
@@ -244,7 +271,6 @@ pub(super) fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
         if limited {
             count_upload(state, ip);
         }
-        state.queue_preview(&id, version);
         let who = author_id.map(|id| format!(" (#{id})")).unwrap_or_default();
         println!("uploaded song {id} v{version} \"{}\" by {}{who} from {ip}", upload.name, upload.author_name);
         Ok((201, signed_receipt(state, id, version, sha256)))
@@ -256,8 +282,9 @@ pub(super) fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
 }
 
 /// `GET /api/v1/songs/{id}/file?version=`: the MIDI file, signed by the
-/// server like a script's source.
-pub(super) fn file(state: &State, id: &str, version: Option<u32>) -> Reply {
+/// server like a script's source. Fetched to play its preview
+/// (`&preview=1`), it isn't counted as a download.
+pub(super) fn file(state: &State, id: &str, version: Option<u32>, count: bool) -> Reply {
     let db = state.db();
     let found: Option<(u32, String, Vec<u8>)> = db
         .query_row(
@@ -270,7 +297,9 @@ pub(super) fn file(state: &State, id: &str, version: Option<u32>) -> Reply {
         .ok()
         .flatten();
     let Some((version, sha256, bytes)) = found else { return error(404, "no such song") };
-    super::notifications::downloaded(state, &db, id);
+    if count {
+        super::notifications::downloaded(state, &db, id);
+    }
     let signature = sign_hex(&state.key, &source_message(&state.key_hex, id, version, &sha256));
     Response::from_data(bytes)
         .with_header(header("Content-Type", "audio/midi"))

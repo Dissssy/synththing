@@ -493,9 +493,13 @@ pub struct SongDownload {
 }
 
 /// A song's file (`version`, or its newest), accepted only signed by
-/// `server_key` and matching the hash signed.
-pub fn download_song(base: &str, id: &str, version: Option<u32>, server_key: &str) -> Result<SongDownload, String> {
+/// `server_key` and matching the hash signed. For its `preview`, it isn't
+/// counted as a download.
+pub fn download_song(base: &str, id: &str, version: Option<u32>, server_key: &str, preview: bool) -> Result<SongDownload, String> {
     let mut request = agent().get(format!("{base}/api/v1/songs/{id}/file"));
+    if preview {
+        request = request.query("preview", "1");
+    }
     if let Some(version) = version {
         request = request.query("version", version.to_string());
     }
@@ -1433,27 +1437,20 @@ mod tests {
         assert_eq!((details.summary.category.as_str(), song.composer.as_str()), ("classical", "Someone Long Ago"));
         assert_eq!((song.arranger.as_str(), song.rights.as_str()), ("tester", "public_domain"));
         assert!(song.notes > 100 && song.length > 20.0);
-        // Its preview: the keyboard visualizer, the whole stretch.
-        let preview = (0..1200)
-            .find_map(|_| {
-                let v = super::details(&base, &first.id).unwrap().versions.remove(0).preview;
-                std::thread::sleep(Duration::from_millis(50));
-                (v != crate::library::Preview::Pending).then_some(v)
-            })
-            .expect("no preview");
-        assert_eq!(preview, crate::library::Preview::Animated);
-        let (w, h, _) = crate::preview::decode_png(&super::preview(&base, &first.id, 1, true).unwrap()).unwrap();
-        assert_eq!((w, h), (crate::preview::WIDTH * 8, crate::preview::HEIGHT * crate::preview::SONG_FRAMES / 8));
-        let got = download_song(&base, &first.id, None, &key).unwrap();
+        // No preview made: the app plays songs' itself.
+        assert_eq!(super::details(&base, &first.id).unwrap().versions[0].preview, crate::library::Preview::None);
+        // Fetched for a preview, it isn't counted; downloaded, it is.
+        download_song(&base, &first.id, None, &key, true).unwrap();
+        let got = download_song(&base, &first.id, None, &key, false).unwrap();
         assert_eq!(crate::library::songs::encode(&got.bytes), canon.data);
         assert_eq!(got.sha256, first.sha256);
         // Songs aren't scripts, and scripts aren't songs.
         assert!(download(&base, &first.id, None, &key).unwrap_err().contains("song"));
-        assert!(download_song(&base, &script.id, None, &key).unwrap_err().contains("no such song"));
+        assert!(download_song(&base, &script.id, None, &key, false).unwrap_err().contains("no such song"));
         // The usual endpoints: its poster can delete it.
         assert!(delete(&base, &key, &ode.id, &alice).is_err());
         delete(&base, &key, &ode.id, &bob).unwrap();
-        assert!(download_song(&base, &ode.id, None, &key).is_err());
+        assert!(download_song(&base, &ode.id, None, &key, false).is_err());
         running.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }

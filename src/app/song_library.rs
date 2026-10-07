@@ -269,7 +269,7 @@ impl App {
                 Some(server_key) => {
                     let key = key.clone();
                     self.spawn_songs(move || {
-                        let result = client::download_song(&key.0, &key.1, Some(key.2), &server_key).map(|d| d.bytes);
+                        let result = client::download_song(&key.0, &key.1, Some(key.2), &server_key, true).map(|d| d.bytes);
                         Event::File(key, result)
                     });
                 }
@@ -403,7 +403,7 @@ impl App {
         let (server, summary) = (server.to_string(), Box::new(summary.clone()));
         self.spawn_songs(move || {
             // (The newest: any app plays any MIDI file.)
-            let result = client::download_song(&server, &summary.id, None, &key);
+            let result = client::download_song(&server, &summary.id, None, &key, false);
             Event::Downloaded(server, summary, result)
         });
     }

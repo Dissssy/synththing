@@ -64,6 +64,7 @@ fn template(kind: &str) -> &'static str {
     match kind {
         "encore_milestone" => "\"{name}\" has {count} encores!",
         "download_milestone" => "\"{name}\" has been installed {count} times!",
+        "song_download_milestone" => "\"{name}\" has been downloaded {count} times!",
         "hidden" => "The moderators hid \"{name}\": {reason}",
         "reinstated" => "\"{name}\" is back up",
         "removed" => "The moderators deleted \"{name}\"",
@@ -136,10 +137,13 @@ pub(super) fn encores_changed(state: &State, db: &Connection, script: &str, befo
 
 /// A script was downloaded: counted, and its author told at milestones.
 pub(super) fn downloaded(state: &State, db: &Connection, script: &str) {
-    let before: i64 = db.query_row("SELECT downloads FROM scripts WHERE id = ?", [script], |r| r.get(0)).unwrap_or(0);
+    let (before, kind): (i64, String) = db
+        .query_row("SELECT downloads, kind FROM scripts WHERE id = ?", [script], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap_or((0, "script".into()));
     let _ = db.execute("UPDATE scripts SET downloads = downloads + 1 WHERE id = ?", [script]);
     if let Some(count) = milestone(before.max(0) as u64, before.max(0) as u64 + 1) {
-        author_notify(state, db, script, "download_milestone", |name| serde_json::json!({ "script": script, "name": name, "count": count }));
+        let kind = if kind == "song" { "song_download_milestone" } else { "download_milestone" };
+        author_notify(state, db, script, kind, |name| serde_json::json!({ "script": script, "name": name, "count": count }));
     }
 }
 

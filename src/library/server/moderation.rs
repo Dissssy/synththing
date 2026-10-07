@@ -374,7 +374,11 @@ fn act(state: &State, action: &AdminAction) -> Acted {
                 )
                 .optional()
                 .map_err(db_error)?;
-            let (version, source) = found.ok_or((404, "no such script or version".to_string()))?;
+            let (version, mut source) = found.ok_or((404, "no such script or version".to_string()))?;
+            // (A song has no code: what there is to see of it instead.)
+            if let Some(song) = super::songs::info(&db, script) {
+                source = super::songs::describe(&song);
+            }
             Ok(serde_json::json!({ "version": version, "source": source }))
         }
         AdminAction::Hide { script, reason } => {

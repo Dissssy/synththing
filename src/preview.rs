@@ -20,11 +20,11 @@
 //! `check` is the same run, cut short: a library server refuses an upload
 //! that doesn't compile, or errors in its first seconds.
 //!
-//! A song's preview (`render_song`) is drawn by the bundled keyboard
-//! visualizer (falling notes), the same for every song: `SONG_SECONDS` from
-//! where the server found it busiest, every kept frame in order
-//! (`SONG_FRAMES`), so the app's silent snippet of the same stretch plays
-//! in step with it.
+//! A song's preview as images (`render_song`, `preview --song-start`) is
+//! drawn by the bundled keyboard visualizer (falling notes): `SONG_SECONDS`
+//! from a given point, every kept frame in order (`SONG_FRAMES`). The app
+//! plays songs' previews live instead (`song_preview.rs`), with the same
+//! script.
 
 use std::io::Cursor;
 use std::path::Path;
@@ -76,12 +76,6 @@ pub const MEMORY_LIMIT: usize = 512 * 1024 * 1024;
 /// back starting with `SCRIPT_ERROR`.
 pub fn run_process(script: &Path, soundfont: &Path, out: &Path, limit: Duration, check: bool) -> Result<(), String> {
     spawn(script, soundfont, out, limit, if check { vec!["--check".into()] } else { Vec::new() })
-}
-
-/// As `run_process`, for a song's preview (`render_song`) from `start`.
-#[cfg_attr(test, allow(dead_code))]
-pub fn run_song_process(song: &Path, soundfont: &Path, out: &Path, limit: Duration, start: f64) -> Result<(), String> {
-    spawn(song, soundfont, out, limit, vec!["--song-start".into(), start.to_string()])
 }
 
 fn spawn(script: &Path, soundfont: &Path, out: &Path, limit: Duration, extra: Vec<String>) -> Result<(), String> {

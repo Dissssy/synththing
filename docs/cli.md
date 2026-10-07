@@ -76,7 +76,7 @@ Makes the preview the Online Library and the script picker show: the script play
 
 With `--check`, it only checks that the script runs: it compiles and plays a few seconds of a song without an error. Library servers check every upload this way.
 
-With `--song-start`, it makes a song's preview instead (the MIDI file given): the bundled keyboard visualizer (falling notes) draws 12 seconds of it from that many seconds in, and all 144 frames make the sheet (8 to a row, 12 a second; if the song ends sooner, its last frame fills the rest), with the middle one as the still. Library servers make songs' previews this way, from the busiest stretch.
+With `--song-start`, it makes a song's preview instead (the MIDI file given): the bundled keyboard visualizer (falling notes) draws 12 seconds of it from that many seconds in, and all 144 frames make the sheet (8 to a row, 12 a second; if the song ends sooner, its last frame fills the rest), with the middle one as the still. (The app plays songs' previews live, with the same script; this is for anyone who wants one as images.)
 
 `--soundfont` defaults to the first one in the app's Soundfonts list. Exit codes: `0` made it (or it checked out), `1` the script has an error, `2` something couldn't be loaded.
 

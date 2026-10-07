@@ -59,6 +59,7 @@ fn wording(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "encore_milestone" => "\"{name}\" has {count} encores!",
         "download_milestone" => "\"{name}\" has been installed {count} times!",
+        "song_download_milestone" => "\"{name}\" has been downloaded {count} times!",
         "hidden" => "The moderators hid \"{name}\": {reason}",
         "reinstated" => "\"{name}\" is back up",
         "removed" => "The moderators deleted \"{name}\"",
@@ -81,7 +82,7 @@ fn wording(kind: &str) -> Option<&'static str> {
 fn icon_of(kind: &str) -> &'static str {
     super::icon(match kind {
         "encore_milestone" => "heart",
-        "download_milestone" => "download-simple",
+        "download_milestone" | "song_download_milestone" => "download-simple",
         "hidden" => "eye-slash",
         "reinstated" => "arrow-counter-clockwise",
         "removed" => "trash",
