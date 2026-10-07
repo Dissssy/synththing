@@ -27,11 +27,13 @@ pub enum Section {
     Sprites,
     /// The script library (scripts shared on servers).
     Library,
+    /// Songs saved from library servers.
+    Downloads,
 }
 
 impl Section {
     /// Every section there is (not the removed `Settings`).
-    pub const ALL: [Section; 8] = [
+    pub const ALL: [Section; 9] = [
         Self::Songs,
         Self::Soundfonts,
         Self::Playlists,
@@ -40,6 +42,7 @@ impl Section {
         Self::Reference,
         Self::Sprites,
         Self::Library,
+        Self::Downloads,
     ];
 
     pub fn title(self) -> &'static str {
@@ -53,12 +56,13 @@ impl Section {
             Self::Reference => "Scripting Reference",
             Self::Sprites => "Sprite Editor",
             Self::Library => "Script Library",
+            Self::Downloads => "Downloaded songs",
         }
     }
 
     fn column(self) -> Column {
         match self {
-            Self::Songs | Self::Soundfonts => Column::Left,
+            Self::Songs | Self::Soundfonts | Self::Downloads => Column::Left,
             Self::Visualizer | Self::Editor | Self::Settings | Self::Reference | Self::Sprites | Self::Library => {
                 Column::Center
             }
@@ -73,7 +77,7 @@ impl Section {
             Self::Soundfonts => Some(Self::Songs),
             Self::Visualizer => Some(Self::Editor),
             Self::Editor => Some(Self::Visualizer),
-            Self::Playlists | Self::Settings | Self::Reference | Self::Sprites | Self::Library => None,
+            Self::Playlists | Self::Settings | Self::Reference | Self::Sprites | Self::Library | Self::Downloads => None,
         }
     }
 }

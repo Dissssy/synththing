@@ -19,6 +19,7 @@ mod previews;
 mod library;
 mod recording;
 mod script_windows;
+mod song_library;
 mod sprite_editor;
 mod themes;
 mod tour;
@@ -241,6 +242,7 @@ pub struct App {
     notifications: notifications::NotificationsState,
     /// A copyright notice on one of the user's uploads, open.
     copyright: copyright::CopyrightState,
+    song_library: song_library::SongLibraryState,
     /// The changelog window: `Some(since)` lists only the versions newer
     /// than that (What's new, after an update), `None` all of them
     /// (Help > Changelog...).
@@ -433,6 +435,7 @@ impl App {
             identity: Default::default(),
             notifications: Default::default(),
             copyright: Default::default(),
+            song_library: Default::default(),
             changelog: None,
             welcome: welcome::Welcome::default(),
             preferences_tab: PrefTab::default(),
@@ -1270,6 +1273,7 @@ impl App {
                 section_checkbox(ui, Section::Reference);
                 section_checkbox(ui, Section::Sprites);
                 section_checkbox(ui, Section::Library);
+                section_checkbox(ui, Section::Downloads);
                 ui.separator();
                 ui.menu_button("Layout", |ui| self.layout_menu_ui(ui));
             });
@@ -1819,6 +1823,7 @@ impl App {
             || self.identity.open()
             || self.notifications.open()
             || self.copyright.open()
+            || self.song_library.open()
             || self.editor.history_open
             || self.layout_save.is_some()
             || self.heavy_prompt.is_some()
@@ -1957,9 +1962,24 @@ impl App {
         });
         let cache = &mut self.song_info;
         let info_open = &mut self.song_info_open;
-        let clicked = self.browser.ui(ui, &mut |ui, path| song_info_widgets(ui, cache, path, info_open));
+        let mut publish = None;
+        let mut menu = |ui: &mut egui::Ui, path: &Path| {
+            if is_midi_path(path)
+                && ui.button("Publish song...").on_hover_text("Share it on a library server that takes songs").clicked()
+            {
+                publish = Some(path.to_path_buf());
+            }
+        };
+        let clicked = self.browser.ui(
+            ui,
+            &mut |ui, path| song_info_widgets(ui, cache, path, info_open),
+            Some(&mut menu),
+        );
         if let Some(path) = clicked {
             self.play_path(path);
+        }
+        if let Some(path) = publish {
+            self.open_publish_song(path);
         }
     }
 
@@ -2887,12 +2907,14 @@ impl eframe::App for App {
         self.identity_flow_ui(&ctx);
         self.notification_ui(&ctx);
         self.copyright_ui(&ctx);
+        self.publish_song_ui(&ctx);
         self.moderation_ui(&ctx);
         self.poll_library();
         self.poll_moderation();
         self.poll_identity();
         self.poll_notifications(&ctx);
         self.poll_copyright();
+        self.poll_song_library();
         self.heavy_midi_ui(&ctx);
         self.poll_recordings(view);
         if self.status != self.logged_status {
@@ -2980,6 +3002,7 @@ impl TabViewer for SectionTabs<'_> {
             Section::Reference => app.docs_ui(ui),
             Section::Sprites => app.sprite_editor_ui(ui),
             Section::Library => app.library_ui(ui),
+            Section::Downloads => app.downloaded_songs_ui(ui),
         }
     }
 

@@ -106,6 +106,46 @@ pub struct SongInfo {
     pub preview_start: f64,
 }
 
+/// Where a song file came from, or went to (`<file>.song.json` beside
+/// it): what the Downloaded songs tab shows, and what publishing it again
+/// makes a new version of.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SongSource {
+    /// The server's address.
+    pub server: String,
+    pub id: String,
+    pub version: u32,
+    pub sha256: String,
+    pub name: String,
+    pub author_name: String,
+    #[serde(default)]
+    pub author_id: Option<String>,
+    #[serde(default)]
+    pub slug: Option<String>,
+    /// Where it's from (one of `SOURCES`).
+    pub from: String,
+    pub song: SongInfo,
+    /// Published from here: the server's receipt.
+    #[serde(default)]
+    pub receipt: Option<super::Receipt>,
+}
+
+pub fn source_path(file: &std::path::Path) -> std::path::PathBuf {
+    let mut name = file.as_os_str().to_os_string();
+    name.push(".song.json");
+    std::path::PathBuf::from(name)
+}
+
+impl SongSource {
+    pub fn read(file: &std::path::Path) -> Option<Self> {
+        serde_json::from_str(&std::fs::read_to_string(source_path(file)).ok()?).ok()
+    }
+
+    pub fn write(&self, file: &std::path::Path) -> std::io::Result<()> {
+        std::fs::write(source_path(file), serde_json::to_string_pretty(self).unwrap_or_default())
+    }
+}
+
 /// What reading a MIDI file found.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SongFacts {

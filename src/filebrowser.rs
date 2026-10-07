@@ -21,6 +21,9 @@ struct Entry {
     is_dir: bool,
 }
 
+/// Draws a file row's right-click menu.
+pub type RowMenu<'a> = &'a mut dyn FnMut(&mut egui::Ui, &Path);
+
 pub struct FileBrowser {
     title: String,
     /// Allowed lowercase extensions (without the dot). Empty = accept any file.
@@ -226,7 +229,8 @@ impl FileBrowser {
     /// `Some(path)` the frame a file row is clicked; clicking a directory row
     /// navigates into it internally and returns `None`. `trailing` draws
     /// extra widgets at the right end of each file row (right to left).
-    pub fn ui(&mut self, ui: &mut egui::Ui, trailing: &mut dyn FnMut(&mut egui::Ui, &Path)) -> Option<PathBuf> {
+    /// `menu`, if given, draws a file row's right-click menu.
+    pub fn ui(&mut self, ui: &mut egui::Ui, trailing: &mut dyn FnMut(&mut egui::Ui, &Path), mut menu: Option<RowMenu>) -> Option<PathBuf> {
         ui.weak(display_dir(&self.cwd));
 
         let mut hidden_changed = false;
@@ -274,6 +278,9 @@ impl FileBrowser {
                 if query.is_empty() {
                     for entry in &self.entries {
                         let response = row(ui, entry, self.active.as_deref(), trailing);
+                        if let Some(menu) = menu.as_mut().filter(|_| !entry.is_dir) {
+                            response.context_menu(|ui| menu(ui, &entry.path));
+                        }
                         if response.clicked() {
                             clicked = Some((entry.path.clone(), entry.is_dir));
                         }
@@ -284,6 +291,9 @@ impl FileBrowser {
                 } else if let Some(candidates) = &self.search_candidates {
                     for entry in ranked_matches(candidates, &query) {
                         let response = row(ui, &entry, self.active.as_deref(), trailing);
+                        if let Some(menu) = menu.as_mut().filter(|_| !entry.is_dir) {
+                            response.context_menu(|ui| menu(ui, &entry.path));
+                        }
                         if response.clicked() {
                             clicked = Some((entry.path.clone(), entry.is_dir));
                         }
