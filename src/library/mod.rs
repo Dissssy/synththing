@@ -151,7 +151,10 @@ fn bundled_scripts(dir: Option<&std::path::Path>) -> Result<Vec<(String, String,
             .collect();
         files.sort();
         for path in files {
-            let source = std::fs::read_to_string(&path).map_err(|e| format!("couldn't read {}: {e}", path.display()))?;
+            // (Unix line endings, as the app embeds them: build.rs.)
+            let source = std::fs::read_to_string(&path)
+                .map_err(|e| format!("couldn't read {}: {e}", path.display()))?
+                .replace("\r\n", "\n");
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             scripts.push((category.to_string(), name, source));
         }

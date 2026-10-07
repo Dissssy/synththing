@@ -27,7 +27,14 @@ fn main() {
     let mut generated = String::from("pub static BUNDLED_SCRIPTS: &[(&str, &str, &str)] = &[\n");
     for category in CATEGORIES {
         for (name, absolute_path) in list_scripts(&manifest_dir, category) {
-            generated.push_str(&format!("    ({category:?}, {name:?}, include_str!({absolute_path:?})),\n"));
+            // With Unix line endings, whatever the checkout has (git on
+            // Windows may give CRLF): a bundled script is then byte for byte
+            // what's published from it, so its hash finds its version.
+            let contents = fs::read_to_string(&absolute_path)
+                .unwrap_or_else(|e| panic!("reading {absolute_path}: {e}"))
+                .replace("\r\n", "\n");
+            println!("cargo:rerun-if-changed={absolute_path}");
+            generated.push_str(&format!("    ({category:?}, {name:?}, {contents:?}),\n"));
         }
         println!("cargo:rerun-if-changed=assets/visualizers/{category}");
     }

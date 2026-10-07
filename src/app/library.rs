@@ -1663,6 +1663,24 @@ impl App {
                 if installed.version == 0 {
                     installed.version = details.versions.iter().find(|v| v.sha256 == installed.sha256).map_or(0, |v| v.version);
                 }
+                // A bundled copy seeded with Windows line endings (by 0.4.8
+                // and before, built from a CRLF checkout) matches nothing
+                // published: compared without them, it's that version, and
+                // becomes exactly it.
+                if installed.version == 0
+                    && let Ok(local) = std::fs::read_to_string(&script)
+                    && local.contains("\r\n")
+                {
+                    let unix = local.replace("\r\n", "\n");
+                    let sha = library::sha256_hex(unix.as_bytes());
+                    if let Some(found) = details.versions.iter().find(|v| v.sha256 == sha)
+                        && std::fs::write(&script, &unix).is_ok()
+                    {
+                        installed.version = found.version;
+                        installed.sha256 = sha;
+                        library::save_original(&unix);
+                    }
+                }
                 let offered: Vec<&library::VersionInfo> = details
                     .versions
                     .iter()

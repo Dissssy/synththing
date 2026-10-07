@@ -4312,6 +4312,15 @@ fn draw_line(
 mod tests {
     use super::*;
 
+    /// Bundled scripts are embedded with Unix line endings whatever the
+    /// checkout has (build.rs), so each one's hash is the published copy's.
+    #[test]
+    fn bundled_scripts_have_unix_line_endings() {
+        for (_, name, contents) in BUNDLED_SCRIPTS {
+            assert!(!contents.contains('\r'), "{name} has a CR");
+        }
+    }
+
     fn sine_wave(freq: f32, sample_rate: f32, len: usize, phase: &mut f32) -> Vec<f32> {
         (0..len)
             .map(|_| {
