@@ -336,8 +336,9 @@ pub fn mark_notifications(
 }
 
 /// Listen for new notifications, calling `each` with every one as it
-/// comes, until the server or the connection ends it (or `each` says to
-/// stop, with false).
+/// comes, until the server or the connection ends it, `STREAM_FOR` is up
+/// (ureq's body timeout is for the whole body: the caller reconnects), or
+/// `each` says to stop, with false.
 pub fn notification_stream(
     base: &str,
     server_key: &str,
@@ -345,14 +346,12 @@ pub fn notification_stream(
     mut each: impl FnMut(super::Notification) -> bool,
 ) -> Result<(), String> {
     use std::io::BufRead;
-    // (No overall timeout: it stays open. The server sends a keep-alive
-    // every 25 seconds; a minute of nothing means the line's dead.)
     static STREAMING: OnceLock<Agent> = OnceLock::new();
     let agent = STREAMING.get_or_init(|| {
         Agent::config_builder()
             .http_status_as_error(false)
             .timeout_connect(Some(Duration::from_secs(15)))
-            .timeout_recv_body(Some(Duration::from_secs(60)))
+            .timeout_recv_body(Some(STREAM_FOR))
             .user_agent(format!("synththing/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .into()
@@ -371,6 +370,10 @@ pub fn notification_stream(
     }
     Ok(())
 }
+
+/// How long one notification stream is kept before it's opened again (so a
+/// connection that's quietly died is noticed).
+pub const STREAM_FOR: Duration = Duration::from_secs(10 * 60);
 
 /// Report a script to the server's admins; the report's number.
 pub fn report(base: &str, server_key: &str, id: &str, identity: &Identity, report: &ReportRequest) -> Result<i64, String> {

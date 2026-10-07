@@ -342,8 +342,9 @@ impl App {
     }
 }
 
-/// A server's listener: what's there, then the stream, over again a
-/// little while after it ends, until told to stop.
+/// A server's listener: what's there, then the stream, over and over until
+/// told to stop: straight away when a stream has run its time (the list
+/// again first, for anything between), half a minute after one that failed.
 fn listen(server: &str, key: &str, identity: &Identity, stop: &AtomicBool, tx: &Sender<Event>, ctx: &egui::Context) {
     while !stop.load(Ordering::Relaxed) {
         match client::notifications(server, key, identity, None) {
@@ -353,6 +354,7 @@ fn listen(server: &str, key: &str, identity: &Identity, stop: &AtomicBool, tx: &
             }
             Err(e) => log::info!("notifications from {server}: {e}"),
         }
+        let started = std::time::Instant::now();
         let streamed = client::notification_stream(server, key, identity, |n| {
             if stop.load(Ordering::Relaxed) {
                 return false;
@@ -361,8 +363,14 @@ fn listen(server: &str, key: &str, identity: &Identity, stop: &AtomicBool, tx: &
             ctx.request_repaint();
             true
         });
-        if let Err(e) = streamed {
+        if let Err(e) = &streamed
+            && started.elapsed() < client::STREAM_FOR
+        {
             log::info!("notifications from {server}: {e}");
+        }
+        // (It ran its time, or nearly: open it again now.)
+        if started.elapsed() >= Duration::from_secs(60) {
+            continue;
         }
         for _ in 0..30 {
             if stop.load(Ordering::Relaxed) {
