@@ -162,6 +162,8 @@ struct PublishDraft {
     /// What it's a remix of (its `server` the original's), and who made
     /// that, as shown.
     remix: Option<(library::RemixOf, String)>,
+    /// Published: where (the server, its ID), and what to say about it.
+    done: Option<(String, String, String)>,
     error: Option<String>,
     /// When the slug was last edited (looked up once typing pauses), and
     /// what the lookup found: (server, slug, the script using it).
@@ -207,6 +209,9 @@ pub struct LibraryState {
     confirm_server: Option<(String, library::RemixLink)>,
     /// A server's document being read.
     document: Option<OpenDocument>,
+    /// The frame the Library was last drawn in: not the one before means
+    /// it's just been opened (or brought back), and searches again.
+    drawn_at: u64,
     /// Delete was clicked once (for this script); the next click confirms.
     confirm_delete: Option<(String, String)>,
     publish: Option<PublishDraft>,
@@ -257,6 +262,7 @@ impl LibraryState {
             encoring: false,
             confirm_server: None,
             document: None,
+            drawn_at: 0,
             confirm_delete: None,
             publish: None,
             installed: HashMap::new(),
@@ -674,6 +680,15 @@ impl App {
         }
     }
 
+    /// Show a script in the Library's details (a server in use).
+    fn library_open_script(&mut self, server: String, id: String) {
+        self.library.confirm_delete = None;
+        self.library.selected = Some((server.clone(), id.clone()));
+        self.library.details = None;
+        let viewer = self.library.identity.as_ref().map(Identity::public);
+        self.spawn_request(move || Event::Opened(server.clone(), client::details_as(&server, &id, viewer.as_deref())));
+    }
+
     /// Show a script on another server (a remix's original), putting the
     /// server in use first if it isn't.
     fn open_remote(&mut self, server: String, original: library::RemixLink) {
@@ -795,12 +810,16 @@ impl App {
         }
         library::save_original(&upload.source);
         log::info!("published {} to {server} as {} v{}", script.display(), receipt.id, receipt.version);
-        self.status = if receipt.version > 1 {
+        let said = if receipt.version > 1 {
             format!("Published version {} of \"{}\" to {}.", receipt.version, upload.name, host(&server))
         } else {
-            format!("Published \"{}\" to {} ({}).", upload.name, host(&server), receipt.id)
+            format!("Published \"{}\" to {}.", upload.name, host(&server))
         };
-        self.library.publish = None;
+        self.status = said.clone();
+        // (The window says so, with a way to see it.)
+        if let Some(draft) = &mut self.library.publish {
+            draft.done = Some((server, receipt.id.clone(), said));
+        }
         self.library_search();
     }
 
@@ -977,7 +996,10 @@ impl App {
             ui.weak("No servers in use: turn one on in Preferences > Library.");
             return;
         }
-        if !self.library.searched || search {
+        let pass = ui.ctx().cumulative_pass_nr();
+        let reopened = self.library.drawn_at + 1 < pass;
+        self.library.drawn_at = pass;
+        if !self.library.searched || search || reopened {
             self.library_search();
         }
         if let Some((server, id)) = self.library.author.clone() {
@@ -1391,6 +1413,7 @@ impl App {
                 Vec::new()
             },
             add_preset: false,
+            done: None,
             preset_name: "My settings".into(),
             script,
         });
@@ -1698,6 +1721,30 @@ impl App {
             .filter(|p| p.server == draft.server && p.slug.is_some() && p.author_id.is_some() && p.author_id == my_id)
             .and_then(|p| p.slug.clone())
             .filter(|_| !draft.anonymous && !draft.as_new);
+        if let Some((server, id, said)) = draft.done.clone() {
+            let mut show = false;
+            let response = egui::Modal::new(egui::Id::new("library_publish")).show(ctx, |ui| {
+                ui.set_width(480.0);
+                ui.heading("Published");
+                ui.label(said.as_str());
+                ui.add_space(8.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                    if ui.button("Open in Library").clicked() {
+                        show = true;
+                    }
+                });
+            });
+            if show {
+                self.set_open(crate::layout::Section::Library, true);
+                self.library_open_script(server, id);
+            } else if !(close || response.should_close()) {
+                self.library.publish = Some(draft);
+            }
+            return;
+        }
         let response = egui::Modal::new(egui::Id::new("library_publish")).show(ctx, |ui| {
             ui.set_width(480.0);
             ui.heading(match (&updating, &draft.remix) {

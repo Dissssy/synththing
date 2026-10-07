@@ -4,6 +4,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- The Script Library searches again each time it's opened, so it's always current.
+- Publishing ends with what was published and a button to open it in the Library, instead of the window just closing.
+
 ## 0.4.6 (2026-10-06)
 
 ### New
