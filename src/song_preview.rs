@@ -222,11 +222,11 @@ mod tests {
         let speakers = std::thread::spawn(move || {
             // About a second of sound, taken a little faster than it plays.
             let mut loud = 0usize;
-            for _ in 0..(SAMPLE_RATE as usize * 2) {
+            for i in 0..(SAMPLE_RATE as usize * 2) {
                 if source.next().is_some_and(|s| s != 0.0) {
                     loud += 1;
                 }
-                if loud % 4096 == 0 {
+                if i.is_multiple_of(4096) {
                     std::thread::yield_now();
                 }
             }
