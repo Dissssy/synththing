@@ -66,11 +66,16 @@ pub fn placeholder_ui(ui: &mut egui::Ui, width: f32, text: &str, spinner: bool) 
     let size = egui::vec2(width, width * preview::HEIGHT as f32 / preview::WIDTH as f32);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
+    // (In a child of its own: `put` would move the cursor back up to the
+    // text's box, inside the space, and what follows would overlap it.)
+    let mut inside = ui.new_child(
+        egui::UiBuilder::new().max_rect(rect.shrink(12.0)).layout(egui::Layout::top_down(egui::Align::Center)),
+    );
     if spinner {
-        ui.put(egui::Rect::from_center_size(rect.center() - egui::vec2(0.0, 16.0), egui::vec2(20.0, 20.0)), egui::Spinner::new());
+        inside.put(egui::Rect::from_center_size(rect.center() - egui::vec2(0.0, 16.0), egui::vec2(20.0, 20.0)), egui::Spinner::new());
     }
     let below = if spinner { egui::vec2(0.0, 14.0) } else { egui::Vec2::ZERO };
-    ui.put(
+    inside.put(
         egui::Rect::from_center_size(rect.center() + below, rect.shrink(12.0).size()),
         egui::Label::new(egui::RichText::new(text).weak()).wrap(),
     );
