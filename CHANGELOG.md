@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### New
+- Library servers can host songs (MIDI files), when their owner turns it on (`"songs": true` in `server.json`): each upload declares the poster's right to share it, says where it's from, and is checked by its notes, so the same song posted again by someone else isn't taken.
+
 ## 0.4.7 (2026-10-07)
 
 ### New

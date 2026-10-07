@@ -103,6 +103,7 @@ Runs a script library server (the design is in docs/SERVER.md): the app's Script
 - `threads`: request workers (4).
 - `check_uploads`: refuse uploads that don't run on this server's version (`preview --check`): they don't compile, or error in their first seconds (true). One whose check takes over 12 seconds is taken: slow isn't broken.
 - `previews`: make a preview of each upload (true), one at a time, each by `synththing preview` in a process of its own; at startup, any script's newest version without one is queued. They play the starter songs with TimGM6mb, downloaded into `soundfonts/` the first time, unless `preview_soundfont` names another.
+- `songs`: take songs (MIDI files) as well as scripts (false). Each upload declares the poster's right to share it; copyright notices cover songs too, so a server that takes them should have a `contact` for notices.
 - `preview_seconds`: how long making one may take before it's stopped (120); the first frame it drew stays as the still.
 - `authorities`: the identity authorities whose rotation records it takes (their keys, hex): the official server's by default.
 - `authority`: this server is an identity authority itself (false): it issues rotations (an identity moving to a new key), and with `mail`, attaches recovery emails and recovers identities by them (docs/SERVER.md).

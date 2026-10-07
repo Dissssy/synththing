@@ -55,7 +55,11 @@ pub fn tokens(source: &str) -> Vec<String> {
 
 impl Fingerprint {
     pub fn of(source: &str) -> Self {
-        let tokens = tokens(source);
+        Self::of_tokens(tokens(source))
+    }
+
+    /// Of any tokens (a song's notes, say).
+    pub fn of_tokens(tokens: Vec<String>) -> Self {
         let token_hashes: Vec<u64> = tokens.iter().map(|t| fnv(t.as_bytes(), 0)).collect();
         let shingles: Vec<u64> = if token_hashes.len() < SHINGLE {
             vec![token_hashes.iter().fold(0, |acc, &h| mix(acc ^ h))]

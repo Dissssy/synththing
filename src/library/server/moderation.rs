@@ -342,7 +342,7 @@ fn act(state: &State, action: &AdminAction) -> Acted {
                 .query_row(
                     &format!("SELECT {}, hidden, hidden_reason FROM scripts WHERE id = ?", super::SUMMARY_COLUMNS),
                     [script],
-                    |r| Ok((super::summary_from_row(r)?, r.get::<_, i64>(12)? != 0, r.get::<_, Option<String>>(13)?)),
+                    |r| Ok((super::summary_from_row(r)?, r.get::<_, i64>(13)? != 0, r.get::<_, Option<String>>(14)?)),
                 )
                 .optional()
                 .map_err(db_error)?

@@ -345,7 +345,7 @@ impl App {
             Some(_) => return None,
             None => None,
         };
-        Some(client::Search { query: lib.query.clone(), category: lib.category, sort: lib.sort, author, page: 0 })
+        Some(client::Search { query: lib.query.clone(), category: lib.category, sort: lib.sort, author, page: 0, songs: false })
     }
 
     /// Search every server in use (with what's typed and picked).

@@ -9,6 +9,7 @@ pub mod admin;
 pub mod client;
 pub mod fingerprint;
 pub mod rotation;
+pub mod songs;
 pub mod identity;
 pub mod server;
 
@@ -327,6 +328,9 @@ pub struct Info {
     pub authority: bool,
     #[serde(default)]
     pub mail: bool,
+    /// It takes songs (MIDI files) as well as scripts.
+    #[serde(default)]
+    pub songs: bool,
 }
 
 /// A notification (`/api/v1/notifications`): what happened, as a kind and
@@ -380,6 +384,16 @@ pub struct ScriptSummary {
     /// Unix seconds.
     pub created: i64,
     pub updated: i64,
+    /// `"script"` or `"song"`.
+    #[serde(default = "script_kind")]
+    pub kind: String,
+    /// A song's own details.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub song: Option<songs::SongInfo>,
+}
+
+fn script_kind() -> String {
+    "script".into()
 }
 
 /// `GET /api/v1/scripts`: a page of scripts.

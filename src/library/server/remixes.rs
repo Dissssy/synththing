@@ -38,7 +38,10 @@ COMMIT;
 /// Fingerprint the versions stored before there were fingerprints.
 pub(super) fn fingerprint_stored(db: &Connection) -> rusqlite::Result<()> {
     let stored: Vec<(String, u32, String)> = db
-        .prepare("SELECT script_id, version, source FROM versions WHERE fingerprint IS NULL")?
+        .prepare(
+            "SELECT v.script_id, v.version, v.source FROM versions v JOIN scripts s ON s.id = v.script_id
+             WHERE v.fingerprint IS NULL AND s.kind = 'script'",
+        )?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<rusqlite::Result<_>>()?;
     for (id, version, source) in stored {
@@ -75,17 +78,18 @@ pub(super) fn resolve(db: &Connection, remix: &RemixOf) -> rusqlite::Result<Remi
         return Ok(as_given(&remix.server));
     }
     type Found = (String, String, Option<String>, Option<String>);
-    let columns = "SELECT id, name, author_id, slug FROM scripts";
+    // (Songs aren't remixed.)
+    let columns = "SELECT id, name, author_id, slug FROM scripts WHERE kind = 'script' AND";
     let row = |r: &rusqlite::Row| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?));
     let found: Option<Found> = if remix.id.is_empty() {
         match (&remix.author_id, &remix.slug) {
             (Some(author), Some(slug)) => {
-                db.query_row(&format!("{columns} WHERE author_id = ? AND slug = ?"), params![author, slug], row).optional()?
+                db.query_row(&format!("{columns} author_id = ? AND slug = ?"), params![author, slug], row).optional()?
             }
             _ => None,
         }
     } else {
-        db.query_row(&format!("{columns} WHERE id = ?"), [&remix.id], row).optional()?
+        db.query_row(&format!("{columns} id = ?"), [&remix.id], row).optional()?
     };
     let Some((id, name, author_id, slug)) = found else {
         return Ok(as_given(""));
@@ -211,7 +215,7 @@ pub(super) fn refuse_copy(
     };
     let mut statement = db.prepare(
         "SELECT v.fingerprint, s.id, s.name, s.author_name, s.author_key FROM versions v JOIN scripts s ON s.id = v.script_id
-         WHERE v.fingerprint IS NOT NULL",
+         WHERE v.fingerprint IS NOT NULL AND s.kind = 'script'",
     )?;
     let rows = statement.query_map([], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?))

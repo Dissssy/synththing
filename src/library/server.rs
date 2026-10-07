@@ -34,6 +34,7 @@ pub use mail::Mail;
 mod moderation;
 mod notifications;
 mod remixes;
+mod songs;
 mod update;
 
 use std::collections::HashMap;
@@ -118,6 +119,8 @@ pub struct ServerConfig {
     /// Refuse uploads that don't run here: they don't compile, or error in
     /// their first seconds (`synththing preview --check`).
     pub check_uploads: bool,
+    /// Take songs (MIDI files) too.
+    pub songs: bool,
 }
 
 impl Default for ServerConfig {
@@ -146,6 +149,7 @@ impl Default for ServerConfig {
             mail: None,
             unverified_uploads_per_day: 3,
             documents: Vec::new(),
+            songs: false,
         }
     }
 }
@@ -620,6 +624,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 11 {
         db.execute_batch(copyright::SCHEMA_V11)?;
     }
+    if version < 12 {
+        db.execute_batch(songs::SCHEMA_V12)?;
+    }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
 }
@@ -739,6 +746,13 @@ fn handle(state: &Arc<State>, mut request: Request) {
         (Method::Get, ["api", "v1", "scripts", id, "source"]) => source(state, id, &query),
         (Method::Get, ["api", "v1", "scripts", id, "preview.png"]) => preview(state, id, &query, false),
         (Method::Get, ["api", "v1", "scripts", id, "preview-sheet.png"]) => preview(state, id, &query, true),
+        (Method::Post, ["api", "v1", "songs"]) => {
+            let ip = client_ip(state, &request);
+            songs::upload(state, &mut request, &ip)
+        }
+        (Method::Get, ["api", "v1", "songs", id, "file"]) => {
+            songs::file(state, id, query.get("version").and_then(|v| v.parse().ok()))
+        }
         (Method::Get, ["api", "v1", "users", id]) => user(state, id),
         (Method::Get, ["api", "v1", "users", id, "scripts", slug]) => by_slug(state, id, slug),
         (Method::Post, ["api", "v1", "scripts"]) => {
@@ -826,6 +840,7 @@ fn info(state: &State) -> Info {
         contact: state.config.contact.clone(),
         authority: state.config.authority,
         mail: state.config.authority && state.mailer.on(),
+        songs: state.config.songs,
     }
 }
 
@@ -863,7 +878,7 @@ fn percent_decode(text: &str) -> String {
 }
 
 const SUMMARY_COLUMNS: &str =
-    "id, name, description, category, tags, author_name, author_key, latest, encores, created, updated, slug";
+    "id, name, description, category, tags, author_name, author_key, latest, encores, created, updated, slug, kind";
 
 fn summary_from_row(row: &rusqlite::Row) -> rusqlite::Result<ScriptSummary> {
     let tags: String = row.get(4)?;
@@ -881,7 +896,16 @@ fn summary_from_row(row: &rusqlite::Row) -> rusqlite::Result<ScriptSummary> {
         created: row.get(9)?,
         updated: row.get(10)?,
         slug: row.get(11)?,
+        kind: row.get(12)?,
+        song: None,
     })
+}
+
+/// Songs' own details, for the songs among `summaries`.
+fn add_song_info(db: &Connection, summaries: &mut [ScriptSummary]) {
+    for summary in summaries.iter_mut().filter(|s| s.kind == "song") {
+        summary.song = songs::info(db, &summary.id);
+    }
 }
 
 /// A search typed by someone as an FTS5 query: each word a prefix, all of
@@ -897,8 +921,9 @@ fn fts_query(text: &str) -> Option<String> {
 }
 
 fn list(state: &State, query: &HashMap<String, String>) -> Reply {
-    let mut clauses = vec!["hidden = 0".to_string()];
-    let mut args: Vec<rusqlite::types::Value> = Vec::new();
+    let mut clauses = vec!["hidden = 0".to_string(), "kind = ?".to_string()];
+    let kind = if query.get("kind").is_some_and(|k| k == "song") { "song" } else { "script" };
+    let mut args: Vec<rusqlite::types::Value> = vec![kind.to_string().into()];
     if let Some(category) = query.get("category").filter(|c| !c.is_empty()) {
         clauses.push("category = ?".into());
         args.push(category.clone().into());
@@ -937,6 +962,7 @@ fn list(state: &State, query: &HashMap<String, String>) -> Reply {
         });
     match (total, scripts) {
         (Ok(total), Ok(mut scripts)) => {
+            add_song_info(&db, &mut scripts);
             for script in &mut scripts {
                 if script.description.chars().count() > 200 {
                     script.description = script.description.chars().take(200).collect::<String>() + "...";
@@ -949,8 +975,11 @@ fn list(state: &State, query: &HashMap<String, String>) -> Reply {
 }
 
 fn find_summary(db: &Connection, id: &str) -> rusqlite::Result<Option<ScriptSummary>> {
-    db.query_row(&format!("SELECT {SUMMARY_COLUMNS} FROM scripts WHERE id = ? AND hidden = 0"), [id], summary_from_row)
-        .optional()
+    let mut found = db
+        .query_row(&format!("SELECT {SUMMARY_COLUMNS} FROM scripts WHERE id = ? AND hidden = 0"), [id], summary_from_row)
+        .optional()?;
+    add_song_info(db, found.as_mut_slice());
+    Ok(found)
 }
 
 fn details(state: &State, id: &str, query: &HashMap<String, String>) -> Reply {
@@ -1002,7 +1031,8 @@ fn details(state: &State, id: &str, query: &HashMap<String, String>) -> Reply {
 fn source(state: &State, id: &str, query: &HashMap<String, String>) -> Reply {
     let db = state.db();
     let summary = match find_summary(&db, id) {
-        Ok(Some(summary)) => summary,
+        Ok(Some(summary)) if summary.kind == "script" => summary,
+        Ok(Some(_)) => return error(404, "that's a song, not a script: this app doesn't know songs yet"),
         Ok(None) => return error(404, "no such script"),
         Err(e) => return error(500, format!("database: {e}")),
     };
@@ -1065,12 +1095,17 @@ fn preview(state: &State, id: &str, query: &HashMap<String, String>, sheet: bool
 
 /// Read a request's body, up to `limit` bytes.
 fn read_body(request: &mut Request, limit: usize) -> Result<Vec<u8>, Reply> {
+    read_body_or(request, limit, &format!("too big: scripts can be up to {} KB", MAX_SOURCE_BYTES / 1024))
+}
+
+/// As `read_body`, saying `too_big` when it is.
+fn read_body_or(request: &mut Request, limit: usize, too_big: &str) -> Result<Vec<u8>, Reply> {
     let mut body = Vec::new();
     if request.as_reader().take(limit as u64 + 1).read_to_end(&mut body).is_err() {
         return Err(error(400, "couldn't read the request"));
     }
     if body.len() > limit {
-        return Err(error(413, format!("too big: scripts can be up to {} KB", MAX_SOURCE_BYTES / 1024)));
+        return Err(error(413, too_big));
     }
     Ok(body)
 }
@@ -1235,30 +1270,10 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
         Ok(None) => {}
         Err(e) => return error(500, format!("database: {e}")),
     }
-    // The daily limit, by address, for anything new (keys the server
-    // trusts aside: the official publisher, by default).
-    let publisher = authority::current_key(&db, &state.config.publisher);
-    let limited = !author.as_ref().is_some_and(|key| state.config.unlimited_keys.contains(key) || *key == publisher);
-    if limited {
-        let mut uploads = state.uploads.lock().unwrap_or_else(|p| p.into_inner());
-        let recent = uploads.entry(ip.to_string()).or_default();
-        let day = Duration::from_secs(24 * 60 * 60);
-        recent.retain(|t| t.elapsed() < day);
-        // (An authority with mail is stricter with keys it can't recover.)
-        let verified = author.as_deref().is_some_and(|key| authority::has_email(&db, key));
-        let per_day = if state.config.authority && state.mailer.on() && !verified {
-            state.config.unverified_uploads_per_day.min(state.config.uploads_per_day)
-        } else {
-            state.config.uploads_per_day
-        };
-        if recent.len() >= per_day {
-            let wait = recent.first().map(|t| day.saturating_sub(t.elapsed()).as_secs()).unwrap_or(0);
-            return json(
-                429,
-                &ApiError { error: "that's all the uploads for today from here".into(), retry_after: Some(wait) },
-            );
-        }
-    }
+    let limited = match upload_allowance(state, &db, author.as_deref(), ip) {
+        Ok(limited) => limited,
+        Err(reply) => return reply,
+    };
     let id = match &existing {
         Some((id, _)) => id.clone(),
         None => loop {
@@ -1336,7 +1351,7 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
         return error(500, format!("database: {e}"));
     }
     if limited {
-        state.uploads.lock().unwrap_or_else(|p| p.into_inner()).entry(ip.to_string()).or_default().push(Instant::now());
+        count_upload(state, ip);
     }
     // (A new remix here: its original's author hears of it.)
     if existing.is_none()
@@ -1352,6 +1367,40 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
     let who = author_id.map(|id| format!(" (#{id})")).unwrap_or_default();
     println!("uploaded {id} v{version} \"{}\" by {}{who} from {ip}", upload.name, upload.author_name);
     json(201, &signed_receipt(state, id, version, sha256))
+}
+
+/// The daily limit on uploads (scripts and songs alike), by address, for
+/// anything new: whether this one counts (keys the server trusts aside: the
+/// official publisher, by default), or why it's refused.
+fn upload_allowance(state: &State, db: &Connection, author: Option<&str>, ip: &str) -> Result<bool, Reply> {
+    let publisher = authority::current_key(db, &state.config.publisher);
+    let limited = !author.is_some_and(|key| state.config.unlimited_keys.iter().any(|k| k == key) || key == publisher);
+    if limited {
+        let mut uploads = state.uploads.lock().unwrap_or_else(|p| p.into_inner());
+        let recent = uploads.entry(ip.to_string()).or_default();
+        let day = Duration::from_secs(24 * 60 * 60);
+        recent.retain(|t| t.elapsed() < day);
+        // (An authority with mail is stricter with keys it can't recover.)
+        let verified = author.is_some_and(|key| authority::has_email(db, key));
+        let per_day = if state.config.authority && state.mailer.on() && !verified {
+            state.config.unverified_uploads_per_day.min(state.config.uploads_per_day)
+        } else {
+            state.config.uploads_per_day
+        };
+        if recent.len() >= per_day {
+            let wait = recent.first().map(|t| day.saturating_sub(t.elapsed()).as_secs()).unwrap_or(0);
+            return Err(json(
+                429,
+                &ApiError { error: "that's all the uploads for today from here".into(), retry_after: Some(wait) },
+            ));
+        }
+    }
+    Ok(limited)
+}
+
+/// An upload `upload_allowance` said counts, taken.
+fn count_upload(state: &State, ip: &str) {
+    state.uploads.lock().unwrap_or_else(|p| p.into_inner()).entry(ip.to_string()).or_default().push(Instant::now());
 }
 
 /// `DELETE /api/v1/scripts/{id}`, signed by its author.

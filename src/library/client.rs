@@ -83,6 +83,8 @@ pub struct Search {
     /// Only this user's uploads (their ID).
     pub author: Option<String>,
     pub page: u32,
+    /// Songs instead of scripts.
+    pub songs: bool,
 }
 
 /// A page of scripts.
@@ -98,6 +100,9 @@ pub fn list(base: &str, search: &Search) -> Result<Listing, String> {
     }
     if let Some(author) = &search.author {
         request = request.query("author", author);
+    }
+    if search.songs {
+        request = request.query("kind", "song");
     }
     read(check(request.call())?)
 }
@@ -479,15 +484,72 @@ pub fn download(base: &str, id: &str, version: Option<u32>, server_key: &str) ->
     Ok(Download { source, version, sha256 })
 }
 
+/// A downloaded song (a MIDI file), checked as a script's source is.
+#[derive(Clone, Debug)]
+pub struct SongDownload {
+    pub bytes: Vec<u8>,
+    pub version: u32,
+    pub sha256: String,
+}
+
+/// A song's file (`version`, or its newest), accepted only signed by
+/// `server_key` and matching the hash signed.
+pub fn download_song(base: &str, id: &str, version: Option<u32>, server_key: &str) -> Result<SongDownload, String> {
+    let mut request = agent().get(format!("{base}/api/v1/songs/{id}/file"));
+    if let Some(version) = version {
+        request = request.query("version", version.to_string());
+    }
+    let mut response = check(request.call())?;
+    let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let (Some(version), Some(sha256), Some(signature)) = (header(VERSION_HEADER), header(SHA256_HEADER), header(SIGNATURE_HEADER))
+    else {
+        return Err("the server didn't sign the song".into());
+    };
+    let version: u32 = version.parse().map_err(|_| "the server sent a bad version".to_string())?;
+    let bytes = response
+        .body_mut()
+        .with_config()
+        .limit(super::songs::MAX_SONG_BYTES as u64)
+        .read_to_vec()
+        .map_err(|e| format!("couldn't read the song ({e})"))?;
+    if super::sha256_hex(&bytes) != sha256 {
+        return Err("the song didn't arrive whole (its hash doesn't match)".into());
+    }
+    if !verify_hex(server_key, &source_message(server_key, id, version, &sha256), &signature) {
+        return Err("the song's signature doesn't match the server's key".into());
+    }
+    Ok(SongDownload { bytes, version, sha256 })
+}
+
 /// Upload a script to the server whose key is `server_key`: signed by
 /// `identity`, or anonymously without one. The receipt is checked against
 /// the server's key.
 pub fn upload(base: &str, server_key: &str, upload: &Upload, identity: Option<&Identity>) -> Result<Receipt, String> {
+    post_upload(base, server_key, "/api/v1/scripts", upload, identity)
+}
+
+/// Upload a song (as `upload` does a script).
+pub fn upload_song(
+    base: &str,
+    server_key: &str,
+    song: &super::songs::SongUpload,
+    identity: Option<&Identity>,
+) -> Result<Receipt, String> {
+    post_upload(base, server_key, "/api/v1/songs", song, identity)
+}
+
+fn post_upload<T: serde::Serialize>(
+    base: &str,
+    server_key: &str,
+    path: &str,
+    upload: &T,
+    identity: Option<&Identity>,
+) -> Result<Receipt, String> {
     let body = serde_json::to_vec(upload).map_err(|e| e.to_string())?;
-    let mut request = agent().post(format!("{base}/api/v1/scripts")).header("Content-Type", "application/json");
+    let mut request = agent().post(format!("{base}{path}")).header("Content-Type", "application/json");
     if let Some(identity) = identity {
         let (time, nonce) = (now(), super::new_nonce());
-        let signature = identity.sign(&request_message(server_key, "POST", "/api/v1/scripts", time, &nonce, &body));
+        let signature = identity.sign(&request_message(server_key, "POST", path, time, &nonce, &body));
         request = request
             .header(KEY_HEADER, identity.public())
             .header(TIME_HEADER, time.to_string())
@@ -1291,6 +1353,96 @@ mod tests {
         as_server(AdminAction::Delete { script: id.clone() }).unwrap();
         let info = as_server(AdminAction::Info { script: id.clone() });
         assert!(info.unwrap_err().contains("no such script"));
+        running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn song_of(file: &str, slug: &str) -> crate::library::songs::SongUpload {
+        let bytes = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/starter/songs").join(file)).unwrap();
+        crate::library::songs::SongUpload {
+            name: file.trim_end_matches(".mid").into(),
+            composer: "Someone Long Ago".into(),
+            from: "classical".into(),
+            from_title: String::new(),
+            description: "a song".into(),
+            tags: vec!["piano".into()],
+            author_name: "tester".into(),
+            rights: "public_domain".into(),
+            data: crate::library::songs::encode(&bytes),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            slug: Some(slug.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Songs: only where a server takes them; listed apart from scripts,
+    /// downloaded signed, and not taken twice from different people.
+    #[test]
+    fn songs_are_shared() {
+        let dir = std::env::temp_dir().join(format!("synththing-songs-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false, "check_uploads": false }"#).unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        assert!(!info(&base).unwrap().songs);
+        let canon = song_of("Canon in D.mid", "canon");
+        assert!(upload_song(&base, &key, &canon, Some(&alice)).unwrap_err().contains("doesn't take songs"));
+        running.stop();
+
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false, "check_uploads": false, "songs": true }"#).unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        assert!(info(&base).unwrap().songs);
+        let script = upload(&base, &key, &upload_of("Bars", "visualizer", "function render() end"), None).unwrap();
+        let first = upload_song(&base, &key, &canon, Some(&alice)).unwrap();
+        assert_eq!(first.version, 1);
+        // The same file again: nothing new.
+        assert_eq!(upload_song(&base, &key, &canon, Some(&alice)).unwrap().version, 1);
+        // Someone else's copy of it isn't taken; the poster's own other song is.
+        let copied = upload_song(&base, &key, &canon, Some(&bob)).unwrap_err();
+        assert!(copied.contains("same song"), "{copied}");
+        let ode = upload_song(&base, &key, &song_of("Ode to Joy.mid", "ode"), Some(&bob)).unwrap();
+        // Not a MIDI file, or no rights declared: refused.
+        let mut bad = song_of("Canon in D.mid", "bad");
+        bad.data = crate::library::songs::encode(b"MThd nope");
+        assert!(upload_song(&base, &key, &bad, Some(&alice)).unwrap_err().contains("MIDI"));
+        let mut bad = song_of("Canon in D.mid", "bad");
+        bad.rights = String::new();
+        assert!(upload_song(&base, &key, &bad, Some(&alice)).unwrap_err().contains("right"));
+        // A script's slug isn't a song's.
+        let mut clash = song_of("Ode to Joy.mid", "canon2");
+        clash.slug = Some("bars".into());
+        let mut bars = upload_of("Bars 2", "visualizer", "function render() clear({r=1,g=1,b=1}) end");
+        bars.slug = Some("bars".into());
+        upload(&base, &key, &bars, Some(&alice)).unwrap();
+        assert!(upload_song(&base, &key, &clash, Some(&alice)).unwrap_err().contains("script with that slug"));
+
+        let songs = list(&base, &Search { sort: "new", songs: true, ..Default::default() }).unwrap();
+        assert_eq!(songs.total, 2);
+        assert!(songs.scripts.iter().all(|s| s.kind == "song" && s.song.is_some()));
+        let scripts = list(&base, &search("", None, "new")).unwrap();
+        assert_eq!(scripts.total, 2);
+        assert!(scripts.scripts.iter().all(|s| s.kind == "script" && s.song.is_none()));
+        assert_eq!(list(&base, &Search { sort: "new", songs: true, category: Some("classical"), ..Default::default() }).unwrap().total, 2);
+
+        let details = details(&base, &first.id).unwrap();
+        let song = details.summary.song.unwrap();
+        assert_eq!((details.summary.category.as_str(), song.composer.as_str()), ("classical", "Someone Long Ago"));
+        assert_eq!((song.arranger.as_str(), song.rights.as_str()), ("tester", "public_domain"));
+        assert!(song.notes > 100 && song.length > 20.0);
+        let got = download_song(&base, &first.id, None, &key).unwrap();
+        assert_eq!(crate::library::songs::encode(&got.bytes), canon.data);
+        assert_eq!(got.sha256, first.sha256);
+        // Songs aren't scripts, and scripts aren't songs.
+        assert!(download(&base, &first.id, None, &key).unwrap_err().contains("song"));
+        assert!(download_song(&base, &script.id, None, &key).unwrap_err().contains("no such song"));
+        // The usual endpoints: its poster can delete it.
+        assert!(delete(&base, &key, &ode.id, &alice).is_err());
+        delete(&base, &key, &ode.id, &bob).unwrap();
+        assert!(download_song(&base, &ode.id, None, &key).is_err());
         running.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -125,9 +125,10 @@ Rendered by the server on each upload and each new version, through a queue (one
 
 A server can host MIDI songs too (`"songs": true` in `server.json`; off by default, so each server's owner decides). Not audio files: they're large, and almost always a recording someone owns.
 
-- **What's uploaded**: one `.mid` file (up to 4 MB), checked by parsing it with the app's own MIDI reader (`midi_notes`) before it's taken, with metadata: title, composer (or artist), the arranger (the name posted under, as for scripts), description, tags, and optionally a script it's made for (highway, say).
+- **What's uploaded**: one `.mid` file (up to 4 MB, base64 in the JSON body), checked by parsing it with the app's own MIDI reader (`midi_notes`, and the synth's) before it's taken, with metadata: title, composer (or artist), the arranger (who made the MIDI file; the name posted under if left out), where it's from (one of a fixed list, kept as its category so listings can be narrowed to one: original, video game, film or TV, anime, popular music, classical, folk or traditional, other) and what it's from (the game, film or album, free text), description, tags, and optionally a script here it's made for (highway, say). Publish song... suggests the title (the first track's name), composer and arranger ("Composed by", "Sequenced by" and the like in its text events or copyright notice) from the file itself (`songs::suggest`). The file's own copyright notice is kept and shown, as the file says it.
 - **Rights, declared on every upload**, one of: **my own composition**; **an arrangement of a public-domain work** (the composer died long enough ago, or the work was released to it); **released under a license** (named: CC BY, CC0, ...). It's shown on the song. There's no "other": a song that's someone else's and not released for sharing isn't to be uploaded (the EULA says so), and copyright notices (below) deal with the ones that are.
-- **Shown** from what the parse found: length, notes, tracks, tempo; downloads come signed by the server like sources.
+- **Shown** from what the parse found: length, notes, tracks, channels; downloads come signed by the server like sources.
+- **Stored** beside scripts (`server/songs.rs`): a row in `scripts` with `kind = 'song'` (so encores, reports, moderation, notices, notifications and deletion work on them unchanged), its details in `songs`, the file in its version's `data`. Listings are scripts unless `kind=song` is asked for, a script's source endpoint refuses a song (so an older app never installs one), and a song can't take a slug its poster's scripts have. Songs aren't remixed, and copy checks compare songs with songs only.
 - **Like scripts**: signed uploads owned by their key (deletable by it), anonymous ones permanent; listing, search, encores, reports, moderation, rate limits, and identity deletion all cover songs. A near-copy check uses the notes, not the bytes: the parsed notes (pitch, start and length, quantized) fingerprinted like scripts, so re-saving a file doesn't make it new.
 - **Previews**: made by the server like scripts' (`preview.rs`), with a standard renderer (a built-in piano-roll script) drawing the song's busiest stretch, so every song has the same kind of card. The preview records where in the song that stretch is. In the app the animation plays with a muted icon over it, and while the Songs side is open a separate engine of its own plays the selected song's stretch along with it, silently, over and over (synthesized from the MIDI with the user's current soundfont); clicking the preview takes the icon away and unmutes it, so the sound starts at once. The server never stores or sends audio.
 - **In the app**: the online Library shows Scripts and Songs, with the same search, details, encores and reports; a song can be played, or saved to the songs folder (a `Library` folder in the browser's default one). Songs saved from libraries have a tab of their own for now (Downloaded songs: play, show in folder, delete; title, composer, rights), until songs have a better home. Publish song... from the song browser's right-click menu, with an optional "made for" script.
@@ -145,7 +146,7 @@ For what happens to your things on a server: encore and download milestones, an 
 
 ## Copyright notices
 
-Formal notices from a rights holder (or someone acting for one), as the US DMCA has them, for any song or script. Separate from reports: a report goes to the moderators; a notice takes the item down at once. Built for scripts (`server/copyright.rs`, `app/copyright.rs`; songs join them when they're built): `POST /api/v1/notices` files one, `/api/v1/notices/{id}` shows it to its uploader (without the claimant's contact details) or claimant, `/dispute` and `/accept` are the uploader's; moderators list and decide them with `AdminAction::Notices` and `AdminAction::Copyright` (the Moderation window's Copyright tab). Notifications carry each step, and the uploader's says what they did (`resolution`) once they've done it.
+Formal notices from a rights holder (or someone acting for one), as the US DMCA has them, for any song or script. Separate from reports: a report goes to the moderators; a notice takes the item down at once. Built for scripts and songs alike (`server/copyright.rs`, `app/copyright.rs`): `POST /api/v1/notices` files one, `/api/v1/notices/{id}` shows it to its uploader (without the claimant's contact details) or claimant, `/dispute` and `/accept` are the uploader's; moderators list and decide them with `AdminAction::Notices` and `AdminAction::Copyright` (the Moderation window's Copyright tab). Notifications carry each step, and the uploader's says what they did (`resolution`) once they've done it.
 
 - **A notice** (signed, from the app: Report... > It's my copyrighted work) needs everything a DMCA notice does: the claimant's full name, who they act for, their postal address, email and phone, the copyrighted work and where it's from, a statement that they believe in good faith the use isn't authorized, a statement under penalty of perjury that the notice is accurate and they're authorized to act, and a signature (their full name, typed). Asking for all of that, and saying it's a legal statement, is what keeps it from being abused.
 - **The item is hidden at once** (`hidden = 3`, under a copyright notice), and its uploader gets a notification of it (from whom, for whom, the work named; not the claimant's address or phone), with **Dispute...**; it stays in their list until they dispute it or let it stand.
@@ -159,8 +160,8 @@ Formal notices from a rights holder (or someone acting for one), as the US DMCA 
 ## API (v1)
 
 ```
-GET  /api/v1/info                         name, version, server key, mode, license, rules, contact, authority?
-GET  /api/v1/scripts?q=&category=&tag=&sort=new|top&page=
+GET  /api/v1/info                         name, version, server key, mode, license, rules, contact, authority?, songs?
+GET  /api/v1/scripts?q=&category=&tag=&sort=new|top&page=&kind=song   (scripts unless kind=song)
 GET  /api/v1/scripts/{id}                 details, versions, author ID and names, encores (?viewer=key: whether they gave one), remix of, remixes
 GET  /api/v1/scripts/{id}/source          ?version=  (signed by the server)
 GET  /api/v1/scripts/{id}/preview.png     the still
@@ -171,6 +172,8 @@ DELETE /api/v1/scripts/{id}               owner or admin
 POST /api/v1/scripts/{id}/encore          (and DELETE to take it back)
 POST /api/v1/scripts/{id}/report
 POST /api/v1/admin                        an admin action (signed by an admin)
+POST /api/v1/songs                        upload a song (servers with "songs": true)
+GET  /api/v1/songs/{id}/file              ?version=  the MIDI file (signed by the server)
 GET  /api/v1/users/{id}                   names, uploads, total encores
 POST /api/v1/notices                     signed: a copyright notice (takes the item down at once)
 POST /api/v1/notices/{id}                signed: the notice, for its uploader or claimant

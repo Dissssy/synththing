@@ -52,7 +52,13 @@ pub struct MidiFacts {
     pub track_names: Vec<String>,
     /// The copyright notice (meta event 02), if there is one.
     pub copyright: Option<String>,
+    /// Its text events (meta event 01), the first `MAX_TEXTS`: often who
+    /// wrote or sequenced it.
+    pub texts: Vec<String>,
 }
+
+/// Text events kept in `MidiFacts::texts`.
+const MAX_TEXTS: usize = 32;
 
 /// A MIDI file's musical timing: where the beats fall in song seconds.
 /// Beats are quarter notes, counted from 0 at the start of the song.
@@ -253,6 +259,7 @@ impl NoteList {
             end_time,
             track_names: texts.names,
             copyright: texts.copyright,
+            texts: texts.texts,
         };
         Ok(Self { notes, longest, timing, facts })
     }
@@ -274,6 +281,7 @@ enum Event {
 struct TrackTexts {
     names: Vec<String>,
     copyright: Option<String>,
+    texts: Vec<String>,
 }
 
 /// Meta event text, which has no declared encoding: UTF-8 when it is,
@@ -304,6 +312,13 @@ fn read_track(
                 let data = r.take(len)?;
                 match (kind, data) {
                     (0x51, [a, b, c]) => Event::Tempo(u32::from_be_bytes([0, *a, *b, *c])),
+                    (0x01, text) => {
+                        let text = meta_text(text);
+                        if texts.texts.len() < MAX_TEXTS && !text.is_empty() {
+                            texts.texts.push(text);
+                        }
+                        Event::Other
+                    }
                     (0x02, text) => {
                         let text = meta_text(text);
                         if texts.copyright.is_none() && !text.is_empty() {
