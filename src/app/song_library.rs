@@ -636,7 +636,8 @@ impl App {
                         ui,
                         |ui| {
                             for (source, title) in songs::SOURCES {
-                                ui.selectable_value(&mut draft.from, source, title);
+                                let option = super::library::kind_option(ui, source, title);
+                                ui.selectable_value(&mut draft.from, source, option);
                             }
                         },
                     );

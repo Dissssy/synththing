@@ -328,6 +328,38 @@ fn diff_ui(ui: &mut egui::Ui, diff: &[(Change, String)]) {
     }
 }
 
+/// The color of a script's kind or a song's source (where it's from), from
+/// the channel palette (`lua_visualizer::default_channel_color`); grey for
+/// "other" and anything unknown. Video-game songs share games' color.
+pub(super) fn kind_color(ui: &egui::Ui, kind: &str) -> egui::Color32 {
+    let palette = match kind {
+        "visualizer" | "classical" => Some(0),
+        "game" => Some(1),
+        "original" => Some(2),
+        "popular" => Some(3),
+        "film" => Some(4),
+        "toy" | "anime" => Some(6),
+        "example" | "traditional" => Some(7),
+        _ => None,
+    };
+    match palette {
+        Some(i) => {
+            let [r, g, b] = lua_visualizer::default_channel_color(i);
+            egui::Color32::from_rgb(r, g, b)
+        }
+        None => ui.visuals().widgets.inactive.bg_fill.gamma_multiply(1.6),
+    }
+}
+
+/// A kind or source as an option in a dropdown: a dot of its color first.
+pub(super) fn kind_option(ui: &egui::Ui, kind: &str, title: &str) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let style = ui.style();
+    egui::RichText::new("\u{25CF} ").color(kind_color(ui, kind)).append_to(&mut job, style, egui::FontSelection::Default, egui::Align::Center);
+    egui::RichText::new(title).append_to(&mut job, style, egui::FontSelection::Default, egui::Align::Center);
+    job
+}
+
 /// A server's address as shown: its host.
 pub(super) fn host(url: &str) -> &str {
     url.split("://").nth(1).unwrap_or(url)
@@ -1020,7 +1052,8 @@ impl App {
             egui::ComboBox::from_id_salt("library_category").selected_text(category).show_ui(ui, |ui| {
                 search |= ui.selectable_value(&mut self.library.category, None, all).clicked();
                 for c in kinds {
-                    search |= ui.selectable_value(&mut self.library.category, Some(c), title(c)).clicked();
+                    let option = kind_option(ui, c, title(c));
+                    search |= ui.selectable_value(&mut self.library.category, Some(c), option).clicked();
                 }
             });
             let sort = SORTS.iter().find(|(s, _)| *s == self.library.sort).map(|(_, t)| *t).unwrap_or("Newest");
@@ -1140,23 +1173,46 @@ impl App {
                         .as_ref()
                         .is_some_and(|(s, id)| *s == found.server && *id == found.summary.id);
                     let s = &found.summary;
-                    let mut text = egui::text::LayoutJob::default();
-                    let style = ui.style();
-                    egui::RichText::new(&s.name).strong().append_to(&mut text, style, egui::FontSelection::Default, egui::Align::LEFT);
                     let official = s.author_id.as_deref() == Some(official_id.as_str());
-                    let weak = |text: String, job: &mut egui::text::LayoutJob| {
-                        egui::RichText::new(text).weak().append_to(job, style, egui::FontSelection::Default, egui::Align::LEFT);
+                    let kind = match &s.song {
+                        Some(_) => songs::source_title(&s.category),
+                        None => library::category_title(&s.category),
                     };
-                    match &s.song {
-                        Some(song) => weak(format!("\n{} · {} · by ", song.composer, songs::source_title(&s.category)), &mut text),
-                        None => weak(format!("\n{} by ", library::category_title(&s.category)), &mut text),
+                    // (Its highlight goes under it, once it's known whether it's hovered.)
+                    let highlight = ui.painter().add(egui::Shape::Noop);
+                    let row = ui
+                        .scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
+                            egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 3)).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.spacing_mut().item_spacing.y = 2.0;
+                                ui.label(egui::RichText::new(&s.name).strong());
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                    super::chip(ui, kind, kind_color(ui, &s.category));
+                                    if let Some(song) = &s.song {
+                                        ui.weak(format!("{} ·", song.composer));
+                                    }
+                                    ui.weak("by");
+                                    // An official script's author in gold.
+                                    let author = egui::RichText::new(&s.author_name);
+                                    ui.label(if official { author.color(OFFICIAL_GOLD) } else { author.weak() });
+                                    ui.weak(format!("·  {} encore{}", s.encores, if s.encores == 1 { "" } else { "s" }));
+                                });
+                            });
+                        })
+                        .response;
+                    let visuals = ui.visuals();
+                    let fill = if selected {
+                        Some(visuals.selection.bg_fill)
+                    } else if row.hovered() {
+                        Some(visuals.widgets.hovered.weak_bg_fill)
+                    } else {
+                        None
+                    };
+                    if let Some(fill) = fill {
+                        ui.painter().set(highlight, egui::Shape::rect_filled(row.rect, visuals.widgets.hovered.corner_radius, fill));
                     }
-                    // An official script's author in gold.
-                    let author = egui::RichText::new(&s.author_name);
-                    let author = if official { author.color(OFFICIAL_GOLD) } else { author.weak() };
-                    author.append_to(&mut text, style, egui::FontSelection::Default, egui::Align::LEFT);
-                    weak(format!("  ·  {} encore{}", s.encores, if s.encores == 1 { "" } else { "s" }), &mut text);
-                    let response = ui.selectable_label(selected, text);
+                    let response = row.on_hover_cursor(egui::CursorIcon::PointingHand);
                     let response = if official { response.on_hover_text(OFFICIAL_HOVER) } else { response };
                     let response = if servers.len() > 1 { response.on_hover_text(host(&found.server)) } else { response };
                     if response.clicked() {
@@ -1210,10 +1266,14 @@ impl App {
                         }
                     }
                 });
-                match &song {
-                    Some(_) => ui.weak(format!("{} on {}", songs::source_title(&s.category), host(&server))),
-                    None => ui.weak(format!("{} on {}", library::category_title(&s.category), host(&server))),
-                };
+                ui.horizontal(|ui| {
+                    let kind = match &song {
+                        Some(_) => songs::source_title(&s.category),
+                        None => library::category_title(&s.category),
+                    };
+                    super::chip(ui, kind, kind_color(ui, &s.category));
+                    ui.weak(format!("on {}", host(&server)));
+                });
                 if !s.tags.is_empty() {
                     ui.weak(s.tags.join(", "));
                 }
@@ -1894,7 +1954,8 @@ impl App {
                     .selected_text(library::category_title(draft.category))
                     .show_ui(ui, |ui| {
                         for c in library::CATEGORIES {
-                            ui.selectable_value(&mut draft.category, c, library::category_title(c));
+                            let option = kind_option(ui, c, library::category_title(c));
+                            ui.selectable_value(&mut draft.category, c, option);
                         }
                     });
                 ui.end_row();

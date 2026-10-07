@@ -3214,10 +3214,7 @@ fn char_index_of_line(text: &str, line: usize) -> usize {
 /// it), outlined in it while it's off.
 fn channel_toggle(ui: &mut egui::Ui, on: &mut bool, label: &str, color: egui::Color32) -> egui::Response {
     ui.scope(|ui| {
-        // (Relative luminance: black on light colors, white on dark ones.)
-        let [r, g, b, _] = color.to_array();
-        let light = 0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b) > 140.0;
-        let mark = if light { egui::Color32::BLACK } else { egui::Color32::WHITE };
+        let mark = on_color(color);
         let visuals = ui.visuals_mut();
         // (The label keeps its usual color: the check mark's is the widget's.)
         visuals.override_text_color = Some(visuals.widgets.inactive.text_color());
@@ -3230,6 +3227,27 @@ fn channel_toggle(ui: &mut egui::Ui, on: &mut bool, label: &str, color: egui::Co
         ui.checkbox(on, label)
     })
     .inner
+}
+
+/// Black or white, whichever reads better on `color` (by its relative
+/// luminance): a check mark on a channel's color, a chip's text.
+pub(super) fn on_color(color: egui::Color32) -> egui::Color32 {
+    let [r, g, b, _] = color.to_array();
+    let light = 0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b) > 140.0;
+    if light { egui::Color32::BLACK } else { egui::Color32::WHITE }
+}
+
+/// A chip: `text` on a pill of `color`, black or white (`on_color`).
+pub(super) fn chip(ui: &mut egui::Ui, text: &str, color: egui::Color32) -> egui::Response {
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font, on_color(color));
+    let padding = egui::vec2(7.0, 1.0);
+    let (rect, response) = ui.allocate_exact_size(galley.size() + padding * 2.0, egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().rect_filled(rect, rect.height() / 2.0, color);
+        ui.painter().galley(rect.min + padding, galley, on_color(color));
+    }
+    response
 }
 
 /// Show `path` in the system file manager (selected, on Windows).

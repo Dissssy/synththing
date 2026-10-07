@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### New
+- Colored chips in the Online Library: each script's kind (visualizer, game, toy, example) and each song's source (original, video game, film or TV, anime, popular, classical, folk) has a color, shown as a chip in the list and the details, and as a dot in the dropdowns that pick them. They're from the same palette as the channel toggles.
+
 ## 0.5.1 (2026-10-07)
 
 ### New
