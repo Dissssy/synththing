@@ -28,6 +28,13 @@ pub struct Cli {
     #[arg(long)]
     pub console: bool,
 
+    /// Keep everything (preferences, scripts, soundfonts, identity) in
+    /// this folder instead of the usual config folder: for test runs that
+    /// mustn't touch the real one. Made if it isn't there. Also
+    /// SYNTHTHING_CONFIG_DIR.
+    #[arg(long, global = true, value_name = "DIR")]
+    pub config_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }

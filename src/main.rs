@@ -113,6 +113,12 @@ fn main() -> Result<()> {
         println!();
     }
     let cli = Cli::parse();
+    if let Some(dir) = &cli.config_dir
+        && let Err(e) = config::set_config_dir(dir)
+    {
+        eprintln!("error: --config-dir: {e:#}");
+        std::process::exit(2);
+    }
 
     if let Some(Command::RunScript(args)) = &cli.command {
         let config = Config::load().unwrap_or_default();

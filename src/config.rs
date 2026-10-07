@@ -243,9 +243,37 @@ impl Config {
     }
 }
 
-/// The platform config directory for synththing (e.g. `%APPDATA%\synththing\config`),
-/// shared by the soundfont list and the Lua visualizer script folder.
+/// A config folder of its own (`--config-dir`, or `SYNTHTHING_CONFIG_DIR`),
+/// for test runs that mustn't touch the real one.
+static CONFIG_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// The variable a config folder of its own is passed on in (to the
+/// processes the app starts, previews say).
+pub const CONFIG_DIR_VAR: &str = "SYNTHTHING_CONFIG_DIR";
+
+/// Use `dir` as the config folder from now on (made if it isn't there).
+pub fn set_config_dir(dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("making {}", dir.display()))?;
+    let dir = std::path::absolute(dir).with_context(|| format!("finding {}", dir.display()))?;
+    let _ = CONFIG_DIR.set(dir);
+    Ok(())
+}
+
+/// The config folder given instead of the usual one, if one was.
+pub fn config_dir_override() -> Option<PathBuf> {
+    CONFIG_DIR
+        .get()
+        .cloned()
+        .or_else(|| std::env::var_os(CONFIG_DIR_VAR).filter(|v| !v.is_empty()).map(PathBuf::from))
+}
+
+/// The config directory for synththing (e.g. `%APPDATA%\synththing\config`),
+/// where everything it keeps lives: preferences, scripts, soundfonts,
+/// identity. `--config-dir` (or `SYNTHTHING_CONFIG_DIR`) puts it elsewhere.
 pub fn config_dir() -> Result<PathBuf> {
+    if let Some(dir) = config_dir_override() {
+        return Ok(dir);
+    }
     let dirs = ProjectDirs::from("", "", "synththing")
         .context("could not determine a config directory for this platform")?;
     Ok(dirs.config_dir().to_path_buf())

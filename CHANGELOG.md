@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### New
+- `--config-dir DIR` (or `SYNTHTHING_CONFIG_DIR`) keeps everything in a folder of its own, for trying a build without touching your real setup.
+
 ### Changed
 - The Script Library searches again each time it's opened, so it's always current.
 - Publishing ends with what was published and a button to open it in the Library, instead of the window just closing.

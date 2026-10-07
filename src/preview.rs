@@ -80,6 +80,10 @@ pub fn run_process(script: &Path, soundfont: &Path, out: &Path, limit: Duration,
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(errors);
+    // (The same config folder, if it isn't the usual one.)
+    if let Some(dir) = crate::config::config_dir_override() {
+        command.env(crate::config::CONFIG_DIR_VAR, dir);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

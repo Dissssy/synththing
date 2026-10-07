@@ -7,11 +7,12 @@ Run with no arguments, `synththing.exe` opens the app as usual. With arguments, 
 ## Opening the app
 
 ```
-synththing [--visualizer] [--console]
+synththing [--visualizer] [--console] [--config-dir DIR]
 ```
 
 - `--visualizer` (or `--viz`): open with the Visualizer tab showing.
 - `--console`: also print the app's log (what Help > Log... shows: script errors, warnings, panics) to the terminal as it happens. Handy for watching a release build, which otherwise has no console (see below).
+- `--config-dir DIR`: keep everything (preferences, scripts, soundfonts, playlists, the library identity, the log) in DIR instead of the usual config folder, made if it isn't there. For trying a test build without touching your real setup. It works with every command (`synththing --config-dir DIR serve` keeps the server's data in `DIR/server` by default, say), and so does the `SYNTHTHING_CONFIG_DIR` environment variable.
 - `--version` / `-V`: print the version.
 - `--help` / `-h`: print help. `synththing help run-script` (or `synththing run-script --help`) for a command's options.
 
