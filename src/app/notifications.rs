@@ -33,8 +33,10 @@ pub struct NotificationsState {
     events: (Sender<Event>, Receiver<Event>),
     /// Every server's, as (server, notification).
     items: Vec<(String, Notification)>,
-    /// The listeners running: their stop flags, by server, and whose.
-    listening: HashMap<String, Arc<AtomicBool>>,
+    /// The listeners running, by server: the server key each was started
+    /// with (one that changes, trusted again, starts over), its stop flag;
+    /// and whose they are.
+    listening: HashMap<String, (String, Arc<AtomicBool>)>,
     listening_as: Option<String>,
     /// The one open in its window: (server, id).
     detail: Option<(String, i64)>,
@@ -149,7 +151,7 @@ impl App {
         let identity = self.library_identity().filter(|_| self.config.library.notifications);
         let whose = identity.as_ref().map(Identity::public);
         if whose != self.notifications.listening_as {
-            for stop in self.notifications.listening.values() {
+            for (_, stop) in self.notifications.listening.values() {
                 stop.store(true, Ordering::Relaxed);
             }
             self.notifications.listening.clear();
@@ -165,8 +167,9 @@ impl App {
             .filter_map(|s| self.config.library.pinned.get(&s).cloned().map(|key| (s, key)))
             .collect();
         let notifications = &mut self.notifications;
-        notifications.listening.retain(|server, stop| {
-            let keep = wanted.iter().any(|(s, _)| s == server);
+        notifications.listening.retain(|server, (key, stop)| {
+            // (Not in use any more, or its key's changed: stopped.)
+            let keep = wanted.iter().any(|(s, k)| s == server && k == key);
             if !keep {
                 stop.store(true, Ordering::Relaxed);
             }
@@ -178,7 +181,7 @@ impl App {
                 continue;
             }
             let stop = Arc::new(AtomicBool::new(false));
-            notifications.listening.insert(server.clone(), Arc::clone(&stop));
+            notifications.listening.insert(server.clone(), (key.clone(), Arc::clone(&stop)));
             let (tx, identity, ctx) = (notifications.events.0.clone(), identity.clone(), ctx.clone());
             std::thread::Builder::new()
                 .name("notifications".into())
