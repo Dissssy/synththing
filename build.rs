@@ -24,6 +24,18 @@ fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
 
+    // The main thread's stack: 16 MB, as the threads that parse Lua get
+    // (script_host, offline, the server). full_moon's parser recurses
+    // deeply, and the main thread parses too (bundled scripts at startup,
+    // the editor's analysis, publishing); Windows gives it only 1 MB, which
+    // a debug build overflowed at startup. (Linux gives it 8 MB already.)
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        match env::var("CARGO_CFG_TARGET_ENV").as_deref() {
+            Ok("msvc") => println!("cargo:rustc-link-arg-bins=/STACK:16777216"),
+            _ => println!("cargo:rustc-link-arg-bins=-Wl,--stack,16777216"),
+        }
+    }
+
     let mut generated = String::from("pub static BUNDLED_SCRIPTS: &[(&str, &str, &str)] = &[\n");
     for category in CATEGORIES {
         for (name, absolute_path) in list_scripts(&manifest_dir, category) {
