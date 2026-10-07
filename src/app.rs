@@ -1071,7 +1071,10 @@ impl App {
             }
             if !self.status.is_empty() {
                 ui.separator();
-                ui.weak(&self.status);
+                match status_color(ui, &self.status) {
+                    Some(color) => ui.colored_label(color, &self.status),
+                    None => ui.weak(&self.status),
+                };
             }
         });
 
@@ -3229,6 +3232,36 @@ fn channel_toggle(ui: &mut egui::Ui, on: &mut bool, label: &str, color: egui::Co
     .inner
 }
 
+/// The status line's color, by what it says: red for something that
+/// failed ("Couldn't ...", "Failed to ..."), green for something done
+/// ("Saved ...", "Installed ..."), none (grey) for anything else.
+fn status_color(ui: &egui::Ui, status: &str) -> Option<egui::Color32> {
+    match status_outcome(status)? {
+        false => Some(ui.visuals().error_fg_color),
+        true => {
+            // (The palette's green, darker on a light theme so it reads.)
+            let [r, g, b] = crate::lua_visualizer::default_channel_color(2);
+            let green = egui::Color32::from_rgb(r, g, b);
+            Some(if ui.visuals().dark_mode { green } else { green.gamma_multiply(0.55).to_opaque() })
+        }
+    }
+}
+
+/// Whether a status says something failed (`Some(false)`), was done
+/// (`Some(true)`), or neither, by its wording.
+fn status_outcome(status: &str) -> Option<bool> {
+    const FAILED: [&str; 6] = ["Couldn't", "Failed", "Can't", "Didn't", "Error", "Not "];
+    const DONE: [&str; 21] = [
+        "Saved", "Installed", "Downloaded", "Published", "Deleted", "Updated", "Restored", "Renamed", "Rendered",
+        "Reported", "Replaced", "Reloaded", "Formatted", "Imported", "Exported", "Disputed", "Added", "Removed",
+        "Recorded", "Soundfont loaded", "Script applied",
+    ];
+    if FAILED.iter().any(|w| status.starts_with(w)) || status.contains(" not loaded") || status.contains("failed") {
+        return Some(false);
+    }
+    DONE.iter().any(|w| status.starts_with(w)).then_some(true)
+}
+
 /// Black or white, whichever reads better on `color` (by its relative
 /// luminance): a check mark on a channel's color, a chip's text.
 pub(super) fn on_color(color: egui::Color32) -> egui::Color32 {
@@ -3354,4 +3387,20 @@ fn is_midi_path(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|ext| MIDI_EXTENSIONS.iter().any(|m| ext.eq_ignore_ascii_case(m)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn statuses_are_sorted_by_wording() {
+        assert_eq!(status_outcome("Couldn't save preferences: denied"), Some(false));
+        assert_eq!(status_outcome("Failed to create script: exists"), Some(false));
+        assert_eq!(status_outcome("Soundfont not loaded"), Some(false));
+        assert_eq!(status_outcome("Published \"Disco\" to synththing.p51.nl."), Some(true));
+        assert_eq!(status_outcome("Soundfont loaded: GeneralUser-GS"), Some(true));
+        assert_eq!(status_outcome("Click a song to play it, click a soundfont to load it."), None);
+        assert_eq!(status_outcome("Loading Canon in D..."), None);
+    }
 }

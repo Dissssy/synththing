@@ -95,6 +95,43 @@ fn icon_of(kind: &str) -> &'static str {
     })
 }
 
+/// How much a kind of notification asks of you, 1 to 4: good news (1),
+/// something resolved (2), a heads-up (3), something to act on (4); 0 for a
+/// kind this app doesn't know.
+fn tier_of(kind: &str) -> u8 {
+    match kind {
+        "encore_milestone" | "download_milestone" | "song_download_milestone" | "remixed" => 1,
+        "reinstated" | "dispute_upheld" | "notice_withdrawn" | "report_handled" | "notice_rejected" => 2,
+        "new_report" | "new_notice" | "new_dispute" | "notice_disputed" | "hidden" => 3,
+        "copyright_notice" | "takedown_stood" | "removed" => 4,
+        _ => 0,
+    }
+}
+
+/// Each kind's color, from the channel palette by its tier (`tier_of`):
+/// the most serious in the theme's error red. Grey once it's been dealt
+/// with, and for a kind this app doesn't know.
+fn color_of(ui: &egui::Ui, n: &Notification) -> egui::Color32 {
+    let palette = |i: u8| {
+        let [r, g, b] = crate::lua_visualizer::default_channel_color(i);
+        egui::Color32::from_rgb(r, g, b)
+    };
+    if n.needs_action && n.handled {
+        return ui.visuals().weak_text_color();
+    }
+    match n.kind.as_str() {
+        "encore_milestone" => palette(6),
+        "download_milestone" | "song_download_milestone" => palette(2),
+        "remixed" => palette(4),
+        "reinstated" | "dispute_upheld" | "notice_withdrawn" => palette(5),
+        "report_handled" | "notice_rejected" => palette(0),
+        "hidden" => palette(1),
+        kind if tier_of(kind) == 3 => palette(3),
+        kind if tier_of(kind) == 4 => ui.visuals().error_fg_color,
+        _ => ui.visuals().weak_text_color(),
+    }
+}
+
 /// `template` with each `{field}` filled in from `data` (one it doesn't
 /// have is left as it is).
 fn fill(template: &str, data: &serde_json::Value) -> String {
@@ -250,6 +287,14 @@ impl App {
             return;
         }
         let unread = self.notifications.items.iter().filter(|(_, n)| !n.read).count();
+        // (The badge in the color of the most serious one unread.)
+        let worst = self
+            .notifications
+            .items
+            .iter()
+            .filter(|(_, n)| !n.read)
+            .max_by_key(|(_, n)| tier_of(&n.kind))
+            .map(|(_, n)| color_of(ui, n));
         let envelope = super::icon("envelope-simple");
         let button = ui
             .add(egui::Button::new(egui::RichText::new(envelope).size(16.0)).frame(false))
@@ -257,13 +302,14 @@ impl App {
         if unread > 0 {
             let center = button.rect.right_top() + egui::vec2(-3.0, 4.0);
             let painter = ui.painter();
-            painter.circle_filled(center, 7.0, egui::Color32::from_rgb(220, 50, 50));
+            let badge = worst.unwrap_or(ui.visuals().error_fg_color);
+            painter.circle_filled(center, 7.0, badge);
             painter.text(
                 center,
                 egui::Align2::CENTER_CENTER,
                 if unread > 9 { "9+".to_string() } else { unread.to_string() },
                 egui::FontId::proportional(9.5),
-                egui::Color32::WHITE,
+                super::on_color(badge),
             );
         }
         let many_servers = self.notifications.items.iter().any(|(s, _)| *s != self.notifications.items[0].0);
@@ -283,10 +329,17 @@ impl App {
             }
             egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
                 for (server, n) in &self.notifications.items {
-                    let mut line = egui::RichText::new(format!("{}  {}", icon_of(&n.kind), text(n)));
-                    if !n.read {
-                        line = line.strong();
-                    }
+                    let mut line = egui::text::LayoutJob::default();
+                    let style = ui.style();
+                    egui::RichText::new(format!("{}  ", icon_of(&n.kind))).color(color_of(ui, n)).append_to(
+                        &mut line,
+                        style,
+                        egui::FontSelection::Default,
+                        egui::Align::Center,
+                    );
+                    let words = egui::RichText::new(text(n));
+                    let words = if n.read { words } else { words.strong() };
+                    words.append_to(&mut line, style, egui::FontSelection::Default, egui::Align::Center);
                     let mut when = library::ago(n.created);
                     if many_servers {
                         when = format!("{when}, {}", host(server));
@@ -343,7 +396,7 @@ impl App {
         let response = egui::Modal::new(egui::Id::new("notification")).show(ctx, |ui| {
             ui.set_width(440.0);
             ui.horizontal(|ui| {
-                ui.heading(icon_of(&n.kind));
+                ui.heading(egui::RichText::new(icon_of(&n.kind)).color(color_of(ui, &n)));
                 ui.label(egui::RichText::new(text(&n)).size(15.0));
             });
             ui.weak(format!("{} on {}", library::ago(n.created), host(&server)));
@@ -477,6 +530,38 @@ fn listen(server: &str, key: &str, identity: &Identity, stop: &AtomicBool, tx: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every kind the app words has a tier (so a color): a new kind added
+    /// to `wording` without one would show grey.
+    #[test]
+    fn every_kind_has_a_tier() {
+        let kinds = [
+            "encore_milestone",
+            "download_milestone",
+            "song_download_milestone",
+            "hidden",
+            "reinstated",
+            "removed",
+            "remixed",
+            "report_handled",
+            "new_report",
+            "copyright_notice",
+            "notice_disputed",
+            "dispute_upheld",
+            "notice_rejected",
+            "notice_withdrawn",
+            "takedown_stood",
+            "new_notice",
+            "new_dispute",
+        ];
+        for kind in kinds {
+            assert!(wording(kind).is_some(), "{kind} isn't worded");
+            assert!(tier_of(kind) > 0, "{kind} has no tier");
+        }
+        assert_eq!(tier_of("copyright_notice"), 4);
+        assert_eq!(tier_of("encore_milestone"), 1);
+        assert_eq!(tier_of("something new"), 0);
+    }
 
     #[test]
     fn wording_fills_in() {

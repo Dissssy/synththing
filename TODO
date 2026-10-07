@@ -8,6 +8,28 @@
 
 ## Tier 2 - solid value, moderate effort
 
+[S/M][!] status line history (asked for 2026-10-07)
+    The transport's status line shows only the last message; one that came
+    and went (a failed save while you looked away) is lost from view. Two
+    ideas, and a third:
+    - Its own history + a modal (click the line: a scroll area of past
+      statuses). Simple and focused, but it duplicates what the log keeps,
+      and a modal stops everything for something you only want to glance at.
+    - The log: every status already goes there (target synththing::status,
+      app.rs, as it changes), with its time, in the log file too. Clicking
+      the line could open the Log window filtered to statuses. No new
+      storage, searchable, survives a restart (synththing.prev.log). But
+      the Log window is a technical, everything-at-once view.
+    - (Recommended) Both halves of those: the log stays the one record, and
+      clicking the status line opens a small popup under it (not a modal):
+      the last ~50 statuses from the log (filtered by that target), newest
+      first, each with "2 min ago" and colored as the line is (status_outcome:
+      red failed, green done), and "Open the full log..." at the bottom. A
+      glance, and gone when you click elsewhere. Extras: a small red dot on
+      the line while there's a failure you haven't looked at (cleared by
+      opening the popup), so errors that flash past aren't missed; hovering
+      the line could show the last few as a tooltip.
+
 [M][!] favorites for games (asked for by a player)
     Favorite a specific combination for a game script, not just a song:
     say highway's song + track + difficulty (+ mode, lanes), to come back
