@@ -439,6 +439,11 @@ fn listen(server: &str, key: &str, identity: &Identity, stop: &AtomicBool, tx: &
                 let _ = tx.send(Event::List(server.to_string(), list));
                 ctx.request_repaint();
             }
+            // (A server from before notifications: nothing to listen for.)
+            Err(e) if e.contains("no such page") => {
+                log::info!("{server} doesn't have notifications (it runs an older version)");
+                return;
+            }
             Err(e) => log::info!("notifications from {server}: {e}"),
         }
         let started = std::time::Instant::now();
