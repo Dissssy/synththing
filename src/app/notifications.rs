@@ -63,6 +63,14 @@ fn wording(kind: &str) -> Option<&'static str> {
         "remixed" => "{by} remixed \"{name}\": \"{remix_name}\"",
         "report_handled" => "Your report of \"{name}\" was dealt with: {outcome}",
         "new_report" => "New report of \"{name}\": {reason}",
+        "copyright_notice" => "\"{name}\" was taken down by a copyright notice from {claimant}, for {on_behalf_of}",
+        "notice_disputed" => "{uploader} disputed your copyright notice on \"{name}\"",
+        "dispute_upheld" => "Your dispute was upheld: \"{name}\" is back up",
+        "notice_rejected" => "Your copyright notice on \"{name}\" was turned down",
+        "notice_withdrawn" => "The copyright notice on \"{name}\" was found bogus: it's back up",
+        "takedown_stood" => "The takedown of \"{name}\" stands ({how})",
+        "new_notice" => "New copyright notice on \"{name}\"",
+        "new_dispute" => "A copyright notice on \"{name}\" was disputed",
         _ => return None,
     })
 }
@@ -77,6 +85,9 @@ fn icon_of(kind: &str) -> &'static str {
         "removed" => "trash",
         "remixed" => "git-fork",
         "report_handled" | "new_report" => "flag",
+        "copyright_notice" | "takedown_stood" | "new_notice" => "copyright",
+        "notice_disputed" | "new_dispute" | "notice_rejected" => "scales",
+        "dispute_upheld" | "notice_withdrawn" => "check-circle",
         _ => "bell",
     })
 }
@@ -107,6 +118,18 @@ fn fill(template: &str, data: &serde_json::Value) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// What was done about a notification, as said.
+fn resolution_text(resolution: &str) -> String {
+    match resolution {
+        "disputed" => "You disputed it: the moderators will decide.".into(),
+        "let stand" => "You let it stand.".into(),
+        "found bogus" => "The moderators found the notice bogus: it's back up.".into(),
+        "not disputed in 14 days" => "It wasn't disputed in 14 days, so it stands.".into(),
+        "the dispute was rejected" => "The moderators rejected the dispute: it stands.".into(),
+        other => format!("Done: {other}."),
+    }
 }
 
 /// A notification, worded.
@@ -183,6 +206,18 @@ impl App {
         }
     }
 
+    /// The notifications about `field` = `value` (a notice's) are handled
+    /// here (the server marked them itself): `resolution` says how.
+    pub(super) fn notification_resolved(&mut self, server: &str, field: &str, value: i64, resolution: &str) {
+        for (s, n) in &mut self.notifications.items {
+            if s == server && n.needs_action && n.data.get(field).and_then(serde_json::Value::as_i64) == Some(value) {
+                n.handled = true;
+                n.read = true;
+                n.resolution = Some(resolution.to_string());
+            }
+        }
+    }
+
     /// Mark these read (or handled) on their servers, and here.
     fn mark_notifications(&mut self, which: Vec<(String, i64)>, handled: bool) {
         let Some(identity) = self.library_identity() else { return };
@@ -252,13 +287,25 @@ impl App {
                     if many_servers {
                         when = format!("{when}, {}", host(server));
                     }
-                    let response = ui
-                        .vertical(|ui| {
-                            let clicked = ui.selectable_label(false, line).clicked();
-                            ui.weak(egui::RichText::new(when).small());
-                            clicked
-                        })
-                        .inner;
+                    // (Unread: an accent down its side, and a tint.)
+                    let accent = ui.visuals().selection.bg_fill;
+                    let fill = if n.read { egui::Color32::TRANSPARENT } else { accent.gamma_multiply(0.18) };
+                    let frame = egui::Frame::new().fill(fill).corner_radius(4.0).inner_margin(egui::Margin::symmetric(6, 3));
+                    let shown = frame.show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        let clicked = ui.selectable_label(false, line).clicked();
+                        ui.weak(egui::RichText::new(when).small());
+                        clicked
+                    });
+                    if !n.read {
+                        let rect = shown.response.rect;
+                        ui.painter().rect_filled(
+                            egui::Rect::from_min_max(rect.left_top(), egui::pos2(rect.left() + 3.0, rect.bottom())),
+                            2.0,
+                            accent,
+                        );
+                    }
+                    let response = shown.inner;
                     if response {
                         open = Some((server.clone(), n.id));
                     }
@@ -287,6 +334,8 @@ impl App {
         let mut close = false;
         let mut show: Option<String> = None;
         let mut moderate = false;
+        let mut copyright = false;
+        let mut notice: Option<(i64, bool)> = None;
         let response = egui::Modal::new(egui::Id::new("notification")).show(ctx, |ui| {
             ui.set_width(440.0);
             ui.horizontal(|ui| {
@@ -294,10 +343,39 @@ impl App {
                 ui.label(egui::RichText::new(text(&n)).size(15.0));
             });
             ui.weak(format!("{} on {}", library::ago(n.created), host(&server)));
+            // (The counter-notice's contact details, sent on to the claimant.)
+            if n.kind == "notice_disputed" {
+                let field = |f: &str| n.data.get(f).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                ui.label(format!("Their address: {}", field("address")));
+                ui.label(format!("Their email: {}", field("email")));
+            }
+            // Done with: what was done, in place of what could be.
+            if n.needs_action && n.handled {
+                ui.add_space(6.0);
+                let done = n.resolution.as_deref().map_or_else(|| "Done.".to_string(), resolution_text);
+                ui.label(egui::RichText::new(format!("{}  {done}", super::icon("check"))).strong());
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let script = n.data.get("script").and_then(|s| s.as_str()).map(str::to_string);
+                let id = n.data.get("notice").and_then(serde_json::Value::as_i64);
                 match n.kind.as_str() {
+                    "copyright_notice" if !n.handled => {
+                        if let Some(id) = id {
+                            if ui.button("View notice and dispute...").clicked() {
+                                notice = Some((id, true));
+                            }
+                            if ui.button("Let it stand...").clicked() {
+                                notice = Some((id, false));
+                            }
+                        }
+                    }
+                    "copyright_notice" => {}
+                    "new_notice" | "new_dispute" => {
+                        if ui.button("Open Moderation").clicked() {
+                            copyright = true;
+                        }
+                    }
                     "remixed" => {
                         if let Some(remix) = n.data.get("remix").and_then(|s| s.as_str())
                             && ui.button("Show the remix").clicked()
@@ -336,6 +414,12 @@ impl App {
         } else if moderate {
             self.notifications.detail = None;
             self.open_moderation();
+        } else if copyright {
+            self.notifications.detail = None;
+            self.open_moderation_copyright();
+        } else if let Some((id, dispute)) = notice {
+            self.notifications.detail = None;
+            self.open_notice(server, id, dispute);
         } else if close || response.should_close() {
             self.notifications.detail = None;
         }
@@ -402,6 +486,7 @@ mod tests {
             handled: false,
             resolution: None,
         };
+        assert_eq!(resolution_text("disputed"), "You disputed it: the moderators will decide.");
         assert_eq!(text(&unknown), "Something new: x (brand_new)");
     }
 }

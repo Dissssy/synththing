@@ -145,7 +145,7 @@ For what happens to your things on a server: encore and download milestones, an 
 
 ## Copyright notices
 
-Formal notices from a rights holder (or someone acting for one), as the US DMCA has them, for any song or script. Separate from reports: a report goes to the moderators; a notice takes the item down at once.
+Formal notices from a rights holder (or someone acting for one), as the US DMCA has them, for any song or script. Separate from reports: a report goes to the moderators; a notice takes the item down at once. Built for scripts (`server/copyright.rs`, `app/copyright.rs`; songs join them when they're built): `POST /api/v1/notices` files one, `/api/v1/notices/{id}` shows it to its uploader (without the claimant's contact details) or claimant, `/dispute` and `/accept` are the uploader's; moderators list and decide them with `AdminAction::Notices` and `AdminAction::Copyright` (the Moderation window's Copyright tab). Notifications carry each step, and the uploader's says what they did (`resolution`) once they've done it.
 
 - **A notice** (signed, from the app: Report... > It's my copyrighted work) needs everything a DMCA notice does: the claimant's full name, who they act for, their postal address, email and phone, the copyrighted work and where it's from, a statement that they believe in good faith the use isn't authorized, a statement under penalty of perjury that the notice is accurate and they're authorized to act, and a signature (their full name, typed). Asking for all of that, and saying it's a legal statement, is what keeps it from being abused.
 - **The item is hidden at once** (`hidden = 3`, under a copyright notice), and its uploader gets a notification of it (from whom, for whom, the work named; not the claimant's address or phone), with **Dispute...**; it stays in their list until they dispute it or let it stand.
@@ -172,6 +172,10 @@ POST /api/v1/scripts/{id}/encore          (and DELETE to take it back)
 POST /api/v1/scripts/{id}/report
 POST /api/v1/admin                        an admin action (signed by an admin)
 GET  /api/v1/users/{id}                   names, uploads, total encores
+POST /api/v1/notices                     signed: a copyright notice (takes the item down at once)
+POST /api/v1/notices/{id}                signed: the notice, for its uploader or claimant
+POST /api/v1/notices/{id}/dispute        signed: the uploader's counter-notice
+POST /api/v1/notices/{id}/accept         signed: the uploader lets it stand
 POST /api/v1/notifications               signed: your notifications, newest first
 POST /api/v1/notifications/mark          signed: mark some (or all) read, or handled
 GET  /api/v1/notifications/stream         signed: new notifications as they come (Server-Sent Events)

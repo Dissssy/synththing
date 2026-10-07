@@ -19,8 +19,8 @@ use super::library::host;
 use super::App;
 use crate::library::identity::Identity;
 use crate::library::{
-    self, ago, client, lines_text, report_reason_title, AdminAction, Ban, Report, ReportRequest, MAX_REPORT_DETAILS,
-    MAX_REPORT_MARKS, REPORT_REASONS,
+    self, ago, client, lines_text, report_reason_title, AdminAction, Ban, CopyrightNotice, NoticeView, Report,
+    ReportRequest, MAX_REPORT_DETAILS, MAX_REPORT_MARKS, REPORT_REASONS,
 };
 use crate::sprite_code::{self, SpriteCall};
 
@@ -30,6 +30,9 @@ enum Event {
     /// The source of the version being reported.
     ReportSource(String, String, u32, Result<String, String>),
     Reported(Result<i64, String>),
+    /// A copyright notice filed: its number and what became of the item.
+    NoticeFiled(Result<(i64, String), String>),
+    Notices(String, Result<Vec<NoticeView>, String>),
     Reports(String, Result<Vec<Report>, String>),
     Bans(String, Result<Vec<Ban>, String>),
     Admins(String, Result<Vec<(String, String)>, String>),
@@ -59,6 +62,9 @@ struct ReportDraft {
     sprites: BTreeSet<u32>,
     error: Option<String>,
     sending: bool,
+    /// A copyright notice instead of a report, and what's in it.
+    copyright: bool,
+    claim: CopyrightNotice,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -66,6 +72,7 @@ enum Tab {
     Reports,
     Bans,
     Admins,
+    Copyright,
     Server,
 }
 
@@ -87,6 +94,9 @@ struct Window {
     bans: Option<Result<Vec<Ban>, String>>,
     admins: Option<Result<Vec<(String, String)>, String>>,
     version: Option<Result<library::ServerVersion, String>>,
+    notices: Option<Result<Vec<NoticeView>, String>>,
+    /// The note going with a copyright decision.
+    copyright_note: String,
     /// Reports showing what they point at.
     shown: HashSet<i64>,
     sources: HashMap<(String, u32), Result<String, String>>,
@@ -225,12 +235,23 @@ impl App {
             sprites: BTreeSet::new(),
             error: None,
             sending: false,
+            copyright: false,
+            claim: CopyrightNotice { item: id.to_string(), ..Default::default() },
         });
         let (server, id) = (server.to_string(), id.to_string());
         self.spawn_moderation(move || {
             let source = client::download(&server, &id, Some(version), &key).map(|d| d.source);
             Event::ReportSource(server, id, version, source)
         });
+    }
+
+    /// Open the Moderation window at its Copyright tab.
+    pub(super) fn open_moderation_copyright(&mut self) {
+        self.open_moderation();
+        if let Some(window) = &mut self.moderation.window {
+            window.tab = Tab::Copyright;
+        }
+        self.refresh_moderation();
     }
 
     /// Open the Moderation window (on the first server the user is an
@@ -245,6 +266,8 @@ impl App {
             bans: None,
             admins: None,
             version: None,
+            notices: None,
+            copyright_note: String::new(),
             shown: HashSet::new(),
             sources: HashMap::new(),
             confirm_delete: None,
@@ -268,12 +291,16 @@ impl App {
             Tab::Bans => window.bans = None,
             Tab::Admins => window.admins = None,
             Tab::Server => window.version = None,
+            Tab::Copyright => window.notices = None,
         }
         self.spawn_moderation(move || match tab {
             Tab::Reports => Event::Reports(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Reports { all })),
             Tab::Bans => Event::Bans(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Bans)),
             Tab::Admins => Event::Admins(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Admins)),
             Tab::Server => Event::Version(server.clone(), client::admin(&server, &key, &identity, &AdminAction::UpdateCheck)),
+            Tab::Copyright => {
+                Event::Notices(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Notices { all }))
+            }
         });
     }
 
@@ -343,6 +370,30 @@ impl App {
                         w.bans = Some(result);
                     }
                 }
+                Event::NoticeFiled(result) => match result {
+                    Ok((number, status)) => {
+                        if let Some(draft) = self.moderation.report.take() {
+                            log::info!("copyright notice #{number} on {} ({status})", draft.id);
+                            self.status = if status == "queued" {
+                                format!("Copyright notice sent: the moderators will decide on \"{}\".", draft.name)
+                            } else {
+                                format!("Copyright notice sent: \"{}\" is down while its uploader may dispute it.", draft.name)
+                            };
+                            self.library_search();
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(draft) = &mut self.moderation.report {
+                            draft.sending = false;
+                            draft.error = Some(e);
+                        }
+                    }
+                },
+                Event::Notices(server, result) => {
+                    if let Some(w) = window.filter(|w| w.server == server) {
+                        w.notices = Some(result);
+                    }
+                }
                 Event::Version(server, result) => {
                     if let Some(w) = window.filter(|w| w.server == server) {
                         w.version = Some(result);
@@ -393,93 +444,102 @@ impl App {
         let response = egui::Modal::new(egui::Id::new("library_report")).show(ctx, |ui| {
             ui.set_width(680.0);
             ui.heading(format!("Report \"{}\"", draft.name));
-            ui.weak(format!("Version {} on {}. Reports go to the server's moderators, signed with your identity.", draft.version, host(&draft.server)));
-            ui.add_space(6.0);
-            ui.label("Why?");
-            for (reason, title) in REPORT_REASONS {
-                ui.radio_value(&mut draft.reason, reason, title);
-            }
-            ui.add_space(6.0);
-            ui.label("Anything the moderators should know (optional)");
-            ui.add(egui::TextEdit::multiline(&mut draft.details).desired_rows(3).desired_width(f32::INFINITY).char_limit(MAX_REPORT_DETAILS));
-            ui.add_space(6.0);
-            ui.label("Point at the problem (optional): click lines of its code, shift-click for a range.");
-            match &draft.source {
-                None => {
-                    ui.spinner();
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut draft.copyright, false, "Report it to the moderators");
+                ui.selectable_value(&mut draft.copyright, true, "It's my copyrighted work (a legal notice)");
+            });
+            ui.separator();
+            if draft.copyright {
+                notice_form_ui(ui, &mut draft.claim, &draft.server);
+            } else {
+                ui.weak(format!("Version {} on {}. Reports go to the server's moderators, signed with your identity.", draft.version, host(&draft.server)));
+                ui.add_space(6.0);
+                ui.label("Why?");
+                for (reason, title) in REPORT_REASONS {
+                    ui.radio_value(&mut draft.reason, reason, title);
                 }
-                Some(Err(e)) => {
-                    ui.colored_label(ui.visuals().warn_fg_color, format!("Couldn't get its code: {e}"));
-                }
-                Some(Ok(source)) => {
-                    let lines: Vec<&str> = source.lines().collect();
-                    let row = ui.text_style_height(&egui::TextStyle::Monospace);
-                    egui::Frame::new().fill(ui.visuals().extreme_bg_color).corner_radius(4.0).show(ui, |ui| {
-                        egui::ScrollArea::both().id_salt("report_code").max_height(240.0).auto_shrink([false, true]).show_rows(
-                            ui,
-                            row,
-                            lines.len(),
-                            |ui, range| {
-                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                                ui.spacing_mut().item_spacing.y = 0.0;
-                                for index in range {
-                                    let number = index as u32 + 1;
-                                    let text = egui::RichText::new(format!("{number:>5}  {}", lines[index])).monospace();
-                                    let picked = draft.lines.contains(&number);
-                                    if ui.selectable_label(picked, text).clicked() {
-                                        let shift = ui.input(|i| i.modifiers.shift);
-                                        match draft.anchor {
-                                            Some(anchor) if shift => {
-                                                let (a, b) = (anchor.min(number), anchor.max(number));
-                                                draft.lines.extend(a..=b);
-                                            }
-                                            _ if picked => {
-                                                draft.lines.remove(&number);
-                                            }
-                                            _ => {
-                                                draft.lines.insert(number);
-                                            }
-                                        }
-                                        draft.anchor = Some(number);
-                                    }
-                                }
-                            },
-                        );
-                    });
-                    if !draft.lines.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.weak(format!("Lines {}", lines_text(&ranges(&draft.lines))));
-                            if ui.small_button("Clear").clicked() {
-                                draft.lines.clear();
-                            }
-                        });
+                ui.add_space(6.0);
+                ui.label("Anything the moderators should know (optional)");
+                ui.add(egui::TextEdit::multiline(&mut draft.details).desired_rows(3).desired_width(f32::INFINITY).char_limit(MAX_REPORT_DETAILS));
+                ui.add_space(6.0);
+                ui.label("Point at the problem (optional): click lines of its code, shift-click for a range.");
+                match &draft.source {
+                    None => {
+                        ui.spinner();
                     }
-                    if !draft.sprites_found.is_empty() {
-                        ui.add_space(4.0);
-                        ui.label("Sprites in it: tick any that are a problem.");
-                        ui.horizontal_wrapped(|ui| {
-                            for call in &draft.sprites_found {
-                                let key = (draft.id.clone(), draft.version, call.line as u32);
-                                let texture = self.moderation.sprite_textures.entry(key).or_insert_with(|| {
-                                    sprite_image(call).map(|image| {
-                                        ctx.load_texture(format!("report-sprite-{}", call.line), image, egui::TextureOptions::NEAREST)
-                                    })
-                                });
-                                ui.vertical(|ui| {
-                                    if let Some(texture) = texture {
-                                        sprite_ui(ui, texture, 48.0);
-                                    }
-                                    let mut ticked = draft.sprites.contains(&(call.line as u32));
-                                    if ui.checkbox(&mut ticked, call.label()).changed() {
-                                        if ticked {
-                                            draft.sprites.insert(call.line as u32);
-                                        } else {
-                                            draft.sprites.remove(&(call.line as u32));
+                    Some(Err(e)) => {
+                        ui.colored_label(ui.visuals().warn_fg_color, format!("Couldn't get its code: {e}"));
+                    }
+                    Some(Ok(source)) => {
+                        let lines: Vec<&str> = source.lines().collect();
+                        let row = ui.text_style_height(&egui::TextStyle::Monospace);
+                        egui::Frame::new().fill(ui.visuals().extreme_bg_color).corner_radius(4.0).show(ui, |ui| {
+                            egui::ScrollArea::both().id_salt("report_code").max_height(240.0).auto_shrink([false, true]).show_rows(
+                                ui,
+                                row,
+                                lines.len(),
+                                |ui, range| {
+                                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                                    ui.spacing_mut().item_spacing.y = 0.0;
+                                    for index in range {
+                                        let number = index as u32 + 1;
+                                        let text = egui::RichText::new(format!("{number:>5}  {}", lines[index])).monospace();
+                                        let picked = draft.lines.contains(&number);
+                                        if ui.selectable_label(picked, text).clicked() {
+                                            let shift = ui.input(|i| i.modifiers.shift);
+                                            match draft.anchor {
+                                                Some(anchor) if shift => {
+                                                    let (a, b) = (anchor.min(number), anchor.max(number));
+                                                    draft.lines.extend(a..=b);
+                                                }
+                                                _ if picked => {
+                                                    draft.lines.remove(&number);
+                                                }
+                                                _ => {
+                                                    draft.lines.insert(number);
+                                                }
+                                            }
+                                            draft.anchor = Some(number);
                                         }
                                     }
-                                });
-                            }
+                                },
+                            );
                         });
+                        if !draft.lines.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.weak(format!("Lines {}", lines_text(&ranges(&draft.lines))));
+                                if ui.small_button("Clear").clicked() {
+                                    draft.lines.clear();
+                                }
+                            });
+                        }
+                        if !draft.sprites_found.is_empty() {
+                            ui.add_space(4.0);
+                            ui.label("Sprites in it: tick any that are a problem.");
+                            ui.horizontal_wrapped(|ui| {
+                                for call in &draft.sprites_found {
+                                    let key = (draft.id.clone(), draft.version, call.line as u32);
+                                    let texture = self.moderation.sprite_textures.entry(key).or_insert_with(|| {
+                                        sprite_image(call).map(|image| {
+                                            ctx.load_texture(format!("report-sprite-{}", call.line), image, egui::TextureOptions::NEAREST)
+                                        })
+                                    });
+                                    ui.vertical(|ui| {
+                                        if let Some(texture) = texture {
+                                            sprite_ui(ui, texture, 48.0);
+                                        }
+                                        let mut ticked = draft.sprites.contains(&(call.line as u32));
+                                        if ui.checkbox(&mut ticked, call.label()).changed() {
+                                            if ticked {
+                                                draft.sprites.insert(call.line as u32);
+                                            } else {
+                                                draft.sprites.remove(&(call.line as u32));
+                                            }
+                                        }
+                                    });
+                                }
+                            });
+                        }
                     }
                 }
             }
@@ -492,8 +552,9 @@ impl App {
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                let can = !draft.sending && marks <= MAX_REPORT_MARKS;
-                if ui.add_enabled(can, egui::Button::new("Send report")).clicked() {
+                let can = !draft.sending && marks <= MAX_REPORT_MARKS && (!draft.copyright || notice_ready(&draft.claim));
+                let label = if draft.copyright { "Send notice" } else { "Send report" };
+                if ui.add_enabled(can, egui::Button::new(label)).clicked() {
                     send = true;
                 }
                 if ui.button("Cancel").clicked() {
@@ -506,6 +567,12 @@ impl App {
         });
         if send {
             match (self.ensure_identity(), self.config.library.pinned.get(&draft.server).cloned()) {
+                (Ok(identity), Some(key)) if draft.copyright => {
+                    draft.sending = true;
+                    draft.error = None;
+                    let (server, claim) = (draft.server.clone(), draft.claim.clone());
+                    self.spawn_moderation(move || Event::NoticeFiled(client::file_notice(&server, &key, &identity, &claim)));
+                }
                 (Ok(identity), Some(key)) => {
                     draft.sending = true;
                     draft.error = None;
@@ -555,16 +622,20 @@ impl App {
                 }
             });
             ui.horizontal(|ui| {
-                for (tab, title) in
-                    [(Tab::Reports, "Reports"), (Tab::Bans, "Bans"), (Tab::Admins, "Admins"), (Tab::Server, "Server")]
-                {
+                for (tab, title) in [
+                    (Tab::Reports, "Reports"),
+                    (Tab::Copyright, "Copyright"),
+                    (Tab::Bans, "Bans"),
+                    (Tab::Admins, "Admins"),
+                    (Tab::Server, "Server"),
+                ] {
                     if ui.selectable_label(window.tab == tab, title).clicked() && window.tab != tab {
                         window.tab = tab;
                         refresh = true;
                     }
                 }
                 ui.separator();
-                if window.tab == Tab::Reports && ui.checkbox(&mut window.all, "Dealt with too").changed() {
+                if matches!(window.tab, Tab::Reports | Tab::Copyright) && ui.checkbox(&mut window.all, "Dealt with too").changed() {
                     refresh = true;
                 }
                 if ui.button("Refresh").clicked() {
@@ -581,6 +652,7 @@ impl App {
                     Tab::Bans => bans_tab_ui(ui, &mut window, &mut actions),
                     Tab::Admins => admins_tab_ui(ui, &mut window, &mut actions),
                     Tab::Server => server_tab_ui(ui, &window, &mut actions),
+                    Tab::Copyright => copyright_tab_ui(ui, &mut window, &mut actions),
                 }
             });
             ui.separator();
@@ -919,6 +991,140 @@ fn admins_tab_ui(ui: &mut egui::Ui, window: &mut Window, actions: &mut Vec<(Stri
             window.new_admin.clear();
         }
     });
+}
+
+/// Whether a notice has everything it needs.
+fn notice_ready(claim: &CopyrightNotice) -> bool {
+    [&claim.name, &claim.on_behalf_of, &claim.address, &claim.email, &claim.phone, &claim.work, &claim.signature]
+        .iter()
+        .all(|f| !f.trim().is_empty())
+        && claim.good_faith
+        && claim.accurate
+}
+
+/// A copyright notice's form: what a DMCA notice needs.
+fn notice_form_ui(ui: &mut egui::Ui, claim: &mut CopyrightNotice, server: &str) {
+    ui.colored_label(
+        ui.visuals().warn_fg_color,
+        "This is a legal notice under the US Digital Millennium Copyright Act, not a report. The script is taken \
+         down at once, its uploader sees your name, who you act for and the work you name, and may dispute it, \
+         and a false notice can make you liable for damages. For anything else wrong with it, report it instead.",
+    );
+    ui.weak(format!("Sent to {}'s moderators, signed with your identity.", host(server)));
+    ui.add_space(6.0);
+    egui::Grid::new("notice_form").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+        for (label, field, hint) in [
+            ("Your full name", &mut claim.name, ""),
+            ("On behalf of", &mut claim.on_behalf_of, "yourself, or whom you act for"),
+            ("Postal address", &mut claim.address, ""),
+            ("Email", &mut claim.email, ""),
+            ("Phone", &mut claim.phone, ""),
+            ("The copyrighted work", &mut claim.work, "its title, and what it is"),
+            ("Where it's from", &mut claim.work_location, "a link, or where it was released"),
+        ] {
+            ui.label(label);
+            ui.add(egui::TextEdit::singleline(field).hint_text(hint).desired_width(420.0));
+            ui.end_row();
+        }
+    });
+    ui.add_space(4.0);
+    ui.checkbox(
+        &mut claim.good_faith,
+        "I have a good faith belief that this use of the work isn't authorized by its owner, its agent, or the law.",
+    );
+    ui.checkbox(
+        &mut claim.accurate,
+        "This notice is accurate, and under penalty of perjury, I'm the owner or authorized to act for the owner.",
+    );
+    ui.horizontal(|ui| {
+        ui.label("Signature (your full name, typed)");
+        ui.add(egui::TextEdit::singleline(&mut claim.signature).desired_width(240.0));
+    });
+}
+
+/// The copyright notices, with what's to decide.
+fn copyright_tab_ui(ui: &mut egui::Ui, window: &mut Window, actions: &mut Vec<(String, Vec<AdminAction>)>) {
+    let notices = match &window.notices {
+        None => {
+            ui.spinner();
+            return;
+        }
+        Some(Err(e)) => {
+            ui.colored_label(ui.visuals().warn_fg_color, format!("Couldn't get the notices: {e}"));
+            return;
+        }
+        Some(Ok(notices)) => notices.clone(),
+    };
+    if notices.is_empty() {
+        ui.weak(if window.all { "No copyright notices." } else { "No open copyright notices." });
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label("Note with a decision:");
+        ui.add(egui::TextEdit::singleline(&mut window.copyright_note).desired_width(360.0));
+    });
+    for n in &notices {
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.strong(format!("#{} \"{}\"", n.id, n.item_name));
+                ui.weak(format!("({}), {}", n.item, ago(n.created)));
+                let status = match n.status.as_str() {
+                    "taken_down" => format!("down: stands {} unless disputed", until(n.deadline)),
+                    "queued" => "queued: it's locked (a dispute was upheld before), still up".to_string(),
+                    other => other.replace('_', " "),
+                };
+                ui.colored_label(ui.visuals().warn_fg_color, status);
+            });
+            let c = &n.notice;
+            ui.label(format!("From {} for {}: \"{}\" ({})", c.name, c.on_behalf_of, c.work, c.work_location));
+            ui.weak(format!(
+                "{} · {} · {} · claimant #{} · uploader {}",
+                c.address,
+                c.email,
+                c.phone,
+                n.claimant_id.as_deref().unwrap_or("?"),
+                n.uploader_id.as_deref().map_or("anonymous".to_string(), |id| format!("#{id}"))
+            ));
+            if let Some(counter) = &n.counter {
+                ui.add_space(4.0);
+                ui.label(format!("Disputed by {} ({}, {})", counter.name, counter.address, counter.email));
+                if !counter.explanation.is_empty() {
+                    ui.label(&counter.explanation);
+                }
+            }
+            if let Some(note) = &n.decision_note {
+                ui.weak(format!("Decided: {note}"));
+            }
+            let note = window.copyright_note.trim().to_string();
+            let decide = |decision: &str| AdminAction::Copyright { notice: n.id, decision: decision.into(), note: note.clone() };
+            ui.horizontal(|ui| {
+                let mut push = |label: &str, hover: &str, decision: &str| {
+                    if ui.button(label).on_hover_text(hover).clicked() {
+                        actions.push((String::new(), vec![decide(decision)]));
+                    }
+                };
+                match n.status.as_str() {
+                    "disputed" => {
+                        push("Uphold the dispute", "It comes back up, locked against further notices", "uphold_dispute");
+                        push("Reject the dispute", "The takedown stands", "reject_dispute");
+                        push("Notice is bogus", "It comes back up; the claimant's told", "bogus");
+                    }
+                    "queued" => {
+                        push("Take it down", "Its uploader can dispute it", "take_down");
+                        push("Notice is bogus", "It stays up; the claimant's told", "bogus");
+                    }
+                    "taken_down" => push("Notice is bogus", "It comes back up; both are told", "bogus"),
+                    _ => {}
+                }
+            });
+        });
+    }
+}
+
+/// A time to come, as how long until it.
+fn until(time: i64) -> String {
+    format!("in {}", crate::song_info::format_length((time - now()).max(0) as f64))
 }
 
 /// The server's version, and updating it.

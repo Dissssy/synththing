@@ -5,6 +5,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### New
+- Copyright notices on library servers: Report... has "It's my copyrighted work", a legal notice (as the US DMCA has them) that takes the script down at once. Its uploader is notified, and can dispute it (a counter-notice) or let it stand; moderators decide disputes (in Moderation's new Copyright tab), an upheld one keeping the script safe from further notices. Takedowns that stand can't simply be published again, and three of them get an identity banned.
+- Notifications you haven't read stand out in the list, and once you've acted on one (disputed a notice, say), it says what you did instead of offering it again.
 - Notifications from library servers: the envelope at the right of the header turns red with a count when there's news about your things (encores and installs adding up, a script hidden or back, a remix of yours, a report of yours dealt with; for moderators, new reports). Click it for the list, every server's together, and one for what can be done about it. Preferences > Library > Notifications turns it off.
 - `--config-dir DIR` (or `SYNTHTHING_CONFIG_DIR`) keeps everything in a folder of its own, for trying a build without touching your real setup.
 

@@ -12,6 +12,7 @@ pub use editor::ApplyMode;
 mod loading;
 mod playlist_panel;
 mod identity;
+mod copyright;
 mod moderation;
 mod notifications;
 mod previews;
@@ -238,6 +239,8 @@ pub struct App {
     identity: identity::IdentityState,
     /// Notifications from library servers.
     notifications: notifications::NotificationsState,
+    /// A copyright notice on one of the user's uploads, open.
+    copyright: copyright::CopyrightState,
     /// The changelog window: `Some(since)` lists only the versions newer
     /// than that (What's new, after an update), `None` all of them
     /// (Help > Changelog...).
@@ -429,6 +432,7 @@ impl App {
             moderation: Default::default(),
             identity: Default::default(),
             notifications: Default::default(),
+            copyright: Default::default(),
             changelog: None,
             welcome: welcome::Welcome::default(),
             preferences_tab: PrefTab::default(),
@@ -1814,6 +1818,7 @@ impl App {
             || self.moderation.open()
             || self.identity.open()
             || self.notifications.open()
+            || self.copyright.open()
             || self.editor.history_open
             || self.layout_save.is_some()
             || self.heavy_prompt.is_some()
@@ -2881,11 +2886,13 @@ impl eframe::App for App {
         self.report_ui(&ctx);
         self.identity_flow_ui(&ctx);
         self.notification_ui(&ctx);
+        self.copyright_ui(&ctx);
         self.moderation_ui(&ctx);
         self.poll_library();
         self.poll_moderation();
         self.poll_identity();
         self.poll_notifications(&ctx);
+        self.poll_copyright();
         self.heavy_midi_ui(&ctx);
         self.poll_recordings(view);
         if self.status != self.logged_status {
