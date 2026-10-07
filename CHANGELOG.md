@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.4.9 (2026-10-07)
+
 ### Fixed
 - The scripts that come with synththing (keyboard, disco, the games...) can be updated again on Windows: they were added with Windows line endings, so they never matched a version on the official server and stayed at "version 0" with nothing to update to. Copies added that way are put right by their next update check.
 
