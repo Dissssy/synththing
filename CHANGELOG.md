@@ -8,6 +8,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Colored chips in the Online Library: each script's kind (visualizer, game, toy, example) and each song's source (original, video game, film or TV, anime, popular, classical, folk) has a color, shown as a chip in the list and the details, and as a dot in the dropdowns that pick them. They're from the same palette as the channel toggles.
 - Notifications in color, by how much each asks of you: good news (encores, downloads, remixes) in pink, green and purple; things resolved in cyan and blue; heads-ups in yellow and coral; and what you need to act on (a takedown, a deletion) in red. The envelope's count takes the color of the most serious one unread, and ones you've dealt with turn grey.
 - The status line is red when something failed and green when something's done.
+- The playback controls are icons now (hover for what each does), with Play in green and Pause in orange.
+- The seek bar is colored by the song's tempo: slow songs blue, through cyan, green, yellow and coral, to pink for fast ones, shifting as the tempo changes. While a song plays it flashes brighter on each beat; Preferences > Songs sets how far toward white (0% for not at all, 100% for white) and how long each flash lasts, a bar's first beat a little longer.
 
 ## 0.5.1 (2026-10-07)
 

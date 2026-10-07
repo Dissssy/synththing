@@ -13,6 +13,11 @@ use serde::{Deserialize, Serialize};
 use crate::layout::Section;
 use crate::playlist::LoopMode;
 
+/// The beat pulse's strength and length (`Config::beat_pulse`,
+/// `beat_pulse_length`) unless they're changed.
+pub const DEFAULT_BEAT_PULSE: f32 = 0.3;
+pub const DEFAULT_BEAT_PULSE_LENGTH: f32 = 0.35;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -63,6 +68,14 @@ pub struct Config {
     /// Preference: ask before playing a very large MIDI file (`None`: yes).
     #[serde(default)]
     pub warn_heavy_midi: Option<bool>,
+    /// Preference: how far toward white the seek bar flashes on each beat,
+    /// 0 (not at all) to 1 (white) (`None`: `DEFAULT_BEAT_PULSE`).
+    #[serde(default)]
+    pub beat_pulse: Option<f32>,
+    /// Preference: how long each beat's flash takes to fade, as a share of
+    /// the beat, 0.1 to 1 (`None`: `DEFAULT_BEAT_PULSE_LENGTH`).
+    #[serde(default)]
+    pub beat_pulse_length: Option<f32>,
     /// Preference: list audio files (MP3, WAV, ...) as songs, not only MIDI.
     #[serde(default)]
     pub show_audio_files: bool,

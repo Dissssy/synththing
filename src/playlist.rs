@@ -178,14 +178,6 @@ impl LoopMode {
             Self::One => Self::Off,
         }
     }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Off => "Loop: Off",
-            Self::One => "Loop: One",
-            Self::All => "Loop: All",
-        }
-    }
 }
 
 /// Which playlist entry is playing, plus the shuffle history for this pass

@@ -309,6 +309,11 @@ pub struct App {
     /// the script: (its load number, path, notes, id).
     loads_sent: u64,
     pending_script_song: Option<(u64, PathBuf, Arc<crate::midi_notes::NoteList>, String)>,
+    /// The song playing's notes (its tempo map, for the transport's accent),
+    /// as of when the audio thread reported it loaded.
+    song_notes: Option<Arc<crate::midi_notes::NoteList>>,
+    /// The transport's accent as last drawn (it eases toward the tempo's).
+    accent: Option<[f32; 3]>,
     /// The reference spot to show (section, block), when it was asked for,
     /// and whether it still needs scrolling to.
     docs_target: Option<((usize, usize), Instant, bool)>,
@@ -467,6 +472,8 @@ impl App {
             pad_frame: crate::gamepad::PadFrame::default(),
             loads_sent: 0,
             pending_script_song: None,
+            song_notes: None,
+            accent: None,
             docs_target: None,
             pending_focus: None,
             sprite: sprite_editor::SpriteEditorState::default(),
@@ -1044,6 +1051,46 @@ impl App {
 
     // --- layout ----------------------------------------------------
 
+    /// The seek bar's color: the tempo's (`tempo_color`), easing toward a
+    /// new one when the tempo changes, flashing brighter on each beat (more
+    /// on a bar's first) while it plays, unless that's turned off. None for
+    /// a song without a tempo map (an audio file): the theme's accent.
+    fn transport_accent(&mut self, ctx: &egui::Context, view: &EngineView) -> Option<egui::Color32> {
+        let timing = self.song_notes.as_ref().filter(|_| view.has_midi).and_then(|n| n.timing().cloned());
+        let Some(timing) = timing else {
+            self.accent = None;
+            return None;
+        };
+        let target = tempo_color(timing.tempo_at(view.position));
+        let ease = 1.0 - (-ctx.input(|i| i.stable_dt).min(0.1) * 4.0).exp();
+        let shown = match self.accent {
+            Some(shown) => [0, 1, 2].map(|i| shown[i] + (target[i] - shown[i]) * ease),
+            None => target,
+        };
+        self.accent = Some(shown);
+        if (0..3).any(|i| (shown[i] - target[i]).abs() > 0.5) {
+            ctx.request_repaint();
+        }
+        let playing = !view.paused && !view.finished;
+        let strength = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE).clamp(0.0, 1.0);
+        let length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH).clamp(0.1, 1.0);
+        let pulse = if playing && strength > 0.0 {
+            ctx.request_repaint();
+            let since_beat = timing.beat_at(view.position).fract() as f32;
+            let downbeat = timing.bar_at(view.position).1 < 1.0;
+            // (A flash `strength` of the way to white, so relative to how dark
+            // the color is: 100% is white. It fades over `length` of the beat,
+            // half as long again on a bar's first, which marks the bar.)
+            let length = if downbeat { (length * 1.5).min(1.0) } else { length };
+            let left = (1.0 - since_beat / length).max(0.0);
+            left * left * strength
+        } else {
+            0.0
+        };
+        let [r, g, b] = shown.map(|c| (c + (255.0 - c) * pulse).round().clamp(0.0, 255.0) as u8);
+        Some(egui::Color32::from_rgb(r, g, b))
+    }
+
     /// The bottom transport bar, VLC-style: track info, seek bar, then a
     /// button row (play/restart/stop, view toggles, loop) with speed/volume/
     /// buffer tucked underneath. Shown identically whether fullscreen or
@@ -1078,11 +1125,23 @@ impl App {
             }
         });
 
+        let accent = self.transport_accent(ui.ctx(), view);
         ui.horizontal(|ui| {
             let mut position = view.position;
-            let response = ui.add(
-                egui::Slider::new(&mut position, 0.0..=view.length.max(0.001)).show_value(false),
-            );
+            let response = ui
+                .scope(|ui| {
+                    if let Some(accent) = accent {
+                        let visuals = ui.visuals_mut();
+                        visuals.selection.bg_fill = accent;
+                        // (The handle ringed in black or white, whichever stands out on it.)
+                        for state in [&mut visuals.widgets.inactive, &mut visuals.widgets.hovered, &mut visuals.widgets.active] {
+                            state.bg_fill = accent;
+                            state.fg_stroke = egui::Stroke::new(1.5, on_color(accent));
+                        }
+                    }
+                    ui.add(egui::Slider::new(&mut position, 0.0..=view.length.max(0.001)).show_value(false).trailing_fill(true))
+                })
+                .inner;
             if response.changed() {
                 self.send(AudioCommand::Seek(position));
             }
@@ -1090,27 +1149,31 @@ impl App {
         });
 
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .button(if view.paused { "Play" } else { "Pause" })
-                .clicked()
-            {
+            // Play is green, Pause orange (the channel palette's).
+            let (glyph, color, hover) = if view.paused {
+                ("play", palette_color(2), "Play")
+            } else {
+                ("pause", palette_color(1), "Pause")
+            };
+            if ui.add(colored_icon_button(glyph, color)).on_hover_text(hover).clicked() {
                 self.send(AudioCommand::TogglePause);
             }
             if ui
-                .button("Previous")
-                .on_hover_text("Previous playlist track, or restart this one if it's been playing a few seconds")
+                .add(icon_button("skip-back"))
+                .on_hover_text("Previous: the previous playlist track, or this one from the start if it's been playing a few seconds")
                 .clicked()
             {
                 self.previous_track(view.position);
             }
-            if ui.button("Stop").clicked() {
+            if ui.add(icon_button("stop")).on_hover_text("Stop").clicked() {
                 self.send(AudioCommand::Seek(0.0));
                 if !view.paused {
                     self.send(AudioCommand::TogglePause);
                 }
             }
             if ui
-                .add_enabled(self.now_playing.is_some(), egui::Button::new("Next"))
+                .add_enabled(self.now_playing.is_some(), icon_button("skip-forward"))
+                .on_hover_text("Next: the next playlist track")
                 .on_disabled_hover_text("Play something from a playlist to queue up a next track")
                 .clicked()
             {
@@ -1119,27 +1182,29 @@ impl App {
 
             ui.separator();
 
-            let fullscreen_label = if self.fullscreen { "Exit Fullscreen" } else { "Fullscreen" };
-            if ui.button(fullscreen_label).clicked() {
+            let (glyph, hover) = if self.fullscreen { ("corners-in", "Exit fullscreen") } else { ("corners-out", "Fullscreen") };
+            if ui.add(icon_button(glyph)).on_hover_text(hover).clicked() {
                 let ctx = ui.ctx().clone();
                 self.set_fullscreen(&ctx, !self.fullscreen);
             }
             let visualizer = self.is_open(Section::Visualizer);
-            if ui.selectable_label(visualizer, "Visualizer").clicked() {
+            if ui.add(icon_button("monitor-play").selected(visualizer)).on_hover_text("Visualizer").clicked() {
                 self.set_open(Section::Visualizer, !visualizer);
             }
             let playlists = self.is_open(Section::Playlists);
-            if ui.selectable_label(playlists, "Playlist").clicked() {
+            if ui.add(icon_button("playlist").selected(playlists)).on_hover_text("Playlists").clicked() {
                 self.set_open(Section::Playlists, !playlists);
             }
-            if ui
-                .selectable_label(self.loop_mode != LoopMode::Off, self.loop_mode.label())
-                .on_hover_text("Off → All (wrap the playlist) → One (repeat this track)")
-                .clicked()
-            {
+            let (glyph, hover) = match self.loop_mode {
+                LoopMode::Off => ("repeat", "Loop: off (click: loop the playlist)"),
+                LoopMode::All => ("repeat", "Loop: the playlist (click: this track)"),
+                LoopMode::One => ("repeat-once", "Loop: this track (click: off)"),
+            };
+            if ui.add(icon_button(glyph).selected(self.loop_mode != LoopMode::Off)).on_hover_text(hover).clicked() {
                 self.set_loop_mode(self.loop_mode.cycle());
             }
-            if ui.selectable_label(self.shuffle, "Shuffle").clicked() {
+            let hover = if self.shuffle { "Shuffle: on" } else { "Shuffle: off" };
+            if ui.add(icon_button("shuffle").selected(self.shuffle)).on_hover_text(hover).clicked() {
                 self.set_shuffle(!self.shuffle);
             }
 
@@ -1148,7 +1213,7 @@ impl App {
         });
 
         ui.horizontal_wrapped(|ui| {
-            ui.label("Speed");
+            ui.label(egui::RichText::new(icon("gauge")).size(15.0)).on_hover_text("Speed");
             if ui.small_button("-").clicked() {
                 self.send(AudioCommand::NudgeSpeed(-0.05));
             }
@@ -1168,7 +1233,12 @@ impl App {
 
             ui.separator();
 
-            ui.label("Volume");
+            let speaker = match self.volume {
+                v if v <= 0.0 => "speaker-x",
+                v if v < 0.5 => "speaker-low",
+                _ => "speaker-high",
+            };
+            ui.label(egui::RichText::new(icon(speaker)).size(15.0)).on_hover_text("Volume");
             if ui
                 .add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false))
                 .changed()
@@ -1179,7 +1249,10 @@ impl App {
 
             ui.separator();
 
-            ui.label("Buffer");
+            ui.label(egui::RichText::new(icon("timer")).size(15.0)).on_hover_text(
+                "Buffer: how much sound is made ahead of what's heard. More holds up better in busy songs; less \
+                 makes the visualizer and controls answer sooner.",
+            );
             if ui
                 .add(
                     egui::Slider::new(&mut self.buffer_ms, MIN_BUFFER_MS..=MAX_BUFFER_MS)
@@ -2109,6 +2182,7 @@ impl App {
         if self.pending_script_song.as_ref().is_some_and(|(target, ..)| view.loads >= *target)
             && let Some((_, path, notes, id)) = self.pending_script_song.take()
         {
+            self.song_notes = Some(Arc::clone(&notes));
             self.visualizer.script().set_song(path, id, notes);
         }
     }
@@ -2452,6 +2526,8 @@ impl App {
         let mut hover_preload = self.config.preload_on_hover;
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
         let mut warn_heavy = self.config.warn_heavy_midi.unwrap_or(true);
+        let mut beat_pulse = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE) * 100.0;
+        let mut pulse_length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH) * 100.0;
         let mut script_log = self.config.script_log_to_app;
         let mut audio_files = self.config.show_audio_files;
         let mut close = false;
@@ -2499,6 +2575,38 @@ impl App {
                                      adding a folder adds only its MIDI files (an audio file dragged in by itself is \
                                      still added).",
                                     |ui| ui.checkbox(&mut audio_files, "Show audio files (MP3, WAV, OGG, FLAC, ...)"),
+                                );
+                                with_info(
+                                    ui,
+                                    "The seek bar is colored by the song's tempo (slow songs blue, fast ones pink), \
+                                     and flashes toward white on each beat while the song plays: 100% is white, \
+                                     0% doesn't flash. Each bar's first beat flashes for longer.",
+                                    |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Pulse with the beat");
+                                            ui.add(egui::Slider::new(&mut beat_pulse, 0.0..=100.0).suffix("%").fixed_decimals(0))
+                                        })
+                                        .inner
+                                    },
+                                );
+                                with_info(
+                                    ui,
+                                    "How long each beat's flash takes to fade, as a share of the beat: short is a \
+                                     quick tick, 100% fades right up to the next beat.",
+                                    |ui| {
+                                        ui.add_enabled_ui(beat_pulse > 0.0, |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label("Flash length");
+                                                ui.add(
+                                                    egui::Slider::new(&mut pulse_length, 10.0..=100.0)
+                                                        .suffix("% of a beat")
+                                                        .fixed_decimals(0),
+                                                )
+                                            })
+                                            .inner
+                                        })
+                                        .inner
+                                    },
                                 );
                                 with_info(
                                     ui,
@@ -2584,6 +2692,8 @@ impl App {
             || hover_preload != self.config.preload_on_hover
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
             || warn_heavy != self.config.warn_heavy_midi.unwrap_or(true)
+            || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
+            || (pulse_length / 100.0 - self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH)).abs() > 1e-4
             || script_log != self.config.script_log_to_app
             || audio_files != self.config.show_audio_files
         {
@@ -2591,6 +2701,9 @@ impl App {
             self.browser.set_extensions(listed_song_extensions(&self.config));
             self.config.script_log_to_app = script_log;
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
+            self.config.beat_pulse = Some(beat_pulse / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE).abs() > 1e-4);
+            self.config.beat_pulse_length =
+                Some(pulse_length / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE_LENGTH).abs() > 1e-4);
             self.config.check_updates_on_launch = (!check_updates).then_some(false);
             self.config.preload_expiry_secs = expiry;
             self.config.preload_on_hover = hover_preload;
@@ -3240,8 +3353,7 @@ fn status_color(ui: &egui::Ui, status: &str) -> Option<egui::Color32> {
         false => Some(ui.visuals().error_fg_color),
         true => {
             // (The palette's green, darker on a light theme so it reads.)
-            let [r, g, b] = crate::lua_visualizer::default_channel_color(2);
-            let green = egui::Color32::from_rgb(r, g, b);
+            let green = palette_color(2);
             Some(if ui.visuals().dark_mode { green } else { green.gamma_multiply(0.55).to_opaque() })
         }
     }
@@ -3260,6 +3372,37 @@ fn status_outcome(status: &str) -> Option<bool> {
         return Some(false);
     }
     DONE.iter().any(|w| status.starts_with(w)).then_some(true)
+}
+
+/// A color of the channel palette (`lua_visualizer::default_channel_color`).
+pub(super) fn palette_color(index: u8) -> egui::Color32 {
+    let [r, g, b] = lua_visualizer::default_channel_color(index);
+    egui::Color32::from_rgb(r, g, b)
+}
+
+/// A transport button: just its icon (Phosphor), a little larger than text.
+fn icon_button(name: &str) -> egui::Button<'static> {
+    egui::Button::new(egui::RichText::new(icon(name)).size(16.0)).min_size(egui::vec2(28.0, 24.0))
+}
+
+/// As `icon_button`, its icon in `color`.
+fn colored_icon_button(name: &str, color: egui::Color32) -> egui::Button<'static> {
+    egui::Button::new(egui::RichText::new(icon(name)).size(16.0).color(color)).min_size(egui::vec2(28.0, 24.0))
+}
+
+/// The accent color for a tempo: slow songs blue, then cyan, green, yellow
+/// and coral, fast ones pink, blended between (palette colors).
+fn tempo_color(bpm: f64) -> [f32; 3] {
+    const STOPS: [(f64, u8); 6] = [(60.0, 0), (90.0, 5), (115.0, 2), (135.0, 3), (160.0, 1), (190.0, 6)];
+    let rgb = |i: u8| lua_visualizer::default_channel_color(i).map(f32::from);
+    let Some(after) = STOPS.iter().position(|&(at, _)| bpm < at) else { return rgb(STOPS[STOPS.len() - 1].1) };
+    if after == 0 {
+        return rgb(STOPS[0].1);
+    }
+    let ((a, from), (b, to)) = (STOPS[after - 1], STOPS[after]);
+    let t = ((bpm - a) / (b - a)) as f32;
+    let (from, to) = (rgb(from), rgb(to));
+    [0, 1, 2].map(|i| from[i] + (to[i] - from[i]) * t)
 }
 
 /// Black or white, whichever reads better on `color` (by its relative
@@ -3392,6 +3535,22 @@ fn is_midi_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Slow songs blue, fast ones pink, blended between; out of range,
+    /// the nearest end.
+    #[test]
+    fn tempos_have_colors() {
+        let rgb = |i: u8| lua_visualizer::default_channel_color(i).map(f32::from);
+        assert_eq!(tempo_color(40.0), rgb(0));
+        assert_eq!(tempo_color(60.0), rgb(0));
+        assert_eq!(tempo_color(115.0), rgb(2));
+        assert_eq!(tempo_color(250.0), rgb(6));
+        let between = tempo_color(102.5);
+        let (cyan, green) = (rgb(5), rgb(2));
+        for i in 0..3 {
+            assert!((between[i] - (cyan[i] + green[i]) / 2.0).abs() < 0.01);
+        }
+    }
 
     #[test]
     fn statuses_are_sorted_by_wording() {
