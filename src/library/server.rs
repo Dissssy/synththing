@@ -450,32 +450,45 @@ fn preview_soundfont(state: &State) -> Result<PathBuf, String> {
 
 /// Make one version's preview (unless it has one), and note what came of it.
 fn make_preview(state: &State, soundfont: &Path, id: &str, version: u32) {
-    let source: Option<String> = state
+    // A script's source; or a song's file, and where its preview starts.
+    type Found = (String, Option<Vec<u8>>, Option<f64>);
+    let found: Option<Found> = state
         .db()
         .query_row(
-            "SELECT source FROM versions WHERE script_id = ? AND version = ? AND preview IS NULL",
+            "SELECT v.source, v.data, so.preview_start FROM versions v LEFT JOIN songs so ON so.id = v.script_id
+             WHERE v.script_id = ? AND v.version = ? AND v.preview IS NULL",
             params![id, version],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
         .ok()
         .flatten();
-    let Some(source) = source else { return };
+    let Some((source, song, song_start)) = found else { return };
     let work = state.previews_dir().join("work");
     let _ = std::fs::remove_dir_all(&work);
-    let script = work.join(format!("{id}.lua"));
-    if let Err(e) = std::fs::create_dir_all(&work).and_then(|()| std::fs::write(&script, source)) {
+    let (input, bytes) = match &song {
+        Some(bytes) => (work.join(format!("{id}.mid")), bytes.clone()),
+        None => (work.join(format!("{id}.lua")), source.into_bytes()),
+    };
+    let song_start = song.is_some().then(|| song_start.unwrap_or(0.0));
+    if let Err(e) = std::fs::create_dir_all(&work).and_then(|()| std::fs::write(&input, bytes)) {
         println!("couldn't make previews: {e}");
         return;
     }
     let started = Instant::now();
     let limit = Duration::from_secs(state.config.preview_seconds.max(5));
     #[cfg(not(test))]
-    let result = crate::preview::run_process(&script, soundfont, &work, limit, false);
+    let result = match song_start {
+        Some(start) => crate::preview::run_song_process(&input, soundfont, &work, limit, start),
+        None => crate::preview::run_process(&input, soundfont, &work, limit, false),
+    };
     #[cfg(test)]
     let result = {
         let _ = limit;
-        crate::preview::render(&script, soundfont, &work).map(|_| ())
+        match song_start {
+            Some(start) => crate::preview::render_song(&input, soundfont, &work, start).map(|_| ()),
+            None => crate::preview::render(&input, soundfont, &work).map(|_| ()),
+        }
     };
     let keep = |name: &str, sheet: bool| {
         let made = work.join(name);

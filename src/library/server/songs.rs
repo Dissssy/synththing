@@ -234,7 +234,7 @@ pub(super) fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
             )?;
             tx.execute(
                 "INSERT INTO versions (script_id, version, sha256, source, app_version, uploader_ip, created, min_app_version,
-                 fingerprint, data, preview) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, 'none')",
+                 fingerprint, data) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?)",
                 params![id, version, sha256, upload.app_version, ip, created, SONGS_SINCE, facts.fingerprint.to_hex(), bytes],
             )?;
             tx.commit()
@@ -244,6 +244,7 @@ pub(super) fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
         if limited {
             count_upload(state, ip);
         }
+        state.queue_preview(&id, version);
         let who = author_id.map(|id| format!(" (#{id})")).unwrap_or_default();
         println!("uploaded song {id} v{version} \"{}\" by {}{who} from {ip}", upload.name, upload.author_name);
         Ok((201, signed_receipt(state, id, version, sha256)))

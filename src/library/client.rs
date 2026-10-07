@@ -1392,7 +1392,7 @@ mod tests {
         assert!(upload_song(&base, &key, &canon, Some(&alice)).unwrap_err().contains("doesn't take songs"));
         running.stop();
 
-        std::fs::write(dir.join("server.json"), r#"{ "previews": false, "check_uploads": false, "songs": true }"#).unwrap();
+        std::fs::write(dir.join("server.json"), r#"{ "check_uploads": false, "songs": true }"#).unwrap();
         let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
         let base = format!("http://{}", running.addr);
         assert!(info(&base).unwrap().songs);
@@ -1433,6 +1433,17 @@ mod tests {
         assert_eq!((details.summary.category.as_str(), song.composer.as_str()), ("classical", "Someone Long Ago"));
         assert_eq!((song.arranger.as_str(), song.rights.as_str()), ("tester", "public_domain"));
         assert!(song.notes > 100 && song.length > 20.0);
+        // Its preview: the keyboard visualizer, the whole stretch.
+        let preview = (0..1200)
+            .find_map(|_| {
+                let v = super::details(&base, &first.id).unwrap().versions.remove(0).preview;
+                std::thread::sleep(Duration::from_millis(50));
+                (v != crate::library::Preview::Pending).then_some(v)
+            })
+            .expect("no preview");
+        assert_eq!(preview, crate::library::Preview::Animated);
+        let (w, h, _) = crate::preview::decode_png(&super::preview(&base, &first.id, 1, true).unwrap()).unwrap();
+        assert_eq!((w, h), (crate::preview::WIDTH * 8, crate::preview::HEIGHT * crate::preview::SONG_FRAMES / 8));
         let got = download_song(&base, &first.id, None, &key).unwrap();
         assert_eq!(crate::library::songs::encode(&got.bytes), canon.data);
         assert_eq!(got.sha256, first.sha256);

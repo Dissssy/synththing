@@ -69,11 +69,14 @@ Not simulated: mouse, keyboard and typed input (scripts see no pointer, no keys 
 
 ```
 synththing preview SCRIPT [--out DIR] [--soundfont FILE] [--check]
+synththing preview SONG.mid --song-start SECONDS [--out DIR] [--soundfont FILE]
 ```
 
 Makes the preview the Script Library and the script picker show: the script plays about 12 seconds from the middle of each starter song at 320 x 180, as a recording in Auto (a game that can play itself is seen playing), and each frame is scored for how much there is to see (contrast, colours, motion). The best-scoring 48 frames in a row become the animation, `preview-sheet.png` (a sprite sheet, 8 frames to a row, played at 12 a second), and the best single frame the still, `preview.png`, both in `--out` (the current folder by default). The first frame with anything on it is written as the still straight away, so a run stopped early still leaves one; a script that never draws anything (all one colour) gets no preview.
 
 With `--check`, it only checks that the script runs: it compiles and plays a few seconds of a song without an error. Library servers check every upload this way.
+
+With `--song-start`, it makes a song's preview instead (the MIDI file given): the bundled keyboard visualizer (falling notes) draws 12 seconds of it from that many seconds in, and all 144 frames make the sheet (8 to a row, 12 a second; if the song ends sooner, its last frame fills the rest), with the middle one as the still. Library servers make songs' previews this way, from the busiest stretch.
 
 `--soundfont` defaults to the first one in the app's Soundfonts list. Exit codes: `0` made it (or it checked out), `1` the script has an error, `2` something couldn't be loaded.
 
