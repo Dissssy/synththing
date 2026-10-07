@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.5.2 (2026-10-07)
+
 ### New
 - Colored chips in the Online Library: each script's kind (visualizer, game, toy, example) and each song's source (original, video game, film or TV, anime, popular, classical, folk) has a color, shown as a chip in the list and the details, and as a dot in the dropdowns that pick them. They're from the same palette as the channel toggles.
 - Notifications in color, by how much each asks of you: good news (encores, downloads, remixes) in pink, green and purple; things resolved in cyan and blue; heads-ups in yellow and coral; and what you need to act on (a takedown, a deletion) in red. The envelope's count takes the color of the most serious one unread, and ones you've dealt with turn grey.
