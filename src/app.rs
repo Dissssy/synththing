@@ -122,7 +122,12 @@ pub struct App {
     browser: FileBrowser,
     active_sf: Option<usize>,
     tap: SampleTap,
-    visualizer: VisualizerPanel,
+    /// The visualizer's picture, shared with the windows that show it
+    /// (`lock_panel`).
+    visualizer: Arc<Mutex<VisualizerPanel>>,
+    /// The running script: loading it, its settings, what it reads back.
+    /// Its frames go to `visualizer`.
+    script: ScriptHost,
     /// Folder holding `.lua` visualizer scripts (bundled defaults + user's own).
     scripts_dir: PathBuf,
     available_scripts: Vec<PathBuf>,
@@ -386,6 +391,7 @@ impl App {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .unwrap_or_default();
         let active_script = active_path.is_some().then_some(active_index);
+        let mut script = ScriptHost::spawn(source.clone(), active_path, sample_rate);
 
         let (playlists, playlist_errors) =
             Library::load(config::playlists_dir().unwrap_or_else(|_| PathBuf::from("playlists")));
@@ -413,11 +419,8 @@ impl App {
             browser,
             active_sf: None,
             tap,
-            visualizer: VisualizerPanel::new(
-                ScriptHost::spawn(source.clone(), active_path, sample_rate),
-                VISUALIZER_WIDTH,
-                VISUALIZER_HEIGHT,
-            ),
+            visualizer: Arc::new(Mutex::new(VisualizerPanel::new(script.take_pipe(), VISUALIZER_WIDTH, VISUALIZER_HEIGHT))),
+            script,
             scripts_dir,
             available_scripts,
             active_script,
@@ -526,7 +529,7 @@ impl App {
             panel_picture: None,
             last_recording: None,
         };
-        if let Some(path) = app.visualizer.script().path().map(Path::to_path_buf) {
+        if let Some(path) = app.script.path().map(Path::to_path_buf) {
             app.editor_opened(&path);
         }
         app.send(AudioCommand::SetBufferMs(app.buffer_ms));
@@ -663,7 +666,7 @@ impl App {
                 .active_sf
                 .and_then(|i| self.config.soundfonts.get(i).cloned())
                 .filter(|_| remember.soundfont),
-            script: self.visualizer.script().path().map(Path::to_path_buf).filter(|_| remember.script),
+            script: self.script.path().map(Path::to_path_buf).filter(|_| remember.script),
         };
         self.config.session = session;
         if let Err(e) = self.config.save() {
@@ -1099,7 +1102,7 @@ impl App {
                 self.editor_text = source.clone();
                 self.completion.request(source.clone());
                 self.editor_hover_info = None;
-                self.visualizer.script_mut().load(Some(path.clone()), source);
+                self.script.load(Some(path.clone()), source);
                 self.active_script = Some(idx);
                 self.editor_opened(&path);
             }
@@ -1896,7 +1899,7 @@ impl App {
                     editor::rename_history(&path, &new_path);
                     self.available_scripts = lua_visualizer::list_scripts(&self.scripts_dir);
                     self.active_script = self.available_scripts.iter().position(|p| *p == new_path);
-                    self.visualizer.script_mut().renamed(new_path.clone());
+                    self.script.renamed(new_path.clone());
                     self.status = format!("Renamed script to {}", lua_visualizer::display_name(&new_path));
                     self.rename = None;
                 }
@@ -1919,7 +1922,7 @@ impl App {
         // Edits still waiting are saved under the old name first; the
         // script thread saves the script's data, then moves it all along.
         self.flush_editor();
-        let answer = self.visualizer.script().rename(name);
+        let answer = self.script.rename(name);
         if let Some(rename) = &mut self.rename {
             rename.waiting = Some(answer);
         }
@@ -1929,7 +1932,7 @@ impl App {
     /// it points at a line. `open_editor`: the button also opens the editor
     /// (for the copy shown above the visualizer).
     fn script_error_ui(&mut self, ui: &mut egui::Ui, open_editor: bool) {
-        let Some(error) = self.visualizer.script().error() else {
+        let Some(error) = self.script.error() else {
             return;
         };
         let line = lua_visualizer::error_line(&error);
@@ -1996,7 +1999,7 @@ impl App {
     /// new version into the editor and visualizer. The app's own saves
     /// leave the file matching the editor, so they don't reload anything.
     fn rescan_scripts(&mut self) {
-        let current = self.visualizer.script().path().map(Path::to_path_buf);
+        let current = self.script.path().map(Path::to_path_buf);
         self.available_scripts = lua_visualizer::list_scripts(&self.scripts_dir);
         self.active_script = current.as_ref().and_then(|p| self.available_scripts.iter().position(|q| q == p));
         let Some(path) = current else {
@@ -2016,7 +2019,7 @@ impl App {
                 self.editor_text = text.clone();
                 self.editor_saved = text.clone();
                 self.completion.request(text.clone());
-                self.visualizer.script_mut().set_source(text, None);
+                self.script.set_source(text, None);
                 self.status = format!("Reloaded {name} (changed on disk).");
             }
             Ok(_) => {}
@@ -2148,7 +2151,7 @@ impl App {
             }
             self.script_window_buttons_ui(ui);
             self.recording_buttons_ui(ui);
-            if let Some(path) = self.visualizer.script().path() {
+            if let Some(path) = self.script.path() {
                 ui.weak(path.display().to_string());
             }
         });
@@ -2171,14 +2174,14 @@ impl App {
             return;
         }
         let transport = self.script_transport();
-        self.visualizer.script_mut().set_app_log(self.config.script_log_to_app);
+        self.script.set_app_log(self.config.script_log_to_app);
         let recording = self.recording.recorder.as_ref().is_some_and(|r| !r.paused());
         let take = self.recording.take();
-        self.visualizer.script_mut().set_recording(recording, take);
-        self.visualizer.set_pads(self.pad_frame.clone());
+        self.script.set_recording(recording, take);
+        lock_panel(&self.visualizer).set_pads(self.pad_frame.clone());
         let fixed_size = self.recording.frame_size();
         let (hold, timestep) = self.pace_recording();
-        self.visualizer_output = self.visualizer.show(
+        self.visualizer_output = lock_panel(&self.visualizer).show(
             ui,
             &self.tap,
             notes,
@@ -2192,7 +2195,7 @@ impl App {
         );
         self.feed_recording(ui);
         self.visualizer_drawn = true;
-        let effects = self.visualizer.take_effects();
+        let effects = lock_panel(&self.visualizer).take_effects();
 
         // A script can ask to mute/unmute a channel itself (e.g. a game
         // script silencing a dead player's channel), the same command the
@@ -2333,7 +2336,7 @@ impl App {
             && let Some((_, path, notes, id)) = self.pending_script_song.take()
         {
             self.song_notes = Some(Arc::clone(&notes));
-            self.visualizer.script().set_song(path, id, notes);
+            self.script.set_song(path, id, notes);
         }
     }
 
@@ -2399,14 +2402,14 @@ impl App {
         if !self.fullscreen {
             self.set_fullscreen(ctx, true);
         }
-        self.visualizer.request_focus();
+        lock_panel(&self.visualizer).request_focus();
     }
 
     /// Start the running visualizer script over from scratch (F5, or the
     /// Restart button).
     fn restart_script(&mut self) {
-        let name = self.visualizer.script().path().map(nice_name).unwrap_or_else(|| "script".to_string());
-        self.status = if self.visualizer.script_mut().restart() {
+        let name = self.script.path().map(nice_name).unwrap_or_else(|| "script".to_string());
+        self.status = if self.script.restart() {
             format!("Restarted {name}.")
         } else {
             "No script running to restart.".to_string()
@@ -2449,11 +2452,11 @@ impl App {
     /// the visualizer's bottom-left corner, with a button to stop it.
     fn script_busy_ui(&mut self, ctx: &egui::Context) {
         let rect = self.visualizer_output.image_rect;
-        let Some(busy) = self.visualizer.script().busy_for() else { return };
+        let Some(busy) = self.script.busy_for() else { return };
         if !self.visualizer_drawn || busy < script_host::BUSY_NOTICE_AFTER || !rect.is_positive() {
             return;
         }
-        let name = self.visualizer.script().path().map(nice_name).unwrap_or_else(|| "The script".to_string());
+        let name = self.script.path().map(nice_name).unwrap_or_else(|| "The script".to_string());
         let mut stop = false;
         egui::Area::new(egui::Id::new("script_busy_notice"))
             .order(egui::Order::Foreground)
@@ -2475,7 +2478,7 @@ impl App {
                 });
             });
         if stop {
-            self.visualizer.script().stop();
+            self.script.stop();
             self.status = format!("Stopped {name}.");
         }
     }
@@ -2541,13 +2544,12 @@ impl App {
             // (they're only written on first run, so an older copy on disk
             // won't have newer host features).
             if let Some(name) = self
-                .visualizer
-                .script()
+                .script
                 .path()
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
                 && let Some(bundled) = lua_visualizer::bundled_default(name)
-                && self.visualizer.script().path().is_some_and(|p| !crate::library::installed_path(p).exists())
+                && self.script.path().is_some_and(|p| !crate::library::installed_path(p).exists())
                 && ui.button("Restore default").clicked()
             {
                 restore_bundled = Some(bundled.to_string());
@@ -2559,7 +2561,7 @@ impl App {
             {
                 restart = true;
             }
-            if let Some(path) = self.visualizer.script().path()
+            if let Some(path) = self.script.path()
                 && ui.button("Rename").on_hover_text("Rename this script's file (its settings come along)").clicked()
             {
                 rename = Some(path.to_path_buf());
@@ -2577,7 +2579,7 @@ impl App {
             self.load_script(idx);
         }
         if let Some(source) = restore_bundled {
-            if let Some(path) = self.visualizer.script().path().map(Path::to_path_buf) {
+            if let Some(path) = self.script.path().map(Path::to_path_buf) {
                 self.editor_opened(&path);
             }
             self.editor_text = source;
@@ -2598,7 +2600,7 @@ impl App {
 
             // In the colors the script draws them in, if it said; else
             // the keyboard visualizer's.
-            let colors = self.visualizer.script().channel_colors();
+            let colors = self.script.channel_colors();
             ui.horizontal_wrapped(|ui| {
                 ui.label("Channels:")
                     .on_hover_text("Left-click to toggle, right-click to solo");
@@ -3343,7 +3345,7 @@ impl eframe::App for App {
     fn on_exit(&mut self) {
         self.flush_editor();
         // Stop the script thread, which saves the script's data.
-        self.visualizer.script_mut().shutdown();
+        self.script.shutdown();
         // Don't lose a recording to closing the app: write it out first.
         if let Some(recorder) = self.recording.recorder.take()
             && let Err(e) = recorder.finish_now()
@@ -3751,6 +3753,18 @@ fn status_line_ui(
         None => ui.weak(status),
     };
     open_log
+}
+
+/// The visualizer panel, locked for a moment (`App::visualizer`). It's only
+/// ever locked on the main thread, so finding it locked already means
+/// it's being locked twice in one go, which would freeze the app: that
+/// panics instead, so it can't happen quietly.
+pub(super) fn lock_panel(panel: &Mutex<VisualizerPanel>) -> std::sync::MutexGuard<'_, VisualizerPanel> {
+    match panel.try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => panic!("the visualizer panel was locked twice at once"),
+    }
 }
 
 /// The log target status messages go under (the status line's history).

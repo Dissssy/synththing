@@ -122,24 +122,26 @@ struct Shared {
     state: Option<StateSnapshot>,
 }
 
-/// The app's side: owns the script thread.
+/// The way to the script thread, shared by the app's side and the frame
+/// pipe; emptied on shutdown, which is what ends the thread.
+type Messages = Arc<Mutex<Option<Sender<Message>>>>;
+
+/// The app's side: owns the script thread and controls it (loading,
+/// settings, what it reads back). Its frames go through a [`FramePipe`],
+/// handed to whatever draws the visualizer.
 pub struct ScriptHost {
-    messages: Option<Sender<Message>>,
-    frames: Receiver<FrameDone>,
+    messages: Messages,
     shared: Arc<Mutex<Shared>>,
     /// Stops the script's code running now (`LuaVisualizer::stop_flag`).
     stop: Arc<AtomicBool>,
     /// Set on the way out: the script thread skips whatever's still queued.
     quit: Arc<AtomicBool>,
-    /// For the script thread to wake the app up when a frame is done.
-    repaint: Arc<OnceLock<egui::Context>>,
     thread: Option<JoinHandle<()>>,
     /// The running script's file. The app is the one that sets it, so its
     /// copy is always current.
     path: Option<PathBuf>,
-    /// A frame was asked for and hasn't come back yet.
-    in_flight: bool,
-    last_request: Option<Instant>,
+    /// The frame side, until it's taken (`take_pipe`).
+    pipe: Option<FramePipe>,
     /// The "copy script logs to the app log" preference, as last sent.
     app_log: bool,
     /// Whether a recording is running, and the take, as last sent.
@@ -191,17 +193,23 @@ impl ScriptHost {
         // The stop flag is the visualizer's own, handed over as soon as
         // it's made (before its script's top level runs).
         let stop = stop_rx.recv().unwrap_or_default();
-        Self {
-            messages: Some(message_tx),
+        let messages: Messages = Arc::new(Mutex::new(Some(message_tx)));
+        let pipe = FramePipe {
+            messages: Arc::clone(&messages),
             frames: frame_rx,
+            shared: Arc::clone(&shared),
+            repaint: Arc::clone(&repaint),
+            in_flight: false,
+            last_request: None,
+        };
+        Self {
+            messages,
             shared,
             stop,
             quit,
-            repaint,
             thread: Some(thread),
             path,
-            in_flight: false,
-            last_request: None,
+            pipe: Some(pipe),
             app_log: false,
             recording: (false, None),
             watching_state: None,
@@ -209,9 +217,12 @@ impl ScriptHost {
     }
 
     fn send(&self, message: Message) {
-        if let Some(messages) = &self.messages {
-            let _ = messages.send(message);
-        }
+        send(&self.messages, message);
+    }
+
+    /// The frame side, for whatever draws the visualizer. Once.
+    pub fn take_pipe(&mut self) -> FramePipe {
+        self.pipe.take().expect("the frame pipe was taken already")
     }
 
     /// Something is about to replace the running script: stop it first if
@@ -220,11 +231,6 @@ impl ScriptHost {
         if self.busy_for().is_some_and(|busy| busy >= BUSY_NOTICE_AFTER) {
             self.stop();
         }
-    }
-
-    /// Wake the app (this context) when a frame finishes.
-    pub fn set_repaint_context(&self, ctx: &egui::Context) {
-        let _ = self.repaint.set(ctx.clone());
     }
 
     // --- what the app reads -----------------------------------------------
@@ -287,10 +293,6 @@ impl ScriptHost {
 
     pub fn options(&self) -> ScriptOptions {
         self.status().status.options
-    }
-
-    pub fn cursor(&self) -> CursorRequest {
-        self.status().status.cursor
     }
 
     pub fn channel_colors(&self) -> crate::lua_visualizer::ChannelColors {
@@ -397,20 +399,58 @@ impl ScriptHost {
         self.send(Message::RetryFullFrameRate);
     }
 
-    // --- frames ---------------------------------------------------------------
+    /// Stop the script thread, saving the script's data, and wait for it.
+    pub fn shutdown(&mut self) {
+        self.quit.store(true, Ordering::Relaxed);
+        self.stop();
+        if let Ok(mut messages) = self.messages.lock() {
+            *messages = None;
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn send(messages: &Messages, message: Message) {
+    if let Ok(messages) = messages.lock()
+        && let Some(messages) = messages.as_ref()
+    {
+        let _ = messages.send(message);
+    }
+}
+
+/// The frame side of the script thread: asks it for frames and takes them
+/// back. Whatever draws the visualizer holds it, apart from the control
+/// side the app keeps ([`ScriptHost`]).
+pub struct FramePipe {
+    messages: Messages,
+    frames: Receiver<FrameDone>,
+    shared: Arc<Mutex<Shared>>,
+    repaint: Arc<OnceLock<egui::Context>>,
+    /// A frame was asked for and hasn't come back yet.
+    in_flight: bool,
+    last_request: Option<Instant>,
+}
+
+impl FramePipe {
+    /// Wake the app (this context) when a frame finishes.
+    pub fn set_repaint_context(&self, ctx: &egui::Context) {
+        let _ = self.repaint.set(ctx.clone());
+    }
 
     /// Whether a frame can be asked for now: none is being drawn, and a
     /// script running at the 30 fps fallback is due another.
     pub fn ready_for_frame(&self) -> bool {
         !self.in_flight
-            && (!self.perf_summary().half_rate
+            && (!lock(&self.shared).status.perf.half_rate
                 || self.last_request.is_none_or(|last| last.elapsed() >= HALF_RATE_INTERVAL))
     }
 
     pub fn request_frame(&mut self, request: FrameRequest) {
         self.in_flight = true;
         self.last_request = Some(Instant::now());
-        self.send(Message::Frame(Box::new(request)));
+        send(&self.messages, Message::Frame(Box::new(request)));
     }
 
     /// The frame asked for, if it's done, waiting up to `wait` for it.
@@ -425,14 +465,9 @@ impl ScriptHost {
         done
     }
 
-    /// Stop the script thread, saving the script's data, and wait for it.
-    pub fn shutdown(&mut self) {
-        self.quit.store(true, Ordering::Relaxed);
-        self.stop();
-        self.messages = None;
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+    /// The cursor the script asked for.
+    pub fn cursor(&self) -> CursorRequest {
+        lock(&self.shared).status.cursor
     }
 }
 
@@ -627,9 +662,9 @@ mod tests {
         }
     }
 
-    fn draw(host: &mut ScriptHost) -> FrameDone {
-        host.request_frame(request(4, 3));
-        host.take_frame(Duration::from_secs(5)).expect("a frame")
+    fn draw(pipe: &mut FramePipe) -> FrameDone {
+        pipe.request_frame(request(4, 3));
+        pipe.take_frame(Duration::from_secs(5)).expect("a frame")
     }
 
     #[test]
@@ -637,9 +672,10 @@ mod tests {
         let script = "local n = setting_int('n', 3, 1, 9)\nfunction render(w, h) log('frame ' .. FRAME) \
                       clear({r = 0x11, g = 0x22, b = 0x33}) pixel(0, 0, {r = 255, g = 255, b = 255}) set_channel_enabled(2, false) end";
         let mut host = ScriptHost::spawn(script.to_string(), None, 44_100);
-        assert!(host.ready_for_frame());
-        let done = draw(&mut host);
-        assert!(host.ready_for_frame());
+        let mut pipe = host.take_pipe();
+        assert!(pipe.ready_for_frame());
+        let done = draw(&mut pipe);
+        assert!(pipe.ready_for_frame());
         assert_eq!((done.width, done.height, done.pixels.len()), (4, 3, 12));
         assert_eq!(done.pixels[0], 0xffffff, "{:x?} {:?}", done.pixels, host.error());
         assert_eq!(done.pixels[1], 0x112233);
@@ -653,10 +689,10 @@ mod tests {
         assert!(matches!(host.settings()[0].value, SettingValue::Int(7)));
         // Messages stay in order with frames.
         host.set_source("function render() log('new') end".into(), None);
-        draw(&mut host);
+        draw(&mut pipe);
         assert_eq!(host.log_entries().last().map(|e| e.message.clone()).as_deref(), Some("new"));
         host.set_source("function render(".into(), None);
-        draw(&mut host);
+        draw(&mut pipe);
         assert!(host.error().is_some_and(|e| e.contains("compile") || e.contains("expected")), "{:?}", host.error());
     }
 
@@ -664,26 +700,27 @@ mod tests {
     fn a_busy_script_can_be_stopped_and_replaced() {
         let script = "function render() if FRAME == 2 then while true do end end end";
         let mut host = ScriptHost::spawn(script.to_string(), None, 44_100);
-        draw(&mut host);
+        let mut pipe = host.take_pipe();
+        draw(&mut pipe);
         assert_eq!(host.busy_for(), None);
-        host.request_frame(request(4, 3));
-        assert!(host.take_frame(Duration::from_millis(100)).is_none(), "still busy");
+        pipe.request_frame(request(4, 3));
+        assert!(pipe.take_frame(Duration::from_millis(100)).is_none(), "still busy");
         assert!(host.busy_for().is_some());
-        assert!(!host.ready_for_frame());
+        assert!(!pipe.ready_for_frame());
         host.stop();
-        let done = host.take_frame(Duration::from_secs(3)).expect("stopped long before the watchdog");
+        let done = pipe.take_frame(Duration::from_secs(3)).expect("stopped long before the watchdog");
         assert_eq!(done.pixels.len(), 12);
         assert!(host.error().is_some_and(|e| e.contains("Stop")), "{:?}", host.error());
         assert_eq!(host.busy_for(), None);
 
         // Busy past the notice: loading another script stops it first.
         host.restart();
-        draw(&mut host);
-        host.request_frame(request(4, 3));
+        draw(&mut pipe);
+        pipe.request_frame(request(4, 3));
         std::thread::sleep(BUSY_NOTICE_AFTER + Duration::from_millis(100));
         host.load(None, "function render() log('replaced') end".into());
-        assert!(host.take_frame(Duration::from_secs(3)).is_some());
-        draw(&mut host);
+        assert!(pipe.take_frame(Duration::from_secs(3)).is_some());
+        draw(&mut pipe);
         assert_eq!(host.error(), None);
         assert_eq!(host.log_entries().last().map(|e| e.message.clone()).as_deref(), Some("replaced"));
     }
@@ -691,7 +728,8 @@ mod tests {
     #[test]
     fn the_watchdog_still_applies() {
         let script = "while true do end function render() end";
-        let host = ScriptHost::spawn_with_watchdog(script.to_string(), None, 44_100, Duration::from_millis(300));
+        let mut host = ScriptHost::spawn_with_watchdog(script.to_string(), None, 44_100, Duration::from_millis(300));
+        let _pipe = host.take_pipe(); // (kept: its channel stays open)
         let started = Instant::now();
         while host.error().is_none() && started.elapsed() < Duration::from_secs(5) {
             std::thread::sleep(Duration::from_millis(20));
@@ -708,16 +746,17 @@ mod tests {
         let script = "function render() store_set('frames', FRAME) end";
         std::fs::write(&path, script).unwrap();
         let mut host = ScriptHost::spawn(script.to_string(), Some(path.clone()), 44_100);
-        draw(&mut host);
+        let mut pipe = host.take_pipe();
+        draw(&mut pipe);
         let answer = host.rename("kept".into());
         let renamed = answer.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
         host.renamed(renamed.clone());
         assert_eq!(host.path(), Some(renamed.as_path()));
         assert!(renamed.exists() && !path.exists());
-        draw(&mut host);
+        draw(&mut pipe);
         // Even stuck in a loop, quitting stops it and saves.
         host.set_source("function render() store_set('frames', 99) while true do end end".into(), None);
-        host.request_frame(request(4, 3));
+        pipe.request_frame(request(4, 3));
         std::thread::sleep(Duration::from_millis(100));
         drop(host);
         let store = std::fs::read_to_string(dir.join("kept.lua.store.json")).unwrap();

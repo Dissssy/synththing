@@ -20,7 +20,7 @@ use eframe::egui;
 use crate::engine::EngineView;
 use crate::gamepad::PadFrame;
 use crate::lua_visualizer::Transport;
-use crate::script_host::{Effects, FrameDone, FrameRequest, ScriptHost};
+use crate::script_host::{Effects, FrameDone, FramePipe, FrameRequest};
 use crate::typing::TextEvent;
 
 /// One stereo sample: `.0` is left, `.1` is right. A plain tuple rather than a
@@ -381,9 +381,11 @@ const FRAME_WAIT: Duration = Duration::from_millis(50);
 /// Shows the frames the script (on its own thread, `ScriptHost`) draws,
 /// as one `ui.image(...)` each time [`show`](Self::show) is called, and
 /// hands it each frame's audio, notes and input. The frames can be smaller
-/// than the panel showing them, see [`MAX_VISUALIZER_PIXELS`].
+/// than the panel showing them, see [`MAX_VISUALIZER_PIXELS`]. It holds the
+/// script's frame side ([`FramePipe`]); the app keeps the control side, so
+/// the panel can be shared by the windows that show it.
 pub struct VisualizerPanel {
-    script: ScriptHost,
+    frames: FramePipe,
     /// The last frame the script drew (`0x00RRGGBB`), `width` by `height`.
     pixels: Vec<u32>,
     /// An old frame's buffer, for the next frame to draw into.
@@ -407,9 +409,9 @@ pub struct VisualizerPanel {
 }
 
 impl VisualizerPanel {
-    pub fn new(script: ScriptHost, width: usize, height: usize) -> Self {
+    pub fn new(frames: FramePipe, width: usize, height: usize) -> Self {
         Self {
-            script,
+            frames,
             pixels: vec![0; width * height],
             spare: Vec::new(),
             rgba: vec![0; width * height * 4],
@@ -439,14 +441,6 @@ impl VisualizerPanel {
     /// Give the visualizer keyboard focus the next time it's shown.
     pub fn request_focus(&mut self) {
         self.focus_requested = true;
-    }
-
-    pub fn script(&self) -> &ScriptHost {
-        &self.script
-    }
-
-    pub fn script_mut(&mut self) -> &mut ScriptHost {
-        &mut self.script
     }
 
     /// What the script asked the app to do (mute channels, play notes,
@@ -524,15 +518,15 @@ impl VisualizerPanel {
             Some(pending) => pending.absorb(input),
             None => self.pending_input = Some(input),
         }
-        self.script.set_repaint_context(&ctx);
+        self.frames.set_repaint_context(&ctx);
 
         // A frame the script finished in the background since last time;
         // else, unless it's still busy, held for a recording or running at
         // a reduced frame rate, ask for the next one (the audio waits in
         // the tap meanwhile).
-        let mut done = self.script.take_frame(Duration::ZERO);
-        if done.is_none() && !hold && self.script.ready_for_frame() {
-            self.script.request_frame(FrameRequest {
+        let mut done = self.frames.take_frame(Duration::ZERO);
+        if done.is_none() && !hold && self.frames.ready_for_frame() {
+            self.frames.request_frame(FrameRequest {
                 width: buf_w,
                 height: buf_h,
                 pixels: std::mem::take(&mut self.spare),
@@ -543,7 +537,7 @@ impl VisualizerPanel {
                 transport,
                 timestep,
             });
-            done = self.script.take_frame(FRAME_WAIT);
+            done = self.frames.take_frame(FRAME_WAIT);
         }
         let rendered = done.is_some();
         if let Some(done) = done {
@@ -555,7 +549,7 @@ impl VisualizerPanel {
             ui.painter().image(texture.id(), rect, uv, egui::Color32::WHITE);
         }
 
-        let cursor = self.script.cursor();
+        let cursor = self.frames.cursor();
         if cursor.hidden && pointer_over {
             ctx.set_cursor_icon(egui::CursorIcon::None);
         }

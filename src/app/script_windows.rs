@@ -77,8 +77,8 @@ impl App {
     /// The Settings, Controls and Debug buttons above the visualizer;
     /// Settings and Controls greyed out when the script has none.
     pub(super) fn script_window_buttons_ui(&mut self, ui: &mut egui::Ui) {
-        let settings = self.visualizer.script().settings().len();
-        let controls = self.visualizer.script().actions().len();
+        let settings = self.script.settings().len();
+        let controls = self.script.actions().len();
         let count = |n: usize, what: &str| match n {
             0 => format!("This script has no {what}."),
             1 => format!("1 {}", what.trim_end_matches('s')),
@@ -100,7 +100,7 @@ impl App {
         {
             self.script_window = Some(ScriptWindow::Controls);
         }
-        let failing = self.visualizer.script().error().is_some();
+        let failing = self.script.error().is_some();
         let label = if failing {
             egui::RichText::new("Debug (error)").color(ui.visuals().error_fg_color)
         } else {
@@ -120,9 +120,9 @@ impl App {
         // The script's variables are only read while they're on screen.
         let watching = self.script_window == Some(ScriptWindow::Debug)
             && self.script_window_tab[ScriptWindow::Debug.slot()] == VARIABLES;
-        self.visualizer.script_mut().watch_state(watching.then_some(&self.state_request));
+        self.script.watch_state(watching.then_some(&self.state_request));
         let Some(window) = self.script_window else { return };
-        let script = self.visualizer.script().path().map(display_name).unwrap_or_else(|| "script".to_string());
+        let script = self.script.path().map(display_name).unwrap_or_else(|| "script".to_string());
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("script_window")).show(ctx, |ui| {
             ui.set_width(600.0);
@@ -173,7 +173,7 @@ impl App {
     }
 
     fn script_settings_body_ui(&mut self, ui: &mut egui::Ui) {
-        let descriptors = self.visualizer.script().settings();
+        let descriptors = self.script.settings();
         if descriptors.is_empty() {
             ui.weak("This script has no settings.");
             return;
@@ -195,19 +195,19 @@ impl App {
         });
         self.script_window_tab[ScriptWindow::Settings.slot()] = index;
         if let Some((key, value)) = changed {
-            self.visualizer.script().set_setting(key, value);
+            self.script.set_setting(key, value);
         }
     }
 
     /// Presets: pick one (Defaults, the script's, or yours) to set every
     /// setting it has; save the settings as one of yours; delete one.
     fn presets_row_ui(&mut self, ui: &mut egui::Ui, descriptors: &[SettingDescriptor]) {
-        let path = self.visualizer.script().path().map(std::path::Path::to_path_buf);
+        let path = self.script.path().map(std::path::Path::to_path_buf);
         if self.user_presets.as_ref().map(|(p, _)| p) != path.as_ref() {
             self.user_presets = path.as_ref().map(|p| (p.clone(), lua_visualizer::load_user_presets(p)));
             self.preset_picked = None;
         }
-        let script_presets = self.visualizer.script().presets();
+        let script_presets = self.script.presets();
         let yours = self.user_presets.as_ref().map(|(_, p)| p.clone()).unwrap_or_default();
         let mut apply: Option<Vec<(String, SettingValue)>> = None;
         let mut picked = self.preset_picked.clone();
@@ -266,7 +266,7 @@ impl App {
         });
         if let Some(values) = apply {
             for (key, value) in values {
-                self.visualizer.script().set_setting(key, value);
+                self.script.set_setting(key, value);
             }
         }
         self.preset_picked = picked;
@@ -297,7 +297,7 @@ impl App {
     }
 
     fn script_controls_body_ui(&mut self, ui: &mut egui::Ui) {
-        let actions = self.visualizer.script().actions();
+        let actions = self.script.actions();
         if actions.is_empty() {
             self.binding_capture = None;
             ui.weak("This script has no controls.");
@@ -325,7 +325,7 @@ impl App {
                     "The script's variables (its top-level locals that its functions use, and globals it \
                      made), a few times a second. Open a table to see inside it.",
                 );
-                match self.visualizer.script().state_snapshot() {
+                match self.script.state_snapshot() {
                     None => {
                         ui.weak("(reading...)");
                     }
@@ -343,7 +343,7 @@ impl App {
             }
             DEBUG_LOCALS => {
                 ui.weak("What was in scope where the script last called debug_locals([label]).");
-                match self.visualizer.script().debug_snapshot() {
+                match self.script.debug_snapshot() {
                     Some(snapshot) => {
                         if let Some(label) = &snapshot.label {
                             ui.weak(format!("from: {label}"));
@@ -371,7 +371,7 @@ impl App {
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
-                        let entries = self.visualizer.script().log_entries();
+                        let entries = self.script.log_entries();
                         if entries.is_empty() {
                             ui.weak("(nothing logged yet)");
                         }
@@ -393,16 +393,16 @@ impl App {
         });
         self.script_window_tab[ScriptWindow::Debug.slot()] = index;
         if clear_log {
-            self.visualizer.script_mut().clear_log();
+            self.script.clear_log();
         }
         if retry {
-            self.visualizer.script_mut().retry_full_frame_rate();
+            self.script.retry_full_frame_rate();
         }
     }
 
     /// Debug > Performance: how long `render()` takes, against 60 fps.
     fn performance_ui(&self, ui: &mut egui::Ui, retry: &mut bool) {
-        let perf = self.visualizer.script().perf_summary();
+        let perf = self.script.perf_summary();
         if perf.frames == 0 {
             ui.weak("(not drawn yet)");
             return;
@@ -549,7 +549,7 @@ impl App {
             self.binding_capture = capture;
         }
         if let Some((i, bindings)) = change {
-            self.visualizer.script_mut().set_action_bindings(i, bindings);
+            self.script.set_action_bindings(i, bindings);
         }
     }
 }

@@ -274,12 +274,12 @@ impl App {
     /// Whether the running script plays itself when recorded: the mode
     /// last picked for it (Auto unless Manual was), if it can.
     pub(super) fn record_auto(&self) -> bool {
-        self.visualizer.script().options().record_auto && self.script_record_key().is_none_or(|key| !self.config.record_manual.contains(&key))
+        self.script.options().record_auto && self.script_record_key().is_none_or(|key| !self.config.record_manual.contains(&key))
     }
 
     /// The running script, as the Record window remembers its mode.
     fn script_record_key(&self) -> Option<String> {
-        self.visualizer.script().path().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned())
+        self.script.path().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned())
     }
 
     /// Record: a song from its start, the current playlist from its first
@@ -320,7 +320,7 @@ impl App {
         if !self.start_recorder(&draft) {
             return;
         }
-        let options = self.visualizer.script().options();
+        let options = self.script.options();
         let prepared = options.record_prepare;
         let auto = draft.auto && options.record_auto;
         let song = if kind == RecordKind::Song { draft.song.clone() } else { self.current_song.clone() };
@@ -384,7 +384,7 @@ impl App {
             return;
         };
         self.flush_editor();
-        let Some(script) = self.visualizer.script().path().map(PathBuf::from) else {
+        let Some(script) = self.script.path().map(PathBuf::from) else {
             self.status = "Save the script to a file first: a render runs its own copy of it.".to_string();
             return;
         };
@@ -655,7 +655,8 @@ impl App {
         let result = if self.preferences_open {
             Ok(())
         } else if self.visualizer_output.rendered {
-            let (samples, pixels) = self.visualizer.recording_parts();
+            let mut panel = super::lock_panel(&self.visualizer);
+            let (samples, pixels) = panel.recording_parts();
             recorder.feed(dt, samples, Some(pixels))
         } else {
             recorder.feed(dt, &[], None)
@@ -1062,8 +1063,8 @@ impl App {
         let mut start = false;
         let mut close = false;
         let mut picked_script = None;
-        let options = self.visualizer.script().options();
-        let script_error = self.visualizer.script().error().is_some();
+        let options = self.script.options();
+        let script_error = self.script.error().is_some();
         let mut choose_song = false;
         let has_playlist = self
             .now_playing

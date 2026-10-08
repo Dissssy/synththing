@@ -230,7 +230,7 @@ impl App {
             DoneWhen::SoundfontOnSong => self.soundfonts_on_songs() > base.soundfonts_on_songs,
             DoneWhen::Fullscreen => self.dedicated.is_some(),
             DoneWhen::Script(name) => {
-                self.visualizer.script().path().and_then(|p| p.file_stem()).is_some_and(|stem| stem == name)
+                self.script.path().and_then(|p| p.file_stem()).is_some_and(|stem| stem == name)
             }
         }
     }

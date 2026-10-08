@@ -1573,8 +1573,8 @@ impl App {
             slug_edited: Some(Instant::now() - SLUG_CHECK_AFTER),
             slug_asked: None,
             slug_found: None,
-            settings: if self.visualizer.script().path() == Some(script.as_path()) {
-                self.visualizer.script().settings()
+            settings: if self.script.path() == Some(script.as_path()) {
+                self.script.settings()
             } else {
                 Vec::new()
             },
@@ -1588,7 +1588,7 @@ impl App {
     /// The selected script's share button: Publish... for one of yours
     /// (or one never published), Update for one installed from a server.
     pub(super) fn script_share_button(&mut self, ui: &mut egui::Ui) {
-        let Some(path) = self.visualizer.script().path().map(PathBuf::from) else { return };
+        let Some(path) = self.script.path().map(PathBuf::from) else { return };
         let fresh =
             self.library.sidecar.as_ref().is_some_and(|(p, _, _, at)| *p == path && at.elapsed() < Duration::from_secs(2));
         if !fresh {
@@ -1674,7 +1674,7 @@ impl App {
                 log::info!("restored {} to its original", script.display());
                 self.status = format!("Restored {} as it came.", lua_visualizer::display_name(script));
                 self.library.sidecar = None;
-                if self.visualizer.script().path() == Some(script)
+                if self.script.path() == Some(script)
                     && let Some(idx) = self.available_scripts.iter().position(|p| p == script)
                 {
                     self.load_script(idx);
@@ -1876,7 +1876,7 @@ impl App {
                 self.library.sidecar = None;
                 self.refresh_installed();
                 // The running script picks up the new version straight away.
-                if self.visualizer.script().path() == Some(script.as_path())
+                if self.script.path() == Some(script.as_path())
                     && let Some(idx) = self.available_scripts.iter().position(|p| *p == script)
                 {
                     self.load_script(idx);
@@ -2126,7 +2126,7 @@ impl App {
         if draft.add_preset && !preset_name.is_empty() {
             let line = lua_visualizer::preset_line(&preset_name, &draft.settings);
             source = lua_visualizer::with_preset_line(&source, &preset_name, &line);
-            if self.visualizer.script().path() == Some(draft.script.as_path()) {
+            if self.script.path() == Some(draft.script.as_path()) {
                 self.editor_text = source.clone();
                 self.apply_editor();
             } else if let Err(e) = std::fs::write(&draft.script, &source) {

@@ -210,7 +210,7 @@ impl App {
         // recording the script prepares each song for.
         let script_running = self.dedicated.is_some() || self.is_open(crate::layout::Section::Visualizer);
         let paused =
-            script_running && (self.visualizer.script().options().start_paused || self.recording.loads_paused());
+            script_running && (self.script.options().start_paused || self.recording.loads_paused());
         match song {
             Asset::Midi(midi) => {
                 self.send(AudioCommand::LoadMidi(midi.file, name.clone(), paused));

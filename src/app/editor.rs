@@ -249,10 +249,10 @@ impl App {
         self.editor.dirty_since = None;
         self.editor_saved = self.editor_text.clone();
         let save_error =
-            self.visualizer.script().path().and_then(|path| lua_visualizer::save_script(path, &self.editor_text));
-        self.visualizer.script_mut().set_source(self.editor_text.clone(), save_error);
+            self.script.path().and_then(|path| lua_visualizer::save_script(path, &self.editor_text));
+        self.script.set_source(self.editor_text.clone(), save_error);
         let due = self.editor.last_snapshot.is_none_or(|t| t.elapsed() >= SNAPSHOT_EVERY);
-        if due && let Some(path) = self.visualizer.script().path().map(Path::to_path_buf) {
+        if due && let Some(path) = self.script.path().map(Path::to_path_buf) {
             snapshot(&path, &self.editor_text);
             self.editor.last_snapshot = Some(Instant::now());
         }
@@ -474,7 +474,7 @@ impl App {
         let wrap = self.config.editor_wrap.unwrap_or(true);
         let font_size = self.editor_font_size();
         let font = egui::FontId::monospace(font_size);
-        let error = self.visualizer.script().error();
+        let error = self.script.error();
         let error_line = error.as_deref().and_then(lua_visualizer::error_line);
         let matches = match &self.editor.find {
             Some(find) => code_edit::find_all(&self.editor_text, &find.query, find.case_sensitive),
@@ -941,7 +941,7 @@ impl App {
                     focus_query: true,
                 });
             }
-            let script = self.visualizer.script().path().map(Path::to_path_buf);
+            let script = self.script.path().map(Path::to_path_buf);
             if ui
                 .add_enabled(script.is_some(), egui::Button::new("History..."))
                 .on_hover_text("Earlier versions of this script, kept automatically")
@@ -1151,7 +1151,7 @@ impl App {
             });
         });
         if let Some(text) = restore {
-            if let Some(path) = self.visualizer.script().path().map(Path::to_path_buf) {
+            if let Some(path) = self.script.path().map(Path::to_path_buf) {
                 snapshot(&path, &self.editor_text);
             }
             self.editor_text = text;
