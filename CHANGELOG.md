@@ -4,6 +4,14 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- synththing has an icon: in the title bar, the taskbar and on the exe itself. The menu bar's "synththing" is the new wordmark, with a thin outline on themes where its purple would be hard to see.
+- synththing starts the way it was left: the same volume, soundfont and visualizer script (and loop and shuffle, as before). Each can be turned off, and the speed turned on, in Preferences > Playback.
+
+### Changed
+- Every channel can be turned off at once, for silence: the last one playing used to stay on. "All" (or turning any one back on) brings them back. Scripts' `set_channel_enabled` can now do the same.
+- The audio buffer setting moved from the transport bar to Preferences > Playback, and it's remembered now (it went back to 150 ms every launch).
+
 ## 0.6.0 (2026-10-08)
 
 ### Added

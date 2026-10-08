@@ -76,6 +76,17 @@ pub struct Config {
     /// the beat, 0.1 to 1 (`None`: `DEFAULT_BEAT_PULSE_LENGTH`).
     #[serde(default)]
     pub beat_pulse_length: Option<f32>,
+    /// Preference: which of the last session's settings to start with.
+    #[serde(default)]
+    pub remember: Remember,
+    /// The last session's settings, saved when the app closes (each kept
+    /// only while `remember` says so).
+    #[serde(default)]
+    pub session: Session,
+    /// Preference: how much audio is made ahead of what's heard, in
+    /// milliseconds (`None`: `audio::DEFAULT_BUFFER_MS`).
+    #[serde(default)]
+    pub buffer_ms: Option<u32>,
     /// Preference: show the channel toggles as colored chips with each
     /// channel's instrument, instead of numbered checkboxes.
     #[serde(default)]
@@ -135,6 +146,37 @@ pub struct Config {
     /// under.
     #[serde(default)]
     pub library: LibrarySettings,
+}
+
+/// Which of the last session's settings the app starts with (Preferences >
+/// Playback): everything but the speed unless changed.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Remember {
+    pub volume: bool,
+    pub soundfont: bool,
+    pub script: bool,
+    pub speed: bool,
+    /// Loop and shuffle.
+    pub modes: bool,
+}
+
+impl Default for Remember {
+    fn default() -> Self {
+        Self { volume: true, soundfont: true, script: true, speed: false, modes: true }
+    }
+}
+
+/// What the last session ended with (`Config::session`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Session {
+    pub volume: Option<f32>,
+    pub speed: Option<f64>,
+    /// The selected soundfont (not a song's own).
+    pub soundfont: Option<PathBuf>,
+    /// The visualizer script that was showing.
+    pub script: Option<PathBuf>,
 }
 
 /// The script library's servers (Preferences > Library).
@@ -335,4 +377,20 @@ pub fn nice_name(path: &Path) -> String {
     path.file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A config from before `remember` existed starts remembering everything
+    /// but the speed, with nothing from a last session.
+    #[test]
+    fn older_configs_remember_by_default() {
+        let config: Config = serde_json::from_str(r#"{ "soundfonts": [] }"#).unwrap();
+        assert_eq!(config.remember, Remember { volume: true, soundfont: true, script: true, speed: false, modes: true });
+        assert!(config.session.volume.is_none() && config.session.script.is_none());
+        let partial: Config = serde_json::from_str(r#"{ "remember": { "speed": true } }"#).unwrap();
+        assert!(partial.remember.speed && partial.remember.volume, "left out: the default");
+    }
 }

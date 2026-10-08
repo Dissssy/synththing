@@ -29,8 +29,7 @@
 //! * `set_channel_enabled(channel, enabled)`, a script can mute/unmute a
 //!   channel too, not just read its state (e.g. a game script silencing the
 //!   channel for a dead player). Goes through the same command as the GUI's
-//!   checkboxes, so it can't disable the last remaining enabled channel
-//!   either.
+//!   toggles.
 //! * `playback()`, transport state: `{position, length, speed, paused,
 //!   finished, loop_enabled, generation}` plus which song (`song_name`,
 //!   `song_path`, `song_id`). The thing to check before writing into a

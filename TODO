@@ -104,19 +104,25 @@
 [S][.] fuzzy search should index subdirectories as well - DONE (it
     already walked subfolders; confirmed working).
 
-[S][!] audio buffer size in Preferences (requested 2026-10-08)
+[S][!] audio buffer size in Preferences (requested 2026-10-08) - DONE
+    (Preferences > Playback, saved as config.buffer_ms, sent at startup)
     It's a slider in the transport bar now (the "150 ms" one); it's set
     once and forgotten, so it belongs in Preferences (a Playback or Audio
     tab), with the transport bar's slider gone.
 
-[M][!] remember things between runs, each one optional (requested 2026-10-08)
+[M][!] remember things between runs, each one optional (requested 2026-10-08) - DONE
+    (config.remember + config.session, saved on exit: volume, soundfont,
+    script, speed (off by default), loop/shuffle. Not yet: the last song
+    and where it was.) Original:
     The selected soundfont, volume, speed, maybe the last song and where
     it was, the open playlist, the running script (check which of these
     already persist first). A Preferences section listing each with a
     checkbox ("Remember: volume, soundfont, ..."), so someone who wants a
     fresh start every launch can have it.
 
-[S][!] no minimum of one enabled channel (requested 2026-10-08)
+[S][!] no minimum of one enabled channel (requested 2026-10-08) - DONE
+    (engine refusal gone; toggles never disabled; docs; snake has its
+    own guard, highway's mutes still make sense)
     Turning off the last enabled channel is refused today (the GUI greys
     out the last toggle; set_channel_enabled can't do it either; the chip
     toggles just ignore the click). Allow it: silence is a valid choice.
@@ -145,7 +151,11 @@
     mini player, show the main window, play/pause, next, quit. Click opens
     the mini player. Maybe "close to tray" as an option later.
 
-[S][!] app icon and wordmark from assets/synththing-icon.svg and
+[S][!] app icon and wordmark - DONE (build.rs renders the icon SVG into
+    a 16-256 px .ico, embedded with winresource, and a 256 px window icon;
+    app/branding.rs draws the wordmark at the exact pixel size, with a
+    halo under 3:1 contrast). Tray icon still to do. Original: from
+    assets/synththing-icon.svg and
     assets/synththing-wordmark.svg (provided 2026-10-08)
     - The window/taskbar icon (eframe ViewportBuilder::with_icon) and the
       .exe's icon (a .ico with 16 to 256 px sizes, embedded through a

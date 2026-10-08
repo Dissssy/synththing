@@ -325,15 +325,10 @@ impl Engine {
     /// Flip a channel's enable flag. This drives both the visualizer (through
     /// [`notes_snapshot`](Self::notes_snapshot)) and playback, a disabled
     /// channel's note-ons are dropped and its ringing voices released. No
-    /// effect while a plain audio file is loaded (it has no channels).
-    ///
-    /// Refuses to disable the one remaining enabled channel, silence isn't
-    /// a useful state to land in by toggling, and the GUI mirrors this by
-    /// graying out that channel's checkbox.
+    /// effect while a plain audio file is loaded (it has no channels). Every
+    /// channel can be off at once: that's silence, and "All" (or turning
+    /// one back on) brings them back.
     pub fn set_channel_enabled(&mut self, channel: u8, enabled: bool) {
-        if !enabled && self.is_last_enabled_detected_channel(channel) {
-            return;
-        }
         if let Some(slot) = self.channels_enabled.get_mut(channel as usize) {
             *slot = enabled;
         }
@@ -352,17 +347,6 @@ impl Engine {
             *slot = i == channel as usize;
         }
         self.apply_channel_mask();
-    }
-
-    fn is_last_enabled_detected_channel(&self, channel: u8) -> bool {
-        !self.detected_channels.is_empty()
-            && self.channels_enabled.get(channel as usize).copied().unwrap_or(false)
-            && self
-                .detected_channels
-                .iter()
-                .filter(|&&c| self.channels_enabled[c as usize])
-                .count()
-                <= 1
     }
 
     fn apply_channel_mask(&mut self) {
@@ -583,5 +567,40 @@ mod tests {
             heard += block.iter().map(|s| s * s).sum::<f32>();
         }
         assert!(heard > 0.0, "the note sounded");
+    }
+
+    /// Every channel can be turned off (silence), and "All" brings them
+    /// back.
+    #[test]
+    fn every_channel_can_be_off() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let soundfont = Arc::new(
+            SoundFont::new(&mut std::fs::File::open(root.join("assets/starter/soundfonts/TimGM6mb.sf2")).unwrap()).unwrap(),
+        );
+        let bytes = std::fs::read(root.join("assets/starter/songs/Ode to Joy.mid")).unwrap();
+        let midi = Arc::new(MidiFile::new(&mut bytes.as_slice()).unwrap());
+        let mut engine = Engine::new(44_100);
+        engine.set_soundfont(soundfont, "TimGM6mb".into()).unwrap();
+        engine.load_midi(midi, "Ode to Joy".into(), false);
+        let loudness = |engine: &mut Engine| {
+            let mut block = vec![0.0f32; 2048];
+            (0..40).map(|_| { engine.render_into(&mut block); block.iter().map(|s| s * s).sum::<f32>() }).sum::<f32>()
+        };
+        let playing = loudness(&mut engine);
+        assert!(playing > 0.0);
+        let channels = engine.notes_snapshot().detected_channels;
+        for &c in &channels {
+            engine.set_channel_enabled(c, false);
+        }
+        let snapshot = engine.notes_snapshot();
+        assert!(channels.iter().all(|&c| !snapshot.enabled_channels[c as usize]), "the last one went off too");
+        // What was ringing is released, not cut, so it fades out.
+        for _ in 0..3 {
+            loudness(&mut engine);
+        }
+        let left = loudness(&mut engine);
+        assert!(left < playing * 1e-4, "silence: {left} against {playing} playing");
+        engine.enable_all_channels();
+        assert!(loudness(&mut engine) > 0.0);
     }
 }

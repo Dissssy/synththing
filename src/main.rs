@@ -220,7 +220,7 @@ fn main() -> Result<()> {
     config.soundfonts.sort();
 
     let mut app = App::new(command_tx, shared, config, tap, sample_rate, preview_output);
-    app.autoload_first_soundfont();
+    app.autoload_soundfont();
     app.check_for_updates_on_launch();
     app.whats_new_on_launch(ran_before);
     if !ran_before {
@@ -230,8 +230,15 @@ fn main() -> Result<()> {
         app.set_visualizer_open(true);
     }
 
+    // The app icon (assets/synththing-icon.svg, drawn by build.rs) for the
+    // title bar and taskbar; the exe has it as a resource too.
+    let icon = egui::IconData {
+        rgba: include_bytes!(concat!(env!("OUT_DIR"), "/icon_256.rgba")).to_vec(),
+        width: 256,
+        height: 256,
+    };
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1100.0, 750.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1100.0, 750.0]).with_icon(icon),
         ..Default::default()
     };
     eframe::run_native(

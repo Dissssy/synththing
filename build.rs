@@ -10,7 +10,9 @@
 //!
 //! Also generates `$OUT_DIR/scripting_reference.rs` from
 //! `docs/scripting-reference.md`, the in-app Scripting Reference (see
-//! `lua_docs.rs` and `parse_reference` below).
+//! `lua_docs.rs` and `parse_reference` below), and the app icon from
+//! `assets/synththing-icon.svg`: `$OUT_DIR/synththing.ico`, embedded in the
+//! Windows exe, and `$OUT_DIR/icon_256.rgba` for the window (`main.rs`).
 
 use std::env;
 use std::fmt::Write as _;
@@ -57,6 +59,89 @@ fn main() {
         .unwrap_or_else(|e| panic!("writing {}: {e}", out_path.display()));
 
     generate_reference(&manifest_dir, &out_dir);
+    generate_icon(&manifest_dir, &out_dir);
+}
+
+// --- app icon ------------------------------------------------------------
+
+/// The sizes in the .ico: what Windows picks from for the title bar, the
+/// taskbar, Explorer's views and Alt+Tab, at every display scale.
+const ICON_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
+
+fn generate_icon(manifest_dir: &str, out_dir: &str) {
+    let svg_path = Path::new(manifest_dir).join("assets").join("synththing-icon.svg");
+    println!("cargo:rerun-if-changed=assets/synththing-icon.svg");
+    let svg = fs::read(&svg_path).unwrap_or_else(|e| panic!("reading {}: {e}", svg_path.display()));
+    let tree = resvg::usvg::Tree::from_data(&svg, &resvg::usvg::Options::default())
+        .unwrap_or_else(|e| panic!("{}: {e}", svg_path.display()));
+
+    // Each size as a PNG; an .ico can hold PNGs (Windows Vista on).
+    let mut images: Vec<(u32, Vec<u8>)> = Vec::new();
+    for size in ICON_SIZES {
+        let rgba = render_square(&tree, size);
+        if size == 256 {
+            let raw = Path::new(out_dir).join("icon_256.rgba");
+            fs::write(&raw, &rgba).unwrap_or_else(|e| panic!("writing {}: {e}", raw.display()));
+        }
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, size, size);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().expect("PNG header");
+            writer.write_image_data(&rgba).expect("PNG data");
+        }
+        images.push((size, png_bytes));
+    }
+
+    // ICONDIR, then one ICONDIRENTRY per image, then the images.
+    let mut ico = Vec::new();
+    ico.extend(0u16.to_le_bytes());
+    ico.extend(1u16.to_le_bytes()); // an icon (not a cursor)
+    ico.extend((images.len() as u16).to_le_bytes());
+    let mut offset = 6 + 16 * images.len() as u32;
+    for (size, data) in &images {
+        let side = if *size >= 256 { 0 } else { *size as u8 }; // 0 means 256
+        ico.extend([side, side, 0, 0]);
+        ico.extend(1u16.to_le_bytes()); // color planes
+        ico.extend(32u16.to_le_bytes()); // bits per pixel
+        ico.extend((data.len() as u32).to_le_bytes());
+        ico.extend(offset.to_le_bytes());
+        offset += data.len() as u32;
+    }
+    for (_, data) in &images {
+        ico.extend(data);
+    }
+    let ico_path = Path::new(out_dir).join("synththing.ico");
+    fs::write(&ico_path, &ico).unwrap_or_else(|e| panic!("writing {}: {e}", ico_path.display()));
+
+    // Into the exe, for Explorer and the taskbar. Without Windows' resource
+    // compiler (no Windows SDK) the build still works, with a plain icon.
+    #[cfg(windows)]
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let mut resource = winresource::WindowsResource::new();
+        resource.set_icon(ico_path.to_str().expect("OUT_DIR is valid UTF-8"));
+        if let Err(e) = resource.compile() {
+            println!("cargo:warning=the app icon isn't in the exe (no resource compiler?): {e}");
+        }
+    }
+}
+
+/// The SVG drawn into a `size` x `size` square, as straight (not
+/// premultiplied) RGBA.
+fn render_square(tree: &resvg::usvg::Tree, size: u32) -> Vec<u8> {
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size).expect("a nonzero size");
+    let svg_size = tree.size();
+    let scale = size as f32 / svg_size.width().max(svg_size.height());
+    resvg::render(tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+    pixmap
+        .pixels()
+        .iter()
+        .flat_map(|p| {
+            let c = p.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect()
 }
 
 /// `(file name, absolute path)` for every `.lua` file directly inside

@@ -325,7 +325,7 @@ Channels are 0 to 15 (the GUI shows them as 1 to 16), keys are MIDI note numbers
 
 All empty/true for a plain audio file, there's no score to read, so nothing here errors, it just has nothing to report.
 
-`set_channel_enabled` goes through the exact same command the GUI's own checkboxes send, so a script can't disable the last remaining enabled channel either, useful for things like a game script muting a dead player's channel without needing its own "don't silence everything" logic.
+`set_channel_enabled` goes through the exact same command the GUI's own channel toggles send, for things like a game script muting a dead player's channel. Every channel can be off at once (since 0.6.1; before, the last one stayed on): a script that mutes channels one by one and doesn't want to end in silence should check `channel_enabled` first, as `snake.lua` does when its last snake dies.
 
 `channel_program` is the instrument channel `c` is playing at `seconds` (song seconds; now, by default): its program number, 0 to 127, and its General MIDI name, like `"Acoustic Grand Piano"` or `"String Ensemble 1"`. Songs can switch a channel's instrument partway through, and this follows that. A channel that's never told is on program 0, a piano, as the synth plays it. Channel 9 (the tenth) is for drums in General MIDI, where the program picks a drum kit instead, so its name is always `"Drums"`. The number is the one in the file, counting from 0; lists of General MIDI instruments usually count from 1, so add 1 to compare. The name is General MIDI's: a soundfont could put a different sound on that program, but most follow General MIDI. For a plain audio file it's nil, nil.
 
@@ -376,7 +376,7 @@ local key = "best:" .. (p.song_id or "none")
 if score > (store_get(key) or 0) then store_set(key, score) end
 ```
 
-Everything a script sees follows what's being heard, not what's been prepared: the app renders audio a little ahead (the audio buffer in Preferences), and `position`, the notes (`active_notes`, `upcoming_notes`), `paused`/`finished` and the `left`/`right` samples are all held back to match the speakers, so visuals line up with the sound at any buffer size. A seek, pause or new song shows up right away.
+Everything a script sees follows what's being heard, not what's been prepared: the app renders audio a little ahead (the audio buffer, in Preferences > Playback), and `position`, the notes (`active_notes`, `upcoming_notes`), `paused`/`finished` and the `left`/`right` samples are all held back to match the speakers, so visuals line up with the sound at any buffer size. A seek, pause or new song shows up right away.
 
 `generation` goes up by one every time the position jumps instead of running on: a seek (by the user or a script), a loop back to the start, or a new song. Compare it with the value from the previous frame to know exactly when to reset anything that tracks position, with no guessing from how far `position` moved.
 

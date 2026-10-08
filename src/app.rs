@@ -7,6 +7,7 @@
 //! around, split, float them out into windows. Closing a tab only hides that
 //! section; the View menu brings it back (see `layout.rs` for where).
 
+mod branding;
 mod editor;
 pub use editor::ApplyMode;
 mod loading;
@@ -329,6 +330,8 @@ pub struct App {
     editor_saved: String,
     /// Recording the visualizer to video (see `app/recording.rs`).
     recording: recording::Recording,
+    /// The wordmark in the menu bar, drawn for the current size and theme.
+    wordmark: branding::Wordmark,
     /// The last recording saved, for "Show last recording".
     last_recording: Option<PathBuf>,
 }
@@ -350,12 +353,16 @@ impl App {
         crate::library::set_official_publishers(config.library.official_publishers.clone());
         crate::library::mark_bundled(&scripts_dir);
         let available_scripts = lua_visualizer::list_scripts(&scripts_dir);
-        let active_path = available_scripts.first().cloned();
+        // The script from last time, if that's remembered and it's still
+        // there; else the first.
+        let remembered = config.session.script.as_ref().filter(|_| config.remember.script);
+        let active_index = remembered.and_then(|p| available_scripts.iter().position(|q| q == p)).unwrap_or(0);
+        let active_path = available_scripts.get(active_index).cloned();
         let source = active_path
             .as_ref()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .unwrap_or_default();
-        let active_script = active_path.is_some().then_some(0);
+        let active_script = active_path.is_some().then_some(active_index);
 
         let (playlists, playlist_errors) =
             Library::load(config::playlists_dir().unwrap_or_else(|_| PathBuf::from("playlists")));
@@ -367,7 +374,10 @@ impl App {
         }
         let dock = config.layout.clone().map(layout::sanitize).unwrap_or_else(layout::default_layout);
         let saved_layout_json = serde_json::to_string(&dock).unwrap_or_default();
-        let (loop_mode, shuffle) = (config.loop_mode, config.shuffle);
+        let (loop_mode, shuffle) =
+            if config.remember.modes { (config.loop_mode, config.shuffle) } else { (LoopMode::Off, false) };
+        let volume = config.session.volume.filter(|_| config.remember.volume).map_or(1.0, |v| v.clamp(0.0, 1.0));
+        let buffer_ms = config.buffer_ms.map_or(DEFAULT_BUFFER_MS, |ms| ms.clamp(MIN_BUFFER_MS, MAX_BUFFER_MS));
         let status = match playlist_errors.first() {
             Some(e) => format!("Couldn't read a playlist ({e})"),
             None => "Click a song to play it, click a soundfont to load it.".to_string(),
@@ -392,8 +402,8 @@ impl App {
             completion: CompletionWorker::new(lua_visualizer::host_global_names()),
             editor_hover_info: None,
             editor_opened_this_run: false,
-            volume: 1.0,
-            buffer_ms: DEFAULT_BUFFER_MS,
+            volume,
+            buffer_ms,
             loop_mode,
             shuffle,
             engine_loop: false,
@@ -481,10 +491,16 @@ impl App {
             editor: editor::EditorState::default(),
             editor_saved: String::new(),
             recording: recording::Recording::new(),
+            wordmark: branding::Wordmark::default(),
             last_recording: None,
         };
         if let Some(path) = app.visualizer.script().path().map(Path::to_path_buf) {
             app.editor_opened(&path);
+        }
+        app.send(AudioCommand::SetBufferMs(app.buffer_ms));
+        app.send(AudioCommand::SetVolume(app.volume));
+        if let Some(speed) = app.config.session.speed.filter(|_| app.config.remember.speed) {
+            app.send(AudioCommand::SetSpeed(speed.clamp(MIN_SPEED, MAX_SPEED)));
         }
         app
     }
@@ -592,11 +608,34 @@ impl App {
         let _ = self.commands.send(command);
     }
 
-    /// Load the first existing soundfont from the retained list, so there is
-    /// sound the moment a song is chosen.
-    pub fn autoload_first_soundfont(&mut self) {
-        if let Some(idx) = self.config.soundfonts.iter().position(|p| p.exists()) {
+    /// Load a soundfont from the list, so there is sound the moment a song
+    /// is chosen: last time's, if that's remembered and still there, else
+    /// the first that exists.
+    pub fn autoload_soundfont(&mut self) {
+        let remembered = self.config.session.soundfont.as_ref().filter(|_| self.config.remember.soundfont);
+        let last = remembered.and_then(|p| self.config.soundfonts.iter().position(|q| q == p && q.exists()));
+        if let Some(idx) = last.or_else(|| self.config.soundfonts.iter().position(|p| p.exists())) {
             self.activate_soundfont(idx);
+        }
+    }
+
+    /// Note what this session ends with, for the next one to start with
+    /// (whatever Preferences > Playback says to remember), and save it.
+    fn save_session(&mut self) {
+        let remember = self.config.remember;
+        let speed = self.shared.lock().map(|s| s.view.speed).unwrap_or(1.0);
+        let session = crate::config::Session {
+            volume: remember.volume.then_some(self.volume),
+            speed: remember.speed.then_some(speed),
+            soundfont: self
+                .active_sf
+                .and_then(|i| self.config.soundfonts.get(i).cloned())
+                .filter(|_| remember.soundfont),
+            script: self.visualizer.script().path().map(Path::to_path_buf).filter(|_| remember.script),
+        };
+        self.config.session = session;
+        if let Err(e) = self.config.save() {
+            log::warn!("couldn't save the session's settings: {e:#}");
         }
     }
 
@@ -1246,22 +1285,6 @@ impl App {
                 self.send(AudioCommand::SetVolume(self.volume));
             }
             ui.monospace(format!("{:>3.0}%", self.volume * 100.0));
-
-            ui.separator();
-
-            ui.label(egui::RichText::new(icon("timer")).size(15.0)).on_hover_text(
-                "Buffer: how much sound is made ahead of what's heard. More holds up better in busy songs; less \
-                 makes the visualizer and controls answer sooner.",
-            );
-            if ui
-                .add(
-                    egui::Slider::new(&mut self.buffer_ms, MIN_BUFFER_MS..=MAX_BUFFER_MS)
-                        .suffix(" ms"),
-                )
-                .changed()
-            {
-                self.send(AudioCommand::SetBufferMs(self.buffer_ms));
-            }
         });
 
         ui.add_space(4.0);
@@ -1319,7 +1342,15 @@ impl App {
     /// be shown is switched on and off from one place.
     fn top_bar_ui(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("synththing", |ui| {
+            // The wordmark (a little taller than the menus' text: it has
+            // a note above and descenders below), or the name as text if
+            // it can't be drawn.
+            let height = ui.text_style_height(&egui::TextStyle::Button) * 1.25;
+            let button = match self.wordmark.image(ui.ctx(), height, ui.visuals().panel_fill) {
+                Some(image) => egui::Button::image(image),
+                None => egui::Button::new("synththing"),
+            };
+            egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
                 if ui.button("Preferences...").clicked() {
                     self.preferences_open = true;
                 }
@@ -2128,9 +2159,8 @@ impl App {
         let effects = self.visualizer.take_effects();
 
         // A script can ask to mute/unmute a channel itself (e.g. a game
-        // script silencing a dead player's channel), same command the GUI's
-        // own checkboxes send, so it's subject to the same "never disable
-        // the last channel" rule.
+        // script silencing a dead player's channel), the same command the
+        // GUI's own toggles send.
         for (channel, enabled) in effects.channel_requests {
             self.send(AudioCommand::SetChannelEnabled(channel, enabled));
         }
@@ -2446,14 +2476,6 @@ impl App {
             let mut solo: Option<u8> = None;
             let mut enable_all = false;
 
-            // At least one channel always has to stay enabled, muting the
-            // last one is never useful, just confusing silence.
-            let enabled_count = notes
-                .detected_channels
-                .iter()
-                .filter(|&&c| notes.enabled_channels[c as usize])
-                .count();
-
             // In the colors the script draws them in, if it said; else
             // the keyboard visualizer's.
             let colors = self.visualizer.script().channel_colors();
@@ -2465,7 +2487,6 @@ impl App {
                 }
                 for &channel in &notes.detected_channels {
                     let mut enabled = notes.enabled_channels[channel as usize];
-                    let is_only_one_left = enabled && enabled_count == 1;
                     let [r, g, b] = colors[channel as usize].unwrap_or_else(|| lua_visualizer::default_channel_color(channel));
                     let color = egui::Color32::from_rgb(r, g, b);
                     let song = self.song_notes.as_deref().filter(|n| n.facts().tracks > 0);
@@ -2483,32 +2504,21 @@ impl App {
                                 ui.strong(format!("Channel {}", channel + 1));
                             }
                         }
-                        ui.weak(if is_only_one_left {
-                            "The last one playing: it can't be turned off"
-                        } else {
-                            "Left-click to toggle, right-click to solo"
-                        });
+                        ui.weak("Left-click to toggle, right-click to solo");
                     };
                     let response = if self.config.channel_chips {
-                        // The last one playing stays in its full color and
-                        // just doesn't turn off (greyed out, it'd look off).
                         let text = match instrument {
                             Some(instrument) => format!("{} \u{b7} {instrument}", channel + 1),
                             None => format!("Channel {}", channel + 1),
                         };
                         let response = channel_chip(ui, enabled, &text, color).on_hover_ui(about);
-                        if response.clicked() && !is_only_one_left {
+                        if response.clicked() {
                             toggle = Some((channel, !enabled));
                         }
                         response
                     } else {
-                        let response = ui
-                            .add_enabled_ui(!is_only_one_left, |ui| {
-                                channel_toggle(ui, &mut enabled, &format!("{}", channel + 1), color)
-                            })
-                            .inner
-                            .on_hover_ui(about)
-                            .on_disabled_hover_ui(about);
+                        let response =
+                            channel_toggle(ui, &mut enabled, &format!("{}", channel + 1), color).on_hover_ui(about);
                         if response.changed() {
                             toggle = Some((channel, enabled));
                         }
@@ -2570,6 +2580,8 @@ impl App {
         let mut script_log = self.config.script_log_to_app;
         let mut audio_files = self.config.show_audio_files;
         let mut channel_chips = self.config.channel_chips;
+        let mut buffer_ms = self.buffer_ms;
+        let mut remember = self.config.remember;
         let mut close = false;
         let mut welcome = false;
         let mut tour = false;
@@ -2682,6 +2694,43 @@ impl App {
                                     },
                                 );
                             }
+                            PrefTab::Playback => {
+                                with_info(
+                                    ui,
+                                    &format!(
+                                        "How much sound is made ahead of what's heard. More holds up better in busy \
+                                         songs and on a busy computer (crackles and gaps mean it's too low); less \
+                                         makes pausing, seeking and the channel toggles answer sooner. Visualizers \
+                                         stay in step with the sound either way. {DEFAULT_BUFFER_MS} ms unless changed."
+                                    ),
+                                    |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Audio buffer");
+                                            ui.add(egui::Slider::new(&mut buffer_ms, MIN_BUFFER_MS..=MAX_BUFFER_MS).suffix(" ms"))
+                                        })
+                                        .inner
+                                    },
+                                );
+                                ui.add_space(6.0);
+                                ui.strong("Start with what was set last time");
+                                for (on, label, info) in [
+                                    (&mut remember.volume, "Volume", "Off: full volume every time."),
+                                    (
+                                        &mut remember.soundfont,
+                                        "Soundfont",
+                                        "The one selected in Soundfonts (not a song's own). Off: the first in the list.",
+                                    ),
+                                    (
+                                        &mut remember.script,
+                                        "Visualizer script",
+                                        "Off: the first script in the list.",
+                                    ),
+                                    (&mut remember.speed, "Speed", "Off: normal speed every time."),
+                                    (&mut remember.modes, "Loop and shuffle", "Off: both off every time."),
+                                ] {
+                                    with_info(ui, info, |ui| ui.checkbox(on, label));
+                                }
+                            }
                             PrefTab::Scripts => {
                                 with_info(
                                     ui,
@@ -2745,7 +2794,15 @@ impl App {
             || script_log != self.config.script_log_to_app
             || audio_files != self.config.show_audio_files
             || channel_chips != self.config.channel_chips
+            || buffer_ms != self.buffer_ms
+            || remember != self.config.remember
         {
+            self.config.remember = remember;
+            if buffer_ms != self.buffer_ms {
+                self.buffer_ms = buffer_ms;
+                self.send(AudioCommand::SetBufferMs(buffer_ms));
+            }
+            self.config.buffer_ms = (buffer_ms != DEFAULT_BUFFER_MS).then_some(buffer_ms);
             self.config.channel_chips = channel_chips;
             self.config.show_audio_files = audio_files;
             self.browser.set_extensions(listed_song_extensions(&self.config));
@@ -3123,7 +3180,7 @@ impl eframe::App for App {
     }
 
     /// Last chance to save a layout change the once-a-second autosave
-    /// hasn't caught yet.
+    /// hasn't caught yet, and what to start with next time.
     fn on_exit(&mut self) {
         self.flush_editor();
         // Stop the script thread, which saves the script's data.
@@ -3135,6 +3192,7 @@ impl eframe::App for App {
             log::warn!("recording lost on exit: {e:#}");
         }
         self.recording.wait_for_saves();
+        self.save_session();
         if serde_json::to_string(&self.dock).unwrap_or_default() != self.saved_layout_json {
             self.save_layout();
         }
@@ -3200,6 +3258,7 @@ enum PrefTab {
     #[default]
     General,
     Songs,
+    Playback,
     Loading,
     Scripts,
     Recording,
@@ -3208,13 +3267,22 @@ enum PrefTab {
 }
 
 impl PrefTab {
-    const ALL: [PrefTab; 7] =
-        [Self::General, Self::Songs, Self::Loading, Self::Scripts, Self::Recording, Self::Library, Self::Experimental];
+    const ALL: [PrefTab; 8] = [
+        Self::General,
+        Self::Songs,
+        Self::Playback,
+        Self::Loading,
+        Self::Scripts,
+        Self::Recording,
+        Self::Library,
+        Self::Experimental,
+    ];
 
     fn title(self) -> &'static str {
         match self {
             Self::General => "General",
             Self::Songs => "Songs",
+            Self::Playback => "Playback",
             Self::Loading => "Loading",
             Self::Scripts => "Scripts",
             Self::Recording => "Recording",
