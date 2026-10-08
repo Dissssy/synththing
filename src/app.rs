@@ -2256,10 +2256,10 @@ impl App {
         for click in tray.clicks() {
             match click {
                 crate::tray::TrayClick::Primary => self.show_window(ctx),
-                crate::tray::TrayClick::Secondary { at } => {
-                    let pixels_per_point = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
+                crate::tray::TrayClick::Secondary { cursor } => {
+                    let native = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
                     self.tray_panel.update(ctx, self.tray_snapshot(view));
-                    self.tray_panel.open(ctx, at, pixels_per_point);
+                    self.tray_panel.open(ctx, cursor, native * ctx.zoom_factor());
                 }
             }
         }

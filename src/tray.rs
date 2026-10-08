@@ -12,9 +12,9 @@
 pub enum TrayClick {
     /// Left button: show synththing.
     Primary,
-    /// Right button: the tray panel, near `at` (the icon's rectangle, in
-    /// physical screen pixels: x, y, width, height).
-    Secondary { at: [f32; 4] },
+    /// Right button: the tray panel, by `cursor` (where the click was, in
+    /// physical screen pixels).
+    Secondary { cursor: [f32; 2] },
 }
 
 #[cfg(windows)]
@@ -47,10 +47,8 @@ mod imp {
                         TrayClick::Primary
                     }
                     TrayIconEvent::Click {
-                        button: MouseButton::Right, button_state: MouseButtonState::Up, rect, ..
-                    } => TrayClick::Secondary {
-                        at: [rect.position.x as f32, rect.position.y as f32, rect.size.width as f32, rect.size.height as f32],
-                    },
+                        button: MouseButton::Right, button_state: MouseButtonState::Up, position, ..
+                    } => TrayClick::Secondary { cursor: [position.x as f32, position.y as f32] },
                     _ => return,
                 };
                 let _ = sender.send(click);

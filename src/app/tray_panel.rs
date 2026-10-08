@@ -69,6 +69,13 @@ enum Tab {
 #[derive(Default)]
 struct State {
     open: bool,
+    /// Where it's anchored (its bottom-right corner, in physical screen
+    /// pixels: the right-click), and how many more frames to place it
+    /// there for: its window only knows its scale (the monitor's, times the
+    /// UI scale) once it's on that monitor, so it's placed again as it
+    /// settles.
+    anchor: Option<([f32; 2], u8)>,
+    wordmark: super::branding::Wordmark,
     /// It's had focus since it was opened, so losing it closes it.
     focused_once: bool,
     tab: Tab,
@@ -109,20 +116,19 @@ impl TrayPanel {
         self.state.lock().is_ok_and(|s| s.open)
     }
 
-    /// Open it by the tray icon, which is at `icon` (x, y, width, height,
-    /// in physical screen pixels): above it, right-aligned with it, or
-    /// below it when the taskbar's at the top. `pixels_per_point`: the
-    /// screen's scale.
-    pub(super) fn open(&self, ctx: &egui::Context, icon: [f32; 4], pixels_per_point: f32) {
-        let [x, y, w, h] = icon.map(|v| v / pixels_per_point);
-        let left = (x + w - SIZE.x).max(0.0);
-        let top = if y - SIZE.y - 8.0 >= 0.0 { y - SIZE.y - 8.0 } else { y + h + 8.0 };
+    /// Open it with its bottom-right corner at `cursor` (physical screen
+    /// pixels: where the tray icon was right-clicked). `pixels_per_point`:
+    /// a first guess at the scale there (the main window's), for getting it
+    /// onto the right monitor; it places itself exactly once it's there.
+    pub(super) fn open(&self, ctx: &egui::Context, cursor: [f32; 2], pixels_per_point: f32) {
         if let Ok(mut state) = self.state.lock() {
             state.open = true;
             state.focused_once = false;
+            state.anchor = Some((cursor, PLACE_FRAMES));
         }
         let id = viewport_id();
-        ctx.send_viewport_cmd_to(id, egui::ViewportCommand::OuterPosition(egui::pos2(left, top)));
+        ctx.send_viewport_cmd_to(id, egui::ViewportCommand::OuterPosition(placement(cursor, pixels_per_point)));
+        ctx.send_viewport_cmd_to(id, egui::ViewportCommand::InnerSize(SIZE));
         ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Focus);
         ctx.request_repaint_of(id);
@@ -144,6 +150,18 @@ impl TrayPanel {
     }
 }
 
+/// Frames it places itself again for after opening (see `State::anchor`).
+const PLACE_FRAMES: u8 = 3;
+
+/// Where its top-left goes (in points, at `pixels_per_point`) for its
+/// bottom-right to be at `cursor` (physical pixels); below the cursor
+/// instead when there's no room above (a taskbar at the top).
+fn placement(cursor: [f32; 2], pixels_per_point: f32) -> egui::Pos2 {
+    let [x, y] = cursor.map(|v| v / pixels_per_point);
+    let top = if y - SIZE.y >= 0.0 { y - SIZE.y } else { y };
+    egui::pos2(x - SIZE.x, top)
+}
+
 /// Close the panel (it only hides).
 fn close(ctx: &egui::Context, state: &mut State) {
     state.open = false;
@@ -156,6 +174,13 @@ fn panel_ui(ui: &mut egui::Ui, state: &Mutex<State>, send: &Sender<Action>) {
         return;
     }
     let ctx = ui.ctx().clone();
+    if let Some((cursor, frames)) = state.anchor {
+        // Its own scale, now it's on its monitor (see `State::anchor`).
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(placement(cursor, ctx.pixels_per_point())));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(SIZE));
+        state.anchor = (frames > 1).then_some((cursor, frames - 1));
+        ctx.request_repaint();
+    }
     // Like a menu: gone once something else is clicked (it's had focus
     // first, so a slow first focus doesn't close it), or on Escape.
     match ctx.input(|i| i.viewport().focused) {
@@ -178,7 +203,11 @@ fn panel_ui(ui: &mut egui::Ui, state: &Mutex<State>, send: &Sender<Action>) {
 
         // What's playing, and the transport.
         ui.horizontal(|ui| {
-            ui.strong("synththing");
+            let height = ui.text_style_height(&egui::TextStyle::Button) * 1.25;
+            match state.wordmark.image(&ctx, height, ui.visuals().window_fill) {
+                Some(image) => ui.add(image),
+                None => ui.strong("synththing"),
+            };
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button(icon("x")).on_hover_text("Close (Esc)").clicked() {
                     close(&ctx, &mut state);
