@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.5.3 (2026-10-08)
+
 ### Changed
 - Scripts can play notes from the moment they start, whenever a soundfont's loaded, not only once a MIDI song is: before one is (or with an audio file), they play on General MIDI's defaults, a piano on every channel and drums on channel 9.
 
