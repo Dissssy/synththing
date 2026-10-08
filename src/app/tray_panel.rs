@@ -6,6 +6,10 @@
 //! are where they were when it's opened again (for the session; nothing's
 //! saved).
 //!
+//! Pinned, it's the mini player: it stays (always on top) until closed, and
+//! drags around by its header. Left-clicking the tray icon shows and hides
+//! it pinned, where it was last left.
+//!
 //! It's a window of its own that draws itself (an egui deferred viewport),
 //! so it keeps working while the main window is hidden, when the app's
 //! `ui` isn't called. It draws from a snapshot the app refreshes
@@ -78,6 +82,11 @@ struct State {
     wordmark: super::branding::Wordmark,
     /// It's had focus since it was opened, so losing it closes it.
     focused_once: bool,
+    /// The mini player: stays until closed, drags by its header.
+    pinned: bool,
+    /// Where the mini player was last (its top-left, in points), to open
+    /// there again.
+    pinned_at: Option<egui::Pos2>,
     tab: Tab,
     /// The playlist shown in the Playlists tab.
     playlist: Option<usize>,
@@ -121,13 +130,40 @@ impl TrayPanel {
     /// a first guess at the scale there (the main window's), for getting it
     /// onto the right monitor; it places itself exactly once it's there.
     pub(super) fn open(&self, ctx: &egui::Context, cursor: [f32; 2], pixels_per_point: f32) {
+        self.show(ctx, cursor, pixels_per_point, false);
+    }
+
+    /// Left-clicking the tray icon: the mini player (the panel pinned),
+    /// where it was last, or by `cursor` the first time; or, if it's up,
+    /// away.
+    pub(super) fn toggle_mini(&self, ctx: &egui::Context, cursor: [f32; 2], pixels_per_point: f32) {
+        let up = self.state.lock().is_ok_and(|s| s.open && s.pinned);
+        if up {
+            if let Ok(mut state) = self.state.lock() {
+                state.open = false;
+            }
+            ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::Visible(false));
+        } else {
+            self.show(ctx, cursor, pixels_per_point, true);
+        }
+    }
+
+    fn show(&self, ctx: &egui::Context, cursor: [f32; 2], pixels_per_point: f32, pinned: bool) {
+        let mut at = placement(cursor, pixels_per_point);
         if let Ok(mut state) = self.state.lock() {
             state.open = true;
             state.focused_once = false;
-            state.anchor = Some((cursor, PLACE_FRAMES));
+            state.pinned = pinned;
+            match state.pinned_at.filter(|_| pinned) {
+                Some(last) => {
+                    at = last;
+                    state.anchor = None;
+                }
+                None => state.anchor = Some((cursor, PLACE_FRAMES)),
+            }
         }
         let id = viewport_id();
-        ctx.send_viewport_cmd_to(id, egui::ViewportCommand::OuterPosition(placement(cursor, pixels_per_point)));
+        ctx.send_viewport_cmd_to(id, egui::ViewportCommand::OuterPosition(at));
         ctx.send_viewport_cmd_to(id, egui::ViewportCommand::InnerSize(SIZE));
         ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Focus);
@@ -181,15 +217,22 @@ fn panel_ui(ui: &mut egui::Ui, state: &Mutex<State>, send: &Sender<Action>) {
         state.anchor = (frames > 1).then_some((cursor, frames - 1));
         ctx.request_repaint();
     }
-    // Like a menu: gone once something else is clicked (it's had focus
-    // first, so a slow first focus doesn't close it), or on Escape.
-    match ctx.input(|i| i.viewport().focused) {
-        Some(true) => state.focused_once = true,
-        Some(false) if state.focused_once => return close(&ctx, &mut state),
-        _ => {}
-    }
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        return close(&ctx, &mut state);
+    if state.pinned {
+        // The mini player stays; it's remembered where it's left.
+        if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
+            state.pinned_at = Some(rect.min);
+        }
+    } else {
+        // Like a menu: gone once something else is clicked (it's had focus
+        // first, so a slow first focus doesn't close it), or on Escape.
+        match ctx.input(|i| i.viewport().focused) {
+            Some(true) => state.focused_once = true,
+            Some(false) if state.focused_once => return close(&ctx, &mut state),
+            _ => {}
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            return close(&ctx, &mut state);
+        }
     }
     let act = |action: Action| {
         let _ = send.send(action);
@@ -201,19 +244,42 @@ fn panel_ui(ui: &mut egui::Ui, state: &Mutex<State>, send: &Sender<Action>) {
         ui.set_min_size(ui.available_size());
         let snapshot = state.snapshot.clone();
 
-        // What's playing, and the transport.
-        ui.horizontal(|ui| {
+        // The header: the wordmark, pin and close; pinned, it's what the
+        // mini player is dragged by.
+        let mut buttons_left = f32::INFINITY;
+        let header = ui.horizontal(|ui| {
             let height = ui.text_style_height(&egui::TextStyle::Button) * 1.25;
             match state.wordmark.image(&ctx, height, ui.visuals().window_fill) {
                 Some(image) => ui.add(image),
                 None => ui.strong("synththing"),
             };
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button(icon("x")).on_hover_text("Close (Esc)").clicked() {
+                let close_hover = if state.pinned { "Close the mini player" } else { "Close (Esc)" };
+                if ui.small_button(icon("x")).on_hover_text(close_hover).clicked() {
                     close(&ctx, &mut state);
+                }
+                let (pin, pin_hover) = if state.pinned {
+                    ("push-pin-slash", "Unpin: back to a panel that closes when you click elsewhere")
+                } else {
+                    ("push-pin", "Pin as the mini player: it stays, on top, and drags by this bar")
+                };
+                let pin = ui.small_button(icon(pin)).on_hover_text(pin_hover);
+                buttons_left = pin.rect.left();
+                if pin.clicked() {
+                    state.pinned = !state.pinned;
+                    state.focused_once = true;
                 }
             });
         });
+        if state.pinned {
+            // (Up to the buttons, so they still take their own clicks.)
+            let mut grip = header.response.rect;
+            grip.max.x = grip.max.x.min(buttons_left - 4.0);
+            let drag = ui.interact(grip, egui::Id::new("tray_panel_drag"), egui::Sense::drag());
+            if drag.drag_started() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+        }
         ui.add_space(2.0);
         match &snapshot.title {
             Some(title) => {

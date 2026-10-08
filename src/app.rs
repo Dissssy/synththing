@@ -2257,11 +2257,13 @@ impl App {
     fn handle_tray(&mut self, ctx: &egui::Context, view: &EngineView) {
         let Some(tray) = &self.tray else { return };
         for click in tray.clicks() {
+            let native = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
+            self.tray_panel.update(ctx, self.tray_snapshot(view));
             match click {
-                crate::tray::TrayClick::Primary => self.show_window(ctx),
+                crate::tray::TrayClick::Primary { cursor } => {
+                    self.tray_panel.toggle_mini(ctx, cursor, native * ctx.zoom_factor());
+                }
                 crate::tray::TrayClick::Secondary { cursor } => {
-                    let native = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
-                    self.tray_panel.update(ctx, self.tray_snapshot(view));
                     self.tray_panel.open(ctx, cursor, native * ctx.zoom_factor());
                 }
             }

@@ -10,8 +10,9 @@
 /// What a click on the tray icon asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TrayClick {
-    /// Left button: show synththing.
-    Primary,
+    /// Left button: the mini player, by `cursor` the first time (physical
+    /// screen pixels).
+    Primary { cursor: [f32; 2] },
     /// Right button: the tray panel, by `cursor` (where the click was, in
     /// physical screen pixels).
     Secondary { cursor: [f32; 2] },
@@ -43,9 +44,9 @@ mod imp {
             let ctx = ctx.clone();
             TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
                 let click = match event {
-                    TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } => {
-                        TrayClick::Primary
-                    }
+                    TrayIconEvent::Click {
+                        button: MouseButton::Left, button_state: MouseButtonState::Up, position, ..
+                    } => TrayClick::Primary { cursor: [position.x as f32, position.y as f32] },
                     TrayIconEvent::Click {
                         button: MouseButton::Right, button_state: MouseButtonState::Up, position, ..
                     } => TrayClick::Secondary { cursor: [position.x as f32, position.y as f32] },
