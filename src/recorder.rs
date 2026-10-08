@@ -470,6 +470,17 @@ impl Recorder {
         Finishing { result: rx }
     }
 
+    /// Stop without writing the file: the temporary files go.
+    pub fn discard(self) {
+        let Recorder { frames, writer, audio, temp_video, temp_audio, log_path, .. } = self;
+        drop(frames);
+        let _ = writer.join();
+        drop(audio);
+        for temp in [&temp_video, &temp_audio, &log_path] {
+            let _ = std::fs::remove_file(temp);
+        }
+    }
+
     /// Stop and write the file, here and now.
     pub fn finish_now(self) -> Result<()> {
         let Recorder { frames, owed, writer, audio, ffmpeg, temp_video, temp_audio, log_path, output, .. } = self;

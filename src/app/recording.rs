@@ -152,6 +152,14 @@ impl Recording {
             })
     }
 
+    /// Stop the recording without saving it (closing, when asked to).
+    pub fn discard(&mut self) {
+        self.session = None;
+        if let Some(recorder) = self.recorder.take() {
+            recorder.discard();
+        }
+    }
+
     /// Block until recordings being saved are done, and stop a render,
     /// keeping what it's done (closing the app).
     pub fn wait_for_saves(&mut self) {

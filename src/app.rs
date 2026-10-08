@@ -8,6 +8,7 @@
 //! section; the View menu brings it back (see `layout.rs` for where).
 
 mod branding;
+mod close;
 mod editor;
 pub use editor::ApplyMode;
 mod loading;
@@ -341,6 +342,14 @@ pub struct App {
     /// The notification-area icon (Windows; `None` elsewhere, or if it
     /// couldn't be made).
     tray: Option<crate::tray::Tray>,
+    /// The window's hidden in the tray.
+    hidden: bool,
+    /// Quit was decided: the next close goes through.
+    quitting: bool,
+    /// A question closing asks first (the first close; a recording on).
+    close_prompt: Option<close::ClosePrompt>,
+    /// Close (or hide) once the background render finishes.
+    close_after_render: Option<close::CloseAction>,
     /// The last recording saved, for "Show last recording".
     last_recording: Option<PathBuf>,
 }
@@ -504,6 +513,10 @@ impl App {
             recording: recording::Recording::new(),
             wordmark: branding::Wordmark::default(),
             tray: None,
+            hidden: false,
+            quitting: false,
+            close_prompt: None,
+            close_after_render: None,
             last_recording: None,
         };
         if let Some(path) = app.visualizer.script().path().map(Path::to_path_buf) {
@@ -1370,8 +1383,13 @@ impl App {
                 ui.separator();
                 self.recording_menu_ui(ui);
                 ui.separator();
-                if ui.button("Quit").clicked() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                let quit = egui::Button::new("Quit").shortcut_text(ui.ctx().format_shortcut(&egui::KeyboardShortcut::new(
+                    egui::Modifiers::COMMAND,
+                    egui::Key::Q,
+                )));
+                if ui.add(quit).on_hover_text("Close synththing completely, even with the tray in use").clicked() {
+                    let ctx = ui.ctx().clone();
+                    self.close_with(&ctx, close::CloseAction::Quit);
                 }
             });
             let mut toggled = Vec::new();
@@ -1946,6 +1964,7 @@ impl App {
             || self.layout_save.is_some()
             || self.heavy_prompt.is_some()
             || self.sprite.new_sprite.is_some()
+            || self.close_prompt.is_some()
     }
 
     /// Pick up files added, removed or changed on disk in the folders on
@@ -2239,6 +2258,7 @@ impl App {
     /// Bring the main window back and to the front: un-hidden,
     /// un-minimized, focused.
     fn show_window(&mut self, ctx: &egui::Context) {
+        self.hidden = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -2622,6 +2642,7 @@ impl App {
         let mut expiry = self.config.preload_expiry_secs.unwrap_or(DEFAULT_PRELOAD_EXPIRY_SECS);
         let mut hover_preload = self.config.preload_on_hover;
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
+        let mut close_to_tray = self.config.close_to_tray.unwrap_or(false);
         let mut warn_heavy = self.config.warn_heavy_midi.unwrap_or(true);
         let mut beat_pulse = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE) * 100.0;
         let mut pulse_length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH) * 100.0;
@@ -2656,6 +2677,13 @@ impl App {
                                      if you turn it back on.",
                                     |ui| ui.checkbox(&mut separate, "Separate layout for fullscreen"),
                                 );
+                                if self.tray.is_some() {
+                                    with_info(
+                                        ui,
+                                        "On: closing the window hides synththing in the tray (by the clock), still                                          playing; click its icon to bring it back, right-click it for a small panel                                          of controls. Quit, in the synththing menu or that panel, closes it                                          completely. Off: closing the window quits.",
+                                        |ui| ui.checkbox(&mut close_to_tray, "Keep running in the tray when the window's closed"),
+                                    );
+                                }
                                 ui.add_space(4.0);
                                 ui.horizontal(|ui| {
                                     welcome = ui
@@ -2836,6 +2864,7 @@ impl App {
         if expiry != self.config.preload_expiry_secs
             || hover_preload != self.config.preload_on_hover
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
+            || (self.tray.is_some() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
             || warn_heavy != self.config.warn_heavy_midi.unwrap_or(true)
             || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
             || (pulse_length / 100.0 - self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH)).abs() > 1e-4
@@ -2860,6 +2889,9 @@ impl App {
             self.config.beat_pulse_length =
                 Some(pulse_length / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE_LENGTH).abs() > 1e-4);
             self.config.check_updates_on_launch = (!check_updates).then_some(false);
+            if self.tray.is_some() && (close_to_tray || self.config.close_to_tray.is_some()) {
+                self.config.close_to_tray = Some(close_to_tray);
+            }
             self.config.preload_expiry_secs = expiry;
             self.config.preload_on_hover = hover_preload;
             changed = true;
@@ -3053,6 +3085,9 @@ impl eframe::App for App {
                     i.consume_key(egui::Modifiers::NONE, egui::Key::F10),
                 )
             });
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)) {
+                self.close_with(&ctx, close::CloseAction::Quit);
+            }
             if f9 {
                 self.toggle_recording(view);
             }
@@ -3162,6 +3197,8 @@ impl eframe::App for App {
             self.layout_save_ui(&ctx);
             self.new_sprite_ui(&ctx);
         }
+        self.close_requested_ui(&ctx);
+        self.close_prompt_ui(&ctx);
         // Outside the layout: F9 can ask for ffmpeg from the dedicated
         // fullscreen too.
         self.ffmpeg_prompt_ui(&ctx);
@@ -3236,6 +3273,7 @@ impl eframe::App for App {
         self.keep_loaded(ctx);
         self.poll_starter(ctx);
         self.editor_tick(ctx);
+        self.close_after_render_tick(ctx);
 
         // Stay idle otherwise, but while a song plays keep ticking, so the
         // end of a track is noticed and a playlist's next one starts, with

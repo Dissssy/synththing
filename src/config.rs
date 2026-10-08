@@ -76,6 +76,10 @@ pub struct Config {
     /// the beat, 0.1 to 1 (`None`: `DEFAULT_BEAT_PULSE_LENGTH`).
     #[serde(default)]
     pub beat_pulse_length: Option<f32>,
+    /// Preference: closing the window hides it to the tray (`Some(true)`)
+    /// or quits (`Some(false)`); `None` until the first close asks.
+    #[serde(default)]
+    pub close_to_tray: Option<bool>,
     /// Preference: which of the last session's settings to start with.
     #[serde(default)]
     pub remember: Remember,
