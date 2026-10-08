@@ -2521,8 +2521,9 @@ fn parse_sequence(list: &Table) -> mlua::Result<Vec<SequenceNote>> {
 }
 
 /// `play_note`, `note_on`, `note_off`, `stop_notes`, `notes_playable` and
-/// sequences: notes a script plays on the live synth (`live.rs`), only
-/// while a MIDI is loaded with a soundfont.
+/// sequences: notes a script plays on the live synth (`live.rs`), whenever
+/// a soundfont's loaded (on the song's instruments, or General MIDI's
+/// defaults without a MIDI song).
 fn register_live_notes(
     lua: &Lua,
     notes: &Rc<RefCell<NotesSnapshot>>,
@@ -2535,8 +2536,7 @@ fn register_live_notes(
     let playable = {
         let view = Rc::clone(playback);
         move || {
-            let view = view.borrow();
-            view.has_midi && view.has_soundfont
+            view.borrow().has_soundfont
         }
     };
     // The channel asked for if the song uses it, else the song's lowest.
@@ -4784,7 +4784,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         run(&mut visualizer);
         assert_eq!(visualizer.take_live_commands(), [LiveCommand::Stop(1), LiveCommand::StopAll]);
 
-        // No soundfont (or a plain audio file): nothing to play on.
+        // No soundfont: nothing to play on.
         let mut silent = LuaVisualizer::new("function render() log(tostring(play_note(60))) end".into(), None, 44_100);
         silent.take_live_commands();
         let mut buffer = vec![0u32; 4];

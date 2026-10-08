@@ -267,10 +267,12 @@ impl Engine {
         self.audio_file = Some(AudioFilePlayback { data, position: 0.0 });
     }
 
-    /// Notes from a script. Only while a MIDI is loaded (with a soundfont):
-    /// the live synth borrows that song's instruments.
+    /// Notes from a script, whenever a soundfont's loaded: the live synth
+    /// borrows the sequencer's instruments, the song's while a MIDI song's
+    /// loaded, General MIDI's defaults before one is (piano on every
+    /// channel, drums on channel 9), so a script can play from the start.
     pub fn live_command(&mut self, command: LiveCommand) {
-        let playable = self.midi.is_some() || command == LiveCommand::StopAll;
+        let playable = self.seq.is_some() || command == LiveCommand::StopAll;
         if let Some(live) = &mut self.live
             && playable
         {
@@ -280,7 +282,7 @@ impl Engine {
 
     /// Whether the live synth has anything to render.
     pub fn live_busy(&self) -> bool {
-        self.midi.is_some() && self.seq.is_some() && self.live.as_ref().is_some_and(LiveSynth::busy)
+        self.seq.is_some() && self.live.as_ref().is_some_and(LiveSynth::busy)
     }
 
     /// Render the live synth's next block (interleaved stereo), whether or
@@ -554,4 +556,32 @@ fn fast_forward(seq: &mut MidiFileSequencer, target: f64, _sample_rate: u32) {
     }
 
     seq.set_speed(saved);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::live::LiveNote;
+
+    /// A script's notes play once a soundfont's loaded, before any song is
+    /// (on General MIDI's default instruments); not before.
+    #[test]
+    fn script_notes_play_without_a_song() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/starter/soundfonts/TimGM6mb.sf2");
+        let soundfont = Arc::new(SoundFont::new(&mut std::fs::File::open(path).unwrap()).unwrap());
+        let note = || LiveCommand::Play(vec![LiveNote { delay: 0.0, length: Some(0.2), channel: 0, key: 60, velocity: 110, tag: 0 }]);
+        let mut engine = Engine::new(44_100);
+        engine.live_command(note());
+        assert!(!engine.live_busy(), "no soundfont: nothing to play on");
+        engine.set_soundfont(soundfont, "TimGM6mb".into()).unwrap();
+        engine.live_command(note());
+        assert!(engine.live_busy());
+        let mut block = vec![0.0f32; 1024];
+        let mut heard = 0.0;
+        for _ in 0..20 {
+            engine.render_live(&mut block);
+            heard += block.iter().map(|s| s * s).sum::<f32>();
+        }
+        assert!(heard > 0.0, "the note sounded");
+    }
 }

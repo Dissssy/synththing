@@ -537,10 +537,10 @@ stop_notes()                         -- let go of everything, cancel every seque
 notes_playable() -> bool             -- whether notes can play right now
 ```
 
-While a MIDI song is loaded with a soundfont, a script can play notes of its own, on the song's instruments: a note on channel 3 sounds like the song's channel 3 does at that moment (its instrument, volume, pan and pitch bend). Without a MIDI song or a soundfont (or with a plain audio file) there's nothing to play on, so these return false and do nothing; `notes_playable()` says which. Notes play whether the song is paused or not.
+Whenever a soundfont is loaded, a script can play notes of its own, from the moment it starts. While a MIDI song is loaded, they're on the song's instruments: a note on channel 3 sounds like the song's channel 3 does at that moment (its instrument, volume, pan and pitch bend). Before a song is loaded (or with a plain audio file), they're on General MIDI's defaults: a piano on every channel, drums on channel 9 (the tenth). Without a soundfont there's nothing to play on, so these return false and do nothing; `notes_playable()` says which. Notes play whether the song is paused or not.
 
 - `key`: MIDI note number, 0 to 127 (60 is middle C)
-- `channel`: 0 to 15, as in `midi_channels()`. Left out, or a channel the song doesn't use (not every song has a channel 0), it's the song's lowest channel.
+- `channel`: 0 to 15, as in `midi_channels()`. Left out, or a channel the song doesn't use (not every song has a channel 0), it's the song's lowest channel; channel 0 with no song.
 - `velocity`: how hard, 1 to 127 (default 100)
 - `duration`: seconds (default 0.5); `play_note` only
 - `delay`: seconds from now until it starts (default 0); `play_note` only
@@ -851,7 +851,7 @@ store_get("nothing saved") --> nil
 Playing notes:
 
 ```lua
-notes_playable() --> true          -- false with no MIDI song or soundfont
+notes_playable() --> true          -- false with no soundfont
 play_note(60) --> true             -- false when notes can't play
 sequence_register({ 60, { key = 64, length = 0.5 } }) --> 1   -- an id
 sequence_play(riff) --> 1          -- a handle for sequence_stop; nil when notes can't play
