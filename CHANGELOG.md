@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.6.2 (2026-10-08)
+
 ### Added
 - synththing can keep running in the tray (Windows): closing the window hides it there, music and all, if you like. The first time you close it, it asks. Click the tray icon to bring synththing back; right-click it for a little panel with what's playing, play/pause and skip, the volume, and your playlists and soundfonts, which goes away like a menu when you click elsewhere and opens again where you left it. Preferences > General changes your answer, and Quit (synththing menu, Ctrl+Q, or the panel) always closes it completely.
 - Closing while a recording or render is running asks what to do with it first: save it, discard it, or keep going (a render can also close once it's done).
