@@ -2088,7 +2088,7 @@ impl App {
 
         self.script_error_ui(ui, true);
 
-        let channels = ui.scope(|ui| self.channels_ui(ui, &mut notes)).response.rect;
+        let channels = ui.scope(|ui| self.channels_ui(ui, &mut notes, playback.position)).response.rect;
         self.tour.mark(tour::Target::Channels, channels);
 
         let mode = if self.fullscreen { DisplayMode::Fullscreen } else { DisplayMode::Window };
@@ -2439,7 +2439,8 @@ impl App {
     /// Per-channel mute toggles for the current MIDI file (left-click
     /// toggle, right-click solo, "All" to re-enable everything). `notes` is
     /// updated optimistically so this frame's preview already reflects it.
-    fn channels_ui(&mut self, ui: &mut egui::Ui, notes: &mut NotesSnapshot) {
+    /// Hovering one says what it plays at `position` and its track's name.
+    fn channels_ui(&mut self, ui: &mut egui::Ui, notes: &mut NotesSnapshot, position: f64) {
         if !notes.detected_channels.is_empty() {
             let mut toggle: Option<(u8, bool)> = None;
             let mut solo: Option<u8> = None;
@@ -2466,15 +2467,53 @@ impl App {
                     let mut enabled = notes.enabled_channels[channel as usize];
                     let is_only_one_left = enabled && enabled_count == 1;
                     let [r, g, b] = colors[channel as usize].unwrap_or_else(|| lua_visualizer::default_channel_color(channel));
-                    let label = format!("{}", channel + 1);
-                    let response = ui
-                        .add_enabled_ui(!is_only_one_left, |ui| {
-                            channel_toggle(ui, &mut enabled, &label, egui::Color32::from_rgb(r, g, b))
-                        })
-                        .inner;
-                    if response.changed() {
-                        toggle = Some((channel, enabled));
-                    }
+                    let color = egui::Color32::from_rgb(r, g, b);
+                    let song = self.song_notes.as_deref().filter(|n| n.facts().tracks > 0);
+                    let instrument =
+                        song.map(|song| crate::midi_notes::program_name(channel, song.program_at(channel, position)));
+                    let about = |ui: &mut egui::Ui| {
+                        match song {
+                            Some(song) => {
+                                ui.strong(format!("Channel {}: {}", channel + 1, instrument.unwrap_or_default()));
+                                if let Some(name) = song.channel_name(channel) {
+                                    ui.label(format!("Track: {name}"));
+                                }
+                            }
+                            None => {
+                                ui.strong(format!("Channel {}", channel + 1));
+                            }
+                        }
+                        ui.weak(if is_only_one_left {
+                            "The last one playing: it can't be turned off"
+                        } else {
+                            "Left-click to toggle, right-click to solo"
+                        });
+                    };
+                    let response = if self.config.channel_chips {
+                        // The last one playing stays in its full color and
+                        // just doesn't turn off (greyed out, it'd look off).
+                        let text = match instrument {
+                            Some(instrument) => format!("{} \u{b7} {instrument}", channel + 1),
+                            None => format!("Channel {}", channel + 1),
+                        };
+                        let response = channel_chip(ui, enabled, &text, color).on_hover_ui(about);
+                        if response.clicked() && !is_only_one_left {
+                            toggle = Some((channel, !enabled));
+                        }
+                        response
+                    } else {
+                        let response = ui
+                            .add_enabled_ui(!is_only_one_left, |ui| {
+                                channel_toggle(ui, &mut enabled, &format!("{}", channel + 1), color)
+                            })
+                            .inner
+                            .on_hover_ui(about)
+                            .on_disabled_hover_ui(about);
+                        if response.changed() {
+                            toggle = Some((channel, enabled));
+                        }
+                        response
+                    };
                     if response.secondary_clicked() {
                         solo = Some(channel);
                     }
@@ -2530,6 +2569,7 @@ impl App {
         let mut pulse_length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH) * 100.0;
         let mut script_log = self.config.script_log_to_app;
         let mut audio_files = self.config.show_audio_files;
+        let mut channel_chips = self.config.channel_chips;
         let mut close = false;
         let mut welcome = false;
         let mut tour = false;
@@ -2575,6 +2615,14 @@ impl App {
                                      adding a folder adds only its MIDI files (an audio file dragged in by itself is \
                                      still added).",
                                     |ui| ui.checkbox(&mut audio_files, "Show audio files (MP3, WAV, OGG, FLAC, ...)"),
+                                );
+                                with_info(
+                                    ui,
+                                    "The channel toggles above the visualizer as chips in each channel's color, \
+                                     saying what it plays (\"3 \u{b7} Violin\"): click one to turn its channel off \
+                                     (it goes grey) or back on, right-click to hear only that one. Off: small \
+                                     numbered checkboxes, with the instrument when you hover one.",
+                                    |ui| ui.checkbox(&mut channel_chips, "Channel toggles as chips with instrument names"),
                                 );
                                 with_info(
                                     ui,
@@ -2696,7 +2744,9 @@ impl App {
             || (pulse_length / 100.0 - self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH)).abs() > 1e-4
             || script_log != self.config.script_log_to_app
             || audio_files != self.config.show_audio_files
+            || channel_chips != self.config.channel_chips
         {
+            self.config.channel_chips = channel_chips;
             self.config.show_audio_files = audio_files;
             self.browser.set_extensions(listed_song_extensions(&self.config));
             self.config.script_log_to_app = script_log;
@@ -3343,6 +3393,41 @@ fn channel_toggle(ui: &mut egui::Ui, on: &mut bool, label: &str, color: egui::Co
         ui.checkbox(on, label)
     })
     .inner
+}
+
+/// A channel's toggle as a chip (`Config::channel_chips`), like the
+/// library's: filled with the channel's color while it's on, washed out to
+/// grey while it's off, outlined in the theme's hover color while hovered.
+/// Clicking it toggles.
+fn channel_chip(ui: &mut egui::Ui, on: bool, text: &str, color: egui::Color32) -> egui::Response {
+    let fill = if on { color } else { washed_out(color, ui.visuals().dark_mode) };
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font, on_color(fill));
+    let padding = egui::vec2(8.0, 2.0);
+    let (rect, response) = ui.allocate_exact_size(galley.size() + padding * 2.0, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let radius = rect.height() / 2.0;
+        ui.painter().rect_filled(rect, radius, fill);
+        if response.hovered() {
+            let hover = ui.visuals().widgets.hovered.bg_stroke;
+            let stroke = egui::Stroke::new(hover.width.max(1.5), hover.color);
+            ui.painter().rect_stroke(rect, radius, stroke, egui::StrokeKind::Outside);
+        }
+        ui.painter().galley(rect.min + padding, galley, on_color(fill));
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, text));
+    response
+}
+
+/// `color` with most of its color taken out and pushed toward the theme's
+/// background: how a channel chip looks while its channel is off, still a
+/// hint of which channel it is.
+fn washed_out(color: egui::Color32, dark: bool) -> egui::Color32 {
+    let grey = (0.2126 * f32::from(color.r()) + 0.7152 * f32::from(color.g()) + 0.0722 * f32::from(color.b())) as u8;
+    let toward = |c: u8, to: u8, t: f32| (f32::from(c) + (f32::from(to) - f32::from(c)) * t).round() as u8;
+    let [r, g, b] = [color.r(), color.g(), color.b()].map(|c| toward(c, grey, 0.65));
+    let (to, t) = if dark { (20, 0.45) } else { (250, 0.4) };
+    egui::Color32::from_rgb(toward(r, to, t), toward(g, to, t), toward(b, to, t))
 }
 
 /// The status line's color, by what it says: red for something that

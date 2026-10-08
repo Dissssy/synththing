@@ -4,6 +4,28 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Scripts can look back at the last few seconds of sound: `history_left(seconds, [count])` and `history_right` give the samples played, oldest first, or `count` of them spread evenly, one per pixel say, so a scope or a slow trace no longer needs its own ring buffer.
+- `line` takes a width: `line(x0, y0, x1, y1, color, 4)` draws a 4-pixel band with round ends, so a thick trace joins up cleanly.
+- `peak_left()` and `peak_right()`: the loudest sample each frame, for peak meters and clip lights, next to `level_left`'s average loudness.
+- Spectrum helpers for scripts: `fft_bin(hz)` finds a frequency's entry in a spectrum, `fft_freq` goes the other way, and `fft_band(spectrum, lo_hz, hi_hz)` gives the peak and average of a range (bass, mids, treble).
+- `approach(current, target, rate)` for smoothing that's the same at any frame rate: meters and followers no longer run faster at 120 fps or slower in a 30 fps recording. The FFT, Pulse and Dashboard visualizers use it.
+- Color helpers for scripts: `hsv(hue, saturation, value)` for colors around the color wheel (hue in degrees), and `mix(color1, color2, t)` for anything in between two colors.
+- Scripts can tell which instrument each channel plays: `channel_program(c)` gives its program and General MIDI name (following changes partway through a song), and `channel_name(c)` the name of the track it's in. Dashboard's piano roll uses them for a legend.
+- Scripts can move and clip their drawing: `translate(dx, dy)` shifts everything drawn after it, `clip(x0, y0, x1, y1)` keeps it inside a rectangle, and `push_view()` / `pop_view()` save and restore both, so a panel or widget can draw in its own coordinates without spilling out.
+- A new visualizer, Dashboard: a scope, a spectrum, a piano roll and level meters in four panels, with a shake when a sound starts.
+- Scripts can leave trails: `set_clear_color({r,g,b,a})` sets what each frame starts from, blended over the frame before. A translucent color fades the last frame a little each time, and `a = 0` keeps it as it was, so a script can draw only what changed.
+
+### Changed
+- Hovering a channel toggle above the visualizer says which instrument that channel is playing, and the name of its track in the file.
+- The channel toggles can be colored chips that say what each channel plays ("3 · Violin"): click one to turn its channel off, and it goes grey. Preferences > Songs > "Channel toggles as chips with instrument names".
+- The Waveform visualizer has a setting for how much sound it shows across the window, from a few milliseconds up to 4 seconds, a trail setting that lets old traces fade out slowly, like an old oscilloscope's screen, and a thickness setting.
+- The FFT visualizer's meters hold the loudest sample, like a studio meter, instead of the highest recent level.
+- The Disco visualizer's light beams are drawn as solid bands rather than bundles of thin lines: smoother, with no stripes.
+
+### Fixed
+- The FFT and Spectrogram visualizers show each frequency where it belongs: they were reading every bucket from about 43 Hz lower than its place on the scale.
+
 ## 0.5.3 (2026-10-08)
 
 ### Changed

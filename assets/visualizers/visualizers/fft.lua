@@ -13,15 +13,20 @@
 -- Frequency labels along the top mark where 50 Hz, 100 Hz, 1 kHz and so
 -- on fall on the log scale, and two slim meters on the right show each
 -- channel's loudness (level_left/level_right, the RMS of this frame's
--- samples) with a slowly falling peak marker.
+-- samples) with a marker holding the loudest sample (peak_left/peak_right)
+-- and falling back slowly, like a studio meter: the gap between the two is
+-- how punchy the sound is, and the marker at the top means clipping.
 
 local MIN_FREQUENCY_HZ = 30.0
 local MAX_FREQUENCY_HZ = 16000.0
 local MIN_DB = -60.0
 local MAX_DB = 0.0
--- Exponential smoothing of bar height between frames: higher = smoother but
--- laggier. This is deliberately mild, not a slow decay.
-local SMOOTHING = 0.55
+-- How fast the bars follow the sound, per second (approach): lower is
+-- smoother but laggier. This is deliberately mild, not a slow decay: about
+-- 45% of the way each frame at 60 fps, and the same speed at any frame rate.
+local BAR_RATE = 36
+-- The meters' bars, a little calmer.
+local METER_RATE = 26
 
 local left_bars = {}
 local right_bars = {}
@@ -33,29 +38,10 @@ local function freq_at(t)
     return MIN_FREQUENCY_HZ * (MAX_FREQUENCY_HZ / MIN_FREQUENCY_HZ) ^ t
 end
 
-local function bin_for_freq(freq, fft_size)
-    return math.floor((freq / SAMPLE_RATE) * fft_size + 0.5)
-end
-
 -- Peak magnitude (as a 0..1 fraction of the MIN_DB..MAX_DB range) within the
 -- log-spaced frequency bucket that column `x` of `width` covers.
 local function bucket_unit_value(spectrum, x, width)
-    if #spectrum == 0 then
-        return 0.0
-    end
-
-    local fft_size = #spectrum * 2
-    -- Skip bin 1 (DC) and clamp into range so odd window sizes can't error.
-    local lo = math.max(1, math.min(bin_for_freq(freq_at((x - 1) / width), fft_size), #spectrum - 1))
-    local hi = math.max(lo + 1, math.min(bin_for_freq(freq_at(x / width), fft_size), #spectrum))
-
-    local peak = 0.0
-    for i = lo, hi do
-        if spectrum[i] and spectrum[i] > peak then
-            peak = spectrum[i]
-        end
-    end
-
+    local peak = fft_band(spectrum, freq_at((x - 1) / width), freq_at(x / width))
     local db = 20.0 * math.log(math.max(peak, 1e-6), 10)
     return math.max(0.0, math.min(1.0, (db - MIN_DB) / (MAX_DB - MIN_DB)))
 end
@@ -82,8 +68,8 @@ function render(width, height, left, right)
         local target_left = bucket_unit_value(left_spectrum, x, width)
         local target_right = bucket_unit_value(right_spectrum, x, width)
 
-        left_bars[x] = (left_bars[x] or 0.0) * SMOOTHING + target_left * (1 - SMOOTHING)
-        right_bars[x] = (right_bars[x] or 0.0) * SMOOTHING + target_right * (1 - SMOOTHING)
+        left_bars[x] = approach(left_bars[x] or 0.0, target_left, BAR_RATE)
+        right_bars[x] = approach(right_bars[x] or 0.0, target_right, BAR_RATE)
 
         local left_h = math.floor(left_bars[x] * bottom + 0.5)
         local right_h = math.floor(right_bars[x] * bottom + 0.5)
@@ -112,12 +98,13 @@ function render(width, height, left, right)
 
     if show_meters then
         -- Smooth the raw per-frame levels a little; peaks fall back slowly.
-        meter.l = meter.l + (level_left() - meter.l) * 0.35
-        meter.r = meter.r + (level_right() - meter.r) * 0.35
-        meter.peak_l = math.max(meter.l, meter.peak_l - DT * 0.4)
-        meter.peak_r = math.max(meter.r, meter.peak_r - DT * 0.4)
+        meter.l = approach(meter.l, level_left(), METER_RATE)
+        meter.r = approach(meter.r, level_right(), METER_RATE)
+        meter.peak_l = math.max(peak_left(), meter.peak_l - DT * 0.4)
+        meter.peak_r = math.max(peak_right(), meter.peak_r - DT * 0.4)
         local function draw_meter(x, level, peak, color)
-            -- RMS 0..~0.7 mapped to the full height, on the same dB scale.
+            -- On the same dB scale as the spectrum: a full-scale sample
+            -- (1.0, 0 dB) reaches the top.
             local function to_h(v)
                 local db = 20 * math.log(math.max(v, 1e-6), 10)
                 return math.max(0, math.min(1, (db - MIN_DB) / (MAX_DB - MIN_DB))) * bottom

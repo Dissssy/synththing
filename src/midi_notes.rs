@@ -9,7 +9,54 @@
 //! seconds, the same clock as `playback().position`.
 //!
 //! It also keeps the file's timing: the tempo map and time signatures, for
-//! `beat()`, `bar()`, `tempo()` and friends.
+//! `beat()`, `bar()`, `tempo()` and friends; and each channel's program
+//! changes and track name, for `channel_program()` and `channel_name()`.
+
+/// General MIDI's instrument names, by program number (0 to 127).
+pub const GM_PROGRAM_NAMES: [&str; 128] = [
+    "Acoustic Grand Piano", "Bright Acoustic Piano", "Electric Grand Piano", "Honky-tonk Piano",
+    "Electric Piano 1", "Electric Piano 2", "Harpsichord", "Clavinet",
+    "Celesta", "Glockenspiel", "Music Box", "Vibraphone",
+    "Marimba", "Xylophone", "Tubular Bells", "Dulcimer",
+    "Drawbar Organ", "Percussive Organ", "Rock Organ", "Church Organ",
+    "Reed Organ", "Accordion", "Harmonica", "Tango Accordion",
+    "Acoustic Guitar (nylon)", "Acoustic Guitar (steel)", "Electric Guitar (jazz)", "Electric Guitar (clean)",
+    "Electric Guitar (muted)", "Overdriven Guitar", "Distortion Guitar", "Guitar Harmonics",
+    "Acoustic Bass", "Electric Bass (finger)", "Electric Bass (pick)", "Fretless Bass",
+    "Slap Bass 1", "Slap Bass 2", "Synth Bass 1", "Synth Bass 2",
+    "Violin", "Viola", "Cello", "Contrabass",
+    "Tremolo Strings", "Pizzicato Strings", "Orchestral Harp", "Timpani",
+    "String Ensemble 1", "String Ensemble 2", "Synth Strings 1", "Synth Strings 2",
+    "Choir Aahs", "Voice Oohs", "Synth Voice", "Orchestra Hit",
+    "Trumpet", "Trombone", "Tuba", "Muted Trumpet",
+    "French Horn", "Brass Section", "Synth Brass 1", "Synth Brass 2",
+    "Soprano Sax", "Alto Sax", "Tenor Sax", "Baritone Sax",
+    "Oboe", "English Horn", "Bassoon", "Clarinet",
+    "Piccolo", "Flute", "Recorder", "Pan Flute",
+    "Blown Bottle", "Shakuhachi", "Whistle", "Ocarina",
+    "Lead 1 (square)", "Lead 2 (sawtooth)", "Lead 3 (calliope)", "Lead 4 (chiff)",
+    "Lead 5 (charang)", "Lead 6 (voice)", "Lead 7 (fifths)", "Lead 8 (bass + lead)",
+    "Pad 1 (new age)", "Pad 2 (warm)", "Pad 3 (polysynth)", "Pad 4 (choir)",
+    "Pad 5 (bowed)", "Pad 6 (metallic)", "Pad 7 (halo)", "Pad 8 (sweep)",
+    "FX 1 (rain)", "FX 2 (soundtrack)", "FX 3 (crystal)", "FX 4 (atmosphere)",
+    "FX 5 (brightness)", "FX 6 (goblins)", "FX 7 (echoes)", "FX 8 (sci-fi)",
+    "Sitar", "Banjo", "Shamisen", "Koto",
+    "Kalimba", "Bagpipe", "Fiddle", "Shanai",
+    "Tinkle Bell", "Agogo", "Steel Drums", "Woodblock",
+    "Taiko Drum", "Melodic Tom", "Synth Drum", "Reverse Cymbal",
+    "Guitar Fret Noise", "Breath Noise", "Seashore", "Bird Tweet",
+    "Telephone Ring", "Helicopter", "Applause", "Gunshot",
+];
+
+/// The channel General MIDI keeps for drums (the tenth, counting from 1),
+/// where a program picks a drum kit rather than an instrument.
+pub const DRUM_CHANNEL: u8 = 9;
+
+/// What a channel on `program` plays, by name: General MIDI's instrument,
+/// or "Drums" on the drum channel.
+pub fn program_name(channel: u8, program: u8) -> &'static str {
+    if channel == DRUM_CHANNEL { "Drums" } else { GM_PROGRAM_NAMES[usize::from(program & 0x7F)] }
+}
 
 /// One note, start to stop, in song seconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -34,6 +81,11 @@ pub struct NoteList {
     timing: Option<Timing>,
     /// Facts about the file itself, for the song info view.
     facts: MidiFacts,
+    /// Every program change, `(seconds, channel, program)`, in time order.
+    programs: Vec<(f64, u8, u8)>,
+    /// The name of the track each channel's first note is in (empty when
+    /// that track has none, or the channel has no notes).
+    channel_names: [String; 16],
 }
 
 /// Facts about a MIDI file, shown in the song info view.
@@ -155,6 +207,18 @@ impl NoteList {
         self.timing.as_ref()
     }
 
+    /// The program (instrument, 0 to 127) `channel` is on at `seconds`: the
+    /// last program change at or before then, 0 (a piano) before any.
+    pub fn program_at(&self, channel: u8, seconds: f64) -> u8 {
+        let until = self.programs.partition_point(|&(time, _, _)| time <= seconds);
+        self.programs[..until].iter().rev().find(|&&(_, c, _)| c == channel).map_or(0, |&(_, _, program)| program)
+    }
+
+    /// The name of the track `channel`'s notes are in, if it has one.
+    pub fn channel_name(&self, channel: u8) -> Option<&str> {
+        self.channel_names.get(usize::from(channel)).map(String::as_str).filter(|name| !name.is_empty())
+    }
+
     /// `(index, note)` for every note sounding at any point in
     /// `[t0, t1)`: starting inside it, or started earlier and still held at
     /// `t0`. In start order.
@@ -208,6 +272,7 @@ impl NoteList {
         let mut open: std::collections::HashMap<(u8, u8), std::collections::VecDeque<(f64, u8)>> =
             std::collections::HashMap::new();
         let mut notes = Vec::new();
+        let mut programs = Vec::new();
         let mut end_time = 0.0f64;
         for &(tick, _, event) in &events {
             let time = clock.seconds(tick);
@@ -236,6 +301,7 @@ impl NoteList {
                         notes.push(Note { channel, key, velocity, start, stop: time });
                     }
                 }
+                Event::Program { channel, program } => programs.push((time, channel, program)),
                 Event::Other => {}
             }
         }
@@ -261,7 +327,10 @@ impl NoteList {
             copyright: texts.copyright,
             texts: texts.texts,
         };
-        Ok(Self { notes, longest, timing, facts })
+        let channel_names = texts
+            .channel_tracks
+            .map(|track| track.and_then(|t| facts.track_names.get(t).cloned()).unwrap_or_default());
+        Ok(Self { notes, longest, timing, facts, programs, channel_names })
     }
 }
 
@@ -273,6 +342,7 @@ enum Event {
     Tempo(u32),
     /// Numerator and denominator (already as a number, e.g. 8 for x/8).
     TimeSignature(u8, u8),
+    Program { channel: u8, program: u8 },
     Other,
 }
 
@@ -282,6 +352,8 @@ struct TrackTexts {
     names: Vec<String>,
     copyright: Option<String>,
     texts: Vec<String>,
+    /// The track (index into `names`) each channel's first note is in.
+    channel_tracks: [Option<usize>; 16],
 }
 
 /// Meta event text, which has no declared encoding: UTF-8 when it is,
@@ -381,6 +453,8 @@ fn read_track(
                         if velocity == 0 {
                             Event::NoteOff { channel, key }
                         } else {
+                            let track = texts.names.len().checked_sub(1);
+                            texts.channel_tracks[usize::from(channel)].get_or_insert(track.unwrap_or(0));
                             Event::NoteOn { channel, key, velocity }
                         }
                     }
@@ -389,7 +463,8 @@ fn read_track(
                         r.u8()?;
                         Event::Other
                     }
-                    0xC0 | 0xD0 => {
+                    0xC0 => Event::Program { channel, program: data(r)? & 0x7F },
+                    0xD0 => {
                         data(r)?;
                         Event::Other
                     }
@@ -611,6 +686,36 @@ mod tests {
         assert_eq!(list.note_count(), 4);
         assert_eq!(list.channels(), [0, 1, 2]);
         assert!((facts.end_time - 1.75).abs() < 1e-9);
+    }
+
+    /// Program changes are kept per channel with their times; a channel
+    /// gets the name of the track its notes are in.
+    #[test]
+    fn programs_and_channel_names() {
+        let mut bytes = b"MThd".to_vec();
+        bytes.extend(6u32.to_be_bytes());
+        bytes.extend([0, 1, 0, 3, 0x01, 0xE0]); // format 1, 3 tracks, 480 per quarter
+        bytes.extend(track(&[(0, &[0xFF, 0x03, 0x05, b'T', b'e', b'm', b'p', b'o'])]));
+        bytes.extend(track(&[
+            (0, &[0xFF, 0x03, 0x07, b'S', b't', b'r', b'i', b'n', b'g', b's']),
+            (0, &[0xC1, 48]),
+            (0, &[0x91, 60, 100]),
+            (480, &[0x81, 60, 0]),
+            (480, &[0xC1, 40]), // at 1.0 s
+            (0, &[0x91, 62, 100]),
+            (480, &[0x81, 62, 0]),
+        ]));
+        bytes.extend(track(&[(0, &[0x99, 36, 100]), (240, &[0x89, 36, 0]), (0, &[0x92, 64, 90]), (240, &[0x82, 64, 0])]));
+        let list = NoteList::from_smf(&bytes).unwrap();
+        assert_eq!(list.program_at(1, 0.0), 48);
+        assert_eq!(list.program_at(1, 0.99), 48);
+        assert_eq!(list.program_at(1, 1.0), 40);
+        assert_eq!(list.program_at(2, 1.0), 0, "never changed: piano");
+        assert_eq!(list.channel_name(1), Some("Strings"));
+        assert_eq!(list.channel_name(9), None, "its track has no name");
+        assert_eq!(list.channel_name(5), None, "no notes");
+        assert_eq!(GM_PROGRAM_NAMES[40], "Violin");
+        assert_eq!(GM_PROGRAM_NAMES[127], "Gunshot");
     }
 
     #[test]

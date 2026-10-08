@@ -5,14 +5,17 @@
 //! 1-indexed tables of numbers. It draws with four host-provided functions:
 //!
 //! * `clear({r, g, b})`
-//! * `line(x0, y0, x1, y1, {r, g, b [, a]})`
+//! * `line(x0, y0, x1, y1, {r, g, b [, a]} [, width])`
 //! * `rect(x0, y0, x1, y1, {r, g, b [, a]})`
 //! * `pixel(x, y, {r, g, b [, a]})`
 //!
 //! Colors are plain Lua tables. `a` is opacity 0.0..1.0, default 1.0 (an
 //! opaque draw overwrites; a translucent one alpha-blends over what's there).
 //! The interpreted cost of reading a color table is paid once per draw call
-//! (queued as a packed `u32`), never once per pixel.
+//! (queued as a packed `u32`), never once per pixel. `translate` / `clip`
+//! queue a view change with the drawing ([`ViewState`], [`Target`]). Each frame starts as
+//! the last one with `set_clear_color`'s color (opaque black by default)
+//! blended over it ([`Canvas`]).
 //!
 //! Other host functions:
 //! * `fft_left(left)` / `fft_right(right)`, windowed magnitude spectrum
@@ -56,8 +59,9 @@
 //!   nearest-neighbor, optionally recolored per draw (`palette`, `tint`).
 //! * `beat`, `time_at_beat`, `bar`, `tempo`, `time_signature`: the MIDI
 //!   file's musical timing (nil for plain audio).
-//! * `level_left`, `level_right` (RMS) and `onset()` (spectral flux), audio
-//!   features computed in Rust.
+//! * `level_left`, `level_right` (RMS), `peak_left`, `peak_right` and `onset()` (spectral flux), audio
+//!   features computed in Rust; `history_left` / `history_right`, the last
+//!   few seconds of samples, kept in Rust.
 //! * `notes_between(t0, t1)`, every note sounding in a time window, whole:
 //!   `{id, channel, key, velocity, start, stop}` (see `midi_notes.rs`).
 //! * `set_paused(paused)` / `seek(seconds)`, playback control, queued like
@@ -125,24 +129,32 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 -- and the new stereo samples (flat, 1-indexed tables) since the last frame.
 --
 -- Draw with clear/line/rect/pixel; color tables take an optional `a` (0..1).
---   clear({r,g,b})  line(x0,y0,x1,y1,{r,g,b,a})  rect(...)  pixel(x,y,{r,g,b,a})
+--   clear({r,g,b})  line(x0,y0,x1,y1,{r,g,b,a},[width])  rect(...)  pixel(x,y,{r,g,b,a})
+--   set_clear_color({r,g,b,a})  what frames start from; a < 1 leaves trails
+--   hsv(hue, s, v) / mix(color1, color2, t)  make colors (hue in degrees)
+--   translate(dx, dy) / clip(x0, y0, x1, y1) / push_view() / pop_view()  move and limit drawing
 --   circle(x,y,r,color)  triangle(x1,y1,x2,y2,x3,y3,color)  polygon(points,color)
 --   sprite_register({image = rows, palette = colors}) once, then sprite(id, x, y, scale)
 --   text(x, y, string, color, height) / text_size(string, height)  pixel text
 -- fft_left(left) / fft_right(right)     magnitude spectrum, computed in Rust
+-- fft_bin(hz) / fft_band(spectrum, lo, hi)  find frequencies in a spectrum
 -- level_left() / level_right() / onset() loudness, and whether a sound just started
+-- peak_left() / peak_right()           this frame's loudest sample
+-- history_left(seconds, [count])       the last few seconds of samples, oldest first
 -- beat() / bar() / tempo()              musical timing from the MIDI file
 -- notes_between(t0, t1)                 whole notes with start/stop times
 -- active_notes() / upcoming_notes()     notes held now / changing soon
 -- midi_channels() / channel_enabled(c)  the file's channels and their toggles
 -- set_channel_enabled(c, enabled)       mute/unmute a channel from the script
 -- channel_colors({ [c] = color, ... })   color the app's channel toggles to match
+-- channel_program(c) / channel_name(c)  the instrument a channel plays, its track's name
 -- play_note(key, {channel, velocity, duration})  play a note on the song's instruments
 -- playback() / set_paused(p) / seek(t)  transport state and control
 -- playlist() / play_track(i) / next_track()  the current playlist
 -- store_get(key) / store_set(key, v)    data saved across restarts
 -- FRAME / TIME                          frame count, seconds since start
 -- log(message) / DT                     debug log, seconds since last frame
+-- approach(current, target, rate)       smoothing, the same at any frame rate
 -- mouse() / has_focus()                 the mouse over the visualizer (see Docs)
 -- input_register(name, keys) / input(id) rebindable keys; typing_begin() for text
 -- setting_bool/int/float/color/string/selection(key, ...)  user-editable values
@@ -383,6 +395,12 @@ pub fn bundled_default(file_name: &str) -> Option<&'static str> {
 enum DrawCommand {
     Clear(u32),
     Line { x0: f32, y0: f32, x1: f32, y1: f32, color: u32 },
+    /// `translate`, `clip`, `pop_view`: everything drawn after it is moved
+    /// by `offset` and limited to `clip` (in frame pixels, offset already
+    /// applied; `None` is the whole frame).
+    View { offset: (f32, f32), clip: Option<(f32, f32, f32, f32)> },
+    /// A `line` wider than a pixel.
+    ThickLine { x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: u32 },
     Rect { x0: f32, y0: f32, x1: f32, y1: f32, color: u32 },
     Pixel { x: i32, y: i32, color: u32 },
     Circle { x: f32, y: f32, radius: f32, color: u32 },
@@ -1349,12 +1367,85 @@ fn describe_scalar(value: &Value) -> String {
 struct AudioFeatures {
     level_left: f32,
     level_right: f32,
+    /// This frame's largest sample, ignoring sign (`peak_left`, `peak_right`).
+    peak_left: f32,
+    peak_right: f32,
     onset: bool,
     onset_strength: f32,
     /// Set the first time a script calls `onset()`: from then on the
     /// detector runs every frame (it needs a running history), and not
     /// before, so scripts that don't use it don't pay for it.
     onset_wanted: bool,
+    history: SampleHistory,
+}
+
+/// How far back `history_left` / `history_right` reach.
+const HISTORY_SECONDS: f64 = 4.0;
+
+/// The last [`HISTORY_SECONDS`] of samples played, per channel, for
+/// `history_left` / `history_right`: a ring that starts out silent, so a
+/// script always gets as many values as it asked for.
+#[derive(Default)]
+struct SampleHistory {
+    left: Vec<f32>,
+    right: Vec<f32>,
+    /// Where the next sample goes, which is also the oldest one.
+    next: usize,
+    sample_rate: u32,
+}
+
+impl SampleHistory {
+    fn new(sample_rate: u32) -> Self {
+        let len = (sample_rate as f64 * HISTORY_SECONDS) as usize;
+        Self { left: vec![0.0; len], right: vec![0.0; len], next: 0, sample_rate }
+    }
+
+    fn push(&mut self, samples: &[StereoFrame]) {
+        let len = self.left.len();
+        if len == 0 {
+            return;
+        }
+        for &(l, r) in samples {
+            self.left[self.next] = l;
+            self.right[self.next] = r;
+            self.next = (self.next + 1) % len;
+        }
+    }
+
+    /// `history_left(seconds, [count])`'s values, from `left` or `right`.
+    fn lookup(&self, right: bool, seconds: f64, count: Option<i64>) -> mlua::Result<Vec<f32>> {
+        if !seconds.is_finite() || seconds < 0.0 {
+            return Err(mlua::Error::runtime(format!("history: seconds must be 0 or more, got {seconds}")));
+        }
+        let span = (seconds.min(HISTORY_SECONDS) * self.sample_rate as f64).round() as usize;
+        let count = match count {
+            Some(count) if count < 0 => {
+                return Err(mlua::Error::runtime(format!("history: count must be 0 or more, got {count}")));
+            }
+            Some(count) => count as usize,
+            None => span,
+        };
+        Ok(self.read(if right { &self.right } else { &self.left }, span, count))
+    }
+
+    /// The last `span` samples of one channel (`ring`), oldest first; or,
+    /// with fewer than `span` wanted, `count` of them spread evenly from
+    /// the oldest to the newest.
+    fn read(&self, ring: &[f32], span: usize, count: usize) -> Vec<f32> {
+        let len = ring.len();
+        let span = span.min(len);
+        let count = count.min(span);
+        if count == 0 {
+            return Vec::new();
+        }
+        let oldest = self.next + len - span;
+        (0..count)
+            .map(|i| {
+                let offset = if count == 1 { span - 1 } else { i * (span - 1) / (count - 1) };
+                ring[(oldest + offset) % len]
+            })
+            .collect()
+    }
 }
 
 /// Which song is loaded, for `playback()`.
@@ -1739,6 +1830,10 @@ struct Compiled {
     frame: Cell<u64>,
     /// `TIME`: seconds since its first frame, as of the last render.
     time: Cell<f64>,
+    /// What each frame starts from (`set_clear_color`).
+    canvas: Canvas,
+    /// `translate` / `clip` this frame, and what `push_view` saved.
+    view: Rc<RefCell<ViewState>>,
     /// The globals there before the script ran (the host's API, Lua's
     /// libraries), so its own can be told apart (`state_snapshot`).
     host_globals: HashSet<String>,
@@ -1828,7 +1923,10 @@ impl LuaVisualizer {
             note_list: Rc::new(RefCell::new(Arc::default())),
             song: Rc::default(),
             live: Rc::default(),
-            features: Rc::default(),
+            features: Rc::new(RefCell::new(AudioFeatures {
+                history: SampleHistory::new(sample_rate),
+                ..AudioFeatures::default()
+            })),
             onset_detector: OnsetDetector::new(sample_rate),
             last_render_instant: None,
             fixed_timestep: None,
@@ -2179,7 +2277,6 @@ impl Visualizer for LuaVisualizer {
         input: &VisualizerInput,
     ) {
         let render_began = Instant::now();
-        buffer.fill(0);
         *self.notes.borrow_mut() = notes.clone();
         *self.playback.borrow_mut() = playback.clone();
         *self.input.borrow_mut() = input.clone();
@@ -2203,8 +2300,11 @@ impl Visualizer for LuaVisualizer {
         self.last_render_instant = Some(now);
 
         let Some(compiled) = &self.compiled else {
+            buffer.fill(0);
             return;
         };
+        compiled.canvas.begin(buffer, width, height);
+        *compiled.view.borrow_mut() = ViewState::default();
         let _ = compiled.lua.globals().set("DT", dt);
         compiled.frame.set(compiled.frame.get() + 1);
         // TIME adds up each frame's length (real, uncapped; or the fixed
@@ -2221,6 +2321,9 @@ impl Visualizer for LuaVisualizer {
             let mut features = self.features.borrow_mut();
             features.level_left = spectrum::rms(&left);
             features.level_right = spectrum::rms(&right);
+            features.peak_left = left.iter().fold(0.0, |peak, s| peak.max(s.abs()));
+            features.peak_right = right.iter().fold(0.0, |peak, s| peak.max(s.abs()));
+            features.history.push(samples);
             if features.onset_wanted {
                 let mono: Vec<f32> = samples.iter().map(|&(l, r)| (l + r) * 0.5).collect();
                 (features.onset, features.onset_strength) = self.onset_detector.update(&mono);
@@ -2256,9 +2359,11 @@ impl Visualizer for LuaVisualizer {
             compiled.log.borrow_mut().push(LogLevel::Error, e.clone());
         }
 
+        let mut target = Target::new(buffer, width, height);
         for cmd in compiled.commands.borrow_mut().drain(..) {
-            rasterize(buffer, width, height, cmd, &compiled.sprites.borrow());
+            rasterize(&mut target, cmd, &compiled.sprites.borrow());
         }
+        compiled.canvas.end(buffer, width, height);
         compiled.store.borrow_mut().save(false);
 
         let ms = render_began.elapsed().as_secs_f32() * 1000.0;
@@ -2359,6 +2464,22 @@ fn compile(
     let controls = Rc::new(RefCell::new(Controls::load(script_path)));
     let typing: Rc<RefCell<TypingSpan>> = Rc::default();
     register_input(&lua, input, &cursor, &controls, &typing).map_err(|e| e.to_string())?;
+    let canvas = Canvas::default();
+    let view: Rc<RefCell<ViewState>> = Rc::default();
+    register_view(&lua, &view, &commands).map_err(|e| e.to_string())?;
+    {
+        let clear_color = Rc::clone(&canvas.clear_color);
+        lua.globals()
+            .set(
+                "set_clear_color",
+                lua.create_function(move |_, color: Table| {
+                    clear_color.set(table_to_color(&color)?);
+                    Ok(())
+                })
+                .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+    }
     let playback_requests: Rc<RefCell<Vec<PlaybackRequest>>> = Rc::default();
     let store = Rc::new(RefCell::new(ScriptStore::load(script_path)));
     let sprites: Rc<RefCell<Vec<Sprite>>> = Rc::default();
@@ -2402,6 +2523,7 @@ fn compile(
             .map_err(|e| e.to_string())?;
     }
     register_timing_audio_shapes(&lua, note_list, playback, features, &commands).map_err(|e| e.to_string())?;
+    register_color_helpers(&lua).map_err(|e| e.to_string())?;
     register_live_notes(&lua, notes, playback, note_list, live).map_err(|e| e.to_string())?;
 
     let host_globals: HashSet<String> = lua
@@ -2444,6 +2566,8 @@ fn compile(
         typing,
         frame: Cell::new(0),
         time: Cell::new(0.0),
+        canvas,
+        view,
         host_globals,
     })
 }
@@ -3192,11 +3316,37 @@ fn register_timing_audio_shapes(
         lua.create_function(move |_, beat: f64| Ok(notes.borrow().timing().map(|t| t.seconds_at_beat(beat))))?,
     )?;
 
+    // Instruments: nil for a plain audio file (no MIDI tracks to read).
+    let (notes, view) = (Rc::clone(note_list), Rc::clone(playback));
+    globals.set(
+        "channel_program",
+        lua.create_function(move |_, (channel, seconds): (i64, Option<f64>)| {
+            let notes = notes.borrow();
+            if notes.facts().tracks == 0 {
+                return Ok((None, None));
+            }
+            let channel = channel.clamp(0, 15) as u8;
+            let program = notes.program_at(channel, seconds.unwrap_or_else(|| view.borrow().position));
+            Ok((Some(program), Some(crate::midi_notes::program_name(channel, program))))
+        })?,
+    )?;
+    let notes = Rc::clone(note_list);
+    globals.set(
+        "channel_name",
+        lua.create_function(move |_, channel: i64| {
+            Ok(notes.borrow().channel_name(channel.clamp(0, 15) as u8).map(str::to_string))
+        })?,
+    )?;
+
     // Audio features.
     let state = Rc::clone(features);
     globals.set("level_left", lua.create_function(move |_, ()| Ok(state.borrow().level_left))?)?;
     let state = Rc::clone(features);
     globals.set("level_right", lua.create_function(move |_, ()| Ok(state.borrow().level_right))?)?;
+    let state = Rc::clone(features);
+    globals.set("peak_left", lua.create_function(move |_, ()| Ok(state.borrow().peak_left))?)?;
+    let state = Rc::clone(features);
+    globals.set("peak_right", lua.create_function(move |_, ()| Ok(state.borrow().peak_right))?)?;
     let state = Rc::clone(features);
     globals.set(
         "onset",
@@ -3206,6 +3356,15 @@ fn register_timing_audio_shapes(
             Ok((features.onset, features.onset_strength))
         })?,
     )?;
+    for (name, right) in [("history_left", false), ("history_right", true)] {
+        let state = Rc::clone(features);
+        globals.set(
+            name,
+            lua.create_function(move |lua, (seconds, count): (f64, Option<i64>)| {
+                vec_to_table(lua, &state.borrow().history.lookup(right, seconds, count)?)
+            })?,
+        )?;
+    }
 
     // Shapes.
     let cmds = Rc::clone(commands);
@@ -3670,10 +3829,17 @@ fn register_globals(
     globals.set(
         "line",
         lua.create_function(
-            move |_, (x0, y0, x1, y1, color): (f32, f32, f32, f32, Table)| {
+            move |_, (x0, y0, x1, y1, color, width): (f32, f32, f32, f32, Table, Option<f32>)| {
                 let color = table_to_color(&color)?;
-                cmds.borrow_mut()
-                    .push(DrawCommand::Line { x0, y0, x1, y1, color });
+                let command = match width {
+                    None => DrawCommand::Line { x0, y0, x1, y1, color },
+                    Some(width) if !(width > 0.0 && width.is_finite()) => {
+                        return Err(mlua::Error::runtime(format!("line: width must be more than 0, got {width}")));
+                    }
+                    Some(width) if width <= 1.0 => DrawCommand::Line { x0, y0, x1, y1, color },
+                    Some(width) => DrawCommand::ThickLine { x0, y0, x1, y1, width: width.min(MAX_LINE_WIDTH), color },
+                };
+                cmds.borrow_mut().push(command);
                 Ok(())
             },
         )?,
@@ -3796,6 +3962,39 @@ fn register_globals(
             }
             *colors.borrow_mut() = mapping;
             Ok(())
+        })?,
+    )?;
+
+    // Spectrum helpers. Entry i of a spectrum is (i - 1) * SAMPLE_RATE /
+    // FFT_SIZE Hz; written as the scripts that had their own wrote it, so
+    // the same frequency gives the same entry.
+    let entries = spectrum::FFT_SIZE / 2;
+    let entry_of = move |hz: f64| -> usize {
+        let bin = (hz / sample_rate as f64 * spectrum::FFT_SIZE as f64 + 0.5).floor();
+        (bin.max(0.0) as usize + 1).min(entries)
+    };
+    globals.set("fft_bin", lua.create_function(move |_, hz: f64| Ok(entry_of(hz)))?)?;
+    globals.set(
+        "fft_freq",
+        lua.create_function(move |_, entry: f64| Ok((entry - 1.0) * sample_rate as f64 / spectrum::FFT_SIZE as f64))?,
+    )?;
+    globals.set(
+        "fft_band",
+        lua.create_function(move |_, (spectrum, lo_hz, hi_hz): (Table, f64, f64)| {
+            let len = spectrum.raw_len();
+            if len == 0 {
+                return Ok((0.0, 0.0));
+            }
+            let (lo_hz, hi_hz) = if lo_hz <= hi_hz { (lo_hz, hi_hz) } else { (hi_hz, lo_hz) };
+            let last = entry_of(hi_hz).min(len);
+            let first = entry_of(lo_hz).min(last);
+            let (mut peak, mut sum) = (0.0f64, 0.0f64);
+            for i in first..=last {
+                let magnitude: f64 = spectrum.raw_get(i)?;
+                peak = peak.max(magnitude);
+                sum += magnitude;
+            }
+            Ok((peak, sum / (last - first + 1) as f64))
         })?,
     )?;
 
@@ -4039,6 +4238,83 @@ fn table_to_color(t: &Table) -> mlua::Result<u32> {
     Ok((alpha << 24) | (byte(r) << 16) | (byte(g) << 8) | byte(b))
 }
 
+/// `hsv` and `mix`, which make color tables, and `approach`. In f64, Lua's
+/// own numbers, so they come out exactly as the same math written in Lua
+/// would.
+fn register_color_helpers(lua: &Lua) -> mlua::Result<()> {
+    let globals = lua.globals();
+    let color = |lua: &Lua, (r, g, b, a): (f64, f64, f64, f64)| -> mlua::Result<Table> {
+        let t = lua.create_table_with_capacity(0, 4)?;
+        t.raw_set("r", r)?;
+        t.raw_set("g", g)?;
+        t.raw_set("b", b)?;
+        t.raw_set("a", a)?;
+        Ok(t)
+    };
+    globals.set(
+        "hsv",
+        lua.create_function(move |lua, (h, s, v, a): (f64, f64, f64, Option<f64>)| {
+            let (r, g, b) = hsv_to_rgb(h, s, v);
+            color(lua, (r * 255.0, g * 255.0, b * 255.0, a.unwrap_or(1.0)))
+        })?,
+    )?;
+    // Smoothing that's the same at any frame rate: `rate` is how fast,
+    // per second (the gap shrinks by e^-rate each second); `rate_down`,
+    // when given, is used instead while heading down.
+    globals.set(
+        "approach",
+        lua.create_function(|lua, (current, target, rate, rate_down): (f64, f64, f64, Option<f64>)| {
+            let rate = if target < current { rate_down.unwrap_or(rate) } else { rate };
+            if rate.is_nan() || rate < 0.0 {
+                return Err(mlua::Error::runtime(format!("approach: rate must be 0 or more, got {rate}")));
+            }
+            let dt = lua.globals().get::<Option<f64>>("DT")?.unwrap_or(0.0);
+            // (No time passed, no move: even at an infinite rate, which
+            // would otherwise be infinity times zero.)
+            let left = if dt > 0.0 { (-rate * dt).exp() } else { 1.0 };
+            Ok(target + (current - target) * left)
+        })?,
+    )?;
+    globals.set(
+        "mix",
+        lua.create_function(move |lua, (from, to, t): (Table, Table, f64)| {
+            let t = t.clamp(0.0, 1.0);
+            let channel = |name: &str| -> mlua::Result<f64> {
+                let (a, b): (Option<f64>, Option<f64>) = (from.get(name)?, to.get(name)?);
+                let (a, b) = match name {
+                    "a" => (a.unwrap_or(1.0), b.unwrap_or(1.0)),
+                    _ => (
+                        a.ok_or_else(|| mlua::Error::runtime(format!("mix: the first color has no {name}")))?,
+                        b.ok_or_else(|| mlua::Error::runtime(format!("mix: the second color has no {name}")))?,
+                    ),
+                };
+                Ok(a + (b - a) * t)
+            };
+            color(lua, (channel("r")?, channel("g")?, channel("b")?, channel("a")?))
+        })?,
+    )?;
+    Ok(())
+}
+
+/// Hue in degrees (any, wrapped to 0..360), saturation and value 0 to 1
+/// (clamped), to red, green and blue 0 to 1.
+fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (f64, f64, f64) {
+    let h = if h.is_finite() { h.rem_euclid(360.0) } else { 0.0 };
+    let (s, v) = (s.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match h {
+        h if h < 60.0 => (c, x, 0.0),
+        h if h < 120.0 => (x, c, 0.0),
+        h if h < 180.0 => (0.0, c, x),
+        h if h < 240.0 => (0.0, x, c),
+        h if h < 300.0 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    (r + m, g + m, b + m)
+}
+
 /// A plain `{r, g, b}` table (no alpha) as used by `setting_color`.
 fn table_to_rgb(t: &Table) -> mlua::Result<[u8; 3]> {
     let r: f32 = t.get("r")?;
@@ -4128,22 +4404,164 @@ fn text_height(height: Option<f32>) -> mlua::Result<f32> {
     Ok(height.min(4096.0))
 }
 
-fn rasterize(buffer: &mut [u32], width: usize, height: usize, cmd: DrawCommand, sprites: &[Sprite]) {
+/// A script's `translate` / `clip` state: where its drawing is moved to and
+/// limited to (in frame pixels, the offset already applied), and the
+/// states `push_view` saved. Every frame starts with none of them.
+#[derive(Default)]
+struct ViewState {
+    offset: (f32, f32),
+    clip: Option<(f32, f32, f32, f32)>,
+    saved: Vec<SavedView>,
+}
+
+/// What `push_view` saves: the offset and the clip.
+type SavedView = ((f32, f32), Option<(f32, f32, f32, f32)>);
+
+/// How many `push_view`s can be waiting for their `pop_view`.
+const MAX_VIEW_DEPTH: usize = 256;
+
+/// `translate`, `clip`, `push_view`, `pop_view`. Each change is queued
+/// with the drawing, so it applies to what's drawn after it.
+fn register_view(lua: &Lua, view: &Rc<RefCell<ViewState>>, commands: &Rc<RefCell<Vec<DrawCommand>>>) -> mlua::Result<()> {
+    let globals = lua.globals();
+    let queue = {
+        let commands = Rc::clone(commands);
+        move |state: &ViewState| commands.borrow_mut().push(DrawCommand::View { offset: state.offset, clip: state.clip })
+    };
+
+    let (state, send) = (Rc::clone(view), queue.clone());
+    globals.set(
+        "translate",
+        lua.create_function(move |_, (dx, dy): (f32, f32)| {
+            let mut state = state.borrow_mut();
+            state.offset = (state.offset.0 + dx, state.offset.1 + dy);
+            send(&state);
+            Ok(())
+        })?,
+    )?;
+    let (state, send) = (Rc::clone(view), queue.clone());
+    globals.set(
+        "clip",
+        lua.create_function(move |_, corners: (Option<f32>, Option<f32>, Option<f32>, Option<f32>)| {
+            let mut state = state.borrow_mut();
+            state.clip = match corners {
+                (None, None, None, None) => None,
+                (Some(x0), Some(y0), Some(x1), Some(y1)) => {
+                    let (ox, oy) = state.offset;
+                    Some((x0 + ox, y0 + oy, x1 + ox, y1 + oy))
+                }
+                _ => return Err(mlua::Error::runtime("clip takes x0, y0, x1, y1, or nothing to draw anywhere again")),
+            };
+            send(&state);
+            Ok(())
+        })?,
+    )?;
+    let state = Rc::clone(view);
+    globals.set(
+        "push_view",
+        lua.create_function(move |_, ()| {
+            let mut state = state.borrow_mut();
+            if state.saved.len() >= MAX_VIEW_DEPTH {
+                return Err(mlua::Error::runtime(format!(
+                    "push_view: {MAX_VIEW_DEPTH} saved already (is there a push_view without its pop_view?)"
+                )));
+            }
+            let saved = (state.offset, state.clip);
+            state.saved.push(saved);
+            Ok(())
+        })?,
+    )?;
+    let (state, send) = (Rc::clone(view), queue);
+    globals.set(
+        "pop_view",
+        lua.create_function(move |_, ()| {
+            let mut state = state.borrow_mut();
+            let Some((offset, clip)) = state.saved.pop() else {
+                return Err(mlua::Error::runtime("pop_view without a push_view before it"));
+            };
+            (state.offset, state.clip) = (offset, clip);
+            send(&state);
+            Ok(())
+        })?,
+    )?;
+    Ok(())
+}
+
+/// Where drawing lands: the frame's pixels, `width` by `height`, and the
+/// part of it drawing is limited to (`clip`), moved by `offset` (`translate`).
+struct Target<'a> {
+    pixels: &'a mut [u32],
+    width: usize,
+    height: usize,
+    clip: Clip,
+    offset: (f32, f32),
+}
+
+/// A rectangle of whole pixels: columns `x0..x1`, rows `y0..y1`.
+#[derive(Clone, Copy)]
+struct Clip {
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+}
+
+impl<'a> Target<'a> {
+    fn new(pixels: &'a mut [u32], width: usize, height: usize) -> Self {
+        Self { pixels, width, height, clip: Clip { x0: 0, y0: 0, x1: width, y1: height }, offset: (0.0, 0.0) }
+    }
+
+    /// A script's clip rectangle as whole pixels inside the frame, rounded
+    /// like `rect`'s edges; the whole frame for none.
+    fn clip_of(&self, rect: Option<(f32, f32, f32, f32)>) -> Clip {
+        let Some((x0, y0, x1, y1)) = rect else {
+            return Clip { x0: 0, y0: 0, x1: self.width, y1: self.height };
+        };
+        let to_x = |v: f32| if v.is_nan() { 0 } else { v.round().clamp(0.0, self.width as f32) as usize };
+        let to_y = |v: f32| if v.is_nan() { 0 } else { v.round().clamp(0.0, self.height as f32) as usize };
+        Clip { x0: to_x(x0.min(x1)), y0: to_y(y0.min(y1)), x1: to_x(x0.max(x1)), y1: to_y(y0.max(y1)) }
+    }
+}
+
+fn rasterize(target: &mut Target, cmd: DrawCommand, sprites: &[Sprite]) {
+    let (ox, oy) = target.offset;
     match cmd {
-        // `clear` always overwrites (the alpha channel is dropped).
-        DrawCommand::Clear(color) => buffer.fill(color & 0x00FF_FFFF),
-        DrawCommand::Pixel { x, y, color } => set_pixel(buffer, width, height, x, y, color),
+        DrawCommand::View { offset, clip } => {
+            target.offset = offset;
+            target.clip = target.clip_of(clip);
+        }
+        // `clear` always overwrites (the alpha channel is dropped), the
+        // clip rectangle only while there is one.
+        DrawCommand::Clear(color) => {
+            let Clip { x0, y0, x1, y1 } = target.clip;
+            if x0 < x1 {
+                for row in y0..y1 {
+                    target.pixels[row * target.width + x0..row * target.width + x1].fill(color & 0x00FF_FFFF);
+                }
+            }
+        }
+        DrawCommand::Pixel { x, y, color } => {
+            set_pixel(target, x.saturating_add(ox.round() as i32), y.saturating_add(oy.round() as i32), color);
+        }
         DrawCommand::Line { x0, y0, x1, y1, color } => {
-            draw_line(buffer, width, height, (x0, y0, x1, y1), color);
+            draw_line(target, (x0 + ox, y0 + oy, x1 + ox, y1 + oy), color);
+        }
+        DrawCommand::ThickLine { x0, y0, x1, y1, width: thickness, color } => {
+            fill_thick_line(target, (x0 + ox, y0 + oy, x1 + ox, y1 + oy), thickness, color);
         }
         DrawCommand::Rect { x0, y0, x1, y1, color } => {
-            fill_rect(buffer, width, height, (x0, y0, x1, y1), color);
+            fill_rect(target, (x0 + ox, y0 + oy, x1 + ox, y1 + oy), color);
         }
-        DrawCommand::Circle { x, y, radius, color } => fill_circle(buffer, width, height, (x, y, radius), color),
-        DrawCommand::Polygon { points, color } => fill_polygon(buffer, width, height, &points, color),
+        DrawCommand::Circle { x, y, radius, color } => fill_circle(target, (x + ox, y + oy, radius), color),
+        DrawCommand::Polygon { mut points, color } => {
+            for point in &mut points {
+                (point.0, point.1) = (point.0 + ox, point.1 + oy);
+            }
+            fill_polygon(target, &points, color);
+        }
         DrawCommand::Sprite { index, x, y, scale, flip_x, flip_y, src, colors } => {
             if let Some(sprite) = sprites.get(index) {
-                draw_sprite(buffer, width, height, sprite, colors.as_deref(), src, (x, y), scale, (flip_x, flip_y));
+                draw_sprite(target, sprite, colors.as_deref(), src, (x + ox, y + oy), scale, (flip_x, flip_y));
             }
         }
     }
@@ -4157,9 +4575,7 @@ fn rasterize(buffer: &mut [u32], width: usize, height: usize, cmd: DrawCommand, 
 /// index.
 #[allow(clippy::too_many_arguments)]
 fn draw_sprite(
-    buffer: &mut [u32],
-    width: usize,
-    height: usize,
+    target: &mut Target,
     sprite: &Sprite,
     colors: Option<&[u32]>,
     (src_x, src_y, src_w, src_h): (usize, usize, usize, usize),
@@ -4175,10 +4591,11 @@ fn draw_sprite(
     let left = x.round() as i64;
     let top = y.round() as i64;
     let (out_w, out_h) = (out_w as i64, out_h as i64);
-    let x_start = left.max(0);
-    let x_end = (left + out_w).min(width as i64);
-    let y_start = top.max(0);
-    let y_end = (top + out_h).min(height as i64);
+    let clip = target.clip;
+    let x_start = left.max(clip.x0 as i64);
+    let x_end = (left + out_w).min(clip.x1 as i64);
+    let y_start = top.max(clip.y0 as i64);
+    let y_end = (top + out_h).min(clip.y1 as i64);
     if x_start >= x_end || y_start >= y_end {
         return;
     }
@@ -4192,7 +4609,8 @@ fn draw_sprite(
     for by in y_start..y_end {
         let sy = src_y + source(by - top, out_h, src_h, flip_y);
         let row = sy * sprite.width..(sy + 1) * sprite.width;
-        let dst_row = &mut buffer[by as usize * width + x_start as usize..by as usize * width + x_end as usize];
+        let stride = target.width;
+        let dst_row = &mut target.pixels[by as usize * stride + x_start as usize..by as usize * stride + x_end as usize];
         let put = |dst: &mut u32, color: u32| match color >> 24 {
             0 => {}
             255 => *dst = color & 0x00FF_FFFF,
@@ -4218,12 +4636,12 @@ fn draw_sprite(
 /// A filled circle: every pixel whose center is within `radius` of
 /// `(cx, cy)`. Each row is one span, so a translucent circle blends each
 /// pixel exactly once.
-fn fill_circle(buffer: &mut [u32], width: usize, height: usize, (cx, cy, radius): (f32, f32, f32), color: u32) {
+fn fill_circle(target: &mut Target, (cx, cy, radius): (f32, f32, f32), color: u32) {
     if radius.is_nan() || radius <= 0.0 {
         return;
     }
-    let top = (cy - radius - 0.5).floor().max(0.0) as usize;
-    let bottom = ((cy + radius + 0.5).ceil().max(0.0) as usize).min(height);
+    let top = ((cy - radius - 0.5).floor().max(0.0) as usize).max(target.clip.y0);
+    let bottom = ((cy + radius + 0.5).ceil().max(0.0) as usize).min(target.clip.y1);
     for row in top..bottom {
         let dy = row as f32 + 0.5 - cy;
         let span = radius * radius - dy * dy;
@@ -4231,21 +4649,83 @@ fn fill_circle(buffer: &mut [u32], width: usize, height: usize, (cx, cy, radius)
             continue;
         }
         let half = span.sqrt();
-        fill_row_span(buffer, width, row, cx - half, cx + half, color);
+        fill_row_span(target, row, cx - half, cx + half, color);
+    }
+}
+
+/// The widest `line` draws (a typo shouldn't fill the screen many times
+/// over).
+const MAX_LINE_WIDTH: f32 = 1024.0;
+
+/// A `line` `thickness` pixels wide, with round ends: every pixel whose
+/// center is within `thickness / 2` of the segment. It's centered on the
+/// pixels a 1-wide line lights (pixel `x` has its center at `x + 0.5`), and
+/// each row is one span, so a translucent line blends each pixel once and
+/// lines joined end to end meet without gaps.
+fn fill_thick_line(
+    target: &mut Target,
+    (x0, y0, x1, y1): (f32, f32, f32, f32),
+    thickness: f32,
+    color: u32,
+) {
+    let (ax, ay, bx, by) = (x0.round() + 0.5, y0.round() + 0.5, x1.round() + 0.5, y1.round() + 0.5);
+    let r = thickness / 2.0;
+    let (dx, dy) = (bx - ax, by - ay);
+    let length = (dx * dx + dy * dy).sqrt();
+    // Where a * x + c is within [lo, hi], along a row.
+    let solve = |a: f32, c: f32, lo: f32, hi: f32| -> Option<(f32, f32)> {
+        if a.abs() < 1e-6 {
+            return (lo..=hi).contains(&c).then_some((f32::NEG_INFINITY, f32::INFINITY));
+        }
+        let (p, q) = ((lo - c) / a, (hi - c) / a);
+        Some((p.min(q), p.max(q)))
+    };
+    let circle = |cx: f32, cy: f32, yc: f32| -> Option<(f32, f32)> {
+        let span = r * r - (yc - cy) * (yc - cy);
+        (span >= 0.0).then(|| (cx - span.sqrt(), cx + span.sqrt()))
+    };
+    let top = ((ay.min(by) - r - 0.5).floor().max(0.0) as usize).max(target.clip.y0);
+    let bottom = ((ay.max(by) + r + 0.5).ceil().max(0.0) as usize).min(target.clip.y1);
+    for row in top..bottom {
+        let yc = row as f32 + 0.5;
+        let mut covered: Option<(f32, f32)> = None;
+        let mut add = |piece: Option<(f32, f32)>| {
+            if let Some((lo, hi)) = piece {
+                covered = Some(covered.map_or((lo, hi), |(l, h)| (l.min(lo), h.max(hi))));
+            }
+        };
+        add(circle(ax, ay, yc));
+        add(circle(bx, by, yc));
+        if length > 0.0 {
+            // The band along the segment: within r of its line, and
+            // between its ends.
+            let (ux, uy) = (dx / length, dy / length);
+            let across = solve(-uy, -uy * -ax + ux * (yc - ay), -r, r);
+            let along = solve(ux, -ux * ax + uy * (yc - ay), 0.0, length);
+            if let (Some((l0, h0)), Some((l1, h1))) = (across, along) {
+                let (lo, hi) = (l0.max(l1), h0.min(h1));
+                if lo <= hi {
+                    add(Some((lo, hi)));
+                }
+            }
+        }
+        if let Some((lo, hi)) = covered {
+            fill_row_span(target, row, lo.max(-1.0), hi.min(target.width as f32 + 1.0), color);
+        }
     }
 }
 
 /// A filled polygon (even-odd rule, so self-intersecting shapes get
 /// holes): every pixel whose center is inside it, one span per crossing
 /// pair per row.
-fn fill_polygon(buffer: &mut [u32], width: usize, height: usize, points: &[(f32, f32)], color: u32) {
+fn fill_polygon(target: &mut Target, points: &[(f32, f32)], color: u32) {
     if points.len() < 3 {
         return;
     }
     let min_y = points.iter().map(|p| p.1).fold(f32::INFINITY, f32::min);
     let max_y = points.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max);
-    let top = (min_y - 0.5).floor().max(0.0) as usize;
-    let bottom = ((max_y + 0.5).ceil().max(0.0) as usize).min(height);
+    let top = ((min_y - 0.5).floor().max(0.0) as usize).max(target.clip.y0);
+    let bottom = ((max_y + 0.5).ceil().max(0.0) as usize).min(target.clip.y1);
     let mut crossings: Vec<f32> = Vec::new();
     for row in top..bottom {
         let y = row as f32 + 0.5;
@@ -4260,19 +4740,86 @@ fn fill_polygon(buffer: &mut [u32], width: usize, height: usize, points: &[(f32,
         crossings.sort_by(f32::total_cmp);
         #[allow(clippy::chunks_exact_to_as_chunks)] // like the rest of the code
         for pair in crossings.chunks_exact(2) {
-            fill_row_span(buffer, width, row, pair[0], pair[1], color);
+            fill_row_span(target, row, pair[0], pair[1], color);
         }
     }
 }
 
 /// Fill the pixels in `row` whose centers lie in `[x0, x1)`.
-fn fill_row_span(buffer: &mut [u32], width: usize, row: usize, x0: f32, x1: f32, color: u32) {
+fn fill_row_span(target: &mut Target, row: usize, x0: f32, x1: f32, color: u32) {
     let first = (x0 - 0.5).ceil();
     let end = (x1 - 0.5).ceil();
     if end <= first {
         return;
     }
-    fill_rect(buffer, width, row + 1, (first, row as f32, end, row as f32 + 1.0), color);
+    fill_rect(target, (first, row as f32, end, row as f32 + 1.0), color);
+}
+
+/// What a script's frame starts from: the clear color (`set_clear_color`,
+/// opaque black unless changed) blended over the frame before, which is
+/// kept only while that color isn't opaque.
+struct Canvas {
+    clear_color: Rc<Cell<u32>>,
+    /// The last frame drawn, and its width and height.
+    kept: RefCell<(Vec<u32>, usize, usize)>,
+}
+
+impl Default for Canvas {
+    fn default() -> Self {
+        Self { clear_color: Rc::new(Cell::new(0xFF00_0000)), kept: RefCell::default() }
+    }
+}
+
+impl Canvas {
+    /// Set `buffer` up for a new frame. A frame of a different size (a
+    /// resize, a recording starting) starts from black instead.
+    fn begin(&self, buffer: &mut [u32], width: usize, height: usize) {
+        let color = self.clear_color.get();
+        let kept = self.kept.borrow();
+        if color >> 24 < 255 && (kept.1, kept.2) == (width, height) && kept.0.len() == buffer.len() {
+            buffer.copy_from_slice(&kept.0);
+            if color >> 24 > 0 {
+                for pixel in buffer.iter_mut() {
+                    *pixel = fade(*pixel, color);
+                }
+            }
+        } else {
+            buffer.fill(fade(0, color));
+        }
+    }
+
+    /// Keep the finished frame for the next one, if it'll show through.
+    fn end(&self, buffer: &[u32], width: usize, height: usize) {
+        let mut kept = self.kept.borrow_mut();
+        if self.clear_color.get() >> 24 < 255 {
+            kept.0.clear();
+            kept.0.extend_from_slice(buffer);
+            (kept.1, kept.2) = (width, height);
+        } else if !kept.0.is_empty() {
+            *kept = Default::default();
+        }
+    }
+}
+
+/// Move `dst` (`0x00RRGGBB`) toward `color` (`0xAARRGGBB`) by its alpha,
+/// like [`blend`] but rounding toward `color`: fading by a little every
+/// frame always gets there, where `blend`'s rounding would leave a faint
+/// glow that never goes.
+fn fade(dst: u32, color: u32) -> u32 {
+    let a = (color >> 24) as i32;
+    if a >= 255 {
+        return color & 0x00FF_FFFF;
+    }
+    if a == 0 {
+        return dst;
+    }
+    let channel = |shift: u32| {
+        let s = ((color >> shift) & 0xFF) as i32;
+        let d = ((dst >> shift) & 0xFF) as i32;
+        let diff = s - d;
+        (d + (diff.abs() * a + 254) / 255 * diff.signum()) as u32
+    };
+    (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
 /// Alpha-composite `src` (`0xAARRGGBB`) over `dst` (`0x00RRGGBB`), returning
@@ -4294,16 +4841,11 @@ fn blend(dst: u32, src: u32) -> u32 {
     (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
-/// Fill an axis-aligned rectangle, clipped to the buffer.
-fn fill_rect(
-    buffer: &mut [u32],
-    width: usize,
-    height: usize,
-    (x0, y0, x1, y1): (f32, f32, f32, f32),
-    color: u32,
-) {
-    let to_x = |v: f32| v.round().clamp(0.0, width as f32) as usize;
-    let to_y = |v: f32| v.round().clamp(0.0, height as f32) as usize;
+/// Fill an axis-aligned rectangle, clipped.
+fn fill_rect(target: &mut Target, (x0, y0, x1, y1): (f32, f32, f32, f32), color: u32) {
+    let clip = target.clip;
+    let to_x = |v: f32| v.round().clamp(clip.x0 as f32, clip.x1 as f32) as usize;
+    let to_y = |v: f32| v.round().clamp(clip.y0 as f32, clip.y1 as f32) as usize;
     let (xa, xb) = (to_x(x0.min(x1)), to_x(x0.max(x1)));
     let (ya, yb) = (to_y(y0.min(y1)), to_y(y0.max(y1)));
     let alpha = color >> 24;
@@ -4311,33 +4853,28 @@ fn fill_rect(
         return;
     }
     for y in ya..yb {
-        let row = y * width;
+        let row = y * target.width;
         if alpha >= 255 {
-            buffer[row + xa..row + xb].fill(color & 0x00FF_FFFF);
+            target.pixels[row + xa..row + xb].fill(color & 0x00FF_FFFF);
         } else {
-            for pixel in &mut buffer[row + xa..row + xb] {
+            for pixel in &mut target.pixels[row + xa..row + xb] {
                 *pixel = blend(*pixel, color);
             }
         }
     }
 }
 
-fn set_pixel(buffer: &mut [u32], width: usize, height: usize, x: i32, y: i32, color: u32) {
-    if x < 0 || y < 0 || x as usize >= width || y as usize >= height {
+fn set_pixel(target: &mut Target, x: i32, y: i32, color: u32) {
+    let clip = target.clip;
+    if x < clip.x0 as i32 || y < clip.y0 as i32 || x >= clip.x1 as i32 || y >= clip.y1 as i32 {
         return;
     }
-    let index = y as usize * width + x as usize;
-    buffer[index] = blend(buffer[index], color);
+    let index = y as usize * target.width + x as usize;
+    target.pixels[index] = blend(target.pixels[index], color);
 }
 
 /// Bresenham's line algorithm, in integer pixel space.
-fn draw_line(
-    buffer: &mut [u32],
-    width: usize,
-    height: usize,
-    (x0, y0, x1, y1): (f32, f32, f32, f32),
-    color: u32,
-) {
+fn draw_line(target: &mut Target, (x0, y0, x1, y1): (f32, f32, f32, f32), color: u32) {
     let (mut x0, mut y0) = (x0.round() as i32, y0.round() as i32);
     let (x1, y1) = (x1.round() as i32, y1.round() as i32);
     let dx = (x1 - x0).abs();
@@ -4347,7 +4884,7 @@ fn draw_line(
     let mut err = dx + dy;
 
     loop {
-        set_pixel(buffer, width, height, x0, y0, color);
+        set_pixel(target, x0, y0, color);
         if x0 == x1 && y0 == y1 {
             break;
         }
@@ -4935,7 +5472,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(".seeded"), "").unwrap();
         seed_bundled(&dir).unwrap();
-        assert_eq!(added(&dir), ["highway", "note_runner"]);
+        assert_eq!(added(&dir), ["dashboard", "highway", "note_runner"]);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -5310,6 +5847,264 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         let left: f32 = log.split(' ').next().unwrap().parse().unwrap();
         assert!((left - 0.566).abs() < 0.01 && log.contains(" 0.25 "), "{log}");
         assert_eq!(hits, 1, "one onset when the sound starts");
+    }
+
+    /// `translate` moves what's drawn after it, `clip` limits it (where
+    /// it's given, after the offset), `clear` fills only the clip, and
+    /// `push_view` / `pop_view` save and restore both. Each frame starts
+    /// with neither.
+    #[test]
+    fn translate_and_clip_move_and_limit_drawing() {
+        let draw = |body: &str, frames: usize| -> String {
+            let mut visualizer = LuaVisualizer::new(format!("W = {{ r = 255, g = 255, b = 255 }}\nfunction render() {body} end"), None, 44_100);
+            let mut buffer = vec![0u32; 8 * 4];
+            for _ in 0..frames {
+                visualizer.render(&mut buffer, 8, 4, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+            }
+            if let Some(e) = visualizer.error() {
+                return e.to_string();
+            }
+            buffer.chunks(8).map(|row| row.iter().map(|&p| if p == 0 { '.' } else { '#' }).collect::<String>() + "\n").collect()
+        };
+        assert_eq!(draw("translate(2, 1) rect(0, 0, 2, 2, W)", 1), "........\n..##....\n..##....\n........\n");
+        assert_eq!(draw("translate(1, 0) translate(1, 1) pixel(0, 0, W) line(0, 2, 3, 2, W)", 1), "........\n..#.....\n........\n..####..\n");
+        assert_eq!(draw("clip(1, 1, 4, 3) clear(W)", 1), "........\n.###....\n.###....\n........\n");
+        assert_eq!(
+            draw("translate(3, 0) clip(0, 0, 2, 4) rect(-5, 0, 10, 1, W) circle(1, 3, 3, W)", 1),
+            "...##...\n...##...\n...##...\n...##...\n",
+            "the clip is where it's given, after the offset"
+        );
+        assert_eq!(
+            draw("push_view() translate(4, 0) clip(0, 0, 2, 1) rect(0, 0, 8, 8, W) pop_view() rect(0, 3, 2, 4, W)", 1),
+            "....##..\n........\n........\n##......\n"
+        );
+        assert_eq!(
+            draw("if FRAME == 1 then translate(6, 0) clip(6, 0, 8, 1) end rect(0, 2, 1, 3, W)", 2),
+            "........\n........\n#.......\n........\n",
+            "a new frame starts over"
+        );
+        assert_eq!(draw("clip() rect(0, 0, 1, 1, W)", 1), "#.......\n........\n........\n........\n");
+        assert!(draw("pop_view()", 1).contains("pop_view without a push_view"));
+        assert!(draw("clip(0, 0)", 1).contains("clip takes x0, y0, x1, y1"));
+        assert!(draw("for i = 1, 300 do push_view() end", 1).contains("256 saved already"));
+    }
+
+    /// `channel_program` gives the program and its General MIDI name (drums
+    /// on channel 9), nil without a MIDI file; `channel_name` the track's.
+    #[test]
+    fn channel_programs_and_names_reach_scripts() {
+        let bytes = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/starter/songs/Ode to Joy.mid")).unwrap();
+        let script = "function render()
+            local p, name = channel_program(0, 0)
+            local dp, drums = channel_program(9)
+            log(tostring(p) .. ' ' .. tostring(name) .. ' | ' .. tostring(drums) .. ' | ' .. tostring(channel_name(15)))
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        render_with(&mut visualizer, &VisualizerInput::default());
+        assert_eq!(last_log(&visualizer), "nil nil | nil | nil", "no MIDI file");
+        visualizer.set_note_list(Arc::new(NoteList::from_smf(&bytes).unwrap()));
+        render_with(&mut visualizer, &VisualizerInput::default());
+        assert_eq!(visualizer.error(), None);
+        let log = last_log(&visualizer);
+        assert!(log.ends_with(" | Drums | nil"), "{log}");
+        let program: usize = log.split(' ').next().unwrap().parse().unwrap();
+        assert!(log.starts_with(&format!("{program} {} |", crate::midi_notes::GM_PROGRAM_NAMES[program])), "{log}");
+    }
+
+    /// `fft_bin` / `fft_freq` convert between spectrum entries and Hz, and
+    /// `fft_band` gives the peak and average of the entries in a range.
+    #[test]
+    fn spectrum_helpers_find_entries_and_bands() {
+        // 1024 Hz, so entry i is (i - 1) Hz.
+        let script = "function render()
+            local spectrum = {}
+            for i = 1, 512 do spectrum[i] = 0 end
+            spectrum[11], spectrum[12], spectrum[13] = 0.5, 1.0, 0.25
+            local peak, mean = fft_band(spectrum, 9.6, 12.4)
+            local narrow = fft_band(spectrum, 11.2, 11.3)
+            local swapped = fft_band(spectrum, 12.4, 9.6)
+            log(table.concat({ fft_bin(0), fft_bin(10.4), fft_bin(10.5), fft_bin(-5), fft_bin(1e9),
+                fft_freq(1), fft_freq(11), peak, mean, narrow, swapped, fft_band({}, 0, 100) }, ' '))
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 1024);
+        render_with(&mut visualizer, &VisualizerInput::default());
+        assert_eq!(visualizer.error(), None);
+        assert_eq!(last_log(&visualizer), "1 11 12 1 512 0.0 10.0 1.0 0.58333333333333 1.0 1.0 0.0 0.0");
+    }
+
+    /// `approach` closes `1 - e^(-rate * DT)` of the gap, `rate_down` while
+    /// heading down; nothing moves with no time passed (the first frame).
+    #[test]
+    fn approach_is_by_the_second() {
+        let script = "function render()
+            log(string.format('%.6f %.6f %g %g %g %g', approach(0, 1, 10), approach(2, 0, 10),
+                approach(1, 0, 10, 0), approach(0, 1, 10, 0), approach(5, 5, 3), approach(0, 1, math.huge)))
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        visualizer.set_fixed_timestep(Some(0.1));
+        render_with(&mut visualizer, &VisualizerInput::default());
+        assert_eq!(last_log(&visualizer), "0.000000 2.000000 1 0 5 0", "DT is 0 on the first frame");
+        render_with(&mut visualizer, &VisualizerInput::default());
+        assert_eq!(last_log(&visualizer), "0.632121 0.735759 1 0.632121 5 1");
+
+        visualizer.set_source("function render() approach(0, 1, -1) end".to_string());
+        render_with(&mut visualizer, &VisualizerInput::default());
+        assert!(visualizer.error().is_some_and(|e| e.contains("rate must be 0 or more")), "{:?}", visualizer.error());
+    }
+
+    /// `hsv` takes hue in degrees (wrapping) and makes a color table;
+    /// `mix` goes between two, alpha included (1 when left out).
+    #[test]
+    fn hsv_and_mix_make_colors() {
+        let script = "function render()
+            local function show(c) return string.format('%g,%g,%g,%g', c.r, c.g, c.b, c.a) end
+            log(table.concat({
+                show(hsv(0, 1, 1)), show(hsv(120, 1, 1)), show(hsv(240, 1, 0.5, 0.25)),
+                show(hsv(-120, 1, 1)), show(hsv(30, 0, 0.2)), show(hsv(60, 2, 2)),
+                show(mix({ r = 0, g = 100, b = 200 }, { r = 100, g = 0, b = 255, a = 0 }, 0.25)),
+                show(mix({ r = 0, g = 0, b = 0 }, { r = 255, g = 255, b = 255 }, 3)),
+            }, ' '))
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        render_with(&mut visualizer, &VisualizerInput::default());
+        assert_eq!(visualizer.error(), None);
+        assert_eq!(
+            last_log(&visualizer),
+            "255,0,0,1 0,255,0,1 0,0,127.5,0.25 0,0,255,1 51,51,51,1 255,255,0,1 25,75,213.75,0.75 255,255,255,1"
+        );
+
+        visualizer.set_source("function render() mix({ r = 1, g = 2 }, { r = 1, g = 2, b = 3 }, 0.5) end".to_string());
+        render_with(&mut visualizer, &VisualizerInput::default());
+        assert!(visualizer.error().is_some_and(|e| e.contains("the first color has no b")), "{:?}", visualizer.error());
+    }
+
+    /// `line`'s width: none or 1 is the plain 1-pixel line, wider is a
+    /// round-ended band centered on the same pixels.
+    #[test]
+    fn wide_lines_are_round_ended_bands() {
+        let draw = |call: &str| -> String {
+            let mut visualizer = LuaVisualizer::new(format!("function render() {call} end"), None, 44_100);
+            let mut buffer = vec![0u32; 10 * 7];
+            visualizer.render(&mut buffer, 10, 7, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+            if let Some(e) = visualizer.error() {
+                return e.to_string();
+            }
+            buffer.chunks(10).map(|row| row.iter().map(|&p| if p == 0 { '.' } else { '#' }).collect::<String>() + "
+").collect()
+        };
+        let white = "{ r = 255, g = 255, b = 255 }";
+        let thin = draw(&format!("line(2, 3, 6, 3, {white})"));
+        assert_eq!(thin, draw(&format!("line(2, 3, 6, 3, {white}, 1)")));
+        assert_eq!(thin, "..........
+..........
+..........
+..#####...
+..........
+..........
+..........
+");
+        assert_eq!(
+            draw(&format!("line(2, 3, 6, 3, {white}, 3)")),
+            "..........
+..........
+.#######..
+.#######..
+.#######..
+..........
+..........
+"
+        );
+        assert_eq!(
+            draw(&format!("line(4, 2, 4, 4, {white}, 5)")),
+            "...###....
+..#####...
+..#####...
+..#####...
+..#####...
+..#####...
+...###....
+",
+            "vertical, round at the ends"
+        );
+        assert!(draw(&format!("line(0, 0, 1, 1, {white}, 0)")).contains("width must be more than 0"));
+    }
+
+    /// Each frame starts from the last one with the clear color blended
+    /// over it: opaque black wipes it (the default), alpha 0 keeps it, in
+    /// between fades it all the way out; a new size starts from black.
+    #[test]
+    fn clear_color_keeps_and_fades_the_last_frame() {
+        let script = "function render(w, h)
+            if FRAME == 1 then pixel(0, 0, { r = 255, g = 255, b = 255 }) end
+        end";
+        let run = |setup: &str, frames: usize, sizes: &[usize]| -> Vec<u32> {
+            let mut visualizer = LuaVisualizer::new(format!("{setup}
+{script}"), None, 44_100);
+            let mut buffer = Vec::new();
+            for f in 0..frames {
+                let width = sizes.get(f).copied().unwrap_or(2);
+                buffer = vec![0x00AB_CDEF; width]; // whatever the host hands over
+                visualizer.render(&mut buffer, width, 1, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+                assert_eq!(visualizer.error(), None);
+            }
+            buffer
+        };
+        assert_eq!(run("", 1, &[]), vec![0xFF_FFFF, 0]);
+        assert_eq!(run("", 2, &[]), vec![0, 0], "opaque black by default");
+        assert_eq!(run("set_clear_color({ r = 0, g = 0, b = 0, a = 0 })", 5, &[]), vec![0xFF_FFFF, 0]);
+        assert_eq!(run("set_clear_color({ r = 0, g = 0, b = 0, a = 0.5 })", 2, &[]), vec![0x7F_7F7F, 0]);
+        // A small fade still gets all the way there (blend's rounding
+        // would stop short, at a dim gray).
+        assert_eq!(run("set_clear_color({ r = 0, g = 0, b = 0, a = 0.05 })", 400, &[]), vec![0, 0]);
+        assert_eq!(run("set_clear_color({ r = 40, g = 40, b = 40, a = 0.05 })", 400, &[]), vec![0x28_2828, 0x28_2828]);
+        // Resized: nothing to keep, so black with the color over it.
+        assert_eq!(run("set_clear_color({ r = 200, g = 0, b = 0, a = 0.5 })", 2, &[2, 3]), vec![0x65_0000; 3]);
+        assert_eq!(run("set_clear_color({ r = 0, g = 0, b = 90 })", 2, &[]), vec![0x00_005A, 0x00_005A]);
+    }
+
+    /// `peak_left` / `peak_right` are the frame's loudest sample, either
+    /// sign; 0 with nothing played.
+    #[test]
+    fn peaks_are_the_loudest_sample() {
+        let script = "function render() log(peak_left() .. ' ' .. peak_right()) end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let mut buffer = vec![0u32; 4];
+        let samples: Vec<StereoFrame> = vec![(0.25, -0.5), (-0.75, 0.125), (0.5, 0.0)];
+        visualizer.render(&mut buffer, 2, 2, &samples, &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        assert_eq!(last_log(&visualizer), "0.75 0.5");
+        visualizer.render(&mut buffer, 2, 2, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        assert_eq!(last_log(&visualizer), "0.0 0.0");
+    }
+
+    /// `history_left` / `history_right` give the last samples played,
+    /// oldest first, across frames; `count` spreads evenly from the oldest
+    /// to the newest; past what's been played, it's silence.
+    #[test]
+    fn sample_history_reaches_back_across_frames() {
+        let script = "function render(w, h, l, r)
+            local function show(t) return table.concat(t, ',') end
+            log(show(history_left(0.01)) .. ' | ' .. show(history_left(0.01, 4)) .. ' | '
+                .. show(history_right(0.003)) .. ' | ' .. show(history_left(10, 2)) .. ' | '
+                .. #history_left(0) .. ' ' .. #history_left(0.005, 50))
+        end";
+        // 1000 Hz, so 0.01 s is 10 samples.
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 1000);
+        let mut buffer = vec![0u32; 4];
+        for f in 0..3 {
+            let samples: Vec<StereoFrame> =
+                (1..=100).map(|i| ((f * 100 + i) as f32, -((f * 100 + i) as f32))).collect();
+            visualizer.render(&mut buffer, 2, 2, &samples, &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        }
+        assert_eq!(visualizer.error(), None);
+        assert_eq!(
+            last_log(&visualizer),
+            "291.0,292.0,293.0,294.0,295.0,296.0,297.0,298.0,299.0,300.0 | 291.0,294.0,297.0,300.0 \
+             | -298.0,-299.0,-300.0 | 0.0,300.0 | 0 5"
+        );
+
+        visualizer.set_source("function render() history_left(-1) end".to_string());
+        render_with(&mut visualizer, &VisualizerInput::default());
+        assert!(visualizer.error().is_some_and(|e| e.contains("0 or more")), "{:?}", visualizer.error());
     }
 
     #[test]

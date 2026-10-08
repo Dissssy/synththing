@@ -76,6 +76,10 @@ pub struct Config {
     /// the beat, 0.1 to 1 (`None`: `DEFAULT_BEAT_PULSE_LENGTH`).
     #[serde(default)]
     pub beat_pulse_length: Option<f32>,
+    /// Preference: show the channel toggles as colored chips with each
+    /// channel's instrument, instead of numbered checkboxes.
+    #[serde(default)]
+    pub channel_chips: bool,
     /// Preference: list audio files (MP3, WAV, ...) as songs, not only MIDI.
     #[serde(default)]
     pub show_audio_files: bool,

@@ -35,10 +35,6 @@ local onset_glow = 0     -- flash after an onset, fades
 local MAX_SPARKS = 48
 local SPARK_LIFE = 1.1
 
-local function mix(a, b, t)
-    return { r = a.r + (b.r - a.r) * t, g = a.g + (b.g - a.g) * t, b = a.b + (b.b - a.b) * t, a = a.a }
-end
-
 -- Points of a regular polygon around (cx, cy).
 local function ring_points(cx, cy, radius, sides, turn)
     local points = {}
@@ -63,7 +59,7 @@ function render(width, height, left, right)
 
     -- Audio: smoothed loudness and onsets.
     local loud = (level_left() + level_right()) / 2
-    level = level + (loud - level) * math.min(1, DT * 12)
+    level = approach(level, loud, 12)
     local hit, strength = onset()
     if hit then
         onset_glow = 1

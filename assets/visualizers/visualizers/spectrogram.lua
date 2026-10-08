@@ -4,9 +4,9 @@
 -- frequency resolution and the time window are editable live in the
 -- Settings window, so "a little blocky" is a slider away rather than an edit.
 --
--- Like waveform.lua's ring buffer, history is kept in a fixed-size ring of
--- already-quantized columns rather than a growing array. Unlike a line plot
--- though, a heatmap needs one draw call per colored cell, and the pixel
+-- History is kept in a fixed-size ring of already-quantized columns rather
+-- than a growing array. Unlike a line plot though, a heatmap needs one draw
+-- call per colored cell, and the pixel
 -- buffer is cleared before every `render` call so every visible column has
 -- to be redrawn every frame -- so column count and bin count are both kept
 -- modest, equal-colored bins within a column are run-length-merged into one
@@ -33,22 +33,16 @@ local QUANT_LEVELS = 24
 -- Exponential smoothing per bin between frames: higher = smoother but laggier.
 local SMOOTHING = 0.45
 
-local function lerp(a, b, t)
-    return a + (b - a) * t
-end
-
 local function build_palette(bg, accent)
     local palette = {}
     for level = 0, QUANT_LEVELS do
         local v = level / QUANT_LEVELS
         if v < 0.5 then
             local t = v / 0.5
-            palette[level] =
-                { r = lerp(bg.r, accent.r, t), g = lerp(bg.g, accent.g, t), b = lerp(bg.b, accent.b, t) }
+            palette[level] = mix(bg, accent, t)
         else
             local t = (v - 0.5) / 0.5
-            palette[level] =
-                { r = lerp(accent.r, 255, t), g = lerp(accent.g, 255, t), b = lerp(accent.b, 255, t) }
+            palette[level] = mix(accent, { r = 255, g = 255, b = 255 }, t)
         end
     end
     return palette
@@ -62,29 +56,12 @@ local function freq_at(t)
     return MIN_FREQUENCY_HZ * (MAX_FREQUENCY_HZ / MIN_FREQUENCY_HZ) ^ t
 end
 
-local function bin_for_freq(freq, fft_size)
-    return math.floor((freq / SAMPLE_RATE) * fft_size + 0.5)
-end
-
 -- Peak magnitude (0..1) within the log-spaced frequency band row `row`
 -- covers; row 1 is the highest frequency, row `freq_bins` the lowest.
 local function row_unit_value(spectrum, row, freq_bins)
-    if #spectrum == 0 then
-        return 0.0
-    end
-    local fft_size = #spectrum * 2
     local t_hi = 1.0 - (row - 1) / freq_bins
     local t_lo = 1.0 - row / freq_bins
-    local lo = math.max(1, math.min(bin_for_freq(freq_at(t_lo), fft_size), #spectrum - 1))
-    local hi = math.max(lo + 1, math.min(bin_for_freq(freq_at(t_hi), fft_size), #spectrum))
-
-    local peak = 0.0
-    for i = lo, hi do
-        if spectrum[i] and spectrum[i] > peak then
-            peak = spectrum[i]
-        end
-    end
-
+    local peak = fft_band(spectrum, freq_at(t_lo), freq_at(t_hi))
     local db = 20.0 * math.log(math.max(peak, 1e-6), 10)
     return math.max(0.0, math.min(1.0, (db - MIN_DB) / (MAX_DB - MIN_DB)))
 end

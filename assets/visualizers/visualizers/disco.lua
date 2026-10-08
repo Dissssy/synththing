@@ -101,6 +101,7 @@ for ri = 1, #RINGS do
 end
 
 local BALL_DARK = { r = 7, g = 9, b = 16 }
+local WHITE = { r = 255, g = 255, b = 255 }
 
 -- State ----------------------------------------------------------------
 local game_time = 0.0
@@ -140,22 +141,6 @@ local PP, QQ = {}, {}
 local function tmp(r_, g_, b_, a_)
     TMP.r, TMP.g, TMP.b, TMP.a = r_, g_, b_, a_ or 1
     return TMP
-end
-
-local function set_hsv(dst, h, s, v)
-    local c = v * s
-    local x = c * (1 - abs((h / 60) % 2 - 1))
-    local m = v - c
-    local rr, gg, bb
-    if h < 60 then rr, gg, bb = c, x, 0
-    elseif h < 120 then rr, gg, bb = x, c, 0
-    elseif h < 180 then rr, gg, bb = 0, c, x
-    elseif h < 240 then rr, gg, bb = 0, x, c
-    elseif h < 300 then rr, gg, bb = x, 0, c
-    else rr, gg, bb = c, 0, x end
-    dst.r = (rr + m) * 255
-    dst.g = (gg + m) * 255
-    dst.b = (bb + m) * 255
 end
 
 local function circle(ccx, ccy, rad, col, step)
@@ -204,17 +189,11 @@ local function clip_seg(x0, y0, x1, y1)
     return x0 + dx * t0, y0 + dy * t0, x0 + dx * t1, y0 + dy * t1
 end
 
--- A line `2*half` px wide, built from parallel 1px lines.
-local function thick(x0, y0, x1, y1, half, step, col)
+-- A line `2*half` px wide.
+local function thick(x0, y0, x1, y1, half, col)
     local dx, dy = x1 - x0, y1 - y0
-    local len = sqrt(dx * dx + dy * dy)
-    if len < 0.5 then return end
-    local px, py = -dy / len, dx / len
-    local n = floor(half / step + 0.5)
-    for i = -n, n do
-        local k = i * step
-        line(x0 + px * k, y0 + py * k, x1 + px * k, y1 + py * k, col)
-    end
+    if dx * dx + dy * dy < 0.25 then return end
+    line(x0, y0, x1, y1, col, 2 * half)
 end
 
 -- Tempo ----------------------------------------------------------------
@@ -488,15 +467,15 @@ local function draw_beam(b, lod, front)
     local mid, core = cc.mid, cc.core
 
     if lod >= 4 then
-        local c = tmp(mid.r, mid.g, mid.b, 0.07 * fade)
-        thick(x0, y0, x1, y1, 9 * wsc, 1.8, c)
+        local c = tmp(mid.r, mid.g, mid.b, 0.04 * fade)
+        thick(x0, y0, x1, y1, 9 * wsc, c)
     end
     if lod >= 3 then
-        local c = tmp(mid.r, mid.g, mid.b, 0.16 * fade)
-        thick(x0, y0, x1, y1, 5 * wsc, 1.2, c)
+        local c = tmp(mid.r, mid.g, mid.b, 0.135 * fade)
+        thick(x0, y0, x1, y1, 5 * wsc, c)
     end
-    thick(x0, y0, x1, y1, 2.2 * wsc, 0.9, tmp(mid.r, mid.g, mid.b, 0.4 * fade))
-    thick(x0, y0, x1, y1, 0.6 * wsc, 0.6, tmp(core.r, core.g, core.b, fade))
+    thick(x0, y0, x1, y1, 2.2 * wsc, tmp(mid.r, mid.g, mid.b, 0.43 * fade))
+    thick(x0, y0, x1, y1, 0.6 * wsc, tmp(core.r, core.g, core.b, fade))
 
     -- Bright head while the light is still traveling
     if b.s1 < S_MAX - 1 and b.x1 > -20 and b.x1 < W + 20 and b.y1 > -20 and b.y1 < H + 20 then
@@ -578,17 +557,12 @@ function render(width, height, left, right)
         ch_on[ch] = channel_enabled(ch) and true or false
         local cc = chan_col[ch]
         if not cc then
-            cc = {
-                mid = { r = 0, g = 0, b = 0 },
-                core = { r = 0, g = 0, b = 0 },
-            }
+            cc = {}
             chan_col[ch] = cc
         end
         local t = (nch > 1) and ((i - 1) / (nch - 1)) or 0.0
-        set_hsv(cc.mid, 240 * (1 - t), 0.88, 1.0)
-        cc.core.r = cc.mid.r + (255 - cc.mid.r) * 0.72
-        cc.core.g = cc.mid.g + (255 - cc.mid.g) * 0.72
-        cc.core.b = cc.mid.b + (255 - cc.mid.b) * 0.72
+        cc.mid = hsv(240 * (1 - t), 0.88, 1.0)
+        cc.core = mix(cc.mid, WHITE, 0.72)
     end
 
     local active = active_notes()

@@ -104,6 +104,59 @@
 [S][.] fuzzy search should index subdirectories as well - DONE (it
     already walked subfolders; confirmed working).
 
+[S][!] audio buffer size in Preferences (requested 2026-10-08)
+    It's a slider in the transport bar now (the "150 ms" one); it's set
+    once and forgotten, so it belongs in Preferences (a Playback or Audio
+    tab), with the transport bar's slider gone.
+
+[M][!] remember things between runs, each one optional (requested 2026-10-08)
+    The selected soundfont, volume, speed, maybe the last song and where
+    it was, the open playlist, the running script (check which of these
+    already persist first). A Preferences section listing each with a
+    checkbox ("Remember: volume, soundfont, ..."), so someone who wants a
+    fresh start every launch can have it.
+
+[S][!] no minimum of one enabled channel (requested 2026-10-08)
+    Turning off the last enabled channel is refused today (the GUI greys
+    out the last toggle; set_channel_enabled can't do it either; the chip
+    toggles just ignore the click). Allow it: silence is a valid choice.
+    Check the engine, solo/"All", the toggle tooltips ("the last one
+    playing") and the scripting reference's set_channel_enabled paragraph.
+
+[M][!] mini player (requested 2026-10-08)
+    A small window with just the essentials, swappable between two views:
+    - the visualizer as the background with the transport buttons
+      underneath (play/pause, previous/next, seek, volume);
+    - the playlist.
+    Two ways to show it (a Preferences choice):
+    - always on top and draggable anywhere (borderless, it moves by its
+      own background);
+    - hidden until brought up from the tray icon (below), near the tray.
+    Probably an egui viewport (ViewportBuilder: always_on_top, decorations
+    off, transparent) sharing the app's state, rather than a second
+    process; the visualizer would render at the mini player's size, so
+    the script sees that width/height (like a recording's size).
+    Questions for later: does the main window hide while it's up, does it
+    show the song name, can it be resized.
+
+[M][!] tray icon (needed by the mini player)
+    A notification-area icon (tray-icon crate, or tray-item; check what
+    works alongside eframe's event loop on Windows) with a menu: show the
+    mini player, show the main window, play/pause, next, quit. Click opens
+    the mini player. Maybe "close to tray" as an option later.
+
+[S][!] app icon and wordmark from assets/synththing-icon.svg and
+    assets/synththing-wordmark.svg (provided 2026-10-08)
+    - The window/taskbar icon (eframe ViewportBuilder::with_icon) and the
+      .exe's icon (a .ico with 16 to 256 px sizes, embedded through a
+      Windows resource in build.rs, e.g. winres/embed-resource), plus the
+      tray icon. Rasterize the SVG (resvg, at build time or once into
+      PNGs committed to assets).
+    - The wordmark in place of the "synththing" text at the left of the
+      top bar, if it fits the bar's height. Its fill is #8B6CF6 on
+      nothing: check it reads on both the dark and light themes, and add
+      an outline to the SVG if it doesn't.
+
 ## Tier 3 - bigger undertakings
 
 [L][!] playlists - v1 DONE, follow-ups below
@@ -680,3 +733,98 @@ Smaller:
     flag); anything replacing a busy script stops it first. The watchdog
     allows 10 s in the app, 3 s in run-script.
     Idea not done: highway charting a few tracks per frame.
+
+## API expansions (2026-10-08 docs review)
+# Quality-of-life helpers scripts keep writing for themselves. Tags as above.
+
+[S][!] sample history: history_left(seconds) / history_right(seconds) - DONE
+    (history_left/right(seconds, [count]), 4 s ring in AudioFeatures;
+    waveform.lua uses it, pixel-identical to the old ring at one sample
+    per column). Original:
+    The last N seconds of played samples, oldest first, from a ring kept in
+    Rust (like fft_left's window), so scripts don't each keep an 11k-entry
+    Lua ring for a 0.25 s scope. Cap the length (a few seconds); while
+    paused it returns the last ones heard. Maybe an optional step/count
+    argument to decimate to about one sample per pixel, since copying
+    thousands of numbers into Lua every frame is the expensive part.
+
+[M][!] the pre-render clear color - DONE as set_clear_color({r,g,b,a})
+    (Canvas in lua_visualizer.rs keeps the last frame while the color isn't
+    opaque; fade() rounds toward the color so trails always finish;
+    waveform.lua's trail setting). shift_frame still open. Original:
+    The buffer is cleared to black before every render(), so trails,
+    feedback and scrolling displays (spectrogram.lua) redraw their whole
+    history every frame. Design (2026-10-08): the script sets the color
+    the buffer is blended with before each render(), alpha included:
+    opaque black is today's behavior, a translucent one fades last frame
+    (trails for free), {0,0,0,0} keeps it as is. Sticks until changed,
+    like set_cursor_visible. Maybe shift_frame(dx, dy) on top, to scroll
+    kept pixels (not scroll(), that's the mouse wheel), so a spectrogram
+    draws one column per frame. Recording at a different size than the
+    panel, and a resize, need the kept frame dropped (or rescaled).
+
+[S][!] outlines and thick lines - line width DONE (line(..., [width]):
+    a round-ended band, fill_thick_line; disco.lua and waveform.lua use
+    it). Outlined rect/circle still open. Original: line(..., [width]), rect_outline,
+    circle_outline (or an { outline = width } option on the shapes)
+    disco.lua's thick() draws several offset lines; outlines are four
+    line() calls today.
+
+[S][.] color helpers - DONE (hue in degrees; letters, disco, pulse and
+    spectrogram use them, renders byte-identical; highway's is its
+    author's). Original: hsv(h, s, v, [a]) -> color, mix(c1, c2, t) -> color
+    hsv is hand-written in highway, disco and letters (with two different
+    hue ranges, 0-1 and 0-360). Pick one (0-1 probably) and document it.
+
+[S][.] note helpers: note_name(key) -> "C#4", note_freq(key) -> Hz,
+    freq_note(hz) -> key (fractional)
+    keyboard.lua has its own NOTE_NAMES; pitch visualizers and tuners
+    need the frequency mapping both ways.
+
+[S][.] spectrum helpers - DONE (fft_bin/fft_freq/fft_band -> peak, average;
+    fft.lua and spectrogram.lua use fft_band, which also fixed their
+    off-by-one entry; note_runner's centroid is its author's). Original:
+    fft_bin(hz) -> index, fft_freq(index) -> Hz,
+    fft_band(spectrum, lo_hz, hi_hz) -> energy
+    fft.lua and spectrogram.lua both hand-roll bin_for_freq; a band sum
+    (bass/mid/treble) is the most common thing done with a spectrum.
+
+[S][.] peak_left() / peak_right() - DONE (fft.lua's meter markers hold
+    them; checked equal to Lua's own max |sample| over two whole songs)
+    The frame's largest absolute sample, next to level_*'s RMS: what peak
+    meters and clip lights want.
+
+[M][.] clip(x0, y0, x1, y1) / clip() and translate(dx, dy) - DONE (with
+    push_view/pop_view; rasterizers draw through a Target with a clip;
+    all bundled scripts render byte-identical; new dashboard.lua uses it)
+    Draw panels and widgets without each one checking its own bounds, and
+    move a group of drawing (shake, a scrolling camera) without threading
+    offsets through every call. A small push/pop stack.
+
+[M][.] instruments - DONE (channel_program(c, [seconds]) -> program,
+    GM name, Drums on 9; channel_name(c) from the track of its first
+    note; checked against an independent reader on the starter songs;
+    dashboard's legend). Original: channel_program(c) -> program, name
+    The General MIDI instrument each channel is on right now ("Acoustic
+    Grand Piano"), from the song's program changes, for labels like
+    highway's channel names. Track names (FF 03) from the file would fit
+    with it.
+
+[M][.] a Lua prelude for pure-Lua helpers
+    Helpers that are cheaper in Lua than as a call into Rust (approach,
+    maybe mix and hsv) could live in a bundled .lua run before each script:
+    no crossing into Rust, and readable by script authors. Needs the
+    editor's analysis (HOST_API, lua_analysis) to know its globals, its
+    errors reported against the script rather than the prelude, and
+    API_SINCE as usual. Zero-copy sample access isn't possible: a Lua
+    table can't point at Rust memory, and a userdata with __index costs a
+    call into Rust per element, slower than a table once more than a
+    handful are read. history_left's count (copy only what's drawn) is the
+    practical version of it.
+
+[S][.] smoothing helper - DONE (approach(current, target, rate,
+    [rate_down]); fft, pulse and dashboard use it). Original:
+    approach(current, target, rate) with DT built in
+    Every meter writes shown = shown + (x - shown) * 0.2, which runs faster
+    at higher frame rates. A frame-rate independent version is easy to get
+    wrong by hand. Low priority, it's pure Lua.

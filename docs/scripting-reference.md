@@ -70,7 +70,7 @@ All color-table based:
 
 ```lua
 clear({r,g,b})
-line(x0, y0, x1, y1, {r,g,b,a})
+line(x0, y0, x1, y1, {r,g,b,a}, [width])     -- width in pixels, 1 by default
 rect(x0, y0, x1, y1, {r,g,b,a})
 pixel(x, y, {r,g,b,a})
 circle(x, y, radius, {r,g,b,a})                -- filled
@@ -80,9 +80,74 @@ polygon(points, {r,g,b,a})                     -- filled; points {x1, y1, x2, y2
 
 Shapes fill every pixel whose center is inside them, so edges are crisp (no anti-aliasing) and a translucent shape blends each pixel exactly once. `polygon` takes up to 4096 points, as a flat list of coordinates or a list of points (`{x, y}` or `{x = .., y = ..}`); a polygon that crosses itself leaves holes where it overlaps (the even-odd rule). For outlines, use `line`.
 
+A `line` is 1 pixel wide unless given a `width`. A wider one is a band with round ends, centered on the pixels the 1-pixel line would light: every pixel whose center is within half the width of the line. Like the shapes, it blends each pixel once, and since the ends are round, lines joined end to end (a trace, an outline) meet without notches. `width` is more than 0, up to 1024; 1 or less is the plain line. The width is new in 0.6.0: older versions ignore it and draw a 1-pixel line.
+
 `r`, `g` and `b` are 0 to 255 (values outside that are clamped, fractions are fine). `a` is opacity, 0.0 to 1.0, defaulting to 1.0. An opaque draw (`a = 1`) overwrites; a translucent one alpha-blends over what's already there. `clear` always overwrites regardless of `a`. Coordinates are buffer pixels, (0, 0) at the top left, and can be fractional.
 
-The buffer is cleared to all-black before your `render()` runs, there's no double buffering, so anything you want visible this frame has to be drawn this frame, including whatever scrolling history your own script is keeping track of.
+```lua
+hsv(hue, saturation, value, [a]) -> color   -- hue in degrees, the rest 0 to 1
+mix(color1, color2, t) -> color             -- t from 0 (color1) to 1 (color2)
+```
+
+Two ways to make color tables without the arithmetic. `hsv` goes around the color wheel: hue 0 is red, 120 green, 240 blue, and it wraps (360 is red again, -120 is blue), so a hue that keeps counting up just keeps cycling; saturation 0 is gray and 1 the full color, value 0 is black and 1 the brightest (both clamped to 0 to 1). `mix` goes between two colors, `a` included (a color without one counts as opaque), with `t` clamped to 0 to 1: `mix(background, accent, 0.25)` is a quarter of the way to the accent, and `mix(c, { r = 255, g = 255, b = 255 }, 0.5)` a paler `c`. Both return a new table, `{r, g, b, a}`, with fractions left as they are. Since 0.6.0.
+
+```lua
+local channel_color = hsv(i / 16 * 360, 0.8, 1)        -- a different hue for each of 16 channels
+local glow = mix(channel_color, background, 0.6)       -- the same, faded toward the background
+```
+
+The buffer is cleared to all-black before your `render()` runs, there's no double buffering, so anything you want visible this frame has to be drawn this frame, including whatever scrolling history your own script is keeping track of. Unless the script changes that:
+
+```lua
+set_clear_color({r,g,b,a})   -- what each frame starts from; opaque black unless changed
+```
+
+Before each `render()`, the clear color is blended over the frame drawn last time, so its `a` decides how much of that frame is left: `a = 1` (the default, with black) wipes it, as above; `{ r = 0, g = 0, b = 0, a = 0.1 }` fades it a tenth of the way to black, so whatever moves leaves a trail that dies away over a few dozen frames; and `a = 0` keeps it exactly, so a script can draw only what changed, adding to a picture over time. The color doesn't have to be black: a fade toward the background color keeps the trails the same tint as the background. A fade always reaches the color in the end, rather than leaving a faint glow behind.
+
+It sticks until changed, or until the script is restarted or reloaded. The fade happens once per frame, so trails are shorter at 30 fps than at 60; for the same length at any frame rate, work the alpha out from `DT`: `a = 1 - (1 - 0.1) ^ (DT * 60)` fades as much each second as 0.1 does every frame at 60 fps. When the frame changes size (the window's resized, a recording starts), there's no last frame to keep, so it starts from black with the clear color over it. `clear()` still wipes everything, whatever the clear color. Since 0.6.0.
+
+```lua
+set_clear_color({ r = 0, g = 0, b = 0, a = 0.15 })  -- once, at the top: trails
+
+function render(width, height, left, right)
+    local x = width / 2 + math.cos(TIME * 2) * width / 3
+    circle(x, height / 2, 12, { r = 255, g = 200, b = 60 })  -- a comet, not a dot
+end
+```
+
+### Moving and clipping
+
+```lua
+translate(dx, dy)           -- move everything drawn after this by dx, dy (adds up)
+clip(x0, y0, x1, y1)        -- draw only inside this rectangle; clip() to draw anywhere again
+push_view()                 -- save the current translate and clip
+pop_view()                  -- go back to the last saved ones
+```
+
+These change where the drawing calls after them land, so a part of the picture can be drawn as if it had the window to itself. `translate` shifts every drawing call after it (shapes, lines, pixels, text, sprites) by `dx, dy` pixels, and calling it again adds to the shift. `clip` keeps everything drawn after it inside a rectangle, given like `rect`'s corners, and whatever falls outside isn't drawn at all; `clear()` fills only the rectangle while one is set. The rectangle is where it's given at the time, so after `translate(100, 50)`, `clip(0, 0, 200, 100)` is the 200 by 100 area starting at (100, 50). A new `clip` replaces the last one rather than narrowing it.
+
+`push_view()` saves both, and `pop_view()` puts them back, so a function can move and clip its own drawing without disturbing the code that called it. Pushes can nest (up to 256 deep); a `pop_view()` with no `push_view()` before it is an error. Every frame starts with no offset and no clip, so a forgotten `pop_view` doesn't build up from frame to frame.
+
+They change drawing only: `mouse()` and the `width`/`height` given to `render()` are still the whole frame's. Fractional offsets move shapes by fractions, like fractional coordinates; `pixel` rounds to a whole pixel. Since 0.6.0.
+
+```lua
+-- A panel that draws in its own coordinates, and can't draw outside itself.
+local function panel(x, y, w, h, draw)
+    push_view()
+    translate(x, y)
+    clip(0, 0, w, h)
+    draw(w, h)
+    pop_view()
+end
+
+-- A shake, for the whole picture.
+push_view()
+translate(math.sin(TIME * 90) * shake, 0)
+-- ... draw everything ...
+pop_view()
+```
+
+`dashboard.lua` uses both: four panels, each drawn from its own (0, 0), and a shake on every onset.
 
 ## Text
 
@@ -179,20 +244,52 @@ Windowed magnitude spectrum of a channel's last 1024 samples (about 23 ms at 44.
 The result is a table of 512 magnitudes. Entry `i` (1-based) is the frequency `(i - 1) * SAMPLE_RATE / 1024` Hz, so entries are about 43 Hz apart at 44.1 kHz, from 0 Hz up to half the sample rate. A full-volume sine wave reads about 1.0 at its frequency. It works on the last 1024 samples it's been given, keeping its own window from call to call, so call it every frame with that frame's `left` (or `right`): at 60 fps a frame brings 735 samples, so the first call returns an empty table and from the second on it's always 512 long.
 
 ```lua
+fft_bin(hz) -> entry                         -- the spectrum entry nearest hz
+fft_freq(entry) -> hz                        -- the frequency an entry is at
+fft_band(spectrum, lo_hz, hi_hz) -> peak, average   -- the entries from lo_hz to hi_hz
+```
+
+These do the entry arithmetic above. `fft_bin` rounds to the nearest entry and stays in the spectrum (1 to 512), so its answer is always a valid index. `fft_band` looks at every entry from `fft_bin(lo_hz)` to `fft_bin(hi_hz)`, at least one, and gives the largest magnitude and the average: the peak for drawing a bar that covers a range of frequencies (one column of a log-scaled display, say), the average for how much is going on in a range overall (bass, mids, treble). With an empty spectrum (the first frame), it's 0, 0. Since 0.6.0.
+
+```lua
 local spectrum = fft_left(left)
-local function bin_for(hz) return math.floor(hz * 1024 / SAMPLE_RATE) + 1 end
-local a440 = spectrum[bin_for(440)] or 0
+local a440 = spectrum[fft_bin(440)]
+local bass = select(2, fft_band(spectrum, 20, 250))   -- the average
+local bar = fft_band(spectrum, 1000, 1200)            -- the peak
 ```
 
 ```lua
 level_left() -> number     -- loudness of this frame's left samples (RMS)
 level_right() -> number    -- same for the right
+peak_left() -> number      -- this frame's loudest left sample, ignoring sign
+peak_right() -> number     -- same for the right
 onset() -> hit, strength   -- did a sound just start this frame?
 ```
 
-The levels are the root mean square of the samples `render()` got this frame: 0 for silence, about 0.71 for a full-volume sine wave, 0 while paused. They change quickly from frame to frame, so smooth them if you want a steady meter (`shown = shown + (level_left() - shown) * 0.2`).
+The levels are the root mean square of the samples `render()` got this frame: 0 for silence, about 0.71 for a full-volume sine wave, 0 while paused. They change quickly from frame to frame, so smooth them if you want a steady meter (`shown = approach(shown, level_left(), 13)`; see `approach` under Playback & timing).
+
+The peaks are the largest sample this frame, ignoring sign: 0 for silence (and while paused), 1.0 for a sample at full scale, and more than 1 only when the sound is clipping. A peak is always at least the level, and how far above it shows how sharp the sound is (a sine wave's peak is about 1.41 times its level, a drum hit's much more). Meters often show both: a bar for the level, and a marker for the peak that falls back slowly, as `fft.lua`'s meters do. Since 0.6.0.
 
 `onset()` is true on a frame where the sound suddenly gets stronger (a drum hit, a note attack), worked out in Rust from how much the spectrum gained since the previous frame against the average of the last half second. After an onset, the next 80 ms can't be another, so one hit counts once. `strength` is that frame's gain in the spectrum: bigger means a sharper change, useful for comparing hits within a song rather than as an absolute number. It's meant for visuals reacting to the audio, not as a beat tracker: for MIDI, `notes_between` and `beat()` are exact. The detector starts running the first time a script calls `onset()`, so that first call (and the next few frames, while it builds up a history) returns false.
+
+```lua
+history_left(seconds, [count]) -> samples   -- the last `seconds` of the left channel, oldest first
+history_right(seconds, [count]) -> samples  -- same for the right
+```
+
+`left` and `right` only hold what played since the previous frame (735 samples at 60 fps), so a scope or a slow-scrolling trace needs more than one frame's worth. The app keeps the last 4 seconds of both channels, and these hand back a slice of it, so a script doesn't keep its own ring buffer. `seconds` goes up to 4 (more is treated as 4); before that much has played, the older part is silence (zeros), so the table is always the same length. While paused nothing new arrives, so it keeps returning the last samples heard.
+
+Without `count`, it's every sample: `seconds * SAMPLE_RATE` of them (11,025 for 0.25 s at 44.1 kHz). Handing that many numbers to Lua every frame takes real time, so when drawing, ask for about as many as you have pixels: with `count`, you get that many samples spread evenly from the oldest to the newest (the first is the oldest, the last is the newest, and no more than one per sample).
+
+```lua
+-- A quarter second of sound across the window, one point per pixel.
+local samples = history_left(0.25, width)
+for x = 2, #samples do
+    line(x - 2, height / 2 - samples[x - 1] * height / 2, x - 1, height / 2 - samples[x] * height / 2, color)
+end
+```
+
+Since 0.6.0.
 
 ## MIDI data
 
@@ -204,6 +301,8 @@ midi_channels() -> channels     -- channels this file uses, sorted
 channel_enabled(c) -> bool      -- the GUI's per-channel toggle
 set_channel_enabled(c, bool)    -- a script can mute/unmute a channel too
 channel_colors(colors)          -- the colors you draw channels in, for the app's toggles
+channel_program(c, [seconds]) -> program, name  -- the instrument a channel plays
+channel_name(c) -> name         -- the name of the track a channel's notes are in, or nil
 ```
 
 `notes_between` is the one to reach for when you want notes as whole things: each comes with its `start` and `stop` time (song seconds, the same clock as `playback().position`), so there's no pairing note-ons with note-offs yourself. It returns every note sounding at any point in the window, including ones that started before `t0` and are still held, in start order. The window can be any size, so a script can look further ahead than `NOTE_LOOKAHEAD` or read the whole song once (`notes_between(0, playback().length)`) to build a level up front. `id` is stable for as long as the song is loaded, so it works as a table key for tracking which notes you've already handled. Notes are read from the file itself, so they're all there whether or not a soundfont is loaded, and regardless of which channels are muted.
@@ -228,6 +327,17 @@ All empty/true for a plain audio file, there's no score to read, so nothing here
 
 `set_channel_enabled` goes through the exact same command the GUI's own checkboxes send, so a script can't disable the last remaining enabled channel either, useful for things like a game script muting a dead player's channel without needing its own "don't silence everything" logic.
 
+`channel_program` is the instrument channel `c` is playing at `seconds` (song seconds; now, by default): its program number, 0 to 127, and its General MIDI name, like `"Acoustic Grand Piano"` or `"String Ensemble 1"`. Songs can switch a channel's instrument partway through, and this follows that. A channel that's never told is on program 0, a piano, as the synth plays it. Channel 9 (the tenth) is for drums in General MIDI, where the program picks a drum kit instead, so its name is always `"Drums"`. The number is the one in the file, counting from 0; lists of General MIDI instruments usually count from 1, so add 1 to compare. The name is General MIDI's: a soundfont could put a different sound on that program, but most follow General MIDI. For a plain audio file it's nil, nil.
+
+`channel_name` is the name of the track the channel's first note is in, as the file names it (track names are often the part, like `"Melody"` or `"Bass"`), or nil when that track has no name. Both since 0.6.0.
+
+```lua
+for _, c in ipairs(midi_channels()) do
+    local _, instrument = channel_program(c)
+    text(4, 4 + c * 14, (channel_name(c) or ("Channel " .. c + 1)) .. ": " .. instrument, white)
+end
+```
+
 `channel_colors` tells the app which color you draw each channel in, so its channel toggles (above the visualizer) show it, and nobody needs a legend: `channel_colors({ [0] = { r = 90, g = 170, b = 255 }, [9] = { r = 255, g = 130, b = 90 } })`. Each toggle is filled with its channel's color while the channel's on, and outlined in it while it's off. Without it, they show the keyboard visualizer's colors (eight, repeating: channel 0 `{90, 170, 255}`, then `{255, 130, 90}`, `{120, 230, 140}`, `{240, 210, 90}`, `{200, 120, 255}`, `{90, 230, 230}`, `{255, 110, 170}`, `{170, 200, 120}`), so a script drawing channels in those needn't call it. Each call replaces the whole mapping: channels left out go back to those defaults, and `channel_colors()` (or `{}`) puts them all back. It's kept until the script is changed or restarted, so calling it once when the script loads is enough (again whenever the colors change, after a setting, say). Channels are 0 to 15, as in `midi_channels()`; `a` is ignored. Since 0.5.1.
 
 ## Playback & timing
@@ -244,6 +354,16 @@ TIME                -- seconds since this script started (the sum of every frame
 FRAME               -- frames rendered since this script started (1 on the first)
 SAMPLE_RATE         -- the engine's sample rate, in Hz
 NOTE_LOOKAHEAD      -- song seconds upcoming_notes() looks ahead (4.0)
+```
+
+```lua
+approach(current, target, rate, [rate_down]) -> value   -- current, moved toward target
+```
+
+For smoothing a value toward where it's heading (a meter following the loudness, a camera following a player) the same way at any frame rate. The usual way, `shown = shown + (target - shown) * 0.2`, moves a fifth of the way every frame, so it's twice as fast at 120 fps as at 60, and in a recording at 30 fps it's half as fast. `approach` goes by the second instead: `rate` is how quickly, and each second the gap shrinks to e^-rate of what it was (`rate = 5` covers about 63% of the way in a fifth of a second, 99% in a second); with `rate_down`, that's the rate while heading down instead, for meters that jump up and fall back slowly. It uses this frame's `DT`, so on the first frame (`DT` is 0) nothing moves. To turn a per-frame fraction `f` that looked right at 60 fps into a rate: `rate = -math.log(1 - f) * 60` (0.2 per frame is about 13.4). Since 0.6.0.
+
+```lua
+shown = approach(shown, level_left(), 30, 4)   -- up fast, down slowly
 ```
 
 Units: `position` and `length` are seconds of song time. `speed` is the playback rate (1.0 is normal), and it's song time that runs faster or slower: at 2.0, one song-second passes in half a real second. Everything song-related (`position`, note `start`/`stop`, `seconds_until`, `NOTE_LOOKAHEAD`) is in song seconds, while `DT` and `TIME` are real seconds. To turn a song-time gap into real time, divide by `speed`.
@@ -617,7 +737,7 @@ Snapshots whatever local variables (and function parameters, Lua treats those th
 
 Only one snapshot is kept; calling it again (from the same or a different spot) replaces the previous one. `label` is optional and just shows up next to the snapshot so you can tell which call site it came from.
 
-This only sees true locals and parameters at that spot: a module-level value declared with `local` outside any function (`waveform.lua`'s `history`, say) isn't one of them, but it's under Variables.
+This only sees true locals and parameters at that spot: a module-level value declared with `local` outside any function (`spectrogram.lua`'s `history`, say) isn't one of them, but it's under Variables.
 
 ## Settings
 
@@ -695,7 +815,7 @@ Debug > Performance shows how long `render()` takes (average and worst over the 
 
 - The buffer is capped at ~1280x720 worth of pixels and scaled up (nearest-neighbor) to fill larger views, so either fullscreen on a large monitor doesn't multiply your render cost, but it's still worth keeping draw counts sane.
 - `spectrogram.lua` run-length-merges same-colored cells in a column into one rect instead of one draw per cell, worth copying for any other grid/heatmap-shaped script.
-- Keep history buffers fixed-size ring buffers (see `waveform.lua`), not growing/shrinking arrays, removing from the front of a Lua table is O(n), and doing that every frame adds up.
+- Keep history buffers fixed-size ring buffers (see `spectrogram.lua`), not growing/shrinking arrays, removing from the front of a Lua table is O(n), and doing that every frame adds up.
 
 Watch out for very large MIDI files: some have hundreds of thousands or millions of notes, and `notes_between(0, playback().length)` on one builds a table entry for every one of them, which can take seconds, during which the script can't draw anything. A script that reads the whole song should spread the work over several frames (a slice of the song per frame) or limit how much it reads. The app marks MIDI files over 100,000 notes with a red ! in the song lists and asks before playing one.
 
@@ -777,6 +897,9 @@ notes_between(5, 6) --> {
 }
 midi_channels() --> { 0, 1, 2 }
 channel_enabled(0) --> true
+channel_program(2) --> 48, "String Ensemble 1"   -- Ode to Joy (starter song)
+channel_program(9) --> 0, "Drums"
+channel_name(2) --> "Strings"                 -- its track's name; nil for a track without one
 ```
 
 Musical timing (nil for plain audio files):
@@ -795,8 +918,11 @@ Audio:
 fft_left(left) --> { 0.000416, 0.0002086, 6.115e-05, ... }  -- 512 magnitudes, entry i is (i - 1) * 43.07 Hz
 fft_left(left) --> {}                                 -- the first frame, before 1024 samples have gone in
 level_left() --> 0.004899
+level_left(), peak_left() --> 0.02618, 0.06927   -- the same frame: the peak's above the level
 onset() --> false, 0
 onset() --> true, 0.1034          -- a sound just started, this sharply (compare hits, it's not on a fixed scale)
+history_left(0.25) --> { 0.0004, 0.0011, ... }        -- 11,025 samples at 44.1 kHz, oldest first
+history_left(0.25, 4) --> { 0.0073, -0.0052, -0.0079, 0.0019 }  -- 4, from the oldest to the newest
 ```
 
 Input:
@@ -863,11 +989,12 @@ They come in four kinds. Visualizers and games are added to your scripts folder 
 
 Visualizers:
 
-- `waveform.lua`, a scrolling oscilloscope trace; the simplest ring-buffer example
+- `waveform.lua`, a scrolling oscilloscope trace from `history_left`/`history_right`, with the time shown as a setting
 - `fft.lua`, log-spaced spectrum bars, left/right overlap shown as a third color; frequency labels (text) and loudness meters (`level_left`/`level_right`)
 - `keyboard.lua`, an 88-key piano with falling notes from `notes_between` (exact lengths, adjustable look-ahead), beat and numbered bar lines (`beat`, `bar`, `time_at_beat`), octave labels; two-pass enabled/disabled channel rendering; and play along: with focus, A to L play a major scale on the song's instrument (`note_on`/`note_off`), the arrows move the span and change the key
 - `spectrogram.lua`, a scrolling time/frequency heatmap; run-length merging, pause-awareness, live-tunable resolution, frequency labels, optional onset ticks (`onset`)
 - `letters.lua`, one glyph per channel, colored by pitch; a from-scratch bitmap font
+- `dashboard.lua`, four panels (a scope, a spectrum, a piano roll with an instrument legend from `channel_program`, and level meters), each drawn in its own coordinates with `translate` and kept inside its box with `clip`, and a shake on every onset
 - `pulse.lua`, a ring that beats with the song: the time signature's beats around a circle, a polygon turning with the beat and swelling with loudness, eighth-note sprites bursting out on onsets, and a tempo/bar readout
 - `disco.lua`, a spinning mirror ball firing a laser per note, colored by channel and aimed by pitch, anticipated with `upcoming_notes()`
 
