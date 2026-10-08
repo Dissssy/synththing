@@ -39,6 +39,7 @@ mod song_preview;
 mod snippets;
 mod spectrum;
 mod theme;
+mod tray;
 mod starter;
 mod script_host;
 mod sprite_code;
@@ -246,6 +247,7 @@ fn main() -> Result<()> {
         options,
         Box::new(|cc| {
             app::install_fonts(&cc.egui_ctx);
+            app.attach_tray(&cc.egui_ctx);
             Ok(Box::new(app))
         }),
     )

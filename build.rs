@@ -12,7 +12,8 @@
 //! `docs/scripting-reference.md`, the in-app Scripting Reference (see
 //! `lua_docs.rs` and `parse_reference` below), and the app icon from
 //! `assets/synththing-icon.svg`: `$OUT_DIR/synththing.ico`, embedded in the
-//! Windows exe, and `$OUT_DIR/icon_256.rgba` for the window (`main.rs`).
+//! Windows exe, `$OUT_DIR/icon_256.rgba` for the window (`main.rs`) and
+//! `$OUT_DIR/icon_32.rgba` for the tray (`tray.rs`).
 
 use std::env;
 use std::fmt::Write as _;
@@ -79,8 +80,8 @@ fn generate_icon(manifest_dir: &str, out_dir: &str) {
     let mut images: Vec<(u32, Vec<u8>)> = Vec::new();
     for size in ICON_SIZES {
         let rgba = render_square(&tree, size);
-        if size == 256 {
-            let raw = Path::new(out_dir).join("icon_256.rgba");
+        if size == 256 || size == 32 {
+            let raw = Path::new(out_dir).join(format!("icon_{size}.rgba"));
             fs::write(&raw, &rgba).unwrap_or_else(|e| panic!("writing {}: {e}", raw.display()));
         }
         let mut png_bytes = Vec::new();

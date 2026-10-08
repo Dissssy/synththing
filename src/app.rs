@@ -338,6 +338,9 @@ pub struct App {
     recording: recording::Recording,
     /// The wordmark in the menu bar, drawn for the current size and theme.
     wordmark: branding::Wordmark,
+    /// The notification-area icon (Windows; `None` elsewhere, or if it
+    /// couldn't be made).
+    tray: Option<crate::tray::Tray>,
     /// The last recording saved, for "Show last recording".
     last_recording: Option<PathBuf>,
 }
@@ -500,6 +503,7 @@ impl App {
             editor_saved: String::new(),
             recording: recording::Recording::new(),
             wordmark: branding::Wordmark::default(),
+            tray: None,
             last_recording: None,
         };
         if let Some(path) = app.visualizer.script().path().map(Path::to_path_buf) {
@@ -2213,6 +2217,33 @@ impl App {
         self.pending_script_song = Some((self.loads_sent, path.to_path_buf(), notes, id));
     }
 
+    /// Put synththing's icon in the tray. Once the window exists (main.rs,
+    /// as eframe starts).
+    pub fn attach_tray(&mut self, ctx: &egui::Context) {
+        self.tray = crate::tray::Tray::new(ctx);
+    }
+
+    /// Clicks on the tray icon since last frame.
+    fn handle_tray(&mut self, ctx: &egui::Context) {
+        let Some(tray) = &self.tray else { return };
+        for click in tray.clicks() {
+            match click {
+                crate::tray::TrayClick::Primary => self.show_window(ctx),
+                // The tray panel comes with the next step; for now the
+                // right button shows synththing too.
+                crate::tray::TrayClick::Secondary { .. } => self.show_window(ctx),
+            }
+        }
+    }
+
+    /// Bring the main window back and to the front: un-hidden,
+    /// un-minimized, focused.
+    fn show_window(&mut self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
     /// Nothing was drawn last frame (hidden in the tray, minimized), so what
     /// only plays while it's on screen stops, as `ui` would have stopped it
     /// on noticing it gone: a script's held notes and a song preview.
@@ -3178,6 +3209,7 @@ impl eframe::App for App {
         if !std::mem::take(&mut self.ui_drawn) {
             self.nothing_drawn();
         }
+        self.handle_tray(ctx);
         let view = self.shared.lock().unwrap().view.clone();
         self.sync_script_song(&view);
         self.poll_loads();

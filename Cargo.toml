@@ -53,4 +53,5 @@ png = "0.18"
 winresource = "0.1"                                         # the icon, embedded in the .exe
 
 [target.'cfg(windows)'.dependencies]
+tray-icon = { version = "0.24", default-features = false }  # the notification-area icon (tray.rs)
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_SystemInformation"] }  # re-attach to the terminal for CLI use; local time for recording names
