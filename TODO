@@ -147,7 +147,11 @@
     Questions for later: does the main window hide while it's up, does it
     show the song name, can it be resized.
 
-[M][!] tray icon (needed by the mini player)
+[M][!] tray icon (needed by the mini player) - DONE (phase 1, 2026-10-08:
+    tray.rs, app/tray_panel.rs as a deferred viewport so it works hidden,
+    app/close.rs for close-to-tray and the recording prompt; logic/ui split
+    in app.rs). Left-click shows the window until the mini player exists.
+    Original:
     A notification-area icon (tray-icon crate, or tray-item; check what
     works alongside eframe's event loop on Windows) with a menu: show the
     mini player, show the main window, play/pause, next, quit. Click opens
