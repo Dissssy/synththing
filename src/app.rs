@@ -187,6 +187,9 @@ pub struct App {
     /// last frame: when it stops, notes the script was holding are let go.
     visualizer_drawn: bool,
     visualizer_was_drawn: bool,
+    /// `ui` ran since the last `logic`: false while nothing's drawn (the
+    /// window hidden or minimized), when what lives only on screen stops.
+    ui_drawn: bool,
     /// Whether the cursor is currently confined to the window for a script.
     cursor_confined: bool,
     updater: Updater,
@@ -426,6 +429,7 @@ impl App {
             visualizer_output: ShowOutput::default(),
             visualizer_drawn: false,
             visualizer_was_drawn: false,
+            ui_drawn: false,
             cursor_confined: false,
             updater: Updater::new(),
             updates_open: false,
@@ -2209,6 +2213,17 @@ impl App {
         self.pending_script_song = Some((self.loads_sent, path.to_path_buf(), notes, id));
     }
 
+    /// Nothing was drawn last frame (hidden in the tray, minimized), so what
+    /// only plays while it's on screen stops, as `ui` would have stopped it
+    /// on noticing it gone: a script's held notes and a song preview.
+    fn nothing_drawn(&mut self) {
+        if self.visualizer_was_drawn {
+            self.send(AudioCommand::Live(crate::live::LiveCommand::StopAll));
+            self.visualizer_was_drawn = false;
+        }
+        self.stop_song_preview();
+    }
+
     /// Hand the script the song the audio thread now reports as loaded.
     fn sync_script_song(&mut self, view: &EngineView) {
         if self.pending_script_song.as_ref().is_some_and(|(target, ..)| view.loads >= *target)
@@ -2978,7 +2993,6 @@ impl eframe::App for App {
         let shared = self.shared.lock().unwrap().clone();
         let view = &shared.view;
         self.visualizer_drawn = false;
-        self.sync_script_song(view);
         self.pad_frame = self.gamepads.poll(ctx.input(|i| i.focused));
         if !self.pad_frame.down.is_empty() || !self.pad_frame.released.is_empty() {
             ctx.request_repaint();
@@ -3085,14 +3099,6 @@ impl eframe::App for App {
 
         self.pause_for_preferences(view);
         self.handle_os_file_drops(&ctx);
-        self.poll_loads();
-        self.refresh_changed_folders(&ctx);
-        if self.song_info.poll() {
-            ctx.request_repaint_after(Duration::from_millis(100));
-        }
-        if !self.preferences_open {
-            self.playlist_tick(view);
-        }
 
         // Which layout the dock shows depends on fullscreen (when the
         // separate-fullscreen-layout preference is on), so settle that before
@@ -3125,7 +3131,6 @@ impl eframe::App for App {
             self.layout_save_ui(&ctx);
             self.new_sprite_ui(&ctx);
         }
-        self.editor_tick(&ctx);
         // Outside the layout: F9 can ask for ffmpeg from the dedicated
         // fullscreen too.
         self.ffmpeg_prompt_ui(&ctx);
@@ -3142,34 +3147,15 @@ impl eframe::App for App {
         self.publish_song_ui(&ctx);
         self.song_preview_tick(&ctx);
         self.moderation_ui(&ctx);
-        self.poll_library();
-        self.poll_moderation();
-        self.poll_identity();
-        self.poll_notifications(&ctx);
-        self.poll_copyright();
-        self.poll_song_library();
         self.heavy_midi_ui(&ctx);
         self.poll_recordings(view);
-        if self.status != self.logged_status {
-            log::info!(target: STATUS_TARGET, "{}", self.status);
-            self.logged_status = self.status.clone();
-            if status_outcome(&self.status) == Some(false) {
-                self.unseen_failure = true;
-            }
-        }
         self.apply_cursor_confinement(&ctx);
-        self.keep_loaded(&ctx);
-        self.poll_starter(&ctx);
         self.script_busy_ui(&ctx);
         self.tour_ui(&ctx, &shared);
         self.themes_window(&ctx);
 
         drag_ghost_ui(&ctx);
 
-        // Keep the progress slider and visualizer animating without input;
-        // stay fully idle otherwise. While a playlist is playing, keep
-        // polling too, so the end of a track is noticed and the next one
-        // starts even with the window idle in the background.
         // The visualizer went away (tab closed or hidden): its script can't
         // let go of notes it's holding any more, so let go for it.
         if self.visualizer_was_drawn && !self.visualizer_drawn {
@@ -3179,7 +3165,50 @@ impl eframe::App for App {
 
         if self.dedicated.is_some() || self.is_open(Section::Visualizer) {
             ctx.request_repaint_after(Duration::from_millis(16));
-        } else if !view.paused && (view.has_midi || view.has_audio_file) {
+        }
+        self.ui_drawn = true;
+    }
+
+    /// Everything that has to keep going whether or not anything's drawn:
+    /// eframe calls this every frame before `ui`, and on its own while the
+    /// window is hidden or minimized (when `ui` isn't called), so a
+    /// playlist goes on to its next track, loads finish and the library
+    /// keeps polling either way.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
+        if !std::mem::take(&mut self.ui_drawn) {
+            self.nothing_drawn();
+        }
+        let view = self.shared.lock().unwrap().view.clone();
+        self.sync_script_song(&view);
+        self.poll_loads();
+        self.refresh_changed_folders(ctx);
+        if self.song_info.poll() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        if !self.preferences_open {
+            self.playlist_tick(&view);
+        }
+        self.poll_library();
+        self.poll_moderation();
+        self.poll_identity();
+        self.poll_notifications(ctx);
+        self.poll_copyright();
+        self.poll_song_library();
+        if self.status != self.logged_status {
+            log::info!(target: STATUS_TARGET, "{}", self.status);
+            self.logged_status = self.status.clone();
+            if status_outcome(&self.status) == Some(false) {
+                self.unseen_failure = true;
+            }
+        }
+        self.keep_loaded(ctx);
+        self.poll_starter(ctx);
+        self.editor_tick(ctx);
+
+        // Stay idle otherwise, but while a song plays keep ticking, so the
+        // end of a track is noticed and a playlist's next one starts, with
+        // the window in the background, minimized or hidden.
+        if !view.paused && (view.has_midi || view.has_audio_file) {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
     }

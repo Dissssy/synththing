@@ -356,6 +356,16 @@ impl App {
     /// Per frame, after the tabs are drawn: a preview not on screen stops
     /// (and the next one starts muted), and the gate follows the mute and
     /// the volume.
+    /// Stop the preview playing (nothing's on screen to show it).
+    pub(super) fn stop_song_preview(&mut self) {
+        let lib = &mut self.song_library;
+        if lib.playing.is_some() {
+            lib.playing = None;
+            lib.muted = true;
+            lib.output.set_gain(0.0);
+        }
+    }
+
     pub(super) fn song_preview_tick(&mut self, ctx: &egui::Context) {
         let lib = &mut self.song_library;
         if lib.playing.is_some() && lib.drawn_at < ctx.cumulative_pass_nr() {
