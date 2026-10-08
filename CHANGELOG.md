@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.6.0 (2026-10-08)
+
 ### Added
 - Scripts can look back at the last few seconds of sound: `history_left(seconds, [count])` and `history_right` give the samples played, oldest first, or `count` of them spread evenly, one per pixel say, so a scope or a slow trace no longer needs its own ring buffer.
 - `line` takes a width: `line(x0, y0, x1, y1, color, 4)` draws a 4-pixel band with round ends, so a thick trace joins up cleanly.
