@@ -526,7 +526,7 @@ mouse_down([button])          -- held; "left" (default), "right", "middle"
 mouse_pressed([button])       -- went down this frame
 mouse_released([button])      -- went up this frame
 has_focus() -> bool           -- whether keys come to this script
-display_mode() -> string      -- "window", "fullscreen" or "dedicated"
+display_mode() -> string      -- "window", "fullscreen", "dedicated" or "mini"
 ```
 
 Mouse state is reported while the pointer is over the visualizer (and while it has focus, so a drag that wanders off still ends cleanly). Keys only while the visualizer has focus: click into it to give it focus, click anywhere else to take it back. While it has focus the app's own shortcuts (space to pause, arrows to seek, ...) are off, so those keys are the script's. An unknown button name is a script error that says so. `scroll()` arrives smoothed, a little per frame, so add it up rather than treating each frame as one notch.
@@ -537,7 +537,7 @@ Five keys always belong to the app, and are never reported to a script in any mo
 
 While the visualizer is being recorded (synththing > Record...), `render()` gets the recording's size as `width` and `height` (1920 x 1080, say) whatever the panel's size, and the picture is shown letterboxed in the panel, with `mouse()` still in the picture's own pixels. It's also called once per video frame rather than once per screen refresh, with `DT` the video time that passed (1/60 s at 60 fps, more if it had to catch up), so motion in the video is perfectly even. A script that lays itself out from `width` and `height` and moves things by `DT` needs nothing special; a bigger recording size just costs more time per frame, and a script too slow for it makes the video repeat frames.
 
-`display_mode()` tells a script where it's being shown: `"window"` (a tab in the normal window), `"fullscreen"` (a tab, with the whole app fullscreen), or `"dedicated"` (the Fullscreen visualizer button or F11: nothing but the visualizer, filling the screen, with focus).
+`display_mode()` tells a script where it's being shown: `"window"` (a tab in the normal window), `"fullscreen"` (a tab, with the whole app fullscreen), or `"dedicated"` (the Fullscreen visualizer button or F11: nothing but the visualizer, filling the screen, with focus), or `"mini"` (small, in the mini player, the tray panel pinned and expanded: about 256 by 144 points, where fine detail and small text are hard to make out, so a script might leave them out or draw bigger). `"mini"` is since 0.7.0.
 
 ```lua
 set_cursor_visible(visible)   -- false: hide the system cursor over the visualizer
@@ -938,7 +938,7 @@ mouse_delta() --> 0, 0
 scroll() --> 0, -2.5              -- arrives smoothed: a little each frame
 mouse_down() --> false
 has_focus() --> false
-display_mode() --> "window"       -- or "fullscreen", "dedicated"
+display_mode() --> "window"       -- or "fullscreen", "dedicated", "mini"
 input_register("jump", { "space", "w" }) --> 1   -- an id, 1, 2, 3, ... in order
 input(jump) --> "up"              -- or "pressed", "held", "released"
 input_down(jump) --> false

@@ -11,7 +11,7 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::audio::Backlog;
 
@@ -207,6 +207,8 @@ pub enum DisplayMode {
     Fullscreen,
     /// The dedicated visualizer fullscreen: nothing else on screen.
     Dedicated,
+    /// Small, in the mini player.
+    Mini,
 }
 
 impl DisplayMode {
@@ -215,6 +217,7 @@ impl DisplayMode {
             Self::Window => "window",
             Self::Fullscreen => "fullscreen",
             Self::Dedicated => "dedicated",
+            Self::Mini => "mini",
         }
     }
 }
@@ -406,6 +409,8 @@ pub struct VisualizerPanel {
     pads: PadFrame,
     /// What the script asked for in the frames drawn since `take_effects`.
     effects: Effects,
+    /// When the main window last showed it (`mark_main`).
+    shown_by_main: Option<Instant>,
 }
 
 impl VisualizerPanel {
@@ -423,7 +428,20 @@ impl VisualizerPanel {
             last_samples: Vec::new(),
             pads: PadFrame::default(),
             effects: Effects::default(),
+            shown_by_main: None,
         }
+    }
+
+    /// The main window is showing it (call before its `show`): another
+    /// window showing it meanwhile just shows the latest picture, rather
+    /// than running the script a second time.
+    pub fn mark_main(&mut self) {
+        self.shown_by_main = Some(Instant::now());
+    }
+
+    /// The main window showed it in the last few frames.
+    pub fn shown_by_main_recently(&self) -> bool {
+        self.shown_by_main.is_some_and(|at| at.elapsed() < Duration::from_millis(100))
     }
 
     /// This frame's controller input, for the next `show`.

@@ -113,7 +113,7 @@ pub const HOST_API: &[(&str, &str)] = &[
     ("sequence_play", "sequence_play(id, [{channel, transpose, tempo, delay}]) -> handle or nil: play it, at the song's tempo by default"),
     ("sequence_stop", "sequence_stop(handle): stop one sequence_play"),
     ("has_focus", "has_focus() -> bool: whether keys go to this script (clicked into, or dedicated fullscreen)"),
-    ("display_mode", "display_mode() -> \"window\", \"fullscreen\" or \"dedicated\""),
+    ("display_mode", "display_mode() -> \"window\", \"fullscreen\", \"dedicated\" or \"mini\" (the mini player)"),
     ("set_cursor_visible", "set_cursor_visible(visible): hide the system cursor over the visualizer (draw your own)"),
     ("set_cursor_locked", "set_cursor_locked(locked): keep the cursor on screen, dedicated fullscreen only"),
     ("SAMPLE_RATE", "the engine's sample rate, in Hz"),

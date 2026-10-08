@@ -392,6 +392,13 @@ impl App {
             .unwrap_or_default();
         let active_script = active_path.is_some().then_some(active_index);
         let mut script = ScriptHost::spawn(source.clone(), active_path, sample_rate);
+        let visualizer =
+            Arc::new(Mutex::new(VisualizerPanel::new(script.take_pipe(), VISUALIZER_WIDTH, VISUALIZER_HEIGHT)));
+        let picture = tray_panel::Picture {
+            panel: Arc::clone(&visualizer),
+            tap: tap.clone(),
+            playback: Arc::clone(&shared),
+        };
 
         let (playlists, playlist_errors) =
             Library::load(config::playlists_dir().unwrap_or_else(|_| PathBuf::from("playlists")));
@@ -419,7 +426,7 @@ impl App {
             browser,
             active_sf: None,
             tap,
-            visualizer: Arc::new(Mutex::new(VisualizerPanel::new(script.take_pipe(), VISUALIZER_WIDTH, VISUALIZER_HEIGHT))),
+            visualizer: Arc::clone(&visualizer),
             script,
             scripts_dir,
             available_scripts,
@@ -521,7 +528,7 @@ impl App {
             recording: recording::Recording::new(),
             wordmark: branding::Wordmark::default(),
             tray: None,
-            tray_panel: tray_panel::TrayPanel::new(),
+            tray_panel: tray_panel::TrayPanel::new(picture),
             hidden: false,
             quitting: false,
             close_prompt: None,
@@ -2178,7 +2185,11 @@ impl App {
         let recording = self.recording.recorder.as_ref().is_some_and(|r| !r.paused());
         let take = self.recording.take();
         self.script.set_recording(recording, take);
-        lock_panel(&self.visualizer).set_pads(self.pad_frame.clone());
+        {
+            let mut panel = lock_panel(&self.visualizer);
+            panel.set_pads(self.pad_frame.clone());
+            panel.mark_main();
+        }
         let fixed_size = self.recording.frame_size();
         let (hold, timestep) = self.pace_recording();
         self.visualizer_output = lock_panel(&self.visualizer).show(
@@ -2196,7 +2207,12 @@ impl App {
         self.feed_recording(ui);
         self.visualizer_drawn = true;
         let effects = lock_panel(&self.visualizer).take_effects();
+        self.apply_script_effects(effects, playback);
+    }
 
+    /// Carry out what the script asked for while drawing (in the main
+    /// window, or the mini player).
+    fn apply_script_effects(&mut self, effects: crate::script_host::Effects, playback: &EngineView) {
         // A script can ask to mute/unmute a channel itself (e.g. a game
         // script silencing a dead player's channel), the same command the
         // GUI's own toggles send.
@@ -2258,7 +2274,8 @@ impl App {
         let Some(tray) = &self.tray else { return };
         for click in tray.clicks() {
             let native = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
-            self.tray_panel.update(ctx, self.tray_snapshot(view));
+            let snapshot = self.tray_snapshot(view);
+            self.tray_panel.update(ctx, snapshot);
             match click {
                 crate::tray::TrayClick::Primary { cursor } => {
                     self.tray_panel.toggle_mini(ctx, cursor, native * ctx.zoom_factor());
@@ -2285,15 +2302,17 @@ impl App {
                 tray_panel::Action::Play(list, entry) => self.play_entry(list, entry),
                 tray_panel::Action::ShowWindow => self.show_window(ctx),
                 tray_panel::Action::Quit => self.close_with(ctx, close::CloseAction::Quit),
+                tray_panel::Action::Effects(effects) => self.apply_script_effects(effects, view),
             }
         }
         if self.tray_panel.is_open() {
-            self.tray_panel.update(ctx, self.tray_snapshot(view));
+            let snapshot = self.tray_snapshot(view);
+            self.tray_panel.update(ctx, snapshot);
         }
     }
 
     /// What the tray panel shows.
-    fn tray_snapshot(&self, view: &EngineView) -> tray_panel::Snapshot {
+    fn tray_snapshot(&mut self, view: &EngineView) -> tray_panel::Snapshot {
         tray_panel::Snapshot {
             title: view.track_name.clone(),
             paused: view.paused,
@@ -2309,6 +2328,9 @@ impl App {
                 .map(|l| (l.playlist.name.clone(), l.playlist.entries.iter().map(|e| nice_name(&e.path)).collect()))
                 .collect(),
             playing: self.now_playing.as_ref().map(|n| (n.list, n.entry)),
+            script: self.script.path().map(nice_name),
+            transport: self.script_transport(),
+            frozen: self.preferences_open,
         }
     }
 
