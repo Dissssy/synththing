@@ -1185,6 +1185,8 @@ impl App {
                             egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 3)).show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.spacing_mut().item_spacing.y = 2.0;
+                                // (Its text isn't selectable: a click anywhere picks the row.)
+                                ui.style_mut().interaction.selectable_labels = false;
                                 ui.label(egui::RichText::new(&s.name).strong());
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 4.0;

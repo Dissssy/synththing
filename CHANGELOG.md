@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Fixed
+- Online Library entries can be clicked anywhere again: since 0.5.2 their text could be selected instead, which got in the way of picking them.
+
 ## 0.5.2 (2026-10-07)
 
 ### New
