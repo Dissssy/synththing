@@ -199,6 +199,9 @@ pub struct App {
     /// Lowest level shown in the Log viewer.
     log_min_level: log::Level,
     log_search: String,
+    /// A failure showed on the status line since the recent messages were
+    /// last looked at (a red dot on the line until they are).
+    unseen_failure: bool,
     /// The status line as last written to the log, so each new status
     /// message is logged once.
     logged_status: String,
@@ -430,6 +433,7 @@ impl App {
             log_open: false,
             log_min_level: log::Level::Info,
             log_search: String::new(),
+            unseen_failure: false,
             logged_status: String::new(),
             rename: None,
             editor_goto_line: None,
@@ -1155,12 +1159,10 @@ impl App {
                 ui.weak("SoundFont:");
                 ui.label(view.soundfont_name.as_deref().unwrap_or("(none)"));
             }
-            if !self.status.is_empty() {
-                ui.separator();
-                match status_color(ui, &self.status) {
-                    Some(color) => ui.colored_label(color, &self.status),
-                    None => ui.weak(&self.status),
-                };
+            ui.separator();
+            if status_line_ui(ui, &self.status, &mut self.unseen_failure, applog::elapsed, applog::entries) {
+                self.log_search = STATUS_TARGET.to_string();
+                self.log_open = true;
             }
         });
 
@@ -3149,8 +3151,11 @@ impl eframe::App for App {
         self.heavy_midi_ui(&ctx);
         self.poll_recordings(view);
         if self.status != self.logged_status {
-            log::info!(target: "synththing::status", "{}", self.status);
+            log::info!(target: STATUS_TARGET, "{}", self.status);
             self.logged_status = self.status.clone();
+            if status_outcome(&self.status) == Some(false) {
+                self.unseen_failure = true;
+            }
         }
         self.apply_cursor_confinement(&ctx);
         self.keep_loaded(&ctx);
@@ -3527,6 +3532,79 @@ fn status_outcome(status: &str) -> Option<bool> {
     DONE.iter().any(|w| status.starts_with(w)).then_some(true)
 }
 
+/// The status line: a history button (with a red dot while a failure that
+/// came up hasn't been looked at) and the latest `status`, red when
+/// something failed, green when something got done. The button opens the
+/// recent messages from the log (`entries`, timed on `now`'s clock) in a
+/// popup above it, which clears the dot. True when "Open the full log..."
+/// was clicked.
+fn status_line_ui(
+    ui: &mut egui::Ui,
+    status: &str,
+    unseen_failure: &mut bool,
+    now: impl FnOnce() -> f64,
+    entries: impl FnOnce() -> Vec<applog::Entry>,
+) -> bool {
+    let button = ui
+        .add(egui::Button::new(egui::RichText::new(icon("clock-counter-clockwise")).size(14.0)).small())
+        .on_hover_text(if *unseen_failure {
+            "Something failed: the recent messages"
+        } else {
+            "The recent messages"
+        });
+    if *unseen_failure {
+        let corner = button.rect.right_top() + egui::vec2(-3.0, 3.0);
+        ui.painter().circle_filled(corner, 3.5, ui.visuals().error_fg_color);
+    }
+    let mut open_log = false;
+    let shown = egui::Popup::from_toggle_button_response(&button)
+        .show(|ui| {
+            ui.set_max_width(480.0);
+            let now = now();
+            let recent: Vec<applog::Entry> = entries()
+                .into_iter()
+                .rev()
+                .filter(|e| e.target == STATUS_TARGET && !e.message.is_empty())
+                .take(STATUS_HISTORY)
+                .collect();
+            ui.strong("Recent messages");
+            if recent.is_empty() {
+                ui.weak("Nothing yet.");
+            }
+            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                for entry in &recent {
+                    ui.horizontal_wrapped(|ui| {
+                        match status_color(ui, &entry.message) {
+                            Some(color) => ui.colored_label(color, &entry.message),
+                            None => ui.label(&entry.message),
+                        };
+                        ui.weak(editor::ago_text((now - entry.secs).max(0.0) as u64));
+                    });
+                }
+            });
+            ui.separator();
+            if ui.button("Open the full log...").on_hover_text("Help > Log, showing just these").clicked() {
+                open_log = true;
+                ui.close();
+            }
+        })
+        .is_some();
+    if shown {
+        *unseen_failure = false;
+    }
+    match status_color(ui, status) {
+        Some(color) => ui.colored_label(color, status),
+        None => ui.weak(status),
+    };
+    open_log
+}
+
+/// The log target status messages go under (the status line's history).
+const STATUS_TARGET: &str = "synththing::status";
+
+/// How many of the status line's past messages its popup shows.
+const STATUS_HISTORY: usize = 50;
+
 /// A color of the channel palette (`lua_visualizer::default_channel_color`).
 pub(super) fn palette_color(index: u8) -> egui::Color32 {
     let [r, g, b] = lua_visualizer::default_channel_color(index);
@@ -3688,6 +3766,55 @@ fn is_midi_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The status history opens from its button, clears the red dot, and
+    /// stays open on the frames after (the dot going away mustn't lose it).
+    #[test]
+    fn status_history_opens_and_stays_open() {
+        let ctx = egui::Context::default();
+        let entries = || {
+            vec![applog::Entry {
+                secs: 1.0,
+                level: log::Level::Info,
+                target: STATUS_TARGET.into(),
+                message: "Couldn't save: denied".into(),
+            }]
+        };
+        let button = std::cell::Cell::new(egui::Rect::NOTHING);
+        let frame = |events: Vec<egui::Event>, unseen: &mut bool| {
+            let input = egui::RawInput {
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                ui.horizontal(|ui| {
+                    let start = ui.cursor().min;
+                    status_line_ui(ui, "Couldn't save: denied", unseen, || 125.0, entries);
+                    button.set(egui::Rect::from_min_size(start, egui::vec2(12.0, 12.0)));
+                });
+            });
+            output.textures_delta.clear(); // (no renderer here to hand them to)
+            egui::Popup::is_any_open(&ctx)
+        };
+        let mut unseen = true;
+        assert!(!frame(vec![], &mut unseen));
+        let at = button.get().center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(at), press(true)], &mut unseen);
+        frame(vec![press(false)], &mut unseen);
+        let mut open = 0;
+        for _ in 0..5 {
+            open += usize::from(frame(vec![], &mut unseen));
+        }
+        assert_eq!(open, 5, "open, and still open");
+        assert!(!unseen, "seen");
+    }
 
     /// Slow songs blue, fast ones pink, blended between; out of range,
     /// the nearest end.

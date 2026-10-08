@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- The status line keeps a history: the button at its start shows the recent messages, newest first, with how long ago and colored like the line (red for what failed). A red dot on the button means something failed that you haven't looked at yet. "Open the full log..." goes to Help > Log, showing just these.
 - synththing has an icon: in the title bar, the taskbar and on the exe itself. The menu bar's "synththing" is the new wordmark, with a thin outline on themes where its purple would be hard to see.
 - synththing starts the way it was left: the same volume, soundfont and visualizer script (and loop and shuffle, as before). Each can be turned off, and the speed turned on, in Preferences > Playback.
 

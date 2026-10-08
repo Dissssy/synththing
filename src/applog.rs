@@ -131,6 +131,11 @@ pub fn init(echo: bool) {
     }));
 }
 
+/// Seconds since the app started: the clock `Entry::secs` is on.
+pub fn elapsed() -> f64 {
+    LOGGER.get().map_or(0.0, |l| l.start.elapsed().as_secs_f64())
+}
+
 /// A copy of the in-memory log, oldest first.
 pub fn entries() -> Vec<Entry> {
     LOGGER

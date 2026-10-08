@@ -175,7 +175,11 @@ pub fn rename_history(old: &Path, new: &Path) {
 }
 
 fn ago(millis: u128) -> String {
-    let secs = (now_millis().saturating_sub(millis) / 1000) as u64;
+    ago_text((now_millis().saturating_sub(millis) / 1000) as u64)
+}
+
+/// "just now", "3 min ago", ... for something `secs` seconds ago.
+pub(super) fn ago_text(secs: u64) -> String {
     match secs {
         0..60 => "just now".to_string(),
         60..3600 => format!("{} min ago", secs / 60),
