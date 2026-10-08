@@ -24,6 +24,7 @@ mod script_windows;
 mod song_library;
 mod sprite_editor;
 mod themes;
+mod tray_panel;
 mod tour;
 mod welcome;
 
@@ -342,6 +343,8 @@ pub struct App {
     /// The notification-area icon (Windows; `None` elsewhere, or if it
     /// couldn't be made).
     tray: Option<crate::tray::Tray>,
+    /// What right-clicking the tray icon opens.
+    tray_panel: tray_panel::TrayPanel,
     /// The window's hidden in the tray.
     hidden: bool,
     /// Quit was decided: the next close goes through.
@@ -350,6 +353,8 @@ pub struct App {
     close_prompt: Option<close::ClosePrompt>,
     /// Close (or hide) once the background render finishes.
     close_after_render: Option<close::CloseAction>,
+    /// The tray panel's picture, for the first close's question.
+    panel_picture: Option<egui::TextureHandle>,
     /// The last recording saved, for "Show last recording".
     last_recording: Option<PathBuf>,
 }
@@ -513,10 +518,12 @@ impl App {
             recording: recording::Recording::new(),
             wordmark: branding::Wordmark::default(),
             tray: None,
+            tray_panel: tray_panel::TrayPanel::new(),
             hidden: false,
             quitting: false,
             close_prompt: None,
             close_after_render: None,
+            panel_picture: None,
             last_recording: None,
         };
         if let Some(path) = app.visualizer.script().path().map(Path::to_path_buf) {
@@ -2242,16 +2249,61 @@ impl App {
         self.tray = crate::tray::Tray::new(ctx);
     }
 
-    /// Clicks on the tray icon since last frame.
-    fn handle_tray(&mut self, ctx: &egui::Context) {
+    /// Clicks on the tray icon since last frame, and what was clicked in
+    /// the tray panel.
+    fn handle_tray(&mut self, ctx: &egui::Context, view: &EngineView) {
         let Some(tray) = &self.tray else { return };
         for click in tray.clicks() {
             match click {
                 crate::tray::TrayClick::Primary => self.show_window(ctx),
-                // The tray panel comes with the next step; for now the
-                // right button shows synththing too.
-                crate::tray::TrayClick::Secondary { .. } => self.show_window(ctx),
+                crate::tray::TrayClick::Secondary { at } => {
+                    let pixels_per_point = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
+                    self.tray_panel.update(ctx, self.tray_snapshot(view));
+                    self.tray_panel.open(ctx, at, pixels_per_point);
+                }
             }
+        }
+        for action in self.tray_panel.actions() {
+            match action {
+                tray_panel::Action::TogglePause => self.send(AudioCommand::TogglePause),
+                tray_panel::Action::Previous => self.previous_track(view.position),
+                tray_panel::Action::Next => {
+                    if self.now_playing.is_some() {
+                        self.next_track();
+                    }
+                }
+                tray_panel::Action::Volume(volume) => {
+                    self.volume = volume.clamp(0.0, 1.0);
+                    self.send(AudioCommand::SetVolume(self.volume));
+                }
+                tray_panel::Action::Soundfont(index) => self.activate_soundfont(index),
+                tray_panel::Action::Play(list, entry) => self.play_entry(list, entry),
+                tray_panel::Action::ShowWindow => self.show_window(ctx),
+                tray_panel::Action::Quit => self.close_with(ctx, close::CloseAction::Quit),
+            }
+        }
+        if self.tray_panel.is_open() {
+            self.tray_panel.update(ctx, self.tray_snapshot(view));
+        }
+    }
+
+    /// What the tray panel shows.
+    fn tray_snapshot(&self, view: &EngineView) -> tray_panel::Snapshot {
+        tray_panel::Snapshot {
+            title: view.track_name.clone(),
+            paused: view.paused,
+            position: view.position,
+            length: view.length,
+            volume: self.volume,
+            soundfonts: self.config.soundfonts.iter().map(|p| nice_name(p)).collect(),
+            active_soundfont: self.active_sf,
+            playlists: self
+                .playlists
+                .lists
+                .iter()
+                .map(|l| (l.playlist.name.clone(), l.playlist.entries.iter().map(|e| nice_name(&e.path)).collect()))
+                .collect(),
+            playing: self.now_playing.as_ref().map(|n| (n.list, n.entry)),
         }
     }
 
@@ -3199,6 +3251,9 @@ impl eframe::App for App {
         }
         self.close_requested_ui(&ctx);
         self.close_prompt_ui(&ctx);
+        if self.tray.is_some() {
+            self.tray_panel.register(&ctx);
+        }
         // Outside the layout: F9 can ask for ffmpeg from the dedicated
         // fullscreen too.
         self.ffmpeg_prompt_ui(&ctx);
@@ -3246,8 +3301,8 @@ impl eframe::App for App {
         if !std::mem::take(&mut self.ui_drawn) {
             self.nothing_drawn();
         }
-        self.handle_tray(ctx);
         let view = self.shared.lock().unwrap().view.clone();
+        self.handle_tray(ctx, &view);
         self.sync_script_song(&view);
         self.poll_loads();
         self.refresh_changed_folders(ctx);

@@ -8,6 +8,9 @@ use eframe::egui;
 
 use super::App;
 
+/// The tray panel, in a screenshot, for the first close's question.
+const PANEL_PICTURE: &[u8] = include_bytes!("../../assets/tray-panel.png");
+
 /// What closing does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CloseAction {
@@ -100,11 +103,21 @@ impl App {
     /// The question closing asked, if any.
     pub(super) fn close_prompt_ui(&mut self, ctx: &egui::Context) {
         let Some(prompt) = self.close_prompt else { return };
+        if prompt == ClosePrompt::FirstTime && self.panel_picture.is_none() {
+            self.panel_picture = crate::preview::decode_png(PANEL_PICTURE)
+                .map(|(w, h, rgba)| {
+                    let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+                    ctx.load_texture("tray_panel_picture", image, egui::TextureOptions::LINEAR)
+                })
+                .map_err(|e| log::warn!("the tray panel picture: {e}"))
+                .ok();
+        }
+        let picture = self.panel_picture.clone();
         let mut answer: Option<Answer> = None;
         let response = egui::Modal::new(egui::Id::new("close_prompt")).show(ctx, |ui| {
-            ui.set_width(460.0);
+            ui.set_width(if prompt == ClosePrompt::FirstTime { 600.0 } else { 460.0 });
             match prompt {
-                ClosePrompt::FirstTime => first_time_ui(ui, &mut answer),
+                ClosePrompt::FirstTime => first_time_ui(ui, picture.as_ref(), &mut answer),
                 ClosePrompt::Recording(action) => {
                     if self.recording.recorder.is_some() {
                         live_recording_ui(ui, action, &mut answer);
@@ -165,9 +178,36 @@ enum Answer {
     WhenRendered(CloseAction),
 }
 
-fn first_time_ui(ui: &mut egui::Ui, answer: &mut Option<Answer>) {
+fn first_time_ui(ui: &mut egui::Ui, picture: Option<&egui::TextureHandle>, answer: &mut Option<Answer>) {
     ui.heading("Keep synththing running in the tray?");
     ui.add_space(4.0);
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(ui.available_width() - if picture.is_some() { 196.0 } else { 0.0 });
+            first_time_text(ui);
+        });
+        if let Some(picture) = picture {
+            let size = picture.size_vec2() * (180.0 / picture.size_vec2().x);
+            ui.add(egui::Image::new((picture.id(), size)).corner_radius(6.0))
+                .on_hover_text("The panel right-clicking the tray icon opens");
+        }
+    });
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        if ui.button("Keep running in the tray").clicked() {
+            *answer = Some(Answer::Remember(CloseAction::Hide));
+        }
+        if ui.button("Quit").clicked() {
+            *answer = Some(Answer::Remember(CloseAction::Quit));
+        }
+        if ui.button("Cancel").on_hover_text("Leave the window open").clicked() {
+            *answer = Some(Answer::Stay);
+        }
+    });
+}
+
+/// The first close's explanation.
+fn first_time_text(ui: &mut egui::Ui) {
     ui.label(
         "Closing the window can quit synththing, or hide it in the tray (the icons by the clock) with the \
          music still playing.",
@@ -181,18 +221,6 @@ fn first_time_ui(ui: &mut egui::Ui, answer: &mut Option<Answer>) {
     ));
     ui.add_space(4.0);
     ui.weak("Quit (in the synththing menu, or the tray panel) always closes it completely. You can change this any time in Preferences > General.");
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        if ui.button("Keep running in the tray").clicked() {
-            *answer = Some(Answer::Remember(CloseAction::Hide));
-        }
-        if ui.button("Quit").clicked() {
-            *answer = Some(Answer::Remember(CloseAction::Quit));
-        }
-        if ui.button("Cancel").on_hover_text("Leave the window open").clicked() {
-            *answer = Some(Answer::Stay);
-        }
-    });
 }
 
 fn live_recording_ui(ui: &mut egui::Ui, action: CloseAction, answer: &mut Option<Answer>) {
