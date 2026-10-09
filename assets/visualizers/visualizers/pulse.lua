@@ -120,11 +120,15 @@ function render(width, height, left, right)
     if show_text then
         local th = (height >= 500) and FONT_HEIGHT * 2 or FONT_HEIGHT
         local color = { r = 230, g = 230, b = 245, a = 0.85 }
+        -- (Just the tempo in the mini player: it's small.)
+        local mini = display_mode() == "mini"
         if b then
             local num, den = time_signature()
             text(th / 2, th / 2, string.format("%d bpm  %d/%d", math.floor(tempo() + 0.5), num, den), color, th)
-            text(th / 2, th * 1.5, string.format("bar %d  beat %d", bar_number, math.floor(into) + 1), color, th)
-        else
+            if not mini then
+                text(th / 2, th * 1.5, string.format("bar %d  beat %d", bar_number, math.floor(into) + 1), color, th)
+            end
+        elseif not mini then
             text(th / 2, th / 2, "no beats in this song: following the sound", color, th)
         end
     end

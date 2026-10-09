@@ -32,6 +32,8 @@ local left_bars = {}
 local right_bars = {}
 local meter = { l = 0, r = 0, peak_l = 0, peak_r = 0 }
 local LABEL_FREQS = { 50, 100, 200, 500, 1000, 2000, 5000, 10000 }
+-- Fewer in the mini player, where the window's small.
+local MINI_LABEL_FREQS = { 100, 1000, 10000 }
 local METER_W = 6
 
 local function freq_at(t)
@@ -88,7 +90,7 @@ function render(width, height, left, right)
     if show_labels then
         local muted = { r = 200, g = 200, b = 220, a = 0.55 }
         local span = math.log(MAX_FREQUENCY_HZ / MIN_FREQUENCY_HZ)
-        for _, f in ipairs(LABEL_FREQS) do
+        for _, f in ipairs(display_mode() == "mini" and MINI_LABEL_FREQS or LABEL_FREQS) do
             local x = math.floor(math.log(f / MIN_FREQUENCY_HZ) / span * width + 0.5)
             line(x, 0, x, height, { r = 255, g = 255, b = 255, a = 0.06 })
             local label = (f >= 1000) and ((f // 1000) .. "k") or tostring(f)

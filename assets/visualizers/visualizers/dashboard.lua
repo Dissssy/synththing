@@ -118,18 +118,27 @@ local function roll(w, h)
         if not channel_enabled(n.channel) then color = mix(color, { r = 0, g = 0, b = 0 }, 0.7) end
         rect(x0, y, math.max(x1, x0 + 2), y + math.max(1, row_h - 1), color)
     end
-    legend()
+    -- (Not in the mini player, where it would cover too much of the roll.)
+    if display_mode() ~= "mini" then
+        legend()
+    end
 end
 
--- One panel: a title, a frame, and `draw(w, h)` inside it with (0, 0) at its
--- top-left and nothing drawn outside it.
+-- One panel: a title (none in the mini player, for room), a frame, and
+-- `draw(w, h)` inside it with (0, 0) at its top-left and nothing drawn
+-- outside it.
 local function panel(x, y, w, h, title, colors, draw)
     push_view()
     translate(x, y)
     rect(0, 0, w, h, colors.panel)
-    text(6, 2, title, colors.title)
-    translate(6, TITLE_H)
-    local iw, ih = w - 12, h - TITLE_H - 6
+    local title_h = TITLE_H
+    if display_mode() == "mini" then
+        title_h = 6
+    else
+        text(6, 2, title, colors.title)
+    end
+    translate(6, title_h)
+    local iw, ih = w - 12, h - title_h - 6
     clip(0, 0, iw, ih)
     draw(iw, ih)
     pop_view()
@@ -155,11 +164,25 @@ function render(width, height, left, right)
     local s = shake * shake_amount
     translate(math.sin(TIME * 90) * s, math.cos(TIME * 77) * s)
 
-    local w = (width - 3 * GAP) / 2
-    local h = (height - 3 * GAP) / 2
-    panel(GAP, GAP, w, h, "scope", colors, function(pw, ph) scope(pw, ph, accent) end)
-    panel(2 * GAP + w, GAP, w, h, "spectrum", colors, function(pw, ph) spectrum(pw, ph, spec_l, spec_r) end)
-    panel(GAP, 2 * GAP + h, w, h, "notes", colors, roll)
-    panel(2 * GAP + w, 2 * GAP + h, w, h, "levels", colors, function(pw, ph) meters(pw, ph, accent) end)
+    local views = {
+        { "scope", function(pw, ph) scope(pw, ph, accent) end },
+        { "spectrum", function(pw, ph) spectrum(pw, ph, spec_l, spec_r) end },
+        { "notes", roll },
+        { "levels", function(pw, ph) meters(pw, ph, accent) end },
+    }
+    if height > width then
+        -- Taller than wide (a narrow mini player, say): one above another.
+        local h = (height - 5 * GAP) / 4
+        for i, v in ipairs(views) do
+            panel(GAP, GAP + (i - 1) * (h + GAP), width - 2 * GAP, h, v[1], colors, v[2])
+        end
+    else
+        local w = (width - 3 * GAP) / 2
+        local h = (height - 3 * GAP) / 2
+        for i, v in ipairs(views) do
+            local col, row = (i - 1) % 2, (i - 1) // 2
+            panel(GAP + col * (w + GAP), GAP + row * (h + GAP), w, h, v[1], colors, v[2])
+        end
+    end
     pop_view()
 end
