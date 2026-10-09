@@ -5,12 +5,12 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
-- `shift_frame(dx, dy)` scrolls the kept frame, so a scrolling display draws only what's new. The Spectrogram works that way now, several times faster.
-- Outlines for scripts: `rect_outline` and `circle_outline` draw just the edge, any width, blending evenly all the way round. The Disco ball's rim light is one now.
-- Note helpers for scripts: `note_name(key)` gives `"C#4"`, `note_freq(key)` a key's pitch in Hz, and `freq_note(hz)` the key at a pitch.
 - A mini player (Windows): click the tray icon for a little window that stays on top, with playback, the volume, and your playlists and soundfonts. Drag it anywhere by its header; it opens where you left it. Its expand button grows it to the left with the visualizer, as tall as the window (drag its left edge for anything from tall 9:16 to wide 16:9), and a picker for switching visualizers over a softened view of the one that's running (the mouse wheel scrolls through them). The tray panel (right-click) has a pin that turns it into the mini player too.
 - The bundled visualizers fit the mini player: fewer labels in FFT and Spectrogram, just the tempo in Pulse, no titles or legend in Dashboard (whose panels stack in a column when it's taller than wide), and no help line in Keyboard.
 - Scripts can tell when they're in the mini player: `display_mode()` is `"mini"` there, so they can leave out detail too small to see.
+- `shift_frame(dx, dy)` scrolls the kept frame, so a scrolling display draws only what's new. The Spectrogram works that way now, several times faster.
+- Outlines for scripts: `rect_outline` and `circle_outline` draw just the edge, any width, blending evenly all the way round. The Disco ball's rim light is one now.
+- Note helpers for scripts: `note_name(key)` gives `"C#4"`, `note_freq(key)` a key's pitch in Hz, and `freq_note(hz)` the key at a pitch.
 
 ## 0.6.2 (2026-10-08)
 
