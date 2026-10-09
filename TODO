@@ -131,7 +131,10 @@
     Check the engine, solo/"All", the toggle tooltips ("the last one
     playing") and the scripting reference's set_channel_enabled paragraph.
 
-[M][!] mini player (requested 2026-10-08)
+[M][!] mini player (requested 2026-10-08) - DONE (the tray panel pinned:
+    app/tray_panel.rs; expands left with the visualizer through the shared
+    VisualizerPanel (ScriptHost/FramePipe split); script switcher overlay;
+    display_mode "mini"). Original:
     A small window with just the essentials, swappable between two views:
     - the visualizer as the background with the transport buttons
       underneath (play/pause, previous/next, seek, volume);

@@ -432,6 +432,11 @@ impl VisualizerPanel {
         }
     }
 
+    /// The last picture, as a texture, and its size in pixels.
+    pub fn picture(&self) -> Option<(egui::TextureId, egui::Vec2)> {
+        self.texture.as_ref().map(|t| (t.id(), t.size_vec2()))
+    }
+
     /// The main window is showing it (call before its `show`): another
     /// window showing it meanwhile just shows the latest picture, rather
     /// than running the script a second time.

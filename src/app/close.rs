@@ -8,8 +8,10 @@ use eframe::egui;
 
 use super::App;
 
-/// The tray panel, in a screenshot, for the first close's question.
+/// The tray panel and the mini player, in screenshots, for the first
+/// close's question.
 const PANEL_PICTURE: &[u8] = include_bytes!("../../assets/tray-panel.png");
+const MINI_PICTURE: &[u8] = include_bytes!("../../assets/tray-mini.png");
 
 /// What closing does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,21 +105,24 @@ impl App {
     /// The question closing asked, if any.
     pub(super) fn close_prompt_ui(&mut self, ctx: &egui::Context) {
         let Some(prompt) = self.close_prompt else { return };
-        if prompt == ClosePrompt::FirstTime && self.panel_picture.is_none() {
-            self.panel_picture = crate::preview::decode_png(PANEL_PICTURE)
-                .map(|(w, h, rgba)| {
-                    let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
-                    ctx.load_texture("tray_panel_picture", image, egui::TextureOptions::LINEAR)
-                })
-                .map_err(|e| log::warn!("the tray panel picture: {e}"))
-                .ok();
+        if prompt == ClosePrompt::FirstTime && self.tray_pictures.is_none() {
+            let load = |name: &str, bytes: &[u8]| {
+                crate::preview::decode_png(bytes)
+                    .map(|(w, h, rgba)| {
+                        let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+                        ctx.load_texture(name, image, egui::TextureOptions::LINEAR)
+                    })
+                    .map_err(|e| log::warn!("the {name} picture: {e}"))
+                    .ok()
+            };
+            self.tray_pictures = load("tray mini player", MINI_PICTURE).zip(load("tray panel", PANEL_PICTURE));
         }
-        let picture = self.panel_picture.clone();
+        let pictures = self.tray_pictures.clone();
         let mut answer: Option<Answer> = None;
         let response = egui::Modal::new(egui::Id::new("close_prompt")).show(ctx, |ui| {
-            ui.set_width(if prompt == ClosePrompt::FirstTime { 600.0 } else { 460.0 });
+            ui.set_width(if prompt == ClosePrompt::FirstTime { 560.0 } else { 460.0 });
             match prompt {
-                ClosePrompt::FirstTime => first_time_ui(ui, picture.as_ref(), &mut answer),
+                ClosePrompt::FirstTime => first_time_ui(ui, pictures.as_ref(), &mut answer),
                 ClosePrompt::Recording(action) => {
                     if self.recording.recorder.is_some() {
                         live_recording_ui(ui, action, &mut answer);
@@ -178,20 +183,28 @@ enum Answer {
     WhenRendered(CloseAction),
 }
 
-fn first_time_ui(ui: &mut egui::Ui, picture: Option<&egui::TextureHandle>, answer: &mut Option<Answer>) {
+fn first_time_ui(
+    ui: &mut egui::Ui,
+    pictures: Option<&(egui::TextureHandle, egui::TextureHandle)>,
+    answer: &mut Option<Answer>,
+) {
     ui.heading("Keep synththing running in the tray?");
     ui.add_space(4.0);
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
-            ui.set_width(ui.available_width() - if picture.is_some() { 196.0 } else { 0.0 });
-            first_time_text(ui);
+    first_time_text(ui);
+    if let Some((mini, panel)) = pictures {
+        ui.add_space(8.0);
+        // Both the same height, side by side, each with what opens it.
+        let height = 190.0;
+        ui.horizontal_top(|ui| {
+            for (picture, caption) in [(mini, "Left-click: the mini player"), (panel, "Right-click: the panel")] {
+                ui.vertical(|ui| {
+                    let size = picture.size_vec2() * (height / picture.size_vec2().y);
+                    ui.add(egui::Image::new((picture.id(), size)).corner_radius(6.0));
+                    ui.weak(caption);
+                });
+            }
         });
-        if let Some(picture) = picture {
-            let size = picture.size_vec2() * (180.0 / picture.size_vec2().x);
-            ui.add(egui::Image::new((picture.id(), size)).corner_radius(6.0))
-                .on_hover_text("The panel right-clicking the tray icon opens");
-        }
-    });
+    }
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         if ui.button("Keep running in the tray").clicked() {
@@ -213,10 +226,14 @@ fn first_time_text(ui: &mut egui::Ui) {
          music still playing.",
     );
     ui.add_space(4.0);
-    ui.label(format!("{}  Click its icon to bring synththing back.", super::icon("cursor-click")));
     ui.label(format!(
-        "{}  Right-click it for a small panel: play, pause and skip, the volume, soundfonts and playlists, \
-         without opening the window.",
+        "{}  Click its icon for the mini player: playback, playlists and soundfonts in a little window that \
+         stays on top, and the visualizer beside them if you like.",
+        super::icon("cursor-click")
+    ));
+    ui.label(format!(
+        "{}  Right-click it for the same as a panel that goes away when you click elsewhere, with \
+         \"Show synththing\" to bring the window back.",
         super::icon("list")
     ));
     ui.add_space(4.0);

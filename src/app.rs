@@ -358,8 +358,9 @@ pub struct App {
     close_prompt: Option<close::ClosePrompt>,
     /// Close (or hide) once the background render finishes.
     close_after_render: Option<close::CloseAction>,
-    /// The tray panel's picture, for the first close's question.
-    panel_picture: Option<egui::TextureHandle>,
+    /// The mini player's and tray panel's pictures, for the first close's
+    /// question.
+    tray_pictures: Option<(egui::TextureHandle, egui::TextureHandle)>,
     /// The last recording saved, for "Show last recording".
     last_recording: Option<PathBuf>,
 }
@@ -533,7 +534,7 @@ impl App {
             quitting: false,
             close_prompt: None,
             close_after_render: None,
-            panel_picture: None,
+            tray_pictures: None,
             last_recording: None,
         };
         if let Some(path) = app.script.path().map(Path::to_path_buf) {
@@ -2303,6 +2304,7 @@ impl App {
                 tray_panel::Action::ShowWindow => self.show_window(ctx),
                 tray_panel::Action::Quit => self.close_with(ctx, close::CloseAction::Quit),
                 tray_panel::Action::Effects(effects) => self.apply_script_effects(effects, view),
+                tray_panel::Action::Script(index) => self.load_script(index),
             }
         }
         if self.tray_panel.is_open() {
@@ -2329,6 +2331,8 @@ impl App {
                 .collect(),
             playing: self.now_playing.as_ref().map(|n| (n.list, n.entry)),
             script: self.script.path().map(nice_name),
+            scripts: self.available_scripts.iter().map(|p| nice_name(p)).collect(),
+            active_script: self.active_script,
             transport: self.script_transport(),
             frozen: self.preferences_open,
         }

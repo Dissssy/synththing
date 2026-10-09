@@ -4,6 +4,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- A mini player (Windows): click the tray icon for a little window that stays on top, with playback, the volume, and your playlists and soundfonts. Drag it anywhere by its header; it opens where you left it. Its expand button grows it to the left with the visualizer, small, and a picker for switching visualizers over a softened view of the one that's running. The tray panel (right-click) has a pin that turns it into the mini player too.
+- Scripts can tell when they're in the mini player: `display_mode()` is `"mini"` there, so they can leave out detail too small to see.
+
 ## 0.6.2 (2026-10-08)
 
 ### Added
