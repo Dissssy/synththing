@@ -37,16 +37,33 @@ pub(super) fn viewport_id() -> egui::ViewportId {
 /// The panel's size, in points.
 const SIZE: egui::Vec2 = egui::vec2(300.0, 420.0);
 
-/// The visualizer's size in the expanded mini player, in points: as tall
-/// as the panel inside its margins, and 16:9 like a video.
+/// The visualizer's size in the expanded mini player, in points, to begin
+/// with: as tall as the panel inside its margins, and 16:9 like a video.
+/// Dragging its left edge makes it narrower, down to 9:16 (`PICTURE_WIDTHS`).
 const PICTURE: egui::Vec2 = egui::vec2((SIZE.y - 20.0) * 16.0 / 9.0, SIZE.y - 20.0);
+
+/// How narrow and how wide the visualizer can be dragged: 9:16 to 16:9.
+const PICTURE_WIDTHS: (f32, f32) = (PICTURE.y * 9.0 / 16.0, PICTURE.y * 16.0 / 9.0);
 
 /// Between the visualizer and the controls.
 const GAP: f32 = 10.0;
 
-/// The window's size, expanded or not.
-fn size(expanded: bool) -> egui::Vec2 {
-    if expanded { egui::vec2(SIZE.x + PICTURE.x + GAP, SIZE.y) } else { SIZE }
+/// The window's size: the panel, and expanded, a `picture` wide visualizer
+/// beside it.
+fn size(expanded: bool, picture: f32) -> egui::Vec2 {
+    if expanded { egui::vec2(SIZE.x + picture + GAP, SIZE.y) } else { SIZE }
+}
+
+/// Let the window be resized (by the visualizer's edge) only between the
+/// visualizer's narrowest and widest, and only expanded.
+fn set_size_limits(ctx: &egui::Context, expanded: bool) {
+    let (min, max) = if expanded {
+        (size(true, PICTURE_WIDTHS.0), size(true, PICTURE_WIDTHS.1))
+    } else {
+        (SIZE, SIZE)
+    };
+    ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(min));
+    ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(max));
 }
 
 /// What the panel shows, from the app.
@@ -131,6 +148,11 @@ struct State {
     pinned_at: Option<egui::Pos2>,
     /// With the visualizer, to the left.
     expanded: bool,
+    /// How wide the visualizer is (it's dragged narrower or wider; kept for
+    /// the session).
+    picture_width: Option<f32>,
+    /// How far the switcher's strip is scrolled (the mouse wheel scrolls it).
+    strip_offset: f32,
     /// The script switcher's up, over the visualizer.
     switching: bool,
     /// It's just opened: its strip scrolls to the running script, once.
@@ -163,7 +185,9 @@ impl TrayPanel {
             .with_decorations(false)
             .with_always_on_top()
             .with_taskbar(false)
-            .with_resizable(false)
+            .with_resizable(true)
+            .with_min_inner_size(SIZE)
+            .with_max_inner_size(SIZE)
             .with_inner_size(SIZE)
             .with_visible(false);
         let (state, picture, send) = (Arc::clone(&self.state), Arc::clone(&self.picture), self.send.clone());
@@ -205,7 +229,8 @@ impl TrayPanel {
         if !pinned {
             state.expanded = false;
         }
-        let size = size(state.expanded);
+        let expanded = state.expanded;
+        let size = size(expanded, state.picture_width.unwrap_or(PICTURE.x));
         let at = match state.pinned_at.filter(|_| pinned) {
             Some(last) => {
                 state.anchor = None;
@@ -218,6 +243,13 @@ impl TrayPanel {
         };
         drop(state);
         let id = viewport_id();
+        let (min, max) = if expanded {
+            (self::size(true, PICTURE_WIDTHS.0), self::size(true, PICTURE_WIDTHS.1))
+        } else {
+            (SIZE, SIZE)
+        };
+        ctx.send_viewport_cmd_to(id, egui::ViewportCommand::MinInnerSize(min));
+        ctx.send_viewport_cmd_to(id, egui::ViewportCommand::MaxInnerSize(max));
         ctx.send_viewport_cmd_to(id, egui::ViewportCommand::OuterPosition(at));
         ctx.send_viewport_cmd_to(id, egui::ViewportCommand::InnerSize(size));
         ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(true));
@@ -262,14 +294,16 @@ fn close(ctx: &egui::Context, state: &mut State) {
 /// Expand (grow to the left with the visualizer) or contract, keeping the
 /// controls where they are on screen.
 fn set_expanded(ctx: &egui::Context, state: &mut State, expanded: bool) {
-    let shift = if expanded { -(PICTURE.x + GAP) } else { PICTURE.x + GAP };
+    let width = state.picture_width.unwrap_or(PICTURE.x);
+    let shift = if expanded { -(width + GAP) } else { width + GAP };
     state.expanded = expanded;
     if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
         let at = rect.min + egui::vec2(shift, 0.0);
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(at));
         state.pinned_at = Some(at);
     }
-    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size(expanded)));
+    set_size_limits(ctx, expanded);
+    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size(expanded, width)));
 }
 
 fn panel_ui(ui: &mut egui::Ui, state: &Mutex<State>, picture: &Picture, send: &Sender<Action>) {
@@ -280,7 +314,7 @@ fn panel_ui(ui: &mut egui::Ui, state: &Mutex<State>, picture: &Picture, send: &S
     let ctx = ui.ctx().clone();
     if let Some((cursor, frames)) = state.anchor {
         // Its own scale, now it's on its monitor (see `State::anchor`).
-        let size = size(state.expanded);
+        let size = size(state.expanded, state.picture_width.unwrap_or(PICTURE.x));
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(placement(cursor, ctx.pixels_per_point(), size)));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
         state.anchor = (frames > 1).then_some((cursor, frames - 1));
@@ -312,8 +346,12 @@ fn panel_ui(ui: &mut egui::Ui, state: &Mutex<State>, picture: &Picture, send: &S
     frame.show(ui, |ui| {
         ui.set_min_size(ui.available_size());
         if state.expanded {
+            // The visualizer takes what the panel doesn't (the window's
+            // dragged wider or narrower by its edge).
+            let width = (ui.available_width() - (SIZE.x - 20.0) - GAP).clamp(PICTURE_WIDTHS.0, PICTURE_WIDTHS.1);
+            state.picture_width = Some(width);
             ui.horizontal_top(|ui| {
-                picture_ui(ui, picture, &mut state, &act);
+                picture_ui(ui, picture, &mut state, &act, width);
                 ui.add_space(GAP - ui.spacing().item_spacing.x);
                 // (Under a fixed id, like the picture's: their state mustn't
                 // depend on what the visualizer drew.)
@@ -329,7 +367,7 @@ fn panel_ui(ui: &mut egui::Ui, state: &Mutex<State>, picture: &Picture, send: &S
 
 /// The visualizer, filling its side of the window, with the script
 /// switcher's button on its corner and the switcher over it when it's up.
-fn picture_ui(ui: &mut egui::Ui, picture: &Picture, state: &mut State, act: &impl Fn(Action)) {
+fn picture_ui(ui: &mut egui::Ui, picture: &Picture, state: &mut State, act: &impl Fn(Action), width: f32) {
     let snapshot = state.snapshot.clone();
     let (notes, view) = match picture.playback.lock() {
         Ok(shared) => (shared.notes.clone(), shared.view.clone()),
@@ -337,7 +375,7 @@ fn picture_ui(ui: &mut egui::Ui, picture: &Picture, state: &mut State, act: &imp
     };
     // An exact rectangle every frame, so the script's picture is always
     // the same size.
-    let (rect, _) = ui.allocate_exact_size(PICTURE, egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, PICTURE.y), egui::Sense::hover());
     let mut inside = ui.new_child(egui::UiBuilder::new().id_salt("tray_picture").max_rect(rect));
     // (Never held already: the main window and this one draw in turn.)
     let shown = picture.panel.try_lock().ok().and_then(|mut panel| {
@@ -351,6 +389,12 @@ fn picture_ui(ui: &mut egui::Ui, picture: &Picture, state: &mut State, act: &imp
         }
         panel.picture()
     });
+    // Its left edge (the window's) resizes it, between 9:16 and 16:9.
+    let edge = egui::Rect::from_min_max(rect.min - egui::vec2(10.0, 0.0), egui::pos2(rect.min.x + 6.0, rect.max.y));
+    let grip = ui.interact(edge, egui::Id::new("tray_picture_edge"), egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    if grip.drag_started() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::BeginResize(egui::viewport::ResizeDirection::West));
+    }
     if state.switching {
         switcher_ui(ui, rect, shown, state, &snapshot, act);
     } else {
@@ -416,7 +460,13 @@ fn switcher_ui(
     // Along the bottom: every script, the running one picked out.
     let strip = egui::Rect::from_min_max(egui::pos2(inner.min.x, inner.max.y - 48.0), inner.max);
     let mut bottom = ui.new_child(egui::UiBuilder::new().id_salt("tray_switcher_strip").max_rect(strip));
-    egui::ScrollArea::horizontal().id_salt("tray_scripts").show(&mut bottom, |ui| {
+    // The mouse wheel scrolls the strip sideways.
+    let wheel = if bottom.rect_contains_pointer(strip) { bottom.input(|i| i.smooth_scroll_delta.y) } else { 0.0 };
+    let mut scroll = egui::ScrollArea::horizontal().id_salt("tray_scripts");
+    if wheel != 0.0 {
+        scroll = scroll.horizontal_scroll_offset((state.strip_offset - wheel).max(0.0));
+    }
+    let output = scroll.show(&mut bottom, |ui| {
         ui.horizontal(|ui| {
             for (i, name) in snapshot.scripts.iter().enumerate() {
                 let current = snapshot.active_script == Some(i);
@@ -432,6 +482,7 @@ fn switcher_ui(
             }
         });
     });
+    state.strip_offset = output.state.offset.x;
 }
 
 /// Where a `size` picture shows inside `rect`, keeping its shape.
