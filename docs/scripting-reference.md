@@ -303,6 +303,9 @@ set_channel_enabled(c, bool)    -- a script can mute/unmute a channel too
 channel_colors(colors)          -- the colors you draw channels in, for the app's toggles
 channel_program(c, [seconds]) -> program, name  -- the instrument a channel plays
 channel_name(c) -> name         -- the name of the track a channel's notes are in, or nil
+note_name(key, [octave]) -> name  -- "C#4" (60 is middle C); octave false: "C#"
+note_freq(key) -> hz            -- a key's pitch: 69 (A4) is 440 Hz
+freq_note(hz) -> key            -- the key at a pitch, fractional; nil for 0 Hz or less
 ```
 
 `notes_between` is the one to reach for when you want notes as whole things: each comes with its `start` and `stop` time (song seconds, the same clock as `playback().position`), so there's no pairing note-ons with note-offs yourself. It returns every note sounding at any point in the window, including ones that started before `t0` and are still held, in start order. The window can be any size, so a script can look further ahead than `NOTE_LOOKAHEAD` or read the whole song once (`notes_between(0, playback().length)`) to build a level up front. `id` is stable for as long as the song is loaded, so it works as a table key for tracking which notes you've already handled. Notes are read from the file itself, so they're all there whether or not a soundfont is loaded, and regardless of which channels are muted.
@@ -336,6 +339,13 @@ for _, c in ipairs(midi_channels()) do
     local _, instrument = channel_program(c)
     text(4, 4 + c * 14, (channel_name(c) or ("Channel " .. c + 1)) .. ": " .. instrument, white)
 end
+```
+
+`note_name` names a key the usual way: sharps (no flats), the octave number counting from C, and 60 as middle C, `"C4"` (so 0 is `"C-1"` and 127 `"G9"`); with `octave` false it's just the note, `"C#"`, for things like a key signature. A fractional key rounds to the nearest. `note_freq` is a key's pitch in equal temperament with A4 (69) at 440 Hz, and fractional keys (a pitch bent between two keys) work; `freq_note` goes the other way, so `freq_note(hz)` of a spectrum's loudest frequency (`fft_freq`) says which key it's nearest, and by how much it's sharp or flat. All three since 0.7.0.
+
+```lua
+local key = freq_note(fft_freq(loudest_entry))      -- 69.2: an A, a little sharp
+text(4, 4, note_name(key) .. string.format(" %+d cents", math.floor((key - math.floor(key + 0.5)) * 100 + 0.5)), white)
 ```
 
 `channel_colors` tells the app which color you draw each channel in, so its channel toggles (above the visualizer) show it, and nobody needs a legend: `channel_colors({ [0] = { r = 90, g = 170, b = 255 }, [9] = { r = 255, g = 130, b = 90 } })`. Each toggle is filled with its channel's color while the channel's on, and outlined in it while it's off. Without it, they show the keyboard visualizer's colors (eight, repeating: channel 0 `{90, 170, 255}`, then `{255, 130, 90}`, `{120, 230, 140}`, `{240, 210, 90}`, `{200, 120, 255}`, `{90, 230, 230}`, `{255, 110, 170}`, `{170, 200, 120}`), so a script drawing channels in those needn't call it. Each call replaces the whole mapping: channels left out go back to those defaults, and `channel_colors()` (or `{}`) puts them all back. It's kept until the script is changed or restarted, so calling it once when the script loads is enough (again whenever the colors change, after a setting, say). Channels are 0 to 15, as in `midi_channels()`; `a` is ignored. Since 0.5.1.

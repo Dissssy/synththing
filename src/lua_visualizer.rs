@@ -4242,6 +4242,7 @@ fn table_to_color(t: &Table) -> mlua::Result<u32> {
 /// would.
 fn register_color_helpers(lua: &Lua) -> mlua::Result<()> {
     let globals = lua.globals();
+    register_note_helpers(&globals, lua)?;
     let color = |lua: &Lua, (r, g, b, a): (f64, f64, f64, f64)| -> mlua::Result<Table> {
         let t = lua.create_table_with_capacity(0, 4)?;
         t.raw_set("r", r)?;
@@ -4293,6 +4294,35 @@ fn register_color_helpers(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     Ok(())
+}
+
+/// The note names in an octave, from C.
+const NOTE_NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+/// `note_name`, `note_freq`, `freq_note`: MIDI keys (60 is middle C, C4;
+/// 69 is A4, 440 Hz) to names and frequencies and back.
+fn register_note_helpers(globals: &Table, lua: &Lua) -> mlua::Result<()> {
+    globals.set(
+        "note_name",
+        lua.create_function(|_, (key, octave): (f64, Option<bool>)| {
+            if !key.is_finite() {
+                return Err(mlua::Error::runtime(format!("note_name: {key} isn't a key")));
+            }
+            Ok(note_name(key.round() as i64, octave.unwrap_or(true)))
+        })?,
+    )?;
+    globals.set("note_freq", lua.create_function(|_, key: f64| Ok(440.0 * 2f64.powf((key - 69.0) / 12.0)))?)?;
+    globals.set(
+        "freq_note",
+        lua.create_function(|_, hz: f64| Ok((hz > 0.0 && hz.is_finite()).then(|| 69.0 + 12.0 * (hz / 440.0).log2())))?,
+    )?;
+    Ok(())
+}
+
+/// "C#4" for key 61 (with `octave`), "C#" without.
+fn note_name(key: i64, octave: bool) -> String {
+    let name = NOTE_NAMES[key.rem_euclid(12) as usize];
+    if octave { format!("{name}{}", key.div_euclid(12) - 1) } else { name.to_string() }
 }
 
 /// Hue in degrees (any, wrapped to 0..360), saturation and value 0 to 1
@@ -5949,6 +5979,21 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         visualizer.set_source("function render() approach(0, 1, -1) end".to_string());
         render_with(&mut visualizer, &VisualizerInput::default());
         assert!(visualizer.error().is_some_and(|e| e.contains("rate must be 0 or more")), "{:?}", visualizer.error());
+    }
+
+    /// Note names (sharps, octaves from C, 60 = C4), frequencies (A4 = 440)
+    /// and back.
+    #[test]
+    fn note_helpers_name_and_tune() {
+        let script = "function render()
+            log(table.concat({ note_name(60), note_name(61), note_name(69.4), note_name(0), note_name(-1),
+                note_name(127), note_name(70, false), string.format('%.2f', note_freq(69)), string.format('%.2f', note_freq(60)),
+                string.format('%.3f', freq_note(440)), string.format('%.3f', freq_note(466.16)), tostring(freq_note(0)) }, ' '))
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        render_with(&mut visualizer, &VisualizerInput::default());
+        assert_eq!(visualizer.error(), None);
+        assert_eq!(last_log(&visualizer), "C4 C#4 A4 C-1 B-2 G9 A# 440.00 261.63 69.000 70.000 nil");
     }
 
     /// `hsv` takes hue in degrees (wrapping) and makes a color table;

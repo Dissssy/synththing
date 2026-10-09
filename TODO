@@ -795,7 +795,8 @@ Smaller:
     hsv is hand-written in highway, disco and letters (with two different
     hue ranges, 0-1 and 0-360). Pick one (0-1 probably) and document it.
 
-[S][.] note helpers: note_name(key) -> "C#4", note_freq(key) -> Hz,
+[S][.] note helpers - DONE (0.7.0; keyboard.lua uses note_name). Original:
+    note_name(key) -> "C#4", note_freq(key) -> Hz,
     freq_note(hz) -> key (fractional)
     keyboard.lua has its own NOTE_NAMES; pitch visualizers and tuners
     need the frequency mapping both ways.

@@ -72,7 +72,6 @@ local KEY_UP = input_register("key up", { "up", "pad_dpad_up" })
 local KEY_DOWN = input_register("key down", { "down", "pad_dpad_down" })
 
 local MAJOR = { 0, 2, 4, 5, 7, 9, 11 }
-local NOTE_NAMES = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }
 local PLAYER_COLOR = { r = 255, g = 214, b = 90 }
 
 -- The key (0 = C ... 11 = B) and the span's first note, in scale steps
@@ -263,7 +262,7 @@ function render(width, height, left, right)
     if show_octaves and c_box and c_box.x1 - c_box.x0 >= 7 then
         for k = 24, LAST_KEY, 12 do
             local box = key_box(k, width)
-            local label = "C" .. (k // 12 - 1)
+            local label = note_name(k)
             local tw = text_size(label)
             if box and tw <= (box.x1 - box.x0) * 2.2 then
                 text(box.x0 + 2, height - FONT_HEIGHT - 2, label, { r = 90, g = 90, b = 110 })
@@ -293,12 +292,16 @@ function render(width, height, left, right)
                 text((box.x0 + box.x1 - tw) / 2, kb_top - 6 - FONT_HEIGHT, PLAY_LETTERS[i], color)
             end
         end
-        local label = NOTE_NAMES[tonic + 1] .. " major   A-L play   Left/Right move   Up/Down key"
-        if not notes_playable() then
-            label = "play along needs a MIDI song and a soundfont"
+        -- Which key, and the controls; not in the mini player, too small
+        -- for a line of help.
+        if display_mode() ~= "mini" then
+            local label = note_name(tonic, false) .. " major   A-L play   Left/Right move   Up/Down key"
+            if not notes_playable() then
+                label = "play along needs a MIDI song and a soundfont"
+            end
+            local tw = text_size(label)
+            rect(width - tw - 12, 4, width - 4, 8 + FONT_HEIGHT, { r = 0, g = 0, b = 0, a = 0.6 })
+            text(width - tw - 8, 6, label, PLAYER_COLOR)
         end
-        local tw = text_size(label)
-        rect(width - tw - 12, 4, width - 4, 8 + FONT_HEIGHT, { r = 0, g = 0, b = 0, a = 0.6 })
-        text(width - tw - 8, 6, label, PLAYER_COLOR)
     end
 end
