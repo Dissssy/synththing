@@ -1,12 +1,10 @@
+# Unix line endings for every text file, in the repository and in the
+# working tree too, whatever core.autocrlf says: one kind of line ending
+# everywhere, so tools that write files (cargo release, editors, scripts)
+# never leave a file half CRLF and half LF. Binaries are found by git
+# itself; the ones below are named to be sure.
+* text=auto eol=lf
+
 *.sf2 binary
 *.mid binary
-# Run on Linux: keep Unix line endings.
-*.sh text eol=lf
-Dockerfile text eol=lf
-*.Dockerfile text eol=lf
-*.service text eol=lf
-*.timer text eol=lf
-*.path text eol=lf
-# Bundled scripts: Unix line endings everywhere, so what's built is what's
-# published (build.rs normalises them too).
-*.lua text eol=lf
+*.png binary
