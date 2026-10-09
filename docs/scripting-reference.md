@@ -125,6 +125,21 @@ function render(width, height, left, right)
 end
 ```
 
+```lua
+shift_frame(dx, [dy])   -- move what's drawn so far by dx, dy whole pixels
+```
+
+With the last frame kept (`a = 0`), `shift_frame` scrolls it: everything drawn so far moves `dx` pixels right (negative: left) and `dy` down (negative: up), rounded to whole pixels; what moves off the edge is gone, and the strip it uncovers is filled with the clear color. So a scrolling display (a spectrogram, a history graph, a ticker) draws only what's new each frame, at the edge it scrolls in from, instead of drawing its whole history again. Inside a `clip` it moves just that rectangle, leaving the rest. Anything drawn over the scrolling part each frame (labels, a cursor) scrolls along and smears, so draw those somewhere that isn't scrolled, or draw what's under them again first, as `spectrogram.lua` does with its frequency labels. When the frame changes size there's nothing kept to scroll, so draw everything afresh then. Since 0.7.0.
+
+```lua
+set_clear_color({ r = 0, g = 0, b = 0, a = 0 })    -- keep each frame
+function render(width, height)
+    shift_frame(-1)                                -- one pixel left...
+    local y = height / 2 - level_left() * height
+    pixel(width - 1, y, { r = 90, g = 200, b = 255 })  -- ...and the newest at the right
+end
+```
+
 ### Moving and clipping
 
 ```lua
@@ -1012,7 +1027,7 @@ Visualizers:
 - `waveform.lua`, a scrolling oscilloscope trace from `history_left`/`history_right`, with the time shown as a setting
 - `fft.lua`, log-spaced spectrum bars, left/right overlap shown as a third color; frequency labels (text) and loudness meters (`level_left`/`level_right`)
 - `keyboard.lua`, an 88-key piano with falling notes from `notes_between` (exact lengths, adjustable look-ahead), beat and numbered bar lines (`beat`, `bar`, `time_at_beat`), octave labels; two-pass enabled/disabled channel rendering; and play along: with focus, A to L play a major scale on the song's instrument (`note_on`/`note_off`), the arrows move the span and change the key
-- `spectrogram.lua`, a scrolling time/frequency heatmap; run-length merging, pause-awareness, live-tunable resolution, frequency labels, optional onset ticks (`onset`)
+- `spectrogram.lua`, a scrolling time/frequency heatmap that keeps its picture and scrolls it (`set_clear_color`, `shift_frame`), drawing one column a frame; run-length merging, pause-awareness, live-tunable resolution, frequency labels, optional onset ticks (`onset`)
 - `letters.lua`, one glyph per channel, colored by pitch; a from-scratch bitmap font
 - `dashboard.lua`, four panels (a scope, a spectrum, a piano roll with an instrument legend from `channel_program`, and level meters), each drawn in its own coordinates with `translate` and kept inside its box with `clip`, and a shake on every onset
 - `pulse.lua`, a ring that beats with the song: the time signature's beats around a circle, a polygon turning with the beat and swelling with loudness, eighth-note sprites bursting out on onsets, and a tempo/bar readout

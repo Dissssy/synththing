@@ -767,7 +767,9 @@ Smaller:
     argument to decimate to about one sample per pixel, since copying
     thousands of numbers into Lua every frame is the expensive part.
 
-[M][!] the pre-render clear color - DONE as set_clear_color({r,g,b,a})
+[M][!] the pre-render clear color - DONE as set_clear_color({r,g,b,a});
+    shift_frame DONE in 0.7.0 (spectrogram scrolls its kept picture; checked
+    pixel-identical to drawing afresh).
     (Canvas in lua_visualizer.rs keeps the last frame while the color isn't
     opaque; fade() rounds toward the color so trails always finish;
     waveform.lua's trail setting). shift_frame still open. Original:

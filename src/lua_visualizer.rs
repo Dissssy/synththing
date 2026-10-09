@@ -130,6 +130,7 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 -- Draw with clear/line/rect/pixel; color tables take an optional `a` (0..1).
 --   clear({r,g,b})  line(x0,y0,x1,y1,{r,g,b,a},[width])  rect(...)  pixel(x,y,{r,g,b,a})
 --   set_clear_color({r,g,b,a})  what frames start from; a < 1 leaves trails
+--   shift_frame(dx, dy)          scroll the kept frame by whole pixels
 --   hsv(hue, s, v) / mix(color1, color2, t)  make colors (hue in degrees)
 --   translate(dx, dy) / clip(x0, y0, x1, y1) / push_view() / pop_view()  move and limit drawing
 --   circle(x,y,r,color)  triangle(x1,y1,x2,y2,x3,y3,color)  polygon(points,color)
@@ -399,6 +400,9 @@ enum DrawCommand {
     /// by `offset` and limited to `clip` (in frame pixels, offset already
     /// applied; `None` is the whole frame).
     View { offset: (f32, f32), clip: Option<(f32, f32, f32, f32)> },
+    /// `shift_frame`: move what's drawn so far inside the clip by `dx, dy`
+    /// whole pixels, filling what's uncovered with `fill` (the clear color).
+    Shift { dx: i32, dy: i32, fill: u32 },
     /// A `line` wider than a pixel.
     ThickLine { x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: u32 },
     Rect { x0: f32, y0: f32, x1: f32, y1: f32, color: u32 },
@@ -2476,6 +2480,19 @@ fn compile(
                 "set_clear_color",
                 lua.create_function(move |_, color: Table| {
                     clear_color.set(table_to_color(&color)?);
+                    Ok(())
+                })
+                .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+        let (clear_color, cmds) = (Rc::clone(&canvas.clear_color), Rc::clone(&commands));
+        lua.globals()
+            .set(
+                "shift_frame",
+                lua.create_function(move |_, (dx, dy): (f32, Option<f32>)| {
+                    let whole = |v: f32| if v.is_finite() { v.round().clamp(-1e6, 1e6) as i32 } else { 0 };
+                    let fill = clear_color.get() & 0x00FF_FFFF;
+                    cmds.borrow_mut().push(DrawCommand::Shift { dx: whole(dx), dy: whole(dy.unwrap_or(0.0)), fill });
                     Ok(())
                 })
                 .map_err(|e| e.to_string())?,
@@ -4593,6 +4610,7 @@ fn rasterize(target: &mut Target, cmd: DrawCommand, sprites: &[Sprite]) {
         }
         // `clear` always overwrites (the alpha channel is dropped), the
         // clip rectangle only while there is one.
+        DrawCommand::Shift { dx, dy, fill } => shift_pixels(target, dx, dy, fill),
         DrawCommand::Clear(color) => {
             let Clip { x0, y0, x1, y1 } = target.clip;
             if x0 < x1 {
@@ -4724,6 +4742,36 @@ fn outline_width(function: &str, width: Option<f32>) -> mlua::Result<f32> {
         None => Ok(1.0),
         Some(width) if width > 0.0 && width.is_finite() => Ok(width.min(MAX_LINE_WIDTH)),
         Some(width) => Err(mlua::Error::runtime(format!("{function}: width must be more than 0, got {width}"))),
+    }
+}
+
+/// Move the pixels inside the clip by `dx, dy` (whole pixels), filling
+/// what's uncovered with `fill`; what moves out of the clip is gone.
+fn shift_pixels(target: &mut Target, dx: i32, dy: i32, fill: u32) {
+    let Clip { x0, y0, x1, y1 } = target.clip;
+    let (w, h) = ((x1 - x0) as i64, (y1 - y0) as i64);
+    if w <= 0 || h <= 0 || (dx == 0 && dy == 0) {
+        return;
+    }
+    let (dx, dy) = (i64::from(dx), i64::from(dy));
+    let stride = target.width;
+    let pixels = &mut *target.pixels;
+    // Rows in the order that never reads one already overwritten.
+    let rows: Box<dyn Iterator<Item = i64>> = if dy > 0 { Box::new((0..h).rev()) } else { Box::new(0..h) };
+    for row in rows {
+        let to = (y0 as i64 + row) as usize * stride + x0;
+        let from_row = row - dy;
+        if from_row < 0 || from_row >= h || dx.abs() >= w {
+            pixels[to..to + w as usize].fill(fill);
+            continue;
+        }
+        let from = (y0 as i64 + from_row) as usize * stride + x0;
+        // The part of the source row that lands inside the clip.
+        let (src_start, dst_start, len) = if dx >= 0 { (0, dx, w - dx) } else { (-dx, 0, w + dx) };
+        let (src, dst, len) = (from + src_start as usize, to + dst_start as usize, len as usize);
+        pixels.copy_within(src..src + len, dst);
+        let (gap_start, gap_len) = if dx >= 0 { (to, dx as usize) } else { (to + len, (-dx) as usize) };
+        pixels[gap_start..gap_start + gap_len].fill(fill);
     }
 }
 
@@ -6098,6 +6146,38 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         visualizer.set_source("function render() mix({ r = 1, g = 2 }, { r = 1, g = 2, b = 3 }, 0.5) end".to_string());
         render_with(&mut visualizer, &VisualizerInput::default());
         assert!(visualizer.error().is_some_and(|e| e.contains("the first color has no b")), "{:?}", visualizer.error());
+    }
+
+    /// `shift_frame` moves the kept frame (whole pixels) inside the clip,
+    /// filling what it uncovers with the clear color.
+    #[test]
+    fn shift_frame_scrolls_the_kept_frame() {
+        let script = "set_clear_color({ r = 0, g = 0, b = 0, a = 0 })
+            function render()
+                if FRAME == 1 then
+                    for x = 0, 5 do pixel(x, 0, { r = x * 10 + 10, g = 0, b = 0 }) end
+                    pixel(0, 1, { r = 0, g = 200, b = 0 })
+                elseif FRAME == 2 then
+                    shift_frame(-2)
+                elseif FRAME == 3 then
+                    clip(0, 0, 3, 2) shift_frame(1, 1)
+                end
+            end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let mut frames = Vec::new();
+        for _ in 0..3 {
+            let mut buffer = vec![0u32; 6 * 2];
+            visualizer.render(&mut buffer, 6, 2, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+            assert_eq!(visualizer.error(), None);
+            frames.push(buffer.iter().map(|p| format!("{:x}", p >> 16 | (p >> 8 & 0xFF))).collect::<Vec<_>>().join(" "));
+        }
+        // Red 10..60 along the top, a green pixel below the first.
+        assert_eq!(frames[0], "a 14 1e 28 32 3c c8 0 0 0 0 0");
+        // Two to the left: the right two uncovered, black.
+        assert_eq!(frames[1], "1e 28 32 3c 0 0 0 0 0 0 0 0");
+        // Only inside the clip (the left three, both rows): one right and
+        // one down; outside it stays.
+        assert_eq!(frames[2], "0 0 0 3c 0 0 0 1e 28 0 0 0");
     }
 
     /// `rect_outline` is four bands inside the rectangle; `circle_outline`
