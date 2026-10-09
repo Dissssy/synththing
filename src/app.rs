@@ -3135,6 +3135,17 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut Frame) {
         let ctx = ui.ctx().clone();
         self.sync_theme(&ctx);
+        if self.hidden {
+            // Hidden in the tray, this still runs while a tray window (a
+            // child of this one) is up: draw nothing, least of all the
+            // visualizer, which would run the script at this window's
+            // size between the mini player's frames. Only keep the tray
+            // window there.
+            if self.tray.is_some() {
+                self.tray_panel.register(&ctx);
+            }
+            return;
+        }
         let shared = self.shared.lock().unwrap().clone();
         let view = &shared.view;
         self.visualizer_drawn = false;
