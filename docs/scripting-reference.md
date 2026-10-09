@@ -76,11 +76,21 @@ pixel(x, y, {r,g,b,a})
 circle(x, y, radius, {r,g,b,a})                -- filled
 triangle(x1, y1, x2, y2, x3, y3, {r,g,b,a})    -- filled
 polygon(points, {r,g,b,a})                     -- filled; points {x1, y1, x2, y2, ...} or {{x, y}, ...}
+rect_outline(x0, y0, x1, y1, {r,g,b,a}, [width])  -- just the edge, width inside the rectangle
+circle_outline(x, y, radius, {r,g,b,a}, [width])  -- just the edge, width inside the radius
 ```
 
 Shapes fill every pixel whose center is inside them, so edges are crisp (no anti-aliasing) and a translucent shape blends each pixel exactly once. `polygon` takes up to 4096 points, as a flat list of coordinates or a list of points (`{x, y}` or `{x = .., y = ..}`); a polygon that crosses itself leaves holes where it overlaps (the even-odd rule). For outlines, use `line`.
 
 A `line` is 1 pixel wide unless given a `width`. A wider one is a band with round ends, centered on the pixels the 1-pixel line would light: every pixel whose center is within half the width of the line. Like the shapes, it blends each pixel once, and since the ends are round, lines joined end to end (a trace, an outline) meet without notches. `width` is more than 0, up to 1024; 1 or less is the plain line. The width is new in 0.6.0: older versions ignore it and draw a 1-pixel line.
+
+`rect_outline` and `circle_outline` draw just the edge of a rectangle or a circle, `width` pixels thick (1 unless given), on the inside: a rectangle's outline stays within its corners, and a circle's within its radius, so an outline drawn over a filled shape of the same size lines up with it exactly. Like the filled shapes, they blend each pixel once, so a translucent outline is the same shade all the way round, corners included; one wider than half the rectangle just fills it. Both since 0.7.0.
+
+```lua
+rect(x0, y0, x1, y1, panel)                    -- a panel...
+rect_outline(x0, y0, x1, y1, edge, 2)          -- ...with a 2-pixel border
+circle_outline(cx, cy, r, { r = 255, g = 255, b = 255, a = 0.4 })   -- a faint ring
+```
 
 `r`, `g` and `b` are 0 to 255 (values outside that are clamped, fractions are fine). `a` is opacity, 0.0 to 1.0, defaulting to 1.0. An opaque draw (`a = 1`) overwrites; a translucent one alpha-blends over what's already there. `clear` always overwrites regardless of `a`. Coordinates are buffer pixels, (0, 0) at the top left, and can be fractional.
 

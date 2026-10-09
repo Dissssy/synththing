@@ -782,7 +782,9 @@ Smaller:
     draws one column per frame. Recording at a different size than the
     panel, and a resize, need the kept frame dropped (or rescaled).
 
-[S][!] outlines and thick lines - line width DONE (line(..., [width]):
+[S][!] outlines and thick lines - DONE (line width in 0.6.0;
+    rect_outline/circle_outline in 0.7.0, disco's rim). Line width:
+    (line(..., [width]):
     a round-ended band, fill_thick_line; disco.lua and waveform.lua use
     it). Outlined rect/circle still open. Original: line(..., [width]), rect_outline,
     circle_outline (or an { outline = width } option on the shapes)

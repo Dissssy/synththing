@@ -37,6 +37,8 @@ pub const HOST_API: &[(&str, &str)] = &[
     ("approach", "approach(current, target, rate, [rate_down]) -> value: smoothing by the second, the same at any frame rate"),
     ("hsv", "hsv(hue, saturation, value, [a]) -> color: hue in degrees (wraps), the rest 0 to 1"),
     ("mix", "mix(color1, color2, t) -> color: from color1 (t = 0) to color2 (t = 1), alpha included"),
+    ("rect_outline", "rect_outline(x0,y0,x1,y1,{r,g,b,a},[width]): just the edge, inside the rectangle"),
+    ("circle_outline", "circle_outline(x,y,radius,{r,g,b,a},[width]): just the edge, inside the radius"),
     ("set_clear_color", "set_clear_color({r,g,b,a}): what each frame starts from, blended over the last one; a < 1 leaves trails, a = 0 keeps it"),
     ("pixel", "pixel(x,y,{r,g,b,a}), set one pixel"),
     ("fft_left", "fft_left(samples) -> spectrum, left channel's magnitude spectrum"),

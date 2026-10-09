@@ -1126,6 +1126,8 @@ pub const API_SINCE: &[(&str, &str)] = &[
     ("mix", "0.6.0"),
     ("approach", "0.6.0"),
     ("note_name", "0.7.0"),
+    ("rect_outline", "0.7.0"),
+    ("circle_outline", "0.7.0"),
     ("note_freq", "0.7.0"),
     ("freq_note", "0.7.0"),
     ("fft_left", "0.1.1"),

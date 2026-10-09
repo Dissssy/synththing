@@ -446,15 +446,10 @@ local function draw_ball()
         end
     end
 
-    -- Rim light
+    -- Rim light: a pixel-wide ring just outside the ball (whose pixels'
+    -- centers are half a pixel off the ball's center).
     local rc = tmp(amb_r * 0.5 + 100, amb_g * 0.5 + 110, amb_b * 0.5 + 120, 0.45 + 0.3 * pulse)
-    local px, py = cx + (R + 0.5), cy
-    for i = 1, 48 do
-        local a = i / 48 * TAU
-        local qx, qy = cx + cos(a) * (R + 0.5), cy + sin(a) * (R + 0.5)
-        line(px, py, qx, qy, rc)
-        px, py = qx, qy
-    end
+    circle_outline(cx + 0.5, cy + 0.5, R + 1, rc)
 end
 
 local function draw_beam(b, lod, front)

@@ -133,6 +133,7 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 --   hsv(hue, s, v) / mix(color1, color2, t)  make colors (hue in degrees)
 --   translate(dx, dy) / clip(x0, y0, x1, y1) / push_view() / pop_view()  move and limit drawing
 --   circle(x,y,r,color)  triangle(x1,y1,x2,y2,x3,y3,color)  polygon(points,color)
+--   rect_outline(x0,y0,x1,y1,color,[width])  circle_outline(x,y,r,color,[width])  just the edge
 --   sprite_register({image = rows, palette = colors}) once, then sprite(id, x, y, scale)
 --   text(x, y, string, color, height) / text_size(string, height)  pixel text
 -- fft_left(left) / fft_right(right)     magnitude spectrum, computed in Rust
@@ -403,6 +404,8 @@ enum DrawCommand {
     Rect { x0: f32, y0: f32, x1: f32, y1: f32, color: u32 },
     Pixel { x: i32, y: i32, color: u32 },
     Circle { x: f32, y: f32, radius: f32, color: u32 },
+    /// `circle_outline`: the ring `width` wide inside `radius`.
+    Ring { x: f32, y: f32, radius: f32, width: f32, color: u32 },
     Polygon { points: Vec<(f32, f32)>, color: u32 },
     /// `src` is the part of the sprite to draw: (x, y, width, height) in
     /// sprite pixels, already clipped to the sprite. `colors` replaces the
@@ -3377,6 +3380,35 @@ fn register_timing_audio_shapes(
     )?;
     let cmds = Rc::clone(commands);
     globals.set(
+        "circle_outline",
+        lua.create_function(move |_, (x, y, radius, color, width): (f32, f32, f32, Table, Option<f32>)| {
+            let color = table_to_color(&color)?;
+            let width = outline_width("circle_outline", width)?;
+            cmds.borrow_mut().push(DrawCommand::Ring { x, y, radius, width, color });
+            Ok(())
+        })?,
+    )?;
+    let cmds = Rc::clone(commands);
+    globals.set(
+        "rect_outline",
+        lua.create_function(move |_, (x0, y0, x1, y1, color, width): (f32, f32, f32, f32, Table, Option<f32>)| {
+            let color = table_to_color(&color)?;
+            let width = outline_width("rect_outline", width)?;
+            // Four bands inside the rectangle, not overlapping, so a
+            // translucent outline blends each pixel once; as wide as half
+            // the rectangle at most (then it's filled).
+            let (x0, x1, y0, y1) = (x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1));
+            let w = width.min((x1 - x0) / 2.0).min((y1 - y0) / 2.0);
+            let mut cmds = cmds.borrow_mut();
+            cmds.push(DrawCommand::Rect { x0, y0, x1, y1: y0 + w, color });
+            cmds.push(DrawCommand::Rect { x0, y0: y1 - w, x1, y1, color });
+            cmds.push(DrawCommand::Rect { x0, y0: y0 + w, x1: x0 + w, y1: y1 - w, color });
+            cmds.push(DrawCommand::Rect { x0: x1 - w, y0: y0 + w, x1, y1: y1 - w, color });
+            Ok(())
+        })?,
+    )?;
+    let cmds = Rc::clone(commands);
+    globals.set(
         "triangle",
         lua.create_function(
             move |_, (x1, y1, x2, y2, x3, y3, color): (f32, f32, f32, f32, f32, f32, Table)| {
@@ -4582,6 +4614,9 @@ fn rasterize(target: &mut Target, cmd: DrawCommand, sprites: &[Sprite]) {
             fill_rect(target, (x0 + ox, y0 + oy, x1 + ox, y1 + oy), color);
         }
         DrawCommand::Circle { x, y, radius, color } => fill_circle(target, (x + ox, y + oy, radius), color),
+        DrawCommand::Ring { x, y, radius, width: thickness, color } => {
+            fill_ring(target, (x + ox, y + oy, radius), thickness, color);
+        }
         DrawCommand::Polygon { mut points, color } => {
             for point in &mut points {
                 (point.0, point.1) = (point.0 + ox, point.1 + oy);
@@ -4679,6 +4714,49 @@ fn fill_circle(target: &mut Target, (cx, cy, radius): (f32, f32, f32), color: u3
         }
         let half = span.sqrt();
         fill_row_span(target, row, cx - half, cx + half, color);
+    }
+}
+
+/// An outline's width: 1 when not given; more than 0, up to
+/// `MAX_LINE_WIDTH`.
+fn outline_width(function: &str, width: Option<f32>) -> mlua::Result<f32> {
+    match width {
+        None => Ok(1.0),
+        Some(width) if width > 0.0 && width.is_finite() => Ok(width.min(MAX_LINE_WIDTH)),
+        Some(width) => Err(mlua::Error::runtime(format!("{function}: width must be more than 0, got {width}"))),
+    }
+}
+
+/// Nudges a span's right end past a pixel center sitting exactly on it.
+const EDGE: f32 = 1e-3;
+
+/// A ring: every pixel whose center is within `radius` of `(cx, cy)` and
+/// no nearer than `radius - thickness`. Up to two spans a row, so a
+/// translucent ring blends each pixel once.
+fn fill_ring(target: &mut Target, (cx, cy, radius): (f32, f32, f32), thickness: f32, color: u32) {
+    if radius.is_nan() || radius <= 0.0 {
+        return;
+    }
+    let inner = radius - thickness;
+    let top = ((cy - radius - 0.5).floor().max(0.0) as usize).max(target.clip.y0);
+    let bottom = ((cy + radius + 0.5).ceil().max(0.0) as usize).min(target.clip.y1);
+    for row in top..bottom {
+        let dy = row as f32 + 0.5 - cy;
+        let outer_span = radius * radius - dy * dy;
+        if outer_span < 0.0 {
+            continue;
+        }
+        // Both edges count (a span takes its left end, not its right),
+        // so a ring centered between pixels comes out symmetric.
+        let outer = outer_span.sqrt() + EDGE;
+        let inner_span = inner * inner - dy * dy;
+        if inner <= 0.0 || inner_span <= 0.0 {
+            fill_row_span(target, row, cx - outer, cx + outer, color);
+        } else {
+            let hole = inner_span.sqrt();
+            fill_row_span(target, row, cx - outer, cx - hole, color);
+            fill_row_span(target, row, cx + hole + EDGE, cx + outer, color);
+        }
     }
 }
 
@@ -6020,6 +6098,44 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         visualizer.set_source("function render() mix({ r = 1, g = 2 }, { r = 1, g = 2, b = 3 }, 0.5) end".to_string());
         render_with(&mut visualizer, &VisualizerInput::default());
         assert!(visualizer.error().is_some_and(|e| e.contains("the first color has no b")), "{:?}", visualizer.error());
+    }
+
+    /// `rect_outline` is four bands inside the rectangle; `circle_outline`
+    /// a ring inside the radius; width 1 unless given.
+    #[test]
+    fn outlines_are_inside_bands_and_rings() {
+        let draw = |call: &str| -> String {
+            let mut visualizer = LuaVisualizer::new(format!("W = {{ r = 255, g = 255, b = 255 }} function render() {call} end"), None, 44_100);
+            let mut buffer = vec![0u32; 9 * 9];
+            visualizer.render(&mut buffer, 9, 9, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+            if let Some(e) = visualizer.error() {
+                return e.to_string();
+            }
+            buffer.chunks(9).map(|row| row.iter().map(|&p| if p == 0 { '.' } else { '#' }).collect::<String>() + "\n").collect()
+        };
+        assert_eq!(
+            draw("rect_outline(1, 1, 8, 6, W)"),
+            ".........\n.#######.\n.#.....#.\n.#.....#.\n.#.....#.\n.#######.\n.........\n.........\n.........\n"
+        );
+        assert_eq!(
+            draw("rect_outline(0, 0, 5, 5, W, 2)"),
+            "#####....\n#####....\n##.##....\n#####....\n#####....\n.........\n.........\n.........\n.........\n"
+        );
+        assert_eq!(
+            draw("circle_outline(4.5, 4.5, 4, W)"),
+            "....#....\n..#####..\n.#.....#.\n.#.....#.\n#.......#\n.#.....#.\n.#.....#.\n..#####..\n....#....\n"
+        );
+        // A translucent outline: one blend per pixel, so all the same shade.
+        let mut visualizer = LuaVisualizer::new(
+            "function render() rect_outline(0, 0, 9, 9, { r = 255, g = 255, b = 255, a = 0.5 }, 3) circle_outline(4.5, 4.5, 4.5, { r = 255, g = 255, b = 255, a = 0.5 }, 2) end".to_string(),
+            None,
+            44_100,
+        );
+        let mut buffer = vec![0u32; 81];
+        visualizer.render(&mut buffer, 9, 9, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        let shades: std::collections::BTreeSet<u32> = buffer.iter().map(|p| p & 0xFF).collect();
+        assert_eq!(shades, [0, 128, 192].into_iter().collect(), "each shape blends once: 0, one layer, both");
+        assert!(draw("circle_outline(4, 4, 3, W, 0)").contains("width must be more than 0"));
     }
 
     /// `line`'s width: none or 1 is the plain 1-pixel line, wider is a
