@@ -37,9 +37,9 @@ pub(super) fn viewport_id() -> egui::ViewportId {
 /// The panel's size, in points.
 const SIZE: egui::Vec2 = egui::vec2(300.0, 420.0);
 
-/// The visualizer's size in the expanded mini player, in points: small,
-/// and 16:9 like a video.
-const PICTURE: egui::Vec2 = egui::vec2(256.0, 144.0);
+/// The visualizer's size in the expanded mini player, in points: as tall
+/// as the panel inside its margins, and 16:9 like a video.
+const PICTURE: egui::Vec2 = egui::vec2((SIZE.y - 20.0) * 16.0 / 9.0, SIZE.y - 20.0);
 
 /// Between the visualizer and the controls.
 const GAP: f32 = 10.0;
@@ -73,6 +73,10 @@ pub(super) struct Snapshot {
     pub transport: Transport,
     /// The visualizer is paused (Preferences is open).
     pub frozen: bool,
+    /// The main window is up and showing the visualizer: it runs the
+    /// script, and the mini player just shows its latest picture (two
+    /// windows running it would resize it back and forth between them).
+    pub main_shows_visualizer: bool,
 }
 
 /// What was clicked, for the app to do.
@@ -309,12 +313,13 @@ fn panel_ui(ui: &mut egui::Ui, state: &Mutex<State>, picture: &Picture, send: &S
         ui.set_min_size(ui.available_size());
         if state.expanded {
             ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(PICTURE.x);
-                    picture_ui(ui, picture, &mut state, &act);
-                });
+                picture_ui(ui, picture, &mut state, &act);
                 ui.add_space(GAP - ui.spacing().item_spacing.x);
-                ui.vertical(|ui| controls_ui(ui, &ctx, &mut state, &act));
+                // (Under a fixed id, like the picture's: their state mustn't
+                // depend on what the visualizer drew.)
+                ui.scope_builder(egui::UiBuilder::new().id_salt("tray_controls"), |ui| {
+                    ui.vertical(|ui| controls_ui(ui, &ctx, &mut state, &act));
+                });
             });
         } else {
             controls_ui(ui, &ctx, &mut state, &act);
@@ -322,49 +327,56 @@ fn panel_ui(ui: &mut egui::Ui, state: &Mutex<State>, picture: &Picture, send: &S
     });
 }
 
-/// The visualizer, small, and what's showing in it; and the script
-/// switcher over it.
+/// The visualizer, filling its side of the window, with the script
+/// switcher's button on its corner and the switcher over it when it's up.
 fn picture_ui(ui: &mut egui::Ui, picture: &Picture, state: &mut State, act: &impl Fn(Action)) {
     let snapshot = state.snapshot.clone();
     let (notes, view) = match picture.playback.lock() {
         Ok(shared) => (shared.notes.clone(), shared.view.clone()),
         Err(_) => return,
     };
-    let area = ui.allocate_ui(PICTURE, |ui| {
-        ui.set_min_size(PICTURE);
-        ui.set_max_size(PICTURE);
-        // (Never held already: the main window and this one draw in turn.)
-        let Ok(mut panel) = picture.panel.try_lock() else { return None };
+    // An exact rectangle every frame, so the script's picture is always
+    // the same size.
+    let (rect, _) = ui.allocate_exact_size(PICTURE, egui::Sense::hover());
+    let mut inside = ui.new_child(egui::UiBuilder::new().id_salt("tray_picture").max_rect(rect));
+    // (Never held already: the main window and this one draw in turn.)
+    let shown = picture.panel.try_lock().ok().and_then(|mut panel| {
         // While the main window's showing the visualizer too, it's the one
         // running the script; this just shows the latest picture.
-        let frozen = snapshot.frozen || panel.shown_by_main_recently();
-        panel.show(ui, &picture.tap, &notes, &view, snapshot.transport.clone(), frozen, DisplayMode::Mini, None, false, None);
+        let frozen = snapshot.frozen || snapshot.main_shows_visualizer;
+        panel.show(&mut inside, &picture.tap, &notes, &view, snapshot.transport.clone(), frozen, DisplayMode::Mini, None, false, None);
         let effects = panel.take_effects();
         if !effects.is_empty() {
             act(Action::Effects(effects));
         }
         panel.picture()
     });
-    let rect = area.response.rect;
     if state.switching {
-        switcher_ui(ui, rect, area.inner, state, &snapshot, act);
-    }
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        let hover = if state.switching { "Close the visualizer picker" } else { "Pick another visualizer" };
-        if ui.selectable_label(state.switching, icon("swap")).on_hover_text(hover).clicked() {
-            state.switching = !state.switching;
-            state.switcher_opened = state.switching;
+        switcher_ui(ui, rect, shown, state, &snapshot, act);
+    } else {
+        // The switcher's button, on the picture's corner. (Under fixed ids
+        // throughout: the visualizer above adds a different number of
+        // widgets from frame to frame.)
+        let at = egui::Rect::from_min_size(rect.min + egui::vec2(8.0, 8.0), egui::vec2(32.0, 28.0));
+        let mut corner = ui.new_child(egui::UiBuilder::new().id_salt("tray_switch_button").max_rect(at));
+        corner.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::from_black_alpha(140);
+        let name = snapshot.script.as_deref().unwrap_or("No script");
+        if corner
+            .add(egui::Button::new(egui::RichText::new(icon("swap")).size(16.0)).min_size(egui::vec2(32.0, 28.0)))
+            .on_hover_text(format!("{name}: pick another visualizer"))
+            .clicked()
+        {
+            state.switching = true;
+            state.switcher_opened = true;
         }
-        ui.add(egui::Label::new(egui::RichText::new(snapshot.script.as_deref().unwrap_or("No script")).strong()).truncate());
-    });
+    }
     ui.ctx().request_repaint();
 }
 
 /// The script switcher, over the visualizer (`rect`): the picture behind it
 /// softened and darkened, which script it is, and every script to switch to
 /// in a strip along the bottom. It stays up, so scripts can be tried one
-/// after another; the switch button or its X closes it.
+/// after another, until its X closes it.
 fn switcher_ui(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -378,38 +390,46 @@ fn switcher_ui(
     if let Some((texture, size)) = picture {
         let image = letterboxed(rect, size);
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        for (dx, dy) in [(-3.0, 0.0), (3.0, 0.0), (0.0, -3.0), (0.0, 3.0), (-2.0, -2.0), (2.0, 2.0), (-2.0, 2.0), (2.0, -2.0)] {
+        for (dx, dy) in [(-4.0, 0.0), (4.0, 0.0), (0.0, -4.0), (0.0, 4.0), (-3.0, -3.0), (3.0, 3.0), (-3.0, 3.0), (3.0, -3.0)] {
             painter.image(texture, image.translate(egui::vec2(dx, dy)), uv, egui::Color32::from_white_alpha(40));
         }
     }
     painter.rect_filled(rect, 0.0, egui::Color32::from_black_alpha(150));
+    let inner = rect.shrink(14.0);
+    let white = egui::Color32::WHITE;
 
-    let mut overlay = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(8.0)).layout(egui::Layout::top_down(egui::Align::Min)));
-    overlay.horizontal(|ui| {
-        ui.label(egui::RichText::new(snapshot.script.as_deref().unwrap_or("No script")).strong().color(egui::Color32::WHITE));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button(icon("x")).on_hover_text("Close the visualizer picker").clicked() {
+    // Across the top: which script it is, and the way out.
+    let top = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), 56.0));
+    let mut header = ui.new_child(egui::UiBuilder::new().id_salt("tray_switcher_top").max_rect(top));
+    header.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new(snapshot.script.as_deref().unwrap_or("No script")).heading().color(white));
+            ui.label(egui::RichText::new("Pick a visualizer").color(egui::Color32::from_gray(200)));
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            if ui.button(icon("x")).on_hover_text("Close the visualizer picker").clicked() {
                 state.switching = false;
             }
         });
     });
-    overlay.label(egui::RichText::new("Pick a visualizer:").small().color(egui::Color32::from_gray(210)));
-    overlay.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-        egui::ScrollArea::horizontal().id_salt("tray_scripts").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for (i, name) in snapshot.scripts.iter().enumerate() {
-                    let current = snapshot.active_script == Some(i);
-                    let chip = egui::Button::selectable(current, name).min_size(egui::vec2(0.0, 26.0));
-                    let response = ui.add(chip);
-                    if current && state.switcher_opened {
-                        response.scroll_to_me(Some(egui::Align::Center));
-                        state.switcher_opened = false;
-                    }
-                    if response.clicked() && !current {
-                        act(Action::Script(i));
-                    }
+
+    // Along the bottom: every script, the running one picked out.
+    let strip = egui::Rect::from_min_max(egui::pos2(inner.min.x, inner.max.y - 48.0), inner.max);
+    let mut bottom = ui.new_child(egui::UiBuilder::new().id_salt("tray_switcher_strip").max_rect(strip));
+    egui::ScrollArea::horizontal().id_salt("tray_scripts").show(&mut bottom, |ui| {
+        ui.horizontal(|ui| {
+            for (i, name) in snapshot.scripts.iter().enumerate() {
+                let current = snapshot.active_script == Some(i);
+                let chip = egui::Button::selectable(current, egui::RichText::new(name).size(15.0)).min_size(egui::vec2(0.0, 32.0));
+                let response = ui.add(chip);
+                if current && state.switcher_opened {
+                    response.scroll_to_me(Some(egui::Align::Center));
+                    state.switcher_opened = false;
                 }
-            });
+                if response.clicked() && !current {
+                    act(Action::Script(i));
+                }
+            }
         });
     });
 }

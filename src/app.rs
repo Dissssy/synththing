@@ -2189,7 +2189,6 @@ impl App {
         {
             let mut panel = lock_panel(&self.visualizer);
             panel.set_pads(self.pad_frame.clone());
-            panel.mark_main();
         }
         let fixed_size = self.recording.frame_size();
         let (hold, timestep) = self.pace_recording();
@@ -2335,6 +2334,7 @@ impl App {
             active_script: self.active_script,
             transport: self.script_transport(),
             frozen: self.preferences_open,
+            main_shows_visualizer: !self.hidden && self.visualizer_was_drawn,
         }
     }
 
