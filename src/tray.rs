@@ -1,6 +1,6 @@
-//! The notification-area (tray) icon: synththing's icon, whose clicks the
-//! app turns into showing itself and, on a right-click, the tray panel
-//! (`app/tray_panel.rs`). Windows only for now: on other systems there's
+//! The notification-area (tray) icon: synththing's icon. Clicking it shows
+//! and hides the mini player (`app/tray_panel.rs`); right-clicking it brings
+//! the main window back. Windows only for now: on other systems there's
 //! no tray, and closing the window quits as it always has.
 //!
 //! The icon's events arrive on the tray library's own callback, which
@@ -13,9 +13,8 @@ pub enum TrayClick {
     /// Left button: the mini player, by `cursor` the first time (physical
     /// screen pixels).
     Primary { cursor: [f32; 2] },
-    /// Right button: the tray panel, by `cursor` (where the click was, in
-    /// physical screen pixels).
-    Secondary { cursor: [f32; 2] },
+    /// Right button: the main window.
+    Secondary,
 }
 
 #[cfg(windows)]
@@ -47,9 +46,9 @@ mod imp {
                     TrayIconEvent::Click {
                         button: MouseButton::Left, button_state: MouseButtonState::Up, position, ..
                     } => TrayClick::Primary { cursor: [position.x as f32, position.y as f32] },
-                    TrayIconEvent::Click {
-                        button: MouseButton::Right, button_state: MouseButtonState::Up, position, ..
-                    } => TrayClick::Secondary { cursor: [position.x as f32, position.y as f32] },
+                    TrayIconEvent::Click { button: MouseButton::Right, button_state: MouseButtonState::Up, .. } => {
+                        TrayClick::Secondary
+                    }
                     _ => return,
                 };
                 let _ = sender.send(click);

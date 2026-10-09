@@ -1,14 +1,12 @@
-//! The tray panel: what right-clicking the tray icon opens. A small window
-//! by the tray with what's playing and its controls, and little versions
-//! of the Soundfonts and Playlists tabs, so synththing can be run from
-//! there without opening the window. It goes away like a menu when it
-//! loses focus (or on Escape), but only hides: its tab and scroll position
-//! are where they were when it's opened again (for the session; nothing's
-//! saved).
+//! The mini player: what clicking the tray icon shows and hides. A small
+//! window with what's playing and its controls, and little versions of the
+//! Soundfonts and Playlists tabs, so synththing can be run from there
+//! without opening the window. It stays (always on top) until closed,
+//! drags around by its header, and opens where it was last left; its tab
+//! and scroll position are kept too (for the session; nothing's saved).
 //!
-//! Pinned, it's the mini player: it stays (always on top) until closed, and
-//! drags around by its header. Left-clicking the tray icon shows and hides
-//! it pinned, where it was last left. Expanded, it grows to the left with
+//! Unpinned, it's a panel instead, going away like a menu when it loses
+//! focus (or on Escape). Expanded, it grows to the left with
 //! the visualizer, small (scripts see `display_mode() == "mini"`).
 //!
 //! It's a window of its own that draws itself (an egui deferred viewport),
@@ -196,14 +194,6 @@ impl TrayPanel {
 
     pub(super) fn is_open(&self) -> bool {
         self.state.lock().is_ok_and(|s| s.open)
-    }
-
-    /// Open it with its bottom-right corner at `cursor` (physical screen
-    /// pixels: where the tray icon was right-clicked). `pixels_per_point`:
-    /// a first guess at the scale there (the main window's), for getting it
-    /// onto the right monitor; it places itself exactly once it's there.
-    pub(super) fn open(&self, ctx: &egui::Context, cursor: [f32; 2], pixels_per_point: f32) {
-        self.show(ctx, cursor, pixels_per_point, false);
     }
 
     /// Left-clicking the tray icon: the mini player (the panel pinned),

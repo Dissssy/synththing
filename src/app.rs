@@ -348,7 +348,7 @@ pub struct App {
     /// The notification-area icon (Windows; `None` elsewhere, or if it
     /// couldn't be made).
     tray: Option<crate::tray::Tray>,
-    /// What right-clicking the tray icon opens.
+    /// The mini player, what clicking the tray icon shows.
     tray_panel: tray_panel::TrayPanel,
     /// The window's hidden in the tray.
     hidden: bool,
@@ -358,9 +358,8 @@ pub struct App {
     close_prompt: Option<close::ClosePrompt>,
     /// Close (or hide) once the background render finishes.
     close_after_render: Option<close::CloseAction>,
-    /// The mini player's and tray panel's pictures, for the first close's
-    /// question.
-    tray_pictures: Option<(egui::TextureHandle, egui::TextureHandle)>,
+    /// The mini player's picture, for the first close's question.
+    tray_picture: Option<egui::TextureHandle>,
     /// The last recording saved, for "Show last recording".
     last_recording: Option<PathBuf>,
 }
@@ -534,7 +533,7 @@ impl App {
             quitting: false,
             close_prompt: None,
             close_after_render: None,
-            tray_pictures: None,
+            tray_picture: None,
             last_recording: None,
         };
         if let Some(path) = app.script.path().map(Path::to_path_buf) {
@@ -2280,9 +2279,7 @@ impl App {
                 crate::tray::TrayClick::Primary { cursor } => {
                     self.tray_panel.toggle_mini(ctx, cursor, native * ctx.zoom_factor());
                 }
-                crate::tray::TrayClick::Secondary { cursor } => {
-                    self.tray_panel.open(ctx, cursor, native * ctx.zoom_factor());
-                }
+                crate::tray::TrayClick::Secondary => self.show_window(ctx),
             }
         }
         for action in self.tray_panel.actions() {
@@ -2762,7 +2759,10 @@ impl App {
                                 if self.tray.is_some() {
                                     with_info(
                                         ui,
-                                        "On: closing the window hides synththing in the tray (by the clock), still                                          playing; click its icon to bring it back, right-click it for a small panel                                          of controls. Quit, in the synththing menu or that panel, closes it                                          completely. Off: closing the window quits.",
+                                        "On: closing the window hides synththing in the tray (by the clock), still \
+                                         playing. Click its icon for the mini player, right-click it to bring the \
+                                         window back. Quit, in the synththing menu or the mini player, closes it \
+                                         completely. Off: closing the window quits.",
                                         |ui| ui.checkbox(&mut close_to_tray, "Keep running in the tray when the window's closed"),
                                     );
                                 }
