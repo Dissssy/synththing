@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.7.0 (2026-10-09)
+
 ### Added
 - A mini player (Windows): click the tray icon for a little window that stays on top, with playback, the volume, and your playlists and soundfonts. Drag it anywhere by its header; it opens where you left it. Its expand button grows it to the left with the visualizer, as tall as the window (drag its left edge for anything from tall 9:16 to wide 16:9), and a picker for switching visualizers over a softened view of the one that's running (the mouse wheel scrolls through them). Right-clicking the tray icon now brings the main window back (it opened a panel in 0.6.2: that's the mini player unpinned now).
 - The bundled visualizers fit the mini player: fewer labels in FFT and Spectrogram, just the tempo in Pulse, no titles or legend in Dashboard (whose panels stack in a column when it's taller than wide), and no help line in Keyboard.
