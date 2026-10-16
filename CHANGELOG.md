@@ -4,6 +4,12 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- More audio files play: Opus (`.opus`, and `.ogg` files holding Opus), Apple Lossless `.m4a`, AIFF, CAF, Matroska audio (`.mka`), MP2, WMA, AC3 and ADPCM WAVs. Anything synththing can't decode itself goes through ffmpeg, the same one recording uses.
+
+### Fixed
+- `.m4a` files (AAC) play; they failed with "The format of the data has not been recognized".
+
 ## 0.7.0 (2026-10-09)
 
 ### Added

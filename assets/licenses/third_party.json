@@ -3992,6 +3992,31 @@
     },
     {
       "authors": [
+        "Philip Deljanov <philip.deljanov@gmail.com>",
+        "Johannes Hackel <geckoxx90@gmail.com>"
+      ],
+      "license": "MPL-2.0",
+      "name": "symphonia-codec-adpcm",
+      "repository": "https://github.com/pdeljanov/Symphonia",
+      "texts": [
+        120
+      ],
+      "version": "0.5.5"
+    },
+    {
+      "authors": [
+        "Philip Deljanov <philip.deljanov@gmail.com>"
+      ],
+      "license": "MPL-2.0",
+      "name": "symphonia-codec-alac",
+      "repository": "https://github.com/pdeljanov/Symphonia",
+      "texts": [
+        120
+      ],
+      "version": "0.5.5"
+    },
+    {
+      "authors": [
         "Philip Deljanov <philip.deljanov@gmail.com>"
       ],
       "license": "MPL-2.0",
@@ -4028,10 +4053,35 @@
     },
     {
       "authors": [
+        "Ian Hobson <ian.r.hobson@gmail.com>",
+        "Philip Deljanov <philip.deljanov@gmail.com>"
+      ],
+      "license": "MPL-2.0",
+      "name": "symphonia-format-caf",
+      "repository": "https://github.com/pdeljanov/Symphonia",
+      "texts": [
+        120
+      ],
+      "version": "0.5.5"
+    },
+    {
+      "authors": [
         "Philip Deljanov <philip.deljanov@gmail.com>"
       ],
       "license": "MPL-2.0",
       "name": "symphonia-format-isomp4",
+      "repository": "https://github.com/pdeljanov/Symphonia",
+      "texts": [
+        120
+      ],
+      "version": "0.5.5"
+    },
+    {
+      "authors": [
+        "Dariusz Niedoba <dariusz.niedoba@gmail.com>"
+      ],
+      "license": "MPL-2.0",
+      "name": "symphonia-format-mkv",
       "repository": "https://github.com/pdeljanov/Symphonia",
       "texts": [
         120

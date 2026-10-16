@@ -16,6 +16,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -343,25 +344,77 @@ pub fn load_midi(path: &Path) -> Result<LoadedMidi> {
 /// Decode a plain audio file (wav/mp3/ogg/flac/...) fully into memory up
 /// front, seeking and speed then just become arithmetic on an index, no
 /// re-decoding needed. Mono is duplicated to stereo; anything beyond stereo
-/// keeps only its first two channels.
+/// keeps only its first two channels. Codecs symphonia doesn't have (Opus,
+/// WMA, AC3, ...) go through ffmpeg instead, when there is one.
 pub fn load_audio_file(path: &Path) -> Result<Arc<DecodedAudio>> {
     let bytes = std::fs::read(path)?;
     let id = song_id(&bytes);
-    let decoder = rodio::Decoder::new(Cursor::new(bytes)).map_err(|e| anyhow!("{e}"))?;
-    let channels = decoder.channels().get() as usize;
-    let sample_rate = decoder.sample_rate().get();
-
-    let raw: Vec<f32> = decoder.collect();
-    let samples: Vec<StereoFrame> = if channels <= 1 {
-        raw.into_iter().map(|s| (s, s)).collect()
-    } else {
-        raw.chunks_exact(channels).map(|f| (f[0], f[1])).collect()
+    let (samples, sample_rate) = match decode_with_symphonia(path, bytes) {
+        Ok(decoded) => decoded,
+        Err(err) => match crate::ffmpeg::find() {
+            Some(ffmpeg) => decode_with_ffmpeg(&ffmpeg, path).map_err(|ffmpeg_err| anyhow!("{err}; ffmpeg couldn't either: {ffmpeg_err}"))?,
+            None => return Err(anyhow!("{err} (with ffmpeg, which Record can download, this file might still play)")),
+        },
     };
     if samples.is_empty() {
         return Err(anyhow!("no audio data decoded"));
     }
-
     Ok(Arc::new(DecodedAudio { samples, sample_rate, song_id: id }))
+}
+
+fn decode_with_symphonia(path: &Path, bytes: Vec<u8>) -> Result<(Vec<StereoFrame>, u32)> {
+    // The length and extension matter: the MP4 demuxer won't take an .m4a without them.
+    let len = bytes.len() as u64;
+    let mut builder = rodio::Decoder::builder().with_data(Cursor::new(bytes)).with_byte_len(len).with_seekable(true);
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        builder = builder.with_hint(ext);
+    }
+    let decoder = builder.build().map_err(|e| anyhow!("{e}"))?;
+    let channels = decoder.channels().get() as usize;
+    let sample_rate = decoder.sample_rate().get();
+
+    let raw: Vec<f32> = decoder.collect();
+    let samples = if channels <= 1 {
+        raw.into_iter().map(|s| (s, s)).collect()
+    } else {
+        raw.chunks_exact(channels).map(|f| (f[0], f[1])).collect()
+    };
+    Ok((samples, sample_rate))
+}
+
+/// Have ffmpeg decode the first audio stream to raw stereo f32 on stdout, at
+/// the file's own rate, which it names on stderr ("Output #0" ... "48000 Hz").
+fn decode_with_ffmpeg(ffmpeg: &Path, path: &Path) -> Result<(Vec<StereoFrame>, u32)> {
+    let output = crate::ffmpeg::command(ffmpeg)
+        .args(["-nostdin", "-hide_banner", "-i"])
+        .arg(path)
+        .args(["-map", "0:a:0", "-ac", "2", "-f", "f32le", "-c:a", "pcm_f32le", "pipe:1"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| anyhow!("couldn't run ffmpeg ({e})"))?;
+    let log = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        let last = log.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("it failed");
+        return Err(anyhow!("{}", last.trim()));
+    }
+    let sample_rate = log
+        .split("Output #0")
+        .nth(1)
+        .and_then(|out| out.split(" Hz").next())
+        .and_then(|before| before.rsplit(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|n| n.parse::<u32>().ok())
+        .filter(|&rate| rate > 0)
+        .ok_or_else(|| anyhow!("couldn't tell the sample rate from ffmpeg's output"))?;
+    let samples = output
+        .stdout
+        .chunks_exact(8)
+        .map(|f| {
+            let left = f32::from_le_bytes([f[0], f[1], f[2], f[3]]);
+            let right = f32::from_le_bytes([f[4], f[5], f[6], f[7]]);
+            (left, right)
+        })
+        .collect();
+    Ok((samples, sample_rate))
 }
 
 pub enum SoundFontProbe {
@@ -485,3 +538,4 @@ mod tests {
         assert!(cache.get(&paths[0]).is_none());
     }
 }
+
