@@ -5,7 +5,8 @@
 //!
 //! MIDI goes through `midi_notes`; audio files through symphonia's
 //! container probe (the same library rodio decodes with), which reads
-//! headers and tags without decoding any audio.
+//! headers and tags without decoding any audio. Files symphonia can't open
+//! (WMA, AC3, ...) are described by ffmpeg instead, when there is one.
 
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
@@ -185,6 +186,14 @@ fn read_midi(path: &Path) -> Result<SongInfo, String> {
 }
 
 fn read_audio(path: &Path) -> Result<SongInfo, String> {
+    read_audio_with_symphonia(path).or_else(|err| match crate::ffmpeg::find() {
+        Some(ffmpeg) => read_audio_with_ffmpeg(&ffmpeg, path).map_err(|ffmpeg_err| format!("{err}; ffmpeg couldn't either: {ffmpeg_err}")),
+        None => Err(err),
+    })
+}
+
+fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
+    use symphonia::core::codecs::CODEC_TYPE_OPUS;
     use symphonia::core::formats::FormatOptions;
     use symphonia::core::io::MediaSourceStream;
     use symphonia::core::meta::MetadataOptions;
@@ -209,6 +218,10 @@ fn read_audio(path: &Path) -> Result<SongInfo, String> {
                 None => tag.key.clone(),
             };
             let value = tag.value.to_string();
+            // Matroska's DURATION tag repeats what Length says.
+            if key.eq_ignore_ascii_case("duration") {
+                continue;
+            }
             if !value.trim().is_empty() && !details.iter().any(|(k, _)| *k == key) {
                 details.push((key, value.trim().to_string()));
             }
@@ -226,16 +239,24 @@ fn read_audio(path: &Path) -> Result<SongInfo, String> {
     let mut length = None;
     if let Some(track) = probed.format.default_track() {
         let params = &track.codec_params;
-        if let (Some(frames), Some(rate)) = (params.n_frames, params.sample_rate)
-            && rate > 0
-        {
-            length = Some(frames as f64 / f64::from(rate));
-        }
+        // Frames count in the track's time base, which is only sometimes
+        // one over the sample rate (Matroska counts in milliseconds).
+        length = match (params.n_frames, params.time_base, params.sample_rate) {
+            (Some(frames), Some(time_base), _) => {
+                let time = time_base.calc_time(frames);
+                Some(time.seconds as f64 + time.frac)
+            }
+            (Some(frames), None, Some(rate)) if rate > 0 => Some(frames as f64 / f64::from(rate)),
+            _ => None,
+        };
         if let Some(length) = length {
             details.push(("Length".into(), format_length(length)));
         }
         if let Some(codec) = symphonia::default::get_codecs().get_codec(params.codec) {
             details.push(("Codec".into(), codec.long_name.to_string()));
+        } else if params.codec == CODEC_TYPE_OPUS {
+            // Known to the container, but there's no decoder to name it (ffmpeg plays it).
+            details.push(("Codec".into(), "Opus".into()));
         }
         if let Some(rate) = params.sample_rate {
             details.push(("Sample rate".into(), format!("{rate} Hz")));
@@ -248,6 +269,137 @@ fn read_audio(path: &Path) -> Result<SongInfo, String> {
         }
     }
     Ok(SongInfo { length, details, notes: None })
+}
+
+/// What `ffmpeg -i <file>` (with no output) prints about it on stderr: the
+/// container's tags, its duration, and the first audio stream.
+fn read_audio_with_ffmpeg(ffmpeg: &Path, path: &Path) -> Result<SongInfo, String> {
+    let output = crate::ffmpeg::command(ffmpeg)
+        .args(["-nostdin", "-hide_banner", "-i"])
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("couldn't run ffmpeg ({e})"))?;
+    // It always "fails" for want of an output file; what matters is whether it read the input.
+    let log = String::from_utf8_lossy(&output.stderr);
+    parse_ffmpeg_info(&log).ok_or_else(|| {
+        let last = log.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("it read nothing");
+        last.trim().to_string()
+    })
+}
+
+/// The details from ffmpeg's description of an input, in the same terms
+/// and order symphonia's give: tags first, then the stream. None when it
+/// found no audio stream.
+fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
+    let indent = |line: &str| line.len() - line.trim_start().len();
+    let mut lines = log.lines().skip_while(|l| !l.starts_with("Input #0")).skip(1).peekable();
+    let mut details: Vec<(String, String)> = Vec::new();
+    let mut length = None;
+    let mut stream = None;
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if indent(line) == 0 {
+            break;
+        }
+        if indent(line) == 2 && trimmed == "Metadata:" {
+            // The container's tags; streams' own come later, indented deeper.
+            while let Some(tag) = lines.next_if(|l| indent(l) > 2) {
+                if let Some((key, value)) = tag.split_once(':') {
+                    let (key, value) = (ffmpeg_tag_name(key.trim()), value.trim());
+                    if !value.is_empty() && !key.eq_ignore_ascii_case("duration") && !details.iter().any(|(k, _)| *k == key) {
+                        details.push((key, value.to_string()));
+                    }
+                }
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("Duration: ") {
+            length = parse_ffmpeg_duration(rest.split(',').next().unwrap_or_default());
+        } else if stream.is_none()
+            && trimmed.starts_with("Stream #")
+            && let Some((_, audio)) = trimmed.split_once("Audio: ")
+        {
+            stream = Some(audio.to_string());
+        }
+    }
+    let stream = stream?;
+
+    if let Some(length) = length {
+        details.push(("Length".into(), format_length(length)));
+    }
+    // "wmav2 (a[1][0][0] / 0x0161), 44100 Hz, stereo, fltp, 128 kb/s"
+    let mut parts = stream.split(", ").map(str::trim);
+    if let Some(codec) = parts.next().and_then(|c| c.split_whitespace().next()) {
+        details.push(("Codec".into(), ffmpeg_codec_name(codec)));
+    }
+    let rest: Vec<&str> = parts.collect();
+    let rate_at = rest.iter().position(|p| p.ends_with(" Hz"));
+    if let Some(rate) = rate_at.map(|i| rest[i]) {
+        details.push(("Sample rate".into(), rate.to_string()));
+    }
+    if let Some(layout) = rate_at.and_then(|i| rest.get(i + 1)) {
+        let channels = match *layout {
+            "mono" => "1",
+            "stereo" => "2",
+            other => other.strip_suffix(" channels").unwrap_or(other),
+        };
+        details.push(("Channels".into(), channels.to_string()));
+    }
+    // An integer sample format: "s16", "s16p", "s32 (24 bit)". Floats say nothing useful here.
+    if let Some(format) = rest.iter().find(|p| p.starts_with('s') && p[1..].starts_with(|c: char| c.is_ascii_digit())) {
+        let bits = match format.split_once(" (") {
+            Some((_, real)) => real.trim_end_matches(" bit)"),
+            None => format[1..].trim_end_matches('p'),
+        };
+        details.push(("Bits per sample".into(), bits.to_string()));
+    }
+    Some(SongInfo { length, details, notes: None })
+}
+
+/// "00:03:21.45" -> 201.45 seconds (None for "N/A").
+fn parse_ffmpeg_duration(text: &str) -> Option<f64> {
+    let mut fields = text.trim().split(':');
+    let (h, m, s) = (fields.next()?, fields.next()?, fields.next()?);
+    Some(h.parse::<f64>().ok()? * 3600.0 + m.parse::<f64>().ok()? * 60.0 + s.parse::<f64>().ok()?)
+}
+
+/// ffmpeg's tag keys in the names symphonia's tags get.
+fn ffmpeg_tag_name(key: &str) -> String {
+    match key.to_ascii_lowercase().as_str() {
+        "title" => "Track title".into(),
+        "track" => "Track number".into(),
+        "disc" => "Disc number".into(),
+        "album_artist" => "Album artist".into(),
+        "date" | "year" => "Date".into(),
+        other => {
+            let spaced = other.replace('_', " ");
+            let mut chars = spaced.chars();
+            chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+        }
+    }
+}
+
+/// ffmpeg's short codec names, spelled out for the ones it's likely to be
+/// describing (symphonia describes the rest itself).
+fn ffmpeg_codec_name(codec: &str) -> String {
+    match codec {
+        "wmav1" | "wmav2" => "Windows Media Audio",
+        "wmapro" => "Windows Media Audio Professional",
+        "wmalossless" => "Windows Media Audio Lossless",
+        "wmavoice" => "Windows Media Audio Voice",
+        "ac3" => "Dolby Digital (AC-3)",
+        "eac3" => "Dolby Digital Plus (E-AC-3)",
+        "truehd" => "Dolby TrueHD",
+        "dts" => "DTS",
+        "opus" => "Opus",
+        "ape" => "Monkey's Audio",
+        "wavpack" => "WavPack",
+        "tta" => "True Audio",
+        "amr_nb" | "amrnb" => "AMR Narrowband",
+        "amr_wb" | "amrwb" => "AMR Wideband",
+        other => other,
+    }
+    .to_string()
 }
 
 /// "TrackTitle" -> "Track title".
@@ -282,6 +434,45 @@ mod tests {
         assert_eq!(format_length(3725.0), "1:02:05");
         assert_eq!(tag_name("TrackTitle"), "Track title");
         assert_eq!(tag_name("Artist"), "Artist");
+    }
+
+    #[test]
+    fn reads_ffmpegs_description_of_a_file() {
+        let log = "[aist#0:0/wmav2 @ 0000] Guessed Channel Layout: stereo
+Input #0, asf, from 'song.wma':
+  Metadata:
+    title           : WMA Song
+    album_artist    : Someone: Else
+    track           : 9
+  Duration: 00:01:30.50, start: 0.000000, bitrate: 158 kb/s
+  Stream #0:0: Audio: wmav2 (a[1][0][0] / 0x0161), 44100 Hz, stereo, fltp, 128 kb/s
+    Metadata:
+      title           : not the song's
+At least one output file must be specified
+";
+        let info = parse_ffmpeg_info(log).unwrap();
+        assert_eq!(info.length, Some(90.5));
+        let details: Vec<(&str, &str)> = info.details.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        assert_eq!(
+            details,
+            [
+                ("Track title", "WMA Song"),
+                ("Album artist", "Someone: Else"),
+                ("Track number", "9"),
+                ("Length", "1:31"),
+                ("Codec", "Windows Media Audio"),
+                ("Sample rate", "44100 Hz"),
+                ("Channels", "2"),
+            ]
+        );
+
+        let flac = "Input #0, flac, from 'a.flac':\n  Duration: N/A\n  Stream #0:0: Audio: flac, 96000 Hz, 5.1, s32 (24 bit)\n";
+        let info = parse_ffmpeg_info(flac).unwrap();
+        assert_eq!(info.length, None);
+        assert!(info.details.contains(&("Channels".into(), "5.1".into())));
+        assert!(info.details.contains(&("Bits per sample".into(), "24".into())));
+
+        assert!(parse_ffmpeg_info("not-there.wma: No such file or directory\n").is_none());
     }
 
     /// Prints what's read from every song in a real folder, for checking
