@@ -32,7 +32,6 @@ pub(super) struct YoutubeState {
     error: Option<String>,
     busy: bool,
     events: (Sender<Event>, Receiver<Event>),
-    destination: Option<PathBuf>,
     yt_dlp: String,
 }
 
@@ -40,7 +39,7 @@ impl YoutubeState {
     pub fn new() -> Self {
         Self {
             open: false, query: String::new(), items: Vec::new(), error: None,
-            busy: false, events: mpsc::channel(), destination: None,
+            busy: false, events: mpsc::channel(),
             yt_dlp: if cfg!(windows) { "yt-dlp.exe".into() } else { "yt-dlp".into() },
         }
     }
@@ -121,7 +120,7 @@ impl App {
         self.youtube.error = None;
         let exe = self.youtube.yt_dlp.clone();
         let tx = self.youtube.events.0.clone();
-        let folder = self.youtube.destination.clone().unwrap_or_else(|| self.config.browse_start_dir().join("YouTube"));
+        let folder = self.config.youtube_download_dir.clone().unwrap_or_else(|| self.config.browse_start_dir().join("YouTube"));
         let ffmpeg = crate::ffmpeg::find();
         thread::spawn(move || {
             let url = format!("https://www.youtube.com/watch?v={}", item.id);
@@ -140,7 +139,7 @@ impl App {
         self.youtube.error = None;
         let exe = self.youtube.yt_dlp.clone();
         let tx = self.youtube.events.0.clone();
-        let folder = self.youtube.destination.clone().unwrap_or_else(|| self.config.browse_start_dir().join("YouTube"));
+        let folder = self.config.youtube_download_dir.clone().unwrap_or_else(|| self.config.browse_start_dir().join("YouTube"));
         let ffmpeg = crate::ffmpeg::find();
         thread::spawn(move || {
             let result = download(&exe, &url, &folder, ffmpeg.as_deref(), true);
@@ -186,10 +185,13 @@ impl App {
             });
             ui.horizontal(|ui| {
                 ui.weak("Download folder:");
-                let dir = self.youtube.destination.clone().unwrap_or_else(|| self.config.browse_start_dir().join("YouTube"));
+                let dir = self.config.youtube_download_dir.clone().unwrap_or_else(|| self.config.browse_start_dir().join("YouTube"));
                 ui.label(dir.display().to_string());
                 if ui.small_button("Change...").clicked() {
-                    if let Some(folder) = rfd::FileDialog::new().pick_folder() { self.youtube.destination = Some(folder); }
+                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                        self.config.youtube_download_dir = Some(folder);
+                        if let Err(err) = self.config.save() { self.youtube.error = Some(format!("Could not save download folder: {err}")); }
+                    }
                 }
             });
             if self.youtube.busy { ui.spinner(); ui.weak("Working..."); }
