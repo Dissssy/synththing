@@ -64,10 +64,18 @@ fn search(exe: &str, query: &str) -> Result<Vec<Video>, String> {
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
     }
-    String::from_utf8(output.stdout).map_err(|e| e.to_string())?
+    let mut items: Vec<Video> = String::from_utf8(output.stdout).map_err(|e| e.to_string())?
         .lines().filter(|s| !s.trim().is_empty())
         .map(|line| serde_json::from_str::<Video>(line).map_err(|e| e.to_string()))
-        .collect()
+        .collect::<Result<_, _>>()?;
+    items.sort_by(|a, b| {
+        let score = |v: &Video| {
+            let label = format!("{} {}", v.title, v.uploader.as_deref().unwrap_or(""));
+            crate::filebrowser::fuzzy_score(&label, query).unwrap_or(i32::MIN)
+        };
+        score(b).cmp(&score(a))
+    });
+    Ok(items)
 }
 
 fn download(exe: &str, url: &str, dir: &Path, ffmpeg: Option<&Path>) -> Result<PathBuf, String> {
