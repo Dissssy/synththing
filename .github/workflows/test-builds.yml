@@ -1,0 +1,170 @@
+# Canary and branch test builds (docs/design/release-channels.md): every
+# push to master rebuilds the `nightly` prerelease, and every push to any
+# other branch rebuilds that branch's `branch-<name>` prerelease. Each is
+# one rolling release: its tag moves to the new commit and its files are
+# replaced, so only the newest build of each exists. Prereleases aren't
+# what /releases/latest (the stable updater, the server's update script)
+# or `gh release download` without a tag see. branch-cleanup.yml removes
+# a branch's release when the branch is deleted.
+#
+# The release's name is the build's version (0.7.1-nightly.12) and its
+# notes start with the commit, which is how the in-app updater tells
+# builds apart.
+name: Test builds
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: test-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Which build this is: its channel, its number (commits since the release
+  # in Cargo.toml) and the release it goes to.
+  stamp:
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.stamp.outputs.channel }}
+      number: ${{ steps.stamp.outputs.number }}
+      version: ${{ steps.stamp.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Stamp
+        id: stamp
+        run: |
+          if [ "$GITHUB_REF_NAME" = master ]; then
+            channel=nightly
+            kind=nightly
+          else
+            # The branch's name, with anything a tag or URL would trip on
+            # made a dash (mike/youtube: branch-mike-youtube).
+            channel="branch-$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9._-' '-')"
+            kind=branch
+          fi
+          release=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          if ! git rev-parse -q --verify "refs/tags/v$release" > /dev/null; then
+            echo "::error::no tag v$release for Cargo.toml's version: test builds count commits from it"
+            exit 1
+          fi
+          number=$(git rev-list --count "v$release..HEAD")
+          IFS=. read -r major minor patch <<< "$release"
+          version="$major.$minor.$((patch + 1))-$kind.$number"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "$channel: $version"
+
+  windows:
+    needs: stamp
+    runs-on: windows-latest
+    env:
+      SYNTHTHING_CHANNEL: ${{ needs.stamp.outputs.channel }}
+      SYNTHTHING_BUILD_NUMBER: ${{ needs.stamp.outputs.number }}
+      SYNTHTHING_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --bin synththing
+
+      - name: Build
+        run: cargo build --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: target/release/synththing.exe
+          retention-days: 1
+
+  # On an older Ubuntu, as releases are (glibc, see release.yml).
+  linux:
+    needs: stamp
+    runs-on: ubuntu-22.04
+    env:
+      SYNTHTHING_CHANNEL: ${{ needs.stamp.outputs.channel }}
+      SYNTHTHING_BUILD_NUMBER: ${{ needs.stamp.outputs.number }}
+      SYNTHTHING_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev libwayland-dev
+
+      - name: Test
+        run: cargo test --bin synththing
+
+      - name: Build
+        run: cargo build --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: target/release/synththing
+          retention-days: 1
+
+  # Both builds into the release at once, once both have passed: a release
+  # never has one platform's build newer than the other's.
+  publish:
+    needs: [stamp, windows, linux]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHANNEL: ${{ needs.stamp.outputs.channel }}
+      VERSION: ${{ needs.stamp.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+
+      - name: Publish
+        run: |
+          mv windows/synththing.exe synththing-windows-x86_64.exe
+          mv linux/synththing synththing-linux-x86_64
+          chmod +x synththing-linux-x86_64
+
+          # The notes: the commit first (the updater reads it), then who
+          # and what. For a branch, its commits that master doesn't have.
+          {
+            echo "Commit: $GITHUB_SHA"
+            echo
+            if [ "$CHANNEL" = nightly ]; then
+              echo "The newest commit on master, built by the test builds workflow. For testing: it may be broken."
+            else
+              echo "The newest commit on \`$GITHUB_REF_NAME\`, built by the test builds workflow. For testing: it may be broken, and its online features are off."
+              echo
+              echo "Commits not on master yet:"
+              echo
+              git log --format='- %h %s (%an)' "origin/master..$GITHUB_SHA"
+            fi
+          } > notes.md
+
+          if gh release view "$CHANNEL" > /dev/null 2>&1; then
+            # Move the tag to this commit, then replace the files.
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$CHANNEL" -f sha="$GITHUB_SHA" -F force=true > /dev/null
+            gh release edit "$CHANNEL" --title "$VERSION" --notes-file notes.md --prerelease --latest=false
+            gh release upload "$CHANNEL" synththing-windows-x86_64.exe synththing-linux-x86_64 --clobber
+          else
+            gh release create "$CHANNEL" synththing-windows-x86_64.exe synththing-linux-x86_64 \
+              --target "$GITHUB_SHA" --title "$VERSION" --notes-file notes.md --prerelease --latest=false
+          fi

@@ -1,0 +1,30 @@
+# When a branch is deleted (merged, usually), its test build goes too: the
+# `branch-<name>` prerelease test-builds.yml made, and its tag. A branch
+# build that's still installed finds its release gone and offers to switch
+# channels (docs/design/release-channels.md).
+name: Branch cleanup
+
+on:
+  delete:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.event.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: ${{ github.event.ref }}
+    steps:
+      - name: Delete its test build
+        run: |
+          # The same name test-builds.yml gives it.
+          channel="branch-$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9._-' '-')"
+          if gh release view "$channel" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release delete "$channel" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+            echo "Deleted $channel."
+          else
+            echo "No $channel release: nothing to do."
+          fi
