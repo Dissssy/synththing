@@ -1023,6 +1023,11 @@ impl App {
 
     /// The Online Library tab.
     pub(super) fn library_ui(&mut self, ui: &mut egui::Ui) {
+        if !crate::build_info::online_features() {
+            ui.add_space(8.0);
+            ui.label(crate::build_info::OFFLINE_NOTE);
+            return;
+        }
         let servers = self.config.library.enabled_servers();
         let mut search = false;
         let mut open_moderation = false;
@@ -1648,7 +1653,7 @@ impl App {
                 if ui
                     .add_enabled(servers, egui::Button::new("Publish remix..."))
                     .on_hover_text(format!("Share your take on \"{}\": it's credited as the original", installed.name))
-                    .on_disabled_hover_text("Turn on a library server first (Preferences > Library)")
+                    .on_disabled_hover_text(no_server_hint())
                     .clicked()
                 {
                     self.open_publish(path, true);
@@ -1659,7 +1664,7 @@ impl App {
                 if ui
                     .add_enabled(servers, egui::Button::new("Publish..."))
                     .on_hover_text("Share this script in the Online Library")
-                    .on_disabled_hover_text("Turn on a library server first (Preferences > Library)")
+                    .on_disabled_hover_text(no_server_hint())
                     .clicked()
                 {
                     self.open_publish(path, false);
@@ -2231,6 +2236,10 @@ impl App {
 
     /// Preferences > Library: the servers in use, and the identity.
     pub(super) fn library_preferences_ui(&mut self, ui: &mut egui::Ui) {
+        if !crate::build_info::online_features() {
+            ui.label(crate::build_info::OFFLINE_NOTE);
+            return;
+        }
         let before = (self.config.library.official, self.config.library.author_name.clone());
         let mut changed = false;
         with_info(
@@ -2423,5 +2432,15 @@ impl App {
                 });
             }
         }
+    }
+}
+
+/// Why Publish (and Remix) can't be used: no server's turned on, or this is
+/// a branch build.
+fn no_server_hint() -> &'static str {
+    if crate::build_info::online_features() {
+        "Turn on a library server first (Preferences > Library)"
+    } else {
+        crate::build_info::OFFLINE_NOTE
     }
 }

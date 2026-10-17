@@ -76,9 +76,10 @@ pub fn songs_dir() -> PathBuf {
     base.join("synththing").join("Starter songs")
 }
 
-/// Where the soundfonts go: `<config dir>/soundfonts`.
+/// Where the soundfonts go: `<config dir>/soundfonts` (the stable one's,
+/// for a branch build too: `config::shared_dir`).
 pub fn soundfonts_dir() -> Result<PathBuf> {
-    Ok(crate::config::config_dir()?.join("soundfonts"))
+    Ok(crate::config::shared_dir()?.join("soundfonts"))
 }
 
 /// Write the songs to `songs_dir()` (leaving any already there alone), and

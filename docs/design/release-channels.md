@@ -1,6 +1,6 @@
 # Release channels: canary (nightly) and branch builds
 
-Status: design, not built yet. Tracked in #3.
+Status: being built in #4 (tracked in #3). Updated as parts land: it describes what the code does.
 
 ## Goal
 
@@ -57,33 +57,42 @@ The existing workflows already handle the release side: `scripts.yml` skips scri
 
 ### Online features
 
-- **Branch builds**: online and library features are off. They're for testing a feature, not for uploading to the real library server.
+- **Branch builds**: online and library features are off. They're for testing a feature, not for uploading to the real library server. `build_info::online_features()` is false, so `enabled_servers()` is empty (Publish and Remix are disabled, nothing is searched or checked), the Online Library tab and Preferences > Library say so instead, and as a backstop every request through the library client fails before it's sent (a ureq middleware in `library/client.rs`; tests still reach their own server).
 - **Canary**: online features stay on. When master changes anything about uploads or the library API (not scripts, covered above), a test server is set up by hand and testers add it as needed.
 
 ### Channels in the updater
 
-A channel setting under updates:
+`updater::Track` is what a build follows:
 
-- **Stable**: `/releases/latest`, as now.
-- **Canary**: whichever is higher, `/releases/latest` or the `nightly` release. After 0.8.0 ships, it sorts above every `0.7.1` nightly, so canary installs the release; the next master commit is `0.8.1-nightly.1` and canary moves back to nightlies. Canary only ever moves forward, so it can be a setting on the normal install, with no folder of its own (the config wipe above happens only when moving to an older build).
-- **Branch**: picked from the `branch-*` prereleases (name, author, age, commit). Installs into its own folder and launches from there. Its updater follows that branch by commit hash. When the branch's release is gone (merged and deleted), the branch build says so at launch and offers to switch to canary or stable and delete its folder.
+- **Stable**: `/releases/latest`, as before.
+- **Canary** (Preferences > General > Canary updates, `Config::canary_updates`): whichever is higher, `/releases/latest` or the `nightly` release. After 0.8.0 ships, it sorts above every `0.7.1` nightly, so canary installs the release; the next master commit is `0.8.1-nightly.1` and canary moves back to nightlies. Canary only ever moves forward, so it's a setting on the normal install, with no folder of its own (the config wipe above happens only when moving to an older build). Turning it off keeps the build you have until the next release.
+- **Branch**: a branch build follows its own `branch-<name>` release, by commit (a rebased branch can count fewer commits). When that release is gone (the branch was merged or deleted), the startup check opens the Updates window, which says so and offers to open the usual synththing (the exe that installed it).
+
+The setting is a bool, not an enum of channels: a build reading a channel name it didn't know would fail to read the whole config.
+
+Branch builds are tried from Help > Check for updates > Branch builds: the list of `branch-*` prereleases (version and commit; the notes, with the branch's commits, on hover), Install (downloads, verifies, installs into the branch's folder and starts it), and Open and Remove for installed ones, including ones whose build is gone.
 
 ### Folders
 
 Stable stays where it is. Moving `%APPDATA%\synththing\config` would break anyone who downgrades or runs an exe from 0.7.0 or older (they'd see an empty config), and a migration that moves the user's real config is the riskiest step there could be.
 
+Each branch build gets one folder for everything, its exe and its config, so removing it is deleting one folder (`channels.rs`):
+
 ```
-%APPDATA%\synththing\
-  config\                     stable (unchanged), and canary
-  shared\                     downloaded ffmpeg, caches: anything with no format version
-  channels\
-    branch-youtube\config\
-%LOCALAPPDATA%\synththing\channels\branch-youtube\synththing.exe
+%APPDATA%\synththing\config\                         stable and canary (unchanged)
+%LOCALAPPDATA%\synththing\data\channels\branch-youtube\
+  synththing.exe
+  config\                                            its settings
+  installed-by                                       the exe that installed it
 ```
 
-What goes in `shared\` is decided per item: only files with no format of synththing's own (downloaded tools, caches). Anything a build writes in its own format (config, playlists, the song library database, the identity) stays per channel, or a branch build could corrupt it for stable. Branch builds have online features off, so they don't need the identity.
+On Linux the same under `~/.local/share/synththing/channels/`. (Not beside the config folder: on Linux its parent is `~/.config` itself. And test installs shouldn't roam.)
 
-A branch install's config starts as a one-time copy of the stable config (so the tester's soundfonts and settings come along) and never syncs back. A "copy settings from stable again" button covers testers who change something on stable later.
+A branch build works out its config folder from the channel compiled into it (`config::config_dir`), not from how it's started, so it never touches the stable one however it's launched. Its settings start as a copy of the stable config when it's installed, never synced back; one started some other way (its exe downloaded from the release page) makes the copy on its first launch. Left out: the identity (branch builds are offline), logs, files set aside as unreadable, and the downloads they share instead.
+
+Shared (`config::shared_dir`): the downloaded ffmpeg and the starter soundfonts, which have no format of synththing's own, stay in the stable config folder and branch builds use them there. Anything a build writes in its own format (config, playlists, the song library database, the identity) stays per install, or a branch build could corrupt it for stable.
+
+With `--config-dir` (test runs), branch builds install into `channels/` inside that folder and are started with their config folder in `SYNTHTHING_CONFIG_DIR`, so a test run touches nothing outside it.
 
 ### Single-instance lock
 
@@ -93,9 +102,9 @@ Due for a rework regardless (it's unreliable now). For this design, the lock is 
 
 1. The collaborator pushes `youtube` to `Dissssy/synththing`. They need write access: workflows on a fork's PR get a read-only token and can't publish a release (otherwise a maintainer pushes the branch).
 2. CI builds both platforms and publishes the `branch-youtube` prerelease, its notes listing the commits since `master`, the author and the commit.
-3. Testers pick "youtube" under the update channel. The app installs it in `channels\branch-youtube\` with a copy of their config and launches it. Their stable install is untouched; going back is opening the normal shortcut.
+3. Testers open Help > Check for updates > Branch builds and press Install next to "youtube". The app installs it in its own folder with a copy of their settings and starts it. Their stable install is untouched; going back is opening the normal shortcut, and the branch build can be opened again from the same list.
 4. New pushes to `youtube` rebuild the release, and the branch install updates itself.
-5. When `youtube` is merged and deleted, a workflow deletes the release and tag, and the branch install offers to switch to canary or stable and remove itself.
+5. When `youtube` is merged and deleted, a workflow deletes the release and tag. The branch build says so at its next launch and offers to open the usual synththing, where the branch build can be removed.
 
 ## Plan
 

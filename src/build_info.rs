@@ -32,6 +32,17 @@ pub fn channel() -> Channel {
     }
 }
 
+/// Whether online features (the script and song library) are on: not in
+/// branch builds, which are for trying a feature, not for posting to the
+/// real servers. A library request from one fails before it's sent
+/// (`library::client`).
+pub fn online_features() -> bool {
+    !matches!(channel(), Channel::Branch(_))
+}
+
+/// Said wherever an online feature would be, in a branch build.
+pub const OFFLINE_NOTE: &str = "Online features (the script and song library) are off in branch builds.";
+
 /// The commit, shortened as git does, if known.
 pub fn short_commit() -> Option<&'static str> {
     (!COMMIT.is_empty()).then(|| &COMMIT[..COMMIT.len().min(7)])

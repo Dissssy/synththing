@@ -33,9 +33,10 @@ const EXE_NAME: &str = "ffmpeg";
 /// ffmpeg with the system's package manager).
 pub const CAN_DOWNLOAD: bool = cfg!(windows);
 
-/// Where a downloaded ffmpeg lives: `<config dir>/ffmpeg/ffmpeg.exe`.
+/// Where a downloaded ffmpeg lives: `<config dir>/ffmpeg/ffmpeg.exe` (the
+/// stable one's, for a branch build too: `config::shared_dir`).
 pub fn managed_path() -> Option<PathBuf> {
-    crate::config::config_dir().ok().map(|dir| dir.join("ffmpeg").join(EXE_NAME))
+    crate::config::shared_dir().ok().map(|dir| dir.join("ffmpeg").join(EXE_NAME))
 }
 
 /// The ffmpeg to use: the downloaded one, else one on the PATH that runs.
