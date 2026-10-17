@@ -407,12 +407,10 @@ fn decode_with_ffmpeg(ffmpeg: &Path, path: &Path) -> Result<(Vec<StereoFrame>, u
         .ok_or_else(|| anyhow!("couldn't tell the sample rate from ffmpeg's output"))?;
     let samples = output
         .stdout
-        .chunks_exact(8)
-        .map(|f| {
-            let left = f32::from_le_bytes([f[0], f[1], f[2], f[3]]);
-            let right = f32::from_le_bytes([f[4], f[5], f[6], f[7]]);
-            (left, right)
-        })
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|&[a, b, c, d, e, f, g, h]| (f32::from_le_bytes([a, b, c, d]), f32::from_le_bytes([e, f, g, h])))
         .collect();
     Ok((samples, sample_rate))
 }
