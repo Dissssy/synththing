@@ -210,6 +210,10 @@ pub struct App {
     /// In a branch build's Updates window: asking before copying the
     /// stable settings over its own.
     confirm_recopy: bool,
+    /// What the last thing done in the Updates window came to (an error,
+    /// or a branch build removed), said there: the status bar is dimmed
+    /// behind it. `true`: an error.
+    updates_message: Option<(String, bool)>,
     /// The startup update check is running: show its result only if it
     /// finds something new (and not a skipped version).
     launch_update_check: bool,
@@ -477,6 +481,7 @@ impl App {
             updates_open: false,
             branches: crate::channels::Branches::default(),
             confirm_recopy: false,
+            updates_message: None,
             launch_update_check: false,
             log_open: false,
             log_min_level: log::Level::Info,
@@ -1711,8 +1716,9 @@ impl App {
                     ui.horizontal(|ui| {
                         if ui.button("Restart now").clicked() {
                             match updater::relaunch() {
-                                Ok(()) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
-                                Err(e) => self.status = format!("Couldn't restart: {e}"),
+                                // (Quit, not close: closing may only hide it in the tray.)
+                                Ok(()) => self.close_with(&ui.ctx().clone(), close::CloseAction::Quit),
+                                Err(e) => self.updates_message = Some((format!("Couldn't restart: {e}"), true)),
                             }
                         }
                         if ui.button("Later").clicked() {
@@ -1731,8 +1737,10 @@ impl App {
                         && ui.button("Open the usual synththing").clicked()
                     {
                         match std::process::Command::new(&stable).spawn() {
-                            Ok(_) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
-                            Err(e) => self.status = format!("Couldn't start {}: {e}", stable.display()),
+                            Ok(_) => self.close_with(&ui.ctx().clone(), close::CloseAction::Quit),
+                            Err(e) => {
+                                self.updates_message = Some((format!("Couldn't start {}: {e}", stable.display()), true));
+                            }
                         }
                     }
                 }
@@ -1750,6 +1758,14 @@ impl App {
                 ui.add_space(8.0);
                 self.recopy_settings_ui(ui);
             }
+            if let Some((message, error)) = &self.updates_message {
+                ui.add_space(6.0);
+                if *error {
+                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), message);
+                } else {
+                    ui.label(message);
+                }
+            }
             // Every state but Available has its own way out above, so a
             // plain Close for the rest. (A download carries on in the
             // background if this closes, and Help > Check for updates
@@ -1765,6 +1781,7 @@ impl App {
         });
         if close || response.should_close() {
             self.updates_open = false;
+            self.updates_message = None;
         }
     }
 
@@ -1790,8 +1807,8 @@ impl App {
             if ui.button("Copy and restart").clicked() {
                 self.confirm_recopy = false;
                 match crate::channels::recopy_settings_on_restart().and_then(|()| updater::relaunch()) {
-                    Ok(()) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
-                    Err(e) => self.status = format!("Couldn't copy the settings: {e:#}"),
+                    Ok(()) => self.close_with(&ui.ctx().clone(), close::CloseAction::Quit),
+                    Err(e) => self.updates_message = Some((format!("Couldn't copy the settings: {e:#}"), true)),
                 }
             }
             if ui.button("Cancel").clicked() {
@@ -1860,17 +1877,17 @@ impl App {
                             if ui.add_enabled(!installing, egui::Button::new("Open")).clicked()
                                 && let Err(e) = crate::channels::launch(&channel)
                             {
-                                self.status = format!("{e:#}");
+                                self.updates_message = Some((format!("{e:#}"), true));
                             }
                             if ui
                                 .add_enabled(!installing, egui::Button::new("Remove"))
                                 .on_hover_text("Delete this branch build and its settings")
                                 .clicked()
                             {
-                                match crate::channels::remove(&channel) {
-                                    Ok(()) => self.status = format!("Removed the {} build.", crate::channels::branch_name(&channel)),
-                                    Err(e) => self.status = format!("{e:#}"),
-                                }
+                                self.updates_message = Some(match crate::channels::remove(&channel) {
+                                    Ok(()) => (format!("Removed the {} build.", crate::channels::branch_name(&channel)), false),
+                                    Err(e) => (format!("{e:#}"), true),
+                                });
                             }
                         } else if let Some(b) = build
                             && ui.add_enabled(!installing, egui::Button::new("Install")).clicked()
