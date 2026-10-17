@@ -76,9 +76,10 @@ pub fn songs_dir() -> PathBuf {
     base.join("synththing").join("Starter songs")
 }
 
-/// Where the soundfonts go: `<config dir>/soundfonts`.
+/// Where the soundfonts go: `<config dir>/soundfonts` (the stable one's,
+/// for a branch build too: `config::shared_dir`).
 pub fn soundfonts_dir() -> Result<PathBuf> {
-    Ok(crate::config::config_dir()?.join("soundfonts"))
+    Ok(crate::config::shared_dir()?.join("soundfonts"))
 }
 
 /// Write the songs to `songs_dir()` (leaving any already there alone), and
@@ -207,7 +208,7 @@ fn is_downloaded(path: &Path, soundfont: &StarterSoundFont) -> bool {
 fn download(progress: &Downloader, soundfont: &StarterSoundFont, target: &Path) -> Result<()> {
     let url = format!("{BASE_URL}{}", soundfont.file);
     let response = ureq::get(&url)
-        .header("User-Agent", format!("synththing/{}", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", format!("synththing/{}", crate::build_info::VERSION))
         .call()
         .context("connecting")?;
     let mut reader = response.into_body().into_with_config().limit(soundfont.size + SIZE_SLACK).reader();

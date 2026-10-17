@@ -29,3 +29,14 @@ cargo release patch --execute  # bumps Cargo.toml, commits "Release X.Y.Z", tags
 cargo-release renames `## Unreleased` in `CHANGELOG.md` to the new version's heading, dated, with an empty `## Unreleased` above it (`pre-release-replacements` in `release.toml`). Then watch the run (`gh run list`, `gh run watch`): it checks the tag matches `Cargo.toml`, runs the tests, builds the release exe and publishes the GitHub Release with `synththing-windows-x86_64.exe`, its notes taken from the version's section of `CHANGELOG.md` (the run fails if there isn't one). Running copies pick it up at their next launch (or Help > Check for updates).
 
 `release.toml` keeps cargo-release from publishing to crates.io (`Cargo.toml` also has `publish = false`) and only allows releases from `master`.
+
+## Test builds
+
+Besides releases, there are test builds (`.github/workflows/test-builds.yml`, design in `docs/design/release-channels.md`), each one a rolling prerelease: its tag moves to the new commit and its files are replaced, so only the newest build of each exists.
+
+- **master**, on every push: the `nightly` prerelease (canary), versioned `<next patch>-nightly.<commits since the release>`, e.g. `0.7.1-nightly.12`.
+- **Any other branch**, when asked: Actions > Test builds > Run workflow, picking the branch, or `gh workflow run test-builds.yml --ref <branch>`. Run it again for each update testers should get; their branch build picks it up at its next launch. It makes a `branch-<name>` prerelease (`mike/youtube` becomes `branch-mike-youtube`), versioned `<next patch>-branch.<N>`, with its online features off. Running it needs write access to the repo, and the branch has to be in it (a fork's branches can't be built).
+
+The release's name is the build's version and its notes start with `Commit: <sha>`; the in-app updater reads both. Builds count commits from the tag of Cargo.toml's version, so a test build fails if that tag isn't there. Deleting a branch deletes its release and tag (`.github/workflows/branch-cleanup.yml`). None of this touches stable users: prereleases aren't what `/releases/latest`, the server's update script or `gh release download` without a tag see.
+
+To build one locally as CI does, set `SYNTHTHING_CHANNEL` (`nightly` or `branch-<name>`), `SYNTHTHING_BUILD_NUMBER` and optionally `SYNTHTHING_COMMIT` before `cargo build` (`build.rs`).

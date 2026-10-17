@@ -24,13 +24,28 @@ fn now() -> i64 {
         .unwrap_or_default()
 }
 
+/// Every request to a library server goes through here: in a branch build
+/// (`build_info::online_features`), it fails before it's sent. (Tests talk
+/// to a server of their own, in a branch build's CI run too.)
+fn online_only(
+    request: ureq::http::Request<ureq::SendBody>,
+    next: ureq::middleware::MiddlewareNext,
+) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+    if cfg!(test) || crate::build_info::online_features() {
+        next.handle(request)
+    } else {
+        Err(ureq::Error::Io(std::io::Error::other("online features are off in branch builds")))
+    }
+}
+
 fn agent() -> &'static Agent {
     static AGENT: OnceLock<Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
         Agent::config_builder()
+            .middleware(online_only)
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(20)))
-            .user_agent(format!("synththing/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("synththing/{}", crate::build_info::VERSION))
             .build()
             .into()
     })
@@ -354,10 +369,11 @@ pub fn notification_stream(
     static STREAMING: OnceLock<Agent> = OnceLock::new();
     let agent = STREAMING.get_or_init(|| {
         Agent::config_builder()
+            .middleware(online_only)
             .http_status_as_error(false)
             .timeout_connect(Some(Duration::from_secs(15)))
             .timeout_recv_body(Some(STREAM_FOR))
-            .user_agent(format!("synththing/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("synththing/{}", crate::build_info::VERSION))
             .build()
             .into()
     });
@@ -597,7 +613,7 @@ mod tests {
             tags: vec!["chill".into()],
             author_name: "tester".into(),
             source: source.into(),
-            app_version: env!("CARGO_PKG_VERSION").into(),
+            app_version: crate::build_info::VERSION.into(),
             slug: None,
             min_app_version: None,
             remix_of: None,
@@ -1373,7 +1389,7 @@ mod tests {
             author_name: "tester".into(),
             rights: "public_domain".into(),
             data: crate::library::songs::encode(&bytes),
-            app_version: env!("CARGO_PKG_VERSION").into(),
+            app_version: crate::build_info::VERSION.into(),
             slug: Some(slug.into()),
             ..Default::default()
         }

@@ -52,7 +52,7 @@ use crate::lua_visualizer::{
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
 use crate::song_info::{format_length, SongInfoCache};
-use crate::updater::{self, UpdateState, Updater};
+use crate::updater::{self, Track, UpdateState, Updater};
 use crate::watch::{FolderWatch, Watched};
 use crate::changelog;
 use crate::script_host::{self, ScriptHost};
@@ -204,6 +204,9 @@ pub struct App {
     cursor_confined: bool,
     updater: Updater,
     updates_open: bool,
+    /// Branch builds: GitHub's list, and installing one (in the Updates
+    /// window).
+    branches: crate::channels::Branches,
     /// The startup update check is running: show its result only if it
     /// finds something new (and not a skipped version).
     launch_update_check: bool,
@@ -463,6 +466,7 @@ impl App {
             cursor_confined: false,
             updater: Updater::new(),
             updates_open: false,
+            branches: crate::channels::Branches::default(),
             launch_update_check: false,
             log_open: false,
             log_min_level: log::Level::Info,
@@ -550,6 +554,12 @@ impl App {
         app
     }
 
+    /// What the updater follows: this branch build's branch, or canary or
+    /// releases as chosen in Preferences.
+    fn update_track(&self) -> Track {
+        Track::current(self.config.canary_updates)
+    }
+
     /// Look for a new release in the background, if that's enabled. Not in
     /// development builds (`cargo run`), which shouldn't offer to replace
     /// themselves with a release.
@@ -558,7 +568,7 @@ impl App {
             return;
         }
         self.launch_update_check = true;
-        self.updater.check();
+        self.updater.check(self.update_track());
     }
 
     /// After an update, show what's new since the version that ran last,
@@ -599,7 +609,7 @@ impl App {
                     ui.heading("What's new");
                     ui.weak(format!(
                         "synththing v{}, since v{} (the version you had)",
-                        env!("CARGO_PKG_VERSION"),
+                        crate::build_info::VERSION,
                         changelog::format_version(since)
                     ));
                 }
@@ -1446,7 +1456,7 @@ impl App {
                 if ui.button("Check for updates...").clicked() {
                     self.launch_update_check = false;
                     self.updates_open = true;
-                    self.updater.check();
+                    self.updater.check(self.update_track());
                 }
                 if ui.button("Changelog...").clicked() {
                     self.changelog = Some(None);
@@ -1458,7 +1468,7 @@ impl App {
                     self.credits_open = true;
                 }
                 ui.separator();
-                ui.weak(format!("synththing v{}", env!("CARGO_PKG_VERSION")));
+                ui.weak(format!("synththing v{}", crate::build_info::describe()));
             });
             // Notifications, at the far right.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.notifications_button_ui(ui));
@@ -1560,10 +1570,14 @@ impl App {
                     let skipped = self.config.skipped_update.as_deref() == Some(release.version.to_string().as_str());
                     self.updates_open |= !skipped;
                 }
+                UpdateState::Gone => {
+                    self.launch_update_check = false;
+                    self.updates_open = true;
+                }
                 _ => self.launch_update_check = false,
             }
         }
-        if matches!(state, UpdateState::Checking | UpdateState::Downloading { .. }) {
+        if matches!(state, UpdateState::Checking | UpdateState::Downloading { .. }) || self.branches.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         if !self.updates_open {
@@ -1576,10 +1590,24 @@ impl App {
             ui.set_width(440.0);
             ui.heading("Updates");
             ui.add_space(4.0);
+            let branch = match crate::build_info::channel() {
+                crate::build_info::Channel::Branch(name) => Some(name),
+                _ => None,
+            };
+            if let Some(name) = branch {
+                ui.label(format!(
+                    "This is a test build of the {name} branch. It updates from that branch and keeps settings of \
+                     its own, so your usual synththing isn't affected."
+                ));
+                ui.add_space(4.0);
+            } else if self.config.canary_updates {
+                ui.weak("Canary updates: the newest build from master (Preferences > General).");
+                ui.add_space(4.0);
+            }
             match &state {
                 UpdateState::Idle => {
                     if ui.button("Check for updates").clicked() {
-                        self.updater.check();
+                        self.updater.check(self.update_track());
                     }
                 }
                 UpdateState::Checking => {
@@ -1647,12 +1675,32 @@ impl App {
                         }
                     });
                 }
+                UpdateState::Gone => {
+                    let name = branch.unwrap_or_default();
+                    ui.label(format!(
+                        "The {name} branch's build is gone: the branch was merged or deleted, so this build won't \
+                         get updates any more. Go back to your usual synththing, and remove this one there, under \
+                         Help > Check for updates > Branch builds."
+                    ));
+                    if let Some(stable) = crate::channels::installed_by()
+                        && ui.button("Open the usual synththing").clicked()
+                    {
+                        match std::process::Command::new(&stable).spawn() {
+                            Ok(_) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
+                            Err(e) => self.status = format!("Couldn't start {}: {e}", stable.display()),
+                        }
+                    }
+                }
                 UpdateState::Failed(error) => {
                     ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
                     if ui.button("Try again").clicked() {
-                        self.updater.check();
+                        self.updater.check(self.update_track());
                     }
                 }
+            }
+            if branch.is_none() {
+                ui.add_space(8.0);
+                self.branch_builds_ui(ui);
             }
             // Every state but Available has its own way out above, so a
             // plain Close for the rest. (A download carries on in the
@@ -1669,6 +1717,113 @@ impl App {
         });
         if close || response.should_close() {
             self.updates_open = false;
+        }
+    }
+
+    /// The Updates window's Branch builds section: trying a feature before
+    /// it's merged. Each installs into a folder of its own with a copy of
+    /// the settings (`channels.rs`), so this install isn't touched.
+    fn branch_builds_ui(&mut self, ui: &mut egui::Ui) {
+        let response = egui::CollapsingHeader::new("Branch builds").id_salt("branch_builds").show(ui, |ui| {
+            ui.label(
+                "Try a feature before it's merged. Each branch build installs separately, starting with a copy \
+                 of your settings, and its online features are off. This synththing isn't touched.",
+            );
+            ui.add_space(4.0);
+            let installed = crate::channels::installed();
+            let list = self.branches.list();
+            let install = self.branches.install_state();
+            let installing = matches!(install, crate::channels::InstallState::Installing { .. });
+            let builds: &[updater::Release] = match &list {
+                crate::channels::ListState::Loaded(builds) => builds,
+                _ => &[],
+            };
+            match &list {
+                crate::channels::ListState::Idle => {}
+                crate::channels::ListState::Loading => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Looking for branch builds...");
+                    });
+                }
+                crate::channels::ListState::Failed(error) => {
+                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
+                }
+                crate::channels::ListState::Loaded(builds) if builds.is_empty() && installed.is_empty() => {
+                    ui.weak("There are no branch builds right now.");
+                }
+                crate::channels::ListState::Loaded(_) => {}
+            }
+            // Every branch with a build, then installed ones whose build is
+            // gone.
+            let mut rows: Vec<(String, Option<&updater::Release>)> =
+                builds.iter().map(|b| (b.tag.clone(), Some(b))).collect();
+            for channel in &installed {
+                if !builds.iter().any(|b| &b.tag == channel) {
+                    rows.push((channel.clone(), None));
+                }
+            }
+            egui::Grid::new("branch_builds_grid").num_columns(3).spacing([12.0, 4.0]).show(ui, |ui| {
+                for (channel, build) in rows {
+                    ui.strong(crate::channels::branch_name(&channel));
+                    match build {
+                        Some(b) => {
+                            let commit = b.commit.as_deref().map(|c| &c[..c.len().min(7)]).unwrap_or_default();
+                            ui.weak(format!("{} {commit}", b.version)).on_hover_text(b.notes.trim());
+                        }
+                        None => {
+                            ui.weak("its build is gone (merged?)");
+                        }
+                    }
+                    ui.horizontal(|ui| {
+                        if installed.contains(&channel) {
+                            if ui.add_enabled(!installing, egui::Button::new("Open")).clicked()
+                                && let Err(e) = crate::channels::launch(&channel)
+                            {
+                                self.status = format!("{e:#}");
+                            }
+                            if ui
+                                .add_enabled(!installing, egui::Button::new("Remove"))
+                                .on_hover_text("Delete this branch build and its settings")
+                                .clicked()
+                            {
+                                match crate::channels::remove(&channel) {
+                                    Ok(()) => self.status = format!("Removed the {} build.", crate::channels::branch_name(&channel)),
+                                    Err(e) => self.status = format!("{e:#}"),
+                                }
+                            }
+                        } else if let Some(b) = build
+                            && ui.add_enabled(!installing, egui::Button::new("Install")).clicked()
+                        {
+                            self.branches.install(b.clone());
+                        }
+                    });
+                    ui.end_row();
+                }
+            });
+            match &install {
+                crate::channels::InstallState::Idle => {}
+                crate::channels::InstallState::Installing { channel, downloaded, size } => {
+                    ui.label(format!("Installing the {} build...", crate::channels::branch_name(channel)));
+                    ui.add(
+                        egui::ProgressBar::new(*downloaded as f32 / (*size).max(1) as f32)
+                            .text(format!("{:.1} / {:.1} MB", *downloaded as f64 / 1e6, *size as f64 / 1e6)),
+                    );
+                }
+                crate::channels::InstallState::Done(channel) => {
+                    ui.label(format!("The {} build is installed and starting.", crate::channels::branch_name(channel)));
+                }
+                crate::channels::InstallState::Failed(error) => {
+                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
+                }
+            }
+            if ui.add_enabled(!self.branches.busy(), egui::Button::new("Refresh")).clicked() {
+                self.branches.refresh();
+            }
+        });
+        // The list is fetched the first time the section opens.
+        if response.body_returned.is_some() && matches!(self.branches.list(), crate::channels::ListState::Idle) {
+            self.branches.refresh();
         }
     }
 
@@ -1691,7 +1846,7 @@ impl App {
             ui.set_width(660.0);
             ui.heading("Credits & licenses");
             ui.horizontal(|ui| {
-                ui.weak(format!("synththing v{}", env!("CARGO_PKG_VERSION")));
+                ui.weak(format!("synththing v{}", crate::build_info::describe()));
                 ui.hyperlink_to(&repo_url, &repo_url);
             });
             ui.horizontal_wrapped(|ui| {
@@ -2724,6 +2879,7 @@ impl App {
         let mut expiry = self.config.preload_expiry_secs.unwrap_or(DEFAULT_PRELOAD_EXPIRY_SECS);
         let mut hover_preload = self.config.preload_on_hover;
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
+        let mut canary = self.config.canary_updates;
         let mut close_to_tray = self.config.close_to_tray.unwrap_or(false);
         let mut warn_heavy = self.config.warn_heavy_midi.unwrap_or(true);
         let mut beat_pulse = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE) * 100.0;
@@ -2751,6 +2907,16 @@ impl App {
                                      Help > Check for updates does it any time.",
                                     |ui| ui.checkbox(&mut check_updates, "Check for updates when synththing starts"),
                                 );
+                                // (A branch build follows its branch.)
+                                if !matches!(crate::build_info::channel(), crate::build_info::Channel::Branch(_)) {
+                                    with_info(
+                                        ui,
+                                        "Canary: the newest build from master, minutes after every change, and \
+                                         releases once they're out. For testing new things early: it can be broken. \
+                                         Turning it off keeps the build you have until the next release.",
+                                        |ui| ui.checkbox(&mut canary, "Canary updates (test builds)"),
+                                    );
+                                }
                                 with_info(
                                     ui,
                                     "Off: fullscreen shows the same tabs as the window, and rearranging them in \
@@ -2949,6 +3115,7 @@ impl App {
         if expiry != self.config.preload_expiry_secs
             || hover_preload != self.config.preload_on_hover
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
+            || canary != self.config.canary_updates
             || (self.tray.is_some() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
             || warn_heavy != self.config.warn_heavy_midi.unwrap_or(true)
             || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
@@ -2974,6 +3141,7 @@ impl App {
             self.config.beat_pulse_length =
                 Some(pulse_length / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE_LENGTH).abs() > 1e-4);
             self.config.check_updates_on_launch = (!check_updates).then_some(false);
+            self.config.canary_updates = canary;
             if self.tray.is_some() && (close_to_tray || self.config.close_to_tray.is_some()) {
                 self.config.close_to_tray = Some(close_to_tray);
             }

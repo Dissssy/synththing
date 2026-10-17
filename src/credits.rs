@@ -109,7 +109,7 @@ fn fetch() -> Result<Vec<Contributor>, String> {
     let url = format!("https://api.github.com/repos/{REPO}/contributors?per_page=100");
     let mut response = ureq::get(&url)
         .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", format!("synththing/{}", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", format!("synththing/{}", crate::build_info::VERSION))
         .call()
         .map_err(|e| e.to_string())?;
     response.body_mut().read_json().map_err(|e| e.to_string())

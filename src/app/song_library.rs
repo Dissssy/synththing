@@ -793,7 +793,7 @@ impl App {
             license: if draft.rights == "licensed" { draft.license.trim().to_string() } else { String::new() },
             made_for: draft.made_for.as_ref().map(|(id, _)| id.clone()),
             data: songs::encode(&bytes),
-            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            app_version: crate::build_info::VERSION.to_string(),
             slug,
         };
         if let Err(problem) = songs::check_upload(&upload) {

@@ -109,6 +109,12 @@ pub struct Config {
     /// means yes.
     #[serde(default)]
     pub check_updates_on_launch: Option<bool>,
+    /// Preference: update to canary builds (the newest from master, and
+    /// releases once they're newer) rather than releases only. A bool, not
+    /// an enum of channels: a build that didn't know a newer channel's name
+    /// couldn't read the whole config (`read_json_or_set_aside`).
+    #[serde(default)]
+    pub canary_updates: bool,
     /// A release version the user chose to skip: the startup check doesn't
     /// bring it up again (a manual check still shows it).
     #[serde(default)]
@@ -224,8 +230,12 @@ pub struct LibraryServer {
 }
 
 impl LibrarySettings {
-    /// The servers in use, the official one first.
+    /// The servers in use, the official one first. None in a branch build
+    /// (`build_info::online_features`).
     pub fn enabled_servers(&self) -> Vec<String> {
+        if !crate::build_info::online_features() {
+            return Vec::new();
+        }
         let official = self.official.then(crate::library::official_url);
         let mut servers: Vec<String> = Vec::new();
         for url in official.into_iter().chain(self.servers.iter().filter(|s| s.enabled).map(|s| s.url.clone())) {
@@ -250,6 +260,9 @@ impl Config {
         Self::file_path().is_ok_and(|path| path.exists())
     }
 
+    /// The saved config, or the defaults if there's none or it can't be
+    /// read. Changes nothing on disk: for commands that never save it. The
+    /// app itself loads with `load_for_app`.
     pub fn load() -> Result<Self> {
         let path = Self::file_path()?;
         if !path.exists() {
@@ -258,6 +271,13 @@ impl Config {
         let data = fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
         Ok(serde_json::from_str(&data).unwrap_or_default())
+    }
+
+    /// The saved config, for the app, which saves it as it goes: one it
+    /// can't read is moved aside first (`read_json_or_set_aside`), so the
+    /// defaults it starts from aren't saved over it.
+    pub fn load_for_app() -> Result<Self> {
+        Ok(read_json_or_set_aside(&Self::file_path()?)?.unwrap_or_default())
     }
 
     pub fn preload_expiry(&self) -> std::time::Duration {
@@ -337,13 +357,34 @@ pub fn config_dir_override() -> Option<PathBuf> {
 /// The config directory for synththing (e.g. `%APPDATA%\synththing\config`),
 /// where everything it keeps lives: preferences, scripts, soundfonts,
 /// identity. `--config-dir` (or `SYNTHTHING_CONFIG_DIR`) puts it elsewhere.
+/// A branch build has its own, in its channel's folder (`channels.rs`),
+/// however it's started: it never touches the stable one.
 pub fn config_dir() -> Result<PathBuf> {
     if let Some(dir) = config_dir_override() {
         return Ok(dir);
     }
+    if let crate::build_info::Channel::Branch(_) = crate::build_info::channel() {
+        return crate::channels::own_config_dir();
+    }
+    stable_config_dir()
+}
+
+/// The usual config directory, the one releases and canary builds use.
+pub fn stable_config_dir() -> Result<PathBuf> {
     let dirs = ProjectDirs::from("", "", "synththing")
         .context("could not determine a config directory for this platform")?;
     Ok(dirs.config_dir().to_path_buf())
+}
+
+/// Where downloads with no format of synththing's own go (ffmpeg, the
+/// starter soundfonts), so a branch build shares them with the stable one
+/// instead of downloading its own: the stable config directory, or
+/// `--config-dir`'s.
+pub fn shared_dir() -> Result<PathBuf> {
+    match config_dir_override() {
+        Some(dir) => Ok(dir),
+        None => stable_config_dir(),
+    }
 }
 
 /// Where recordings go when nothing's chosen: Videos\synththing, or under
@@ -356,6 +397,42 @@ pub fn default_recordings_dir() -> PathBuf {
         .or_else(|| dirs.as_ref().map(|d| d.home_dir().to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("synththing")
+}
+
+/// A JSON file synththing keeps, as `T`: `None` if it isn't there, or if
+/// it can't be read as `T` (written by a build that stores it differently,
+/// a branch build say). Such a file is first moved aside, to
+/// `<name>.unreadable-<unix time>` next to it, so whatever the caller uses
+/// instead and saves doesn't overwrite it: it can be recovered, or read
+/// again by the build that wrote it. Errors only when it can't be read at
+/// all, or can't be moved aside.
+pub fn read_json_or_set_aside<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+    let data = match fs::read_to_string(path) {
+        Ok(data) => data,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let error = match serde_json::from_str(&data) {
+        Ok(value) => return Ok(Some(value)),
+        Err(e) => e,
+    };
+    let aside = set_aside(path).with_context(|| format!("{} can't be read ({error})", path.display()))?;
+    log::warn!("{} couldn't be read ({error}); moved to {} and starting without it", path.display(), aside.display());
+    Ok(None)
+}
+
+/// Move a file synththing can't read out of the way, to
+/// `<name>.unreadable-<unix time>` next to it, before something new is
+/// saved in its place. Returns where it went.
+pub fn set_aside(path: &Path) -> Result<PathBuf> {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".unreadable-{secs}"));
+    let aside = path.with_file_name(name);
+    fs::rename(path, &aside).with_context(|| format!("moving {} aside", path.display()))?;
+    Ok(aside)
 }
 
 /// Where saved playlists live, one JSON file each.
@@ -396,5 +473,32 @@ mod tests {
         assert!(config.session.volume.is_none() && config.session.script.is_none());
         let partial: Config = serde_json::from_str(r#"{ "remember": { "speed": true } }"#).unwrap();
         assert!(partial.remember.speed && partial.remember.volume, "left out: the default");
+    }
+
+    /// A file that can't be read is moved aside rather than left to be
+    /// saved over; a readable or missing one is left alone.
+    #[test]
+    fn unreadable_files_are_moved_aside() {
+        let dir = std::env::temp_dir().join(format!("synththing-set-aside-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("soundfonts.json");
+
+        assert!(read_json_or_set_aside::<Config>(&path).unwrap().is_none(), "missing");
+
+        fs::write(&path, r#"{ "soundfonts": ["a.sf2"] }"#).unwrap();
+        let config = read_json_or_set_aside::<Config>(&path).unwrap().unwrap();
+        assert_eq!(config.soundfonts, [PathBuf::from("a.sf2")]);
+        assert!(path.exists(), "a readable file stays");
+
+        // From a build where `soundfonts` is something else.
+        fs::write(&path, r#"{ "soundfonts": { "list": [] } }"#).unwrap();
+        assert!(read_json_or_set_aside::<Config>(&path).unwrap().is_none());
+        assert!(!path.exists(), "moved aside");
+        let aside: Vec<_> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(aside.len(), 1);
+        assert!(aside[0].starts_with("soundfonts.json.unreadable-"), "{aside:?}");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -108,7 +108,7 @@ fn bundled_upload(category: &str, file_name: &str, source: &str) -> Option<Uploa
         tags: Vec::new(),
         author_name: "synththing".to_string(),
         source: source.to_string(),
-        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        app_version: crate::build_info::VERSION.to_string(),
         slug: Some(slugify(stem)),
         min_app_version: Some(min_app_version(source)),
         remix_of: None,
@@ -1267,10 +1267,10 @@ pub fn supported_version() -> &'static str {
             .iter()
             .chain(OPTION_SINCE)
             .map(|(_, since)| *since)
-            .chain([env!("CARGO_PKG_VERSION")])
+            .chain([crate::build_info::VERSION])
             .filter_map(|v| semver::Version::parse(v).ok())
             .max()
-            .map_or_else(|| env!("CARGO_PKG_VERSION").to_string(), |v| v.to_string())
+            .map_or_else(|| crate::build_info::VERSION.to_string(), |v| v.to_string())
     })
 }
 
@@ -1514,7 +1514,7 @@ mod tests {
         for (name, since) in API_SINCE.iter().chain(OPTION_SINCE) {
             assert!(runs_on(since, supported_version()), "{name}");
         }
-        assert!(runs_on(env!("CARGO_PKG_VERSION"), supported_version()));
+        assert!(runs_on(crate::build_info::VERSION, supported_version()));
         // Names this build doesn't know (a newer function), but not the
         // script's own, Lua's, or locals.
         let newer = "local x = 1 function helper() end function render() helper() brand_new_thing() math.floor(x) end";

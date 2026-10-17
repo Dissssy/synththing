@@ -8,9 +8,11 @@
 
 mod app;
 mod changelog;
+mod channels;
 mod cli;
 mod headless;
 mod applog;
+mod build_info;
 mod audio;
 mod code_edit;
 mod config;
@@ -125,6 +127,9 @@ fn main() -> Result<()> {
         eprintln!("error: --config-dir: {e:#}");
         std::process::exit(2);
     }
+    // A branch build's first launch: its own settings, copied from the
+    // stable ones, before anything reads them. (Logged once the log is up.)
+    let prepared = channels::prepare_own_config();
 
     if let Some(Command::RunScript(args)) = &cli.command {
         let config = Config::load().unwrap_or_default();
@@ -165,7 +170,12 @@ fn main() -> Result<()> {
     }
 
     applog::init(cli.console);
-    log::info!("synththing v{} starting", env!("CARGO_PKG_VERSION"));
+    log::info!("synththing v{} starting", build_info::describe());
+    match prepared {
+        Some(Ok(done)) => log::info!("{done}"),
+        Some(Err(e)) => log::warn!("couldn't copy the settings for this branch build: {e:#}"),
+        None => {}
+    }
 
     let sample_rate = 44_100u32;
 
@@ -217,7 +227,7 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow!("could not start the render thread: {e}"))?;
 
     let ran_before = Config::exists();
-    let mut config = Config::load()?;
+    let mut config = Config::load_for_app()?;
     config.soundfonts.sort();
 
     let mut app = App::new(command_tx, shared, config, tap, sample_rate, preview_output);
@@ -239,7 +249,10 @@ fn main() -> Result<()> {
         height: 256,
     };
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1100.0, 750.0]).with_icon(icon),
+        viewport: egui::ViewportBuilder::default()
+            .with_title(build_info::window_title())
+            .with_inner_size([1100.0, 750.0])
+            .with_icon(icon),
         ..Default::default()
     };
     eframe::run_native(
