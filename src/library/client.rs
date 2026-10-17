@@ -30,7 +30,7 @@ fn agent() -> &'static Agent {
         Agent::config_builder()
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(20)))
-            .user_agent(format!("synththing/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("synththing/{}", crate::build_info::VERSION))
             .build()
             .into()
     })
@@ -357,7 +357,7 @@ pub fn notification_stream(
             .http_status_as_error(false)
             .timeout_connect(Some(Duration::from_secs(15)))
             .timeout_recv_body(Some(STREAM_FOR))
-            .user_agent(format!("synththing/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("synththing/{}", crate::build_info::VERSION))
             .build()
             .into()
     });
@@ -597,7 +597,7 @@ mod tests {
             tags: vec!["chill".into()],
             author_name: "tester".into(),
             source: source.into(),
-            app_version: env!("CARGO_PKG_VERSION").into(),
+            app_version: crate::build_info::VERSION.into(),
             slug: None,
             min_app_version: None,
             remix_of: None,
@@ -1373,7 +1373,7 @@ mod tests {
             author_name: "tester".into(),
             rights: "public_domain".into(),
             data: crate::library::songs::encode(&bytes),
-            app_version: env!("CARGO_PKG_VERSION").into(),
+            app_version: crate::build_info::VERSION.into(),
             slug: Some(slug.into()),
             ..Default::default()
         }

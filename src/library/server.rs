@@ -229,7 +229,7 @@ pub fn run(data: &Path, bind: Option<String>) -> Result<(), String> {
     let running = start(data, bind)?;
     println!(
         "synththing {} serving the library in {} at http://{} (key {})",
-        env!("CARGO_PKG_VERSION"),
+        crate::build_info::VERSION,
         data.display(),
         running.addr,
         super::key_id(&running.state.key_hex)
@@ -833,7 +833,7 @@ fn info(state: &State) -> Info {
         documents,
         publisher_rotations,
         name: state.config.name.clone(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: crate::build_info::VERSION.to_string(),
         key: state.key_hex.clone(),
         mode: state.config.mode.clone(),
         license: state.config.license.clone(),
@@ -1210,7 +1210,7 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
         && !known
         && let Err(problem) = check_runs(state, &upload.source)
     {
-        return error(400, format!("it doesn't run on synththing {}: {problem}", env!("CARGO_PKG_VERSION")));
+        return error(400, format!("it doesn't run on synththing {}: {problem}", crate::build_info::VERSION));
     }
     let fingerprint = super::fingerprint::Fingerprint::of(&upload.source);
     let created = now();

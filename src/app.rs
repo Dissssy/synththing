@@ -599,7 +599,7 @@ impl App {
                     ui.heading("What's new");
                     ui.weak(format!(
                         "synththing v{}, since v{} (the version you had)",
-                        env!("CARGO_PKG_VERSION"),
+                        crate::build_info::VERSION,
                         changelog::format_version(since)
                     ));
                 }
@@ -1458,7 +1458,7 @@ impl App {
                     self.credits_open = true;
                 }
                 ui.separator();
-                ui.weak(format!("synththing v{}", env!("CARGO_PKG_VERSION")));
+                ui.weak(format!("synththing v{}", crate::build_info::describe()));
             });
             // Notifications, at the far right.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.notifications_button_ui(ui));
@@ -1691,7 +1691,7 @@ impl App {
             ui.set_width(660.0);
             ui.heading("Credits & licenses");
             ui.horizontal(|ui| {
-                ui.weak(format!("synththing v{}", env!("CARGO_PKG_VERSION")));
+                ui.weak(format!("synththing v{}", crate::build_info::describe()));
                 ui.hyperlink_to(&repo_url, &repo_url);
             });
             ui.horizontal_wrapped(|ui| {

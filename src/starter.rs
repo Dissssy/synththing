@@ -207,7 +207,7 @@ fn is_downloaded(path: &Path, soundfont: &StarterSoundFont) -> bool {
 fn download(progress: &Downloader, soundfont: &StarterSoundFont, target: &Path) -> Result<()> {
     let url = format!("{BASE_URL}{}", soundfont.file);
     let response = ureq::get(&url)
-        .header("User-Agent", format!("synththing/{}", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", format!("synththing/{}", crate::build_info::VERSION))
         .call()
         .context("connecting")?;
     let mut reader = response.into_body().into_with_config().limit(soundfont.size + SIZE_SLACK).reader();

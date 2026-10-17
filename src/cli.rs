@@ -16,7 +16,7 @@ use clap::{Args, Parser, Subcommand};
 ///
 /// With no command, opens the app.
 #[derive(Parser, Debug)]
-#[command(name = "synththing", version, after_help = "Full documentation: docs/cli.md in the repository.")]
+#[command(name = "synththing", version = crate::build_info::VERSION, after_help = "Full documentation: docs/cli.md in the repository.")]
 pub struct Cli {
     /// Open with the Visualizer tab showing.
     #[arg(long, visible_alias = "viz")]

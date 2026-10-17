@@ -31,7 +31,7 @@ pub const ASSET_NAME: &str = "synththing-windows-x86_64.exe";
 pub const ASSET_NAME: &str = "synththing-linux-x86_64";
 
 pub fn current_version() -> Version {
-    Version::parse(env!("CARGO_PKG_VERSION")).expect("Cargo.toml version is valid semver")
+    Version::parse(crate::build_info::VERSION).expect("Cargo.toml version is valid semver")
 }
 
 #[derive(Clone, Debug)]
@@ -164,7 +164,7 @@ struct ApiAsset {
 }
 
 fn user_agent() -> String {
-    format!("synththing/{} (+https://github.com/{REPO})", env!("CARGO_PKG_VERSION"))
+    format!("synththing/{} (+https://github.com/{REPO})", crate::build_info::VERSION)
 }
 
 fn fetch_latest() -> Result<Release> {

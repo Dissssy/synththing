@@ -11,6 +11,7 @@ mod changelog;
 mod cli;
 mod headless;
 mod applog;
+mod build_info;
 mod audio;
 mod code_edit;
 mod config;
@@ -165,7 +166,7 @@ fn main() -> Result<()> {
     }
 
     applog::init(cli.console);
-    log::info!("synththing v{} starting", env!("CARGO_PKG_VERSION"));
+    log::info!("synththing v{} starting", build_info::describe());
 
     let sample_rate = 44_100u32;
 
@@ -239,7 +240,10 @@ fn main() -> Result<()> {
         height: 256,
     };
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1100.0, 750.0]).with_icon(icon),
+        viewport: egui::ViewportBuilder::default()
+            .with_title(build_info::window_title())
+            .with_inner_size([1100.0, 750.0])
+            .with_icon(icon),
         ..Default::default()
     };
     eframe::run_native(

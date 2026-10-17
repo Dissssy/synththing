@@ -124,7 +124,7 @@ impl Downloader {
 }
 
 fn user_agent() -> String {
-    format!("synththing/{}", env!("CARGO_PKG_VERSION"))
+    format!("synththing/{}", crate::build_info::VERSION)
 }
 
 fn download(progress: &Downloader) -> Result<PathBuf> {

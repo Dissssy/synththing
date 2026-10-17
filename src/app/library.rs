@@ -2144,7 +2144,7 @@ impl App {
             tags: library::parse_tags(&draft.tags),
             author_name: draft.author_name.trim().to_string(),
             source,
-            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            app_version: crate::build_info::VERSION.to_string(),
             min_app_version,
             slug,
             remix_of: draft.remix.as_ref().map(|(original, _)| library::RemixOf {

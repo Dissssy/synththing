@@ -29,7 +29,7 @@ pub(super) fn how_run() -> &'static str {
 
 /// The version running, the newest release, and how it's run.
 pub(super) fn check() -> ServerVersion {
-    let current = env!("CARGO_PKG_VERSION").to_string();
+    let current = crate::build_info::VERSION.to_string();
     let (latest, error) = match updater::latest_release() {
         Ok(release) => (Some(release.version.to_string()), None),
         Err(e) => (None, Some(format!("{e:#}"))),

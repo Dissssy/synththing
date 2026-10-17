@@ -42,16 +42,16 @@ Decision: **branch builds get an install of their own** (exe and config folder),
 Builds from CI report a version that sorts correctly against releases, so the updater and the script library's `runs_on` (`src/library/mod.rs`) need no special cases:
 
 - **Nightly**: the next patch version as a semver prerelease, numbered by commits since the last release tag: `0.7.1-nightly.<N>`, with N from `git rev-list --count v0.7.0..HEAD` (the checkout needs `fetch-depth: 0`). Semver puts `0.7.0 < 0.7.1-nightly.3 < 0.7.1-nightly.9 < 0.8.0`. On master, N also says whether a build is before or after a given commit. This assumes master is never force-pushed (a rewrite reuses numbers).
-- **Branch builds**: `0.7.1-<branch>.<short hash>`, for display only.
+- **Branch builds**: `0.7.1-branch.<N>`, numbered the same way. The branch's name isn't in the version (a name like `0123` would make it invalid semver); it's the channel.
 - **Local builds**: the plain Cargo.toml version, as now.
 
-`build.rs` stamps the version and commit hash from environment variables the workflows set. The build is shown in the title bar and the About box ("youtube · abc1234"), so screenshots and bug reports say which build they came from.
+`build.rs` stamps the version, the channel and the commit from environment variables the workflows set: `SYNTHTHING_CHANNEL` (`nightly` or `branch-<name>`), `SYNTHTHING_BUILD_NUMBER` (N) and `SYNTHTHING_COMMIT`. A channel without a build number, or a channel it doesn't know, fails the build. `src/build_info.rs` reports them. The window title, the About line, the log and `--version` say which build it is ("synththing (youtube, abc1234)"), so screenshots and bug reports do too. The changelog still goes by Cargo.toml's version: it's about releases.
 
 ### Script library and nightly builds
 
-`API_SINCE` already gives a new Lua function the version it will ship in (the next release, see docs/RELEASING.md). A script using it needs, say, `0.8.0`, and every `0.7.1-nightly.N` sorts below that, so nightly users don't get it from the library until the release: nobody is offered a script their build can't run. Bundled scripts are compiled into the exe, so canary users get the newest ones anyway.
+`API_SINCE` already gives a new Lua function the version it will ship in (the next release, see docs/RELEASING.md), so a script using it needs, say, `0.8.0`. Every `0.7.1-nightly.N` sorts below that, but the library doesn't compare scripts against the app's version directly: it uses `supported_version()` (`src/library/mod.rs`), which for a build ahead of its version number is the newest version in its `API_SINCE` and `OPTION_SINCE`. So a canary build that has `0.8.0` functions already sees scripts that need `0.8.0`, from the library too.
 
-Accepted gap: a script someone publishes from a canary build using a brand-new function isn't visible to other canary users until the release. Sharing the `.lua` file directly covers that.
+The catch: a script using a function added after that canary's commit (also `0.8.0`) is offered to it as well, and fails when it calls the function. Updating canary fixes it. Accepted, as is sharing `.lua` files directly for anything else. Bundled scripts are compiled into the exe, so canary users get the newest ones regardless.
 
 The existing workflows already handle the release side: `scripts.yml` skips scripts using functions the newest release doesn't know, and `release.yml`'s `scripts` job publishes them with the new release, which works out their minimum versions.
 

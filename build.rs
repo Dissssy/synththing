@@ -14,6 +14,10 @@
 //! `assets/synththing-icon.svg`: `$OUT_DIR/synththing.ico`, embedded in the
 //! Windows exe, `$OUT_DIR/icon_256.rgba` for the window (`main.rs`) and
 //! `$OUT_DIR/icon_32.rgba` for the tray (`tray.rs`).
+//!
+//! And stamps the build (`src/build_info.rs`): `SYNTHTHING_VERSION`,
+//! `SYNTHTHING_CHANNEL` and `SYNTHTHING_COMMIT`, from what CI sets for a
+//! canary or branch build (`stamp_build` below).
 
 use std::env;
 use std::fmt::Write as _;
@@ -61,6 +65,49 @@ fn main() {
 
     generate_reference(&manifest_dir, &out_dir);
     generate_icon(&manifest_dir, &out_dir);
+    stamp_build();
+}
+
+// --- build stamp ---------------------------------------------------------
+
+/// The version, channel and commit `src/build_info.rs` reports, from what
+/// CI sets (docs/design/release-channels.md):
+///
+/// - `SYNTHTHING_CHANNEL`: `nightly`, or `branch-<name>`. Unset (or
+///   `stable`): a release, or a build made anywhere else, which is
+///   Cargo.toml's version.
+/// - `SYNTHTHING_BUILD_NUMBER`: for a canary or branch build, the commits
+///   since the release tag. The version is then the next patch version as
+///   a prerelease, `0.7.1-nightly.12` or `0.7.1-branch.3`: after the release
+///   it's built on, before the next.
+/// - `SYNTHTHING_COMMIT`: the commit it's built from, if known.
+fn stamp_build() {
+    for var in ["SYNTHTHING_CHANNEL", "SYNTHTHING_BUILD_NUMBER", "SYNTHTHING_COMMIT"] {
+        println!("cargo:rerun-if-env-changed={var}");
+    }
+    let package = env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION not set");
+    let channel = env::var("SYNTHTHING_CHANNEL").unwrap_or_default();
+    let channel = if channel.is_empty() { "stable".to_string() } else { channel };
+    let version = if channel == "stable" {
+        package
+    } else {
+        let kind = match channel.as_str() {
+            "nightly" => "nightly",
+            c if c.strip_prefix("branch-").is_some_and(|name| !name.is_empty()) => "branch",
+            c => panic!("SYNTHTHING_CHANNEL is {c:?}: it's nightly, branch-<name> or stable"),
+        };
+        let number: u64 = env::var("SYNTHTHING_BUILD_NUMBER")
+            .ok()
+            .and_then(|n| n.trim().parse().ok())
+            .unwrap_or_else(|| panic!("a {channel} build needs SYNTHTHING_BUILD_NUMBER (commits since the release)"));
+        let parts: Vec<u64> = package.split('.').map(|p| p.parse().expect("Cargo.toml version is plain x.y.z")).collect();
+        let [major, minor, patch] = parts[..] else { panic!("Cargo.toml version is plain x.y.z") };
+        format!("{major}.{minor}.{}-{kind}.{number}", patch + 1)
+    };
+    let commit = env::var("SYNTHTHING_COMMIT").unwrap_or_default();
+    println!("cargo:rustc-env=SYNTHTHING_VERSION={version}");
+    println!("cargo:rustc-env=SYNTHTHING_CHANNEL={channel}");
+    println!("cargo:rustc-env=SYNTHTHING_COMMIT={}", commit.trim());
 }
 
 // --- app icon ------------------------------------------------------------
