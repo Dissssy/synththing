@@ -87,8 +87,8 @@ fn download(exe: &str, url: &str, dir: &Path, ffmpeg: Option<&Path>, playlist: b
         .arg(if playlist { "--yes-playlist" } else { "--no-playlist" })
         .arg("--download-archive").arg(dir.join(".youtube-downloads.txt"))
         .args(["--output", "%(title).160B [%(id)s].%(ext)s"]);
-    if let Some(path) = ffmpeg { cmd.arg("--ffmpeg-location").arg(path); }
-    let output = cmd.arg("--").arg(url)
+    // ffmpeg::find() may return the bare name "ffmpeg" from PATH. yt-dlp\n    // interprets --ffmpeg-location as a filesystem path, not a PATH command.\n    // Let yt-dlp discover PATH binaries itself in that case.\n    if let Some(path) = ffmpeg.filter(|path| path.is_absolute() && path.is_file()) {\n        cmd.arg("--ffmpeg-location").arg(path);\n    }
+    // Deno is enabled by default in yt-dlp; allow the EJS solver to be\n    // retrieved when the installed yt-dlp lacks bundled challenge scripts.\n    cmd.args(["--remote-components", "ejs:github"]);\n    let output = cmd.arg("--").arg(url)
         .stdout(Stdio::piped()).stderr(Stdio::piped()).output()
         .map_err(|e| format!("Couldn't start yt-dlp: {e}"))?;
     if !output.status.success() {
@@ -195,7 +195,7 @@ impl App {
                 }
             });
             if self.youtube.busy { ui.spinner(); ui.weak("Working..."); }
-            if let Some(error) = &self.youtube.error { ui.colored_label(ui.visuals().error_fg_color, error); }
+            if let Some(error) = &self.youtube.error {\n                ui.colored_label(ui.visuals().error_fg_color, error);\n                if error.contains("Sign in to confirm") || error.contains("not a bot") {\n                    ui.weak("YouTube requested authentication. Test yt-dlp with your own browser cookies; this experimental UI does not yet support cookie import.");\n                }\n            }
             egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                 for item in &self.youtube.items {
                     ui.horizontal(|ui| {
