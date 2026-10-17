@@ -9,6 +9,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Fixed
 - `.m4a` files (AAC) play; they failed with "The format of the data has not been recognized".
+- Settings saved by a different build that this one can't read are kept, renamed to `soundfonts.json.unreadable-...` in the config folder, instead of being replaced by the defaults. The same goes for the library identity's key and its rotation records, which used to be replaced by a new identity.
 
 ## 0.7.0 (2026-10-09)
 

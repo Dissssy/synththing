@@ -250,6 +250,9 @@ impl Config {
         Self::file_path().is_ok_and(|path| path.exists())
     }
 
+    /// The saved config, or the defaults if there's none or it can't be
+    /// read. Changes nothing on disk: for commands that never save it. The
+    /// app itself loads with `load_for_app`.
     pub fn load() -> Result<Self> {
         let path = Self::file_path()?;
         if !path.exists() {
@@ -258,6 +261,13 @@ impl Config {
         let data = fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
         Ok(serde_json::from_str(&data).unwrap_or_default())
+    }
+
+    /// The saved config, for the app, which saves it as it goes: one it
+    /// can't read is moved aside first (`read_json_or_set_aside`), so the
+    /// defaults it starts from aren't saved over it.
+    pub fn load_for_app() -> Result<Self> {
+        Ok(read_json_or_set_aside(&Self::file_path()?)?.unwrap_or_default())
     }
 
     pub fn preload_expiry(&self) -> std::time::Duration {
@@ -358,6 +368,42 @@ pub fn default_recordings_dir() -> PathBuf {
     base.join("synththing")
 }
 
+/// A JSON file synththing keeps, as `T`: `None` if it isn't there, or if
+/// it can't be read as `T` (written by a build that stores it differently,
+/// a branch build say). Such a file is first moved aside, to
+/// `<name>.unreadable-<unix time>` next to it, so whatever the caller uses
+/// instead and saves doesn't overwrite it: it can be recovered, or read
+/// again by the build that wrote it. Errors only when it can't be read at
+/// all, or can't be moved aside.
+pub fn read_json_or_set_aside<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+    let data = match fs::read_to_string(path) {
+        Ok(data) => data,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let error = match serde_json::from_str(&data) {
+        Ok(value) => return Ok(Some(value)),
+        Err(e) => e,
+    };
+    let aside = set_aside(path).with_context(|| format!("{} can't be read ({error})", path.display()))?;
+    log::warn!("{} couldn't be read ({error}); moved to {} and starting without it", path.display(), aside.display());
+    Ok(None)
+}
+
+/// Move a file synththing can't read out of the way, to
+/// `<name>.unreadable-<unix time>` next to it, before something new is
+/// saved in its place. Returns where it went.
+pub fn set_aside(path: &Path) -> Result<PathBuf> {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".unreadable-{secs}"));
+    let aside = path.with_file_name(name);
+    fs::rename(path, &aside).with_context(|| format!("moving {} aside", path.display()))?;
+    Ok(aside)
+}
+
 /// Where saved playlists live, one JSON file each.
 pub fn playlists_dir() -> Result<PathBuf> {
     Ok(config_dir()?.join("playlists"))
@@ -396,5 +442,32 @@ mod tests {
         assert!(config.session.volume.is_none() && config.session.script.is_none());
         let partial: Config = serde_json::from_str(r#"{ "remember": { "speed": true } }"#).unwrap();
         assert!(partial.remember.speed && partial.remember.volume, "left out: the default");
+    }
+
+    /// A file that can't be read is moved aside rather than left to be
+    /// saved over; a readable or missing one is left alone.
+    #[test]
+    fn unreadable_files_are_moved_aside() {
+        let dir = std::env::temp_dir().join(format!("synththing-set-aside-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("soundfonts.json");
+
+        assert!(read_json_or_set_aside::<Config>(&path).unwrap().is_none(), "missing");
+
+        fs::write(&path, r#"{ "soundfonts": ["a.sf2"] }"#).unwrap();
+        let config = read_json_or_set_aside::<Config>(&path).unwrap().unwrap();
+        assert_eq!(config.soundfonts, [PathBuf::from("a.sf2")]);
+        assert!(path.exists(), "a readable file stays");
+
+        // From a build where `soundfonts` is something else.
+        fs::write(&path, r#"{ "soundfonts": { "list": [] } }"#).unwrap();
+        assert!(read_json_or_set_aside::<Config>(&path).unwrap().is_none());
+        assert!(!path.exists(), "moved aside");
+        let aside: Vec<_> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(aside.len(), 1);
+        assert!(aside[0].starts_with("soundfonts.json.unreadable-"), "{aside:?}");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

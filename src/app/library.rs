@@ -2213,6 +2213,14 @@ impl App {
 
     pub(super) fn ensure_identity(&mut self) -> Result<Identity, String> {
         if self.library.identity.is_none() {
+            // A key file that's there but couldn't be read (kept differently
+            // by another build) is moved aside, not replaced.
+            if let Some(path) = Identity::path().filter(|p| p.exists())
+                && Identity::load().is_none()
+            {
+                let aside = crate::config::set_aside(&path).map_err(|e| format!("{e:#}"))?;
+                log::warn!("{} couldn't be read; moved to {}", path.display(), aside.display());
+            }
             let identity = Identity::generate()?;
             identity.save()?;
             log::info!("made the library identity #{}", identity.id());

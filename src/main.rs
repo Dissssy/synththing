@@ -217,7 +217,7 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow!("could not start the render thread: {e}"))?;
 
     let ran_before = Config::exists();
-    let mut config = Config::load()?;
+    let mut config = Config::load_for_app()?;
     config.soundfonts.sort();
 
     let mut app = App::new(command_tx, shared, config, tap, sample_rate, preview_output);

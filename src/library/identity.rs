@@ -54,11 +54,15 @@ fn rotations_path() -> Option<PathBuf> {
 }
 
 /// The records of how the saved identity came to be its key (oldest
-/// first; none for a key that was never replaced).
+/// first; none for a key that was never replaced). A file that can't be
+/// read is moved aside (`config::read_json_or_set_aside`), so saving the
+/// next rotation doesn't overwrite it.
 pub fn load_rotations() -> Vec<Rotation> {
     rotations_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|text| serde_json::from_str(&text).ok())
+        .and_then(|p| crate::config::read_json_or_set_aside(&p).unwrap_or_else(|e| {
+            log::warn!("{e:#}");
+            None
+        }))
         .unwrap_or_default()
 }
 
