@@ -6,7 +6,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Added
 - Canary updates (Preferences > General): the newest build from master, minutes after every change, and releases once they're out. For trying new things early; it can be broken. Test builds name themselves in the title bar.
-- Branch builds (Help > Check for updates > Branch builds): try a feature before it's merged. Each installs separately, starting with a copy of your settings, and follows its branch; your usual synththing isn't touched. Their online features are off.
+- Branch builds (Help > Check for updates > Branch builds): try a feature before it's merged. Each installs separately, starting with a copy of your settings (take a fresh one from its Help > Check for updates), and follows its branch; your usual synththing isn't touched. Their online features are off.
 - More audio files play: Opus (`.opus`, and `.ogg` files holding Opus), Apple Lossless `.m4a`, AIFF, CAF, Matroska audio (`.mka`), MP2, WMA, AC3 and ADPCM WAVs. Anything synththing can't decode itself goes through ffmpeg, the same one recording uses. Their length, tags and codec show in the song info too.
 
 ### Changed

@@ -184,8 +184,16 @@ fn main() -> Result<()> {
         }
     };
 
+    // (Only now, with any app it replaces closed.)
+    let recopied = channels::recopy_settings_if_asked();
+
     applog::init(cli.console);
     log::info!("synththing v{} starting", build_info::describe());
+    match recopied {
+        Some(Ok(done)) => log::info!("settings copied again: {done}"),
+        Some(Err(e)) => log::warn!("couldn't copy the settings again: {e:#}"),
+        None => {}
+    }
     match prepared {
         Some(Ok(done)) => log::info!("{done}"),
         Some(Err(e)) => log::warn!("couldn't copy the settings for this branch build: {e:#}"),

@@ -207,6 +207,9 @@ pub struct App {
     /// Branch builds: GitHub's list, and installing one (in the Updates
     /// window).
     branches: crate::channels::Branches,
+    /// In a branch build's Updates window: asking before copying the
+    /// stable settings over its own.
+    confirm_recopy: bool,
     /// The startup update check is running: show its result only if it
     /// finds something new (and not a skipped version).
     launch_update_check: bool,
@@ -473,6 +476,7 @@ impl App {
             updater: Updater::new(),
             updates_open: false,
             branches: crate::channels::Branches::default(),
+            confirm_recopy: false,
             launch_update_check: false,
             log_open: false,
             log_min_level: log::Level::Info,
@@ -1742,6 +1746,9 @@ impl App {
             if branch.is_none() {
                 ui.add_space(8.0);
                 self.branch_builds_ui(ui);
+            } else {
+                ui.add_space(8.0);
+                self.recopy_settings_ui(ui);
             }
             // Every state but Available has its own way out above, so a
             // plain Close for the rest. (A download carries on in the
@@ -1759,6 +1766,38 @@ impl App {
         if close || response.should_close() {
             self.updates_open = false;
         }
+    }
+
+    /// In a branch build's Updates window: start its settings over from a
+    /// copy of the usual synththing's, for a tester who's changed something
+    /// there since. Takes a restart.
+    fn recopy_settings_ui(&mut self, ui: &mut egui::Ui) {
+        if !self.confirm_recopy {
+            if ui
+                .button("Copy settings from your usual synththing again...")
+                .on_hover_text("This build's settings started as a copy of them; take a fresh copy")
+                .clicked()
+            {
+                self.confirm_recopy = true;
+            }
+            return;
+        }
+        ui.label(
+            "Copy your usual synththing's settings over this build's, and restart it? Scripts and other files only \
+             this build has are kept.",
+        );
+        ui.horizontal(|ui| {
+            if ui.button("Copy and restart").clicked() {
+                self.confirm_recopy = false;
+                match crate::channels::recopy_settings_on_restart().and_then(|()| updater::relaunch()) {
+                    Ok(()) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
+                    Err(e) => self.status = format!("Couldn't copy the settings: {e:#}"),
+                }
+            }
+            if ui.button("Cancel").clicked() {
+                self.confirm_recopy = false;
+            }
+        });
     }
 
     /// The Updates window's Branch builds section: trying a feature before
