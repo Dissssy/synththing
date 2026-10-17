@@ -1,15 +1,25 @@
 //! The wordmark (`assets/synththing-wordmark.svg`) in the menu bar, drawn
 //! at the exact pixel size it's shown at, so it's sharp at any UI scale.
-//! Its purple reads on the stock themes; on a theme whose menu bar is too
-//! close to it (a custom one, say), it gets a thin black or white halo.
+//! It's in the build's accent (`build_info::ACCENT`: purple for a release,
+//! another color for canary, each branch build and local builds, like the
+//! icon). On a
+//! theme whose menu bar is too close to that (a custom one, say), it gets a
+//! thin black or white halo.
 
 use eframe::egui;
 use resvg::{tiny_skia, usvg};
 
-const WORDMARK_SVG: &[u8] = include_bytes!("../../assets/synththing-wordmark.svg");
+const WORDMARK_SVG: &str = include_str!("../../assets/synththing-wordmark.svg");
 
-/// The wordmark's purple (its fill in the SVG).
-const WORDMARK_COLOR: egui::Color32 = egui::Color32::from_rgb(0x8B, 0x6C, 0xF6);
+/// The wordmark's fill in the SVG, replaced with the build's accent.
+const SVG_COLOR: &str = "#8B6CF6";
+
+/// The build's accent, what the wordmark is drawn in.
+fn wordmark_color() -> egui::Color32 {
+    let hex = crate::build_info::ACCENT.trim_start_matches('#');
+    let channel = |i: usize| hex.get(i..i + 2).and_then(|c| u8::from_str_radix(c, 16).ok()).unwrap_or(0);
+    egui::Color32::from_rgb(channel(0), channel(2), channel(4))
+}
 
 /// Below this contrast ratio (WCAG's, 1 to 21) with the background, the
 /// wordmark gets a halo. 3:1 is the usual floor for large text and logos.
@@ -31,14 +41,15 @@ impl Wordmark {
     pub(super) fn image(&mut self, ctx: &egui::Context, height: f32, background: egui::Color32) -> Option<egui::Image<'static>> {
         if !self.parsed {
             self.parsed = true;
-            self.tree = usvg::Tree::from_data(WORDMARK_SVG, &usvg::Options::default())
+            let svg = WORDMARK_SVG.replace(SVG_COLOR, crate::build_info::ACCENT);
+            self.tree = usvg::Tree::from_data(svg.as_bytes(), &usvg::Options::default())
                 .map_err(|e| log::warn!("the wordmark couldn't be read: {e}"))
                 .ok();
         }
         let tree = self.tree.as_ref()?;
         let pixels_per_point = ctx.pixels_per_point();
         let height_px = ((height * pixels_per_point).round() as u32).clamp(8, 512);
-        let halo = (contrast(WORDMARK_COLOR, background) < MIN_CONTRAST).then(|| crate::app::on_color(background));
+        let halo = (contrast(wordmark_color(), background) < MIN_CONTRAST).then(|| crate::app::on_color(background));
         let key = (height_px, halo);
         if self.texture.as_ref().is_none_or(|(drawn, _)| *drawn != key) {
             let image = render(tree, height_px, halo, pixels_per_point);
@@ -130,21 +141,31 @@ fn contrast(a: egui::Color32, b: egui::Color32) -> f32 {
 mod tests {
     use super::*;
 
-    /// The stock themes' menu bars don't need a halo; a background close
-    /// to the purple does.
+    /// The stock themes' menu bars don't need a halo with stable's purple;
+    /// a background close to it does. (Test builds' colors get one where
+    /// they need it, a light theme with canary's yellow, say.)
     #[test]
     fn halo_only_when_hard_to_read() {
+        let purple = egui::Color32::from_rgb(0x8B, 0x6C, 0xF6);
         assert!((contrast(egui::Color32::BLACK, egui::Color32::WHITE) - 21.0).abs() < 0.01);
-        assert!(contrast(WORDMARK_COLOR, egui::Visuals::dark().panel_fill) >= MIN_CONTRAST);
-        assert!(contrast(WORDMARK_COLOR, egui::Visuals::light().panel_fill) >= MIN_CONTRAST);
-        assert!(contrast(WORDMARK_COLOR, egui::Color32::from_rgb(0x7A, 0x60, 0xD8)) < MIN_CONTRAST);
+        assert!(contrast(purple, egui::Visuals::dark().panel_fill) >= MIN_CONTRAST);
+        assert!(contrast(purple, egui::Visuals::light().panel_fill) >= MIN_CONTRAST);
+        assert!(contrast(purple, egui::Color32::from_rgb(0x7A, 0x60, 0xD8)) < MIN_CONTRAST);
+    }
+
+    /// The wordmark is drawn in the build's accent, read right.
+    #[test]
+    fn the_accent_is_read() {
+        let c = wordmark_color();
+        assert_eq!(format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b()), crate::build_info::ACCENT.to_ascii_uppercase());
+        assert!(WORDMARK_SVG.contains(SVG_COLOR), "the SVG still has the color that's replaced");
     }
 
     /// It renders at the height asked for, wider than tall, with a margin
     /// for the halo when there is one.
     #[test]
     fn renders_at_the_size_asked() {
-        let tree = usvg::Tree::from_data(WORDMARK_SVG, &usvg::Options::default()).unwrap();
+        let tree = usvg::Tree::from_data(WORDMARK_SVG.as_bytes(), &usvg::Options::default()).unwrap();
         let plain = render(&tree, 40, None, 1.0);
         assert_eq!(plain.size[1], 40);
         assert!(plain.size[0] > 100);

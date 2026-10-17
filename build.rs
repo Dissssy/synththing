@@ -17,7 +17,9 @@
 //!
 //! And stamps the build (`src/build_info.rs`): `SYNTHTHING_VERSION`,
 //! `SYNTHTHING_CHANNEL` and `SYNTHTHING_COMMIT`, from what CI sets for a
-//! canary or branch build (`stamp_build` below).
+//! canary or branch build (`stamp_build` below), and `SYNTHTHING_ACCENT`,
+//! the color the icon and the wordmark are drawn in for its channel
+//! (`accent` below).
 
 use std::env;
 use std::fmt::Write as _;
@@ -64,8 +66,9 @@ fn main() {
         .unwrap_or_else(|e| panic!("writing {}: {e}", out_path.display()));
 
     generate_reference(&manifest_dir, &out_dir);
-    generate_icon(&manifest_dir, &out_dir);
-    stamp_build();
+    let accent = accent(&stamp_build());
+    println!("cargo:rustc-env=SYNTHTHING_ACCENT={accent}");
+    generate_icon(&manifest_dir, &out_dir, &accent);
 }
 
 // --- build stamp ---------------------------------------------------------
@@ -81,7 +84,9 @@ fn main() {
 ///   a prerelease, `0.7.1-nightly.12` or `0.7.1-branch.3`: after the release
 ///   it's built on, before the next.
 /// - `SYNTHTHING_COMMIT`: the commit it's built from, if known.
-fn stamp_build() {
+///
+/// Returns the channel (`stable`, `nightly`, `branch-<name>`).
+fn stamp_build() -> String {
     for var in ["SYNTHTHING_CHANNEL", "SYNTHTHING_BUILD_NUMBER", "SYNTHTHING_COMMIT"] {
         println!("cargo:rerun-if-env-changed={var}");
     }
@@ -108,6 +113,58 @@ fn stamp_build() {
     println!("cargo:rustc-env=SYNTHTHING_VERSION={version}");
     println!("cargo:rustc-env=SYNTHTHING_CHANNEL={channel}");
     println!("cargo:rustc-env=SYNTHTHING_COMMIT={}", commit.trim());
+    channel
+}
+
+/// The color a build's icon and wordmark are drawn in, so which build is
+/// which shows at a glance (in the taskbar, the tray, the menu bar): the
+/// purple for a release, canary yellow for canary, and for a branch build a
+/// hue of its own, from its name (it keeps it through its updates), at
+/// stable's saturation and brightness, never near the other two. Built
+/// anywhere but GitHub Actions (which sets `GITHUB_ACTIONS`), off-white,
+/// whatever the channel: a local build, debug or release, never passes for
+/// one users get.
+fn accent(channel: &str) -> String {
+    println!("cargo:rerun-if-env-changed=GITHUB_ACTIONS");
+    if env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+        return "#E6E1D6".to_string();
+    }
+    match channel {
+        "stable" => STABLE_ACCENT.to_string(),
+        "nightly" => "#F2C230".to_string(),
+        branch => {
+            // FNV-1a, so a branch's color is the same from any toolchain.
+            let hash = branch.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+            // The hues, leaving out canary's yellow (30-60) and stable's
+            // purple (230-280): 280 to pick from.
+            let pick = (hash % 280) as f32;
+            let hue = if pick < 30.0 {
+                pick
+            } else if pick < 200.0 {
+                pick + 30.0
+            } else {
+                pick + 80.0
+            };
+            hsv_hex(hue, 0.6, 0.96)
+        }
+    }
+}
+
+/// `#RRGGBB` for a hue (degrees), saturation and value (0 to 1).
+fn hsv_hex(hue: f32, saturation: f32, value: f32) -> String {
+    let c = value * saturation;
+    let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match (hue / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = value - c;
+    let byte = |v: f32| ((v + m) * 255.0).round() as u8;
+    format!("#{:02X}{:02X}{:02X}", byte(r), byte(g), byte(b))
 }
 
 // --- app icon ------------------------------------------------------------
@@ -116,10 +173,17 @@ fn stamp_build() {
 /// taskbar, Explorer's views and Alt+Tab, at every display scale.
 const ICON_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
 
-fn generate_icon(manifest_dir: &str, out_dir: &str) {
+/// The purple in the icon and wordmark SVGs: what `accent` replaces.
+const STABLE_ACCENT: &str = "#8B6CF6";
+
+/// The icon and the wordmark in `accent` (`#RRGGBB`) instead of their
+/// purple.
+fn generate_icon(manifest_dir: &str, out_dir: &str, accent: &str) {
     let svg_path = Path::new(manifest_dir).join("assets").join("synththing-icon.svg");
     println!("cargo:rerun-if-changed=assets/synththing-icon.svg");
-    let svg = fs::read(&svg_path).unwrap_or_else(|e| panic!("reading {}: {e}", svg_path.display()));
+    let svg = fs::read_to_string(&svg_path).unwrap_or_else(|e| panic!("reading {}: {e}", svg_path.display()));
+    assert!(svg.contains(STABLE_ACCENT), "{} has no {STABLE_ACCENT} to recolor", svg_path.display());
+    let svg = svg.replace(STABLE_ACCENT, accent).into_bytes();
     let tree = resvg::usvg::Tree::from_data(&svg, &resvg::usvg::Options::default())
         .unwrap_or_else(|e| panic!("{}: {e}", svg_path.display()));
 
