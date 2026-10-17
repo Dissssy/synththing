@@ -409,7 +409,11 @@ pub fn install_now(release: &Release) -> Result<()> {
 /// then closes this instance.
 pub fn relaunch() -> Result<()> {
     let exe = std::env::current_exe()?;
-    std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn()?;
+    // (It waits for this one to close: `instance.rs`.)
+    std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .env(crate::instance::RELAUNCH_VAR, "1")
+        .spawn()?;
     Ok(())
 }
 

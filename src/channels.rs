@@ -173,7 +173,7 @@ pub fn launch(channel: &str) -> Result<()> {
     let exe = exe_path(channel)?;
     let dir = channel_dir(channel)?;
     let mut command = std::process::Command::new(&exe);
-    command.current_dir(&dir);
+    command.current_dir(&dir).env_remove(crate::instance::RELAUNCH_VAR);
     if crate::config::config_dir_override().is_some() {
         command.env(crate::config::CONFIG_DIR_VAR, dir.join("config"));
     } else {
