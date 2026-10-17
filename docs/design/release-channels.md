@@ -96,7 +96,7 @@ With `--config-dir` (test runs), branch builds install into `channels/` inside t
 
 ### Single-instance lock
 
-There isn't one yet (it was planned, never built): two copies of the same install can run at once and both save the same config. When it's built, it's per install, keyed on the config folder: stable and a branch build can run side by side, two copies of the same one can't.
+Per install, keyed on the config folder (`instance.rs`, #5): stable and a branch build run side by side, two copies of the same one can't. The app holds an exclusive lock on `synththing.lock` in its config folder (let go however it ends); a second launch finds it locked, leaves a `show-request` file and exits, and the running app, which checks for it a few times a second, brings its window back.
 
 ### Workflow example: the `youtube` branch
 

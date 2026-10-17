@@ -354,6 +354,9 @@ pub struct App {
     /// The notification-area icon (Windows; `None` elsewhere, or if it
     /// couldn't be made).
     tray: Option<crate::tray::Tray>,
+    /// Raised when synththing is launched again for this config folder
+    /// (`instance.rs`): the window comes back.
+    second_launch: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// The mini player, what clicking the tray icon shows.
     tray_panel: tray_panel::TrayPanel,
     /// The window's hidden in the tray.
@@ -538,6 +541,7 @@ impl App {
             recording: recording::Recording::new(),
             wordmark: branding::Wordmark::default(),
             tray: None,
+            second_launch: None,
             tray_panel: tray_panel::TrayPanel::new(picture),
             hidden: false,
             quitting: false,
@@ -2463,6 +2467,11 @@ impl App {
         self.tray = crate::tray::Tray::new(ctx);
     }
 
+    /// Watch `flag`, raised when synththing is launched again here.
+    pub fn listen_for_second_launch(&mut self, flag: Arc<std::sync::atomic::AtomicBool>) {
+        self.second_launch = Some(flag);
+    }
+
     /// Clicks on the tray icon since last frame, and what was clicked in
     /// the tray panel.
     fn handle_tray(&mut self, ctx: &egui::Context, view: &EngineView) {
@@ -3554,6 +3563,10 @@ impl eframe::App for App {
         }
         let view = self.shared.lock().unwrap().view.clone();
         self.handle_tray(ctx, &view);
+        if self.second_launch.as_ref().is_some_and(|f| f.swap(false, std::sync::atomic::Ordering::Relaxed)) {
+            log::info!("launched again: showing the window");
+            self.show_window(ctx);
+        }
         self.sync_script_song(&view);
         self.poll_loads();
         self.refresh_changed_folders(ctx);

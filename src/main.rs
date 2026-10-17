@@ -11,6 +11,7 @@ mod changelog;
 mod channels;
 mod cli;
 mod headless;
+mod instance;
 mod applog;
 mod build_info;
 mod audio;
@@ -169,6 +170,20 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // One app per config folder: a second launch brings the first one's
+    // window back instead (before the log, which the first one is writing).
+    let instance = match instance::claim() {
+        Ok(instance::Claim::First(guard)) => Some(guard),
+        Ok(instance::Claim::Running) => {
+            println!("synththing is already running here: brought its window to the front.");
+            return Ok(());
+        }
+        Err(e) => {
+            eprintln!("couldn't check for another synththing running ({e:#}); starting anyway");
+            None
+        }
+    };
+
     applog::init(cli.console);
     log::info!("synththing v{} starting", build_info::describe());
     match prepared {
@@ -261,6 +276,9 @@ fn main() -> Result<()> {
         Box::new(|cc| {
             app::install_fonts(&cc.egui_ctx);
             app.attach_tray(&cc.egui_ctx);
+            if let Some(guard) = &instance {
+                app.listen_for_second_launch(guard.listen(&cc.egui_ctx));
+            }
             Ok(Box::new(app))
         }),
     )

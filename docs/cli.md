@@ -13,6 +13,8 @@ synththing [--visualizer] [--console] [--config-dir DIR]
 - `--visualizer` (or `--viz`): open with the Visualizer tab showing.
 - `--console`: also print the app's log (what Help > Log... shows: script errors, warnings, panics) to the terminal as it happens. Handy for watching a release build, which otherwise has no console (see below).
 - `--config-dir DIR`: keep everything (preferences, scripts, soundfonts, playlists, the library identity, the log) in DIR instead of the usual config folder, made if it isn't there. For trying a test build without touching your real setup. It works with every command (`synththing --config-dir DIR serve` keeps the server's data in `DIR/server` by default, say), and so does the `SYNTHTHING_CONFIG_DIR` environment variable. Branch builds installed from Help > Check for updates go in `DIR/channels` then, each started with its own config folder there, so nothing outside DIR is touched.
+
+Only one app runs per config folder: starting it again while it's open brings the open one's window to the front and exits (the new launch's options, like `--visualizer`, aren't passed on). A different `--config-dir` runs alongside. The commands below don't count.
 - `--version` / `-V`: print the version.
 - `--help` / `-h`: print help. `synththing help run-script` (or `synththing run-script --help`) for a command's options.
 

@@ -9,6 +9,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Branch builds (Help > Check for updates > Branch builds): try a feature before it's merged. Each installs separately, starting with a copy of your settings, and follows its branch; your usual synththing isn't touched. Their online features are off.
 - More audio files play: Opus (`.opus`, and `.ogg` files holding Opus), Apple Lossless `.m4a`, AIFF, CAF, Matroska audio (`.mka`), MP2, WMA, AC3 and ADPCM WAVs. Anything synththing can't decode itself goes through ffmpeg, the same one recording uses. Their length, tags and codec show in the song info too.
 
+### Changed
+- Opening synththing while it's already running brings the running one to the front (out of the tray too) instead of starting a second copy, which would save over the first one's settings. A branch build and your usual synththing still run side by side.
+
 ### Fixed
 - `.m4a` files (AAC) play; they failed with "The format of the data has not been recognized".
 - Settings saved by a different build that this one can't read are no longer replaced by the defaults. Whatever can still be read is kept (a layout with a tab this build doesn't have costs just the layout), the whole file is saved beside it as `soundfonts.json.unreadable-...`, and synththing says so when it starts. The library identity's key and its rotation records are kept the same way; the key used to be replaced by a new identity.
