@@ -28,6 +28,9 @@ pub struct Config {
     /// the working directory.
     #[serde(default)]
     pub browse_dir: Option<PathBuf>,
+    /// Experimental YouTube search/download UI (opt-in).
+    #[serde(default)]
+    pub youtube_experimental: bool,
     /// The dock layout, which sections are open and how they're arranged.
     /// Remembered so the app reopens the way you left it; `None` (first
     /// launch) means `layout::default_layout()`.
