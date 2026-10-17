@@ -362,6 +362,9 @@ pub struct App {
     quitting: bool,
     /// A question closing asks first (the first close; a recording on).
     close_prompt: Option<close::ClosePrompt>,
+    /// Settings files that couldn't be read and were set aside
+    /// (`config::set_aside_notices`), until the user's seen them.
+    set_aside: Vec<(String, PathBuf)>,
     /// Close (or hide) once the background render finishes.
     close_after_render: Option<close::CloseAction>,
     /// The mini player's picture, for the first close's question.
@@ -539,6 +542,7 @@ impl App {
             hidden: false,
             quitting: false,
             close_prompt: None,
+            set_aside: Vec::new(),
             close_after_render: None,
             tray_picture: None,
             last_recording: None,
@@ -594,6 +598,39 @@ impl App {
             if let Err(e) = self.config.save() {
                 log::warn!("couldn't save the config: {e:#}");
             }
+        }
+    }
+
+    /// Settings files that couldn't be read and were set aside (at launch,
+    /// or later for ones read later): what happened, and where the old file
+    /// is.
+    fn set_aside_ui(&mut self, ctx: &egui::Context) {
+        self.set_aside.extend(crate::config::set_aside_notices());
+        if self.set_aside.is_empty() {
+            return;
+        }
+        let mut close = false;
+        let response = egui::Modal::new(egui::Id::new("set_aside")).show(ctx, |ui| {
+            ui.set_width(480.0);
+            ui.heading("Some settings couldn't be read");
+            ui.add_space(4.0);
+            for (note, kept) in &self.set_aside {
+                ui.label(note);
+                if ui.small_button("Show it").on_hover_text(kept.display().to_string()).clicked() {
+                    open_in_file_manager(kept);
+                }
+                ui.add_space(4.0);
+            }
+            ui.weak("Nothing was deleted: the build that saved it can still read the kept copy.");
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("OK").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if close || response.should_close() {
+            self.set_aside.clear();
         }
     }
 
@@ -2140,6 +2177,7 @@ impl App {
             || self.heavy_prompt.is_some()
             || self.sprite.new_sprite.is_some()
             || self.close_prompt.is_some()
+            || !self.set_aside.is_empty()
     }
 
     /// Pick up files added, removed or changed on disk in the folders on
@@ -3455,6 +3493,7 @@ impl eframe::App for App {
             self.rename_ui(&ctx);
             self.credits_ui(&ctx);
             self.changelog_ui(&ctx);
+            self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
             self.song_info_ui(&ctx);
             self.history_ui(&ctx);
