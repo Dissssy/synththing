@@ -83,7 +83,7 @@ fn download(exe: &str, url: &str, dir: &Path, ffmpeg: Option<&Path>, playlist: b
     // The video ID makes names stable and avoids accidental overwrites.
     let mut cmd = command(exe);
     cmd.args(["--ignore-config", "--no-overwrites", "--restrict-filenames",
-        "--extract-audio", "--format", "bestaudio/best", "--print", "after_move:filepath",
+        "--extract-audio", "--format", "bestaudio/best", "--write-info-json", "--print", "after_move:filepath",
         "--paths"]).arg(dir)
         .arg(if playlist { "--yes-playlist" } else { "--no-playlist" })
         .arg("--download-archive").arg(dir.join(".youtube-downloads.txt"))
@@ -224,4 +224,24 @@ fn is_youtube_url(input: &str) -> bool {
     let authority = url.1.split('/').next().unwrap_or("").split('?').next().unwrap_or("");
     let host = authority.rsplit('@').next().unwrap_or("").split(':').next().unwrap_or("");
     matches!(host, "youtube.com" | "www.youtube.com" | "music.youtube.com" | "youtu.be" | "www.youtu.be")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_youtube_url;
+
+    #[test]
+    fn accepts_video_playlist_and_music_links() {
+        assert!(is_youtube_url("https://www.youtube.com/watch?v=abc"));
+        assert!(is_youtube_url("https://youtu.be/abc"));
+        assert!(is_youtube_url("https://music.youtube.com/playlist?list=abc"));
+    }
+
+    #[test]
+    fn rejects_other_hosts_and_schemes() {
+        assert!(!is_youtube_url("https://youtube.com.evil.invalid/watch?v=abc"));
+        assert!(!is_youtube_url("http://youtube.com/watch?v=abc"));
+        assert!(!is_youtube_url("https://evil.invalid/playlist?list=abc"));
+        assert!(!is_youtube_url("not a link"));
+    }
 }
