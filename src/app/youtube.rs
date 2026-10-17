@@ -22,7 +22,7 @@ struct Video {
 
 enum Event {
     Results(Result<Vec<Video>, String>),
-    Downloaded(Result<PathBuf, String>),
+    Downloaded(Result<Vec<PathBuf>, String>),
 }
 
 pub(super) struct YoutubeState {
@@ -78,13 +78,15 @@ fn search(exe: &str, query: &str) -> Result<Vec<Video>, String> {
     Ok(items)
 }
 
-fn download(exe: &str, url: &str, dir: &Path, ffmpeg: Option<&Path>) -> Result<PathBuf, String> {
+fn download(exe: &str, url: &str, dir: &Path, ffmpeg: Option<&Path>, playlist: bool) -> Result<Vec<PathBuf>, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     // The video ID makes names stable and avoids accidental overwrites.
     let mut cmd = command(exe);
-    cmd.args(["--ignore-config", "--no-playlist", "--no-overwrites", "--restrict-filenames",
+    cmd.args(["--ignore-config", "--no-overwrites", "--restrict-filenames",
         "--extract-audio", "--format", "bestaudio/best", "--print", "after_move:filepath",
         "--paths"]).arg(dir)
+        .arg(if playlist { "--yes-playlist" } else { "--no-playlist" })
+        .arg("--download-archive").arg(dir.join(".youtube-downloads.txt"))
         .args(["--output", "%(title).160B [%(id)s].%(ext)s"]);
     if let Some(path) = ffmpeg { cmd.arg("--ffmpeg-location").arg(path); }
     let output = cmd.arg("--").arg(url)
@@ -93,11 +95,12 @@ fn download(exe: &str, url: &str, dir: &Path, ffmpeg: Option<&Path>) -> Result<P
     if !output.status.success() {
         return Err(format!("Download failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
     }
-    let path = String::from_utf8_lossy(&output.stdout);
-    let path = path.lines().last().ok_or("yt-dlp did not report a downloaded path")?.trim();
-    let path = PathBuf::from(path);
-    if !path.is_file() { return Err("yt-dlp finished without a playable audio file".into()); }
-    Ok(path)
+    let paths: Vec<PathBuf> = String::from_utf8_lossy(&output.stdout)
+        .lines().map(str::trim).filter(|line| !line.is_empty())
+        .map(PathBuf::from).filter(|path| path.is_file()).collect();
+    // An empty result with a successful exit typically means all entries were
+    // already present in the persistent download archive.
+    Ok(paths)
 }
 
 impl App {
@@ -122,7 +125,25 @@ impl App {
         let ffmpeg = crate::ffmpeg::find();
         thread::spawn(move || {
             let url = format!("https://www.youtube.com/watch?v={}", item.id);
-            let result = download(&exe, &url, &folder, ffmpeg.as_deref());
+            let result = download(&exe, &url, &folder, ffmpeg.as_deref(), false);
+            let _ = tx.send(Event::Downloaded(result));
+        });
+    }
+
+    fn youtube_download_link(&mut self, url: String) {
+        if self.youtube.busy { return; }
+        if !is_youtube_url(&url) {
+            self.youtube.error = Some("Enter a YouTube or YouTube Music URL.".into());
+            return;
+        }
+        self.youtube.busy = true;
+        self.youtube.error = None;
+        let exe = self.youtube.yt_dlp.clone();
+        let tx = self.youtube.events.0.clone();
+        let folder = self.youtube.destination.clone().unwrap_or_else(|| self.config.browse_start_dir().join("YouTube"));
+        let ffmpeg = crate::ffmpeg::find();
+        thread::spawn(move || {
+            let result = download(&exe, &url, &folder, ffmpeg.as_deref(), true);
             let _ = tx.send(Event::Downloaded(result));
         });
     }
@@ -136,8 +157,9 @@ impl App {
                     Err(e) => self.youtube.error = Some(e),
                 },
                 Event::Downloaded(result) => match result {
-                    Ok(path) => {
-                        self.status = format!("Downloaded {}", path.display());
+                    Ok(paths) => {
+                        self.status = if paths.is_empty() { "Nothing new to download (already in download archive).".into() }
+                            else { format!("Downloaded {} track(s) to {}", paths.len(), paths[0].parent().unwrap_or(Path::new(".")).display()) };
                         self.browser.rescan();
                     },
                     Err(e) => self.youtube.error = Some(e),
@@ -147,14 +169,20 @@ impl App {
         if !self.youtube.open { return; }
         let mut open = true;
         let mut run_search = false;
+        let mut run_link = None;
         let mut download_item = None;
         egui::Modal::new(egui::Id::new("youtube_music")).show(ctx, |ui| {
             ui.set_width(600.0);
             ui.heading("Find music on YouTube (experimental)");
+            ui.weak("Search by artist/song, or paste a YouTube video or playlist URL.");
             ui.horizontal(|ui| {
                 let edit = ui.add(egui::TextEdit::singleline(&mut self.youtube.query).hint_text("Artist, song, or album").desired_width(440.0));
-                run_search = (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                    || ui.add_enabled(!self.youtube.busy, egui::Button::new("Search")).clicked();
+                let submitted = (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                    || ui.add_enabled(!self.youtube.busy, egui::Button::new("Go")).clicked();
+                if submitted {
+                    if self.youtube.query.starts_with("http") { run_link = Some(self.youtube.query.trim().to_string()); }
+                    else { run_search = true; }
+                }
             });
             ui.horizontal(|ui| {
                 ui.weak("Download folder:");
@@ -185,6 +213,15 @@ impl App {
         });
         self.youtube.open = open;
         if run_search { self.youtube_search(); }
+        if let Some(url) = run_link { self.youtube_download_link(url); }
         if let Some(item) = download_item { self.youtube_download(item); }
     }
+}
+
+fn is_youtube_url(input: &str) -> bool {
+    let Ok(url) = input.split_once("://").ok_or(()) else { return false; };
+    if url.0 != "https" { return false; }
+    let authority = url.1.split('/').next().unwrap_or("").split('?').next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or("").split(':').next().unwrap_or("");
+    matches!(host, "youtube.com" | "www.youtube.com" | "music.youtube.com" | "youtu.be" | "www.youtu.be")
 }
