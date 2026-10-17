@@ -96,21 +96,21 @@ With `--config-dir` (test runs), branch builds install into `channels/` inside t
 
 ### Single-instance lock
 
-Due for a rework regardless (it's unreliable now). For this design, the lock is per channel, keyed on the config folder: stable and a branch build can run side by side, two copies of the same channel can't.
+There isn't one yet (it was planned, never built): two copies of the same install can run at once and both save the same config. When it's built, it's per install, keyed on the config folder: stable and a branch build can run side by side, two copies of the same one can't.
 
 ### Workflow example: the `youtube` branch
 
-1. The collaborator pushes `youtube` to `Dissssy/synththing`. They need write access: workflows on a fork's PR get a read-only token and can't publish a release (otherwise a maintainer pushes the branch).
+1. The collaborator pushes `youtube` to `Dissssy/synththing` and, when it's ready to try, runs Actions > Test builds > Run workflow on it (or `gh workflow run test-builds.yml --ref youtube`). They need write access: workflows on a fork's PR get a read-only token and can't publish a release (otherwise a maintainer pushes the branch and runs it). Branch builds are manual so work in progress doesn't reach testers by accident.
 2. CI builds both platforms and publishes the `branch-youtube` prerelease, its notes listing the commits since `master`, the author and the commit.
 3. Testers open Help > Check for updates > Branch builds and press Install next to "youtube". The app installs it in its own folder with a copy of their settings and starts it. Their stable install is untouched; going back is opening the normal shortcut, and the branch build can be opened again from the same list.
-4. New pushes to `youtube` rebuild the release, and the branch install updates itself.
+4. Running the workflow on `youtube` again rebuilds the release from its newest commit, and the branch install updates itself at its next launch.
 5. When `youtube` is merged and deleted, a workflow deletes the release and tag. The branch build says so at its next launch and offers to open the usual synththing, where the branch build can be removed.
 
 ## Plan
 
 1. `Config::load`: back up a config file it can't parse instead of overwriting it.
 2. Version stamping in `build.rs` (nightly, branch, local) and the build shown in the title bar and About box.
-3. Workflows: nightly on push to master, branch builds into `branch-<name>` prereleases, deleting a branch's release when the branch is deleted.
+3. Workflows: nightly on push to master, branch builds (run by hand) into `branch-<name>` prereleases, deleting a branch's release when the branch is deleted.
 4. Updater: the channel setting, canary following the higher of nightly and the latest release, branch installs into `channels\` folders, and the "this branch is gone" check.
 5. Branch builds: online and library features off.
 6. Docs: RELEASING.md (channels, versions, the branch workflow), the changelog, and this file updated to describe what was built.

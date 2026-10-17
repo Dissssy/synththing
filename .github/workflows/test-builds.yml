@@ -1,6 +1,8 @@
 # Canary and branch test builds (docs/design/release-channels.md): every
-# push to master rebuilds the `nightly` prerelease, and every push to any
-# other branch rebuilds that branch's `branch-<name>` prerelease. Each is
+# push to master rebuilds the `nightly` prerelease. A branch's
+# `branch-<name>` prerelease is built when asked: Actions > Test builds >
+# Run workflow, picking the branch (or `gh workflow run test-builds.yml
+# --ref <branch>`), again for each update testers should get. Each is
 # one rolling release: its tag moves to the new commit and its files are
 # replaced, so only the newest build of each exists. Prereleases aren't
 # what /releases/latest (the stable updater, the server's update script)
@@ -14,7 +16,7 @@ name: Test builds
 
 on:
   push:
-    branches: ["**"]
+    branches: [master]
   workflow_dispatch:
 
 permissions:

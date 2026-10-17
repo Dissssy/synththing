@@ -32,10 +32,10 @@ cargo-release renames `## Unreleased` in `CHANGELOG.md` to the new version's hea
 
 ## Test builds
 
-Besides releases, every push builds a test build (`.github/workflows/test-builds.yml`, design in `docs/design/release-channels.md`), each one a rolling prerelease: its tag moves to the new commit and its files are replaced, so only the newest build of each exists.
+Besides releases, there are test builds (`.github/workflows/test-builds.yml`, design in `docs/design/release-channels.md`), each one a rolling prerelease: its tag moves to the new commit and its files are replaced, so only the newest build of each exists.
 
-- **master**: the `nightly` prerelease (canary), versioned `<next patch>-nightly.<commits since the release>`, e.g. `0.7.1-nightly.12`.
-- **Any other branch**: a `branch-<name>` prerelease (`mike/youtube` becomes `branch-mike-youtube`), versioned `<next patch>-branch.<N>`. Its online features are off. Pushing to a branch here needs write access to the repo; a fork's branches don't get builds.
+- **master**, on every push: the `nightly` prerelease (canary), versioned `<next patch>-nightly.<commits since the release>`, e.g. `0.7.1-nightly.12`.
+- **Any other branch**, when asked: Actions > Test builds > Run workflow, picking the branch, or `gh workflow run test-builds.yml --ref <branch>`. Run it again for each update testers should get; their branch build picks it up at its next launch. It makes a `branch-<name>` prerelease (`mike/youtube` becomes `branch-mike-youtube`), versioned `<next patch>-branch.<N>`, with its online features off. Running it needs write access to the repo, and the branch has to be in it (a fork's branches can't be built).
 
 The release's name is the build's version and its notes start with `Commit: <sha>`; the in-app updater reads both. Builds count commits from the tag of Cargo.toml's version, so a test build fails if that tag isn't there. Deleting a branch deletes its release and tag (`.github/workflows/branch-cleanup.yml`). None of this touches stable users: prereleases aren't what `/releases/latest`, the server's update script or `gh release download` without a tag see.
 
