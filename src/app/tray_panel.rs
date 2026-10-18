@@ -289,6 +289,8 @@ fn placement(cursor: [f32; 2], pixels_per_point: f32, size: egui::Vec2) -> egui:
 fn close(ctx: &egui::Context, state: &mut State) {
     state.open = false;
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+    // The main window's frames were asked for by this one's (`picture_ui`).
+    ctx.request_repaint_of(egui::ViewportId::ROOT);
 }
 
 /// Expand (grow to the left with the visualizer) or contract, keeping the
@@ -304,6 +306,8 @@ fn set_expanded(ctx: &egui::Context, state: &mut State, expanded: bool) {
     }
     set_size_limits(ctx, expanded);
     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size(expanded, width)));
+    // The main window's frames were asked for by this one's (`picture_ui`).
+    ctx.request_repaint_of(egui::ViewportId::ROOT);
 }
 
 fn panel_ui(ui: &mut egui::Ui, state: &Mutex<State>, picture: &Picture, send: &Sender<Action>) {

@@ -201,9 +201,8 @@ pub struct App {
     /// `ui` ran since the last `logic`: false while nothing's drawn (the
     /// window hidden or minimized), when what lives only on screen stops.
     ui_drawn: bool,
-    /// `ui` ran in the frame before this one (`ui_drawn`, as `logic` found
-    /// it): the window's on screen.
-    on_screen: bool,
+    /// The window's minimized (as of this frame's `logic`).
+    minimized: bool,
     /// Whether the cursor is currently confined to the window for a script.
     cursor_confined: bool,
     updater: Updater,
@@ -481,7 +480,7 @@ impl App {
             visualizer_drawn: false,
             visualizer_was_drawn: false,
             ui_drawn: false,
-            on_screen: false,
+            minimized: false,
             cursor_confined: false,
             updater: Updater::new(),
             updates_open: false,
@@ -2607,7 +2606,7 @@ impl App {
             transport: self.script_transport(),
             frozen: self.preferences_open,
             main_shows_visualizer: !self.hidden && self.visualizer_was_drawn,
-            main_on_screen: self.on_screen,
+            main_on_screen: !self.hidden && !self.minimized,
         }
     }
 
@@ -3635,10 +3634,10 @@ impl eframe::App for App {
     /// playlist goes on to its next track, loads finish and the library
     /// keeps polling either way.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
-        self.on_screen = std::mem::take(&mut self.ui_drawn);
-        if !self.on_screen {
+        if !std::mem::take(&mut self.ui_drawn) {
             self.nothing_drawn();
         }
+        self.minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
         let view = self.shared.lock().unwrap().view.clone();
         self.handle_tray(ctx, &view);
         if self.second_launch.as_ref().is_some_and(|f| f.swap(false, std::sync::atomic::Ordering::Relaxed)) {
