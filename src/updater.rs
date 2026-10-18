@@ -272,9 +272,20 @@ fn is_update(track: &Track, release: &Release) -> bool {
 }
 
 /// Every branch's test build (the `branch-<name>` prereleases), newest
-/// first.
+/// made first. Through every page of releases (a branch build made long ago,
+/// and only updated since, is listed as old), up to `MAX_PAGES`.
 pub fn branch_builds() -> Result<Vec<Release>> {
-    let all: Vec<ApiRelease> = api_get("releases?per_page=100")?.unwrap_or_default();
+    const PER_PAGE: usize = 100;
+    const MAX_PAGES: usize = 10;
+    let mut all: Vec<ApiRelease> = Vec::new();
+    for page in 1..=MAX_PAGES {
+        let batch: Vec<ApiRelease> = api_get(&format!("releases?per_page={PER_PAGE}&page={page}"))?.unwrap_or_default();
+        let last = batch.len() < PER_PAGE;
+        all.extend(batch);
+        if last {
+            break;
+        }
+    }
     Ok(all
         .into_iter()
         .filter(|r| r.prerelease && r.tag_name.starts_with("branch-"))
@@ -398,7 +409,11 @@ pub fn install_now(release: &Release) -> Result<()> {
 /// then closes this instance.
 pub fn relaunch() -> Result<()> {
     let exe = std::env::current_exe()?;
-    std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn()?;
+    // (It waits for this one to close: `instance.rs`.)
+    std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .env(crate::instance::RELAUNCH_VAR, "1")
+        .spawn()?;
     Ok(())
 }
 

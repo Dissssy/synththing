@@ -45,7 +45,7 @@ Builds from CI report a version that sorts correctly against releases, so the up
 - **Branch builds**: `0.7.1-branch.<N>`, numbered the same way. The branch's name isn't in the version (a name like `0123` would make it invalid semver); it's the channel.
 - **Local builds**: the plain Cargo.toml version, as now.
 
-`build.rs` stamps the version, the channel and the commit from environment variables the workflows set: `SYNTHTHING_CHANNEL` (`nightly` or `branch-<name>`), `SYNTHTHING_BUILD_NUMBER` (N) and `SYNTHTHING_COMMIT`. A channel without a build number, or a channel it doesn't know, fails the build. `src/build_info.rs` reports them. The window title, the About line, the log and `--version` say which build it is ("synththing (youtube, abc1234)"), so screenshots and bug reports do too. The changelog still goes by Cargo.toml's version: it's about releases.
+`build.rs` stamps the version, the channel and the commit from environment variables the workflows set: `SYNTHTHING_CHANNEL` (`nightly` or `branch-<name>`), `SYNTHTHING_BUILD_NUMBER` (N) and `SYNTHTHING_COMMIT`. A channel without a build number, or a channel it doesn't know, fails the build. `src/build_info.rs` reports them. The window title, the About line, the log and `--version` say which build it is ("synththing (youtube, abc1234)"), so screenshots and bug reports do too. The icon (window, taskbar, tray, the exe's own) and the menu bar's wordmark are drawn in the build's accent (`build.rs`, `accent`), so it shows at a glance: purple for a release, canary yellow for canary, a hue from the branch's name for a branch build (kept through its updates, never near the other two), and off-white for anything built outside GitHub Actions, debug or release, so a local build never passes for one users get. The changelog still goes by Cargo.toml's version: it's about releases.
 
 ### Script library and nightly builds
 
@@ -88,7 +88,7 @@ Each branch build gets one folder for everything, its exe and its config, so rem
 
 On Linux the same under `~/.local/share/synththing/channels/`. (Not beside the config folder: on Linux its parent is `~/.config` itself. And test installs shouldn't roam.)
 
-A branch build works out its config folder from the channel compiled into it (`config::config_dir`), not from how it's started, so it never touches the stable one however it's launched. Its settings start as a copy of the stable config when it's installed, never synced back; one started some other way (its exe downloaded from the release page) makes the copy on its first launch. Left out: the identity (branch builds are offline), logs, files set aside as unreadable, and the downloads they share instead.
+A branch build works out its config folder from the channel compiled into it (`config::config_dir`), not from how it's started, so it never touches the stable one however it's launched. Its settings start as a copy of the stable config when it's installed, never synced back; one started some other way (its exe downloaded from the release page) makes the copy on its first launch. Left out: the identity (branch builds are offline), logs, the running app's lock, files set aside as unreadable, and the downloads they share instead. A tester who's changed their usual settings since can take a fresh copy from the branch build's Updates window (Copy settings from your usual synththing again): it restarts, and the new start copies them over its own, keeping files only the branch build has.
 
 Shared (`config::shared_dir`): the downloaded ffmpeg and the starter soundfonts, which have no format of synththing's own, stay in the stable config folder and branch builds use them there. Anything a build writes in its own format (config, playlists, the song library database, the identity) stays per install, or a branch build could corrupt it for stable.
 
@@ -96,7 +96,7 @@ With `--config-dir` (test runs), branch builds install into `channels/` inside t
 
 ### Single-instance lock
 
-There isn't one yet (it was planned, never built): two copies of the same install can run at once and both save the same config. When it's built, it's per install, keyed on the config folder: stable and a branch build can run side by side, two copies of the same one can't.
+Per install, keyed on the config folder (`instance.rs`, #5): stable and a branch build run side by side, two copies of the same one can't. The app holds an exclusive lock on `synththing.lock` in its config folder (let go however it ends); a second launch finds it locked, leaves a `show-request` file and exits, and the running app, which checks for it a few times a second, brings its window back.
 
 ### Workflow example: the `youtube` branch
 

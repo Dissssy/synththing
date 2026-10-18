@@ -26,13 +26,16 @@ use crate::build_info::{self, Channel};
 use crate::updater::{self, Release};
 
 /// What isn't copied from the stable config folder into a branch build's:
-/// the library identity (branch builds are offline), logs, and downloads
-/// shared through `config::shared_dir` instead.
+/// the library identity (branch builds are offline), logs, the running
+/// app's lock (`instance.rs`: locked, it can't even be read on Windows),
+/// and downloads shared through `config::shared_dir` instead.
 const NOT_COPIED: &[&str] = &[
     "identity.key",
     "identity.rotations.json",
     "synththing.log",
     "synththing.prev.log",
+    "synththing.lock",
+    "show-request",
     "ffmpeg",
     "soundfonts",
     "server",
@@ -92,6 +95,48 @@ fn copy_settings(from: &Path, to: &Path) -> Result<String> {
     } else {
         Ok(format!("no settings at {} to copy", from.display()))
     }
+}
+
+/// Left in a branch build's folder to have its settings copied from the
+/// stable ones again at its next start (`recopy_settings_on_restart`).
+const RECOPY: &str = "recopy-settings";
+
+/// The settings a branch build copies: the stable config folder, or in a
+/// test run (`--config-dir`) the folder it was installed into
+/// (`<dir>/channels/<channel>/config`).
+fn stable_settings() -> Result<PathBuf> {
+    if crate::config::config_dir_override().is_some() {
+        let own = crate::config::config_dir()?;
+        let channels = own.parent().and_then(Path::parent);
+        if let Some(channels) = channels.filter(|c| c.file_name().is_some_and(|n| n == "channels")) {
+            return Ok(channels.parent().unwrap_or(channels).to_path_buf());
+        }
+    }
+    crate::config::stable_config_dir()
+}
+
+/// Have this branch build copy the stable settings over its own at its
+/// next start (the caller restarts it): not now, as it would save its own
+/// over them on the way out.
+pub fn recopy_settings_on_restart() -> Result<()> {
+    let dir = crate::config::config_dir()?;
+    let channel = dir.parent().ok_or_else(|| anyhow!("{} has no folder above it", dir.display()))?;
+    fs::write(channel.join(RECOPY), b"").with_context(|| format!("writing in {}", channel.display()))
+}
+
+/// At a branch build's start, once it's the only one running
+/// (`instance.rs`): if asked (`recopy_settings_on_restart`), copy the stable
+/// settings over its own. What's only in its own (a script made in it, say)
+/// stays. Returns what it did, for the log.
+pub fn recopy_settings_if_asked() -> Option<Result<String>> {
+    own_channel()?;
+    let to = crate::config::config_dir().ok()?;
+    let marker = to.parent()?.join(RECOPY);
+    if !marker.exists() {
+        return None;
+    }
+    let _ = fs::remove_file(&marker);
+    Some(stable_settings().and_then(|from| copy_settings(&from, &to)))
 }
 
 /// A branch build started without being installed by the app (its exe
@@ -173,7 +218,7 @@ pub fn launch(channel: &str) -> Result<()> {
     let exe = exe_path(channel)?;
     let dir = channel_dir(channel)?;
     let mut command = std::process::Command::new(&exe);
-    command.current_dir(&dir);
+    command.current_dir(&dir).env_remove(crate::instance::RELAUNCH_VAR);
     if crate::config::config_dir_override().is_some() {
         command.env(crate::config::CONFIG_DIR_VAR, dir.join("config"));
     } else {

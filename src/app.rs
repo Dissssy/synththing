@@ -207,6 +207,13 @@ pub struct App {
     /// Branch builds: GitHub's list, and installing one (in the Updates
     /// window).
     branches: crate::channels::Branches,
+    /// In a branch build's Updates window: asking before copying the
+    /// stable settings over its own.
+    confirm_recopy: bool,
+    /// What the last thing done in the Updates window came to (an error,
+    /// or a branch build removed), said there: the status bar is dimmed
+    /// behind it. `true`: an error.
+    updates_message: Option<(String, bool)>,
     /// The startup update check is running: show its result only if it
     /// finds something new (and not a skipped version).
     launch_update_check: bool,
@@ -354,6 +361,9 @@ pub struct App {
     /// The notification-area icon (Windows; `None` elsewhere, or if it
     /// couldn't be made).
     tray: Option<crate::tray::Tray>,
+    /// Raised when synththing is launched again for this config folder
+    /// (`instance.rs`): the window comes back.
+    second_launch: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// The mini player, what clicking the tray icon shows.
     tray_panel: tray_panel::TrayPanel,
     /// The window's hidden in the tray.
@@ -362,6 +372,9 @@ pub struct App {
     quitting: bool,
     /// A question closing asks first (the first close; a recording on).
     close_prompt: Option<close::ClosePrompt>,
+    /// Settings files that couldn't be read and were set aside
+    /// (`config::set_aside_notices`), until the user's seen them.
+    set_aside: Vec<(String, PathBuf)>,
     /// Close (or hide) once the background render finishes.
     close_after_render: Option<close::CloseAction>,
     /// The mini player's picture, for the first close's question.
@@ -467,6 +480,8 @@ impl App {
             updater: Updater::new(),
             updates_open: false,
             branches: crate::channels::Branches::default(),
+            confirm_recopy: false,
+            updates_message: None,
             launch_update_check: false,
             log_open: false,
             log_min_level: log::Level::Info,
@@ -535,10 +550,12 @@ impl App {
             recording: recording::Recording::new(),
             wordmark: branding::Wordmark::default(),
             tray: None,
+            second_launch: None,
             tray_panel: tray_panel::TrayPanel::new(picture),
             hidden: false,
             quitting: false,
             close_prompt: None,
+            set_aside: Vec::new(),
             close_after_render: None,
             tray_picture: None,
             last_recording: None,
@@ -594,6 +611,39 @@ impl App {
             if let Err(e) = self.config.save() {
                 log::warn!("couldn't save the config: {e:#}");
             }
+        }
+    }
+
+    /// Settings files that couldn't be read and were set aside (at launch,
+    /// or later for ones read later): what happened, and where the old file
+    /// is.
+    fn set_aside_ui(&mut self, ctx: &egui::Context) {
+        self.set_aside.extend(crate::config::set_aside_notices());
+        if self.set_aside.is_empty() {
+            return;
+        }
+        let mut close = false;
+        let response = egui::Modal::new(egui::Id::new("set_aside")).show(ctx, |ui| {
+            ui.set_width(480.0);
+            ui.heading("Some settings couldn't be read");
+            ui.add_space(4.0);
+            for (note, kept) in &self.set_aside {
+                ui.label(note);
+                if ui.small_button("Show it").on_hover_text(kept.display().to_string()).clicked() {
+                    open_in_file_manager(kept);
+                }
+                ui.add_space(4.0);
+            }
+            ui.weak("Nothing was deleted: the build that saved it can still read the kept copy.");
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("OK").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if close || response.should_close() {
+            self.set_aside.clear();
         }
     }
 
@@ -1666,8 +1716,9 @@ impl App {
                     ui.horizontal(|ui| {
                         if ui.button("Restart now").clicked() {
                             match updater::relaunch() {
-                                Ok(()) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
-                                Err(e) => self.status = format!("Couldn't restart: {e}"),
+                                // (Quit, not close: closing may only hide it in the tray.)
+                                Ok(()) => self.close_with(&ui.ctx().clone(), close::CloseAction::Quit),
+                                Err(e) => self.updates_message = Some((format!("Couldn't restart: {e}"), true)),
                             }
                         }
                         if ui.button("Later").clicked() {
@@ -1686,8 +1737,10 @@ impl App {
                         && ui.button("Open the usual synththing").clicked()
                     {
                         match std::process::Command::new(&stable).spawn() {
-                            Ok(_) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
-                            Err(e) => self.status = format!("Couldn't start {}: {e}", stable.display()),
+                            Ok(_) => self.close_with(&ui.ctx().clone(), close::CloseAction::Quit),
+                            Err(e) => {
+                                self.updates_message = Some((format!("Couldn't start {}: {e}", stable.display()), true));
+                            }
                         }
                     }
                 }
@@ -1701,6 +1754,17 @@ impl App {
             if branch.is_none() {
                 ui.add_space(8.0);
                 self.branch_builds_ui(ui);
+            } else {
+                ui.add_space(8.0);
+                self.recopy_settings_ui(ui);
+            }
+            if let Some((message, error)) = &self.updates_message {
+                ui.add_space(6.0);
+                if *error {
+                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), message);
+                } else {
+                    ui.label(message);
+                }
             }
             // Every state but Available has its own way out above, so a
             // plain Close for the rest. (A download carries on in the
@@ -1717,7 +1781,40 @@ impl App {
         });
         if close || response.should_close() {
             self.updates_open = false;
+            self.updates_message = None;
         }
+    }
+
+    /// In a branch build's Updates window: start its settings over from a
+    /// copy of the usual synththing's, for a tester who's changed something
+    /// there since. Takes a restart.
+    fn recopy_settings_ui(&mut self, ui: &mut egui::Ui) {
+        if !self.confirm_recopy {
+            if ui
+                .button("Copy settings from your usual synththing again...")
+                .on_hover_text("This build's settings started as a copy of them; take a fresh copy")
+                .clicked()
+            {
+                self.confirm_recopy = true;
+            }
+            return;
+        }
+        ui.label(
+            "Copy your usual synththing's settings over this build's, and restart it? Scripts and other files only \
+             this build has are kept.",
+        );
+        ui.horizontal(|ui| {
+            if ui.button("Copy and restart").clicked() {
+                self.confirm_recopy = false;
+                match crate::channels::recopy_settings_on_restart().and_then(|()| updater::relaunch()) {
+                    Ok(()) => self.close_with(&ui.ctx().clone(), close::CloseAction::Quit),
+                    Err(e) => self.updates_message = Some((format!("Couldn't copy the settings: {e:#}"), true)),
+                }
+            }
+            if ui.button("Cancel").clicked() {
+                self.confirm_recopy = false;
+            }
+        });
     }
 
     /// The Updates window's Branch builds section: trying a feature before
@@ -1780,17 +1877,17 @@ impl App {
                             if ui.add_enabled(!installing, egui::Button::new("Open")).clicked()
                                 && let Err(e) = crate::channels::launch(&channel)
                             {
-                                self.status = format!("{e:#}");
+                                self.updates_message = Some((format!("{e:#}"), true));
                             }
                             if ui
                                 .add_enabled(!installing, egui::Button::new("Remove"))
                                 .on_hover_text("Delete this branch build and its settings")
                                 .clicked()
                             {
-                                match crate::channels::remove(&channel) {
-                                    Ok(()) => self.status = format!("Removed the {} build.", crate::channels::branch_name(&channel)),
-                                    Err(e) => self.status = format!("{e:#}"),
-                                }
+                                self.updates_message = Some(match crate::channels::remove(&channel) {
+                                    Ok(()) => (format!("Removed the {} build.", crate::channels::branch_name(&channel)), false),
+                                    Err(e) => (format!("{e:#}"), true),
+                                });
                             }
                         } else if let Some(b) = build
                             && ui.add_enabled(!installing, egui::Button::new("Install")).clicked()
@@ -2140,6 +2237,7 @@ impl App {
             || self.heavy_prompt.is_some()
             || self.sprite.new_sprite.is_some()
             || self.close_prompt.is_some()
+            || !self.set_aside.is_empty()
     }
 
     /// Pick up files added, removed or changed on disk in the folders on
@@ -2423,6 +2521,11 @@ impl App {
     /// as eframe starts).
     pub fn attach_tray(&mut self, ctx: &egui::Context) {
         self.tray = crate::tray::Tray::new(ctx);
+    }
+
+    /// Watch `flag`, raised when synththing is launched again here.
+    pub fn listen_for_second_launch(&mut self, flag: Arc<std::sync::atomic::AtomicBool>) {
+        self.second_launch = Some(flag);
     }
 
     /// Clicks on the tray icon since last frame, and what was clicked in
@@ -3455,6 +3558,7 @@ impl eframe::App for App {
             self.rename_ui(&ctx);
             self.credits_ui(&ctx);
             self.changelog_ui(&ctx);
+            self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
             self.song_info_ui(&ctx);
             self.history_ui(&ctx);
@@ -3515,6 +3619,10 @@ impl eframe::App for App {
         }
         let view = self.shared.lock().unwrap().view.clone();
         self.handle_tray(ctx, &view);
+        if self.second_launch.as_ref().is_some_and(|f| f.swap(false, std::sync::atomic::Ordering::Relaxed)) {
+            log::info!("launched again: showing the window");
+            self.show_window(ctx);
+        }
         self.sync_script_song(&view);
         self.poll_loads();
         self.refresh_changed_folders(ctx);

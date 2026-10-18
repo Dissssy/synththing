@@ -399,13 +399,17 @@ pub fn default_recordings_dir() -> PathBuf {
     base.join("synththing")
 }
 
-/// A JSON file synththing keeps, as `T`: `None` if it isn't there, or if
-/// it can't be read as `T` (written by a build that stores it differently,
-/// a branch build say). Such a file is first moved aside, to
-/// `<name>.unreadable-<unix time>` next to it, so whatever the caller uses
-/// instead and saves doesn't overwrite it: it can be recovered, or read
-/// again by the build that wrote it. Errors only when it can't be read at
-/// all, or can't be moved aside.
+/// A JSON file synththing keeps, as `T`: `None` if it isn't there.
+///
+/// One that can't be read as `T` (written by a build that stores something
+/// differently, a branch build or a newer one, say) is first moved aside,
+/// to `<name>.unreadable-<unix time>` next to it, so what's saved next
+/// doesn't overwrite it: it can be recovered, or read again by the build
+/// that wrote it. What can still be read of it is used (`salvage`: every
+/// top-level field that's fine on its own, so a layout with a tab this
+/// build doesn't have costs the layout, not every setting); `None` if
+/// nothing can. Either way the app says so (`set_aside_notices`).
+/// Errors only when it can't be read at all, or can't be moved aside.
 pub fn read_json_or_set_aside<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     let data = match fs::read_to_string(path) {
         Ok(data) => data,
@@ -417,8 +421,56 @@ pub fn read_json_or_set_aside<T: serde::de::DeserializeOwned>(path: &Path) -> Re
         Err(e) => e,
     };
     let aside = set_aside(path).with_context(|| format!("{} can't be read ({error})", path.display()))?;
-    log::warn!("{} couldn't be read ({error}); moved to {} and starting without it", path.display(), aside.display());
-    Ok(None)
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let salvaged = salvage::<T>(&data);
+    let note = match &salvaged {
+        Some((_, dropped)) => format!(
+            "Part of {name} couldn't be read ({}): it was most likely saved by a different build of \
+             synththing, or changed by hand. The rest was kept. The whole file was saved as {}.",
+            dropped.join(", "),
+            aside.display()
+        ),
+        None => format!(
+            "{name} couldn't be read: it was most likely saved by a different build of synththing, or changed \
+             by hand. synththing started without it, and saved it as {}.",
+            aside.display()
+        ),
+    };
+    log::warn!("{note} ({error})");
+    if let Ok(mut notices) = SET_ASIDE.lock() {
+        notices.push((note, aside));
+    }
+    Ok(salvaged.map(|(value, _)| value))
+}
+
+/// What `read_json_or_set_aside` set aside this run, to tell the user.
+static SET_ASIDE: std::sync::Mutex<Vec<(String, PathBuf)>> = std::sync::Mutex::new(Vec::new());
+
+/// Settings files set aside this run (`read_json_or_set_aside`): what
+/// happened, in a sentence or two, and where the file went. Taken: each is
+/// said once.
+pub fn set_aside_notices() -> Vec<(String, PathBuf)> {
+    SET_ASIDE.lock().map(|mut n| std::mem::take(&mut *n)).unwrap_or_default()
+}
+
+/// What can be read of `data` as `T`, a struct whose fields all have
+/// defaults: every top-level field that reads on its own, the rest left at
+/// their defaults. Returns it with the fields left out, or `None` if it
+/// isn't a JSON object or still doesn't read.
+fn salvage<T: serde::de::DeserializeOwned>(data: &str) -> Option<(T, Vec<String>)> {
+    let serde_json::Value::Object(fields) = serde_json::from_str(data).ok()? else { return None };
+    let mut kept = serde_json::Map::new();
+    let mut dropped = Vec::new();
+    for (key, value) in fields {
+        let alone = serde_json::Value::Object([(key.clone(), value.clone())].into_iter().collect());
+        if serde_json::from_value::<T>(alone).is_ok() {
+            kept.insert(key, value);
+        } else {
+            dropped.push(key);
+        }
+    }
+    let value = serde_json::from_value(serde_json::Value::Object(kept)).ok()?;
+    Some((value, dropped))
 }
 
 /// Move a file synththing can't read out of the way, to
@@ -491,10 +543,15 @@ mod tests {
         assert_eq!(config.soundfonts, [PathBuf::from("a.sf2")]);
         assert!(path.exists(), "a readable file stays");
 
-        // From a build where `soundfonts` is something else.
-        fs::write(&path, r#"{ "soundfonts": { "list": [] } }"#).unwrap();
-        assert!(read_json_or_set_aside::<Config>(&path).unwrap().is_none());
+        // From a build where `soundfonts` is something else, and a loop
+        // mode this one doesn't have: the rest is still read.
+        fs::write(&path, r#"{ "soundfonts": { "list": [] }, "loop_mode": "Sideways", "shuffle": true }"#).unwrap();
+        let config = read_json_or_set_aside::<Config>(&path).unwrap().expect("what can be read is");
+        assert!(config.shuffle, "kept");
+        assert!(config.soundfonts.is_empty(), "left at the default");
         assert!(!path.exists(), "moved aside");
+        let notices = set_aside_notices();
+        assert!(notices.iter().any(|(n, _)| n.contains("soundfonts, loop_mode") || n.contains("loop_mode, soundfonts")), "{notices:?}");
         let aside: Vec<_> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(aside.len(), 1);
         assert!(aside[0].starts_with("soundfonts.json.unreadable-"), "{aside:?}");

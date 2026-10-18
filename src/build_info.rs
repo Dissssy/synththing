@@ -9,6 +9,10 @@
 /// after the release it's built on and before the next one.
 pub const VERSION: &str = env!("SYNTHTHING_VERSION");
 
+/// The color its icon and wordmark are drawn in (`#RRGGBB`): which build
+/// this is, at a glance (build.rs, `accent`). Off-white for a local build.
+pub const ACCENT: &str = env!("SYNTHTHING_ACCENT");
+
 /// The commit it's built from, when CI said.
 const COMMIT: &str = env!("SYNTHTHING_COMMIT");
 
