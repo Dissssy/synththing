@@ -2611,8 +2611,10 @@ impl App {
     }
 
     /// Bring the main window back and to the front: un-hidden,
-    /// un-minimized, focused.
+    /// un-minimized, focused. The mini player goes away: the two aren't
+    /// up together.
     fn show_window(&mut self, ctx: &egui::Context) {
+        self.tray_panel.hide(ctx);
         self.hidden = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
