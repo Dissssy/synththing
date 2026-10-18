@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- Feedback you send is sorted into synththing's issue tracker on GitHub by Claude, so it turns into a fix sooner. The issue describes it in Claude's own words, without your log or anything that identifies you; the privacy policy says so.
+
 ## 0.7.1 (2026-10-18)
 
 ### Added
