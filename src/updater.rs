@@ -275,6 +275,22 @@ fn is_update(track: &Track, release: &Release) -> bool {
 /// made first. Through every page of releases (a branch build made long ago,
 /// and only updated since, is listed as old), up to `MAX_PAGES`.
 pub fn branch_builds() -> Result<Vec<Release>> {
+    Ok(branch_releases()?
+        .into_iter()
+        .filter_map(|r| {
+            let tag = r.tag_name.clone();
+            parse_release(r).map_err(|e| log::warn!("skipping {tag}: {e:#}")).ok()
+        })
+        .collect())
+}
+
+/// The channels (`branch-<name>`) GitHub has a test build for, whether
+/// or not each is one this app could install.
+pub fn branch_channels() -> Result<Vec<String>> {
+    Ok(branch_releases()?.into_iter().map(|r| r.tag_name).collect())
+}
+
+fn branch_releases() -> Result<Vec<ApiRelease>> {
     const PER_PAGE: usize = 100;
     const MAX_PAGES: usize = 10;
     let mut all: Vec<ApiRelease> = Vec::new();
@@ -286,14 +302,8 @@ pub fn branch_builds() -> Result<Vec<Release>> {
             break;
         }
     }
-    Ok(all
-        .into_iter()
-        .filter(|r| r.prerelease && r.tag_name.starts_with("branch-"))
-        .filter_map(|r| {
-            let tag = r.tag_name.clone();
-            parse_release(r).map_err(|e| log::warn!("skipping {tag}: {e:#}")).ok()
-        })
-        .collect())
+    all.retain(|r| r.prerelease && r.tag_name.starts_with("branch-"));
+    Ok(all)
 }
 
 fn parse_release(api: ApiRelease) -> Result<Release> {

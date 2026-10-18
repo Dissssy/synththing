@@ -27,6 +27,7 @@
 mod authority;
 mod copyright;
 mod deletion;
+mod feedback;
 mod mail;
 
 #[cfg(test)]
@@ -256,6 +257,13 @@ impl Running {
         deletion::purge_as_of(&self.state, i64::MAX);
     }
 
+    /// Delete branch builds' feedback but for `channels`' (tests: the real
+    /// list comes from GitHub).
+    #[cfg(test)]
+    pub fn forget_branches_except(&self, channels: &[String]) {
+        feedback::forget_branches_except(&self.state, channels);
+    }
+
     /// The emails it's "sent" (tests).
     #[cfg(test)]
     pub fn outbox(&self) -> Vec<mail::Mail> {
@@ -323,6 +331,7 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
         mailer,
     });
     moderation::forget_old_addresses(&state);
+    feedback::forget_old(&state);
     deletion::purge(&state);
     copyright::expire(&state);
     {
@@ -332,6 +341,8 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
             .spawn(move || loop {
                 std::thread::sleep(Duration::from_secs(24 * 60 * 60));
                 moderation::forget_old_addresses(&state);
+                feedback::forget_old(&state);
+                feedback::forget_gone_branches(&state);
                 deletion::purge(&state);
                 notifications::forget_old(&state);
                 copyright::expire(&state);
@@ -628,6 +639,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 12 {
         db.execute_batch(songs::SCHEMA_V12)?;
     }
+    if version < 13 {
+        db.execute_batch(feedback::SCHEMA_V13)?;
+    }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
 }
@@ -771,6 +785,10 @@ fn handle(state: &Arc<State>, mut request: Request) {
         (Method::Post, ["api", "v1", "scripts", id, "report"]) => {
             let (id, ip) = (id.to_string(), client_ip(state, &request));
             moderation::report(state, &mut request, &id, &ip)
+        }
+        (Method::Post, ["api", "v1", "feedback"]) => {
+            let ip = client_ip(state, &request);
+            feedback::send(state, &mut request, &ip)
         }
         (Method::Post, ["api", "v1", "admin"]) => moderation::admin(state, &mut request),
         (Method::Post, ["api", "v1", "identity", "rotate"]) => authority::rotate(state, &mut request),

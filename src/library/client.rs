@@ -12,7 +12,7 @@ use ureq::Agent;
 
 use super::identity::Identity;
 use super::{
-    receipt_message, request_message, source_message, verify_hex, AdminAction, ApiError, EncoreState, Info, Listing,
+    receipt_message, request_message, source_message, verify_hex, AdminAction, ApiError, EncoreState, FeedbackRequest, Info, Listing,
     Receipt, ReportRequest, ScriptDetails, Upload, UserInfo, KEY_HEADER, NONCE_HEADER, SHA256_HEADER,
     SIGNATURE_HEADER, TIME_HEADER, VERSION_HEADER,
 };
@@ -25,13 +25,14 @@ fn now() -> i64 {
 }
 
 /// Every request to a library server goes through here: in a branch build
-/// (`build_info::online_features`), it fails before it's sent. (Tests talk
-/// to a server of their own, in a branch build's CI run too.)
+/// (`build_info::online_features`), it fails before it's sent, except
+/// feedback, which is what a branch build is for. (Tests talk to a server
+/// of their own, in a branch build's CI run too.)
 fn online_only(
     request: ureq::http::Request<ureq::SendBody>,
     next: ureq::middleware::MiddlewareNext,
 ) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
-    if cfg!(test) || crate::build_info::online_features() {
+    if cfg!(test) || crate::build_info::online_features() || request.uri().path() == FEEDBACK_PATH {
         next.handle(request)
     } else {
         Err(ureq::Error::Io(std::io::Error::other("online features are off in branch builds")))
@@ -439,6 +440,14 @@ pub fn report(base: &str, server_key: &str, id: &str, identity: &Identity, repor
     let request = agent().post(format!("{base}{path}")).header("Content-Type", "application/json");
     let reply: serde_json::Value = read(check(signed(request, server_key, identity, "POST", &path, &body).send(&body[..]))?)?;
     reply["report"].as_i64().ok_or_else(|| "the server sent something unexpected".to_string())
+}
+
+const FEEDBACK_PATH: &str = "/api/v1/feedback";
+
+/// Send feedback to the server's admins; its number.
+pub fn feedback(base: &str, feedback: &FeedbackRequest) -> Result<i64, String> {
+    let reply: serde_json::Value = read(check(agent().post(format!("{base}{FEEDBACK_PATH}")).send_json(feedback))?)?;
+    reply["feedback"].as_i64().ok_or_else(|| "the server sent something unexpected".to_string())
 }
 
 /// An admin action, signed by `identity` (an admin's, or the server's own).
@@ -986,6 +995,53 @@ mod tests {
     /// Notifications: milestones, moderation, remixes, reports for the
     /// moderators and back to their reporters; pushed over the stream as
     /// they happen, listed, marked read.
+    /// Feedback: sent unsigned, the admins hear, listed with its build,
+    /// marked done; a gone branch's goes, the rest stays.
+    #[test]
+    fn feedback_reaches_the_admins() {
+        use crate::library::{AdminAction, Feedback, FeedbackRequest};
+        let dir = std::env::temp_dir().join(format!("synththing-feedback-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false, "check_uploads": false }"#).unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let server_id = Identity::from_secret_hex(&std::fs::read_to_string(dir.join("server.key")).unwrap()).unwrap();
+        let mod_ = Identity::generate().unwrap();
+        let bars = upload(&base, &key, &upload_of("Bars", "visualizer", "function render() end"), None).unwrap();
+        encore(&base, &key, &bars.id, &mod_, true).unwrap();
+        admin::<serde_json::Value>(&base, &key, &server_id, &AdminAction::AddAdmin { key: mod_.public() }).unwrap();
+
+        let note = |text: &str, channel: &str| FeedbackRequest {
+            text: text.into(),
+            app_version: "0.7.1".into(),
+            channel: channel.into(),
+            os: "windows x86_64".into(),
+            log: None,
+        };
+        assert!(feedback(&base, &note("   ", "stable")).is_err());
+        let stable = feedback(&base, &note(" The seek bar is tiny ", "stable")).unwrap();
+        let kept = feedback(&base, &note("Lanes work great", "branch-lanes")).unwrap();
+        let gone = feedback(&base, &note("Old idea", "branch-merged")).unwrap();
+        let theirs = notifications(&base, &key, &mod_, None).unwrap();
+        assert_eq!((theirs[2].kind.as_str(), theirs[2].data["feedback"].as_i64()), ("new_feedback", Some(stable)));
+
+        let open = |all| admin::<Vec<Feedback>>(&base, &key, &mod_, &AdminAction::Feedback { all }).unwrap();
+        let listed = open(false);
+        assert_eq!(listed.iter().map(|f| f.id).collect::<Vec<_>>(), vec![gone, kept, stable]);
+        assert_eq!(listed[2].request.text, "The seek bar is tiny");
+        admin::<serde_json::Value>(&base, &key, &mod_, &AdminAction::FeedbackDone { feedback: stable, note: "#12".into() })
+            .unwrap();
+        assert_eq!(open(false).len(), 2);
+        assert_eq!(open(true)[2].note.as_deref(), Some("#12"));
+
+        running.forget_branches_except(&["branch-lanes".to_string()]);
+        assert_eq!(open(true).iter().map(|f| f.id).collect::<Vec<_>>(), vec![kept, stable]);
+        running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn notifications_are_kept_and_pushed() {
         use crate::library::{AdminAction, ReportRequest};

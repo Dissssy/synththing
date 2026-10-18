@@ -66,6 +66,7 @@ fn wording(kind: &str) -> Option<&'static str> {
         "remixed" => "{by} remixed \"{name}\": \"{remix_name}\"",
         "report_handled" => "Your report of \"{name}\" was dealt with: {outcome}",
         "new_report" => "New report of \"{name}\": {reason}",
+        "new_feedback" => "New feedback ({channel}): {preview}",
         "copyright_notice" => "\"{name}\" was taken down by a copyright notice from {claimant}, for {on_behalf_of}",
         "notice_disputed" => "{uploader} disputed your copyright notice on \"{name}\"",
         "dispute_upheld" => "Your dispute was upheld: \"{name}\" is back up",
@@ -88,6 +89,7 @@ fn icon_of(kind: &str) -> &'static str {
         "removed" => "trash",
         "remixed" => "git-fork",
         "report_handled" | "new_report" => "flag",
+        "new_feedback" => "chat-circle-dots",
         "copyright_notice" | "takedown_stood" | "new_notice" => "copyright",
         "notice_disputed" | "new_dispute" | "notice_rejected" => "scales",
         "dispute_upheld" | "notice_withdrawn" => "check-circle",
@@ -102,7 +104,7 @@ fn tier_of(kind: &str) -> u8 {
     match kind {
         "encore_milestone" | "download_milestone" | "song_download_milestone" | "remixed" => 1,
         "reinstated" | "dispute_upheld" | "notice_withdrawn" | "report_handled" | "notice_rejected" => 2,
-        "new_report" | "new_notice" | "new_dispute" | "notice_disputed" | "hidden" => 3,
+        "new_report" | "new_feedback" | "new_notice" | "new_dispute" | "notice_disputed" | "hidden" => 3,
         "copyright_notice" | "takedown_stood" | "removed" => 4,
         _ => 0,
     }
@@ -391,6 +393,7 @@ impl App {
         let mut close = false;
         let mut show: Option<String> = None;
         let mut moderate = false;
+        let mut moderate_feedback = false;
         let mut copyright = false;
         let mut notice: Option<(i64, bool)> = None;
         let response = egui::Modal::new(egui::Id::new("notification")).show(ctx, |ui| {
@@ -450,6 +453,11 @@ impl App {
                             moderate = true;
                         }
                     }
+                    "new_feedback" => {
+                        if ui.button("Open Feedback").clicked() {
+                            moderate_feedback = true;
+                        }
+                    }
                     "removed" => {}
                     _ => {
                         if let Some(script) = &script
@@ -471,6 +479,9 @@ impl App {
         } else if moderate {
             self.notifications.detail = None;
             self.open_moderation();
+        } else if moderate_feedback {
+            self.notifications.detail = None;
+            self.open_moderation_feedback();
         } else if copyright {
             self.notifications.detail = None;
             self.open_moderation_copyright();
@@ -545,6 +556,7 @@ mod tests {
             "remixed",
             "report_handled",
             "new_report",
+            "new_feedback",
             "copyright_notice",
             "notice_disputed",
             "dispute_upheld",

@@ -190,6 +190,17 @@ pub enum AdminCommand {
         #[arg(long, default_value = "")]
         note: String,
     },
+    /// Feedback not dealt with yet, newest first (all of it with --all).
+    Feedback {
+        #[arg(long)]
+        all: bool,
+    },
+    /// Mark feedback dealt with.
+    FeedbackDone {
+        feedback: i64,
+        #[arg(long, default_value = "")]
+        note: String,
+    },
     /// Update the server to the newest release (under systemd, through
     /// the update service; under Docker it says to pull the image).
     Update {

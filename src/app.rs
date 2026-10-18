@@ -10,6 +10,7 @@
 mod branding;
 mod close;
 mod editor;
+mod feedback;
 pub use editor::ApplyMode;
 mod loading;
 mod playlist_panel;
@@ -263,6 +264,7 @@ pub struct App {
     script_previews: std::cell::RefCell<previews::LocalPreviews>,
     /// Reports, and the Moderation window.
     moderation: moderation::ModerationState,
+    feedback: feedback::FeedbackState,
     /// The identity's recovery email, new keys and recovery.
     identity: identity::IdentityState,
     /// Notifications from library servers.
@@ -505,6 +507,7 @@ impl App {
             library: library::LibraryState::new(),
             script_previews: Default::default(),
             moderation: Default::default(),
+            feedback: Default::default(),
             identity: Default::default(),
             notifications: Default::default(),
             copyright: Default::default(),
@@ -1511,6 +1514,9 @@ impl App {
                 if ui.button("Changelog...").clicked() {
                     self.changelog = Some(None);
                 }
+                if ui.button("Send feedback...").on_hover_text("Tell us what's working and what isn't").clicked() {
+                    self.open_feedback();
+                }
                 if ui.button("Log...").clicked() {
                     self.log_open = true;
                 }
@@ -1520,8 +1526,11 @@ impl App {
                 ui.separator();
                 ui.weak(format!("synththing v{}", crate::build_info::describe()));
             });
-            // Notifications, at the far right.
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.notifications_button_ui(ui));
+            // Notifications and feedback, at the far right.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.notifications_button_ui(ui);
+                self.feedback_button_ui(ui);
+            });
         });
     }
 
@@ -2228,6 +2237,7 @@ impl App {
             || self.script_window.is_some()
             || self.library.publish_open()
             || self.moderation.open()
+            || self.feedback.open()
             || self.identity.open()
             || self.notifications.open()
             || self.copyright.open()
@@ -3586,6 +3596,7 @@ impl eframe::App for App {
         self.publish_song_ui(&ctx);
         self.song_preview_tick(&ctx);
         self.moderation_ui(&ctx);
+        self.feedback_ui(&ctx);
         self.heavy_midi_ui(&ctx);
         self.poll_recordings(view);
         self.apply_cursor_confinement(&ctx);
@@ -3634,6 +3645,7 @@ impl eframe::App for App {
         }
         self.poll_library();
         self.poll_moderation();
+        self.poll_feedback();
         self.poll_identity();
         self.poll_notifications(ctx);
         self.poll_copyright();

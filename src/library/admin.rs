@@ -6,7 +6,7 @@
 use crate::cli::{AdminArgs, AdminCommand};
 use crate::library::identity::Identity;
 use crate::library::{
-    ago, client, key_id, lines_text, report_reason_title, AdminAction, AdminScriptInfo, Ban, Report,
+    ago, client, key_id, lines_text, report_reason_title, AdminAction, AdminScriptInfo, Ban, Feedback, Report,
 };
 
 pub fn run(args: &AdminArgs) -> Result<(), String> {
@@ -95,6 +95,18 @@ pub fn run(args: &AdminArgs) -> Result<(), String> {
             }
         }
         AdminCommand::Resolve { report, note } => done(send(AdminAction::Resolve { report: *report, note: note.clone() })?),
+        AdminCommand::Feedback { all } => {
+            let feedback: Vec<Feedback> = client::admin(&base, &key, &server, &AdminAction::Feedback { all: *all })?;
+            if feedback.is_empty() {
+                println!("{}", if *all { "no feedback" } else { "no feedback to deal with" });
+            }
+            for f in &feedback {
+                print_feedback(f);
+            }
+        }
+        AdminCommand::FeedbackDone { feedback, note } => {
+            done(send(AdminAction::FeedbackDone { feedback: *feedback, note: note.clone() })?)
+        }
         AdminCommand::Update { check } => {
             let version: crate::library::ServerVersion = client::admin(&base, &key, &server, &AdminAction::UpdateCheck)?;
             match (&version.latest, &version.error) {
@@ -152,6 +164,24 @@ fn print_report(report: &Report) {
     }
     if !marks.is_empty() {
         println!("    points at {}", marks.join("; "));
+    }
+}
+
+fn print_feedback(feedback: &Feedback) {
+    let f = &feedback.request;
+    let state = match &feedback.handled {
+        Some(_) => format!("  [done: {}]", feedback.note.as_deref().unwrap_or_default()),
+        None => String::new(),
+    };
+    println!("#{}  {}  {} ({}), {}{state}", feedback.id, ago(feedback.created), f.app_version, f.channel, f.os);
+    for line in f.text.lines() {
+        println!("    {line}");
+    }
+    if let Some(log) = &f.log {
+        println!("    with the log ({} lines):", log.lines().count());
+        for line in log.lines() {
+            println!("      {line}");
+        }
     }
 }
 

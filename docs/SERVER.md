@@ -105,10 +105,17 @@ Rendered by the server on each upload and each new version, through a queue (one
 - Limits per address: 60 encores an hour, 10 reports a day. Banned keys and addresses can't upload, give encores or report (they can still browse and download).
 - Keys cost nothing to make, so encores can be faked with many keys, and a banned key can be swapped for a new one (a rotation carries its bans along; a fresh key doesn't, which is what address bans are for). A key ban can take its addresses along: those it was seen on in the last 30 days are banned for 30 days, and any new address the banned key comes back from is banned for 30 days too, so the ban follows it as long as it keeps coming back (new keys on a banned address are refused while that lasts, but aren't banned themselves, since addresses are shared). An authority with mail is stricter with keys without an email (fewer uploads a day). Every encore counts the same, whatever the key's age: making them count less would punish newcomers. Not perfect; fine at this scale.
 
+## Feedback
+
+- **Feedback** (`server/feedback.rs`, Help > Send feedback... and the speech bubble in the app's menu bar) is a note about the app for the admins: unsigned, so it needs no identity, with the build it came from (version, channel, OS) and, if the sender ticks it, the end of the app's log. The app sends it to the official server. Branch builds can send it although their other online features are off: trying a feature and saying how it went is what they're for.
+- Limits per address: 10 a day. Banned addresses can't send it. The admins get a `new_feedback` notification.
+- Read it in Moderation's Feedback tab or with `synththing admin feedback`, and mark it done (with a note, like the issue it became) with `synththing admin feedback-done <number>`.
+- Kept until it's done, then 90 days; addresses 30 days, as for reports. A branch build's feedback is deleted once that branch's test build is gone from GitHub's releases (`branch-cleanup.yml` removes it when the branch is deleted), checked daily; if GitHub can't be reached, nothing is deleted.
+
 ## Moderation
 
 - **Admins** are keys listed by the server (added with `synththing admin add-admin <id>`), and the server's own key.
-- One endpoint, `POST /api/v1/admin`, signed by an admin, takes an action (`AdminAction`): reports, a script's extra metadata (uploader key and addresses, versions, its reports) and source (hidden or not), hide, unhide, delete, ban (a key or an address, for a while or for good, optionally hiding everything the key uploaded), unban, bans, add-admin, remove-admin, admins, resolve.
+- One endpoint, `POST /api/v1/admin`, signed by an admin, takes an action (`AdminAction`): reports, a script's extra metadata (uploader key and addresses, versions, its reports) and source (hidden or not), hide, unhide, delete, ban (a key or an address, for a while or for good, optionally hiding everything the key uploaded), unban, bans, add-admin, remove-admin, admins, resolve, feedback, feedback-done.
 - **`synththing admin <command>`** on the server sends those, signed with the server's own key from its data folder, to the running server at its configured address: it works from SSH, under systemd, and in Docker (`docker exec <container> synththing admin ...`). Still to come: `update`.
 - **Moderation** in the app's Library tab, for admin keys: reports with the lines they point at highlighted in the code and the sprites drawn, and the actions above, signed with the admin's key.
 - **Web admin panel**: parked. Moderation in the app does the job and stays in step with it; if the app ever builds for the web (egui runs in a browser, see TODO), that's the web version.
@@ -171,6 +178,7 @@ POST /api/v1/scripts/{id}/versions        new version (owner)
 DELETE /api/v1/scripts/{id}               owner or admin
 POST /api/v1/scripts/{id}/encore          (and DELETE to take it back)
 POST /api/v1/scripts/{id}/report
+POST /api/v1/feedback                     feedback for the admins (unsigned)
 POST /api/v1/admin                        an admin action (signed by an admin)
 POST /api/v1/songs                        upload a song (servers with "songs": true)
 GET  /api/v1/songs/{id}/file              ?version=&preview=1  the MIDI file (signed by the server; for a preview, not counted)
