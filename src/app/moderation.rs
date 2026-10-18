@@ -19,7 +19,7 @@ use super::library::host;
 use super::App;
 use crate::library::identity::Identity;
 use crate::library::{
-    self, ago, client, lines_text, report_reason_title, AdminAction, Ban, CopyrightNotice, NoticeView, Report,
+    self, ago, client, lines_text, report_reason_title, AdminAction, Ban, CopyrightNotice, Feedback, NoticeView, Report,
     ReportRequest, MAX_REPORT_DETAILS, MAX_REPORT_MARKS, REPORT_REASONS,
 };
 use crate::sprite_code::{self, SpriteCall};
@@ -33,6 +33,7 @@ enum Event {
     /// A copyright notice filed: its number and what became of the item.
     NoticeFiled(Result<(i64, String), String>),
     Notices(String, Result<Vec<NoticeView>, String>),
+    Feedback(String, Result<Vec<Feedback>, String>),
     Reports(String, Result<Vec<Report>, String>),
     Bans(String, Result<Vec<Ban>, String>),
     Admins(String, Result<Vec<(String, String)>, String>),
@@ -75,6 +76,7 @@ enum Tab {
     Bans,
     Admins,
     Copyright,
+    Feedback,
     Server,
 }
 
@@ -97,8 +99,11 @@ struct Window {
     admins: Option<Result<Vec<(String, String)>, String>>,
     version: Option<Result<library::ServerVersion, String>>,
     notices: Option<Result<Vec<NoticeView>, String>>,
+    feedback: Option<Result<Vec<Feedback>, String>>,
     /// The note going with a copyright decision.
     copyright_note: String,
+    /// The note going with feedback marked dealt with.
+    feedback_note: String,
     /// Reports showing what they point at.
     shown: HashSet<i64>,
     sources: HashMap<(String, u32), Result<String, String>>,
@@ -262,6 +267,15 @@ impl App {
         self.refresh_moderation();
     }
 
+    /// Open the Moderation window at its Feedback tab.
+    pub(super) fn open_moderation_feedback(&mut self) {
+        self.open_moderation();
+        if let Some(window) = &mut self.moderation.window {
+            window.tab = Tab::Feedback;
+        }
+        self.refresh_moderation();
+    }
+
     /// Open the Moderation window (on the first server the user is an
     /// admin on).
     pub(super) fn open_moderation(&mut self) {
@@ -275,7 +289,9 @@ impl App {
             admins: None,
             version: None,
             notices: None,
+            feedback: None,
             copyright_note: String::new(),
+            feedback_note: String::new(),
             shown: HashSet::new(),
             sources: HashMap::new(),
             confirm_delete: None,
@@ -300,6 +316,7 @@ impl App {
             Tab::Admins => window.admins = None,
             Tab::Server => window.version = None,
             Tab::Copyright => window.notices = None,
+            Tab::Feedback => window.feedback = None,
         }
         self.spawn_moderation(move || match tab {
             Tab::Reports => Event::Reports(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Reports { all })),
@@ -308,6 +325,9 @@ impl App {
             Tab::Server => Event::Version(server.clone(), client::admin(&server, &key, &identity, &AdminAction::UpdateCheck)),
             Tab::Copyright => {
                 Event::Notices(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Notices { all }))
+            }
+            Tab::Feedback => {
+                Event::Feedback(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Feedback { all }))
             }
         });
     }
@@ -400,6 +420,11 @@ impl App {
                 Event::Notices(server, result) => {
                     if let Some(w) = window.filter(|w| w.server == server) {
                         w.notices = Some(result);
+                    }
+                }
+                Event::Feedback(server, result) => {
+                    if let Some(w) = window.filter(|w| w.server == server) {
+                        w.feedback = Some(result);
                     }
                 }
                 Event::Version(server, result) => {
@@ -636,6 +661,7 @@ impl App {
                 for (tab, title) in [
                     (Tab::Reports, "Reports"),
                     (Tab::Copyright, "Copyright"),
+                    (Tab::Feedback, "Feedback"),
                     (Tab::Bans, "Bans"),
                     (Tab::Admins, "Admins"),
                     (Tab::Server, "Server"),
@@ -646,7 +672,7 @@ impl App {
                     }
                 }
                 ui.separator();
-                if matches!(window.tab, Tab::Reports | Tab::Copyright) && ui.checkbox(&mut window.all, "Dealt with too").changed() {
+                if matches!(window.tab, Tab::Reports | Tab::Copyright | Tab::Feedback) && ui.checkbox(&mut window.all, "Dealt with too").changed() {
                     refresh = true;
                 }
                 if ui.button("Refresh").clicked() {
@@ -664,6 +690,7 @@ impl App {
                     Tab::Admins => admins_tab_ui(ui, &mut window, &mut actions),
                     Tab::Server => server_tab_ui(ui, &window, &mut actions),
                     Tab::Copyright => copyright_tab_ui(ui, &mut window, &mut actions),
+                    Tab::Feedback => feedback_tab_ui(ui, &mut window, &mut actions),
                 }
             });
             ui.separator();
@@ -1054,6 +1081,59 @@ fn notice_form_ui(ui: &mut egui::Ui, claim: &mut CopyrightNotice, server: &str) 
 }
 
 /// The copyright notices, with what's to decide.
+fn feedback_tab_ui(ui: &mut egui::Ui, window: &mut Window, actions: &mut Vec<(String, Vec<AdminAction>)>) {
+    let feedback = match &window.feedback {
+        None => {
+            ui.spinner();
+            return;
+        }
+        Some(Err(e)) => {
+            ui.colored_label(ui.visuals().warn_fg_color, format!("Couldn't get the feedback: {e}"));
+            return;
+        }
+        Some(Ok(feedback)) => feedback.clone(),
+    };
+    if feedback.is_empty() {
+        ui.weak(if window.all { "No feedback." } else { "No feedback to deal with." });
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label("Note when marking it done:");
+        ui.add(egui::TextEdit::singleline(&mut window.feedback_note).desired_width(360.0));
+    });
+    for f in &feedback {
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.strong(format!("#{}", f.id));
+                ui.weak(format!("{}, {} ({}), {}", ago(f.created), f.request.app_version, f.request.channel, f.request.os));
+            });
+            ui.label(&f.request.text);
+            if let Some(log) = &f.request.log {
+                egui::CollapsingHeader::new(format!("The log ({} lines)", log.lines().count())).id_salt(("feedback_log", f.id)).show(
+                    ui,
+                    |ui| {
+                        egui::ScrollArea::vertical().id_salt(("feedback_log_scroll", f.id)).max_height(200.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new(log).monospace().size(11.0));
+                        });
+                    },
+                );
+            }
+            match &f.handled {
+                Some(_) => {
+                    ui.weak(format!("Done: {}", f.note.as_deref().unwrap_or_default()));
+                }
+                None => {
+                    if ui.button("Mark done").clicked() {
+                        let note = window.feedback_note.trim().to_string();
+                        actions.push((format!("Feedback #{} marked done.", f.id), vec![AdminAction::FeedbackDone { feedback: f.id, note }]));
+                    }
+                }
+            }
+        });
+    }
+}
+
 fn copyright_tab_ui(ui: &mut egui::Ui, window: &mut Window, actions: &mut Vec<(String, Vec<AdminAction>)>) {
     let notices = match &window.notices {
         None => {

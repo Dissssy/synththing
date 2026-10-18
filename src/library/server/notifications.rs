@@ -71,6 +71,7 @@ fn template(kind: &str) -> &'static str {
         "remixed" => "{by} published a remix of \"{name}\": \"{remix_name}\"",
         "report_handled" => "Your report of \"{name}\" was dealt with: {outcome}",
         "new_report" => "New report of \"{name}\": {reason}",
+        "new_feedback" => "New feedback ({channel}): {preview}",
         "copyright_notice" => "\"{name}\" was taken down: a copyright notice from {claimant}, for {on_behalf_of}",
         "notice_disputed" => "{uploader} disputed your copyright notice on \"{name}\"",
         "dispute_upheld" => "Your dispute was upheld: \"{name}\" is back up",

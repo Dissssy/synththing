@@ -1,6 +1,6 @@
 # Privacy Policy
 
-*synththing official library (synththing.p51.nl). Last updated 2026-10-07.*
+*synththing official library (synththing.p51.nl). Last updated 2026-10-18.*
 
 The synththing library is built to need as little about you as possible: there are no accounts, no passwords, no ads and no tracking. This page says what the server does keep, why, for how long, and how to have it deleted.
 
@@ -20,7 +20,9 @@ The official library server is run by the makers of synththing. Questions, reque
 
 **Encores and reports**: which identity gave which script or song an encore (only the totals are shown publicly), and the reports you send (their reason, details and what they point at), which only the server's moderators see.
 
-**Your address (IP)** is kept with each upload, encore, report and email request, to limit abuse (how many of each one address can make) and so moderators can ban someone who abuses the library. Addresses are deleted after **30 days**, except those of active bans, kept until the ban ends. The server's own log also notes uploads, with the address they came from; the system rotates it away.
+**Feedback** you send from the app (Help > Send feedback...): what you wrote, the app's version and build, your operating system, and the app's recent log if you ticked the box for it. It isn't linked to your identity. Only the server's moderators see it. It's kept until they've dealt with it, then for **90 days**; feedback from a branch build is deleted once that test build is gone.
+
+**Your address (IP)** is kept with each upload, encore, report, feedback and email request, to limit abuse (how many of each one address can make) and so moderators can ban someone who abuses the library. Addresses are deleted after **30 days**, except those of active bans, kept until the ban ends. The server's own log also notes uploads, with the address they came from; the system rotates it away.
 
 **Your email, if you attach one** for recovering your identity: the server keeps only a one-way hash of it (salted with a secret of the server's), never the address itself, so it can recognise the address when you type it again but can't read or show it, and can't write to you unasked. When you ask for a code (to attach an address, change it, recover your identity or delete your data), the address you type is handed to our email provider to send it, and not kept.
 
@@ -29,7 +31,7 @@ The official library server is run by the makers of synththing. Questions, reque
 ## Who else sees it
 
 - **Everyone**: what you publish, the names you post under, your ID, and encore totals.
-- **The server's moderators**: reports, and for each script and song the addresses its versions were uploaded from (while they're kept).
+- **The server's moderators**: reports, feedback, and for each script and song the addresses its versions were uploaded from (while they're kept).
 - **Service providers**, only as far as running the library needs: the server is hosted by Hetzner Online (in the United States); emails are sent through SendGrid (Twilio). Nothing is sold, and nothing is shared for advertising.
 
 ## Deleting your data

@@ -572,6 +572,36 @@ pub struct ReportRequest {
     pub sprites: Vec<u32>,
 }
 
+/// Feedback text a note may hold, and log it may carry along.
+pub const MAX_FEEDBACK_TEXT: usize = 4000;
+pub const MAX_FEEDBACK_LOG: usize = 64 * 1024;
+
+/// `POST /api/v1/feedback`, unsigned: what someone thinks of the app, for
+/// the server's admins, with the build it came from (a branch build's is
+/// deleted once its branch is gone).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct FeedbackRequest {
+    pub text: String,
+    pub app_version: String,
+    /// `stable`, `nightly` or `branch-<name>`.
+    pub channel: String,
+    pub os: String,
+    /// The end of the app's log, if they chose to send it.
+    #[serde(default)]
+    pub log: Option<String>,
+}
+
+/// Feedback, as admins see it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Feedback {
+    pub id: i64,
+    #[serde(flatten)]
+    pub request: FeedbackRequest,
+    pub created: i64,
+    pub handled: Option<i64>,
+    pub note: Option<String>,
+}
+
 /// A script's encores after giving or taking back one.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EncoreState {
@@ -676,6 +706,11 @@ pub enum AdminAction {
     /// `"take_down"` (a notice queued on a locked item, taken down after
     /// all).
     Copyright { notice: i64, decision: String, note: String },
+    /// Feedback not dealt with yet (all, with `all`), newest first:
+    /// `[Feedback]`.
+    Feedback { all: bool },
+    /// Mark feedback dealt with.
+    FeedbackDone { feedback: i64, note: String },
 }
 
 /// A copyright notice, as a rights holder (or someone acting for one)
