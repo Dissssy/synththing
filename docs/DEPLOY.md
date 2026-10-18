@@ -84,15 +84,15 @@ An authority sends codes, for attaching a recovery email and recovering an ident
 
 Keep `email.pepper` (made in the data folder on first run) with the backups: without it, the attached emails can't be recognised.
 
-## Feedback triage
+## Feedback intake
 
-A server can push each new note of feedback to a Claude Code routine that files it as a GitHub issue (docs/feedback-triage.md says what it does):
+A server can hand its feedback out to be filed as GitHub issues by an hourly Claude run (docs/feedback-intake.md says what it does):
 
-1. In the Claude project's Routines tab (or claude.ai/code/routines), create a routine with the synththing repository and this prompt: "Follow docs/feedback-triage.md from the repository for the feedback in the routine-fire-payload block." Under Select a trigger, Add another trigger > API > Generate token. Copy the URL and the token; the token is shown once.
-2. Put the token in the data folder, readable only by the server: `install -m 600 -o synththing -g synththing /dev/stdin /var/lib/synththing/triage.token`, paste it, then Ctrl+D.
-3. In `server.json`: `"triage": { "url": "https://api.anthropic.com/v1/claude_code/routines/<id>/fire" }`. Restart; it says "pushing new feedback to triage" as it starts, then "pushed feedback #n to triage" for each note.
+1. In `server.json`: `"intake": true`. Restart. The server makes `intake.token` in its data folder: that's the intake token.
+2. In the Claude project's settings, the cloud environment: allow the server's host (synththing.p51.nl) under Network access, and add the token as `SYNTHTHING_INTAKE_TOKEN`.
+3. Ask the project to set up the "Feedback intake" thread: it schedules its own hourly run.
 
-Notes the routine doesn't take (it's unreachable, or over its 30 an hour) wait in the database and go once it does. Feedback already there when triage is turned on, and not marked done, is pushed too.
+Notes stay waiting until a run says it has taken them, so nothing is lost if a run fails. To have a note filed again, clear its `taken` (`sqlite3 library.db "UPDATE feedback SET taken = NULL WHERE id = 12"`). To change the token, delete `intake.token` and restart.
 
 ## Moderating
 

@@ -82,8 +82,6 @@ pub(super) fn send(state: &State, request: &mut Request, ip: &str) -> Reply {
                 "new_feedback",
                 serde_json::json!({ "feedback": number, "channel": short(&feedback.channel), "preview": preview }),
             );
-            drop(db);
-            super::triage::wake(state);
             json(201, &serde_json::json!({ "feedback": number }))
         }
         Err(e) => error(500, format!("database: {e}")),
