@@ -6,6 +6,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Fixed
 - Right-clicking the tray icon closes the mini player as it brings the main window back, so the two aren't on screen together.
+- The main window and the mini player are never on screen together: left-clicking the tray icon puts the main window away in the tray as the mini player comes up, and bringing the main window back from the taskbar closes the mini player.
 
 ## 0.8.1 (2026-10-18)
 
