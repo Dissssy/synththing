@@ -1042,59 +1042,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Triage: each note is pushed to the routine with its token, oldest
-    /// first; one it doesn't take waits and goes with the next.
+    /// Intake: only with the token; the oldest waiting notes, with the end
+    /// of their logs; taken ones (and ones dealt with) aren't handed out
+    /// again.
     #[test]
-    fn feedback_is_pushed_to_triage() {
-        use std::sync::Arc;
-
-        use crate::library::FeedbackRequest;
-        let routine = Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
-        let url = format!("http://{}/fire", routine.server_addr().to_ip().unwrap());
-        let (fired, fires) = std::sync::mpsc::channel();
-        {
-            let routine = Arc::clone(&routine);
-            std::thread::spawn(move || {
-                for (n, mut request) in routine.incoming_requests().enumerate() {
-                    let token = request.headers().iter().find(|h| h.field.equiv("Authorization")).map(|h| h.value.to_string());
-                    let mut body = String::new();
-                    request.as_reader().read_to_string(&mut body).unwrap();
-                    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
-                    let _ = fired.send((token, body["text"].as_str().unwrap().to_string()));
-                    // (The first one isn't taken.)
-                    let _ = request.respond(tiny_http::Response::empty(if n == 0 { 503 } else { 200 }));
-                }
-            });
-        }
-        let dir = std::env::temp_dir().join(format!("synththing-triage-test-{}", std::process::id()));
+    fn feedback_waits_for_intake() {
+        use crate::library::{AdminAction, FeedbackRequest};
+        let dir = std::env::temp_dir().join(format!("synththing-intake-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let config = serde_json::json!({ "previews": false, "check_uploads": false, "triage": { "url": url } });
-        std::fs::write(dir.join("server.json"), config.to_string()).unwrap();
-        std::fs::write(dir.join("triage.token"), "sk-test\n").unwrap();
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false, "check_uploads": false, "intake": true }"#).unwrap();
         let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
         let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let server_id = Identity::from_secret_hex(&std::fs::read_to_string(dir.join("server.key")).unwrap()).unwrap();
+        let token = std::fs::read_to_string(dir.join("intake.token")).unwrap();
         let note = |text: &str, log: Option<String>| FeedbackRequest {
             text: text.into(),
-            app_version: "0.7.2".into(),
-            channel: "branch-lanes".into(),
+            app_version: "0.8.0".into(),
+            channel: "stable".into(),
             os: "linux x86_64".into(),
             log,
         };
-        let next = || fires.recv_timeout(Duration::from_secs(10)).unwrap();
+        let agent: Agent = Agent::config_builder().http_status_as_error(false).build().into();
+        let waiting = |token: &str| {
+            let mut response =
+                agent.get(format!("{base}/api/v1/intake")).header("Authorization", format!("Bearer {token}")).call().unwrap();
+            let status = response.status().as_u16();
+            (status, response.body_mut().read_json::<serde_json::Value>().unwrap())
+        };
+        let ids = |body: &serde_json::Value| -> Vec<i64> {
+            body["feedback"].as_array().unwrap().iter().map(|f| f["id"].as_i64().unwrap()).collect()
+        };
 
         let first = feedback(&base, &note("Lanes stutter", Some(format!("é{}the end", "x".repeat(20_000))))).unwrap();
-        let (token, refused) = next();
-        assert_eq!(token.as_deref(), Some("Bearer sk-test"));
-        assert!(refused.starts_with(&format!("synththing feedback #{first}\n")), "{refused}");
-        assert!(refused.contains("channel: branch-lanes\n") && refused.contains("\nLanes stutter\n"));
-        assert!(refused.contains("the end") && !refused.contains('é') && refused.len() < 9 * 1024);
-
         let second = feedback(&base, &note("Lanes are great", None)).unwrap();
-        assert!(next().1.starts_with(&format!("synththing feedback #{first}\n")));
-        let (_, pushed) = next();
-        assert!(pushed.starts_with(&format!("synththing feedback #{second}\n")) && !pushed.contains("log"));
-        assert!(fires.recv_timeout(Duration::from_millis(300)).is_err());
+        let done = feedback(&base, &note("Old news", None)).unwrap();
+        admin::<serde_json::Value>(&base, &key, &server_id, &AdminAction::FeedbackDone { feedback: done, note: "#3".into() })
+            .unwrap();
+        assert_eq!(waiting("not-it").0, 401);
+        let (status, body) = waiting(&token);
+        assert_eq!((status, ids(&body)), (200, vec![first, second]));
+        let log = body["feedback"][0]["log"].as_str().unwrap();
+        assert!(log.ends_with("the end") && !log.contains('é') && log.len() <= 8 * 1024);
+        assert_eq!(body["feedback"][0]["text"], "Lanes stutter");
+        assert!(body["feedback"][0].get("ip").is_none());
+
+        let mut response = agent
+            .post(format!("{base}/api/v1/intake/taken"))
+            .header("Authorization", format!("Bearer {token}"))
+            .send_json(serde_json::json!({ "feedback": [first] }))
+            .unwrap();
+        assert_eq!(response.body_mut().read_json::<serde_json::Value>().unwrap()["taken"], 1);
+        assert_eq!(ids(&waiting(&token).1), vec![second]);
         running.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }

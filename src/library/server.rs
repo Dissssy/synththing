@@ -28,6 +28,7 @@ mod authority;
 mod copyright;
 mod deletion;
 mod feedback;
+mod intake;
 mod mail;
 
 #[cfg(test)]
@@ -36,7 +37,6 @@ mod moderation;
 mod notifications;
 mod remixes;
 mod songs;
-mod triage;
 mod update;
 
 use std::collections::HashMap;
@@ -123,8 +123,9 @@ pub struct ServerConfig {
     pub check_uploads: bool,
     /// Take songs (MIDI files) too.
     pub songs: bool,
-    /// Push new feedback to a Claude Code routine that triages it.
-    pub triage: Option<TriageConfig>,
+    /// Hand feedback out to be filed as GitHub issues, with the intake
+    /// token (`intake.token`, made on first run).
+    pub intake: bool,
 }
 
 impl Default for ServerConfig {
@@ -154,7 +155,7 @@ impl Default for ServerConfig {
             unverified_uploads_per_day: 3,
             documents: Vec::new(),
             songs: false,
-            triage: None,
+            intake: false,
         }
     }
 }
@@ -208,25 +209,10 @@ impl Default for MailConfig {
     }
 }
 
-/// Triage settings (`server.json`'s `triage`): the routine's API trigger.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct TriageConfig {
-    /// Its URL (`https://api.anthropic.com/v1/claude_code/routines/<id>/fire`).
-    pub url: String,
-    /// The file its token is in (in the data folder unless it's a full
-    /// path).
-    pub token_file: String,
-}
-
-impl Default for TriageConfig {
-    fn default() -> Self {
-        Self { url: String::new(), token_file: "triage.token".into() }
-    }
-}
-
-/// The secret addresses are hashed with: `email.pepper`, made on first run.
-fn load_pepper(path: &Path) -> Result<Vec<u8>, String> {
+/// A secret of the server's (32 bytes, hex in the file), made on first
+/// run and readable only by its owner: `email.pepper`, what addresses are
+/// hashed with, and `intake.token`.
+fn load_secret(path: &Path) -> Result<Vec<u8>, String> {
     if let Ok(text) = std::fs::read_to_string(path) {
         return unhex(text.trim()).filter(|b| b.len() >= 16).ok_or_else(|| format!("{} isn't valid", path.display()));
     }
@@ -331,10 +317,12 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
     let workers = config.threads.max(1);
     let (queue, jobs) = mpsc::channel();
     let previews = config.previews;
-    let pepper = load_pepper(&data.join("email.pepper"))?;
+    let pepper = load_secret(&data.join("email.pepper"))?;
     let mailer = mail::Mailer::new(config.mail.as_ref(), data)?;
-    let routine = triage::Routine::new(config.triage.as_ref(), data)?;
-    let (wake_triage, triage_woken) = mpsc::channel();
+    let intake_token = match config.intake {
+        true => Some(hex(&load_secret(&data.join("intake.token"))?)),
+        false => None,
+    };
     if config.authority {
         println!("an identity authority{}", if mailer.on() { ", sending email" } else { " (no email: rotations only)" });
     }
@@ -352,12 +340,8 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
         previews: Mutex::new(previews.then_some(queue)),
         pepper,
         mailer,
-        triage: routine.is_some().then_some(wake_triage),
+        intake_token,
     });
-    if let Some(routine) = routine {
-        println!("pushing new feedback to triage");
-        triage::start(&state, routine, triage_woken)?;
-    }
     moderation::forget_old_addresses(&state);
     feedback::forget_old(&state);
     deletion::purge(&state);
@@ -422,8 +406,8 @@ struct State {
     /// What email addresses are hashed with, and the mail sender.
     pepper: Vec<u8>,
     mailer: mail::Mailer,
-    /// Wakes the thread pushing feedback to triage (if it's on).
-    triage: Option<Sender<()>>,
+    /// The token feedback intake asks with (if it's on).
+    intake_token: Option<String>,
 }
 
 impl State {
@@ -673,7 +657,10 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
         db.execute_batch(feedback::SCHEMA_V13)?;
     }
     if version < 14 {
-        db.execute_batch(triage::SCHEMA_V14)?;
+        db.execute_batch(intake::SCHEMA_V14)?;
+    }
+    if version < 15 {
+        db.execute_batch(intake::SCHEMA_V15)?;
     }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
@@ -823,6 +810,8 @@ fn handle(state: &Arc<State>, mut request: Request) {
             let ip = client_ip(state, &request);
             feedback::send(state, &mut request, &ip)
         }
+        (Method::Get, ["api", "v1", "intake"]) => intake::waiting(state, &request),
+        (Method::Post, ["api", "v1", "intake", "taken"]) => intake::taken(state, &mut request),
         (Method::Post, ["api", "v1", "admin"]) => moderation::admin(state, &mut request),
         (Method::Post, ["api", "v1", "identity", "rotate"]) => authority::rotate(state, &mut request),
         (Method::Post, ["api", "v1", "identity", "apply"]) => {

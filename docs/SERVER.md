@@ -110,7 +110,7 @@ Rendered by the server on each upload and each new version, through a queue (one
 - **Feedback** (`server/feedback.rs`, Help > Send feedback... and the speech bubble in the app's menu bar) is a note about the app for the admins: unsigned, so it needs no identity, with the build it came from (version, channel, OS) and, if the sender ticks it, the end of the app's log. The app sends it to the official server. Branch builds can send it although their other online features are off: trying a feature and saying how it went is what they're for.
 - Limits per address: 10 a day. Banned addresses can't send it. The admins get a `new_feedback` notification.
 - Read it in Moderation's Feedback tab or with `synththing admin feedback`, and mark it done (with a note, like the issue it became) with `synththing admin feedback-done <number>`.
-- **Triage** (`server/triage.rs`, `triage` in `server.json`, docs/DEPLOY.md): each new note is pushed to a Claude Code routine's API trigger, which opens or adds to a GitHub issue for it (docs/feedback-triage.md), or for a branch build's, comments on that branch's PR. It gets the note, its build and the last 8 KB of its log, not the address. The feedback table is the queue: a note is `pushed` once the routine takes it; a push thread sends them oldest first when one comes in and every 10 minutes, so none are lost while the routine can't be reached.
+- **Intake** (`server/intake.rs`, `"intake": true` in `server.json`, docs/DEPLOY.md): an hourly Claude run collects the feedback waiting (`GET /api/v1/intake`, up to 20, oldest first: each note, its build and the last 8 KB of its log, not the address), files it as GitHub issues (docs/feedback-intake.md), and marks it taken (`POST /api/v1/intake/taken`). Both need the intake token (`intake.token` in the data folder, made on first run). Until a note is taken, the next run gets it again; one run takes a whole batch, so notes about the same thing are filed together.
 - Kept until it's done, then 90 days; addresses 30 days, as for reports. A branch build's feedback is deleted once that branch's test build is gone from GitHub's releases (`branch-cleanup.yml` removes it when the branch is deleted), checked daily; if GitHub can't be reached, nothing is deleted.
 
 ## Moderation
@@ -180,6 +180,8 @@ DELETE /api/v1/scripts/{id}               owner or admin
 POST /api/v1/scripts/{id}/encore          (and DELETE to take it back)
 POST /api/v1/scripts/{id}/report
 POST /api/v1/feedback                     feedback for the admins (unsigned)
+GET  /api/v1/intake                       feedback waiting to be filed (the intake token)
+POST /api/v1/intake/taken                 mark it filed (the intake token)
 POST /api/v1/admin                        an admin action (signed by an admin)
 POST /api/v1/songs                        upload a song (servers with "songs": true)
 GET  /api/v1/songs/{id}/file              ?version=&preview=1  the MIDI file (signed by the server; for a preview, not counted)
