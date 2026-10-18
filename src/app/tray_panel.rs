@@ -202,13 +202,18 @@ impl TrayPanel {
     pub(super) fn toggle_mini(&self, ctx: &egui::Context, cursor: [f32; 2], pixels_per_point: f32) {
         let up = self.state.lock().is_ok_and(|s| s.open && s.pinned);
         if up {
-            if let Ok(mut state) = self.state.lock() {
-                state.open = false;
-            }
-            ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::Visible(false));
+            self.hide(ctx);
         } else {
             self.show(ctx, cursor, pixels_per_point, true);
         }
+    }
+
+    /// Put the panel away (it only hides), pinned or not.
+    pub(super) fn hide(&self, ctx: &egui::Context) {
+        if let Ok(mut state) = self.state.lock() {
+            state.open = false;
+        }
+        ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::Visible(false));
     }
 
     fn show(&self, ctx: &egui::Context, cursor: [f32; 2], pixels_per_point: f32, pinned: bool) {
@@ -635,7 +640,6 @@ fn controls_ui(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut State, act: &
         ui.horizontal(|ui| {
             if ui.button(format!("{} Show synththing", icon("app-window"))).clicked() {
                 act(Action::ShowWindow);
-                close(ctx, state);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button(format!("{} Quit", icon("power"))).on_hover_text("Close synththing completely").clicked() {

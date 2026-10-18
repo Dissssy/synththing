@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Fixed
+- Right-clicking the tray icon closes the mini player as it brings the main window back, so the two aren't on screen together.
+
 ## 0.8.1 (2026-10-18)
 
 ### Changed
