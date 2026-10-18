@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.7.1 (2026-10-18)
+
 ### Added
 - Canary updates (Preferences > General): the newest build from master, minutes after every change, and releases once they're out. For trying new things early; it can be broken. Test builds name themselves in the title bar, and their icon and wordmark have a color of their own: yellow for canary, another for each branch build.
 - Branch builds (Help > Check for updates > Branch builds): try a feature before it's merged. Each installs separately, starting with a copy of your settings (take a fresh one from its Help > Check for updates), and follows its branch; your usual synththing isn't touched. Their online features are off.
