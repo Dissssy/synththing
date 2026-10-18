@@ -201,6 +201,9 @@ pub struct App {
     /// `ui` ran since the last `logic`: false while nothing's drawn (the
     /// window hidden or minimized), when what lives only on screen stops.
     ui_drawn: bool,
+    /// `ui` ran in the frame before this one (`ui_drawn`, as `logic` found
+    /// it): the window's on screen.
+    on_screen: bool,
     /// Whether the cursor is currently confined to the window for a script.
     cursor_confined: bool,
     updater: Updater,
@@ -478,6 +481,7 @@ impl App {
             visualizer_drawn: false,
             visualizer_was_drawn: false,
             ui_drawn: false,
+            on_screen: false,
             cursor_confined: false,
             updater: Updater::new(),
             updates_open: false,
@@ -2603,6 +2607,7 @@ impl App {
             transport: self.script_transport(),
             frozen: self.preferences_open,
             main_shows_visualizer: !self.hidden && self.visualizer_was_drawn,
+            main_on_screen: self.on_screen,
         }
     }
 
@@ -3613,7 +3618,12 @@ impl eframe::App for App {
         }
         self.visualizer_was_drawn = self.visualizer_drawn;
 
-        if self.dedicated.is_some() || self.is_open(Section::Visualizer) {
+        if self.tray_panel.picture_shown() {
+            // The two windows take turns: each frame here asks for one of
+            // the mini player's, and each of its asks for one here (see
+            // `tray_panel`).
+            ctx.request_repaint_of(tray_panel::viewport_id());
+        } else if self.dedicated.is_some() || self.is_open(Section::Visualizer) {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
         self.ui_drawn = true;
@@ -3625,7 +3635,8 @@ impl eframe::App for App {
     /// playlist goes on to its next track, loads finish and the library
     /// keeps polling either way.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
-        if !std::mem::take(&mut self.ui_drawn) {
+        self.on_screen = std::mem::take(&mut self.ui_drawn);
+        if !self.on_screen {
             self.nothing_drawn();
         }
         let view = self.shared.lock().unwrap().view.clone();

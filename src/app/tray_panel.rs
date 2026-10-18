@@ -14,7 +14,8 @@
 //! `ui` isn't called. It draws from a snapshot the app refreshes
 //! (`App::logic`) and hands back what's clicked as [`Action`]s for the app
 //! to carry out; the visualizer it draws itself, through the panel it
-//! shares with the main window.
+//! shares with the main window. While the main window's on screen too,
+//! the two draw the visualizer's frames in turn (`picture_ui`).
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
@@ -92,6 +93,9 @@ pub(super) struct Snapshot {
     /// script, and the mini player just shows its latest picture (two
     /// windows running it would resize it back and forth between them).
     pub main_shows_visualizer: bool,
+    /// The main window is on screen (not hidden or minimized), drawing
+    /// frames of its own.
+    pub main_on_screen: bool,
 }
 
 /// What was clicked, for the app to do.
@@ -194,6 +198,12 @@ impl TrayPanel {
 
     pub(super) fn is_open(&self) -> bool {
         self.state.lock().is_ok_and(|s| s.open)
+    }
+
+    /// It's up with the visualizer, which keeps it drawing frame after
+    /// frame.
+    pub(super) fn picture_shown(&self) -> bool {
+        self.state.lock().is_ok_and(|s| s.open && s.expanded)
     }
 
     /// Left-clicking the tray icon: the mini player (the panel pinned),
@@ -404,7 +414,17 @@ fn picture_ui(ui: &mut egui::Ui, picture: &Picture, state: &mut State, act: &imp
             state.switcher_opened = true;
         }
     }
-    ui.ctx().request_repaint();
+    // The next frame. With the main window on screen too, the two take
+    // turns, each asking for the other's next frame (the main window asks
+    // for this one's, `App::ui`): on Windows, a window that asks for its
+    // own next frame every frame is always waiting to be drawn, and an
+    // always-on-top one waiting is drawn before any other, so the main
+    // window would never be drawn again.
+    if snapshot.main_on_screen {
+        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    } else {
+        ui.ctx().request_repaint();
+    }
 }
 
 /// The script switcher, over the visualizer (`rect`): the picture behind it

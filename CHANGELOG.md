@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Fixed
+- The main window no longer freezes while the mini player is showing the visualizer. It stopped drawing and taking clicks (even its close button) until the mini player's visualizer was closed.
+
 ## 0.8.1 (2026-10-18)
 
 ### Changed
