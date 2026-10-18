@@ -84,6 +84,16 @@ An authority sends codes, for attaching a recovery email and recovering an ident
 
 Keep `email.pepper` (made in the data folder on first run) with the backups: without it, the attached emails can't be recognised.
 
+## Feedback triage
+
+A server can push each new note of feedback to a Claude Code routine that files it as a GitHub issue (docs/feedback-triage.md says what it does):
+
+1. In the Claude project's Routines tab (or claude.ai/code/routines), create a routine with the synththing repository and this prompt: "Follow docs/feedback-triage.md from the repository for the feedback in the routine-fire-payload block." Under Select a trigger, Add another trigger > API > Generate token. Copy the URL and the token; the token is shown once.
+2. Put the token in the data folder, readable only by the server: `install -m 600 -o synththing -g synththing /dev/stdin /var/lib/synththing/triage.token`, paste it, then Ctrl+D.
+3. In `server.json`: `"triage": { "url": "https://api.anthropic.com/v1/claude_code/routines/<id>/fire" }`. Restart; it says "pushing new feedback to triage" as it starts, then "pushed feedback #n to triage" for each note.
+
+Notes the routine doesn't take (it's unreachable, or over its 30 an hour) wait in the database and go once it does. Feedback already there when triage is turned on, and not marked done, is pushed too.
+
 ## Moderating
 
 `synththing admin` on the server talks to it, signed with its own key (docs/cli.md): `synththing admin --data /var/lib/synththing reports` under systemd (as root, or the synththing user), `docker exec <container> synththing admin --data /data reports` in Docker. To moderate from the app instead, make your identity an admin: `synththing admin --data ... add-admin '#yourid'` (the server needs to have seen your key: give something an encore first, or pass the whole key). The Library tab then has Moderation.

@@ -1042,6 +1042,63 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Triage: each note is pushed to the routine with its token, oldest
+    /// first; one it doesn't take waits and goes with the next.
+    #[test]
+    fn feedback_is_pushed_to_triage() {
+        use std::sync::Arc;
+
+        use crate::library::FeedbackRequest;
+        let routine = Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
+        let url = format!("http://{}/fire", routine.server_addr().to_ip().unwrap());
+        let (fired, fires) = std::sync::mpsc::channel();
+        {
+            let routine = Arc::clone(&routine);
+            std::thread::spawn(move || {
+                for (n, mut request) in routine.incoming_requests().enumerate() {
+                    let token = request.headers().iter().find(|h| h.field.equiv("Authorization")).map(|h| h.value.to_string());
+                    let mut body = String::new();
+                    request.as_reader().read_to_string(&mut body).unwrap();
+                    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+                    let _ = fired.send((token, body["text"].as_str().unwrap().to_string()));
+                    // (The first one isn't taken.)
+                    let _ = request.respond(tiny_http::Response::empty(if n == 0 { 503 } else { 200 }));
+                }
+            });
+        }
+        let dir = std::env::temp_dir().join(format!("synththing-triage-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = serde_json::json!({ "previews": false, "check_uploads": false, "triage": { "url": url } });
+        std::fs::write(dir.join("server.json"), config.to_string()).unwrap();
+        std::fs::write(dir.join("triage.token"), "sk-test\n").unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let note = |text: &str, log: Option<String>| FeedbackRequest {
+            text: text.into(),
+            app_version: "0.7.2".into(),
+            channel: "branch-lanes".into(),
+            os: "linux x86_64".into(),
+            log,
+        };
+        let next = || fires.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        let first = feedback(&base, &note("Lanes stutter", Some(format!("é{}the end", "x".repeat(20_000))))).unwrap();
+        let (token, refused) = next();
+        assert_eq!(token.as_deref(), Some("Bearer sk-test"));
+        assert!(refused.starts_with(&format!("synththing feedback #{first}\n")), "{refused}");
+        assert!(refused.contains("channel: branch-lanes\n") && refused.contains("\nLanes stutter\n"));
+        assert!(refused.contains("the end") && !refused.contains('é') && refused.len() < 9 * 1024);
+
+        let second = feedback(&base, &note("Lanes are great", None)).unwrap();
+        assert!(next().1.starts_with(&format!("synththing feedback #{first}\n")));
+        let (_, pushed) = next();
+        assert!(pushed.starts_with(&format!("synththing feedback #{second}\n")) && !pushed.contains("log"));
+        assert!(fires.recv_timeout(Duration::from_millis(300)).is_err());
+        running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn notifications_are_kept_and_pushed() {
         use crate::library::{AdminAction, ReportRequest};

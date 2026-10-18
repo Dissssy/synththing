@@ -36,6 +36,7 @@ mod moderation;
 mod notifications;
 mod remixes;
 mod songs;
+mod triage;
 mod update;
 
 use std::collections::HashMap;
@@ -122,6 +123,8 @@ pub struct ServerConfig {
     pub check_uploads: bool,
     /// Take songs (MIDI files) too.
     pub songs: bool,
+    /// Push new feedback to a Claude Code routine that triages it.
+    pub triage: Option<TriageConfig>,
 }
 
 impl Default for ServerConfig {
@@ -151,6 +154,7 @@ impl Default for ServerConfig {
             unverified_uploads_per_day: 3,
             documents: Vec::new(),
             songs: false,
+            triage: None,
         }
     }
 }
@@ -201,6 +205,23 @@ pub struct MailConfig {
 impl Default for MailConfig {
     fn default() -> Self {
         Self { from: String::new(), from_name: "synththing".into(), api_key_file: "sendgrid.key".into() }
+    }
+}
+
+/// Triage settings (`server.json`'s `triage`): the routine's API trigger.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TriageConfig {
+    /// Its URL (`https://api.anthropic.com/v1/claude_code/routines/<id>/fire`).
+    pub url: String,
+    /// The file its token is in (in the data folder unless it's a full
+    /// path).
+    pub token_file: String,
+}
+
+impl Default for TriageConfig {
+    fn default() -> Self {
+        Self { url: String::new(), token_file: "triage.token".into() }
     }
 }
 
@@ -312,6 +333,8 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
     let previews = config.previews;
     let pepper = load_pepper(&data.join("email.pepper"))?;
     let mailer = mail::Mailer::new(config.mail.as_ref(), data)?;
+    let routine = triage::Routine::new(config.triage.as_ref(), data)?;
+    let (wake_triage, triage_woken) = mpsc::channel();
     if config.authority {
         println!("an identity authority{}", if mailer.on() { ", sending email" } else { " (no email: rotations only)" });
     }
@@ -329,7 +352,12 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
         previews: Mutex::new(previews.then_some(queue)),
         pepper,
         mailer,
+        triage: routine.is_some().then_some(wake_triage),
     });
+    if let Some(routine) = routine {
+        println!("pushing new feedback to triage");
+        triage::start(&state, routine, triage_woken)?;
+    }
     moderation::forget_old_addresses(&state);
     feedback::forget_old(&state);
     deletion::purge(&state);
@@ -394,6 +422,8 @@ struct State {
     /// What email addresses are hashed with, and the mail sender.
     pepper: Vec<u8>,
     mailer: mail::Mailer,
+    /// Wakes the thread pushing feedback to triage (if it's on).
+    triage: Option<Sender<()>>,
 }
 
 impl State {
@@ -641,6 +671,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     }
     if version < 13 {
         db.execute_batch(feedback::SCHEMA_V13)?;
+    }
+    if version < 14 {
+        db.execute_batch(triage::SCHEMA_V14)?;
     }
     remixes::fingerprint_stored(&db)?;
     Ok(db)

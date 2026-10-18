@@ -20,7 +20,7 @@ The official library server is run by the makers of synththing. Questions, reque
 
 **Encores and reports**: which identity gave which script or song an encore (only the totals are shown publicly), and the reports you send (their reason, details and what they point at), which only the server's moderators see.
 
-**Feedback** you send from the app (Help > Send feedback...): what you wrote, the app's version and build, your operating system, and the app's recent log if you ticked the box for it. It isn't linked to your identity. Only the server's moderators see it. It's kept until they've dealt with it, then for **90 days**; feedback from a branch build is deleted once that test build is gone.
+**Feedback** you send from the app (Help > Send feedback...): what you wrote, the app's version and build, your operating system, and the app's recent log if you ticked the box for it. It isn't linked to your identity. Only the server's moderators see it as you wrote it. It's also passed, without your address, to Claude (Anthropic's AI), which sorts it into synththing's public issue tracker on GitHub: what it's about goes there in Claude's own words, without your log. It's kept until they've dealt with it, then for **90 days**; feedback from a branch build is deleted once that test build is gone.
 
 **Your address (IP)** is kept with each upload, encore, report, feedback and email request, to limit abuse (how many of each one address can make) and so moderators can ban someone who abuses the library. Addresses are deleted after **30 days**, except those of active bans, kept until the ban ends. The server's own log also notes uploads, with the address they came from; the system rotates it away.
 
@@ -32,7 +32,7 @@ The official library server is run by the makers of synththing. Questions, reque
 
 - **Everyone**: what you publish, the names you post under, your ID, and encore totals.
 - **The server's moderators**: reports, feedback, and for each script and song the addresses its versions were uploaded from (while they're kept).
-- **Service providers**, only as far as running the library needs: the server is hosted by Hetzner Online (in the United States); emails are sent through SendGrid (Twilio). Nothing is sold, and nothing is shared for advertising.
+- **Service providers**, only as far as running the library needs: the server is hosted by Hetzner Online (in the United States); emails are sent through SendGrid (Twilio); feedback is sorted by Claude (Anthropic). Nothing is sold, and nothing is shared for advertising.
 
 ## Deleting your data
 
