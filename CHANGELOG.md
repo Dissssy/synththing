@@ -6,6 +6,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## 0.8.1 (2026-10-18)
 
+### Changed
+- Feedback is filed once an hour, a batch at a time, so notes about the same thing end up in one issue instead of several.
+
 ## 0.8.0 (2026-10-18)
 
 ### Changed
