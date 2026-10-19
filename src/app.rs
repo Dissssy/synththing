@@ -3159,6 +3159,7 @@ impl App {
         let mut buffer_ms = self.buffer_ms;
         let mut remember = self.config.remember;
         let mut install_updates = self.config.android_install_updates;
+        let mut over_cutout = self.config.fullscreen_over_cutout;
         let mut close = false;
         let mut welcome = false;
         let mut tour = false;
@@ -3195,6 +3196,14 @@ impl App {
                                      if you turn it back on.",
                                     |ui| ui.checkbox(&mut separate, "Separate layout for fullscreen"),
                                 );
+                                if cfg!(target_os = "android") {
+                                    with_info(
+                                        ui,
+                                        "With the controls hidden, the visualizer fills the screen. On: it goes \
+                                         under the notch or camera hole as well. Off: that strip stays black.",
+                                        |ui| ui.checkbox(&mut over_cutout, "Full screen covers the notch"),
+                                    );
+                                }
                                 if self.tray.is_some() {
                                     with_info(
                                         ui,
@@ -3406,9 +3415,11 @@ impl App {
             || buffer_ms != self.buffer_ms
             || remember != self.config.remember
             || install_updates != self.config.android_install_updates
+            || over_cutout != self.config.fullscreen_over_cutout
         {
             self.config.remember = remember;
             self.config.android_install_updates = install_updates;
+            self.config.fullscreen_over_cutout = over_cutout;
             if buffer_ms != self.buffer_ms {
                 self.buffer_ms = buffer_ms;
                 self.send(AudioCommand::SetBufferMs(buffer_ms));

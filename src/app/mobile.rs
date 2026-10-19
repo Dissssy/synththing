@@ -12,7 +12,7 @@
 
 use std::time::{Duration, Instant};
 
-use eframe::egui;
+use eframe::egui::{self, AtomExt as _};
 
 use super::{fmt_time, icon, on_color, palette_color, status_color, status_outcome, App};
 use crate::audio::{AudioCommand, PlaybackShared};
@@ -136,7 +136,7 @@ impl App {
         // The visualizer filling the screen is full screen: no status or
         // navigation bar either (a swipe from the edge shows them a moment).
         #[cfg(target_os = "android")]
-        crate::android::set_fullscreen(fill_screen);
+        crate::android::set_fullscreen(fill_screen, self.config.fullscreen_over_cutout);
 
         // Picture-in-picture: a small floating window, just the visualizer.
         #[cfg(target_os = "android")]
@@ -626,7 +626,8 @@ impl App {
 
 /// An icon button `size` points square, big enough for a finger.
 fn big_icon_button(name: &str, size: f32) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(icon(name)).size(size * 0.5)).min_size(egui::Vec2::splat(size))
+    // (Growing, the icon is centered in the button.)
+    egui::Button::new(egui::RichText::new(icon(name)).size(size * 0.5).atom_grow(true)).min_size(egui::Vec2::splat(size))
 }
 
 /// `text` on one line the width of `ui`, scrolling sideways (round and

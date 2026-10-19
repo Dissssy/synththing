@@ -123,6 +123,10 @@ pub struct Config {
     /// desktop (View > Mobile layout). Android always uses it.
     #[serde(default)]
     pub mobile_layout: bool,
+    /// On Android: the visualizer filling the screen draws under a notch
+    /// or camera hole too (off: that strip is black).
+    #[serde(default)]
+    pub fullscreen_over_cutout: bool,
     /// A release version the user chose to skip: the startup check doesn't
     /// bring it up again (a manual check still shows it).
     #[serde(default)]

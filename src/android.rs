@@ -95,9 +95,17 @@ impl eframe::App for Shared {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         // The app draws under the system bars (edge to edge): their part
-        // gets the background, and the app the rest.
-        ui.painter().rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
-        let content = ui.ctx().content_rect();
+        // gets the background, and the app the rest. Full screen, what's
+        // left (a notch, a camera hole) is black, unless the app is to
+        // draw there too.
+        let fullscreen = FULLSCREEN.load(Ordering::Relaxed);
+        let fill = if fullscreen { egui::Color32::BLACK } else { ui.visuals().panel_fill };
+        ui.painter().rect_filled(ui.max_rect(), 0.0, fill);
+        let content = if fullscreen && OVER_CUTOUT.load(Ordering::Relaxed) {
+            ui.max_rect()
+        } else {
+            ui.ctx().content_rect()
+        };
         ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| self.app.lock().unwrap().ui(ui, frame));
         // eframe has no clipboard on Android: what was copied goes to
         // Android's.
@@ -329,9 +337,13 @@ pub fn set_insets(left: i32, top: i32, right: i32, bottom: i32) {
 
 /// Whether the system bars are hidden, as last asked.
 static FULLSCREEN: AtomicBool = AtomicBool::new(false);
+/// Whether full screen draws under a notch or camera hole too.
+static OVER_CUTOUT: AtomicBool = AtomicBool::new(false);
 
-/// Hide the status and navigation bars (`on`), or show them again.
-pub fn set_fullscreen(on: bool) {
+/// Hide the status and navigation bars (`on`), or show them again;
+/// `over_cutout`: full screen draws under a notch or camera hole as well.
+pub fn set_fullscreen(on: bool, over_cutout: bool) {
+    OVER_CUTOUT.store(over_cutout, Ordering::Relaxed);
     if FULLSCREEN.swap(on, Ordering::Relaxed) == on {
         return;
     }
