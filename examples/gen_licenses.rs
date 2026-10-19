@@ -20,6 +20,11 @@ use std::process::Command;
 
 use serde_json::{json, Value};
 
+/// synththing's own crates (the app, and its library for Android), which
+/// aren't third party. (The vendored ones are, though they're workspace
+/// members too.)
+const OURS: [&str; 2] = ["synththing", "synththing-android"];
+
 /// The platform release builds are made for; dependencies only used on
 /// other platforms aren't in the binary, so they aren't listed.
 const TARGET: &str = "x86_64-pc-windows-msvc";
@@ -56,7 +61,8 @@ fn main() {
     for package in metadata["packages"].as_array().expect("packages") {
         let id = package["id"].as_str().unwrap_or_default();
         let name = package["name"].as_str().unwrap_or_default().to_string();
-        if !in_build.contains(id) || name == "synththing" {
+        // (Not synththing's own crates: the app and its Android library.)
+        if !in_build.contains(id) || OURS.contains(&name.as_str()) {
             continue;
         }
         let version = package["version"].as_str().unwrap_or_default().to_string();

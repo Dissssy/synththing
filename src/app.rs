@@ -1171,9 +1171,12 @@ impl App {
         };
     }
 
-    /// Browse for soundfonts to add: one or several at once.
-    #[cfg(not(target_os = "android"))]
+    /// Browse for soundfonts to add: one or several at once. (On
+    /// Android, import them: `import.rs`.)
     fn open_soundfont_browser(&mut self) {
+        #[cfg(target_os = "android")]
+        crate::import::start(crate::import::Kind::Soundfonts, &["sf2"]);
+        #[cfg(not(target_os = "android"))]
         if let Some(paths) = rfd::FileDialog::new()
             .add_filter("SoundFont", &["sf2"])
             .set_directory(self.config.browse_start_dir())
@@ -1420,7 +1423,7 @@ impl App {
         ui.horizontal(|ui| {
             if self.mobile() {
                 if ui.button(format!("{}  Import soundfonts...", icon("plus"))).on_hover_text("Copy soundfonts into synththing").clicked() {
-                    crate::import::start(ui.ctx(), crate::import::Kind::Soundfonts, &["sf2"]);
+                    crate::import::start(crate::import::Kind::Soundfonts, &["sf2"]);
                 }
             } else if ui.button("Add soundfont...").clicked() {
                 self.open_soundfont_browser();
@@ -1726,27 +1729,38 @@ impl App {
                     ui.hyperlink_to("Release page", &release.page_url);
                     ui.add_space(6.0);
                     let dev_build = cfg!(debug_assertions);
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(!dev_build, egui::Button::new("Install"))
-                            .on_disabled_hover_text(
-                                "This is a development build (cargo run); updates install into release builds.",
-                            )
-                            .clicked()
-                        {
-                            self.updater.install(release.clone());
-                        }
-                        if ui.button("Skip this version").clicked() {
+                    if let Some(announce) = self.android_update_ui(ui) {
+                        if announce {
+                            // Shown this once: next time, only if there's a newer one.
                             self.config.skipped_update = Some(release.version.to_string());
                             if let Err(e) = self.config.save() {
                                 self.status = format!("Couldn't save preferences: {e}");
                             }
                             close = true;
                         }
-                        if ui.button("Not now").clicked() {
-                            close = true;
-                        }
-                    });
+                    } else {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(!dev_build, egui::Button::new("Install"))
+                                .on_disabled_hover_text(
+                                    "This is a development build (cargo run); updates install into release builds.",
+                                )
+                                .clicked()
+                            {
+                                self.updater.install(release.clone());
+                            }
+                            if ui.button("Skip this version").clicked() {
+                                self.config.skipped_update = Some(release.version.to_string());
+                                if let Err(e) = self.config.save() {
+                                    self.status = format!("Couldn't save preferences: {e}");
+                                }
+                                close = true;
+                            }
+                            if ui.button("Not now").clicked() {
+                                close = true;
+                            }
+                        });
+                    }
                 }
                 UpdateState::Downloading { release, downloaded } => {
                     ui.label(format!("Downloading v{}...", release.version));
@@ -1755,6 +1769,12 @@ impl App {
                         egui::ProgressBar::new(*downloaded as f32 / total as f32)
                             .text(format!("{:.1} / {:.1} MB", *downloaded as f64 / 1e6, total as f64 / 1e6)),
                     );
+                }
+                UpdateState::Installed(version) if cfg!(target_os = "android") => {
+                    ui.label(format!("Android asks you to install v{version}; synththing restarts with it."));
+                    if ui.button("OK").clicked() {
+                        close = true;
+                    }
                 }
                 UpdateState::Installed(version) => {
                     ui.label(format!("v{version} is installed. It runs the next time synththing starts."));
@@ -1796,7 +1816,7 @@ impl App {
                     }
                 }
             }
-            if branch.is_none() {
+            if branch.is_none() && !cfg!(target_os = "android") {
                 ui.add_space(8.0);
                 self.branch_builds_ui(ui);
             } else {
@@ -2416,7 +2436,7 @@ impl App {
                 Err(e) => self.status = format!("Couldn't open the song library: {e:#}"),
             }
             if ui.button(format!("{}  Import songs...", icon("plus"))).on_hover_text("Copy songs into synththing's library").clicked() {
-                crate::import::start(ui.ctx(), crate::import::Kind::Songs, listed_song_extensions(&self.config));
+                crate::import::start(crate::import::Kind::Songs, listed_song_extensions(&self.config));
             }
         } else {
             if self.browser.set_root(None) {
@@ -2457,7 +2477,8 @@ impl App {
                     }
                 });
             }
-            if is_midi_path(path)
+            if !library::READ_ONLY
+                && is_midi_path(path)
                 && ui.button("Publish song...").on_hover_text("Share it on a library server that takes songs").clicked()
             {
                 publish = Some(path.to_path_buf());
@@ -3108,6 +3129,7 @@ impl App {
         let mut channel_chips = self.config.channel_chips;
         let mut buffer_ms = self.buffer_ms;
         let mut remember = self.config.remember;
+        let mut install_updates = self.config.android_install_updates;
         let mut close = false;
         let mut welcome = false;
         let mut tour = false;
@@ -3291,6 +3313,16 @@ impl App {
                             PrefTab::Library => self.library_preferences_ui(ui),
                             PrefTab::Experimental => {
                                 ui.weak("Newer features that might change or go away.");
+                                if cfg!(target_os = "android") {
+                                    with_info(
+                                        ui,
+                                        "Download new versions and hand them to Android to install (it asks you \
+                                         first). Android has to allow synththing to install apps: Settings > Apps > \
+                                         Special app access > Install unknown apps. Off: a new version is only \
+                                         announced, once, with a link to get it.",
+                                        |ui| ui.checkbox(&mut install_updates, "Install updates in the app"),
+                                    );
+                                }
                                 with_info(
                                     ui,
                                     "Start loading a song once the pointer rests on it in Songs or a playlist, \
@@ -3344,8 +3376,10 @@ impl App {
             || channel_chips != self.config.channel_chips
             || buffer_ms != self.buffer_ms
             || remember != self.config.remember
+            || install_updates != self.config.android_install_updates
         {
             self.config.remember = remember;
+            self.config.android_install_updates = install_updates;
             if buffer_ms != self.buffer_ms {
                 self.buffer_ms = buffer_ms;
                 self.send(AudioCommand::SetBufferMs(buffer_ms));
@@ -3521,6 +3555,68 @@ fn settings_row_ui(ui: &mut egui::Ui, d: &SettingDescriptor, changed: &mut Optio
     }
 }
 
+impl App {
+    /// Everything that has to keep going whether or not anything's drawn
+    /// (`eframe::App::logic`, every frame, and on its own while the window
+    /// is hidden or minimized; on Android also while the app is in the
+    /// background, when eframe has no window and calls nothing).
+    pub fn tick(&mut self, ctx: &egui::Context) {
+        if !std::mem::take(&mut self.ui_drawn) {
+            self.nothing_drawn();
+        }
+        self.minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        let view = self.shared.lock().unwrap().view.clone();
+        self.handle_tray(ctx, &view);
+        if self.second_launch.as_ref().is_some_and(|f| f.swap(false, std::sync::atomic::Ordering::Relaxed)) {
+            log::info!("launched again: showing the window");
+            self.show_window(ctx);
+        }
+        // The main window and the mini player are never up together: the
+        // main window on screen, however it got there (`show_window`, or
+        // restored from the taskbar), puts the mini player away.
+        if !self.hidden && !self.minimized && self.tray_panel.is_open() {
+            self.tray_panel.hide(ctx);
+        }
+        self.sync_script_song(&view);
+        self.poll_loads();
+        self.poll_imports();
+        #[cfg(target_os = "android")]
+        self.android_tick(&view);
+        self.refresh_changed_folders(ctx);
+        if self.song_info.poll() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        if !self.preferences_open {
+            self.playlist_tick(&view);
+        }
+        self.poll_library();
+        self.poll_moderation();
+        self.poll_feedback();
+        self.poll_identity();
+        self.poll_notifications(ctx);
+        self.poll_copyright();
+        self.poll_song_library();
+        if self.status != self.logged_status {
+            log::info!(target: STATUS_TARGET, "{}", self.status);
+            self.logged_status = self.status.clone();
+            if status_outcome(&self.status) == Some(false) {
+                self.unseen_failure = true;
+            }
+        }
+        self.keep_loaded(ctx);
+        self.poll_starter(ctx);
+        self.editor_tick(ctx);
+        self.close_after_render_tick(ctx);
+
+        // Stay idle otherwise, but while a song plays keep ticking, so the
+        // end of a track is noticed and a playlist's next one starts, with
+        // the window in the background, minimized or hidden.
+        if !view.paused && (view.has_midi || view.has_audio_file) {
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
+    }
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut Frame) {
         let ctx = ui.ctx().clone();
@@ -3540,6 +3636,7 @@ impl eframe::App for App {
         let view = &shared.view;
         self.visualizer_drawn = false;
         select_list::set_touch(&ctx, self.mobile());
+        crate::import::set_waker(&ctx);
         self.pad_frame = self.gamepads.poll(ctx.input(|i| i.focused));
         if !self.pad_frame.down.is_empty() || !self.pad_frame.released.is_empty() {
             ctx.request_repaint();
@@ -3744,57 +3841,7 @@ impl eframe::App for App {
     /// playlist goes on to its next track, loads finish and the library
     /// keeps polling either way.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
-        if !std::mem::take(&mut self.ui_drawn) {
-            self.nothing_drawn();
-        }
-        self.minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
-        let view = self.shared.lock().unwrap().view.clone();
-        self.handle_tray(ctx, &view);
-        if self.second_launch.as_ref().is_some_and(|f| f.swap(false, std::sync::atomic::Ordering::Relaxed)) {
-            log::info!("launched again: showing the window");
-            self.show_window(ctx);
-        }
-        // The main window and the mini player are never up together: the
-        // main window on screen, however it got there (`show_window`, or
-        // restored from the taskbar), puts the mini player away.
-        if !self.hidden && !self.minimized && self.tray_panel.is_open() {
-            self.tray_panel.hide(ctx);
-        }
-        self.sync_script_song(&view);
-        self.poll_loads();
-        self.poll_imports();
-        self.refresh_changed_folders(ctx);
-        if self.song_info.poll() {
-            ctx.request_repaint_after(Duration::from_millis(100));
-        }
-        if !self.preferences_open {
-            self.playlist_tick(&view);
-        }
-        self.poll_library();
-        self.poll_moderation();
-        self.poll_feedback();
-        self.poll_identity();
-        self.poll_notifications(ctx);
-        self.poll_copyright();
-        self.poll_song_library();
-        if self.status != self.logged_status {
-            log::info!(target: STATUS_TARGET, "{}", self.status);
-            self.logged_status = self.status.clone();
-            if status_outcome(&self.status) == Some(false) {
-                self.unseen_failure = true;
-            }
-        }
-        self.keep_loaded(ctx);
-        self.poll_starter(ctx);
-        self.editor_tick(ctx);
-        self.close_after_render_tick(ctx);
-
-        // Stay idle otherwise, but while a song plays keep ticking, so the
-        // end of a track is noticed and a playlist's next one starts, with
-        // the window in the background, minimized or hidden.
-        if !view.paused && (view.has_midi || view.has_audio_file) {
-            ctx.request_repaint_after(Duration::from_millis(200));
-        }
+        self.tick(ctx);
     }
 
     /// Last chance to save a layout change the once-a-second autosave

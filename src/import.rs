@@ -73,9 +73,17 @@ pub fn take_finished() -> Vec<Finished> {
     std::mem::take(&mut *FINISHED.lock().unwrap())
 }
 
+/// Who to wake when an import finishes: the app's context. (Once is
+/// enough.)
+pub fn set_waker(ctx: &egui::Context) {
+    let mut waker = WAKER.lock().unwrap();
+    if waker.is_none() {
+        *waker = Some(ctx.clone());
+    }
+}
+
 /// Ask the user for files of `kind` (with one of `extensions`) to import.
-pub fn start(ctx: &egui::Context, kind: Kind, extensions: &[&str]) {
-    *WAKER.lock().unwrap() = Some(ctx.clone());
+pub fn start(kind: Kind, extensions: &[&str]) {
     let dir = match kind.dir() {
         Ok(dir) => dir,
         Err(e) => return finish(Finished { kind, result: Err(format!("{e:#}")) }),

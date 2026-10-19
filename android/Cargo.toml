@@ -1,0 +1,21 @@
+# The Android app's native library: libsynththing_android.so, loaded by the
+# activity (android/app). The app itself is the synththing library; this
+# is its entry point, and the functions Java calls back into.
+[package]
+name = "synththing-android"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "WTFPL"
+
+[package.metadata.release]
+release = false
+
+[lib]
+name = "synththing_android"
+crate-type = ["cdylib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+synththing = { path = ".." }
+android-activity = "0.6"
+jni = "0.21"

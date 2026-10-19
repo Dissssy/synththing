@@ -11,6 +11,11 @@
 //! from its `android_main`. What they share, starting playback and the
 //! [`App`](app::App), is `startup.rs`.
 
+// Android uses the same app without what only the desktop has (the command
+// line, the library server, the tray, script editing...): unused there,
+// not dead.
+#![cfg_attr(target_os = "android", allow(dead_code))]
+
 mod app;
 mod applog;
 mod audio;
@@ -59,6 +64,8 @@ mod updater;
 mod visualizer;
 mod watch;
 
+#[cfg(target_os = "android")]
+pub mod android;
 #[cfg(not(target_os = "android"))]
 mod desktop;
 #[cfg(not(target_os = "android"))]

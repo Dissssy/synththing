@@ -27,7 +27,9 @@ use eframe::egui::TextureHandle;
 
 use eframe::egui;
 
-use super::{is_midi_path, listed_song_extensions, open_in_file_manager, App};
+#[cfg(not(target_os = "android"))]
+use super::listed_song_extensions;
+use super::{is_midi_path, open_in_file_manager, App};
 use crate::config::nice_name;
 use crate::audio::AudioCommand;
 use crate::engine::EngineView;
@@ -940,6 +942,7 @@ impl App {
                 });
             }
         }
+        #[cfg(not(target_os = "android"))]
         if pick_folder && let Some(folder) = rfd::FileDialog::new().set_directory(&dir).pick_folder() {
             self.config.record_dir = Some(folder);
             if let Err(e) = self.config.save() {
@@ -1194,6 +1197,7 @@ impl App {
                 }
             });
         });
+        #[cfg(not(target_os = "android"))]
         if choose_song
             && let Some(path) = rfd::FileDialog::new()
                 .add_filter("Songs", listed_song_extensions(&self.config))

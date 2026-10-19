@@ -86,6 +86,9 @@ pub(super) struct Mobile {
     drawer_open: bool,
     /// The Now playing page's controls folded away.
     collapsed: bool,
+    /// What the media session was last told, and when.
+    #[cfg(target_os = "android")]
+    told: Option<(crate::android::Playback, std::time::Instant)>,
 }
 
 impl App {
@@ -117,6 +120,15 @@ impl App {
         let view = &shared.view;
         let page = self.mobile_state.page;
         let fill_screen = page == Page::NowPlaying && self.mobile_state.collapsed;
+
+        // Picture-in-picture: a small floating window, just the visualizer.
+        #[cfg(target_os = "android")]
+        if crate::android::picture_in_picture() {
+            egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                self.show_visualizer(ui, &shared.notes, view, DisplayMode::Mini);
+            });
+            return;
+        }
 
         if !fill_screen {
             egui::Panel::top("mobile_top_bar").show(ui, |ui| self.mobile_top_bar_ui(ui));
@@ -406,6 +418,86 @@ impl App {
         }
         if close {
             self.mobile_state.drawer_open = false;
+        }
+    }
+}
+
+impl App {
+    /// An available update, on Android: unless installing in the app is
+    /// on (Preferences > Experimental) and allowed, it's only announced,
+    /// once. `None` on the desktop, and on Android when it can be
+    /// installed (the usual Install buttons follow); `Some(true)` once the
+    /// announcement's been seen.
+    pub(super) fn android_update_ui(&mut self, ui: &mut egui::Ui) -> Option<bool> {
+        if !cfg!(target_os = "android") {
+            return None;
+        }
+        #[cfg(target_os = "android")]
+        if self.config.android_install_updates {
+            if crate::android::can_install_packages() {
+                return None;
+            }
+            ui.label("Installing updates in the app is on, but Android doesn't allow synththing to install apps yet.");
+            if ui.button("Allow it...").on_hover_text("Settings > Install unknown apps, for synththing").clicked() {
+                crate::android::open_install_settings();
+            }
+        }
+        ui.label("Download it from the release page and install it.");
+        Some(ui.button("OK").clicked())
+    }
+}
+
+#[cfg(target_os = "android")]
+impl App {
+    /// The Android side of `tick`: carry out the media buttons pressed
+    /// outside the app, and keep the media session (the notification, the
+    /// lock screen) up to date with what's playing.
+    pub(super) fn android_tick(&mut self, view: &EngineView) {
+        use crate::android::{self, MediaCommand, Playback};
+
+        for command in android::take_media_commands() {
+            match command {
+                MediaCommand::Play if view.paused => self.send(AudioCommand::TogglePause),
+                MediaCommand::Pause if !view.paused => self.send(AudioCommand::TogglePause),
+                MediaCommand::Play | MediaCommand::Pause => {}
+                MediaCommand::Next if self.now_playing.is_some() => self.next_track(),
+                MediaCommand::Next => {}
+                MediaCommand::Previous => self.previous_track(view.position),
+                MediaCommand::Seek(to) => self.send(AudioCommand::Seek(to)),
+            }
+        }
+
+        let has_song = view.has_midi || view.has_audio_file;
+        let playback = Playback {
+            title: view.track_name.clone().unwrap_or_default(),
+            detail: self
+                .now_playing
+                .as_ref()
+                .and_then(|np| self.playlists.lists.get(np.list))
+                .map(|list| list.playlist.name.clone())
+                .unwrap_or_default(),
+            playing: has_song && !view.paused && !view.finished,
+            position_ms: (view.position * 1000.0) as i64,
+            length_ms: (view.length * 1000.0) as i64,
+            has_next: self.now_playing.is_some(),
+        };
+        // The session moves the position along by itself while playing:
+        // only a change, or a jump (a seek), is worth telling it.
+        let stale = match &self.mobile_state.told {
+            None => true,
+            Some((told, at)) => {
+                let expected = told.position_ms + if told.playing { at.elapsed().as_millis() as i64 } else { 0 };
+                Playback { position_ms: 0, ..told.clone() } != Playback { position_ms: 0, ..playback.clone() }
+                    || (playback.position_ms - expected).abs() > 1500
+            }
+        };
+        if stale && (has_song || self.mobile_state.told.is_some()) {
+            let allow_pip = playback.playing;
+            if self.mobile_state.told.as_ref().is_none_or(|(told, _)| told.playing != allow_pip) {
+                android::set_picture_in_picture_allowed(allow_pip);
+            }
+            android::set_playback(&playback);
+            self.mobile_state.told = Some((playback, std::time::Instant::now()));
         }
     }
 }

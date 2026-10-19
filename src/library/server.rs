@@ -251,7 +251,7 @@ pub fn run(data: &Path, bind: Option<String>) -> Result<(), String> {
 /// A running server.
 pub struct Running {
     pub addr: SocketAddr,
-    #[cfg_attr(not(test), expect(dead_code))] // (stopping is for tests so far)
+    #[cfg_attr(not(any(test, target_os = "android")), expect(dead_code))] // (stopping is for tests so far)
     http: Arc<tiny_http::Server>,
     threads: Vec<JoinHandle<()>>,
     state: Arc<State>,
@@ -278,7 +278,7 @@ impl Running {
     }
 
     /// Stop it, waiting for requests under way.
-    #[cfg_attr(not(test), expect(dead_code))]
+    #[cfg_attr(not(any(test, target_os = "android")), expect(dead_code))]
     pub fn stop(self) {
         self.http.unblock();
         for _ in 1..self.threads.len() {

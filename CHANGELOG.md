@@ -5,6 +5,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- An Android app, experimental: `synththing-android-arm64.apk` on each release. A layout made for a phone, with the visualizer on top and the controls under it; songs and soundfonts are imported from the phone; playback goes on in the background, with controls in the notification and on the lock screen; and leaving the app while it plays shrinks the visualizer into a floating window. It reads the Online Library without an account: install and update scripts, but no publishing or encores. See docs/ANDROID.md.
+- The mobile layout on desktop too (View > Mobile layout), to try it, or for a narrow window.
 - Select several songs at once in Songs, the way a playlist already allows (Ctrl and Shift, Ctrl+A), and drag them onto a playlist together. The Soundfonts list selects the same way, so several can be removed at once.
 
 ### Changed

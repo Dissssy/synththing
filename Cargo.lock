@@ -5192,6 +5192,7 @@ dependencies = [
 name = "synththing"
 version = "0.8.1"
 dependencies = [
+ "android-activity",
  "anyhow",
  "argon2",
  "base64 0.23.1",
@@ -5206,8 +5207,10 @@ dependencies = [
  "full_moon",
  "getrandom 0.4.3",
  "gilrs",
+ "jni 0.21.1",
  "log",
  "mlua",
+ "ndk-context",
  "notify",
  "png 0.18.1",
  "resvg",
@@ -5229,6 +5232,15 @@ dependencies = [
  "windows-sys 0.61.2",
  "winresource",
  "zip",
+]
+
+[[package]]
+name = "synththing-android"
+version = "0.0.0"
+dependencies = [
+ "android-activity",
+ "jni 0.21.1",
+ "synththing",
 ]
 
 [[package]]

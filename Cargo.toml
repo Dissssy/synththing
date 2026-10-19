@@ -5,6 +5,11 @@ edition = "2024"
 publish = false
 license = "WTFPL"
 
+# The Android app's native library (android/), built with cargo-ndk.
+[workspace]
+members = [".", "android"]
+default-members = ["."]
+
 [dependencies]
 # Vendored copy of rustysynth 1.3.6 with local patches: repairing (instead of
 # rejecting) soundfonts with out-of-range sample/loop points, channel muting
@@ -12,14 +17,12 @@ license = "WTFPL"
 # synthesizers, and Clone on the synthesizer (snapshots to re-render from). Search vendor/rustysynth/src for "LOCAL PATCH".
 rustysynth = { path = "vendor/rustysynth" }
 rodio = { version = "0.22.2", features = ["playback"] } # Safe cross-platform audio playback
-eframe = "0.36.1"                                       # GUI framework (re-exports egui)
 anyhow = "1.0.104"
 directories = "6.0.0"                                   # cross-platform config dir
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 rustfft = "6.4.1"
 mlua = { version = "0.12.1", features = ["lua54", "vendored"] }
-rfd = "0.15"                                             # native folder-picker dialog
 egui_dock = { version = "0.21.1", features = ["serde"] }      # dockable, rearrangeable tab layout
 ureq = { version = "3.4", features = ["json"] }            # HTTPS for update checks/downloads
 semver = "1.0"                                            # comparing release versions
@@ -44,6 +47,19 @@ egui_commonmark = "0.25"                                  # library servers' doc
 egui-phosphor = "0.14"
 base64 = "0.23"                                           # songs' MIDI files, in uploads (library/songs.rs)
 resvg = { version = "0.45", default-features = false }      # the wordmark in the menu bar (app/branding.rs)                                    # icons (the Phosphor set, as a font)
+
+# The GUI framework (re-exports egui): on the desktop with its defaults, on
+# Android with the native-activity backend and what that allows (not
+# accesskit, which needs the game-activity one).
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe = "0.36.1"
+rfd = "0.15"                                              # native file and folder dialogs
+
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.36.1", default-features = false, features = ["android-native-activity", "default_fonts", "links", "wgpu"] }
+android-activity = "0.6"                                  # the AndroidApp eframe runs in (android.rs)
+jni = "0.21"                                              # calling the app's Java side (android.rs)
+ndk-context = "0.1"                                       # the JVM and the activity, for jni
 
 [build-dependencies]
 resvg = { version = "0.45", default-features = false }      # the app icon, from assets/synththing-icon.svg

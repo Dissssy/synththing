@@ -115,6 +115,10 @@ pub struct Config {
     /// couldn't read the whole config (`read_json_or_set_aside`).
     #[serde(default)]
     pub canary_updates: bool,
+    /// On Android: download and install updates in the app (it needs
+    /// Install unknown apps allowed). Off, a new version is only announced.
+    #[serde(default)]
+    pub android_install_updates: bool,
     /// The mobile layout (`app/mobile.rs`) instead of the desktop's, on the
     /// desktop (View > Mobile layout). Android always uses it.
     #[serde(default)]

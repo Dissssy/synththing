@@ -1,0 +1,83 @@
+# Builds the Android APK (docs/ANDROID.md): the native library with
+# cargo-ndk, then Gradle packages it. The runner's Android SDK and NDK
+# (GitHub's Ubuntu images have both) do the rest. Signed with the release
+# key when it's given (the ANDROID_* secrets), with a throwaway debug key
+# otherwise: only a signed APK may be published, as Android installs an
+# update only with the same key. The APK ends up as
+# synththing-android-arm64.apk, the name the in-app updater looks for
+# (src/updater.rs, ASSET_NAME).
+name: Android APK
+description: Build synththing-android-arm64.apk
+
+inputs:
+  version:
+    description: The app's version (a test build's, 0.8.2-nightly.12); Cargo.toml's when empty
+    default: ""
+  keystore:
+    description: The release keystore, base64 (the ANDROID_KEYSTORE secret); a debug build without it
+    default: ""
+  keystore-password:
+    default: ""
+  key-alias:
+    default: ""
+  key-password:
+    default: ""
+
+outputs:
+  signed:
+    description: Whether the APK has the release key ("true"), so may be published
+    value: ${{ steps.key.outputs.signed }}
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-linux-android
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: android
+
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-ndk
+
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: "17"
+
+    - uses: gradle/actions/setup-gradle@v5
+      with:
+        gradle-version: "8.14.3"
+
+    - name: Release key
+      id: key
+      shell: bash
+      env:
+        KEYSTORE: ${{ inputs.keystore }}
+      run: |
+        if [ -z "$KEYSTORE" ]; then
+          echo "No release key: a debug build, not for publishing."
+          echo "signed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        printf '%s' "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.keystore"
+        echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+        echo "signed=true" >> "$GITHUB_OUTPUT"
+
+    - name: Native library
+      shell: bash
+      run: cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build -p synththing-android --release
+
+    - name: APK
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        ANDROID_KEYSTORE_PASSWORD: ${{ inputs.keystore-password }}
+        ANDROID_KEY_ALIAS: ${{ inputs.key-alias }}
+        ANDROID_KEY_PASSWORD: ${{ inputs.key-password }}
+      run: |
+        gradle -p android assembleRelease ${VERSION:+-PsynththingVersion=$VERSION}
+        cp android/app/build/outputs/apk/release/app-release.apk synththing-android-arm64.apk

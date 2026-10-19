@@ -46,3 +46,18 @@ jobs:
 
       - name: Test
         run: cargo test --lib
+
+  # The Android app (docs/ANDROID.md): it builds, so the desktop app's
+  # changes don't quietly break it.
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/android-apk
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android
+          path: synththing-android-arm64.apk
+          retention-days: 7

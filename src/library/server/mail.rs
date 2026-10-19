@@ -23,7 +23,7 @@ pub enum Mailer {
     Off,
     SendGrid { key: String, from: String, name: String },
     /// What would have been sent (tests).
-    #[cfg_attr(not(test), expect(dead_code))]
+    #[cfg_attr(not(any(test, target_os = "android")), expect(dead_code))]
     Outbox(Mutex<Vec<Mail>>),
 }
 

@@ -469,6 +469,7 @@ impl App {
                         self.create_playlist(&name, songs);
                     }
                 }
+                #[cfg(not(target_os = "android"))]
                 if ui.button("Import .m3u...").clicked() {
                     self.import_m3u();
                 }
@@ -605,6 +606,7 @@ impl App {
                 self.playlist_rename = Some(self.playlists.lists[list].playlist.name.clone());
             }
 
+            #[cfg(not(target_os = "android"))]
             if ui.button("Export .m3u...").on_hover_text("Save as an .m3u8 playlist other players can open").clicked() {
                 self.export_m3u(list);
             }
@@ -736,6 +738,7 @@ impl App {
     }
 
     /// New playlist from an .m3u/.m3u8 file (named after it).
+    #[cfg(not(target_os = "android"))]
     fn import_m3u(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("M3U playlist", &["m3u", "m3u8"])
@@ -776,6 +779,7 @@ impl App {
     }
 
     /// Save playlist `list` as an .m3u8 file.
+    #[cfg(not(target_os = "android"))]
     fn export_m3u(&mut self, list: usize) {
         let Some(stored) = self.playlists.lists.get(list) else {
             return;
