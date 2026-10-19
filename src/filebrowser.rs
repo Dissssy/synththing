@@ -246,15 +246,18 @@ impl FileBrowser {
     /// directory row navigates into it internally and returns `None`.
     /// `title` names a file's row. `trailing` draws extra widgets at the
     /// right end of each file row (right to left). `menu`, if given, draws a
-    /// file row's right-click menu.
+    /// file row's right-click menu. `tools` draws more buttons into the
+    /// toolbar, after Browse.
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
+        tools: &mut dyn FnMut(&mut egui::Ui, &Path),
         title: &mut dyn FnMut(&Path) -> String,
         trailing: &mut dyn FnMut(&mut egui::Ui, &Path),
         mut menu: Option<RowMenu>,
     ) -> Option<PathBuf> {
-        ui.weak(display_dir(&self.cwd));
+        let dir = display_dir(&self.cwd);
+        ui.horizontal(|ui| select_list::label(ui, egui::RichText::new(&dir).weak(), None));
 
         let mut hidden_changed = false;
         ui.horizontal(|ui| {
@@ -262,10 +265,19 @@ impl FileBrowser {
             // `desired_width(INFINITY)` to soak up whatever's left, sizing it
             // from `ui.available_width()` instead fed back into the layout
             // and made the row (and its containing panel) grow every frame.
-            if ui.button("Browse...").clicked() {
+            if ui.add(crate::app::icon_button("folder-open")).on_hover_text("Browse: go to any folder or drive").clicked() {
                 self.browse_dialog();
             }
-            hidden_changed = ui.checkbox(&mut self.show_hidden, "hidden").changed();
+            tools(ui, &self.cwd);
+            let (eye, hover) = if self.show_hidden {
+                ("eye", "Hidden files are shown: click to hide them")
+            } else {
+                ("eye-slash", "Hidden files are left out: click to show them")
+            };
+            if ui.add(crate::app::icon_button(eye).selected(self.show_hidden)).on_hover_text(hover).clicked() {
+                self.show_hidden = !self.show_hidden;
+                hidden_changed = true;
+            }
             let (sort, hint) = if self.sort_by_file_name {
                 ("Sort: file", "Sorted by the files' names. Click to sort by the songs' names.")
             } else {

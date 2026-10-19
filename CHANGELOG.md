@@ -4,6 +4,11 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- The toolbars are slimmer: Restart, Fullscreen, Settings, Controls and Debug above the visualizer, the playlist's Play, New, Rename, Export and Delete, the Songs browser's Browse, Set as default and hidden-files toggle, and the editor's Format, Find and History are icon buttons now (hover one to see what it does), and each toolbar is one row that wraps when its tab is narrow.
+- New script, Rename..., Restore default and Publish... moved into the script picker: New script lists the templates and examples, the sidebar's Make a copy starts a new script from any script, and the running script's card has its file's buttons and its full path.
+- The editor's Apply, Wrap and text size are under its cog.
+
 ## 0.9.0 (2026-10-19)
 
 ### Added

@@ -212,7 +212,7 @@ const SEEDED_BY_0_1_8: &[&str] =
     &["waveform.lua", "fft.lua", "keyboard.lua", "spectrogram.lua", "letters.lua", "snake.lua", "pulse.lua", "disco.lua"];
 
 /// Bundled visualizers and games go into the user's folder; templates and
-/// examples are only offered by "New".
+/// examples are only offered as New script in the picker.
 fn is_added(category: &str) -> bool {
     matches!(category, "visualizers" | "games")
 }
@@ -257,16 +257,19 @@ pub fn list_scripts(dir: &Path) -> Vec<PathBuf> {
     scripts
 }
 
-/// Starting points offered by the "New" button, as (category, name,
-/// contents): a blank script, then every bundled script by category.
+/// Starting points for a new script (the picker's New script), as
+/// (category, name, contents): a blank script, then the bundled templates
+/// and examples. (A bundled visualizer or game is copied with Make a copy.)
 /// Display names are the bare file stem, the same convention
 /// `display_name`/`nice_name` use for a script's own name elsewhere.
 pub fn new_script_templates() -> Vec<(&'static str, &'static str, &'static str)> {
     let mut templates = vec![("templates", "Blank", BLANK_SCRIPT_TEMPLATE)];
     for &(category, name, contents) in BUNDLED_SCRIPTS {
-        templates.push((category, name.strip_suffix(".lua").unwrap_or(name), contents));
+        if !is_added(category) {
+            templates.push((category, name.strip_suffix(".lua").unwrap_or(name), contents));
+        }
     }
-    templates.sort_by_key(|(category, ..)| ["templates", "examples", "visualizers", "games"].iter().position(|c| c == category));
+    templates.sort_by_key(|(category, ..)| *category != "templates");
     templates
 }
 
@@ -383,7 +386,7 @@ pub fn host_global_names() -> Vec<String> {
 /// The current embedded source for a bundled visualizer or game (the ones
 /// added to the user's folder), by file name: how the app offers "Restore
 /// default" when one has drifted from the shipped version. Templates and
-/// examples are never added under their own name ("New" writes a fresh
+/// examples are never added under their own name (New script writes a fresh
 /// `untitled-N.lua`), so there's nothing of theirs to restore.
 pub fn bundled_default(file_name: &str) -> Option<&'static str> {
     BUNDLED_SCRIPTS

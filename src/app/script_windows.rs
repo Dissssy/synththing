@@ -74,8 +74,9 @@ fn name_ui(ui: &mut egui::Ui, name: &str, labels: &ItemLabels) {
 }
 
 impl App {
-    /// The Settings, Controls and Debug buttons above the visualizer;
-    /// Settings and Controls greyed out when the script has none.
+    /// The Settings, Controls and Debug buttons above the visualizer (a
+    /// cog, a gamepad and a bug); Settings and Controls greyed out when the
+    /// script has none, the bug red while the script is failing.
     pub(super) fn script_window_buttons_ui(&mut self, ui: &mut egui::Ui) {
         let settings = self.script.settings().len();
         let controls = self.script.actions().len();
@@ -84,31 +85,32 @@ impl App {
             1 => format!("1 {}", what.trim_end_matches('s')),
             n => format!("{n} {what}"),
         };
+        let settings_hover = format!("Settings: {}", count(settings, "settings"));
         if ui
-            .add_enabled(settings > 0, egui::Button::new("Settings"))
-            .on_hover_text(count(settings, "settings"))
-            .on_disabled_hover_text(count(settings, "settings"))
+            .add_enabled(settings > 0, super::icon_button("gear"))
+            .on_hover_text(&settings_hover)
+            .on_disabled_hover_text(&settings_hover)
             .clicked()
         {
             self.script_window = Some(ScriptWindow::Settings);
         }
+        let controls_hover = format!("Controls: {}", count(controls, "controls"));
         if ui
-            .add_enabled(controls > 0, egui::Button::new("Controls"))
-            .on_hover_text(count(controls, "controls"))
-            .on_disabled_hover_text(count(controls, "controls"))
+            .add_enabled(controls > 0, super::icon_button("game-controller"))
+            .on_hover_text(&controls_hover)
+            .on_disabled_hover_text(&controls_hover)
             .clicked()
         {
             self.script_window = Some(ScriptWindow::Controls);
         }
-        let failing = self.script.error().is_some();
-        let label = if failing {
-            egui::RichText::new("Debug (error)").color(ui.visuals().error_fg_color)
+        let (button, hover) = if self.script.error().is_some() {
+            (super::colored_icon_button("bug", ui.visuals().error_fg_color), "Debug (the script has an error)")
         } else {
-            egui::RichText::new("Debug")
+            (super::icon_button("bug"), "Debug")
         };
         if ui
-            .button(label)
-            .on_hover_text("The script's variables, its debug_locals(), its log, and how long it takes to draw")
+            .add(button)
+            .on_hover_text(format!("{hover}: the script's variables, its debug_locals(), its log, and how long it takes to draw"))
             .clicked()
         {
             self.script_window = Some(ScriptWindow::Debug);
