@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
 }
@@ -26,7 +28,7 @@ val synththingVersion: String = (findProperty("synththingVersion") as String?)
 // them beside the native library it built (in CARGO_TARGET_DIR, if
 // that's set).
 val cargoTarget: File = System.getenv("CARGO_TARGET_DIR")?.let { File(it) } ?: rootProject.file("../target")
-val stamp = java.util.Properties().apply {
+val stamp = Properties().apply {
     val file = cargoTarget.resolve("aarch64-linux-android/release/synththing-android.properties")
     check(file.exists()) { "no ${file.path}: build the native library first (docs/ANDROID.md)" }
     file.reader().use { load(it) }
