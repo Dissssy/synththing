@@ -365,6 +365,7 @@ impl App {
         let width = (screen.width() - 32.0).min(480.0);
         let response = egui::Area::new(egui::Id::new("status_toast"))
             .order(egui::Order::Tooltip)
+            .sense(egui::Sense::click())
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -377,7 +378,7 @@ impl App {
                 });
             })
             .response;
-        if response.interact(egui::Sense::click()).clicked() {
+        if response.clicked() {
             self.mobile_state.toast = None;
         }
     }
@@ -556,7 +557,16 @@ impl App {
                 egui::Frame::side_top_panel(ui.style()).show(ui, |ui| {
                     ui.set_width(width);
                     ui.set_min_height(screen.height());
-                    egui::ScrollArea::vertical().show(ui, |ui| self.mobile_drawer_items_ui(ui));
+                    // The version along the bottom, the items filling the
+                    // rest (scrolling when they don't fit).
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                        ui.add_space(8.0);
+                        self.mobile_version_ui(ui);
+                        ui.add_space(4.0);
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| self.mobile_drawer_items_ui(ui));
+                        });
+                    });
                 });
             });
         // Over the backdrop, always: a tap on the backdrop (closing the
@@ -565,11 +575,20 @@ impl App {
         ctx.move_to_top(drawer.response.layer_id);
     }
 
+    /// The version, short; a tap shows all of it (the branch and commit
+    /// of a test build).
+    fn mobile_version_ui(&mut self, ui: &mut egui::Ui) {
+        let short = egui::RichText::new(format!("v{}", crate::build_info::VERSION)).weak();
+        if ui.add(egui::Label::new(short).sense(egui::Sense::click())).clicked() {
+            let full = format!("synththing v{}", crate::build_info::describe());
+            self.mobile_state.toast = Some((full, Instant::now()));
+        }
+    }
+
     fn mobile_drawer_items_ui(&mut self, ui: &mut egui::Ui) {
         ui.spacing_mut().button_padding = egui::vec2(10.0, 10.0);
         ui.add_space(8.0);
         ui.heading("synththing");
-        ui.weak(format!("v{}", crate::build_info::describe()));
         ui.add_space(8.0);
         let mut picked = None;
         for page in Page::ALL {
