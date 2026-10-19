@@ -1,6 +1,6 @@
 # Fixes for feedback
 
-How a thread in the synththing Claude project works on a fix for a `feedback` issue. The coordinator starts these threads, for `bug` issues only (docs/feedback-intake.md). A feature request (`enhancement`) gets a thread only once a developer has approved it.
+How a thread in the synththing Claude project works on a fix for a `feedback` issue. The coordinator starts these threads, for `bug` issues only (docs/feedback-intake.md). A feature request (`enhancement`) gets a thread only once a developer has approved it: labelled it `approved`, or said go in a comment as a repo owner, member or collaborator. Intake watches the issues for that, and for comments and closes, and hands them to the coordinator, which passes feedback to the thread working on the issue and stops it if the issue is closed.
 
 ## Working on a fix
 
@@ -11,6 +11,6 @@ The thread opens a draft pull request that links its issue ("Fixes #34"). Merges
 A closed PR always means stop. The thread unsubscribes from the PR, pushes nothing more to it, never reopens it, and doesn't start another attempt on its own.
 
 - **The closing came with a comment** (on the PR, or a review): the thread summarizes the reason on the issue, then resolves its thread. If the comment asks for a different approach, a new attempt starts only when a developer says go.
-- **No comment:** the thread leaves one note on the issue saying the fix was closed without a reason, and labels the issue `needs-decision`. Intake hands that issue on for no more work until someone removes the label or closes the issue.
+- **No comment:** the thread leaves one note on the issue saying the fix was closed without a reason, and labels the issue `needs-decision`. Intake hands that issue on for no more work until a developer removes the label or says go, or the issue is closed.
 
 Either way the issue stays open, unless whoever closed the PR closes it too.
