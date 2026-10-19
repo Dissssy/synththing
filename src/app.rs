@@ -2443,8 +2443,9 @@ impl App {
             }
             self.script_window_buttons_ui(ui);
             self.recording_buttons_ui(ui);
+            // Cut short so a long path can't set the page's minimum width.
             if let Some(path) = self.script.path() {
-                ui.weak(path.display().to_string());
+                select_list::label(ui, egui::RichText::new(path.display().to_string()).weak(), None);
             }
         });
 
