@@ -35,9 +35,11 @@ runs:
       with:
         targets: aarch64-linux-android
 
+    # One cache for every Android build (CI, test builds, releases): they're
+    # all the same release build for the same target.
     - uses: Swatinem/rust-cache@v2
       with:
-        key: android
+        shared-key: android
 
     - uses: taiki-e/install-action@v2
       with:
