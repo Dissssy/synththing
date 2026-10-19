@@ -260,8 +260,10 @@ impl App {
     /// The menu button, the page's name, and notifications and feedback at
     /// the right, as on the desktop.
     fn mobile_top_bar_ui(&mut self, ui: &mut egui::Ui) {
+        let library_details = self.mobile_state.page == Page::Library && self.library_details_open();
         ui.horizontal(|ui| {
-            // In a Preferences section: back to the list of them instead.
+            // In a Preferences section or a library pick's details: back to
+            // the list instead.
             let state = &mut self.mobile_state;
             match state.pref_section.filter(|_| state.page == Page::Preferences) {
                 Some(section) => {
@@ -273,6 +275,12 @@ impl App {
                         }
                     }
                     ui.heading(if state.editing_themes { "Themes" } else { section.title() });
+                }
+                None if library_details => {
+                    if ui.add(big_icon_button("arrow-left", 36.0)).on_hover_text("Back").clicked() {
+                        self.library_close_details();
+                    }
+                    ui.heading(Page::Library.title());
                 }
                 None => {
                     if ui.add(big_icon_button("list", 36.0)).on_hover_text("Menu").clicked() {
@@ -300,8 +308,9 @@ impl App {
 
     /// Back (Android's back, Escape on the desktop), a step at a time: a
     /// dialog or popup closes itself (egui's own Escape), then the menu,
-    /// a Preferences section, full screen, any page but Now playing, and
-    /// last, on Android, leaving (pressed twice, as other apps do).
+    /// a Preferences section, a library pick's details, full screen, any
+    /// page but Now playing, and last, on Android, leaving (pressed twice,
+    /// as other apps do).
     fn mobile_back(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.key_pressed(egui::Key::Escape))
             || ctx.memory(|m| m.top_modal_layer().is_some())
@@ -309,6 +318,7 @@ impl App {
         {
             return;
         }
+        let library_details = self.mobile_state.page == Page::Library && self.library_details_open();
         let state = &mut self.mobile_state;
         if state.drawer_open {
             state.drawer_open = false;
@@ -316,6 +326,8 @@ impl App {
             state.editing_themes = false;
         } else if state.page == Page::Preferences && state.pref_section.is_some() {
             state.pref_section = None;
+        } else if library_details {
+            self.library_close_details();
         } else if state.page == Page::NowPlaying && state.collapsed {
             state.collapsed = false;
         } else if state.page != Page::NowPlaying {
