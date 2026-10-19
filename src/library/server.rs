@@ -35,6 +35,7 @@ mod mail;
 pub use mail::Mail;
 mod moderation;
 mod notifications;
+mod pairing;
 mod remixes;
 mod songs;
 mod update;
@@ -341,6 +342,7 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
         pepper,
         mailer,
         intake_token,
+        pairings: Mutex::default(),
     });
     moderation::forget_old_addresses(&state);
     feedback::forget_old(&state);
@@ -408,6 +410,8 @@ struct State {
     mailer: mail::Mailer,
     /// The token feedback intake asks with (if it's on).
     intake_token: Option<String>,
+    /// Sign-in handoffs waiting to be taken, by ID.
+    pairings: Mutex<pairing::Pairings>,
 }
 
 impl State {
@@ -815,6 +819,18 @@ fn handle(state: &Arc<State>, mut request: Request) {
         (Method::Get, ["api", "v1", "intake"]) => intake::waiting(state, &request),
         (Method::Post, ["api", "v1", "intake", "taken"]) => intake::taken(state, &mut request),
         (Method::Post, ["api", "v1", "admin"]) => moderation::admin(state, &mut request),
+        (Method::Post, ["api", "v1", "pair"]) => {
+            let ip = client_ip(state, &request);
+            pairing::park(state, &mut request, &ip)
+        }
+        (Method::Post, ["api", "v1", "pair", id]) => {
+            let id = id.to_string();
+            pairing::status(state, &mut request, &id)
+        }
+        (Method::Post, ["api", "v1", "pair", id, "take"]) => {
+            let id = id.to_string();
+            pairing::take(state, &mut request, &id)
+        }
         (Method::Post, ["api", "v1", "identity", "rotate"]) => authority::rotate(state, &mut request),
         (Method::Post, ["api", "v1", "identity", "apply"]) => {
             let ip = client_ip(state, &request);

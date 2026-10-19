@@ -11,6 +11,7 @@ pub mod fingerprint;
 pub mod rotation;
 pub mod songs;
 pub mod identity;
+pub mod pairing;
 pub mod server;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};

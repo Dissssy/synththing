@@ -25,6 +25,7 @@ mod channels;
 mod cli;
 mod code_edit;
 mod config;
+mod device;
 mod credits;
 mod engine;
 mod ffmpeg;
