@@ -19,36 +19,48 @@ fun codeFor(version: String): Int {
 val synththingVersion: String = (findProperty("synththingVersion") as String?)
     ?: Regex("""(?m)^version = "(.+)"""").find(rootProject.file("../Cargo.toml").readText())!!.groupValues[1]
 
-// The icon's color: the build's accent, as on desktop (purple for a
-// release, yellow for canary, a branch's own color, off-white built
-// locally). Rust's build script works it out, and leaves it beside the
-// native library it built (in CARGO_TARGET_DIR, if that's set).
+// What Rust's build script worked out for this build's channel
+// (src/android_id.rs): the app's id and launcher name, and the icon's
+// color, the build's accent as on desktop (purple for a release, yellow
+// for canary, a branch's own color, off-white built locally). It leaves
+// them beside the native library it built (in CARGO_TARGET_DIR, if
+// that's set).
 val cargoTarget: File = System.getenv("CARGO_TARGET_DIR")?.let { File(it) } ?: rootProject.file("../target")
-val accent: String = cargoTarget.resolve("aarch64-linux-android/release/synththing-accent").let { file ->
+val stamp = java.util.Properties().apply {
+    val file = cargoTarget.resolve("aarch64-linux-android/release/synththing-android.properties")
     check(file.exists()) { "no ${file.path}: build the native library first (docs/ANDROID.md)" }
-    file.readText().trim()
+    file.reader().use { load(it) }
 }
 
 // Signed with the release key when CI has it (the ANDROID_KEYSTORE_*
 // secrets, docs/ANDROID.md): every build that's published must be, or
 // Android refuses it as an update. Otherwise with the debug key, for
 // trying a build out: that can never update the published app, so it's
-// a separate app beside it ("synththing test"), and trying a pull
+// a separate one beside it (".test", "... test"), and trying a pull
 // request's APK doesn't mean uninstalling the nightly and its data.
 val keystore: String? = System.getenv("ANDROID_KEYSTORE_FILE")
+val testSuffix = keystore == null
+
+// A branch build's app is its own (src/android_id.rs), and its updates
+// follow the branch's commits, which a rebase can make fewer: its code is
+// the workflow run's number instead, which only goes up.
+val appVersionCode: Int = System.getenv("GITHUB_RUN_NUMBER")
+    ?.takeIf { stamp.getProperty("channel").startsWith("branch-") }
+    ?.toInt()
+    ?: codeFor(synththingVersion)
 
 android {
     namespace = "nl.p51.synththing"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = if (keystore != null) "nl.p51.synththing" else "nl.p51.synththing.test"
+        applicationId = stamp.getProperty("applicationId") + if (testSuffix) ".test" else ""
         minSdk = 26
         targetSdk = 34
-        versionCode = codeFor(synththingVersion)
+        versionCode = appVersionCode
         versionName = synththingVersion
-        resValue("color", "ic_launcher_background", accent)
-        manifestPlaceholders["appLabel"] = if (keystore != null) "synththing" else "synththing test"
+        resValue("color", "ic_launcher_background", stamp.getProperty("accent"))
+        manifestPlaceholders["appLabel"] = stamp.getProperty("label") + if (testSuffix) " test" else ""
         ndk {
             abiFilters += "arm64-v8a"
         }

@@ -720,16 +720,19 @@ impl App {
 
 impl App {
     /// An available update, on Android: unless installing in the app is
-    /// on (Preferences > Updates) and allowed, it's only announced,
-    /// once. `None` on the desktop, and on Android when it can be
-    /// installed (the usual Install buttons follow); `Some(true)` once the
-    /// announcement's been seen.
+    /// on (Preferences > Updates, or always in a branch build, which was
+    /// installed by the app) and allowed, it's only announced, once. `None`
+    /// on the desktop, and on Android when it can be installed (the usual
+    /// Install buttons follow); `Some(true)` once the announcement's been
+    /// seen.
     pub(super) fn android_update_ui(&mut self, ui: &mut egui::Ui) -> Option<bool> {
         if !cfg!(target_os = "android") {
             return None;
         }
         #[cfg(target_os = "android")]
-        if self.config.android_install_updates {
+        if self.config.android_install_updates
+            || matches!(crate::build_info::channel(), crate::build_info::Channel::Branch(_))
+        {
             if crate::android::can_install_packages() {
                 return None;
             }

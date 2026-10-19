@@ -10,6 +10,7 @@ import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Color;
@@ -444,5 +445,39 @@ public class MainActivity extends NativeActivity {
                 Log.e(TAG, "installing the update", e);
             }
         }).start();
+    }
+
+    /**
+     * From Rust: the branch builds' apps installed here (each an app of its
+     * own, src/android_id.rs), as their ids starting with {@code prefix},
+     * each followed by its launcher name.
+     */
+    public String[] branchApps(String prefix) {
+        PackageManager manager = getPackageManager();
+        Intent launcher = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+        List<String> found = new ArrayList<>();
+        for (ResolveInfo info : manager.queryIntentActivities(launcher, 0)) {
+            String app = info.activityInfo.packageName;
+            if (app.startsWith(prefix)) {
+                found.add(app);
+                found.add(info.loadLabel(manager).toString());
+            }
+        }
+        return found.toArray(new String[0]);
+    }
+
+    /** From Rust: start the installed app {@code app}. */
+    public void openApp(String app) {
+        Intent intent = getPackageManager().getLaunchIntentForPackage(app);
+        if (intent == null) {
+            Log.w(TAG, app + " isn't installed");
+            return;
+        }
+        runOnUiThread(() -> startActivity(intent));
+    }
+
+    /** From Rust: ask to uninstall the app {@code app} (Android asks the user). */
+    public void uninstallApp(String app) {
+        runOnUiThread(() -> startActivity(new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + app))));
     }
 }

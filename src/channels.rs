@@ -13,6 +13,10 @@
 //! With `--config-dir` (a test run), branch builds go in `channels/` inside
 //! that folder instead, and are started with their own config folder in
 //! `SYNTHTHING_CONFIG_DIR`: nothing outside it is touched.
+//!
+//! On Android each branch build is an app of its own instead
+//! (`android_id.rs`), installed, opened and uninstalled through Android,
+//! with data of its own from the start.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -57,6 +61,7 @@ pub fn channel_dir(channel: &str) -> Result<PathBuf> {
     Ok(channels_dir()?.join(channel))
 }
 
+#[cfg(not(target_os = "android"))]
 fn exe_path(channel: &str) -> Result<PathBuf> {
     Ok(channel_dir(channel)?.join(if cfg!(windows) { "synththing.exe" } else { "synththing" }))
 }
@@ -176,6 +181,7 @@ fn copy_dir(from: &Path, to: &Path, top: bool) -> Result<()> {
 }
 
 /// The branch builds installed here (their channels), by name.
+#[cfg(not(target_os = "android"))]
 pub fn installed() -> Vec<String> {
     let Ok(dir) = channels_dir() else { return Vec::new() };
     let mut channels: Vec<String> = fs::read_dir(dir)
@@ -189,9 +195,33 @@ pub fn installed() -> Vec<String> {
     channels
 }
 
+/// The branch builds' apps installed here (their channels), by name. Asked
+/// of Android at most every couple of seconds: the Branch builds section
+/// asks every frame.
+#[cfg(target_os = "android")]
+pub fn installed() -> Vec<String> {
+    use std::time::{Duration, Instant};
+    static ASKED: Mutex<Option<(Instant, Vec<String>)>> = Mutex::new(None);
+    let mut asked = ASKED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, channels)) = asked.as_ref()
+        && at.elapsed() < Duration::from_secs(2)
+    {
+        return channels.clone();
+    }
+    let prefix = format!("{}.branch.", crate::android_id::BASE);
+    let mut channels: Vec<String> = crate::android::branch_apps(&prefix)
+        .into_iter()
+        .filter_map(|(id, label)| crate::android_id::channel(&id, &label))
+        .collect();
+    channels.sort();
+    *asked = Some((Instant::now(), channels.clone()));
+    channels
+}
+
 /// Download `release` (a branch's test build) into its folder, replacing
 /// any copy there, and remember which exe installed it. The first time, its
 /// settings start as a copy of this app's.
+#[cfg(not(target_os = "android"))]
 fn install(release: &Release, progress: impl FnMut(u64)) -> Result<()> {
     let dir = channel_dir(&release.tag)?;
     fs::create_dir_all(&dir).with_context(|| format!("making {}", dir.display()))?;
@@ -212,8 +242,18 @@ fn install(release: &Release, progress: impl FnMut(u64)) -> Result<()> {
     Ok(())
 }
 
+/// Download `release` (a branch's test build) and hand it to Android's
+/// installer, which asks the user, as an app of its own.
+#[cfg(target_os = "android")]
+fn install(release: &Release, progress: impl FnMut(u64)) -> Result<()> {
+    let apk = updater::download(release, progress)?;
+    crate::android::install_apk(&apk);
+    Ok(())
+}
+
 /// Start an installed branch build. In a test run (`--config-dir`), with
 /// its config folder said outright, as it would otherwise use the real one.
+#[cfg(not(target_os = "android"))]
 pub fn launch(channel: &str) -> Result<()> {
     let exe = exe_path(channel)?;
     let dir = channel_dir(channel)?;
@@ -228,10 +268,25 @@ pub fn launch(channel: &str) -> Result<()> {
     Ok(())
 }
 
+/// Start an installed branch build's app.
+#[cfg(target_os = "android")]
+pub fn launch(channel: &str) -> Result<()> {
+    crate::android::open_app(&crate::android_id::application_id(channel));
+    Ok(())
+}
+
 /// Remove an installed branch build: its exe and its settings.
+#[cfg(not(target_os = "android"))]
 pub fn remove(channel: &str) -> Result<()> {
     let dir = channel_dir(channel)?;
     fs::remove_dir_all(&dir).with_context(|| format!("removing {} (is that build running?)", dir.display()))
+}
+
+/// Uninstall a branch build's app, and its data (Android asks the user).
+#[cfg(target_os = "android")]
+pub fn remove(channel: &str) -> Result<()> {
+    crate::android::uninstall_app(&crate::android_id::application_id(channel));
+    Ok(())
 }
 
 /// The branch's name in a channel (`branch-youtube`: `youtube`).
@@ -255,7 +310,7 @@ pub enum InstallState {
     #[default]
     Idle,
     Installing { channel: String, downloaded: u64, size: u64 },
-    /// Installed and started.
+    /// Installed and started; on Android, handed to Android's installer.
     Done(String),
     Failed(String),
 }
@@ -299,7 +354,8 @@ impl Branches {
         });
     }
 
-    /// Install `release` and start it, in the background.
+    /// Install `release` and start it, in the background. (On Android,
+    /// Android's installer takes over.)
     pub fn install(&self, release: Release) {
         if matches!(self.install_state(), InstallState::Installing { .. }) {
             return;
@@ -313,7 +369,12 @@ impl Branches {
             let progress = |downloaded| {
                 set(&install_state, InstallState::Installing { channel: channel.clone(), downloaded, size });
             };
-            let state = match install(&release, progress).and_then(|()| launch(&channel)) {
+            let installed = install(&release, progress);
+            // (On Android, it's opened from the list once Android's
+            // installed it.)
+            #[cfg(not(target_os = "android"))]
+            let installed = installed.and_then(|()| launch(&channel));
+            let state = match installed {
                 Ok(()) => InstallState::Done(channel),
                 Err(e) => {
                     log::warn!("installing the {channel} build failed: {e:#}");

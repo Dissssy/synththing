@@ -26,6 +26,11 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
+// (Only the id and the name are used here.)
+#[allow(dead_code)]
+#[path = "src/android_id.rs"]
+mod android_id;
+
 /// The bundled script folders, in the order they're listed.
 const CATEGORIES: [&str; 4] = ["visualizers", "games", "templates", "examples"];
 
@@ -66,22 +71,29 @@ fn main() {
         .unwrap_or_else(|e| panic!("writing {}: {e}", out_path.display()));
 
     generate_reference(&manifest_dir, &out_dir);
-    let accent = accent(&stamp_build());
+    let channel = stamp_build();
+    let accent = accent(&channel);
     println!("cargo:rustc-env=SYNTHTHING_ACCENT={accent}");
     generate_icon(&manifest_dir, &out_dir, &accent);
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
-        write_android_accent(&out_dir, &accent);
+        write_android_build(&out_dir, &channel, &accent);
     }
 }
 
-/// The Android app's icon is the APK's, which Gradle makes after this
-/// build, so the accent goes in a file for it beside the library
-/// (`target/<target>/<profile>/synththing-accent`, which
+/// What the APK takes from this build, which Gradle packages after it: the
+/// channel, the app's id and launcher name for it (`src/android_id.rs`) and
+/// the icon's accent. In a file beside the library
+/// (`target/<target>/<profile>/synththing-android.properties`, which
 /// android/app/build.gradle.kts reads): `OUT_DIR` is three folders below.
-fn write_android_accent(out_dir: &str, accent: &str) {
+fn write_android_build(out_dir: &str, channel: &str, accent: &str) {
     let profile_dir = Path::new(out_dir).ancestors().nth(3).expect("OUT_DIR is target/<target>/<profile>/build/<crate>/out");
-    let path = profile_dir.join("synththing-accent");
-    fs::write(&path, accent).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
+    let path = profile_dir.join("synththing-android.properties");
+    let properties = format!(
+        "channel={channel}\napplicationId={}\nlabel={}\naccent={accent}\n",
+        android_id::application_id(channel),
+        android_id::label(channel),
+    );
+    fs::write(&path, properties).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
 }
 
 // --- build stamp ---------------------------------------------------------
