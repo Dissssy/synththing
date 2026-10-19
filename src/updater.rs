@@ -58,7 +58,8 @@ pub enum Track {
 
 impl Track {
     /// What this build follows: a branch build, its branch; otherwise
-    /// canary if the user chose it (`Config::canary_updates`).
+    /// canary if chosen, or by default in a canary build
+    /// (`Config::canary_updates`).
     pub fn current(canary: bool) -> Self {
         match crate::build_info::channel() {
             crate::build_info::Channel::Branch(name) => Track::Branch(format!("branch-{name}")),
