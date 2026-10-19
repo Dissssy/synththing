@@ -201,6 +201,8 @@ pub struct App {
     /// `ui` ran since the last `logic`: false while nothing's drawn (the
     /// window hidden or minimized), when what lives only on screen stops.
     ui_drawn: bool,
+    /// The window's minimized (as of this frame's `logic`).
+    minimized: bool,
     /// Whether the cursor is currently confined to the window for a script.
     cursor_confined: bool,
     updater: Updater,
@@ -478,6 +480,7 @@ impl App {
             visualizer_drawn: false,
             visualizer_was_drawn: false,
             ui_drawn: false,
+            minimized: false,
             cursor_confined: false,
             updater: Updater::new(),
             updates_open: false,
@@ -2548,6 +2551,10 @@ impl App {
             self.tray_panel.update(ctx, snapshot);
             match click {
                 crate::tray::TrayClick::Primary { cursor } => {
+                    // The mini player takes over from the main window.
+                    if !self.tray_panel.is_open() {
+                        self.hide_window(ctx);
+                    }
                     self.tray_panel.toggle_mini(ctx, cursor, native * ctx.zoom_factor());
                 }
                 crate::tray::TrayClick::Secondary => self.show_window(ctx),
@@ -2607,10 +2614,8 @@ impl App {
     }
 
     /// Bring the main window back and to the front: un-hidden,
-    /// un-minimized, focused. The mini player goes away: the two aren't
-    /// up together.
+    /// un-minimized, focused (which puts the mini player away, `logic`).
     fn show_window(&mut self, ctx: &egui::Context) {
-        self.tray_panel.hide(ctx);
         self.hidden = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -3630,11 +3635,18 @@ impl eframe::App for App {
         if !std::mem::take(&mut self.ui_drawn) {
             self.nothing_drawn();
         }
+        self.minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
         let view = self.shared.lock().unwrap().view.clone();
         self.handle_tray(ctx, &view);
         if self.second_launch.as_ref().is_some_and(|f| f.swap(false, std::sync::atomic::Ordering::Relaxed)) {
             log::info!("launched again: showing the window");
             self.show_window(ctx);
+        }
+        // The main window and the mini player are never up together: the
+        // main window on screen, however it got there (`show_window`, or
+        // restored from the taskbar), puts the mini player away.
+        if !self.hidden && !self.minimized && self.tray_panel.is_open() {
+            self.tray_panel.hide(ctx);
         }
         self.sync_script_song(&view);
         self.poll_loads();
