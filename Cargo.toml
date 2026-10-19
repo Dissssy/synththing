@@ -44,6 +44,8 @@ egui_commonmark = "0.25"                                  # library servers' doc
 egui-phosphor = "0.14"
 base64 = "0.23"                                           # songs' MIDI files, in uploads (library/songs.rs)
 resvg = { version = "0.45", default-features = false }      # the wordmark in the menu bar (app/branding.rs)                                    # icons (the Phosphor set, as a font)
+fontdb = "0.24"                                           # finding installed fonts to fall back on (app/fonts.rs)
+skrifa = "0.44"                                           # reading which characters a font has; the same copy egui renders with
 
 [build-dependencies]
 resvg = { version = "0.45", default-features = false }      # the app icon, from assets/synththing-icon.svg

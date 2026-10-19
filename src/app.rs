@@ -11,6 +11,7 @@ mod branding;
 mod close;
 mod editor;
 mod feedback;
+pub mod fonts;
 pub use editor::ApplyMode;
 mod loading;
 mod playlist_panel;
@@ -2029,13 +2030,20 @@ impl App {
                     }
 
                     ui.separator();
-                    ui.strong("Font");
+                    ui.strong("Fonts");
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Script text uses Monogram by Vinícius Menézio (datagoblin), released to the public domain (CC0). Attribution isn't required, but it's given gladly.");
                         ui.hyperlink_to("datagoblin.itch.io/monogram", "https://datagoblin.itch.io/monogram");
                     });
                     egui::CollapsingHeader::new("Monogram's credits").id_salt("credits_monogram").show(ui, |ui| {
                         ui.label(egui::RichText::new(credits::MONOGRAM_CREDITS.trim()).monospace());
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Japanese and Korean text uses Noto Sans JP and Noto Sans KR by Google and Adobe, under the SIL Open Font License 1.1.");
+                        ui.hyperlink_to("github.com/notofonts/noto-cjk", "https://github.com/notofonts/noto-cjk");
+                    });
+                    egui::CollapsingHeader::new("Noto Sans CJK's license").id_salt("credits_noto_cjk").show(ui, |ui| {
+                        ui.label(egui::RichText::new(credits::NOTO_CJK_LICENSE.trim()).monospace());
                     });
 
                     ui.separator();
@@ -3881,15 +3889,6 @@ fn categories_body<S: AsRef<str>>(
     });
 }
 
-/// A setting on one line (`add`), with an (i) after it: hovering either
-/// shows `info`, the longer explanation.
-/// The fonts: egui's own, with the Phosphor icons (`icon`) mixed in.
-pub fn install_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-    ctx.set_fonts(fonts);
-}
-
 /// A Phosphor icon by its name (`shield-check`, `SCROLL`), for text: the
 /// scroll if there's no such icon.
 pub fn icon(name: &str) -> &'static str {
@@ -3900,6 +3899,8 @@ pub fn icon(name: &str) -> &'static str {
         .map_or(egui_phosphor::regular::SCROLL, |(_, glyph)| glyph)
 }
 
+/// A setting on one line (`add`), with an (i) after it: hovering either
+/// shows `info`, the longer explanation.
 fn with_info(ui: &mut egui::Ui, info: &str, add: impl FnOnce(&mut egui::Ui) -> egui::Response) {
     ui.horizontal(|ui| {
         add(ui).on_hover_text(info);
