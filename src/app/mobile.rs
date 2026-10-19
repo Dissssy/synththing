@@ -344,7 +344,7 @@ impl App {
         }
 
         let width = (screen.width() * 0.8).min(320.0);
-        egui::Area::new(egui::Id::new("mobile_drawer"))
+        let drawer = egui::Area::new(egui::Id::new("mobile_drawer"))
             .order(egui::Order::Foreground)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
@@ -354,6 +354,10 @@ impl App {
                     egui::ScrollArea::vertical().show(ui, |ui| self.mobile_drawer_items_ui(ui));
                 });
             });
+        // Over the backdrop, always: a tap on the backdrop (closing the
+        // menu) brings it to the front, and it would cover the menu the
+        // next time it opened.
+        ctx.move_to_top(drawer.response.layer_id);
     }
 
     fn mobile_drawer_items_ui(&mut self, ui: &mut egui::Ui) {
