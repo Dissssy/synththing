@@ -24,6 +24,7 @@ import android.util.Log;
 import android.util.Rational;
 import android.view.DisplayCutout;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
@@ -42,8 +43,8 @@ import java.util.Locale;
 /**
  * The app's activity: a NativeActivity running the Rust app (eframe), with
  * what that can't do itself, for the Rust side to call (src/android.rs):
- * picking files to import, the playback service, picture-in-picture and
- * installing updates.
+ * picking files to import, the playback service, picture-in-picture,
+ * installing updates, and the keyboard's connection to text fields.
  */
 public class MainActivity extends NativeActivity {
     private static final String TAG = "synththing";
@@ -55,6 +56,8 @@ public class MainActivity extends NativeActivity {
     private String[] pickExtensions;
     private String pickDir;
 
+    private KeyboardView keyboardView;
+
     private volatile boolean pictureInPictureAllowed;
     private volatile Rational pictureInPictureAspect = new Rational(1, 1);
 
@@ -65,6 +68,8 @@ public class MainActivity extends NativeActivity {
         System.loadLibrary(LIBRARY);
         super.onCreate(savedInstanceState);
         drawEdgeToEdge();
+        keyboardView = new KeyboardView(this);
+        addContentView(keyboardView, new ViewGroup.LayoutParams(1, 1));
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 0);
@@ -158,6 +163,23 @@ public class MainActivity extends NativeActivity {
                 getWindow().getDecorView().setSystemUiVisibility(on ? layout | hidden : layout);
             }
         });
+    }
+
+    // ---- The keyboard ----
+
+    /** From Rust: the text field being edited holds {@code text} (KeyboardView.edit). */
+    public void editText(int revision, String text, int start, int end, boolean password, boolean restart) {
+        runOnUiThread(() -> keyboardView.edit(revision, text, start, end, password, restart));
+    }
+
+    /** From Rust: show the keyboard, for the text field being edited. */
+    public void showKeyboard() {
+        runOnUiThread(keyboardView::show);
+    }
+
+    /** From Rust: no text field's being edited. */
+    public void hideKeyboard() {
+        runOnUiThread(keyboardView::hide);
     }
 
     // ---- Importing ----

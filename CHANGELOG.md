@@ -17,6 +17,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Song names are set under Preferences > Appearance. On Android they show on the now-playing screen and in the notification too, and {file_path} is the folder inside the song library.
 
 ### Fixed
+- On Android, the keyboard works in text fields as it does in other apps: autocorrect, predictions and gesture typing.
 - With a very round theme, the seek bar's filled part no longer runs past its handle.
 
 ## 0.9.0 (2026-10-19)

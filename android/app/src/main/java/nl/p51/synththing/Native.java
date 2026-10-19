@@ -16,6 +16,13 @@ final class Native {
     /** What the system bars, a notch and the keyboard cover of the window, in pixels. */
     static native void insets(int left, int top, int right, int bottom);
 
+    /**
+     * The keyboard edited the text field: it now holds {@code text}, with
+     * {@code selectionStart} to {@code selectionEnd} selected (in code
+     * points), edited on what Rust said it held as {@code revision}.
+     */
+    static native void typed(int revision, String text, int selectionStart, int selectionEnd);
+
     /** The app went into picture-in-picture, or came out of it. */
     static native void pictureInPicture(boolean on);
 }
