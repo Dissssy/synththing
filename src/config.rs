@@ -283,9 +283,19 @@ impl Config {
 
     /// The saved config, for the app, which saves it as it goes: one it
     /// can't read is moved aside first (`read_json_or_set_aside`), so the
-    /// defaults it starts from aren't saved over it.
+    /// defaults it starts from aren't saved over it. What could be read of
+    /// it is saved in its place straight away: otherwise, if nothing changes
+    /// before the app is next started (Android has no closing to save on),
+    /// it would start without any of it.
     pub fn load_for_app() -> Result<Self> {
-        Ok(read_json_or_set_aside(&Self::file_path()?)?.unwrap_or_default())
+        let path = Self::file_path()?;
+        let config: Option<Self> = read_json_or_set_aside(&path)?;
+        if let Some(config) = &config
+            && !path.exists()
+        {
+            config.save()?;
+        }
+        Ok(config.unwrap_or_default())
     }
 
     pub fn preload_expiry(&self) -> std::time::Duration {
@@ -321,7 +331,9 @@ impl Config {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
-        let json = serde_json::to_string_pretty(self)?;
+        let mut json = serde_json::to_value(self)?;
+        finite_positions(&mut json);
+        let json = serde_json::to_string_pretty(&json)?;
         fs::write(&path, json).with_context(|| format!("writing {}", path.display()))?;
         Ok(())
     }
@@ -487,6 +499,24 @@ fn salvage<T: serde::de::DeserializeOwned>(data: &str) -> Option<(T, Vec<String>
     Some((value, dropped))
 }
 
+/// Make every position (`{"x": .., "y": ..}`) in `json` finite. A rect egui
+/// hasn't laid out yet (a dock layout that's never been drawn, as on Android
+/// and in the mobile layout) is infinite, which JSON can't hold: serde_json
+/// writes `null`, then can't read it back. They're laid out again before
+/// they're used, so 0 does.
+fn finite_positions(json: &mut serde_json::Value) {
+    match json {
+        serde_json::Value::Object(fields) if fields.len() == 2 && fields.contains_key("x") && fields.contains_key("y") => {
+            for value in fields.values_mut().filter(|v| v.is_null()) {
+                *value = 0.0.into();
+            }
+        }
+        serde_json::Value::Object(fields) => fields.values_mut().for_each(finite_positions),
+        serde_json::Value::Array(items) => items.iter_mut().for_each(finite_positions),
+        _ => {}
+    }
+}
+
 /// Move a file synththing can't read out of the way, to
 /// `<name>.unreadable-<unix time>` next to it, before something new is
 /// saved in its place. Returns where it went.
@@ -571,5 +601,17 @@ mod tests {
         assert!(aside[0].starts_with("soundfonts.json.unreadable-"), "{aside:?}");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A dock layout that's never been drawn (Android, the mobile layout)
+    /// has infinite rects: saved, it still reads back.
+    #[test]
+    fn undrawn_layouts_read_back() {
+        let config = Config { layout: Some(crate::layout::default_layout()), ..Config::default() };
+        let mut json = serde_json::to_value(&config).unwrap();
+        assert!(serde_json::from_value::<Config>(json.clone()).is_err(), "null positions, as serde_json writes infinities");
+        finite_positions(&mut json);
+        let read: Config = serde_json::from_value(json).expect("reads back");
+        assert!(read.layout.is_some());
     }
 }

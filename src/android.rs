@@ -88,15 +88,22 @@ impl eframe::App for Shared {
 }
 
 /// Tick the app whenever eframe hasn't for a while: it's in the
-/// background, with no window.
+/// background, with no window. Going there, it saves what it would on
+/// closing, as Android may end it there.
 fn background_ticks(app: Arc<Mutex<App>>, last_frame: Arc<Mutex<Instant>>, ctx: egui::Context) {
     let spawned = std::thread::Builder::new().name("background-ticks".to_string()).spawn(move || {
+        let mut background = false;
         loop {
             std::thread::sleep(BACKGROUND_TICK);
-            let idle = last_frame.lock().unwrap().elapsed();
-            if idle > BACKGROUND_TICK * 2 {
-                app.lock().unwrap().tick(&ctx);
+            let idle = last_frame.lock().unwrap().elapsed() > BACKGROUND_TICK * 2;
+            if idle {
+                let mut app = app.lock().unwrap();
+                if !background {
+                    app.backgrounded();
+                }
+                app.tick(&ctx);
             }
+            background = idle;
         }
     });
     if let Err(e) = spawned {

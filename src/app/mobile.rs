@@ -449,6 +449,16 @@ impl App {
 
 #[cfg(target_os = "android")]
 impl App {
+    /// The app went into the background: save what closing the app saves
+    /// on desktop (`on_exit`), as Android ends an app in the background
+    /// without telling it.
+    pub fn backgrounded(&mut self) {
+        self.save_session();
+        if serde_json::to_string(&self.dock).unwrap_or_default() != self.saved_layout_json {
+            self.save_layout();
+        }
+    }
+
     /// The Android side of `tick`: carry out the media buttons pressed
     /// outside the app, and keep the media session (the notification, the
     /// lock screen) up to date with what's playing.
