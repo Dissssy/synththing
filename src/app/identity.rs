@@ -95,6 +95,23 @@ impl App {
         (server, key)
     }
 
+    /// Another device moved the identity to a new key: this one's is refused
+    /// everywhere now, so it's forgotten (signed out), and the user's told.
+    fn sign_out_replaced(&mut self) {
+        let id = self.library_identity().map(|identity| identity.id()).unwrap_or_default();
+        if let Err(e) = identity::forget() {
+            log::warn!("signing out: {e}");
+        }
+        log::info!("signed out: #{id}'s key was replaced on another device");
+        self.clear_library_identity();
+        self.forget_identity_status();
+        self.identity.flow = None;
+        let message = "Signed out: your identity moved to a new key on another device. Sign in again with Sign in \
+                       with a link... (or import its export).";
+        self.library_identity_message(message);
+        self.status = message.to_string();
+    }
+
     /// Ask the authority about the identity afresh: it's another one now.
     pub(super) fn forget_identity_status(&mut self) {
         self.identity.status = None;
@@ -113,6 +130,15 @@ impl App {
     }
 
     pub(super) fn poll_identity(&mut self) {
+        // (Not while this device is moving to a new key itself: its old key
+        // is refused before the new one's in place.)
+        let changing = self.identity.flow.as_ref().is_some_and(|f| f.busy);
+        if !changing
+            && let Some(key) = client::take_replaced()
+            && self.library_identity().is_some_and(|identity| identity.public() == key)
+        {
+            self.sign_out_replaced();
+        }
         while let Ok(event) = self.identity.events.1.try_recv() {
             let flow = self.identity.flow.as_mut();
             match event {
@@ -400,6 +426,11 @@ impl App {
                         current.as_ref().map(Identity::id).unwrap_or_default(),
                         host(&authority)
                     ));
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        "Every other device signed in as you is signed out: sign them in again from here afterwards \
+                         (Sign in another device...).",
+                    );
                     ui.weak("Export the new one afterwards: an export of the old key won't work any more.");
                 }
                 Flow::Delete { server, restore, address, sent, code, done } => {
@@ -463,6 +494,7 @@ impl App {
                             ),
                             None => "The identity moves to a new key, made here.".to_string(),
                         });
+                        ui.weak("Every other device signed in as you is signed out: sign them in again from here afterwards.");
                     }
                 }
             }

@@ -850,6 +850,11 @@ pub struct ApiError {
     /// Seconds until trying again makes sense (rate limits).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after: Option<u64>,
+    /// The request's key (hex), refused because a rotation replaced it:
+    /// another device of the identity's moved it to a new key, and this
+    /// one is signed out (`client::take_replaced`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced: Option<String>,
 }
 
 /// Headers a script's source comes with: its version, its SHA-256, and the

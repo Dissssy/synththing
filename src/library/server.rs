@@ -747,7 +747,7 @@ fn json<T: Serialize>(status: u16, body: &T) -> Reply {
 }
 
 fn error(status: u16, message: impl Into<String>) -> Reply {
-    json(status, &ApiError { error: message.into(), retry_after: None })
+    json(status, &ApiError { error: message.into(), retry_after: None, replaced: None })
 }
 
 fn now() -> i64 {
@@ -1240,10 +1240,13 @@ fn signer_any(state: &State, request: &Request, method: &str, path: &str, body: 
         return Err(error(401, "the request's signature doesn't match its key"));
     }
     if authority::is_retired(&state.db(), &key) {
-        return Err(error(
-            401,
-            "this key was replaced by a newer one (a rotation or a recovery): the app with the new key can carry on",
-        ));
+        let error = ApiError {
+            error: "this key was replaced by a newer one on another device (a new key or a recovery): sign in again"
+                .into(),
+            retry_after: None,
+            replaced: Some(key),
+        };
+        return Err(json(410, &error));
     }
     let mut seen = state.seen_signatures.lock().unwrap_or_else(|p| p.into_inner());
     let window = Duration::from_secs(REQUEST_WINDOW_SECONDS as u64 * 2);
@@ -1487,7 +1490,7 @@ fn upload_allowance(state: &State, db: &Connection, author: Option<&str>, ip: &s
             let wait = recent.first().map(|t| day.saturating_sub(t.elapsed()).as_secs()).unwrap_or(0);
             return Err(json(
                 429,
-                &ApiError { error: "that's all the uploads for today from here".into(), retry_after: Some(wait) },
+                &ApiError { error: "that's all the uploads for today from here".into(), retry_after: Some(wait), replaced: None },
             ));
         }
     }
