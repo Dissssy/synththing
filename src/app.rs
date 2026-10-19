@@ -2547,7 +2547,7 @@ impl App {
         self.pending_script_song = Some((self.loads_sent, path.to_path_buf(), notes, id));
     }
 
-    /// Put synththing's icon in the tray. Once the window exists (main.rs,
+    /// Put synththing's icon in the tray. Once the window exists (desktop.rs,
     /// as eframe starts).
     pub fn attach_tray(&mut self, ctx: &egui::Context) {
         self.tray = crate::tray::Tray::new(ctx);

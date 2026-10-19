@@ -9,7 +9,7 @@ Releases are built by GitHub Actions (`.github/workflows/release.yml`) when a `v
   - `docs/cli.md` covers every command-line command and option, and agrees with `synththing --help` (generated from `src/cli.rs`).
 - **New Lua functions have a version.** Every entry in `HOST_API` needs one in `API_SINCE` (`src/library/mod.rs`; a test checks), and so does every new `script_options` key in `OPTION_SINCE`. Use the version it will ship in (the next release), not the one in Cargo.toml: the library uses it to keep scripts that need it away from apps that don't have it.
 - **The changelog is current.** User-facing changes get a line under `## Unreleased` in `CHANGELOG.md` (New / Changed / Fixed), written for people using the app, not for the code. The app shows it after an update and under Help > Changelog....
-- **Checks pass:** `cargo build`, `cargo clippy` (no warnings), `cargo test --bin synththing`.
+- **Checks pass:** `cargo build`, `cargo clippy` (no warnings), `cargo test --lib`.
 - **Dependencies changed?** Regenerate the license list with `cargo run --example gen_licenses` (the `license_list_matches_the_dependency_tree` test fails until you do). A dependency licensed under something with no text in `assets/licenses/spdx/` makes the generator stop and say which one to add.
 
 ## Bundled scripts on the library

@@ -85,7 +85,7 @@ With [Rust](https://rustup.rs) installed:
 cargo build --release
 ```
 
-The program ends up at `target\release\synththing.exe`. Run the tests with `cargo test --bin synththing`. How releases are made is in [docs/RELEASING.md](docs/RELEASING.md).
+The program ends up at `target\release\synththing.exe`. Run the tests with `cargo test --lib`. How releases are made is in [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Credits
 

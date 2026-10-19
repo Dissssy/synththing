@@ -12,7 +12,7 @@
 //! `docs/scripting-reference.md`, the in-app Scripting Reference (see
 //! `lua_docs.rs` and `parse_reference` below), and the app icon from
 //! `assets/synththing-icon.svg`: `$OUT_DIR/synththing.ico`, embedded in the
-//! Windows exe, `$OUT_DIR/icon_256.rgba` for the window (`main.rs`) and
+//! Windows exe, `$OUT_DIR/icon_256.rgba` for the window (`desktop.rs`) and
 //! `$OUT_DIR/icon_32.rgba` for the tray (`tray.rs`).
 //!
 //! And stamps the build (`src/build_info.rs`): `SYNTHTHING_VERSION`,
