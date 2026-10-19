@@ -2,7 +2,8 @@
 //! plays it and marks it as playing. [`FileBrowser::ui`] returns `Some(path)`
 //! when a *file* row is double-clicked; double-clicking a directory navigates
 //! into it internally. Rows can be selected several at a time and dragged
-//! out together (onto a playlist).
+//! out together (onto a playlist). Songs show by their names
+//! (`song_title`), sorted by them or by their files' names.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -50,6 +51,8 @@ pub struct FileBrowser {
     /// The folder it's kept inside, if any (the mobile layout's song
     /// library): no going above it, and no browsing elsewhere.
     root: Option<PathBuf>,
+    /// Files sorted by their files' names, not the names shown.
+    sort_by_file_name: bool,
 }
 
 impl FileBrowser {
@@ -65,6 +68,7 @@ impl FileBrowser {
             active: None,
             search_query: String::new(),
             search_candidates: None,
+            sort_by_file_name: false,
             hovered: None,
             selection: Selection::default(),
             root: None,
@@ -88,6 +92,11 @@ impl FileBrowser {
         self.hovered = None;
     }
 
+    /// The files in the current folder.
+    pub fn files(&self) -> impl Iterator<Item = &Path> {
+        self.entries.iter().filter(|e| !e.is_dir).map(|e| e.path.as_path())
+    }
+
     /// Re-read the current folder (and the search results, mid-search),
     /// e.g. because files in it changed on disk.
     pub fn rescan(&mut self) {
@@ -109,6 +118,11 @@ impl FileBrowser {
         self.search_query.clear();
         self.search_candidates = None;
         self.refresh();
+    }
+
+    /// The folder it's kept inside, if any.
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
     }
 
     /// Keep the browser inside `root` (or let it go anywhere, `None`),
@@ -255,9 +269,16 @@ impl FileBrowser {
     /// Draw the browser (search box + scrollable list) into `ui`. Returns
     /// `Some(path)` the frame a file row is double-clicked; double-clicking a
     /// directory row navigates into it internally and returns `None`.
-    /// `trailing` draws extra widgets at the right end of each file row
-    /// (right to left). `menu`, if given, draws a file row's right-click menu.
-    pub fn ui(&mut self, ui: &mut egui::Ui, trailing: &mut dyn FnMut(&mut egui::Ui, &Path), mut menu: Option<RowMenu>) -> Option<PathBuf> {
+    /// `title` names a file's row. `trailing` draws extra widgets at the
+    /// right end of each file row (right to left). `menu`, if given, draws a
+    /// file row's right-click menu.
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        title: &mut dyn FnMut(&Path) -> String,
+        trailing: &mut dyn FnMut(&mut egui::Ui, &Path),
+        mut menu: Option<RowMenu>,
+    ) -> Option<PathBuf> {
         match &self.root {
             Some(root) => {
                 let inside = self.cwd.strip_prefix(root).unwrap_or(Path::new(""));
@@ -283,6 +304,15 @@ impl FileBrowser {
                 }
                 hidden_changed = ui.checkbox(&mut self.show_hidden, "hidden").changed();
             }
+            let (sort, hint) = if self.sort_by_file_name {
+                ("Sort: file", "Sorted by the files' names. Click to sort by the songs' names.")
+            } else {
+                ("Sort: name", "Sorted by the songs' names. Click to sort by the files' names.")
+            };
+            if ui.button(sort).on_hover_text(hint).clicked() {
+                self.sort_by_file_name = !self.sort_by_file_name;
+                self.selection.clear();
+            }
 
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
@@ -307,13 +337,26 @@ impl FileBrowser {
         }
 
         let query = self.search_query.trim();
-        let matches;
-        let entries: &[Entry] = if query.is_empty() {
-            &self.entries
+        let entries: Vec<Entry> = if query.is_empty() {
+            let mut entries: Vec<Entry> = self
+                .entries
+                .iter()
+                .map(|e| Entry {
+                    label: if e.is_dir { e.label.clone() } else { title(&e.path) },
+                    path: e.path.clone(),
+                    is_dir: e.is_dir,
+                })
+                .collect();
+            // (Folders first, as read; they keep their names.)
+            if !self.sort_by_file_name {
+                let first_file = entries.iter().position(|e| !e.is_dir).unwrap_or(entries.len());
+                entries[first_file..].sort_by_cached_key(|e| e.label.to_lowercase());
+            }
+            entries
         } else {
-            matches = self.search_candidates.as_deref().map(|c| ranked_matches(c, query)).unwrap_or_default();
-            &matches
+            self.search_candidates.as_deref().map(|c| ranked_matches(c, query, title)).unwrap_or_default()
         };
+        let entries = entries.as_slice();
         let active = self.active.as_deref();
         let output = select_list::show(ui, &self.title, entries, &mut self.selection, |ui, row, entry| {
             let is_active = active == Some(entry.path.as_path());
@@ -359,12 +402,18 @@ impl FileBrowser {
 /// of it, else just that row.
 pub struct DraggedFiles(pub Vec<PathBuf>);
 
-/// Re-rank `candidates` against `query` and return the top matches as `Entry`s.
-fn ranked_matches(candidates: &[(String, PathBuf)], query: &str) -> Vec<Entry> {
+/// Re-rank `candidates` against `query`, by their paths or their names
+/// (`title`), whichever matches better, and return the top matches as
+/// `Entry`s, named.
+fn ranked_matches(candidates: &[(String, PathBuf)], query: &str, title: &mut dyn FnMut(&Path) -> String) -> Vec<Entry> {
     let mut scored: Vec<(i32, usize)> = candidates
         .iter()
         .enumerate()
-        .filter_map(|(i, (label, _))| fuzzy_score(label, query).map(|score| (score, i)))
+        .filter_map(|(i, (label, path))| {
+            let by_path = fuzzy_score(label, query);
+            let by_name = fuzzy_score(&title(path), query);
+            by_path.max(by_name).map(|score| (score, i))
+        })
         .collect();
     // Stable sort: ties keep the walk order, which groups by folder.
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
@@ -373,9 +422,9 @@ fn ranked_matches(candidates: &[(String, PathBuf)], query: &str) -> Vec<Entry> {
     scored
         .into_iter()
         .map(|(_, i)| {
-            let (label, path) = &candidates[i];
+            let path = &candidates[i].1;
             Entry {
-                label: label.clone(),
+                label: title(path),
                 path: path.clone(),
                 is_dir: false,
             }

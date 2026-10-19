@@ -70,7 +70,7 @@ impl PrefTab {
     /// What's in it, in a few words (under its title in the mobile list).
     pub(super) fn summary(self) -> &'static str {
         match self {
-            Self::Appearance => "Theme, UI scale, the seek bar, full screen",
+            Self::Appearance => "Theme, UI scale, the seek bar, full screen, song names",
             Self::Playback => "Audio buffer, what's kept from last time",
             Self::Songs => "Audio files, loading",
             Self::Visualizers => "Script logs",
@@ -227,6 +227,8 @@ impl App {
                         |ui| ui.checkbox(&mut separate, "Separate layout for fullscreen"),
                     );
                 }
+                ui.separator();
+                self.song_names_ui(ui);
             }
             PrefTab::Playback => {
                 with_info(

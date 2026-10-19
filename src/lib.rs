@@ -52,6 +52,7 @@ mod script_host;
 mod select_list;
 mod snippets;
 mod song_info;
+mod song_title;
 mod song_preview;
 mod spectrum;
 mod sprite_code;

@@ -26,6 +26,7 @@ mod library;
 mod recording;
 mod script_windows;
 mod song_library;
+mod song_names;
 mod sprite_editor;
 mod themes;
 mod tray_panel;
@@ -57,6 +58,7 @@ use crate::lua_visualizer::{
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
 use crate::song_info::{format_length, SongInfoCache};
+use crate::song_title::Naming;
 use crate::updater::{self, Track, UpdateState, Updater};
 use crate::watch::{FolderWatch, Watched};
 use crate::changelog;
@@ -77,6 +79,31 @@ const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 
 /// The songs listed and added from folders: MIDI files, plus audio files
 /// when that's turned on in Preferences.
+impl App {
+    /// The song at `path`'s name, from its tags (Preferences > Appearance).
+    fn song_title(&mut self, path: &Path) -> String {
+        title_of(&mut self.song_info, &naming(&self.config, &self.browser), path)
+    }
+
+    /// The playing song's name, if a song is playing.
+    fn current_title(&mut self) -> Option<String> {
+        self.current_song.clone().map(|path| self.song_title(&path))
+    }
+}
+
+/// How songs are named: by the title patterns, with `{file_path}` inside
+/// the Songs list's folder (the song library on mobile, else the default
+/// folder).
+fn naming<'a>(config: &'a Config, browser: &FileBrowser) -> Naming<'a> {
+    let folder = browser.root().map(Path::to_path_buf).unwrap_or_else(|| config.browse_start_dir());
+    Naming::new(config, folder)
+}
+
+/// The song at `path`'s name, by `naming`.
+fn title_of(cache: &mut SongInfoCache, naming: &Naming, path: &Path) -> String {
+    naming.name(path, cache.get(path).as_deref())
+}
+
 fn listed_song_extensions(config: &Config) -> &'static [&'static str] {
     if config.show_audio_files { SONG_EXTENSIONS } else { MIDI_EXTENSIONS }
 }
@@ -503,7 +530,10 @@ impl App {
             rename: None,
             editor_goto_line: None,
             folder_watch: None,
-            song_info: SongInfoCache::new(),
+            song_info: match config::config_dir() {
+                Ok(dir) => SongInfoCache::saved_in(dir.join("song-info.json")),
+                Err(_) => SongInfoCache::new(),
+            },
             song_info_open: None,
             playlist_selection: Selection::default(),
             binding_capture: None,
@@ -1271,7 +1301,10 @@ impl App {
 
         ui.horizontal(|ui| {
             ui.weak("Song:");
-            ui.label(view.track_name.as_deref().unwrap_or("(none)"));
+            match self.current_song.clone() {
+                Some(path) => ui.label(self.song_title(&path)),
+                None => ui.label(view.track_name.as_deref().unwrap_or("(none)")),
+            };
             if let Some(np) = &self.now_playing
                 && let Some(list) = self.playlists.lists.get(np.list)
             {
@@ -2144,7 +2177,7 @@ impl App {
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("song_info")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 460.0));
-            ui.heading(nice_name(&path));
+            ui.heading(self.song_title(&path));
             ui.weak(path.display().to_string());
             ui.add_space(6.0);
             match &info {
@@ -2466,7 +2499,10 @@ impl App {
                 }
             });
         }
-        let cache = &mut self.song_info;
+        // (Both the names and the trailing widgets read the song info, one
+        // after the other.)
+        let cache = std::cell::RefCell::new(&mut self.song_info);
+        let naming = naming(&self.config, &self.browser);
         let info_open = &mut self.song_info_open;
         let mut publish = None;
         let mut add_to: Option<(Option<usize>, PathBuf)> = None;
@@ -2496,7 +2532,8 @@ impl App {
         };
         let clicked = self.browser.ui(
             ui,
-            &mut |ui, path| song_info_widgets(ui, cache, path, info_open),
+            &mut |path| title_of(&mut cache.borrow_mut(), &naming, path),
+            &mut |ui, path| song_info_widgets(ui, &mut cache.borrow_mut(), path, info_open),
             Some(&mut menu),
         );
         if let Some(path) = clicked {
@@ -2738,7 +2775,7 @@ impl App {
     /// What the tray panel shows.
     fn tray_snapshot(&mut self, view: &EngineView) -> tray_panel::Snapshot {
         tray_panel::Snapshot {
-            title: view.track_name.clone(),
+            title: self.current_title().or_else(|| view.track_name.clone()),
             paused: view.paused,
             position: view.position,
             length: view.length,

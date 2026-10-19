@@ -204,7 +204,7 @@ impl App {
         }
 
         self.pending_play = None;
-        let name = nice_name(&path);
+        let name = self.song_title(&path);
         // A running script can ask for songs to wait for it (its own start
         // button): `script_options({ start_paused = true })`. So does a
         // recording the script prepares each song for.

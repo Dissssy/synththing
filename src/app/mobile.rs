@@ -430,8 +430,8 @@ impl App {
             });
         });
 
-        let title = view.track_name.as_deref().unwrap_or("Nothing playing");
-        marquee(ui, title, egui::TextStyle::Heading);
+        let title = self.current_title().or_else(|| view.track_name.clone());
+        marquee(ui, title.as_deref().unwrap_or("Nothing playing"), egui::TextStyle::Heading);
         let mut detail = Vec::new();
         if let Some(np) = &self.now_playing
             && let Some(list) = self.playlists.lists.get(np.list)
@@ -504,6 +504,7 @@ impl App {
     /// On the other pages: what's playing, with play/pause; tapping the
     /// name goes to Now playing.
     fn mobile_now_playing_bar_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        let title = self.current_title().or_else(|| view.track_name.clone());
         ui.horizontal(|ui| {
             let (glyph, color) = if view.paused { ("play", palette_color(2)) } else { ("pause", palette_color(1)) };
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -511,7 +512,7 @@ impl App {
                 if ui.add(play).on_hover_text(if view.paused { "Play" } else { "Pause" }).clicked() {
                     self.send(AudioCommand::TogglePause);
                 }
-                let title = view.track_name.as_deref().unwrap_or("Nothing playing");
+                let title = title.as_deref().unwrap_or("Nothing playing");
                 let name = egui::Label::new(egui::RichText::new(title).strong()).truncate().sense(egui::Sense::click());
                 if ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(name)).inner.clicked() {
                     self.mobile_state.page = Page::NowPlaying;
@@ -718,7 +719,7 @@ impl App {
 
         let has_song = view.has_midi || view.has_audio_file;
         let playback = Playback {
-            title: view.track_name.clone().unwrap_or_default(),
+            title: self.current_title().or_else(|| view.track_name.clone()).unwrap_or_default(),
             detail: self
                 .now_playing
                 .as_ref()
