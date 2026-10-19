@@ -1287,6 +1287,11 @@ impl App {
             }
         }
         if let Some(author) = show_author {
+            // (On mobile, to their uploads' list: else the script's details
+            // stay, as it's among them.)
+            if self.mobile() {
+                self.library_close_details();
+            }
             self.library_show_author(Some(author));
         }
         if let Some(path) = use_script
