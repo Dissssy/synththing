@@ -38,6 +38,7 @@ mod playlist;
 mod preview;
 mod recorder;
 mod song_info;
+mod song_title;
 mod song_preview;
 mod snippets;
 mod spectrum;

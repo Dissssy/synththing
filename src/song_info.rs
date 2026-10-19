@@ -7,6 +7,11 @@
 //! container probe (the same library rodio decodes with), which reads
 //! headers and tags without decoding any audio. Files symphonia can't open
 //! (WMA, AC3, ...) are described by ffmpeg instead, when there is one.
+//!
+//! What's been read is kept between launches (`song-info.json` in the
+//! config folder), so songs' names (`song_title`) and lengths show at once;
+//! each is still read again the first time it's asked for in a session, in
+//! case the file changed.
 
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
@@ -14,17 +19,85 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
 
 use crate::midi_notes::NoteList;
 
 /// A song's length (when it can be known without decoding it) and its
 /// details as label/value pairs, empty when the file has nothing to say.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SongInfo {
     pub length: Option<f64>,
     pub details: Vec<(String, String)>,
     /// A MIDI file's note count.
     pub notes: Option<usize>,
+    /// What its tags say it is, for its name (`song_title`).
+    #[serde(default)]
+    pub tags: Tags,
+}
+
+/// The tags a song's name can be made from: an audio file's (ID3, Vorbis
+/// comments, ...), or a MIDI file's first track name as its title.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Tags {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub composer: Option<String>,
+    pub genre: Option<String>,
+    pub track: Option<String>,
+    pub year: Option<String>,
+}
+
+impl Tags {
+    /// The tag `name` (as a title pattern writes it), if the song has it.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        let tag = match name {
+            "title" => &self.title,
+            "artist" => &self.artist,
+            "album" => &self.album,
+            "album_artist" => &self.album_artist,
+            "composer" => &self.composer,
+            "genre" => &self.genre,
+            "track" => &self.track,
+            "year" => &self.year,
+            _ => return None,
+        };
+        tag.as_deref()
+    }
+
+    /// Fill the tag `key` (symphonia's name for a standard tag, or
+    /// ffmpeg's) names, with `value`, unless it's set already.
+    fn set(&mut self, key: &str, value: &str) {
+        let key = key.to_ascii_lowercase().replace([' ', '_'], "");
+        let slot = match key.as_str() {
+            "tracktitle" | "title" => &mut self.title,
+            "artist" => &mut self.artist,
+            "album" => &mut self.album,
+            "albumartist" => &mut self.album_artist,
+            "composer" => &mut self.composer,
+            "genre" => &mut self.genre,
+            "tracknumber" | "track" => &mut self.track,
+            "date" | "year" | "releasedate" | "originaldate" => &mut self.year,
+            _ => return,
+        };
+        let value = value.trim();
+        if slot.is_some() || value.is_empty() {
+            return;
+        }
+        let value = match key.as_str() {
+            // "3/12" is track 3.
+            "tracknumber" | "track" => value.split('/').next().unwrap_or(value).trim(),
+            // "2003-05-01" is 2003.
+            "title" | "tracktitle" | "artist" | "album" | "albumartist" | "composer" | "genre" => value,
+            _ => value.get(..4).filter(|y| y.bytes().all(|b| b.is_ascii_digit())).unwrap_or(value),
+        };
+        *slot = Some(value.to_string());
+    }
 }
 
 /// A MIDI file with more notes than this is "very large": playing it is
@@ -51,16 +124,27 @@ pub fn thousands(n: usize) -> String {
 }
 
 enum Slot {
-    Pending,
+    /// Being read; meanwhile, what an earlier launch read, if anything.
+    Pending(Option<Arc<SongInfo>>),
+    /// What an earlier launch read, not read again yet this session.
+    Saved(Arc<SongInfo>),
     Ready(Arc<SongInfo>),
 }
 
 type Queue = (Mutex<VecDeque<PathBuf>>, Condvar);
 
+/// How long after a read the cache is saved (so a folder being read is
+/// saved a few times, not once per song).
+const SAVE_AFTER: Duration = Duration::from_secs(10);
+
 pub struct SongInfoCache {
     slots: HashMap<PathBuf, Slot>,
     queue: Arc<Queue>,
     results: Receiver<(PathBuf, SongInfo)>,
+    /// Where it's kept between launches, if it is.
+    file: Option<PathBuf>,
+    /// When the first read not saved yet landed.
+    unsaved_since: Option<Instant>,
 }
 
 impl SongInfoCache {
@@ -69,39 +153,90 @@ impl SongInfoCache {
         let (tx, results) = mpsc::channel();
         let worker_queue = Arc::clone(&queue);
         let _ = thread::Builder::new().name("song-info".into()).spawn(move || worker(&worker_queue, &tx));
-        Self { slots: HashMap::new(), queue, results }
+        Self { slots: HashMap::new(), queue, results, file: None, unsaved_since: None }
     }
 
-    /// The info for `path` if it's been read; otherwise asks for it (ahead
-    /// of earlier requests) and returns `None` for now.
+    /// A cache kept in `file`: what it holds is shown until each song is
+    /// read again, and what's read is saved there.
+    pub fn saved_in(file: PathBuf) -> Self {
+        let mut cache = Self::new();
+        let saved: Vec<(PathBuf, SongInfo)> = match std::fs::read_to_string(&file) {
+            Ok(json) => serde_json::from_str(&json).unwrap_or_else(|e| {
+                log::warn!("couldn't read {} ({e}); songs are read again", file.display());
+                Vec::new()
+            }),
+            Err(_) => Vec::new(),
+        };
+        cache.slots = saved.into_iter().map(|(path, info)| (path, Slot::Saved(Arc::new(info)))).collect();
+        cache.file = Some(file);
+        cache
+    }
+
+    /// The info for `path`: what's been read, or else what an earlier
+    /// launch read (and then it's read again), or else `None` for now (and
+    /// it's asked for, ahead of earlier requests).
     pub fn get(&mut self, path: &Path) -> Option<Arc<SongInfo>> {
-        match self.slots.get(path) {
+        let known = match self.slots.get(path) {
             Some(Slot::Ready(info)) => return Some(Arc::clone(info)),
-            Some(Slot::Pending) => return None,
-            None => {}
-        }
-        self.slots.insert(path.to_path_buf(), Slot::Pending);
+            Some(Slot::Pending(known)) => return known.clone(),
+            Some(Slot::Saved(info)) => Some(Arc::clone(info)),
+            None => None,
+        };
+        self.slots.insert(path.to_path_buf(), Slot::Pending(known.clone()));
         let (lock, cvar) = &*self.queue;
         if let Ok(mut queue) = lock.lock() {
             queue.push_front(path.to_path_buf());
             cvar.notify_one();
         }
-        None
+        known
     }
 
-    /// Collect finished reads. Returns whether any requests are still
-    /// outstanding (so the caller can keep repainting until they land).
+    /// Collect finished reads (and save them, now and then). Returns
+    /// whether any requests are still outstanding (so the caller can keep
+    /// repainting until they land).
     pub fn poll(&mut self) -> bool {
         while let Ok((path, info)) = self.results.try_recv() {
             self.slots.insert(path, Slot::Ready(Arc::new(info)));
+            self.unsaved_since.get_or_insert_with(Instant::now);
         }
-        self.slots.values().any(|s| matches!(s, Slot::Pending))
+        if self.unsaved_since.is_some_and(|since| since.elapsed() >= SAVE_AFTER) {
+            self.unsaved_since = None;
+            self.save();
+        }
+        self.slots.values().any(|s| matches!(s, Slot::Pending(_)))
+    }
+
+    /// Write what's known to the file, on a thread of its own, leaving out
+    /// files that are gone.
+    fn save(&self) {
+        let Some(file) = self.file.clone() else { return };
+        let known: Vec<(PathBuf, Arc<SongInfo>)> = self
+            .slots
+            .iter()
+            .filter_map(|(path, slot)| match slot {
+                Slot::Ready(info) | Slot::Saved(info) | Slot::Pending(Some(info)) => Some((path.clone(), Arc::clone(info))),
+                Slot::Pending(None) => None,
+            })
+            .collect();
+        let _ = thread::Builder::new().name("song-info-save".into()).spawn(move || {
+            let kept: Vec<(&Path, &SongInfo)> = known
+                .iter()
+                .filter(|(path, _)| path.to_str().is_some() && path.exists())
+                .map(|(path, info)| (path.as_path(), &**info))
+                .collect();
+            let result = serde_json::to_string(&kept)
+                .map_err(|e| e.to_string())
+                .and_then(|json| std::fs::write(&file, json).map_err(|e| e.to_string()));
+            if let Err(e) = result {
+                log::warn!("couldn't save {}: {e}", file.display());
+            }
+        });
     }
 
     /// Forget everything cached for files directly in `dir` (they changed
     /// on disk), so they're read again when next shown.
     pub fn forget_folder(&mut self, dir: &Path) {
-        self.slots.retain(|path, slot| matches!(slot, Slot::Pending) || path.parent() != Some(dir));
+        self.slots.retain(|path, slot| matches!(slot, Slot::Pending(_)) || path.parent() != Some(dir));
     }
 }
 
@@ -144,8 +279,10 @@ fn read_midi(path: &Path) -> Result<SongInfo, String> {
     let list = NoteList::from_smf(&bytes)?;
     let facts = list.facts();
     let mut details = Vec::new();
-    if let Some(title) = facts.track_names.first().filter(|n| !n.is_empty()) {
+    let mut tags = Tags::default();
+    if let Some(title) = facts.track_names.first().filter(|n| !n.trim().is_empty()) {
         details.push(("Title".into(), title.clone()));
+        tags.title = Some(title.trim().to_string());
     }
     if let Some(copyright) = &facts.copyright {
         details.push(("Copyright".into(), copyright.clone()));
@@ -182,7 +319,7 @@ fn read_midi(path: &Path) -> Result<SongInfo, String> {
     if !named.is_empty() {
         details.push(("Track names".into(), named.join(", ")));
     }
-    Ok(SongInfo { length: Some(facts.end_time), details, notes: Some(list.note_count()) })
+    Ok(SongInfo { length: Some(facts.end_time), details, notes: Some(list.note_count()), tags })
 }
 
 fn read_audio(path: &Path) -> Result<SongInfo, String> {
@@ -211,6 +348,7 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
 
     // Tags can sit before the audio (ID3) or inside the container.
     let mut details: Vec<(String, String)> = Vec::new();
+    let mut song_tags = Tags::default();
     let mut add_tags = |tags: &[symphonia::core::meta::Tag]| {
         for tag in tags {
             let key = match tag.std_key {
@@ -218,6 +356,9 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
                 None => tag.key.clone(),
             };
             let value = tag.value.to_string();
+            if tag.std_key.is_some() {
+                song_tags.set(&key, &value);
+            }
             // Matroska's DURATION tag repeats what Length says.
             if key.eq_ignore_ascii_case("duration") {
                 continue;
@@ -268,7 +409,7 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
             details.push(("Bits per sample".into(), bits.to_string()));
         }
     }
-    Ok(SongInfo { length, details, notes: None })
+    Ok(SongInfo { length, details, notes: None, tags: song_tags })
 }
 
 /// What `ffmpeg -i <file>` (with no output) prints about it on stderr: the
@@ -296,6 +437,7 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
     let indent = |line: &str| line.len() - line.trim_start().len();
     let mut lines = log.lines().skip_while(|l| !l.starts_with("Input #0")).skip(1).peekable();
     let mut details: Vec<(String, String)> = Vec::new();
+    let mut tags = Tags::default();
     let mut length = None;
     let mut stream = None;
     while let Some(line) = lines.next() {
@@ -307,6 +449,7 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
             // The container's tags; streams' own come later, indented deeper.
             while let Some(tag) = lines.next_if(|l| indent(l) > 2) {
                 if let Some((key, value)) = tag.split_once(':') {
+                    tags.set(key.trim(), value);
                     let (key, value) = (ffmpeg_tag_name(key.trim()), value.trim());
                     if !value.is_empty() && !key.eq_ignore_ascii_case("duration") && !details.iter().any(|(k, _)| *k == key) {
                         details.push((key, value.to_string()));
@@ -353,7 +496,7 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
         };
         details.push(("Bits per sample".into(), bits.to_string()));
     }
-    Some(SongInfo { length, details, notes: None })
+    Some(SongInfo { length, details, notes: None, tags })
 }
 
 /// "00:03:21.45" -> 201.45 seconds (None for "N/A").

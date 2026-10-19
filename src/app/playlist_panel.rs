@@ -615,6 +615,7 @@ impl App {
         let selected_sf = self.active_sf.and_then(|i| self.config.soundfonts.get(i)).is_some();
         let selection = &mut self.playlist_selection;
         let cache = &mut self.song_info;
+        let patterns = self.config.title_patterns.as_deref();
         let info_open = &mut self.song_info_open;
 
         // Total time from what's been read so far.
@@ -692,7 +693,7 @@ impl App {
                 {
                     action = Some(RowAction::ClearSoundfont(vec![idx]));
                 }
-                let mut label = nice_name(&entry.path);
+                let mut label = super::title_of(cache, patterns, &entry.path);
                 if entry.missing {
                     label.push_str("  (missing)");
                 }
