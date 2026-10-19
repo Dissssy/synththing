@@ -29,27 +29,31 @@ val accent: String = cargoTarget.resolve("aarch64-linux-android/release/synththi
     file.readText().trim()
 }
 
+// Signed with the release key when CI has it (the ANDROID_KEYSTORE_*
+// secrets, docs/ANDROID.md): every build that's published must be, or
+// Android refuses it as an update. Otherwise with the debug key, for
+// trying a build out: that can never update the published app, so it's
+// a separate app beside it ("synththing test"), and trying a pull
+// request's APK doesn't mean uninstalling the nightly and its data.
+val keystore: String? = System.getenv("ANDROID_KEYSTORE_FILE")
+
 android {
     namespace = "nl.p51.synththing"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "nl.p51.synththing"
+        applicationId = if (keystore != null) "nl.p51.synththing" else "nl.p51.synththing.test"
         minSdk = 26
         targetSdk = 34
         versionCode = codeFor(synththingVersion)
         versionName = synththingVersion
         resValue("color", "ic_launcher_background", accent)
+        manifestPlaceholders["appLabel"] = if (keystore != null) "synththing" else "synththing test"
         ndk {
             abiFilters += "arm64-v8a"
         }
     }
 
-    // Signed with the release key when CI has it (the ANDROID_KEYSTORE_*
-    // secrets, docs/ANDROID.md): every build that's published must be, or
-    // Android refuses it as an update. Otherwise with the debug key, for
-    // trying a build out.
-    val keystore = System.getenv("ANDROID_KEYSTORE_FILE")
     signingConfigs {
         if (keystore != null) {
             create("release") {

@@ -41,7 +41,7 @@ gradle -p android assembleRelease
 adb install android/app/build/outputs/apk/release/app-release.apk
 ```
 
-Without the release key, that's signed with your debug key: fine to try, but it won't update (or be updated by) a published APK. The app's log is in the app (menu > Log); `adb logcat -s synththing` has the Java side's.
+Without the release key, that's signed with your debug key, and as it can never update (or be updated by) a published APK, it's a separate app: `nl.p51.synththing.test`, "synththing test" in the launcher, installed beside the published one with its own data. CI's APK for a pull request is the same. The app's log is in the app (menu > Log); `adb logcat -s synththing` has the Java side's.
 
 CI does the same in `.github/actions/android-apk`, which `ci.yml` (every pull request), `test-builds.yml` (the nightly) and `release.yml` share. It pins the SDK packages and NDK (27.2.12479018) with setup-android. The jobs run on the self-hosted runner when the `RUNNER` repository variable names one (not for pull requests from forks), and on GitHub's otherwise; the runner keeps the SDK, Gradle's caches, the JDK and cargo's builds on volumes, so the GitHub caches are skipped there.
 
