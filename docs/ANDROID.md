@@ -14,7 +14,7 @@ Status: it builds (CI's `android` job) and the Rust side cross-compiles cleanly,
 - **The visualizer in a floating window.** Leaving the app while something's playing shrinks it into picture-in-picture, showing only the visualizer, with previous, play/pause and next. Preferences > Visualizers turns it off or picks its shape (square, wide, tall). Android pauses an activity in picture-in-picture, and winit draws nothing while paused, so `MainActivity.onPause` resumes it again when it's going into the floating window.
 - **Script previews from the server.** The app can't start a second process to make a preview, and every script on a phone is bundled (published on the official server) or downloaded from one, so previews are fetched by the source's SHA-256 (`/api/v1/previews/{sha256}/...`).
 - **Updates.** The app checks for a new version as on desktop, and says once that one's out, to download from the release page. Preferences > Updates > "Install updates in the app" downloads and installs it instead, once Android's "Install unknown apps" setting allows synththing (the app offers to open it).
-- **Read-only to the library.** It browses, installs and updates scripts from the Online Library, but has no identity: no publishing, encores, reports, deleting or moderation, and no identity in Preferences > Online Library (`READ_ONLY` in `src/app/library.rs`). Feedback works, as it needs no account.
+- **Signs in with a link.** Without an identity it reads the library only: it browses, installs and updates scripts. Signing in (scan the code from Sign in another device... on a signed-in desktop, or Sign in with a link... with the link) gives it the same identity, so it encores, reports and deletes its own uploads, and gets notifications. It never makes an identity of its own (except recovering one by email), and publishing and moderation stay on the desktop (`PUBLISHING` in `src/app/library.rs`). The camera's link opens in the app through `MainActivity`'s intent filters: the official server's `https://.../pair` links once Android has checked its `assetlinks.json` (docs/DEPLOY.md), and `synththing:` links from the server's page. Feedback works without signing in.
 
 Left out: script editing (and the sprite editor), recording, the mini player and tray, branch builds, the tour (it shows desktop panels), m3u import and export, and dragging to reorder.
 
@@ -83,4 +83,3 @@ Android orders updates by `versionCode` (`android/app/build.gradle.kts`): a rele
 - A tap plays a song (on desktop it's a double-click); long-press is the menu.
 - No drag to reorder on a touch screen.
 - No m3u playlist import or export, and no identity import or export, on Android.
-- Later: giving the phone an identity from the desktop app (a QR code), so it can give encores.

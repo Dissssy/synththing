@@ -755,12 +755,15 @@ impl App {
         }
     }
 
-    /// The Android side of `tick`: carry out the media buttons pressed
-    /// outside the app, and keep the media session (the notification, the
+    /// The Android side of `tick`: open a sign-in link the app was opened
+    /// with, carry out the media buttons pressed outside the app, and keep the media session (the notification, the
     /// lock screen) up to date with what's playing.
     pub(super) fn android_tick(&mut self, view: &EngineView) {
         use crate::android::{self, MediaCommand, Playback};
 
+        for link in android::take_links() {
+            self.open_pairing_link(link);
+        }
         for command in android::take_media_commands() {
             match command {
                 MediaCommand::Play if view.paused => self.send(AudioCommand::TogglePause),

@@ -40,7 +40,6 @@ tiny_http = "0.12"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 ed25519-dalek = "3.0.0"
 getrandom = "0.4.3"
-gethostname = "1.1"                                       # the default name of this device, for sign-ins (device.rs)
 qrcode = { version = "0.14", default-features = false }  # the sign-in code another device scans (app/pairing.rs)
 argon2 = "0.6.0"
 chacha20poly1305 = "0.11.0"
@@ -58,6 +57,7 @@ skrifa = "0.44"                                           # reading which charac
 [target.'cfg(not(target_os = "android"))'.dependencies]
 eframe = "0.36.1"
 rfd = "0.15"                                              # native file and folder dialogs
+gethostname = "1.1"                                       # the default name of this device, for sign-ins (device.rs)
 
 [target.'cfg(target_os = "android")'.dependencies]
 eframe = { version = "0.36.1", default-features = false, features = ["android-native-activity", "default_fonts", "links", "wgpu"] }

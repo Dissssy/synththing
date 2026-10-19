@@ -86,3 +86,15 @@ pub extern "system" fn Java_nl_p51_synththing_Native_pictureInPicture<'local>(
 ) {
     synththing::android::set_picture_in_picture(on != 0);
 }
+
+/// `Native.openLink(String link)`: the app was opened with a link.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_nl_p51_synththing_Native_openLink<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    link: JString<'local>,
+) {
+    if let Ok(link) = env.get_string(&link) {
+        synththing::android::open_link(link.into());
+    }
+}

@@ -69,6 +69,25 @@ public class MainActivity extends NativeActivity {
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 0);
         }
+        openLink(getIntent());
+    }
+
+    // ---- Links ----
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        openLink(intent);
+    }
+
+    /**
+     * A sign-in link the app was opened with (the camera scanning a code,
+     * or the server's page): for the Rust side to ask about.
+     */
+    private void openLink(Intent intent) {
+        if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
+            Native.openLink(intent.getData().toString());
+        }
     }
 
     // ---- The system bars ----

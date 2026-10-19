@@ -25,7 +25,13 @@ impl Device {
             log::warn!("{e:#}");
             None
         });
-        saved.unwrap_or_else(|| Self { name: gethostname::gethostname().to_string_lossy().into_owned() })
+        saved.unwrap_or_else(|| {
+            #[cfg(target_os = "android")]
+            let name = crate::android::device_model().unwrap_or_else(|| "Android phone".into());
+            #[cfg(not(target_os = "android"))]
+            let name = gethostname::gethostname().to_string_lossy().into_owned();
+            Self { name }
+        })
     }
 
     pub fn save(&self) -> Result<()> {

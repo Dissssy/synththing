@@ -334,6 +334,27 @@ pub fn take_media_commands() -> Vec<MediaCommand> {
     std::mem::take(&mut *MEDIA_COMMANDS.lock().unwrap())
 }
 
+static LINKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// From Java: the app was opened with a link (a sign-in code scanned with
+/// the camera).
+pub fn open_link(link: String) {
+    LINKS.lock().unwrap().push(link);
+}
+
+/// The links the app was opened with since the last call.
+pub fn take_links() -> Vec<String> {
+    std::mem::take(&mut *LINKS.lock().unwrap())
+}
+
+/// The phone's model ("Pixel 8"), as Android names it.
+pub fn device_model() -> Option<String> {
+    call("asking the model", |env, _| {
+        let model = env.get_static_field("android/os/Build", "MODEL", "Ljava/lang/String;")?.l()?;
+        Ok(env.get_string(&JString::from(model))?.into())
+    })
+}
+
 /// What the system bars, a notch and the keyboard cover of the window:
 /// left, top, right and bottom, in pixels (from Java, as they change).
 static INSETS: [AtomicI32; 4] = [const { AtomicI32::new(0) }; 4];

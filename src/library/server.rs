@@ -127,6 +127,11 @@ pub struct ServerConfig {
     /// Hand feedback out to be filed as GitHub issues, with the intake
     /// token (`intake.token`, made on first run).
     pub intake: bool,
+    /// The SHA-256 fingerprints (`AB:CD:...`) of the keys the Android app
+    /// is signed with: listed in `/.well-known/assetlinks.json`, so Android
+    /// opens this server's sign-in links in the app. Only the official
+    /// server's links are the app's, so only it needs them.
+    pub android_fingerprints: Vec<String>,
 }
 
 impl Default for ServerConfig {
@@ -157,6 +162,7 @@ impl Default for ServerConfig {
             documents: Vec::new(),
             songs: false,
             intake: false,
+            android_fingerprints: Vec::new(),
         }
     }
 }
@@ -819,6 +825,8 @@ fn handle(state: &Arc<State>, mut request: Request) {
         (Method::Get, ["api", "v1", "intake"]) => intake::waiting(state, &request),
         (Method::Post, ["api", "v1", "intake", "taken"]) => intake::taken(state, &mut request),
         (Method::Post, ["api", "v1", "admin"]) => moderation::admin(state, &mut request),
+        (Method::Get, ["pair"]) => pairing::page(),
+        (Method::Get, [".well-known", "assetlinks.json"]) => pairing::asset_links(state),
         (Method::Post, ["api", "v1", "pair"]) => {
             let ip = client_ip(state, &request);
             pairing::park(state, &mut request, &ip)
