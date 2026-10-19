@@ -4,13 +4,18 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
-### Added
-- Select several songs at once in Songs, the way a playlist already allows (Ctrl and Shift, Ctrl+A), and drag them onto a playlist together. The Soundfonts list selects the same way, so several can be removed at once.
-
 ### Changed
 - The toolbars are slimmer: Restart, Fullscreen, Settings, Controls and Debug above the visualizer, the playlist's Play, New, Rename, Export and Delete, the Songs browser's Browse, Set as default and hidden-files toggle, and the editor's Format, Find and History are icon buttons now (hover one to see what it does), and each toolbar is one row that wraps when its tab is narrow.
 - New script, Rename..., Restore default and Publish... moved into the script picker: New script lists the templates and examples, the sidebar's Make a copy starts a new script from any script, and the running script's card has its file's buttons and its full path.
 - The editor's Apply, Wrap and text size are under its cog.
+
+## 0.9.0 (2026-10-19)
+
+### Added
+- Select several songs at once in Songs, the way a playlist already allows (Ctrl and Shift, Ctrl+A), and drag them onto a playlist together. The Soundfonts list selects the same way, so several can be removed at once.
+- Songs are named by their tags. Preferences > Songs > Song names holds a list of patterns such as "{title} by {artist}"; the first one a song has every field of names it, and a song without them keeps its file name. Besides tags, a pattern can use {file_name}, {file_extension}, {file_path} (the folder, inside the Songs list's default folder), {length}, and for MIDI files {bpm} and {notes}. The name shows in the Songs list, playlists, the now-playing bar and the tray. Search matches both the name and the file name, and a Sort button switches the list between the two. Tags are remembered between launches.
+
+### Changed
 - Songs, Soundfonts and the playlist are one kind of list now and work alike: click selects, double-click plays a song, opens a folder or uses a soundfont.
 - A name too long for its list is cut short with "...", and hovering it shows all of it.
 - Feedback asking for something new is filed as a feature request for the developers to decide on; only bug reports go on to automatic fixes.

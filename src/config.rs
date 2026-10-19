@@ -98,6 +98,10 @@ pub struct Config {
     /// Preference: list audio files (MP3, WAV, ...) as songs, not only MIDI.
     #[serde(default)]
     pub show_audio_files: bool,
+    /// Preference: how songs are named from their tags, the first that
+    /// works for a song (`song_title`; `None`: `song_title::DEFAULT_PATTERNS`).
+    #[serde(default)]
+    pub title_patterns: Option<Vec<String>>,
     /// Preference: copy visualizer scripts' log() messages to the app's log.
     #[serde(default)]
     pub script_log_to_app: bool,
