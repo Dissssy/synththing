@@ -8,6 +8,15 @@
 
 ## Tier 2 - solid value, moderate effort
 
+[S][.] Chinese text style (only if it comes up): Noto Sans JP is the
+    bundled font for Han characters (app/fonts.rs). Chinese-only characters
+    it lacks come from whatever CJK font is installed, so their style can
+    differ, and they're boxes on a computer with none. Fix: bundle Noto Sans
+    SC Light (about 10.5 MB, OFL, same family and weight; from
+    @expo-google-fonts/noto-sans-sc on npm) after JP in bundled(), and add
+    it to the credits. Add TC Light (about 7 MB) as well for Traditional
+    Chinese.
+
 [S/M][!] status line history (asked for 2026-10-07) - DONE (the third
     idea, with a history button instead of a clickable line: status_line_ui
     in app.rs, reading the log's synththing::status entries). Original:
@@ -580,8 +589,10 @@ Smaller:
     publishes the one being heard. Script notes stay current. Also fixed:
     a flush is done by the render thread under the ring lock, so audio
     rendered right after a seek is no longer thrown away by the consumer.
-    Not counted: the OS/device's own output latency.
-
+    Not counted: the OS/device's own output latency.
+
+
+
 [L][!] recording the visualizer to video - DONE
     recorder.rs: raw frames piped to ffmpeg (libx264 veryfast crf 18,
     temp .mkv) on a writer thread, audio to a temp float WAV, muxed to
@@ -681,8 +692,10 @@ Smaller:
 [S][.] reference: Example calls and results - DONE
     Real return values (captured with a probe script through run-script)
     for every function returning a table or several values. Refresh them
-    when a return shape changes.
-
+    when a return shape changes.
+
+
+
 [M][!] channel mutes without a skip - DONE
     Toggling a channel used to flush the audio buffer (buffer_ms of
     rendered-ahead audio thrown away), skipping the song and the visuals
@@ -690,8 +703,10 @@ Smaller:
     unheard (rustysynth LOCAL PATCH: Clone), and a toggle rewinds to the
     block being heard, applies it there and re-renders the buffered part:
     heard at once, nothing skipped (audio::tests::muting_a_channel_doesnt_skip
-    checks it sample for sample against the real synth).
-
+    checks it sample for sample against the real synth).
+
+
+
 [S][!] bundled scripts by kind - DONE
     assets/visualizers/{visualizers,games,templates,examples}; build.rs
     generates BUNDLED_SCRIPTS (category, name, contents). Visualizers and
@@ -703,8 +718,10 @@ Smaller:
 [S][.] scripts see a song switch all at once - DONE
     The app hands the script a new song's notes/id/path only when the
     audio thread reports it loaded (EngineView::loads), so playback() never
-    mixes the old song's length with the new song's notes.
-
+    mixes the old song's length with the new song's notes.
+
+
+
 [M][!] game controllers - DONE
     gamepad.rs (gilrs): every connected pad merged; buttons, d-pad, triggers
     and stick directions as on/off inputs (past halfway, with hysteresis)
@@ -713,8 +730,10 @@ Smaller:
     (not rebindable), gamepads() lists them. Pads count while the window has
     focus. Ideas: rumble, per-player pads (pad 1 vs pad 2) for local
     multiplayer. Pad defaults in snake and keyboard - DONE (highway and
-    note_runner are their authors' to change).
-
+    note_runner are their authors' to change).
+
+
+
 [M][!] analogue values for actions - DONE (input_value, PadFrame::value)
     input_value(id) -> 0..1 for any action: keys and buttons 0 or 1, a
     trigger how far it's pulled, a stick direction (pad_lstick_left) how far
@@ -734,8 +753,10 @@ Smaller:
     Probably as its own modal opened from the Visualizer tab (a Controls
     button) rather than inside Script Settings, laid out like Preferences:
     groups down the side, one line per control, reusing its rendering
-    (with_info, the fixed-height body) so the two look alike.
-
+    (with_info, the fixed-height body) so the two look alike.
+
+
+
 [S][.] very large MIDI warning - DONE
     Over 100,000 notes (song_info::HEAVY_MIDI_NOTES): a red ! by the length
     in the lists, and a "play anyway?" window before playing, with "don't
