@@ -690,51 +690,19 @@ impl App {
         }
     }
 
-    /// What's new (since a version), or the whole changelog.
+    /// What's new (since a version), or the whole changelog, as a modal
+    /// (the mobile layout shows it as a page instead).
     fn changelog_ui(&mut self, ctx: &egui::Context) {
         let Some(since) = self.changelog else { return };
+        if self.mobile() {
+            return;
+        }
         let mut close = false;
         let mut show_all = false;
         let response = egui::Modal::new(egui::Id::new("changelog")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 560.0));
-            match since {
-                Some(since) => {
-                    ui.heading("What's new");
-                    ui.weak(format!(
-                        "synththing v{}, since v{} (the version you had)",
-                        crate::build_info::VERSION,
-                        changelog::format_version(since)
-                    ));
-                }
-                None => {
-                    ui.heading("Changelog");
-                }
-            }
-            ui.add_space(6.0);
-            let releases: Vec<&changelog::Release> = match since {
-                Some(since) => changelog::newer_than(since).collect(),
-                None => changelog::releases().iter().collect(),
-            };
-            egui::ScrollArea::vertical().id_salt("changelog_scroll").max_height(440.0).show(ui, |ui| {
-                for release in releases {
-                    ui.label(egui::RichText::new(&release.heading).heading().size(17.0));
-                    for block in &release.blocks {
-                        match block {
-                            changelog::Block::Heading(text) => {
-                                ui.add_space(2.0);
-                                ui.strong(text);
-                            }
-                            changelog::Block::Bullet(text) => {
-                                ui.label(inline_code_job(ui, "- ", text));
-                            }
-                            changelog::Block::Paragraph(text) => {
-                                ui.label(inline_code_job(ui, "", text));
-                            }
-                        }
-                    }
-                    ui.add_space(10.0);
-                }
-            });
+            ui.heading(if since.is_some() { "What's new" } else { "Changelog" });
+            show_all = changelog_body_ui(ui, since, false);
             ui.add_space(6.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 if ui.button("Close").clicked() {
@@ -1591,12 +1559,27 @@ impl App {
         });
     }
 
-    /// The app log viewer, as a modal: level filter, search, copy, and the
-    /// log file's location.
+    /// The app log viewer, as a modal (the mobile layout shows it as a
+    /// page instead).
     fn log_ui(&mut self, ctx: &egui::Context) {
-        if !self.log_open {
+        if !self.log_open || self.mobile() {
             return;
         }
+        let mut close = false;
+        let response = egui::Modal::new(egui::Id::new("app_log")).show(ctx, |ui| {
+            ui.set_width(fit_width(ui, 720.0));
+            ui.heading("Log");
+            close = self.log_body_ui(ui, false);
+        });
+        if close || response.should_close() {
+            self.log_open = false;
+        }
+    }
+
+    /// The log: level filter, search, copy, and the log file's location.
+    /// On a page the entries fill what's left, under the buttons, and
+    /// there's no Close; whether Close was clicked.
+    pub(super) fn log_body_ui(&mut self, ui: &mut egui::Ui, page: bool) -> bool {
         let entries = applog::entries();
         let search = self.log_search.to_lowercase();
         let shown: Vec<&applog::Entry> = entries
@@ -1604,82 +1587,60 @@ impl App {
             .filter(|e| e.level <= self.log_min_level)
             .filter(|e| search.is_empty() || e.line().to_lowercase().contains(&search))
             .collect();
+        ui.ctx().request_repaint_after(Duration::from_millis(250));
 
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("app_log")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 720.0));
-            ui.heading("Log");
-            ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("log_min_level")
-                    .selected_text(match self.log_min_level {
-                        log::Level::Error => "Errors",
-                        log::Level::Warn => "Warnings and up",
-                        _ => "Everything",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.log_min_level, log::Level::Info, "Everything");
-                        ui.selectable_value(&mut self.log_min_level, log::Level::Warn, "Warnings and up");
-                        ui.selectable_value(&mut self.log_min_level, log::Level::Error, "Errors");
-                    });
-                ui.add(egui::TextEdit::singleline(&mut self.log_search).hint_text("search...").desired_width(200.0));
-                ui.weak(format!("{} of {}", shown.len(), entries.len()));
-            });
-            ui.separator();
-            egui::ScrollArea::both()
-                .id_salt("app_log_scroll")
-                .max_height(420.0)
-                .auto_shrink([false, true])
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    if shown.is_empty() {
-                        ui.weak("(nothing)");
-                    }
-                    for entry in &shown {
-                        let color = match entry.level {
-                            log::Level::Error => egui::Color32::from_rgb(220, 90, 90),
-                            log::Level::Warn => egui::Color32::from_rgb(220, 180, 80),
-                            _ => ui.visuals().text_color(),
-                        };
-                        ui.add(egui::Label::new(egui::RichText::new(entry.line()).monospace().color(color)).extend());
-                    }
+        ui.horizontal_wrapped(|ui| {
+            egui::ComboBox::from_id_salt("log_min_level")
+                .selected_text(match self.log_min_level {
+                    log::Level::Error => "Errors",
+                    log::Level::Warn => "Warnings and up",
+                    _ => "Everything",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.log_min_level, log::Level::Info, "Everything");
+                    ui.selectable_value(&mut self.log_min_level, log::Level::Warn, "Warnings and up");
+                    ui.selectable_value(&mut self.log_min_level, log::Level::Error, "Errors");
                 });
+            ui.add(egui::TextEdit::singleline(&mut self.log_search).hint_text("search...").desired_width(200.0));
+            ui.weak(format!("{} of {}", shown.len(), entries.len()));
+        });
+        if page {
+            log_actions_ui(ui, &shown);
+            log_file_note_ui(ui);
+        }
+        ui.separator();
+        egui::ScrollArea::both()
+            .id_salt("app_log_scroll")
+            .max_height(if page { f32::INFINITY } else { 420.0 })
+            .auto_shrink([false, !page])
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                if shown.is_empty() {
+                    ui.weak("(nothing)");
+                }
+                for entry in &shown {
+                    let color = match entry.level {
+                        log::Level::Error => egui::Color32::from_rgb(220, 90, 90),
+                        log::Level::Warn => egui::Color32::from_rgb(220, 180, 80),
+                        _ => ui.visuals().text_color(),
+                    };
+                    ui.add(egui::Label::new(egui::RichText::new(entry.line()).monospace().color(color)).extend());
+                }
+            });
+        if !page {
             ui.separator();
-            if let Some(path) = applog::file_path() {
-                ui.weak(format!("Also saved to {} (the previous run's is synththing.prev.log)", path.display()));
-            }
+            log_file_note_ui(ui);
             ui.horizontal(|ui| {
-                if ui.button("Copy shown").clicked() {
-                    let text: Vec<String> = shown.iter().map(|e| e.line()).collect();
-                    ui.ctx().copy_text(text.join("\n"));
-                }
-                // (Android has no file manager to open: the log is shared,
-                // to whatever app the user picks, instead.)
-                #[cfg(not(target_os = "android"))]
-                if let Some(path) = applog::file_path()
-                    && ui.button("Open log folder").clicked()
-                {
-                    open_in_file_manager(&path);
-                }
-                #[cfg(target_os = "android")]
-                if let Some(path) = applog::file_path()
-                    && ui.button("Share log").clicked()
-                {
-                    crate::android::share_log(&path);
-                }
-                if ui.button("Clear").on_hover_text("Clears this view; the log file keeps everything").clicked() {
-                    applog::clear();
-                }
+                log_actions_ui(ui, &shown);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Close").clicked() {
                         close = true;
                     }
                 });
             });
-        });
-        if close || response.should_close() {
-            self.log_open = false;
         }
-        ctx.request_repaint_after(Duration::from_millis(250));
+        close
     }
 
     /// The Updates window: what the update check found, release notes, and
@@ -1705,176 +1666,190 @@ impl App {
         if matches!(state, UpdateState::Checking | UpdateState::Downloading { .. }) || self.branches.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
-        if !self.updates_open {
+        if !self.updates_open || self.mobile() {
             return;
         }
-
-        let current = updater::current_version();
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("updates")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 440.0));
             ui.heading("Updates");
             ui.add_space(4.0);
-            let branch = match crate::build_info::channel() {
-                crate::build_info::Channel::Branch(name) => Some(name),
-                _ => None,
-            };
-            if let Some(name) = branch {
-                ui.label(format!(
-                    "This is a test build of the {name} branch. It updates from that branch and keeps settings of \
-                     its own, so your usual synththing isn't affected."
-                ));
-                ui.add_space(4.0);
-            } else if self.config.canary_updates {
-                ui.weak("Canary updates: the newest build from master (Preferences > Updates).");
-                ui.add_space(4.0);
+            close = self.updates_body_ui(ui, false);
+        });
+        if close || response.should_close() {
+            self.updates_open = false;
+            self.updates_message = None;
+        }
+    }
+
+    /// What the update check found, release notes, and installing. On a
+    /// page there's no Close (back leaves), and the release notes aren't
+    /// a scroll area of their own; whether a way out (Close, Not now,
+    /// Skip, Later) was clicked.
+    pub(super) fn updates_body_ui(&mut self, ui: &mut egui::Ui, page: bool) -> bool {
+        let state = self.updater.state();
+        let current = updater::current_version();
+        let mut close = false;
+        let branch = match crate::build_info::channel() {
+            crate::build_info::Channel::Branch(name) => Some(name),
+            _ => None,
+        };
+        if let Some(name) = branch {
+            ui.label(format!(
+                "This is a test build of the {name} branch. It updates from that branch and keeps settings of \
+                 its own, so your usual synththing isn't affected."
+            ));
+            ui.add_space(4.0);
+        } else if self.config.canary_updates {
+            ui.weak("Canary updates: the newest build from master (Preferences > Updates).");
+            ui.add_space(4.0);
+        }
+        match &state {
+            UpdateState::Idle => {
+                if ui.button("Check for updates").clicked() {
+                    self.updater.check(self.update_track());
+                }
             }
-            match &state {
-                UpdateState::Idle => {
-                    if ui.button("Check for updates").clicked() {
-                        self.updater.check(self.update_track());
-                    }
-                }
-                UpdateState::Checking => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("Checking for updates...");
-                    });
-                }
-                UpdateState::UpToDate => {
-                    ui.label(format!("You're on the latest version (v{current})."));
-                }
-                UpdateState::Available(release) => {
-                    ui.heading(format!("synththing v{} is available", release.version));
-                    ui.weak(format!("You have v{current}."));
-                    if !release.notes.trim().is_empty() {
-                        ui.add_space(4.0);
+            UpdateState::Checking => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Checking for updates...");
+                });
+            }
+            UpdateState::UpToDate => {
+                ui.label(format!("You're on the latest version (v{current})."));
+            }
+            UpdateState::Available(release) => {
+                ui.heading(format!("synththing v{} is available", release.version));
+                ui.weak(format!("You have v{current}."));
+                if !release.notes.trim().is_empty() {
+                    ui.add_space(4.0);
+                    if page {
+                        ui.label(release.notes.trim());
+                    } else {
                         egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
                             ui.label(release.notes.trim());
                         });
                     }
-                    ui.hyperlink_to("Release page", &release.page_url);
-                    ui.add_space(6.0);
-                    let dev_build = cfg!(debug_assertions);
-                    if let Some(announce) = self.android_update_ui(ui) {
-                        if announce {
-                            // Shown this once: next time, only if there's a newer one.
+                }
+                ui.hyperlink_to("Release page", &release.page_url);
+                ui.add_space(6.0);
+                let dev_build = cfg!(debug_assertions);
+                if let Some(announce) = self.android_update_ui(ui) {
+                    if announce {
+                        // Shown this once: next time, only if there's a newer one.
+                        self.config.skipped_update = Some(release.version.to_string());
+                        if let Err(e) = self.config.save() {
+                            self.status = format!("Couldn't save preferences: {e}");
+                        }
+                        close = true;
+                    }
+                } else {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(!dev_build, egui::Button::new("Install"))
+                            .on_disabled_hover_text(
+                                "This is a development build (cargo run); updates install into release builds.",
+                            )
+                            .clicked()
+                        {
+                            self.updater.install(release.clone());
+                        }
+                        if ui.button("Skip this version").clicked() {
                             self.config.skipped_update = Some(release.version.to_string());
                             if let Err(e) = self.config.save() {
                                 self.status = format!("Couldn't save preferences: {e}");
                             }
                             close = true;
                         }
-                    } else {
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add_enabled(!dev_build, egui::Button::new("Install"))
-                                .on_disabled_hover_text(
-                                    "This is a development build (cargo run); updates install into release builds.",
-                                )
-                                .clicked()
-                            {
-                                self.updater.install(release.clone());
-                            }
-                            if ui.button("Skip this version").clicked() {
-                                self.config.skipped_update = Some(release.version.to_string());
-                                if let Err(e) = self.config.save() {
-                                    self.status = format!("Couldn't save preferences: {e}");
-                                }
-                                close = true;
-                            }
-                            if ui.button("Not now").clicked() {
-                                close = true;
-                            }
-                        });
-                    }
-                }
-                UpdateState::Downloading { release, downloaded } => {
-                    ui.label(format!("Downloading v{}...", release.version));
-                    let total = release.size().max(1);
-                    ui.add(
-                        egui::ProgressBar::new(*downloaded as f32 / total as f32)
-                            .text(format!("{:.1} / {:.1} MB", *downloaded as f64 / 1e6, total as f64 / 1e6)),
-                    );
-                }
-                UpdateState::Installed(version) if cfg!(target_os = "android") => {
-                    ui.label(format!("Android asks you to install v{version}; synththing restarts with it."));
-                    if ui.button("OK").clicked() {
-                        close = true;
-                    }
-                }
-                UpdateState::Installed(version) => {
-                    ui.label(format!("v{version} is installed. It runs the next time synththing starts."));
-                    ui.horizontal(|ui| {
-                        if ui.button("Restart now").clicked() {
-                            match updater::relaunch() {
-                                // (Quit, not close: closing may only hide it in the tray.)
-                                Ok(()) => self.close_with(&ui.ctx().clone(), close::CloseAction::Quit),
-                                Err(e) => self.updates_message = Some((format!("Couldn't restart: {e}"), true)),
-                            }
-                        }
-                        if ui.button("Later").clicked() {
+                        if ui.button("Not now").clicked() {
                             close = true;
                         }
                     });
                 }
-                UpdateState::Gone => {
-                    let name = branch.unwrap_or_default();
-                    ui.label(format!(
-                        "The {name} branch's build is gone: the branch was merged or deleted, so this build won't \
-                         get updates any more. Go back to your usual synththing, and remove this one there, under \
-                         Help > Check for updates > Branch builds."
-                    ));
-                    if let Some(stable) = crate::channels::installed_by()
-                        && ui.button("Open the usual synththing").clicked()
-                    {
-                        match std::process::Command::new(&stable).spawn() {
-                            Ok(_) => self.close_with(&ui.ctx().clone(), close::CloseAction::Quit),
-                            Err(e) => {
-                                self.updates_message = Some((format!("Couldn't start {}: {e}", stable.display()), true));
-                            }
+            }
+            UpdateState::Downloading { release, downloaded } => {
+                ui.label(format!("Downloading v{}...", release.version));
+                let total = release.size().max(1);
+                ui.add(
+                    egui::ProgressBar::new(*downloaded as f32 / total as f32)
+                        .text(format!("{:.1} / {:.1} MB", *downloaded as f64 / 1e6, total as f64 / 1e6)),
+                );
+            }
+            UpdateState::Installed(version) if cfg!(target_os = "android") => {
+                ui.label(format!("Android asks you to install v{version}; synththing restarts with it."));
+                if ui.button("OK").clicked() {
+                    close = true;
+                }
+            }
+            UpdateState::Installed(version) => {
+                ui.label(format!("v{version} is installed. It runs the next time synththing starts."));
+                ui.horizontal(|ui| {
+                    if ui.button("Restart now").clicked() {
+                        match updater::relaunch() {
+                            // (Quit, not close: closing may only hide it in the tray.)
+                            Ok(()) => self.close_with(&ui.ctx().clone(), close::CloseAction::Quit),
+                            Err(e) => self.updates_message = Some((format!("Couldn't restart: {e}"), true)),
                         }
                     }
-                }
-                UpdateState::Failed(error) => {
-                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
-                    if ui.button("Try again").clicked() {
-                        self.updater.check(self.update_track());
-                    }
-                }
-            }
-            if branch.is_none() && !cfg!(target_os = "android") {
-                ui.add_space(8.0);
-                self.branch_builds_ui(ui);
-            } else {
-                ui.add_space(8.0);
-                self.recopy_settings_ui(ui);
-            }
-            if let Some((message, error)) = &self.updates_message {
-                ui.add_space(6.0);
-                if *error {
-                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), message);
-                } else {
-                    ui.label(message);
-                }
-            }
-            // Every state but Available has its own way out above, so a
-            // plain Close for the rest. (A download carries on in the
-            // background if this closes, and Help > Check for updates
-            // shows how it went.)
-            if !matches!(state, UpdateState::Available(_) | UpdateState::Installed(_)) {
-                ui.add_space(8.0);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    if ui.button("Close").clicked() {
+                    if ui.button("Later").clicked() {
                         close = true;
                     }
                 });
             }
-        });
-        if close || response.should_close() {
-            self.updates_open = false;
-            self.updates_message = None;
+            UpdateState::Gone => {
+                let name = branch.unwrap_or_default();
+                ui.label(format!(
+                    "The {name} branch's build is gone: the branch was merged or deleted, so this build won't \
+                     get updates any more. Go back to your usual synththing, and remove this one there, under \
+                     Help > Check for updates > Branch builds."
+                ));
+                if let Some(stable) = crate::channels::installed_by()
+                    && ui.button("Open the usual synththing").clicked()
+                {
+                    match std::process::Command::new(&stable).spawn() {
+                        Ok(_) => self.close_with(&ui.ctx().clone(), close::CloseAction::Quit),
+                        Err(e) => {
+                            self.updates_message = Some((format!("Couldn't start {}: {e}", stable.display()), true));
+                        }
+                    }
+                }
+            }
+            UpdateState::Failed(error) => {
+                ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
+                if ui.button("Try again").clicked() {
+                    self.updater.check(self.update_track());
+                }
+            }
         }
+        if branch.is_none() && !cfg!(target_os = "android") {
+            ui.add_space(8.0);
+            self.branch_builds_ui(ui);
+        } else {
+            ui.add_space(8.0);
+            self.recopy_settings_ui(ui);
+        }
+        if let Some((message, error)) = &self.updates_message {
+            ui.add_space(6.0);
+            if *error {
+                ui.colored_label(egui::Color32::from_rgb(220, 90, 90), message);
+            } else {
+                ui.label(message);
+            }
+        }
+        // Every state but Available has its own way out above, so a
+        // plain Close for the rest. (A download carries on in the
+        // background if this closes, and Help > Check for updates
+        // shows how it went.)
+        if !page && !matches!(state, UpdateState::Available(_) | UpdateState::Installed(_)) {
+            ui.add_space(8.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+        }
+        close
     }
 
     /// In a branch build's Updates window: start its settings over from a
@@ -2019,129 +1994,14 @@ impl App {
     /// Help > Credits & licenses: contributors (from GitHub), the font, Lua,
     /// and every library in the app with its license text.
     fn credits_ui(&mut self, ctx: &egui::Context) {
-        if !self.credits_open {
+        if !self.credits_open || self.mobile() {
             return;
         }
-        self.contributors.fetch_once();
-        let contributors = self.contributors.state();
-        if matches!(contributors, ContributorsState::Fetching) {
-            ctx.request_repaint_after(Duration::from_millis(200));
-        }
-        let third_party = credits::third_party();
-        let repo_url = format!("https://github.com/{}", updater::REPO);
-
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("credits")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 660.0));
             ui.heading("Credits & licenses");
-            ui.horizontal(|ui| {
-                ui.weak(format!("synththing v{}", crate::build_info::describe()));
-                ui.hyperlink_to(&repo_url, &repo_url);
-            });
-            ui.horizontal_wrapped(|ui| {
-                ui.label("synththing itself is released under the WTFPL: do whatever you want with it.");
-                ui.hyperlink_to("License", format!("{repo_url}/blob/master/LICENSE"));
-            });
-            ui.separator();
-            egui::ScrollArea::vertical().id_salt("credits_scroll").max_height(480.0).auto_shrink([false, true]).show(
-                ui,
-                |ui| {
-                    ui.strong("Contributors");
-                    match &contributors {
-                        ContributorsState::NotFetched | ContributorsState::Fetching => {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.weak("Loading from GitHub...");
-                            });
-                        }
-                        ContributorsState::Done(list) if list.is_empty() => {
-                            ui.weak("(none listed yet)");
-                        }
-                        ContributorsState::Done(list) => {
-                            for contributor in list {
-                                ui.horizontal(|ui| {
-                                    ui.hyperlink_to(&contributor.login, &contributor.html_url);
-                                    let s = if contributor.contributions == 1 { "" } else { "s" };
-                                    ui.weak(format!("{} commit{s}", contributor.contributions));
-                                });
-                            }
-                        }
-                        ContributorsState::Failed(error) => {
-                            ui.weak(format!("Couldn't load the list ({error})."));
-                            ui.hyperlink_to("See them on GitHub", format!("{repo_url}/graphs/contributors"));
-                        }
-                    }
-
-                    ui.separator();
-                    ui.strong("Font");
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("Script text uses Monogram by Vinícius Menézio (datagoblin), released to the public domain (CC0). Attribution isn't required, but it's given gladly.");
-                        ui.hyperlink_to("datagoblin.itch.io/monogram", "https://datagoblin.itch.io/monogram");
-                    });
-                    egui::CollapsingHeader::new("Monogram's credits").id_salt("credits_monogram").show(ui, |ui| {
-                        ui.label(egui::RichText::new(credits::MONOGRAM_CREDITS.trim()).monospace());
-                    });
-
-                    ui.separator();
-                    ui.strong("Starter pack soundfonts");
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("GeneralUser GS by S. Christian Collins, used and hosted as its license asks.");
-                        ui.hyperlink_to("schristiancollins.com/generaluser", "https://www.schristiancollins.com/generaluser");
-                    });
-                    egui::CollapsingHeader::new("GeneralUser GS's license").id_salt("credits_generaluser").show(ui, |ui| {
-                        ui.label(egui::RichText::new(credits::GENERALUSER_LICENSE.trim()).monospace());
-                    });
-                    ui.label(
-                        "TimGM6mb by Tim Brechbill (2004), with changes by David Bolton (2010), under the GNU GPL \
-                         version 2. The soundfont file is its own source.",
-                    );
-                    egui::CollapsingHeader::new("TimGM6mb's license (GPL-2.0)").id_salt("credits_timgm6mb").show(ui, |ui| {
-                        ui.label(egui::RichText::new(credits::TIMGM6MB_LICENSE.trim()).monospace());
-                    });
-                    ui.weak("The starter songs are synththing's own arrangements of public-domain music.");
-
-                    ui.separator();
-                    ui.strong("Lua");
-                    ui.label("Visualizer scripts run on Lua 5.4, by Lua.org, PUC-Rio (MIT license), through mlua.");
-                    egui::CollapsingHeader::new("Lua's license").id_salt("credits_lua").show(ui, |ui| {
-                        ui.label(egui::RichText::new(credits::LUA_LICENSE.trim()).monospace());
-                    });
-
-                    ui.separator();
-                    ui.strong(format!("Libraries ({})", third_party.packages.len()));
-                    ui.weak("Everything compiled into this build, with its license. Click one for its license text.");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.credits_search)
-                            .hint_text("search by name or license...")
-                            .desired_width(240.0),
-                    );
-                    let search = self.credits_search.to_lowercase();
-                    for package in &third_party.packages {
-                        let matches = search.is_empty()
-                            || package.name.to_lowercase().contains(&search)
-                            || package.license.to_lowercase().contains(&search);
-                        if !matches {
-                            continue;
-                        }
-                        egui::CollapsingHeader::new(format!(
-                            "{} {}   {}",
-                            package.name, package.version, package.license
-                        ))
-                        .id_salt(("credits_package", &package.name, &package.version))
-                        .show(ui, |ui| {
-                            if !package.authors.is_empty() {
-                                ui.weak(format!("By {}", package.authors.join(", ")));
-                            }
-                            if let Some(repository) = &package.repository {
-                                ui.hyperlink_to(repository, repository);
-                            }
-                            for text in third_party.texts_for(package) {
-                                ui.label(egui::RichText::new(text).monospace().small());
-                            }
-                        });
-                    }
-                },
-            );
+            self.credits_body_ui(ui, false);
             ui.separator();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 if ui.button("Close").clicked() {
@@ -2152,6 +2012,131 @@ impl App {
         if close || response.should_close() {
             self.credits_open = false;
         }
+    }
+
+    /// Contributors (from GitHub), the font, Lua, and every library in
+    /// the app with its license text. On a page the list fills what's
+    /// left.
+    pub(super) fn credits_body_ui(&mut self, ui: &mut egui::Ui, page: bool) {
+        self.contributors.fetch_once();
+        let contributors = self.contributors.state();
+        if matches!(contributors, ContributorsState::Fetching) {
+            ui.ctx().request_repaint_after(Duration::from_millis(200));
+        }
+        let third_party = credits::third_party();
+        let repo_url = format!("https://github.com/{}", updater::REPO);
+        ui.horizontal_wrapped(|ui| {
+            ui.weak(format!("synththing v{}", crate::build_info::describe()));
+            ui.hyperlink_to(&repo_url, &repo_url);
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("synththing itself is released under the WTFPL: do whatever you want with it.");
+            ui.hyperlink_to("License", format!("{repo_url}/blob/master/LICENSE"));
+        });
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .id_salt("credits_scroll")
+            .max_height(if page { f32::INFINITY } else { 480.0 })
+            .auto_shrink([false, !page])
+            .show(
+            ui,
+            |ui| {
+                ui.strong("Contributors");
+                match &contributors {
+                    ContributorsState::NotFetched | ContributorsState::Fetching => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.weak("Loading from GitHub...");
+                        });
+                    }
+                    ContributorsState::Done(list) if list.is_empty() => {
+                        ui.weak("(none listed yet)");
+                    }
+                    ContributorsState::Done(list) => {
+                        for contributor in list {
+                            ui.horizontal(|ui| {
+                                ui.hyperlink_to(&contributor.login, &contributor.html_url);
+                                let s = if contributor.contributions == 1 { "" } else { "s" };
+                                ui.weak(format!("{} commit{s}", contributor.contributions));
+                            });
+                        }
+                    }
+                    ContributorsState::Failed(error) => {
+                        ui.weak(format!("Couldn't load the list ({error})."));
+                        ui.hyperlink_to("See them on GitHub", format!("{repo_url}/graphs/contributors"));
+                    }
+                }
+
+                ui.separator();
+                ui.strong("Font");
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Script text uses Monogram by Vinícius Menézio (datagoblin), released to the public domain (CC0). Attribution isn't required, but it's given gladly.");
+                    ui.hyperlink_to("datagoblin.itch.io/monogram", "https://datagoblin.itch.io/monogram");
+                });
+                egui::CollapsingHeader::new("Monogram's credits").id_salt("credits_monogram").show(ui, |ui| {
+                    ui.label(egui::RichText::new(credits::MONOGRAM_CREDITS.trim()).monospace());
+                });
+
+                ui.separator();
+                ui.strong("Starter pack soundfonts");
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("GeneralUser GS by S. Christian Collins, used and hosted as its license asks.");
+                    ui.hyperlink_to("schristiancollins.com/generaluser", "https://www.schristiancollins.com/generaluser");
+                });
+                egui::CollapsingHeader::new("GeneralUser GS's license").id_salt("credits_generaluser").show(ui, |ui| {
+                    ui.label(egui::RichText::new(credits::GENERALUSER_LICENSE.trim()).monospace());
+                });
+                ui.label(
+                    "TimGM6mb by Tim Brechbill (2004), with changes by David Bolton (2010), under the GNU GPL \
+                     version 2. The soundfont file is its own source.",
+                );
+                egui::CollapsingHeader::new("TimGM6mb's license (GPL-2.0)").id_salt("credits_timgm6mb").show(ui, |ui| {
+                    ui.label(egui::RichText::new(credits::TIMGM6MB_LICENSE.trim()).monospace());
+                });
+                ui.weak("The starter songs are synththing's own arrangements of public-domain music.");
+
+                ui.separator();
+                ui.strong("Lua");
+                ui.label("Visualizer scripts run on Lua 5.4, by Lua.org, PUC-Rio (MIT license), through mlua.");
+                egui::CollapsingHeader::new("Lua's license").id_salt("credits_lua").show(ui, |ui| {
+                    ui.label(egui::RichText::new(credits::LUA_LICENSE.trim()).monospace());
+                });
+
+                ui.separator();
+                ui.strong(format!("Libraries ({})", third_party.packages.len()));
+                ui.weak("Everything compiled into this build, with its license. Click one for its license text.");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.credits_search)
+                        .hint_text("search by name or license...")
+                        .desired_width(240.0),
+                );
+                let search = self.credits_search.to_lowercase();
+                for package in &third_party.packages {
+                    let matches = search.is_empty()
+                        || package.name.to_lowercase().contains(&search)
+                        || package.license.to_lowercase().contains(&search);
+                    if !matches {
+                        continue;
+                    }
+                    egui::CollapsingHeader::new(format!(
+                        "{} {}   {}",
+                        package.name, package.version, package.license
+                    ))
+                    .id_salt(("credits_package", &package.name, &package.version))
+                    .show(ui, |ui| {
+                        if !package.authors.is_empty() {
+                            ui.weak(format!("By {}", package.authors.join(", ")));
+                        }
+                        if let Some(repository) = &package.repository {
+                            ui.hyperlink_to(repository, repository);
+                        }
+                        for text in third_party.texts_for(package) {
+                            ui.label(egui::RichText::new(text).monospace().small());
+                        }
+                    });
+                }
+            },
+        );
     }
 
     /// The song info modal: every detail read from one file.
@@ -3501,11 +3486,10 @@ impl eframe::App for App {
             self.dedicated_ui(ui, &shared);
         } else if self.mobile() {
             self.mobile_ui(ui, &shared);
+            // (Only for the launch check: the windows are pages here.)
             self.updates_ui(&ctx);
-            self.log_ui(&ctx);
+            self.open_mobile_pages(&ctx);
             self.rename_ui(&ctx);
-            self.credits_ui(&ctx);
-            self.changelog_ui(&ctx);
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
             self.song_info_ui(&ctx);
@@ -4175,6 +4159,87 @@ fn is_midi_path(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|ext| MIDI_EXTENSIONS.iter().any(|m| ext.eq_ignore_ascii_case(m)))
+}
+
+/// The changelog's text: what's new since a version, or all of it. On a
+/// page it fills what's left, with "Full changelog" above it rather than
+/// beside a Close button; whether that was tapped.
+fn changelog_body_ui(ui: &mut egui::Ui, since: Option<changelog::Version>, page: bool) -> bool {
+    let mut show_all = false;
+    if let Some(since) = since {
+        ui.weak(format!(
+            "synththing v{}, since v{} (the version you had)",
+            crate::build_info::VERSION,
+            changelog::format_version(since)
+        ));
+        if page && ui.button("Full changelog").clicked() {
+            show_all = true;
+        }
+    }
+    ui.add_space(6.0);
+    let releases: Vec<&changelog::Release> = match since {
+        Some(since) => changelog::newer_than(since).collect(),
+        None => changelog::releases().iter().collect(),
+    };
+    egui::ScrollArea::vertical()
+        .id_salt("changelog_scroll")
+        .max_height(if page { f32::INFINITY } else { 440.0 })
+        .auto_shrink([!page, !page])
+        .show(ui, |ui| {
+            for release in releases {
+                ui.label(egui::RichText::new(&release.heading).heading().size(17.0));
+                for block in &release.blocks {
+                    match block {
+                        changelog::Block::Heading(text) => {
+                            ui.add_space(2.0);
+                            ui.strong(text);
+                        }
+                        changelog::Block::Bullet(text) => {
+                            ui.label(inline_code_job(ui, "- ", text));
+                        }
+                        changelog::Block::Paragraph(text) => {
+                            ui.label(inline_code_job(ui, "", text));
+                        }
+                    }
+                }
+                ui.add_space(10.0);
+            }
+        });
+    show_all
+}
+
+/// Where the log file is.
+fn log_file_note_ui(ui: &mut egui::Ui) {
+    if let Some(path) = applog::file_path() {
+        ui.weak(format!("Also saved to {} (the previous run's is synththing.prev.log)", path.display()));
+    }
+}
+
+/// The log's buttons: copy what's shown, open or share the file, clear.
+fn log_actions_ui(ui: &mut egui::Ui, shown: &[&applog::Entry]) {
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Copy shown").clicked() {
+            let text: Vec<String> = shown.iter().map(|e| e.line()).collect();
+            ui.ctx().copy_text(text.join("\n"));
+        }
+        // (Android has no file manager to open: the log is shared, to
+        // whatever app the user picks, instead.)
+        #[cfg(not(target_os = "android"))]
+        if let Some(path) = applog::file_path()
+            && ui.button("Open log folder").clicked()
+        {
+            open_in_file_manager(&path);
+        }
+        #[cfg(target_os = "android")]
+        if let Some(path) = applog::file_path()
+            && ui.button("Share log").clicked()
+        {
+            crate::android::share_log(&path);
+        }
+        if ui.button("Clear").on_hover_text("Clears this view; the log file keeps everything").clicked() {
+            applog::clear();
+        }
+    });
 }
 
 #[cfg(test)]

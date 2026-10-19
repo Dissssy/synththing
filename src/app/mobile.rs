@@ -46,6 +46,11 @@ pub(super) enum Page {
     Downloads,
     /// From the menu's lower part, not its pages.
     Preferences,
+    Updates,
+    /// What's new since `Mobile::changelog_since`, or all of it.
+    Changelog,
+    Log,
+    Credits,
 }
 
 impl Page {
@@ -69,6 +74,10 @@ impl Page {
             Self::Library => "Script library",
             Self::Downloads => "Downloaded songs",
             Self::Preferences => "Preferences",
+            Self::Updates => "Updates",
+            Self::Changelog => "Changelog",
+            Self::Log => "Log",
+            Self::Credits => "Credits & licenses",
         }
     }
 
@@ -82,6 +91,10 @@ impl Page {
             Self::Library => "storefront",
             Self::Downloads => "download-simple",
             Self::Preferences => "gear",
+            Self::Updates => "arrows-clockwise",
+            Self::Changelog => "clock-counter-clockwise",
+            Self::Log => "notepad",
+            Self::Credits => "info",
         }
     }
 }
@@ -111,6 +124,9 @@ pub(super) struct Mobile {
     pref_section: Option<PrefTab>,
     /// Editing themes, a level under Preferences > Appearance.
     editing_themes: bool,
+    /// The version the Changelog page shows what's new since (after an
+    /// update), else all of it.
+    changelog_since: Option<crate::changelog::Version>,
     /// When back was pressed with nothing left to go back from: a second
     /// press while its toast shows leaves (`mobile_back`).
     back_to_leave: Option<Instant>,
@@ -195,11 +211,50 @@ impl App {
                 Page::Library => self.library_ui(ui),
                 Page::Downloads => self.downloaded_songs_ui(ui),
                 Page::Preferences => self.mobile_preferences_ui(ui),
+                Page::Updates => {
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        if self.updates_body_ui(ui, true) {
+                            self.updates_message = None;
+                            self.mobile_state.page = Page::NowPlaying;
+                        }
+                    });
+                }
+                Page::Changelog => {
+                    if super::changelog_body_ui(ui, self.mobile_state.changelog_since, true) {
+                        self.mobile_state.changelog_since = None;
+                    }
+                }
+                Page::Log => {
+                    self.log_body_ui(ui, true);
+                }
+                Page::Credits => self.credits_body_ui(ui, true),
             });
         }
         if self.mobile_state.drawer_open {
             self.mobile_drawer_ui(&ctx);
         }
+    }
+
+    /// What opens a window on the desktop (the launch update check, What's
+    /// new after an update, the status bar's link to the log) opens its
+    /// page here instead.
+    pub(super) fn open_mobile_pages(&mut self, ctx: &egui::Context) {
+        let state = &mut self.mobile_state;
+        let page = if std::mem::take(&mut self.updates_open) {
+            Page::Updates
+        } else if let Some(since) = self.changelog.take() {
+            state.changelog_since = since;
+            Page::Changelog
+        } else if std::mem::take(&mut self.log_open) {
+            Page::Log
+        } else if std::mem::take(&mut self.credits_open) {
+            Page::Credits
+        } else {
+            return;
+        };
+        state.page = page;
+        state.drawer_open = false;
+        ctx.request_repaint();
     }
 
     /// The menu button, the page's name, and notifications and feedback at
@@ -225,10 +280,14 @@ impl App {
                     }
                     // Now playing is the app's home: its name, as the
                     // wordmark.
-                    if self.mobile_state.page == Page::NowPlaying {
-                        self.mobile_wordmark_ui(ui);
-                    } else {
-                        ui.heading(self.mobile_state.page.title());
+                    match self.mobile_state.page {
+                        Page::NowPlaying => self.mobile_wordmark_ui(ui),
+                        Page::Changelog if self.mobile_state.changelog_since.is_some() => {
+                            ui.heading("What's new");
+                        }
+                        page => {
+                            ui.heading(page.title());
+                        }
                     }
                 }
             }
@@ -620,33 +679,35 @@ impl App {
         }
 
         ui.separator();
-        let item = |ui: &mut egui::Ui, glyph: &str, text: &str| ui.add(drawer_item(ui, false, glyph, text)).clicked();
+        let current = self.mobile_state.page;
+        let item = |ui: &mut egui::Ui, page: Page| ui.add(drawer_item(ui, current == page, page.icon(), page.title())).clicked();
         let mut close = false;
-        if item(ui, "gear", "Preferences") {
+        if item(ui, Page::Preferences) {
             self.mobile_state.page = Page::Preferences;
             self.mobile_state.pref_section = None;
             self.mobile_state.editing_themes = false;
             close = true;
         }
-        if item(ui, "arrows-clockwise", "Check for updates") {
+        if item(ui, Page::Updates) {
             self.launch_update_check = false;
-            self.updates_open = true;
             self.updater.check(self.update_track());
+            self.mobile_state.page = Page::Updates;
             close = true;
         }
-        if item(ui, "clock-counter-clockwise", "Changelog") {
-            self.changelog = Some(None);
+        if item(ui, Page::Changelog) {
+            self.mobile_state.changelog_since = None;
+            self.mobile_state.page = Page::Changelog;
             close = true;
         }
-        if item(ui, "notepad", "Log") {
-            self.log_open = true;
+        if item(ui, Page::Log) {
+            self.mobile_state.page = Page::Log;
             close = true;
         }
-        if item(ui, "info", "Credits & licenses") {
-            self.credits_open = true;
+        if item(ui, Page::Credits) {
+            self.mobile_state.page = Page::Credits;
             close = true;
         }
-        if !cfg!(target_os = "android") && item(ui, "desktop", "Desktop layout") {
+        if !cfg!(target_os = "android") && ui.add(drawer_item(ui, false, "desktop", "Desktop layout")).clicked() {
             let ctx = ui.ctx().clone();
             self.set_mobile_layout(&ctx, false);
             close = true;
