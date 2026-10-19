@@ -284,7 +284,7 @@ impl App {
                         }
                     }
                 }
-                super::info_icon(ui).on_hover_text(format!(
+                super::info_icon(ui, format!(
                     "An email attached to your identity on {} gets it back if you lose your key: a code is sent \
                      to it, and the identity moves to a new key. Only a hash of the address is kept, it's never \
                      shown or shared, and changing or taking it off needs a code sent to it too.",

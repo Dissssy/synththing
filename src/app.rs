@@ -3705,14 +3705,20 @@ pub fn icon(name: &str) -> &'static str {
 fn with_info(ui: &mut egui::Ui, info: &str, add: impl FnOnce(&mut egui::Ui) -> egui::Response) {
     ui.horizontal(|ui| {
         add(ui).on_hover_text(info);
-        info_icon(ui).on_hover_text(info);
+        info_icon(ui, info);
     });
 }
 
-/// A small circled "i": there's more to read on hover.
-fn info_icon(ui: &mut egui::Ui) -> egui::Response {
+/// A small circled "i": `info` on hover, and in the mobile layout's toast
+/// on a tap (a touch screen has no hover; `mobile::INFO_TOAST`).
+fn info_icon(ui: &mut egui::Ui, info: impl Into<String>) -> egui::Response {
+    let info = info.into();
     let size = ui.text_style_height(&egui::TextStyle::Body).min(16.0);
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    if response.clicked() {
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(mobile::INFO_TOAST), info.clone()));
+    }
+    let response = response.on_hover_text(info);
     let color = if response.hovered() { ui.visuals().strong_text_color() } else { ui.visuals().weak_text_color() };
     let painter = ui.painter();
     painter.circle_stroke(rect.center(), size * 0.45, egui::Stroke::new(1.2, color));

@@ -1995,7 +1995,7 @@ impl App {
                         Some(slug) => {
                             ui.horizontal(|ui| {
                                 ui.label(format!("{slug} (version after the last)"));
-                                info_icon(ui).on_hover_text(
+                                info_icon(ui, 
                                     "You published this script before, so it becomes its next version. Untick \
                                      below to publish it as a new script instead.",
                                 );
@@ -2007,7 +2007,7 @@ impl App {
                                     if ui.add(egui::TextEdit::singleline(&mut draft.slug).desired_width(200.0)).changed() {
                                         draft.slug_edited = Some(Instant::now());
                                     }
-                                    info_icon(ui).on_hover_text(
+                                    info_icon(ui, 
                                         "Its name among your uploads: lowercase letters, digits and dashes. \
                                          Publishing again with the same slug adds a new version instead of a new \
                                          script.",
@@ -2285,7 +2285,7 @@ impl App {
                 self.library.new_server.clear();
                 changed = true;
             }
-            info_icon(ui).on_hover_text(
+            info_icon(ui, 
                 "Anyone can run a library server (synththing serve). Its address, e.g. scripts.example.org \
                  (https is assumed; write http:// for one on your own network).",
             );
@@ -2356,7 +2356,7 @@ impl App {
                     if ui.small_button("Copy").clicked() {
                         ui.ctx().copy_text(format!("#{id}"));
                     }
-                    info_icon(ui).on_hover_text(
+                    info_icon(ui, 
                         "A key made by this app, kept in its config folder: it signs what you publish, so only \
                          you can change or delete it. No account, no email. Back it up with Export: lost, it \
                          can't be replaced (your scripts stay up, but you can't change them).",

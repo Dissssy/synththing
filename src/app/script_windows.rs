@@ -68,7 +68,7 @@ fn name_ui(ui: &mut egui::Ui, name: &str, labels: &ItemLabels) {
         let label = ui.label(name);
         if let Some(info) = &labels.info {
             label.on_hover_text(info);
-            info_icon(ui).on_hover_text(info);
+            info_icon(ui, info);
         }
     });
 }

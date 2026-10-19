@@ -986,7 +986,7 @@ impl App {
                         ui.selectable_value(&mut fps, option, format!("{option} fps"));
                     }
                 });
-                super::info_icon(ui).on_hover_text(
+                super::info_icon(ui, 
                     "Records just the visualizer, at this size whatever the window's size, with what you \
                      hear (your own notes included, before the volume slider). F9 starts and stops, F10 \
                      pauses. Bigger sizes cost the script more time per frame.",

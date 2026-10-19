@@ -292,7 +292,7 @@ impl App {
             if ui.button("Reset").on_hover_text("Back to 100%").clicked() {
                 ctx.set_zoom_factor(1.0);
             }
-            super::info_icon(ui).on_hover_text(
+            super::info_icon(ui, 
                 "How big everything is. Ctrl + and Ctrl - change it anywhere in synththing, Ctrl 0 \
                  goes back to 100%. The visualizer's picture isn't affected.",
             );

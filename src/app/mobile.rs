@@ -112,9 +112,14 @@ pub(super) struct Mobile {
     back_to_leave: Option<Instant>,
 }
 
-/// How long a status shows: a failure longer, to be read.
+/// How long a toast shows, at least: a failure longer, to be read. A long
+/// one stays long enough to read (`READING_SPEED` characters a second).
 const TOAST: Duration = Duration::from_secs(4);
 const FAILURE_TOAST: Duration = Duration::from_secs(8);
+const READING_SPEED: f32 = 15.0;
+
+/// Where a tapped info icon leaves its text for the toast (`info_icon`).
+pub(super) const INFO_TOAST: &str = "info_toast";
 
 impl App {
     /// Whether the mobile layout is showing: always on Android, else as
@@ -357,9 +362,13 @@ impl App {
             }
             state.seen_status = Some(self.status.clone());
         }
+        if let Some(info) = ctx.data_mut(|d| d.remove_temp::<String>(egui::Id::new(INFO_TOAST))) {
+            state.toast = Some((info, Instant::now()));
+        }
         let Some((text, since)) = &state.toast else { return };
         let failed = status_outcome(text) == Some(false);
-        if since.elapsed() > if failed { FAILURE_TOAST } else { TOAST } {
+        let least = if failed { FAILURE_TOAST } else { TOAST };
+        if since.elapsed() > least.max(Duration::from_secs_f32(text.len() as f32 / READING_SPEED)) {
             state.toast = None;
             return;
         }
@@ -605,9 +614,7 @@ impl App {
         ui.add_space(8.0);
         let mut picked = None;
         for page in Page::ALL {
-            let text = format!("{}   {}", icon(page.icon()), page.title());
-            let item = egui::Button::selectable(self.mobile_state.page == page, text).min_size(egui::vec2(ui.available_width(), 0.0));
-            if ui.add(item).clicked() {
+            if ui.add(drawer_item(ui, self.mobile_state.page == page, page.icon(), page.title())).clicked() {
                 picked = Some(page);
             }
         }
@@ -617,19 +624,12 @@ impl App {
         }
 
         ui.separator();
-        let item = |ui: &mut egui::Ui, glyph: &str, text: &str| {
-            ui.add(egui::Button::new(format!("{}   {text}", icon(glyph))).frame(false).min_size(egui::vec2(ui.available_width(), 36.0)))
-                .clicked()
-        };
+        let item = |ui: &mut egui::Ui, glyph: &str, text: &str| ui.add(drawer_item(ui, false, glyph, text)).clicked();
         let mut close = false;
         if item(ui, "gear", "Preferences") {
             self.mobile_state.page = Page::Preferences;
             self.mobile_state.pref_section = None;
             self.mobile_state.editing_themes = false;
-            close = true;
-        }
-        if item(ui, "chat-text", "Send feedback") {
-            self.open_feedback();
             close = true;
         }
         if item(ui, "arrows-clockwise", "Check for updates") {
@@ -752,6 +752,11 @@ impl App {
 }
 
 /// An icon button `size` points square, big enough for a finger.
+/// One of the menu's items: its icon and text, the width of `ui`.
+fn drawer_item(ui: &egui::Ui, selected: bool, glyph: &str, text: &str) -> egui::Button<'static> {
+    egui::Button::selectable(selected, format!("{}   {text}", icon(glyph))).min_size(egui::vec2(ui.available_width(), 0.0))
+}
+
 /// A Preferences section in the list: its icon, title and what's in it,
 /// the width of `ui`.
 fn section_row(ui: &mut egui::Ui, section: PrefTab) -> egui::Response {
