@@ -30,7 +30,7 @@ jobs:
   # Which build this is: its channel, its number (commits since the release
   # in Cargo.toml) and the release it goes to.
   stamp:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
     outputs:
       channel: ${{ steps.stamp.outputs.channel }}
       number: ${{ steps.stamp.outputs.number }}
@@ -133,7 +133,7 @@ jobs:
   # never has one platform's build newer than the other's.
   publish:
     needs: [stamp, windows, linux]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
     env:
       GH_TOKEN: ${{ github.token }}
       CHANNEL: ${{ needs.stamp.outputs.channel }}
