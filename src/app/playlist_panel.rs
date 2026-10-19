@@ -15,9 +15,10 @@ use super::{
 use crate::audio::AudioCommand;
 use crate::config::nice_name;
 use crate::engine::EngineView;
-use crate::filebrowser::DraggedFile;
+use crate::filebrowser::DraggedFiles;
 use crate::layout::Section;
 use crate::playlist::{self, LoopMode, NowPlaying, PlaylistEntry};
+use crate::select_list;
 use crate::song_info::format_length;
 
 /// Drag-and-drop payload for playlist rows being dragged to reorder them:
@@ -31,9 +32,9 @@ pub(super) struct DraggedEntry {
 
 /// Something dropped onto a playlist row this frame.
 enum RowDrop {
-    /// A song (or a folder of songs) from the browser, to insert at this
+    /// Songs (or folders of songs) from the browser, to insert at this
     /// position.
-    Song(PathBuf, usize),
+    Songs(Vec<PathBuf>, usize),
     /// Rows of the same playlist, moved to just before this position.
     Move(Vec<usize>, usize),
     /// A soundfont, to become the override of this row (and the rest of
@@ -45,10 +46,9 @@ enum RowDrop {
 /// The `Vec` ones apply to the selection when used on a selected row.
 enum RowAction {
     Play(usize),
-    Select(usize),
     Remove(Vec<usize>),
     ClearSoundfont(Vec<usize>),
-    UseSelectedSoundfont(Vec<usize>),
+    UseCurrentSoundfont(Vec<usize>),
     RevealInSongs(usize),
 }
 
@@ -202,7 +202,6 @@ impl App {
                 self.playlist_rename = None;
                 self.confirm_delete_playlist = false;
                 self.playlist_selection.clear();
-                self.selection_anchor = None;
             }
             Err(e) => self.status = format!("Couldn't create playlist: {e}"),
         }
@@ -216,7 +215,6 @@ impl App {
         }
         self.status = format!("Deleted playlist: {name}");
         self.playlist_selection.clear();
-        self.selection_anchor = None;
         self.now_playing = self.now_playing.take().and_then(|mut np| {
             np.list = playlist::index_after_remove(np.list, list)?;
             Some(np)
@@ -311,10 +309,7 @@ impl App {
             np.history.iter_mut().for_each(|h| *h = positions.get(*h).copied().unwrap_or(*h));
         }
         if self.viewed_playlist == Some(list) {
-            let mut selection: Vec<usize> = self.playlist_selection.iter().filter_map(|&i| positions.get(i).copied()).collect();
-            selection.sort_unstable();
-            self.playlist_selection = selection;
-            self.selection_anchor = self.selection_anchor.and_then(|i| positions.get(i).copied());
+            self.playlist_selection.remap(&positions);
         }
         self.plan_upcoming();
         self.save_playlist(list);
@@ -329,7 +324,6 @@ impl App {
             self.remove_entry(list, idx);
         }
         self.playlist_selection.clear();
-        self.selection_anchor = None;
     }
 
     /// Set (or clear) the soundfont override of several entries; plain
@@ -350,41 +344,6 @@ impl App {
         for idx in midi {
             self.set_entry_soundfont(list, idx, soundfont.clone());
         }
-    }
-
-    /// Update the selection for a click on row `idx`, by the modifier keys
-    /// held: plain selects just it, Ctrl toggles it, Shift extends a range
-    /// from the last plain/Ctrl click.
-    fn click_select(&mut self, idx: usize, modifiers: egui::Modifiers) {
-        if modifiers.shift
-            && let Some(anchor) = self.selection_anchor
-        {
-            let (lo, hi) = (anchor.min(idx), anchor.max(idx));
-            if !modifiers.command {
-                self.playlist_selection.clear();
-            }
-            self.playlist_selection.extend(lo..=hi);
-            self.playlist_selection.sort_unstable();
-            self.playlist_selection.dedup();
-            return;
-        }
-        if modifiers.command {
-            match self.playlist_selection.binary_search(&idx) {
-                Ok(pos) => {
-                    self.playlist_selection.remove(pos);
-                }
-                Err(pos) => self.playlist_selection.insert(pos, idx),
-            }
-        } else {
-            self.playlist_selection = vec![idx];
-        }
-        self.selection_anchor = Some(idx);
-    }
-
-    /// The rows an action on row `idx` should apply to: the whole selection
-    /// if `idx` is part of it, otherwise just `idx`.
-    fn rows_for(&self, idx: usize) -> Vec<usize> {
-        if self.playlist_selection.contains(&idx) { self.playlist_selection.clone() } else { vec![idx] }
     }
 
     fn set_entry_soundfont(&mut self, list: usize, idx: usize, soundfont: Option<PathBuf>) {
@@ -513,7 +472,7 @@ impl App {
         let released_here =
             ui.rect_contains_pointer(panel_rect) && ui.input(|i| i.pointer.any_released());
         if row_drop.is_none() && released_here {
-            if let Some(file) = egui::DragAndDrop::take_payload::<DraggedFile>(ui.ctx()) {
+            if let Some(files) = egui::DragAndDrop::take_payload::<DraggedFiles>(ui.ctx()) {
                 let list = match self.viewed_playlist.filter(|&l| l < self.playlists.lists.len()) {
                     Some(list) => list,
                     None => {
@@ -523,7 +482,7 @@ impl App {
                     }
                 };
                 let at = self.playlists.lists.get(list).map_or(0, |l| l.playlist.entries.len());
-                self.insert_songs(list, at, vec![file.0.clone()]);
+                self.insert_songs(list, at, files.0.clone());
             } else if egui::DragAndDrop::take_payload::<DraggedSoundfont>(ui.ctx()).is_some() {
                 self.status = "Drop a soundfont onto a MIDI entry to override its soundfont.".to_string();
             }
@@ -533,45 +492,24 @@ impl App {
             return;
         };
 
-        // Keys, while the pointer is over the list and nothing's being
-        // typed: Ctrl+A selects all, Delete removes the selection.
-        let typing = ui.ctx().memory(|m| m.focused().is_some());
-        if !typing && ui.rect_contains_pointer(panel_rect) {
-            let (select_all, delete) = ui.input(|i| {
-                (i.modifiers.command && i.key_pressed(egui::Key::A), i.key_pressed(egui::Key::Delete))
-            });
-            if select_all {
-                let len = self.playlists.lists.get(list).map_or(0, |l| l.playlist.entries.len());
-                self.playlist_selection = (0..len).collect();
-            }
-            if delete && !self.playlist_selection.is_empty() {
-                let selection = self.playlist_selection.clone();
-                self.remove_entries(list, &selection);
-            }
-        }
-
         match row_drop {
-            Some(RowDrop::Song(path, at)) => self.insert_songs(list, at, vec![path]),
+            Some(RowDrop::Songs(paths, at)) => self.insert_songs(list, at, paths),
             Some(RowDrop::Move(indices, before)) => self.move_entries(list, &indices, before),
             Some(RowDrop::Soundfont(sf, idx)) => {
-                let rows = self.rows_for(idx);
+                let rows = self.playlist_selection.rows_for(idx);
                 self.set_entries_soundfont(list, &rows, Some(sf));
             }
             None => {}
         }
         match action {
             Some(RowAction::Play(idx)) => self.play_entry(list, idx),
-            Some(RowAction::Select(idx)) => {
-                let modifiers = ui.input(|i| i.modifiers);
-                self.click_select(idx, modifiers);
-            }
             Some(RowAction::Remove(rows)) => self.remove_entries(list, &rows),
             Some(RowAction::ClearSoundfont(rows)) => self.set_entries_soundfont(list, &rows, None),
-            Some(RowAction::UseSelectedSoundfont(rows)) => {
+            Some(RowAction::UseCurrentSoundfont(rows)) => {
                 let selected = self.active_sf.and_then(|i| self.config.soundfonts.get(i)).cloned();
                 match selected {
                     Some(sf) => self.set_entries_soundfont(list, &rows, Some(sf)),
-                    None => self.status = "No soundfont selected.".to_string(),
+                    None => self.status = "No soundfont in use.".to_string(),
                 }
             }
             Some(RowAction::RevealInSongs(idx)) => {
@@ -614,7 +552,6 @@ impl App {
             self.playlist_rename = None;
             self.confirm_delete_playlist = false;
             self.playlist_selection.clear();
-            self.selection_anchor = None;
         }
 
         let Some(list) = viewed else {
@@ -673,11 +610,10 @@ impl App {
     fn playlist_rows_ui(&mut self, ui: &mut egui::Ui, list: usize) -> (Option<RowDrop>, Option<RowAction>) {
         let mut row_drop = None;
         let mut action = None;
-        let mut hovered = None;
         let entries = &self.playlists.lists[list].playlist.entries;
         let playing = self.now_playing.as_ref().filter(|np| np.list == list).map(|np| np.entry);
         let selected_sf = self.active_sf.and_then(|i| self.config.soundfonts.get(i)).is_some();
-        let selection = &self.playlist_selection;
+        let selection = &mut self.playlist_selection;
         let cache = &mut self.song_info;
         let info_open = &mut self.song_info_open;
 
@@ -703,88 +639,77 @@ impl App {
         ui.weak(summary);
         ui.separator();
 
-        let row_height = ui.spacing().interact_size.y;
-        egui::ScrollArea::vertical()
-            .id_salt("playlist_rows")
-            .auto_shrink([false, false])
-            .show_rows(ui, row_height, entries.len(), |ui, range| {
-                for idx in range {
-                    let entry = &entries[idx];
-                    let is_selected = selection.binary_search(&idx).is_ok();
-                    let rows = || if is_selected { selection.clone() } else { vec![idx] };
-                    let row = ui.horizontal(|ui| {
-                        // The playing entry is marked in the number column;
-                        // the highlight is the selection.
-                        if playing == Some(idx) {
-                            ui.strong(" > ").on_hover_text("Playing");
-                        } else {
-                            ui.weak(format!("{:>3}", idx + 1));
-                        }
-                        let mut label = nice_name(&entry.path);
-                        if entry.missing {
-                            label.push_str("  (missing)");
-                        }
-                        let response = ui
-                            .add(egui::Button::selectable(is_selected, label).sense(egui::Sense::click_and_drag()))
-                            .on_hover_text(format!("{}\nDouble-click to play", entry.path.display()));
-                        if response.hovered() {
-                            hovered = Some((entry.path.clone(), entry.soundfont.clone()));
-                        }
-                        response.dnd_set_drag_payload(DraggedEntry { list, indices: rows(), path: entry.path.clone() });
-                        if response.double_clicked() {
-                            action = Some(RowAction::Play(idx));
-                        } else if response.clicked() {
-                            action = Some(RowAction::Select(idx));
-                        }
-                        response.context_menu(|ui| {
-                            let rows = rows();
-                            let count = if rows.len() > 1 { format!(" ({})", rows.len()) } else { String::new() };
-                            if ui.button("Play").clicked() {
-                                action = Some(RowAction::Play(idx));
-                            }
-                            if is_midi_path(&entry.path) || rows.len() > 1 {
-                                if ui
-                                    .add_enabled(selected_sf, egui::Button::new(format!("Use selected soundfont{count}")))
-                                    .clicked()
-                                {
-                                    action = Some(RowAction::UseSelectedSoundfont(rows.clone()));
-                                }
-                                if ui.button(format!("Clear soundfont override{count}")).clicked() {
-                                    action = Some(RowAction::ClearSoundfont(rows.clone()));
-                                }
-                            }
-                            if ui.button("Show in Songs").clicked() {
-                                action = Some(RowAction::RevealInSongs(idx));
-                            }
-                            if ui.button(format!("Remove from playlist{count}")).clicked() {
-                                action = Some(RowAction::Remove(rows));
-                            }
-                        });
-
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("x").on_hover_text("Remove from playlist").clicked() {
-                                action = Some(RowAction::Remove(vec![idx]));
-                            }
-                            song_info_widgets(ui, cache, &entry.path, info_open);
-                            if let Some(sf) = &entry.soundfont
-                                && ui
-                                    .small_button(format!("SF: {}", nice_name(sf)))
-                                    .on_hover_text(format!(
-                                        "Plays with this soundfont instead of the selected one.\n{}\nClick to clear.",
-                                        sf.display()
-                                    ))
-                                    .clicked()
-                            {
-                                action = Some(RowAction::ClearSoundfont(vec![idx]));
-                            }
-                        });
-                    });
-
-                    if let Some(drop) = row_drop_ui(ui, &row.response, list, idx, is_midi_path(&entry.path)) {
-                        row_drop = Some(drop);
+        let output = select_list::show(ui, "playlist_rows", entries, selection, |ui, row, entry| {
+            let idx = row.idx;
+            if row.response.drag_started() {
+                row.response.dnd_set_drag_payload(DraggedEntry { list, indices: row.rows(), path: entry.path.clone() });
+            }
+            row.response.context_menu(|ui| {
+                let rows = row.rows();
+                let count = if rows.len() > 1 { format!(" ({})", rows.len()) } else { String::new() };
+                if ui.button("Play").clicked() {
+                    action = Some(RowAction::Play(idx));
+                }
+                if is_midi_path(&entry.path) || rows.len() > 1 {
+                    if ui
+                        .add_enabled(selected_sf, egui::Button::new(format!("Use current soundfont{count}")))
+                        .clicked()
+                    {
+                        action = Some(RowAction::UseCurrentSoundfont(rows.clone()));
+                    }
+                    if ui.button(format!("Clear soundfont override{count}")).clicked() {
+                        action = Some(RowAction::ClearSoundfont(rows.clone()));
                     }
                 }
+                if ui.button("Show in Songs").clicked() {
+                    action = Some(RowAction::RevealInSongs(idx));
+                }
+                if ui.button(format!("Remove from playlist{count}")).clicked() {
+                    action = Some(RowAction::Remove(rows));
+                }
             });
+
+            // The playing entry is marked in the number column; the
+            // highlight is the selection.
+            if playing == Some(idx) {
+                ui.strong(" > ").on_hover_text("Playing");
+            } else {
+                ui.weak(format!("{:>3}", idx + 1));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("x").on_hover_text("Remove from playlist").clicked() {
+                    action = Some(RowAction::Remove(vec![idx]));
+                }
+                song_info_widgets(ui, cache, &entry.path, info_open);
+                if let Some(sf) = &entry.soundfont
+                    && ui
+                        .small_button(format!("SF: {}", nice_name(sf)))
+                        .on_hover_text(format!(
+                            "Plays with this soundfont instead of the current one.\n{}\nClick to clear.",
+                            sf.display()
+                        ))
+                        .clicked()
+                {
+                    action = Some(RowAction::ClearSoundfont(vec![idx]));
+                }
+                let mut label = nice_name(&entry.path);
+                if entry.missing {
+                    label.push_str("  (missing)");
+                }
+                select_list::label(ui, label, Some(format!("{}\nDouble-click to play", entry.path.display())));
+            });
+
+            if let Some(drop) = row_drop_ui(ui, &row.response, list, idx, is_midi_path(&entry.path)) {
+                row_drop = Some(drop);
+            }
+        });
+        if let Some(idx) = output.activated {
+            action = Some(RowAction::Play(idx));
+        }
+        if output.delete {
+            action = Some(RowAction::Remove(self.playlist_selection.rows().to_vec()));
+        }
+        let hovered = output.hovered.map(|i| (entries[i].path.clone(), entries[i].soundfont.clone()));
 
         self.hovered_playlist_entry = hovered;
         (row_drop, action)
@@ -874,10 +799,10 @@ fn row_drop_ui(ui: &egui::Ui, row: &egui::Response, list: usize, idx: usize, is_
 
     let ctx = ui.ctx();
     let released = ui.input(|i| i.pointer.any_released());
-    if egui::DragAndDrop::has_payload_of_type::<DraggedFile>(ctx) {
+    if egui::DragAndDrop::has_payload_of_type::<DraggedFiles>(ctx) {
         ui.painter().hline(rect.x_range(), line_y, stroke);
-        if released && let Some(file) = egui::DragAndDrop::take_payload::<DraggedFile>(ctx) {
-            return Some(RowDrop::Song(file.0.clone(), insert_at));
+        if released && let Some(files) = egui::DragAndDrop::take_payload::<DraggedFiles>(ctx) {
+            return Some(RowDrop::Songs(files.0.clone(), insert_at));
         }
     } else if let Some(entry) = egui::DragAndDrop::payload::<DraggedEntry>(ctx)
         && entry.list == list

@@ -4,10 +4,16 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Select several songs at once in Songs, the way a playlist already allows (Ctrl and Shift, Ctrl+A), and drag them onto a playlist together. The Soundfonts list selects the same way, so several can be removed at once.
+
 ### Changed
+- Songs, Soundfonts and the playlist are one kind of list now and work alike: click selects, double-click plays a song, opens a folder or uses a soundfont.
+- A name too long for its list is cut short with "...", and hovering it shows all of it.
 - Feedback asking for something new is filed as a feature request for the developers to decide on; only bug reports go on to automatic fixes.
 
 ### Fixed
+- On Linux, the Songs list stopped re-reading its folder over and over just because files in it were read.
 - Right-clicking the tray icon closes the mini player as it brings the main window back, so the two aren't on screen together.
 - The main window and the mini player are never on screen together: left-clicking the tray icon puts the main window away in the tray as the mini player comes up, and bringing the main window back from the taskbar closes the mini player.
 

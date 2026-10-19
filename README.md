@@ -27,7 +27,7 @@ It needs 64-bit Windows 10 or 11. There's an experimental Linux build on each re
 
 The first time synththing runs, a welcome window offers a starter pack (the soundfonts download in the background; the songs land in `Music\synththing\Starter songs`) and a tour that walks you through all of this on the real buttons. Help > Welcome... and Help > Tour bring them back. Or, by hand:
 
-1. **Pick your music.** The Songs tab is a file browser: **Browse...** jumps to any folder or drive, **Set as default** makes it open there next time, and the search box finds songs in subfolders too. Click a song to play it.
+1. **Pick your music.** The Songs tab is a file browser: **Browse...** jumps to any folder or drive, **Set as default** makes it open there next time, and the search box finds songs in subfolders too. Double-click a song to play it.
 2. **Add a soundfont for MIDI.** MIDI files are just notes; a SoundFont supplies the instruments. In the Soundfonts tab, **Add soundfont...** and pick any General MIDI `.sf2` (plenty are free online). Compressed `.sf3` soundfonts aren't supported; Polyphone can convert them to `.sf2`.
 3. **Make a playlist.** Open View > Playlists and drag songs (or folders) in from Songs; dropping onto an empty Playlists tab starts a new one. Drag a soundfont onto a MIDI entry to give it its own.
 4. **Watch the visualizer.** It's on the right to begin with (View > Visualizer if you've closed it); pick a script above it. **Fullscreen visualizer** (or F11) fills the screen; Esc comes back.
@@ -50,7 +50,7 @@ The View menu shows and hides each section; drag tabs around to arrange them how
 | F10 | Pause / resume the recording |
 | Esc | Back to windowed |
 
-In a playlist: click to select (Ctrl and Shift for more), double-click to play, Ctrl+A selects all, Delete removes. Right-click a row for more.
+In the Songs, Soundfonts and Playlists lists: click to select (Ctrl and Shift for more), double-click to play or open, Ctrl+A selects all, and drag the selection (from Songs onto a playlist, or within a playlist to reorder it). Delete removes the selection from a playlist or the soundfont list. Right-click a row for more.
 
 ## Visualizer scripts
 

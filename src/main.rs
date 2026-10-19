@@ -45,6 +45,7 @@ mod theme;
 mod tray;
 mod starter;
 mod script_host;
+mod select_list;
 mod sprite_code;
 mod typing;
 mod updater;
