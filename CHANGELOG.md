@@ -13,6 +13,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - New script, Rename..., Restore default and Publish... moved into the script picker: New script lists the templates and examples, the sidebar's Make a copy starts a new script from any script, and the running script's card has its file's buttons and its full path.
 - The editor's Apply, Wrap and text size are under its cog.
 - Preferences are arranged by what they're for: Appearance (with the theme and the UI scale, which moved there from the Themes window), Playback, Songs, Visualizers, Online Library, Updates, App and Recording. In the mobile layout they're a page of their own, each section opening in its place, and back (or Escape) steps out again. Themes are edited from Appearance too (Edit themes..., in place of the synththing menu's Themes...); in the mobile layout that's a level under it, with the theme and its buttons along the top and the preview along the bottom.
+- A canary build updates to canary builds unless Preferences > Updates says otherwise; before, it waited for the next release unless Canary updates was turned on.
 - Song names are set under Preferences > Appearance. On Android they show on the now-playing screen and in the notification too, and {file_path} is the folder inside the song library.
 
 ### Fixed

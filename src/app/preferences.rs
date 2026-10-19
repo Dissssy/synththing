@@ -140,7 +140,7 @@ impl App {
         let mut expiry = self.config.preload_expiry_secs.unwrap_or(DEFAULT_PRELOAD_EXPIRY_SECS);
         let mut hover_preload = self.config.preload_on_hover;
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
-        let mut canary = self.config.canary_updates;
+        let mut canary = self.config.canary_updates();
         let mut close_to_tray = self.config.close_to_tray.unwrap_or(false);
         let mut warn_heavy = self.config.warn_heavy_midi.unwrap_or(true);
         let mut beat_pulse = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE) * 100.0;
@@ -412,7 +412,7 @@ impl App {
         if expiry != self.config.preload_expiry_secs
             || hover_preload != self.config.preload_on_hover
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
-            || canary != self.config.canary_updates
+            || canary != self.config.canary_updates()
             || (self.tray.is_some() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
             || warn_heavy != self.config.warn_heavy_midi.unwrap_or(true)
             || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
@@ -446,7 +446,9 @@ impl App {
             self.config.beat_pulse_length =
                 Some(pulse_length / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE_LENGTH).abs() > 1e-4);
             self.config.check_updates_on_launch = (!check_updates).then_some(false);
-            self.config.canary_updates = canary;
+            if canary != self.config.canary_updates() {
+                self.config.canary_updates = Some(canary);
+            }
             if self.tray.is_some() && (close_to_tray || self.config.close_to_tray.is_some()) {
                 self.config.close_to_tray = Some(close_to_tray);
             }

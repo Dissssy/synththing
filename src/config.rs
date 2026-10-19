@@ -114,11 +114,12 @@ pub struct Config {
     #[serde(default)]
     pub check_updates_on_launch: Option<bool>,
     /// Preference: update to canary builds (the newest from master, and
-    /// releases once they're newer) rather than releases only. A bool, not
-    /// an enum of channels: a build that didn't know a newer channel's name
-    /// couldn't read the whole config (`read_json_or_set_aside`).
+    /// releases once they're newer) rather than releases only. `None`
+    /// means yes in a canary build, no otherwise (`canary_updates()`). A
+    /// bool, not an enum of channels: a build that didn't know a newer
+    /// channel's name couldn't read the whole config (`read_json_or_set_aside`).
     #[serde(default)]
-    pub canary_updates: bool,
+    pub canary_updates: Option<bool>,
     /// On Android: download and install updates in the app (it needs
     /// Install unknown apps allowed). Off, a new version is only announced.
     #[serde(default)]
@@ -333,6 +334,13 @@ impl Config {
             config.save()?;
         }
         Ok(config.unwrap_or_default())
+    }
+
+    /// Whether to update to canary builds: as chosen, or by default if this
+    /// build is one. (Android's APK is in canary builds before any release
+    /// has one, so a fresh install has something to update to.)
+    pub fn canary_updates(&self) -> bool {
+        self.canary_updates.unwrap_or(crate::build_info::channel() == crate::build_info::Channel::Nightly)
     }
 
     pub fn preload_expiry(&self) -> std::time::Duration {

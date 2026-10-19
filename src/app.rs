@@ -618,7 +618,7 @@ impl App {
     /// What the updater follows: this branch build's branch, or canary or
     /// releases as chosen in Preferences.
     fn update_track(&self) -> Track {
-        Track::current(self.config.canary_updates)
+        Track::current(self.config.canary_updates())
     }
 
     /// Look for a new release in the background, if that's enabled. Not in
@@ -1701,7 +1701,7 @@ impl App {
                  its own, so your usual synththing isn't affected."
             ));
             ui.add_space(4.0);
-        } else if self.config.canary_updates {
+        } else if self.config.canary_updates() {
             ui.weak("Canary updates: the newest build from master (Preferences > Updates).");
             ui.add_space(4.0);
         }
