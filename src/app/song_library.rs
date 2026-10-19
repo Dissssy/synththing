@@ -423,11 +423,11 @@ impl App {
         self.rescan_downloaded(false);
         let dir = self.library_songs_dir();
         let mut open_library = false;
-        ui.horizontal_wrapped(|ui| {
-            ui.weak(dir.display().to_string());
-            if dir.is_dir() && ui.small_button("Open folder").clicked() {
+        ui.horizontal(|ui| {
+            if dir.is_dir() && ui.add(super::icon_button("folder-open")).on_hover_text("Open the folder").clicked() {
                 super::open_in_file_manager(&dir);
             }
+            crate::select_list::label(ui, egui::RichText::new(dir.display().to_string()).weak(), None);
         });
         ui.separator();
         if self.song_library.downloaded.is_empty() {

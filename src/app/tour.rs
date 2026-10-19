@@ -105,7 +105,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         title: "Playlists",
-        text: "Drag songs from the Songs tab onto this one to make a playlist (a whole folder works too; New \
+        text: "Drag songs from the Songs tab onto this one to make a playlist (a whole folder works too; + \
                makes an empty one). Double-click a song in it to play it; Loop and Shuffle are in the controls.",
         target: Some(Target::Tab(Section::Playlists)),
         tabs: &[Section::Songs, Section::Playlists],

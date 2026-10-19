@@ -925,13 +925,13 @@ impl App {
                     });
                 });
             }
-            if ui.button("Format").on_hover_text("Tidy the script's layout (Shift+Alt+F)").clicked() {
+            if ui.add(super::icon_button("magic-wand")).on_hover_text("Format: tidy the script's layout (Shift+Alt+F)").clicked() {
                 let ctx = ui.ctx().clone();
                 if self.format_script(&ctx, editor_id) {
                     self.editor_changed();
                 }
             }
-            if ui.button("Find").on_hover_text("Ctrl+F; Ctrl+H to replace").clicked() {
+            if ui.add(super::icon_button("magnifying-glass")).on_hover_text("Find (Ctrl+F); Ctrl+H to replace").clicked() {
                 self.editor.find = Some(Find {
                     query: String::new(),
                     replacement: String::new(),
@@ -943,8 +943,8 @@ impl App {
             }
             let script = self.script.path().map(Path::to_path_buf);
             if ui
-                .add_enabled(script.is_some(), egui::Button::new("History..."))
-                .on_hover_text("Earlier versions of this script, kept automatically")
+                .add_enabled(script.is_some(), super::icon_button("clock-counter-clockwise"))
+                .on_hover_text("History: earlier versions of this script, kept automatically")
                 .clicked()
                 && let Some(script) = script
             {
@@ -954,41 +954,14 @@ impl App {
                 self.editor.history_open = true;
             }
 
-            ui.separator();
-            let mut mode = self.config.editor_apply;
-            ui.label("Apply:");
-            egui::ComboBox::from_id_salt("editor_apply_mode").selected_text(mode.label()).show_ui(ui, |ui| {
-                for option in ApplyMode::ALL {
-                    ui.selectable_value(&mut mode, option, option.label());
-                }
-            })
-            .response
-            .on_hover_text(
-                "When your edits reach the running script (and its file). Applying restarts the script, \\
-                 so a game loses its state: \"when typing pauses\" or \"on Ctrl+S\" keep that from happening \\
-                 on every keystroke. Ctrl+S always applies right away.",
-            );
-            if mode != self.config.editor_apply {
-                self.config.editor_apply = mode;
-                if mode == ApplyMode::EveryEdit {
-                    self.flush_editor();
-                }
-                self.editor_settings_changed();
-            }
-            let mut wrap = self.config.editor_wrap.unwrap_or(true);
-            if ui.checkbox(&mut wrap, "Wrap").changed() {
-                self.config.editor_wrap = (!wrap).then_some(false);
-                self.editor_settings_changed();
-            }
-            let mut size = self.editor_font_size();
-            if ui
-                .add(egui::DragValue::new(&mut size).range(FONT_SIZES).speed(0.2).suffix(" pt"))
-                .on_hover_text("Text size (Ctrl+scroll over the text)")
-                .changed()
-            {
-                self.config.editor_font_size = Some(size.round());
-                self.editor_settings_changed();
-            }
+            // Open until clicked away from: it has a text size to drag.
+            let settings = egui::containers::menu::MenuConfig::new()
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+            egui::containers::menu::MenuButton::from_button(super::icon_button("gear"))
+                .config(settings)
+                .ui(ui, |ui| self.editor_settings_ui(ui))
+                .0
+                .on_hover_text("Editor settings: when edits apply, wrapping, text size");
             if self.editor_dirty() {
                 ui.separator();
                 let label = egui::RichText::new("Not applied yet").color(ui.visuals().warn_fg_color);
@@ -996,6 +969,46 @@ impl App {
                 if ui.small_button("Apply (Ctrl+S)").clicked() {
                     self.apply_editor();
                 }
+            }
+        });
+    }
+
+    /// The editor's settings (its toolbar's cog): when edits reach the
+    /// running script, wrapping, and text size.
+    fn editor_settings_ui(&mut self, ui: &mut egui::Ui) {
+        ui.set_max_width(280.0);
+        let mut mode = self.config.editor_apply;
+        ui.label("Apply edits");
+        for option in ApplyMode::ALL {
+            ui.radio_value(&mut mode, option, option.label());
+        }
+        ui.weak(
+            "Applying restarts the script, so a game loses its state: \"when typing pauses\" or \"on Ctrl+S\" \
+             keep that from happening on every keystroke. Ctrl+S always applies right away.",
+        );
+        if mode != self.config.editor_apply {
+            self.config.editor_apply = mode;
+            if mode == ApplyMode::EveryEdit {
+                self.flush_editor();
+            }
+            self.editor_settings_changed();
+        }
+        ui.separator();
+        let mut wrap = self.config.editor_wrap.unwrap_or(true);
+        if ui.checkbox(&mut wrap, "Wrap long lines").changed() {
+            self.config.editor_wrap = (!wrap).then_some(false);
+            self.editor_settings_changed();
+        }
+        let mut size = self.editor_font_size();
+        ui.horizontal(|ui| {
+            ui.label("Text size");
+            if ui
+                .add(egui::DragValue::new(&mut size).range(FONT_SIZES).speed(0.2).suffix(" pt"))
+                .on_hover_text("Ctrl+scroll over the text changes it too")
+                .changed()
+            {
+                self.config.editor_font_size = Some(size.round());
+                self.editor_settings_changed();
             }
         });
     }

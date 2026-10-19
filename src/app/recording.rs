@@ -793,8 +793,8 @@ impl App {
         }
     }
 
-    /// Start now / Pause / Stop while recording: next to "Fullscreen
-    /// visualizer", and in the synththing menu.
+    /// Start now / Pause / Stop while recording: above the visualizer, and
+    /// in the synththing menu.
     fn recording_controls_ui(&mut self, ui: &mut egui::Ui) {
         let Some(recorder) = &self.recording.recorder else { return };
         let paused = recorder.paused();
@@ -815,8 +815,8 @@ impl App {
         }
     }
 
-    /// Next to "Fullscreen visualizer": a recording's controls while there
-    /// is one, saving, and "Show last recording".
+    /// Above the visualizer: a recording's controls while there is one,
+    /// saving, and the last recording (shown in its folder).
     pub(super) fn recording_buttons_ui(&mut self, ui: &mut egui::Ui) {
         self.recording_controls_ui(ui);
         if !self.recording.finishing.is_empty() {
@@ -825,8 +825,8 @@ impl App {
         } else if let Some(path) = self.last_recording.clone()
             && self.recording.recorder.is_none()
             && ui
-                .small_button("Show last recording")
-                .on_hover_text(format!("{} ({})", path.display(), file_size(&path)))
+                .add(super::icon_button("film-strip"))
+                .on_hover_text(format!("Show the last recording: {} ({})", path.display(), file_size(&path)))
                 .clicked()
         {
             open_in_file_manager(&path);
@@ -1124,7 +1124,7 @@ impl App {
                         .map(|p| lua_visualizer::display_name(p))
                         .unwrap_or_else(|| "(none)".to_string());
                     egui::ComboBox::from_id_salt("record_script").selected_text(current).height(f32::INFINITY).show_ui(ui, |ui| {
-                        picked_script = self.script_list_ui(ui);
+                        picked_script = self.script_list_ui(ui, false);
                     });
                     ui.weak("Picking one here switches the visualizer to it.");
                 });
@@ -1214,7 +1214,7 @@ impl App {
                 self.status = format!("Couldn't save preferences: {e}");
             }
         }
-        if let Some(idx) = picked_script {
+        if let Some(super::previews::Picked::Script(idx)) = picked_script {
             self.load_script(idx);
             // (The new script's own Auto/Manual, once it's compiled.)
             draft.auto = self.record_auto();
