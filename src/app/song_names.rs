@@ -3,13 +3,13 @@
 //! of your own songs, a different few every few seconds.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
 use super::{title_of, App};
-use crate::song_info::Tags;
-use crate::song_title::{render, DEFAULT_PATTERNS, FIELDS};
+use crate::song_info::{SongInfo, Tags};
+use crate::song_title::{render, Naming, Song, DEFAULT_PATTERNS, FIELDS};
 
 /// How many of your songs the preview shows, and for how long.
 const PREVIEW_SONGS: usize = 3;
@@ -19,7 +19,8 @@ impl App {
     pub(super) fn song_names_ui(&mut self, ui: &mut egui::Ui) {
         ui.strong("Song names");
         ui.weak(format!(
-            "Each song is named by the first of these its tags fill in, or else by its file's name. Tags: {}.",
+            "Each song is named by the first of these it has every field of, or else by its file's name. \
+             {{file_path}} is the folder it's in, inside the Songs list's default folder. Fields: {}.",
             FIELDS.map(|f| format!("{{{f}}}")).join(", ")
         ));
         let mut patterns: Vec<String> =
@@ -72,19 +73,24 @@ impl App {
 
         ui.add_space(4.0);
         egui::Frame::group(ui.style()).show(ui, |ui| {
-            let example = example_tags();
-            let named = patterns.iter().find_map(|p| render(p, &example)).unwrap_or_else(|| "example song".to_string());
+            let info = example_info();
+            let example = Song {
+                path: Path::new("/music/games/ds3/harbour_lights.mid"),
+                info: Some(&info),
+                folder: Path::new("/music"),
+            };
+            let named = patterns.iter().find_map(|p| render(p, &example)).unwrap_or_else(|| "harbour_lights".to_string());
             ui.horizontal_wrapped(|ui| {
-                ui.weak("A song with every tag:");
+                ui.weak("A song with every field:");
                 ui.label(named);
             });
             let songs = self.preview_songs(ui);
             if !songs.is_empty() {
                 ui.weak("Yours:");
             }
-            let patterns = self.config.title_patterns.clone();
+            let naming = Naming::new(&self.config);
             for song in songs {
-                let name = title_of(&mut self.song_info, patterns.as_deref(), &song);
+                let name = title_of(&mut self.song_info, &naming, &song);
                 ui.label(name).on_hover_text(song.display().to_string());
             }
         });
@@ -115,8 +121,8 @@ impl App {
     }
 }
 
-fn example_tags() -> Tags {
-    Tags {
+fn example_info() -> SongInfo {
+    let tags = Tags {
         title: Some("Harbour Lights".into()),
         artist: Some("The Night Owls".into()),
         album: Some("Late Trains".into()),
@@ -125,5 +131,6 @@ fn example_tags() -> Tags {
         genre: Some("Jazz".into()),
         track: Some("3".into()),
         year: Some("2010".into()),
-    }
+    };
+    SongInfo { length: Some(203.0), bpm: Some(92.0), notes: Some(4210), tags, ..SongInfo::default() }
 }

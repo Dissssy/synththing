@@ -33,6 +33,9 @@ pub struct SongInfo {
     pub details: Vec<(String, String)>,
     /// A MIDI file's note count.
     pub notes: Option<usize>,
+    /// A MIDI file's tempo at its start.
+    #[serde(default)]
+    pub bpm: Option<f64>,
     /// What its tags say it is, for its name (`song_title`).
     #[serde(default)]
     pub tags: Tags,
@@ -306,6 +309,7 @@ fn read_midi(path: &Path) -> Result<SongInfo, String> {
             channels.iter().map(|c| (c + 1).to_string()).collect::<Vec<_>>().join(", ")
         ),
     ));
+    let bpm = list.timing().map(|timing| timing.tempo_at(0.0));
     if let Some(timing) = list.timing() {
         details.push(("Tempo at start".into(), format!("{:.1} bpm", timing.tempo_at(0.0))));
         let (numerator, denominator) = timing.signature_at(0.0);
@@ -319,7 +323,7 @@ fn read_midi(path: &Path) -> Result<SongInfo, String> {
     if !named.is_empty() {
         details.push(("Track names".into(), named.join(", ")));
     }
-    Ok(SongInfo { length: Some(facts.end_time), details, notes: Some(list.note_count()), tags })
+    Ok(SongInfo { length: Some(facts.end_time), details, notes: Some(list.note_count()), bpm, tags })
 }
 
 fn read_audio(path: &Path) -> Result<SongInfo, String> {
@@ -409,7 +413,7 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
             details.push(("Bits per sample".into(), bits.to_string()));
         }
     }
-    Ok(SongInfo { length, details, notes: None, tags: song_tags })
+    Ok(SongInfo { length, details, notes: None, bpm: None, tags: song_tags })
 }
 
 /// What `ffmpeg -i <file>` (with no output) prints about it on stderr: the
@@ -496,7 +500,7 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
         };
         details.push(("Bits per sample".into(), bits.to_string()));
     }
-    Some(SongInfo { length, details, notes: None, tags })
+    Some(SongInfo { length, details, notes: None, bpm: None, tags })
 }
 
 /// "00:03:21.45" -> 201.45 seconds (None for "N/A").

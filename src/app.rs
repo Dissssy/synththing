@@ -55,7 +55,7 @@ use crate::lua_visualizer::{
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
 use crate::song_info::{format_length, SongInfoCache};
-use crate::song_title::{song_title, DEFAULT_PATTERNS};
+use crate::song_title::Naming;
 use crate::updater::{self, Track, UpdateState, Updater};
 use crate::watch::{FolderWatch, Watched};
 use crate::changelog;
@@ -79,19 +79,13 @@ const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 impl App {
     /// The song at `path`'s name, from its tags (Preferences > Songs).
     fn song_title(&mut self, path: &Path) -> String {
-        title_of(&mut self.song_info, self.config.title_patterns.as_deref(), path)
+        title_of(&mut self.song_info, &Naming::new(&self.config), path)
     }
 }
 
-/// The song at `path`'s name: from its tags by `patterns` (the title
-/// patterns, `None` for the defaults), or its file's name.
-fn title_of(cache: &mut SongInfoCache, patterns: Option<&[String]>, path: &Path) -> String {
-    let info = cache.get(path);
-    let tags = info.as_deref().map(|info| &info.tags);
-    match patterns {
-        Some(patterns) => song_title(patterns, tags, path),
-        None => song_title(&DEFAULT_PATTERNS, tags, path),
-    }
+/// The song at `path`'s name, by `naming`.
+fn title_of(cache: &mut SongInfoCache, naming: &Naming, path: &Path) -> String {
+    naming.name(path, cache.get(path).as_deref())
 }
 
 fn listed_song_extensions(config: &Config) -> &'static [&'static str] {
@@ -2428,7 +2422,7 @@ impl App {
         // (Both the names and the trailing widgets read the song info, one
         // after the other.)
         let cache = std::cell::RefCell::new(&mut self.song_info);
-        let patterns = self.config.title_patterns.as_deref();
+        let naming = Naming::new(&self.config);
         let info_open = &mut self.song_info_open;
         let mut publish = None;
         let mut menu = |ui: &mut egui::Ui, path: &Path| {
@@ -2440,7 +2434,7 @@ impl App {
         };
         let clicked = self.browser.ui(
             ui,
-            &mut |path| title_of(&mut cache.borrow_mut(), patterns, path),
+            &mut |path| title_of(&mut cache.borrow_mut(), &naming, path),
             &mut |ui, path| song_info_widgets(ui, &mut cache.borrow_mut(), path, info_open),
             Some(&mut menu),
         );

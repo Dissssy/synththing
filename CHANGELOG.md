@@ -6,7 +6,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Added
 - Select several songs at once in Songs, the way a playlist already allows (Ctrl and Shift, Ctrl+A), and drag them onto a playlist together. The Soundfonts list selects the same way, so several can be removed at once.
-- Songs are named by their tags. Preferences > Songs > Song names holds a list of patterns such as "{title} by {artist}"; the first one whose tags a song has names it, and a song without them keeps its file name. The name shows in the Songs list, playlists, the now-playing bar and the tray. Search matches both the name and the file name, and a Sort button switches the list between the two. Tags are remembered between launches.
+- Songs are named by their tags. Preferences > Songs > Song names holds a list of patterns such as "{title} by {artist}"; the first one a song has every field of names it, and a song without them keeps its file name. Besides tags, a pattern can use {file_name}, {file_extension}, {file_path} (the folder, inside the Songs list's default folder), {length}, and for MIDI files {bpm} and {notes}. The name shows in the Songs list, playlists, the now-playing bar and the tray. Search matches both the name and the file name, and a Sort button switches the list between the two. Tags are remembered between launches.
 
 ### Changed
 - Songs, Soundfonts and the playlist are one kind of list now and work alike: click selects, double-click plays a song, opens a folder or uses a soundfont.
