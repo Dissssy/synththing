@@ -105,6 +105,8 @@ pub(super) struct Mobile {
     toast: Option<(String, Instant)>,
     /// The Preferences section open, if one is (else the list of them).
     pref_section: Option<PrefTab>,
+    /// Editing themes, a level under Preferences > Appearance.
+    editing_themes: bool,
     /// When back was pressed with nothing left to go back from: a second
     /// press while its toast shows leaves (`mobile_back`).
     back_to_leave: Option<Instant>,
@@ -196,12 +198,17 @@ impl App {
     fn mobile_top_bar_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             // In a Preferences section: back to the list of them instead.
-            match self.mobile_state.pref_section.filter(|_| self.mobile_state.page == Page::Preferences) {
+            let state = &mut self.mobile_state;
+            match state.pref_section.filter(|_| state.page == Page::Preferences) {
                 Some(section) => {
                     if ui.add(big_icon_button("arrow-left", 36.0)).on_hover_text("Back").clicked() {
-                        self.mobile_state.pref_section = None;
+                        if state.editing_themes {
+                            state.editing_themes = false;
+                        } else {
+                            state.pref_section = None;
+                        }
                     }
-                    ui.heading(section.title());
+                    ui.heading(if state.editing_themes { "Themes" } else { section.title() });
                 }
                 None => {
                     if ui.add(big_icon_button("list", 36.0)).on_hover_text("Menu").clicked() {
@@ -231,6 +238,8 @@ impl App {
         let state = &mut self.mobile_state;
         if state.drawer_open {
             state.drawer_open = false;
+        } else if state.page == Page::Preferences && state.editing_themes {
+            state.editing_themes = false;
         } else if state.page == Page::Preferences && state.pref_section.is_some() {
             state.pref_section = None;
         } else if state.page == Page::NowPlaying && state.collapsed {
@@ -250,8 +259,20 @@ impl App {
         }
     }
 
+    /// Preferences > Appearance > Edit themes..., from wherever.
+    pub(super) fn open_mobile_themes(&mut self) {
+        let state = &mut self.mobile_state;
+        state.page = Page::Preferences;
+        state.pref_section = Some(PrefTab::Appearance);
+        state.editing_themes = true;
+    }
+
     /// The Preferences page: the sections, each opening in its place.
     fn mobile_preferences_ui(&mut self, ui: &mut egui::Ui) {
+        if self.mobile_state.editing_themes && self.mobile_state.pref_section == Some(PrefTab::Appearance) {
+            self.mobile_themes_ui(ui);
+            return;
+        }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.mobile_state.pref_section {
             Some(section) => {
                 ui.spacing_mut().item_spacing.y = 8.0;
@@ -263,6 +284,7 @@ impl App {
                 for section in PrefTab::available() {
                     if section_row(ui, section).clicked() {
                         self.mobile_state.pref_section = Some(section);
+                        self.mobile_state.editing_themes = false;
                     }
                 }
             }
@@ -571,10 +593,11 @@ impl App {
         if item(ui, "gear", "Preferences") {
             self.mobile_state.page = Page::Preferences;
             self.mobile_state.pref_section = None;
+            self.mobile_state.editing_themes = false;
             close = true;
         }
         if item(ui, "palette", "Themes") {
-            self.themes.open = true;
+            self.open_mobile_themes();
             close = true;
         }
         if item(ui, "chat-text", "Send feedback") {

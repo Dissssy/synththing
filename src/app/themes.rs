@@ -1,7 +1,8 @@
 //! The Themes window (synththing > Themes...): its own OS window, kept on
 //! top, so the app can be clicked around and looked at while themes are
-//! picked and edited. Every change shows at once, everywhere. Also where
-//! the UI scale is set (Ctrl + / Ctrl - / Ctrl 0 work anywhere too).
+//! picked and edited. Every change shows at once, everywhere. (The UI
+//! scale is in Preferences > Appearance; Ctrl + / Ctrl - / Ctrl 0 work
+//! anywhere too.)
 //!
 //! Not a modal, on purpose (like the tour): the point is seeing the app
 //! itself in the theme.
@@ -45,6 +46,15 @@ impl Default for ThemesState {
         }
     }
 }
+
+/// What was clicked in the themes' list or buttons.
+enum ThemeAction {
+    Pick(String),
+    Duplicate,
+    Delete,
+}
+
+const BUILTIN_NOTE: &str = "Built in, so it can't be changed: Duplicate it to make your own from it.";
 
 /// UI scale bounds and step.
 const MIN_SCALE: f32 = 0.75;
@@ -125,41 +135,10 @@ impl App {
     }
 
     fn themes_ui(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
         let current = self.current_theme();
         let builtin = theme::builtins().iter().any(|t| t.name == current.name);
-        let mut pick: Option<String> = None;
-        let mut duplicate = false;
-        let mut delete = false;
+        let mut action = None;
         let mut edited = current.clone();
-
-        // The scale, along the bottom.
-        egui::Panel::bottom("themes_scale").show(ui, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.label("UI scale");
-                let mut scale = self.themes.scale_drag.unwrap_or_else(|| ctx.zoom_factor());
-                let slider = ui.add(
-                    egui::Slider::new(&mut scale, MIN_SCALE..=MAX_SCALE)
-                        .step_by(0.05)
-                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
-                );
-                if slider.dragged() {
-                    self.themes.scale_drag = Some(scale);
-                } else if slider.changed() || slider.drag_stopped() {
-                    self.themes.scale_drag = None;
-                    ctx.set_zoom_factor(scale);
-                }
-                if ui.button("100%").clicked() {
-                    ctx.set_zoom_factor(1.0);
-                }
-                super::info_icon(ui).on_hover_text(
-                    "How big everything is. Ctrl + and Ctrl - change it anywhere in synththing, Ctrl 0 \
-                     goes back to 100%. The visualizer's picture isn't affected.",
-                );
-            });
-            ui.add_space(2.0);
-        });
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             ui.horizontal_top(|ui| {
@@ -172,7 +151,7 @@ impl App {
                             ui.weak("Built in");
                             for t in theme::builtins() {
                                 if ui.selectable_label(t.name == current.name, &t.name).clicked() {
-                                    pick = Some(t.name);
+                                    action = Some(ThemeAction::Pick(t.name));
                                 }
                             }
                             ui.add_space(6.0);
@@ -182,29 +161,15 @@ impl App {
                             }
                             for t in &self.themes.custom {
                                 if ui.selectable_label(t.name == current.name, &t.name).clicked() {
-                                    pick = Some(t.name.clone());
+                                    action = Some(ThemeAction::Pick(t.name.clone()));
                                 }
                             }
                         },
                     );
                     ui.separator();
-                    duplicate = ui
-                        .button("Duplicate")
-                        .on_hover_text(format!("Make your own theme, starting as a copy of {}", current.name))
-                        .clicked();
-                    ui.add_enabled_ui(!builtin, |ui| {
-                        if ui.button("Rename...").clicked() {
-                            self.themes.renaming = Some((current.name.clone(), None));
-                        }
-                        let label = if self.themes.confirm_delete { "Really delete?" } else { "Delete" };
-                        if ui.button(label).clicked() {
-                            if self.themes.confirm_delete {
-                                delete = true;
-                            } else {
-                                self.themes.confirm_delete = true;
-                            }
-                        }
-                    });
+                    if let Some(clicked) = self.theme_buttons_ui(ui, &current, builtin) {
+                        action = Some(clicked);
+                    }
                 });
                 ui.separator();
 
@@ -213,7 +178,7 @@ impl App {
                     egui::ScrollArea::vertical().id_salt("theme_editor").show(ui, |ui| {
                         self.theme_name_ui(ui, &current);
                         if builtin {
-                            ui.weak("Built in, so it can't be changed: Duplicate it to make your own from it.");
+                            ui.weak(BUILTIN_NOTE);
                         }
                         ui.add_space(4.0);
                         ui.add_enabled_ui(!builtin, |ui| theme_editor_ui(ui, &mut edited));
@@ -224,36 +189,150 @@ impl App {
                 });
             });
         });
+        self.finish_theme_edit(ui.ctx(), &current, builtin, action, edited);
+    }
 
-        if let Some(name) = pick {
-            self.pick_theme(&ctx, name);
-        } else if duplicate {
-            let taken = self.theme_names();
-            let copy = Theme { name: theme::copy_name(&current.name, &taken), ..current.clone() };
-            match theme::save_custom(&copy) {
-                Ok(()) => {
-                    let name = copy.name.clone();
-                    self.themes.custom.push(copy);
-                    self.themes.custom.sort_by_key(|t| t.name.to_lowercase());
-                    self.pick_theme(&ctx, name);
+    /// The themes in the mobile layout (Preferences > Appearance > Edit
+    /// themes...): picking and what can be done to the theme along the top,
+    /// the preview along the bottom, and its colors and shapes scrolling
+    /// between.
+    pub(super) fn mobile_themes_ui(&mut self, ui: &mut egui::Ui) {
+        let current = self.current_theme();
+        let builtin = theme::builtins().iter().any(|t| t.name == current.name);
+        let mut action = None;
+        let mut edited = current.clone();
+
+        egui::Panel::top("mobile_themes_bar").show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                egui::ComboBox::from_id_salt("mobile_theme_pick").selected_text(&current.name).show_ui(ui, |ui| {
+                    for t in theme::builtins() {
+                        if ui.selectable_label(t.name == current.name, &t.name).clicked() {
+                            action = Some(ThemeAction::Pick(t.name));
+                        }
+                    }
+                    if !self.themes.custom.is_empty() {
+                        ui.separator();
+                    }
+                    for t in &self.themes.custom {
+                        if ui.selectable_label(t.name == current.name, &t.name).clicked() {
+                            action = Some(ThemeAction::Pick(t.name.clone()));
+                        }
+                    }
+                });
+                if let Some(clicked) = self.theme_buttons_ui(ui, &current, builtin) {
+                    action = Some(clicked);
                 }
-                Err(e) => self.status = format!("Couldn't save the theme: {e:#}"),
+            });
+            if self.themes.renaming.is_some() {
+                self.theme_name_ui(ui, &current);
             }
-        } else if delete {
-            match theme::delete_custom(&current.name) {
+            if builtin {
+                ui.weak(BUILTIN_NOTE);
+            }
+            ui.add_space(4.0);
+        });
+        egui::Panel::bottom("mobile_themes_preview").show(ui, |ui| {
+            ui.add_space(4.0);
+            theme_preview_ui(ui);
+            ui.add_space(4.0);
+        });
+        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("mobile_theme_editor").auto_shrink([false, false]).show(ui, |ui| {
+                ui.add_space(4.0);
+                ui.add_enabled_ui(!builtin, |ui| theme_editor_ui(ui, &mut edited));
+            });
+        });
+        self.finish_theme_edit(ui.ctx(), &current, builtin, action, edited);
+    }
+
+    /// Duplicate, Rename... and Delete, for the selected theme.
+    fn theme_buttons_ui(&mut self, ui: &mut egui::Ui, current: &Theme, builtin: bool) -> Option<ThemeAction> {
+        let mut action = None;
+        if ui
+            .button("Duplicate")
+            .on_hover_text(format!("Make your own theme, starting as a copy of {}", current.name))
+            .clicked()
+        {
+            action = Some(ThemeAction::Duplicate);
+        }
+        ui.add_enabled_ui(!builtin, |ui| {
+            if ui.button("Rename...").clicked() {
+                self.themes.renaming = Some((current.name.clone(), None));
+            }
+            let label = if self.themes.confirm_delete { "Really delete?" } else { "Delete" };
+            if ui.button(label).clicked() {
+                if self.themes.confirm_delete {
+                    action = Some(ThemeAction::Delete);
+                } else {
+                    self.themes.confirm_delete = true;
+                }
+            }
+        });
+        action
+    }
+
+    /// The UI scale's slider (applied when it's let go), and a reset to
+    /// 100% (Preferences > Appearance).
+    pub(super) fn ui_scale_ui(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        ui.horizontal(|ui| {
+            ui.label("UI scale");
+            let mut scale = self.themes.scale_drag.unwrap_or_else(|| ctx.zoom_factor());
+            let slider = ui.add(
+                egui::Slider::new(&mut scale, MIN_SCALE..=MAX_SCALE)
+                    .step_by(0.05)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+            );
+            if slider.dragged() {
+                self.themes.scale_drag = Some(scale);
+            } else if slider.changed() || slider.drag_stopped() {
+                self.themes.scale_drag = None;
+                ctx.set_zoom_factor(scale);
+            }
+            if ui.button("Reset").on_hover_text("Back to 100%").clicked() {
+                ctx.set_zoom_factor(1.0);
+            }
+            super::info_icon(ui).on_hover_text(
+                "How big everything is. Ctrl + and Ctrl - change it anywhere in synththing, Ctrl 0 \
+                 goes back to 100%. The visualizer's picture isn't affected.",
+            );
+        });
+    }
+
+    /// Carry out what was asked of the themes, or put an edit to the
+    /// selected one into effect.
+    fn finish_theme_edit(&mut self, ctx: &egui::Context, current: &Theme, builtin: bool, action: Option<ThemeAction>, edited: Theme) {
+        match action {
+            Some(ThemeAction::Pick(name)) => self.pick_theme(ctx, name),
+            Some(ThemeAction::Duplicate) => {
+                let taken = self.theme_names();
+                let copy = Theme { name: theme::copy_name(&current.name, &taken), ..current.clone() };
+                match theme::save_custom(&copy) {
+                    Ok(()) => {
+                        let name = copy.name.clone();
+                        self.themes.custom.push(copy);
+                        self.themes.custom.sort_by_key(|t| t.name.to_lowercase());
+                        self.pick_theme(ctx, name);
+                    }
+                    Err(e) => self.status = format!("Couldn't save the theme: {e:#}"),
+                }
+            }
+            Some(ThemeAction::Delete) => match theme::delete_custom(&current.name) {
                 Ok(()) => {
                     self.themes.custom.retain(|t| t.name != current.name);
-                    self.pick_theme(&ctx, theme::DEFAULT_THEME.to_string());
+                    self.pick_theme(ctx, theme::DEFAULT_THEME.to_string());
                     self.status = format!("Deleted the theme {}.", current.name);
                 }
                 Err(e) => self.status = format!("Couldn't delete the theme: {e:#}"),
+            },
+            None if edited != *current && !builtin => {
+                edited.apply(ctx);
+                if let Some(slot) = self.themes.custom.iter_mut().find(|t| t.name == current.name) {
+                    *slot = edited;
+                }
+                self.themes.unsaved = Some(Instant::now());
             }
-        } else if edited != current && !builtin {
-            edited.apply(&ctx);
-            if let Some(slot) = self.themes.custom.iter_mut().find(|t| t.name == current.name) {
-                *slot = edited;
-            }
-            self.themes.unsaved = Some(Instant::now());
+            None => {}
         }
     }
 
@@ -340,11 +419,13 @@ fn theme_editor_ui(ui: &mut egui::Ui, theme: &mut Theme) {
         ("Outline", "Around a widget being hovered or pressed", &mut p.widget_outline),
         ("Borders", "Separators, window and widget borders", &mut p.border),
     ];
-    egui::Grid::new("theme_colors").num_columns(4).spacing([10.0, 6.0]).show(ui, |ui| {
+    // Two to a row, or one where there isn't room (a phone).
+    let per_row = if ui.available_width() < 420.0 { 1 } else { 2 };
+    egui::Grid::new("theme_colors").num_columns(2 * per_row).spacing([10.0, 6.0]).show(ui, |ui| {
         for (i, (label, info, color)) in colors.into_iter().enumerate() {
             color_edit_button_srgba(ui, &mut color.0, Alpha::Opaque).on_hover_text(info);
             ui.label(label).on_hover_text(info);
-            if i % 2 == 1 {
+            if i % per_row == per_row - 1 {
                 ui.end_row();
             }
         }

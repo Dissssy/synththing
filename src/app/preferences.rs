@@ -70,7 +70,7 @@ impl PrefTab {
     /// What's in it, in a few words (under its title in the mobile list).
     pub(super) fn summary(self) -> &'static str {
         match self {
-            Self::Appearance => "Theme, size, the seek bar, full screen",
+            Self::Appearance => "Theme, UI scale, the seek bar, full screen",
             Self::Playback => "Audio buffer, what's kept from last time",
             Self::Songs => "Audio files, loading",
             Self::Visualizers => "Script logs",
@@ -129,6 +129,7 @@ impl App {
         match jump {
             PrefJump::Welcome => self.open_welcome(),
             PrefJump::Tour => self.start_tour(),
+            PrefJump::Themes if self.mobile() => self.open_mobile_themes(),
             PrefJump::Themes => self.themes.open = true,
         }
     }
@@ -165,13 +166,14 @@ impl App {
                             }
                         }
                     });
-                    if ui.button("Themes...").on_hover_text("Edit themes, and the UI size").clicked() {
+                    if ui.button("Edit themes...").on_hover_text("Make your own themes").clicked() {
                         jump = Some(PrefJump::Themes);
                     }
                 });
                 if let Some(name) = picked {
                     self.pick_theme(ui.ctx(), name);
                 }
+                self.ui_scale_ui(ui);
                 with_info(
                     ui,
                     "The channel toggles above the visualizer as chips in each channel's color, \
