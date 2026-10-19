@@ -5,7 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
-- An Android app, experimental: `synththing-android-arm64.apk` on each release. A layout made for a phone, with the visualizer on top and the controls under it; songs and soundfonts are imported from the phone; playback goes on in the background, with controls in the notification and on the lock screen; and leaving the app while it plays shrinks the visualizer into a floating window (Preferences > Visualizers turns it off or picks its shape). Scripts' previews come from the Online Library. Updates, the changelog, the log and the credits are pages of the menu, and an update found or installed at launch opens its page. It reads the Online Library without an account: install and update scripts, but no publishing or encores. See docs/ANDROID.md.
+- An Android app, experimental: `synththing-android-arm64.apk` on each release. A layout made for a phone, with the visualizer on top and the controls under it; songs and soundfonts are imported from the phone; playback goes on in the background, with controls in the notification and on the lock screen; and leaving the app while it plays shrinks the visualizer into a floating window (Preferences > Visualizers turns it off or picks its shape). Scripts' previews come from the Online Library, whose list opens a script's details on a page of their own, with back (or Escape) returning to the list. Updates, the changelog, the log and the credits are pages of the menu, and an update found or installed at launch opens its page. It reads the Online Library without an account: install and update scripts, but no publishing or encores. See docs/ANDROID.md.
 - The mobile layout on desktop too (View > Mobile layout), to try it, or for a narrow window.
 - Sign in another device as you, without moving files around: Preferences > Online Library > Sign in another device... shows a QR code and a link, and on the other computer, Sign in with a link... takes the link. The code works once, for 10 minutes, and the server passing it along only ever holds it sealed. The device that showed it says which device signed in (each one's name is set beside the buttons). Server: `POST /api/v1/pair` and the endpoints under it.
 - The Android app can sign in: scan the code from Sign in another device... with the phone's camera (or use Sign in with a link... in the app), and it's you there too, with encores, reports, deleting your uploads and notifications. Publishing stays on the desktop. Server: `GET /pair` (where a link lands outside the app) and `/.well-known/assetlinks.json` (`android_fingerprints` in `server.json`).
@@ -19,6 +19,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Song names are set under Preferences > Appearance. On Android they show on the now-playing screen and in the notification too, and {file_path} is the folder inside the song library.
 
 ### Fixed
+- On Android, the keyboard works in text fields as it does in other apps: autocorrect, predictions and gesture typing.
 - With a very round theme, the seek bar's filled part no longer runs past its handle.
 
 ## 0.9.0 (2026-10-19)

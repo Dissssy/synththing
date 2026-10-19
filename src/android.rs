@@ -6,10 +6,11 @@
 //! What eframe can't do, Java does: the foreground service and media
 //! session that keep music playing with the app in the background and put
 //! it in the notification and on the lock screen, the document picker for
-//! imports, picture-in-picture, and installing updates. Rust calls into
-//! Java through methods on the activity ([`call`]); Java calls back
-//! through the `Native` class's methods, which the `android/` crate
-//! exports and hands to the functions here.
+//! imports, picture-in-picture, installing updates, and the keyboard's
+//! connection to text fields ([`keyboard`]). Rust calls into Java through
+//! methods on the activity ([`call`]); Java calls back through the
+//! `Native` class's methods, which the `android/` crate exports and hands
+//! to the functions here.
 //!
 //! While the app is in the background eframe has no window, so it calls
 //! nothing at all; a thread of our own keeps [`App::tick`] going then, so
@@ -27,6 +28,9 @@ use jni::{JNIEnv, JavaVM};
 
 use crate::app::App;
 use crate::import::{self, Kind};
+
+mod keyboard;
+pub use keyboard::typed;
 
 /// How often the app ticks while in the background.
 const BACKGROUND_TICK: Duration = Duration::from_millis(250);
@@ -101,6 +105,7 @@ impl eframe::App for Shared {
                 *key = egui::Key::Escape;
             }
         }
+        keyboard::before_frame(ctx, raw_input);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -128,6 +133,7 @@ impl eframe::App for Shared {
         if let Some(text) = copied {
             copy_text(&text);
         }
+        keyboard::after_frame(ui.ctx());
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {

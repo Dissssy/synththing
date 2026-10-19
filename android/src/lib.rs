@@ -98,3 +98,19 @@ pub extern "system" fn Java_nl_p51_synththing_Native_openLink<'local>(
         synththing::android::open_link(link.into());
     }
 }
+
+/// `Native.typed(int revision, String text, int selectionStart, int
+/// selectionEnd)`: the keyboard edited the text field (in characters).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_nl_p51_synththing_Native_typed<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    revision: jint,
+    text: JString<'local>,
+    selection_start: jint,
+    selection_end: jint,
+) {
+    let Ok(text) = env.get_string(&text).map(String::from) else { return };
+    let (start, end) = (selection_start.max(0) as usize, selection_end.max(0) as usize);
+    synththing::android::typed(revision, text, start.min(end)..start.max(end));
+}
