@@ -13,6 +13,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Feedback asking for something new is filed as a feature request for the developers to decide on; only bug reports go on to automatic fixes.
 
 ### Fixed
+- A long script path on the Visualizer page no longer stops the page from getting narrower; it's cut short with "...", and hovering it shows all of it.
 - On Linux, the Songs list stopped re-reading its folder over and over just because files in it were read.
 - Right-clicking the tray icon closes the mini player as it brings the main window back, so the two aren't on screen together.
 - The main window and the mini player are never on screen together: left-clicking the tray icon puts the main window away in the tray as the mini player comes up, and bringing the main window back from the taskbar closes the mini player.
