@@ -152,6 +152,8 @@ impl App {
         let mut remember = self.config.remember;
         let mut install_updates = self.config.android_install_updates;
         let mut over_cutout = self.config.fullscreen_over_cutout;
+        let mut mini_player = self.config.mini_player.unwrap_or(true);
+        let mut mini_player_shape = self.config.mini_player_shape;
         let mut jump = None;
         match tab {
             PrefTab::Appearance => {
@@ -324,6 +326,29 @@ impl App {
                      single messages (log_app).",
                     |ui| ui.checkbox(&mut script_log, "Copy script logs to the app log"),
                 );
+                if cfg!(target_os = "android") {
+                    with_info(
+                        ui,
+                        "Leaving synththing while a song plays (home, or switching apps) shrinks it \
+                         into a small floating window of the visualizer, with play, pause and skip. \
+                         Drag it around, pinch to resize it, or swipe it away. Off: it plays on in \
+                         the background, with only the notification.",
+                        |ui| ui.checkbox(&mut mini_player, "Mini player when leaving the app"),
+                    );
+                    ui.add_enabled_ui(mini_player, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Mini player shape");
+                            egui::ComboBox::from_id_salt("mini_player_shape").selected_text(mini_player_shape.name()).show_ui(
+                                ui,
+                                |ui| {
+                                    for shape in crate::config::MiniPlayerShape::ALL {
+                                        ui.selectable_value(&mut mini_player_shape, shape, shape.name());
+                                    }
+                                },
+                            );
+                        });
+                    });
+                }
             }
             PrefTab::Library => self.library_preferences_ui(ui),
             PrefTab::Updates => {
@@ -399,7 +424,11 @@ impl App {
             || remember != self.config.remember
             || install_updates != self.config.android_install_updates
             || over_cutout != self.config.fullscreen_over_cutout
+            || mini_player != self.config.mini_player.unwrap_or(true)
+            || mini_player_shape != self.config.mini_player_shape
         {
+            self.config.mini_player = (!mini_player).then_some(false);
+            self.config.mini_player_shape = mini_player_shape;
             self.config.remember = remember;
             self.config.android_install_updates = install_updates;
             self.config.fullscreen_over_cutout = over_cutout;

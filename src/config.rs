@@ -131,6 +131,13 @@ pub struct Config {
     /// or camera hole too (off: that strip is black).
     #[serde(default)]
     pub fullscreen_over_cutout: bool,
+    /// On Android: leaving the app while a song plays shrinks it into a
+    /// floating window of the visualizer, the mini player (`None`: on).
+    #[serde(default)]
+    pub mini_player: Option<bool>,
+    /// That window's shape.
+    #[serde(default)]
+    pub mini_player_shape: MiniPlayerShape,
     /// A release version the user chose to skip: the startup check doesn't
     /// bring it up again (a manual check still shows it).
     #[serde(default)]
@@ -176,6 +183,28 @@ pub struct Config {
 
 /// Which of the last session's settings the app starts with (Preferences >
 /// Playback): everything but the speed unless changed.
+/// The shape of Android's mini player (picture-in-picture): Android sizes
+/// it, and lets the user resize it, in this shape.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MiniPlayerShape {
+    #[default]
+    Square,
+    Wide,
+    Tall,
+}
+
+impl MiniPlayerShape {
+    pub const ALL: [Self; 3] = [Self::Square, Self::Wide, Self::Tall];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Square => "Square",
+            Self::Wide => "Wide (16:9)",
+            Self::Tall => "Tall (9:16)",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Remember {

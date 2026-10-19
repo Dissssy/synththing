@@ -1330,21 +1330,7 @@ impl App {
         let accent = self.transport_accent(ui.ctx(), view);
         ui.horizontal(|ui| {
             let mut position = view.position;
-            let response = ui
-                .scope(|ui| {
-                    if let Some(accent) = accent {
-                        let visuals = ui.visuals_mut();
-                        visuals.selection.bg_fill = accent;
-                        // (The handle ringed in black or white, whichever stands out on it.)
-                        for state in [&mut visuals.widgets.inactive, &mut visuals.widgets.hovered, &mut visuals.widgets.active] {
-                            state.bg_fill = accent;
-                            state.fg_stroke = egui::Stroke::new(1.5, on_color(accent));
-                        }
-                    }
-                    ui.add(egui::Slider::new(&mut position, 0.0..=view.length.max(0.001)).show_value(false).trailing_fill(true))
-                })
-                .inner;
-            if response.changed() {
+            if seek_bar_ui(ui, &mut position, view.length, accent).changed() {
                 self.send(AudioCommand::Seek(position));
             }
             ui.monospace(format!("{} / {}", fmt_time(view.position), fmt_time(view.length)));
@@ -4019,6 +4005,30 @@ fn icon_button(name: &str) -> egui::Button<'static> {
 /// As `icon_button`, its icon in `color`.
 fn colored_icon_button(name: &str, color: egui::Color32) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(icon(name)).size(16.0).color(color)).min_size(egui::vec2(28.0, 24.0))
+}
+
+/// The seek bar over a song `length` seconds long, in `accent` (the
+/// tempo's color) when there is one.
+fn seek_bar_ui(ui: &mut egui::Ui, position: &mut f64, length: f64, accent: Option<egui::Color32>) -> egui::Response {
+    ui.scope(|ui| {
+        let rail_radius = (ui.spacing().slider_rail_height / 2.0) as u8;
+        let visuals = ui.visuals_mut();
+        // egui runs the filled part past the handle by the rail's corner
+        // radius, which a very round theme makes far longer than the rail
+        // can be round: no rounder than the rail.
+        let corners = &mut visuals.widgets.inactive.corner_radius;
+        *corners = egui::CornerRadius::same(corners.nw.min(rail_radius));
+        if let Some(accent) = accent {
+            visuals.selection.bg_fill = accent;
+            // (The handle ringed in black or white, whichever stands out on it.)
+            for state in [&mut visuals.widgets.inactive, &mut visuals.widgets.hovered, &mut visuals.widgets.active] {
+                state.bg_fill = accent;
+                state.fg_stroke = egui::Stroke::new(1.5, on_color(accent));
+            }
+        }
+        ui.add(egui::Slider::new(position, 0.0..=length.max(0.001)).show_value(false).trailing_fill(true))
+    })
+    .inner
 }
 
 /// The accent color for a tempo: slow songs blue, then cyan, green, yellow

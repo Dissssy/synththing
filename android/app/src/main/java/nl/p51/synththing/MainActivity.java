@@ -56,6 +56,7 @@ public class MainActivity extends NativeActivity {
     private String pickDir;
 
     private volatile boolean pictureInPictureAllowed;
+    private volatile Rational pictureInPictureAspect = new Rational(1, 1);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -314,11 +315,10 @@ public class MainActivity extends NativeActivity {
      * From Rust: whether leaving the app should shrink it into a floating
      * window (while something's playing).
      */
-    public void setPictureInPictureAllowed(boolean allowed) {
+    public void setPictureInPictureAllowed(boolean allowed, int width, int height) {
         pictureInPictureAllowed = allowed;
-        if (Build.VERSION.SDK_INT >= 31) {
-            runOnUiThread(this::updatePictureInPicture);
-        }
+        pictureInPictureAspect = new Rational(width, height);
+        runOnUiThread(this::updatePictureInPicture);
     }
 
     private void updatePictureInPicture() {
@@ -331,7 +331,7 @@ public class MainActivity extends NativeActivity {
 
     private PictureInPictureParams pictureInPictureParams() {
         PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder()
-                .setAspectRatio(new Rational(1, 1))
+                .setAspectRatio(pictureInPictureAspect)
                 .setActions(pictureInPictureActions());
         if (Build.VERSION.SDK_INT >= 31) {
             builder.setAutoEnterEnabled(pictureInPictureAllowed);
@@ -367,6 +367,20 @@ public class MainActivity extends NativeActivity {
             } catch (Exception e) {
                 Log.w(TAG, "picture-in-picture", e);
             }
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // In picture-in-picture the activity is paused but on screen, and
+        // the native side doesn't draw while paused (winit only redraws a
+        // resumed app): the floating window would show the last frame,
+        // squeezed. Resumed again, it draws the visualizer at the window's
+        // size. (Back to full size or closed, Android resumes or stops it
+        // as usual.)
+        if (isInPictureInPictureMode()) {
+            super.onResume();
         }
     }
 

@@ -96,7 +96,7 @@ Rendered by the server on each upload and each new version, through a queue (one
 - The first frame with anything on it is kept as the still straight away, so a script that stalls (stopped at the time limit) or breaks later still has one. A script that never draws anything has no preview, and the app says so.
 - Stored as a PNG sprite sheet (8 frames to a row) plus the still PNG, per version. The app animates the sheet by drawing one cell at a time; a web page can do the same with CSS. Only the newest version's is made; asking for a version without one gets the newest earlier one's.
 - Before an upload is taken, the server checks it runs on its version (`preview --check`: it compiles and plays a few seconds without an error), and refuses it with the error if not.
-- The app's script picker shows previews too: installed scripts keep the server's, and any other script gets one made by the app the first time it's looked at (cached by its source's SHA-256).
+- The app's script picker shows previews too: installed scripts keep the server's, and any other script gets one made by the app the first time it's looked at (cached by its source's SHA-256). Android can't make previews (no second process), and has only bundled scripts and ones from the Online Library, all on the official server: it asks the servers for the preview of the same source by its SHA-256 (`/api/v1/previews/{sha256}/...`).
 
 ## Encores and reports
 
@@ -174,6 +174,8 @@ GET  /api/v1/scripts/{id}                 details, versions, author ID and names
 GET  /api/v1/scripts/{id}/source          ?version=  (signed by the server)
 GET  /api/v1/scripts/{id}/preview.png     the still
 GET  /api/v1/scripts/{id}/preview-sheet.png
+GET  /api/v1/previews/{sha256}/preview.png  the still of the version whose source has that SHA-256
+GET  /api/v1/previews/{sha256}/preview-sheet.png
 POST /api/v1/scripts                      upload
 POST /api/v1/scripts/{id}/versions        new version (owner)
 DELETE /api/v1/scripts/{id}               owner or admin

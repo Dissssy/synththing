@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, AtomExt as _};
 
 use super::preferences::PrefTab;
-use super::{fmt_time, icon, on_color, palette_color, status_color, status_outcome, App};
+use super::{fmt_time, icon, palette_color, status_color, status_outcome, App};
 use crate::audio::{AudioCommand, PlaybackShared};
 use crate::engine::EngineView;
 use crate::lua_visualizer;
@@ -96,6 +96,10 @@ pub(super) struct Mobile {
     /// What the media session was last told, and when.
     #[cfg(target_os = "android")]
     told: Option<(crate::android::Playback, std::time::Instant)>,
+    /// What picture-in-picture was last set to: whether leaving goes into
+    /// it, and its shape.
+    #[cfg(target_os = "android")]
+    picture_in_picture: Option<(bool, crate::config::MiniPlayerShape)>,
     /// Audio files just imported with audio files turned off: whether to
     /// turn them on (`audio_import_ui`).
     audio_import: Option<Vec<std::path::PathBuf>>,
@@ -403,18 +407,9 @@ impl App {
         let mut position = view.position;
         let changed = ui
             .scope(|ui| {
-                if let Some(accent) = accent {
-                    let visuals = ui.visuals_mut();
-                    visuals.selection.bg_fill = accent;
-                    for state in [&mut visuals.widgets.inactive, &mut visuals.widgets.hovered, &mut visuals.widgets.active] {
-                        state.bg_fill = accent;
-                        state.fg_stroke = egui::Stroke::new(1.5, on_color(accent));
-                    }
-                }
                 ui.spacing_mut().slider_width = ui.available_width();
                 ui.spacing_mut().interact_size.y = 28.0;
-                ui.add(egui::Slider::new(&mut position, 0.0..=view.length.max(0.001)).show_value(false).trailing_fill(true))
-                    .changed()
+                super::seek_bar_ui(ui, &mut position, view.length, accent).changed()
             })
             .inner;
         if changed {
@@ -741,11 +736,13 @@ impl App {
                     || (playback.position_ms - expected).abs() > 1500
             }
         };
+        // Leaving the app goes into the mini player while a song plays.
+        let pip = (playback.playing && self.config.mini_player.unwrap_or(true), self.config.mini_player_shape);
+        if self.mobile_state.picture_in_picture != Some(pip) {
+            android::set_picture_in_picture_allowed(pip.0, pip.1);
+            self.mobile_state.picture_in_picture = Some(pip);
+        }
         if stale && (has_song || self.mobile_state.told.is_some()) {
-            let allow_pip = playback.playing;
-            if self.mobile_state.told.as_ref().is_none_or(|(told, _)| told.playing != allow_pip) {
-                android::set_picture_in_picture_allowed(allow_pip);
-            }
             android::set_playback(&playback);
             self.mobile_state.told = Some((playback, std::time::Instant::now()));
         }

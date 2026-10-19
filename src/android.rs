@@ -385,11 +385,23 @@ pub fn picture_in_picture() -> bool {
     PICTURE_IN_PICTURE.load(Ordering::Relaxed)
 }
 
-/// Whether picture-in-picture should be offered (something's playing):
-/// leaving the app then shrinks it into the floating window.
-pub fn set_picture_in_picture_allowed(allowed: bool) {
+/// Whether picture-in-picture should be offered (something's playing and
+/// the mini player is on): leaving the app then shrinks it into the
+/// floating window, in `shape`.
+pub fn set_picture_in_picture_allowed(allowed: bool, shape: crate::config::MiniPlayerShape) {
+    use crate::config::MiniPlayerShape;
+    let aspect = match shape {
+        MiniPlayerShape::Square => (1, 1),
+        MiniPlayerShape::Wide => (16, 9),
+        MiniPlayerShape::Tall => (9, 16),
+    };
     call("allowing picture-in-picture", |env, activity| {
-        env.call_method(activity, "setPictureInPictureAllowed", "(Z)V", &[JValue::Bool(allowed.into())])?;
+        env.call_method(
+            activity,
+            "setPictureInPictureAllowed",
+            "(ZII)V",
+            &[JValue::Bool(allowed.into()), JValue::Int(aspect.0), JValue::Int(aspect.1)],
+        )?;
         Ok(())
     });
 }
