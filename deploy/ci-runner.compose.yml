@@ -1,0 +1,47 @@
+# The self-hosted GitHub Actions runner the RUNNER repository variable names
+# (see .github/workflows/ci.yml), pasted into Portainer as its own stack.
+# ACCESS_TOKEN is set in the stack's environment variables, never here: a
+# fine-grained token for Dissssy/synththing with only Administration: Read
+# and write, which lets the container register itself on every start.
+# Set RUNNER to the label below.
+#
+# Every volume caches downloads or builds between runs, so the runner skips
+# the GitHub cache (rust-cache, setup-gradle's cache) GitHub's runners use.
+# Wiping one is always safe, it just refills on the next run.
+services:
+  github-runner:
+    image: myoung34/github-runner:ubuntu-noble
+    restart: always
+    environment:
+      RUNNER_SCOPE: repo
+      REPO_URL: https://github.com/Dissssy/synththing
+      ACCESS_TOKEN: ${ACCESS_TOKEN}
+      RUNNER_NAME: ethan-docker-synththing
+      LABELS: synththing-runner
+      RUNNER_WORKDIR: /_work
+      # Builds go here instead of the checkout's target/ (which checkout
+      # wipes), so each build only redoes what changed.
+      CARGO_TARGET_DIR: /root/target
+      # Where android-actions/setup-android installs the SDK and NDK.
+      ANDROID_HOME: /root/android-sdk
+    volumes:
+      # rustup and its toolchains and targets
+      - rustup:/root/.rustup
+      # cargo's registry, git checkouts and installed tools (cargo-ndk)
+      - cargo:/root/.cargo
+      # every build's output
+      - target:/root/target
+      # the Android SDK, NDK and licences
+      - android-sdk:/root/android-sdk
+      # Gradle's dependencies, the Android Gradle plugin and Gradle itself
+      - gradle:/root/.gradle
+      # JDKs from setup-java
+      - toolcache:/opt/hostedtoolcache
+
+volumes:
+  rustup:
+  cargo:
+  target:
+  android-sdk:
+  gradle:
+  toolcache:

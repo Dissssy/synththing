@@ -4,10 +4,10 @@
 #
 # The Linux jobs here and in test-builds.yml and branch-cleanup.yml run on
 # the runner the RUNNER repository variable names (Settings > Secrets and
-# variables > Actions > Variables), GitHub's ubuntu-latest without it. It
-# needs git, gh, and apt with passwordless sudo. Pull requests from forks
-# always stay on GitHub's runners: this repository is public, and a fork's
-# code shouldn't run on a machine of ours. The Windows jobs, and the Linux
+# variables > Actions > Variables), GitHub's ubuntu-latest without it. The
+# runner is deploy/ci-runner.compose.yml. Pull requests from forks always
+# stay on GitHub's runners: this repository is public, and a fork's code
+# shouldn't run on a machine of ours. The Windows jobs, and the Linux
 # builds pinned to ubuntu-22.04 for their glibc (release.yml,
 # test-builds.yml), stay on GitHub's runners.
 name: CI
@@ -43,7 +43,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # The self-hosted runner keeps its builds on volumes instead.
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
 
       - name: System libraries
         run: |
