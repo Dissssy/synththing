@@ -355,7 +355,7 @@ fn ranked_matches(candidates: &[(String, PathBuf)], query: &str) -> Vec<Entry> {
 /// `haystack`, this catches concatenated names like "ChronoTrigger/Corridor..."
 /// that contain no literal space. Returns `None` if any term fails to match,
 /// otherwise a score where higher is better.
-fn fuzzy_score(haystack: &str, needle: &str) -> Option<i32> {
+pub(crate) fn fuzzy_score(haystack: &str, needle: &str) -> Option<i32> {
     let needle = needle.trim();
     if needle.is_empty() {
         return Some(0);

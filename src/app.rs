@@ -28,6 +28,7 @@ mod themes;
 mod tray_panel;
 mod tour;
 mod welcome;
+mod youtube;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -125,6 +126,7 @@ pub struct App {
     config: Config,
     /// Always-visible song file browser. Double-clicking a song plays it.
     browser: FileBrowser,
+    youtube: youtube::YoutubeState,
     active_sf: Option<usize>,
     /// Selected rows of the Soundfonts list.
     soundfont_selection: Selection,
@@ -448,6 +450,7 @@ impl App {
             shared,
             config,
             browser,
+            youtube: youtube::YoutubeState::new(),
             active_sf: None,
             soundfont_selection: Selection::default(),
             tap,
@@ -2387,6 +2390,7 @@ impl App {
 
     fn songs_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            if self.config.youtube_experimental && ui.button("Find music online...").clicked() { self.youtube.open = true; }
             if ui
                 .button("Set as default")
                 .on_hover_text("Open the song browser in this folder from now on")
@@ -3015,6 +3019,7 @@ impl App {
         let mut separate = self.config.separate_fullscreen_layout;
         let mut expiry = self.config.preload_expiry_secs.unwrap_or(DEFAULT_PRELOAD_EXPIRY_SECS);
         let mut hover_preload = self.config.preload_on_hover;
+        let mut youtube_experimental = self.config.youtube_experimental;
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
         let mut canary = self.config.canary_updates;
         let mut close_to_tray = self.config.close_to_tray.unwrap_or(false);
@@ -3209,6 +3214,7 @@ impl App {
                             PrefTab::Library => self.library_preferences_ui(ui),
                             PrefTab::Experimental => {
                                 ui.weak("Newer features that might change or go away.");
+                                ui.checkbox(&mut youtube_experimental, "Enable YouTube music search (requires yt-dlp on PATH)");
                                 with_info(
                                     ui,
                                     "Start loading a song once the pointer rests on it in Songs or a playlist, \
@@ -3250,6 +3256,7 @@ impl App {
         let mut changed = false;
         let expiry = Some(expiry).filter(|&s| s != DEFAULT_PRELOAD_EXPIRY_SECS);
         if expiry != self.config.preload_expiry_secs
+            || youtube_experimental != self.config.youtube_experimental
             || hover_preload != self.config.preload_on_hover
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
             || canary != self.config.canary_updates
@@ -3284,6 +3291,7 @@ impl App {
             }
             self.config.preload_expiry_secs = expiry;
             self.config.preload_on_hover = hover_preload;
+            self.config.youtube_experimental = youtube_experimental;
             changed = true;
         }
         // (A layout preference change saves the config itself, below.)
@@ -3587,6 +3595,7 @@ impl eframe::App for App {
             self.dock_ui(ui, &shared);
             self.autosave_layout(&ctx);
             self.preferences_ui(&ctx);
+            if self.config.youtube_experimental { self.youtube_ui(&ctx); }
             self.updates_ui(&ctx);
             self.log_ui(&ctx);
             self.rename_ui(&ctx);

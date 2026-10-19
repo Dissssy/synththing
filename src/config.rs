@@ -28,6 +28,15 @@ pub struct Config {
     /// the working directory.
     #[serde(default)]
     pub browse_dir: Option<PathBuf>,
+    /// Experimental YouTube search/download UI (opt-in).
+    #[serde(default)]
+    pub youtube_experimental: bool,
+    /// Optional destination for downloads from YouTube.
+    #[serde(default)]
+    pub youtube_download_dir: Option<PathBuf>,
+    /// Optional Firefox-compatible browser profile for yt-dlp cookies.
+    #[serde(default)]
+    pub youtube_cookie_profile: Option<PathBuf>,
     /// The dock layout, which sections are open and how they're arranged.
     /// Remembered so the app reopens the way you left it; `None` (first
     /// launch) means `layout::default_layout()`.
