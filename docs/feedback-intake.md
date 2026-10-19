@@ -43,9 +43,9 @@ Take the batch as a whole: first group the notes that are about the same thing, 
      -d '{"feedback": [12, 13, 14]}' https://synththing.p51.nl/api/v1/intake/taken
    ```
    Only after filing: notes not marked come back next hour.
-2. **Hand the coordinator what's new.** Send the project's coordinator session (`get_channel_session_id`, then `send_message`) one message listing each issue opened or commented on, with its number, title, link, whether it's a `bug` or an `enhancement`, and a line on what it's about. Bugs may get a thread working on a fix. Feature requests get no work until a developer approves them, so say so for each.
+2. **Hand the coordinator what's new.** Send the project's coordinator session (`get_channel_session_id`, then `send_message`) one message listing each issue opened or commented on, with its number, title, link, whether it's a `bug` or an `enhancement`, and a line on what it's about. Bugs may get a thread working on a fix. Feature requests get no work until a developer approves them, so say so for each. Two kinds of bug get no work either, and you say so for them too: one labelled `needs-decision`, and one whose fix PR was closed without being merged (it's linked from the issue). Those wait until a developer says go (docs/feedback-fixes.md).
 3. **Report** in this thread in a few lines, with the links. If more than 20 notes were waiting, collect again (from the top) before finishing.
 
 ## Not yet
 
-Intake only files feedback. It doesn't push code, open pull requests, run workflows, close or edit others' issues, or mark feedback done on the server (an admin does that: `synththing admin feedback-done 12 --note "#34"`). Fixes start in threads the coordinator starts, for bugs only, each reviewed by a person: merges are never automatic.
+Intake only files feedback. It doesn't push code, open pull requests, run workflows, close or edit others' issues, or mark feedback done on the server (an admin does that: `synththing admin feedback-done 12 --note "#34"`). Fixes start in threads the coordinator starts, for bugs only, each reviewed by a person: merges are never automatic. How those threads work is in docs/feedback-fixes.md.
