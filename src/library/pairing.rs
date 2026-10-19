@@ -68,9 +68,11 @@ impl Link {
         format!("{}/pair#{}.{}", self.server, self.id, hex(&self.secret))
     }
 
-    /// A link as pasted (spaces around it are fine).
+    /// A link as pasted (spaces around it are fine), or as the Android app
+    /// is opened with it from the server's page (`synththing:` before it).
     pub fn parse(text: &str) -> Option<Self> {
-        let (server, rest) = text.trim().split_once("/pair#")?;
+        let text = text.trim();
+        let (server, rest) = text.strip_prefix("synththing:").unwrap_or(text).split_once("/pair#")?;
         let (id, secret) = rest.split_once('.')?;
         let secret = <[u8; 32]>::try_from(unhex(secret)?).ok()?;
         if id.is_empty() || !id.chars().all(|c| c.is_ascii_hexdigit()) || !server.starts_with("http") {
@@ -107,7 +109,8 @@ mod tests {
     #[test]
     fn links_round_trip() {
         let link = Link { server: "https://example.org".into(), id: "ab12".into(), secret: [7; 32] };
-        assert_eq!(Link::parse(&format!("  {}\n", link.url())), Some(link));
+        assert_eq!(Link::parse(&format!("  {}\n", link.url())), Some(link.clone()));
+        assert_eq!(Link::parse(&format!("synththing:{}", link.url())), Some(link));
         assert_eq!(Link::parse("https://example.org/pair#ab12"), None);
         assert_eq!(Link::parse("https://example.org/pair#zz.0707"), None);
         assert_eq!(Link::parse("#k3f9q2xa"), None);

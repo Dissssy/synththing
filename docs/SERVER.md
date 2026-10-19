@@ -36,6 +36,7 @@ Every device signed in as someone holds the same key: signing one in copies it t
 - A signed-in app exports the identity (unsealed, with its rotation records), seals it with ChaCha20-Poly1305 under a random 32-byte secret, and parks it on the authority (`POST /api/v1/pair`, signed). It shows `<server>/pair#<id>.<secret>` as a QR code and a link. The secret is after the `#`, which browsers never send, so the server only ever holds the sealed copy.
 - The other device takes it (`POST /api/v1/pair/{id}/take`, unsigned, with its name from `device.json`), opens it with the secret and saves the key. A handoff can be taken once and waits 10 minutes; they're kept in memory only, at most 5 per key.
 - The app that parked it asks whether it's been taken (`POST /api/v1/pair/{id}`, signed by the same key) and shows the device's name.
+- Outside the app, a link lands on `GET /pair`: a page whose Open in synththing button hands the link (still with its `#`) to the Android app as `synththing:<link>`. With `android_fingerprints` in `server.json`, `/.well-known/assetlinks.json` lets Android open the official server's links in the app directly.
 - A rotation (or a recovery) signs every other device out: servers refuse the old key once it's applied.
 
 ### Server modes

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use tiny_http::Request;
 
 use super::moderation::refuse_banned;
-use super::{error, json, now, read_body_or, signer, Reply, State};
+use super::{error, header, json, now, read_body_or, signer, Reply, State};
 use crate::library::pairing::{Park, PairStatus, Parked, Take, MAX_DEVICE_NAME, MAX_SEALED, PAIR_SECONDS};
 
 /// Handoffs one key may have parked at once.
@@ -106,3 +106,57 @@ pub(super) fn status(state: &State, request: &mut Request, id: &str) -> Reply {
         None => error(404, "that sign-in code has expired"),
     }
 }
+
+/// The Android app's package, for `asset_links`.
+const ANDROID_PACKAGE: &str = "nl.p51.synththing";
+
+/// `GET /pair`: where a sign-in link lands outside the app (a phone
+/// without synththing, or one that doesn't open the link in it). The code
+/// stays in the address's `#`, which never reaches the server; the page's
+/// button hands it to the app.
+pub(super) fn page() -> Reply {
+    tiny_http::Response::from_string(PAGE).with_header(header("Content-Type", "text/html; charset=utf-8"))
+}
+
+const PAGE: &str = r##"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in to synththing</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 30em; margin: 3em auto; padding: 0 1em; line-height: 1.5; }
+a.button { display: inline-block; padding: 0.6em 1.2em; border-radius: 0.4em; background: #6b5bd6; color: white; text-decoration: none; }
+code { word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>Sign in to synththing</h1>
+<p>This is a sign-in code from another device of yours. It works once, for 10 minutes.</p>
+<p><a class="button" id="open" href="#">Open in synththing</a></p>
+<p>On a computer, choose <b>Sign in with a link...</b> under Preferences &gt; Online Library and paste this page's address.</p>
+<p>No synththing yet? <a href="https://github.com/Dissssy/synththing/releases">Get it from GitHub</a>.</p>
+<script>document.getElementById("open").href = "synththing:" + location.href;</script>
+</body>
+</html>
+"##;
+
+/// `GET /.well-known/assetlinks.json`: the Android app may open this
+/// server's links (`android_fingerprints` in `server.json`).
+pub(super) fn asset_links(state: &State) -> Reply {
+    if state.config.android_fingerprints.is_empty() {
+        return error(404, "no app opens this server's links");
+    }
+    json(
+        200,
+        &serde_json::json!([{
+            "relation": ["delegate_permission/common.handle_all_urls"],
+            "target": {
+                "namespace": "android_app",
+                "package_name": ANDROID_PACKAGE,
+                "sha256_cert_fingerprints": state.config.android_fingerprints,
+            },
+        }]),
+    )
+}
+

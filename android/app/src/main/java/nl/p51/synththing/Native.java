@@ -25,4 +25,7 @@ final class Native {
 
     /** The app went into picture-in-picture, or came out of it. */
     static native void pictureInPicture(boolean on);
+
+    /** The app was opened with a link (a sign-in code). */
+    static native void openLink(String link);
 }

@@ -42,10 +42,11 @@ use crate::library::{
 };
 use crate::lua_visualizer;
 
-/// The Android app only reads the library: it browses, installs and
-/// updates, but has no identity, so it never publishes, encores, reports,
-/// deletes or moderates (nothing it does needs an account on a server).
-pub(super) const READ_ONLY: bool = cfg!(target_os = "android");
+/// Publishing (scripts, remixes, songs) and moderating are for the desktop
+/// app: the Android app has no script editor, and imports songs rather
+/// than browsing them. Signed in (`App::can_sign`), it encores, reports
+/// and deletes its own uploads like the desktop.
+pub(super) const PUBLISHING: bool = !cfg!(target_os = "android");
 
 /// Sort orders, as the API names them and as shown.
 const SORTS: [(&str, &str); 2] = [("new", "Newest"), ("top", "Most encores")];
@@ -1123,7 +1124,7 @@ impl App {
                         }
                     }
                 }
-                if !READ_ONLY
+                if PUBLISHING
                     && self.moderation.is_admin_anywhere()
                     && ui.button("Moderation").on_hover_text("Reports, bans and admins, on the servers you moderate").clicked()
                 {
@@ -1375,6 +1376,7 @@ impl App {
     /// and what can be done with it.
     fn library_details_ui(&mut self, ui: &mut egui::Ui, servers: &[String], act: &mut LibraryActions) {
         let my_id = self.library.my_id();
+        let can_sign = self.can_sign();
         let official_id = library::official_id();
         let Some((server, id)) = self.library.selected.clone() else {
             ui.weak(if self.library.songs { "Pick a song to see more." } else { "Pick a script to see more." });
@@ -1447,7 +1449,7 @@ impl App {
                     }
                 }
             }
-            if !READ_ONLY && s.author_id.is_some() && s.author_id == my_id {
+            if s.author_id.is_some() && s.author_id == my_id {
                 let confirming = self.library.confirm_delete.as_ref() == Some(&(server.clone(), id.clone()));
                 let label = if confirming { "Click again to delete it" } else { "Delete" };
                 if ui
@@ -1470,7 +1472,7 @@ impl App {
         let mine = s.author_id.is_some() && s.author_id == my_id;
         ui.horizontal_wrapped(|ui| {
             let count = format!("{} encore{}", s.encores, if s.encores == 1 { "" } else { "s" });
-            if mine || READ_ONLY {
+            if mine || !can_sign {
                 ui.weak(count);
                 return;
             }
@@ -1709,7 +1711,7 @@ impl App {
                     self.start_update(path.clone());
                 }
                 let servers = !self.config.library.enabled_servers().is_empty();
-                if !READ_ONLY
+                if PUBLISHING
                     && ui
                         .add_enabled(servers, egui::Button::new("Publish remix..."))
                         .on_hover_text(format!("Share your take on \"{}\": it's credited as the original", installed.name))
@@ -1719,7 +1721,7 @@ impl App {
                     self.open_publish(path, true);
                 }
             }
-            _ if READ_ONLY => {}
+            _ if !PUBLISHING => {}
             _ => {
                 let servers = !self.config.library.enabled_servers().is_empty();
                 if ui
@@ -2277,9 +2279,16 @@ impl App {
         self.library.identity_message = Some(message.to_string());
     }
 
+    /// Whether signed things (encores, reports) can be done here: always on
+    /// the desktop, which makes an identity when one's first needed; on
+    /// Android, once it's signed in.
+    pub(super) fn can_sign(&self) -> bool {
+        PUBLISHING || self.library.identity.is_some()
+    }
+
     pub(super) fn ensure_identity(&mut self) -> Result<Identity, String> {
-        if READ_ONLY {
-            return Err("this app only reads the library".to_string());
+        if !PUBLISHING && self.library.identity.is_none() {
+            return Err("sign in first: Preferences > Online Library > Sign in with a link...".to_string());
         }
         if self.library.identity.is_none() {
             // A key file that's there but couldn't be read (kept differently
@@ -2391,11 +2400,9 @@ impl App {
             }
         }
 
-        if !READ_ONLY {
-            ui.add_space(6.0);
-            ui.strong("Your identity");
-            self.identity_ui(ui);
-        }
+        ui.add_space(6.0);
+        ui.strong("Your identity");
+        self.identity_ui(ui);
     }
 
     /// The identity: its ID, made on request; export and import.
@@ -2416,19 +2423,28 @@ impl App {
                     );
                 });
             }
+            None if !PUBLISHING => {
+                ui.weak("Not signed in: Sign in with a link... takes the link a signed-in device shows.");
+            }
             None => {
                 ui.weak("None yet: one's made the first time you publish signed.");
             }
         }
-        ui.horizontal(|ui| {
-            ui.label("Passphrase");
-            ui.add(egui::TextEdit::singleline(&mut lib.passphrase).password(true).desired_width(160.0))
-                .on_hover_text("Seals an exported identity (optional, but wise), or opens a sealed one being imported.");
-        });
         let mut export = false;
         let mut import = false;
         let mut make = false;
+        // (Identity files are for the desktop: Android signs in with a link.)
+        if PUBLISHING {
+            ui.horizontal(|ui| {
+                ui.label("Passphrase");
+                ui.add(egui::TextEdit::singleline(&mut lib.passphrase).password(true).desired_width(160.0))
+                    .on_hover_text("Seals an exported identity (optional, but wise), or opens a sealed one being imported.");
+            });
+        }
         ui.horizontal(|ui| {
+            if !PUBLISHING {
+                return;
+            }
             if lib.identity.is_none() {
                 make = ui.button("Make one now").clicked();
             }

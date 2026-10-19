@@ -1717,6 +1717,10 @@ mod tests {
         assert!(pair_take(&base, &link.id, "thief").is_err(), "once");
         assert_eq!(pair_status(&base, &key, &alice, &link.id).unwrap().taken.as_deref(), Some("Pixel 8"));
         assert!(pair_take(&base, "00ff", "x").is_err());
+        // Outside the app, the link lands on a page that hands it to the app.
+        let page = agent().get(format!("{base}/pair")).call().unwrap().body_mut().read_to_string().unwrap();
+        assert!(page.contains("\"synththing:\" + location.href"));
+        assert_eq!(agent().get(format!("{base}/.well-known/assetlinks.json")).call().unwrap().status(), 404);
 
         running.stop();
         let _ = std::fs::remove_dir_all(&dir);

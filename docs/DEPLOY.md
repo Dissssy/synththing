@@ -84,6 +84,14 @@ An authority sends codes, for attaching a recovery email and recovering an ident
 
 Keep `email.pepper` (made in the data folder on first run) with the backups: without it, the attached emails can't be recognised.
 
+## Sign-in links on Android
+
+The official server's sign-in links (`/pair#...`) open in the Android app once Android trusts the server for them:
+
+1. Get the SHA-256 fingerprint of the key the APKs are signed with: `keytool -list -v -keystore release.jks` (the `SHA256:` line, `AB:CD:...`).
+2. In `server.json`: `"android_fingerprints": ["AB:CD:..."]`. Restart. `https://synththing.p51.nl/.well-known/assetlinks.json` should list it.
+3. Android checks it when the app is installed or updated. Until then (or without it) the link opens the server's page in the browser, whose Open in synththing button still hands it to the app.
+
 ## Feedback intake
 
 A server can hand its feedback out to be filed as GitHub issues by an hourly Claude run (docs/feedback-intake.md says what it does):

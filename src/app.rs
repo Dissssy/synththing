@@ -2504,7 +2504,7 @@ impl App {
                     }
                 });
             }
-            if !library::READ_ONLY
+            if library::PUBLISHING
                 && is_midi_path(path)
                 && ui.button("Publish song...").on_hover_text("Share it on a library server that takes songs").clicked()
             {

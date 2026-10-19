@@ -147,6 +147,12 @@ impl App {
         }
     }
 
+    /// The app was opened with a sign-in link: ask to sign in with it.
+    #[cfg_attr(not(target_os = "android"), expect(dead_code))]
+    pub(super) fn open_pairing_link(&mut self, link: String) {
+        self.pairing.flow = Some(FlowState { flow: Flow::Enter { link }, busy: false, error: None });
+    }
+
     /// Seal the identity and park it on the authority, for `Flow::Show`.
     fn make_pairing_code(&mut self) {
         let (authority, key) = self.authority();
