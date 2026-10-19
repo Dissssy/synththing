@@ -51,7 +51,7 @@ impl App {
         let mut start = false;
         let mut tour = false;
         let response = egui::Modal::new(egui::Id::new("welcome")).show(ctx, |ui| {
-            ui.set_width(470.0);
+            ui.set_width(super::fit_width(ui, 470.0));
             ui.heading("Welcome to synththing");
             ui.add_space(4.0);
             ui.label(

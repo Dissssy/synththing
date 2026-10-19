@@ -318,7 +318,7 @@ impl App {
         let mut open: Option<(String, i64)> = None;
         let mut all_read = false;
         egui::Popup::menu(&button).show(|ui| {
-            ui.set_min_width(340.0);
+            ui.set_min_width(super::fit_width(ui, 340.0));
             ui.horizontal(|ui| {
                 ui.strong("Notifications");
                 if unread > 0 && ui.small_button("Mark all read").clicked() {
@@ -397,7 +397,7 @@ impl App {
         let mut copyright = false;
         let mut notice: Option<(i64, bool)> = None;
         let response = egui::Modal::new(egui::Id::new("notification")).show(ctx, |ui| {
-            ui.set_width(440.0);
+            ui.set_width(super::fit_width(ui, 440.0));
             ui.horizontal(|ui| {
                 ui.heading(egui::RichText::new(icon_of(&n.kind)).color(color_of(ui, &n)));
                 ui.label(egui::RichText::new(text(&n)).size(15.0));

@@ -115,6 +115,10 @@ pub struct Config {
     /// couldn't read the whole config (`read_json_or_set_aside`).
     #[serde(default)]
     pub canary_updates: bool,
+    /// The mobile layout (`app/mobile.rs`) instead of the desktop's, on the
+    /// desktop (View > Mobile layout). Android always uses it.
+    #[serde(default)]
+    pub mobile_layout: bool,
     /// A release version the user chose to skip: the startup check doesn't
     /// bring it up again (a manual check still shows it).
     #[serde(default)]

@@ -344,7 +344,7 @@ impl App {
         let mut close = false;
         let mut go = false;
         let response = egui::Modal::new(egui::Id::new("identity_flow")).show(ctx, |ui| {
-            ui.set_width(440.0);
+            ui.set_width(super::fit_width(ui, 440.0));
             match &mut state.flow {
                 Flow::Email { removing, address, current, sent, code, current_code } => {
                     let changing = matches!(&self.identity.status, Some(Ok(s)) if s.email) && !*removing;

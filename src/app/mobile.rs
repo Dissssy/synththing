@@ -1,0 +1,417 @@
+//! The mobile layout: one page at a time, sized for a phone's screen and
+//! fingers. The Android app always uses it; on the desktop, View > Mobile
+//! layout switches to it, so it can be tried without a phone.
+//!
+//! The Now playing page is the visualizer over the controls: the seek bar
+//! as the line between them, the song's name (scrolling when it's too long
+//! to fit), and the transport. The chevron folds the controls away, giving
+//! the visualizer the whole screen, with a small handle left to bring them
+//! back (touches on the visualizer go to the script, so they can't be what
+//! brings them back). The menu at the top left opens the other pages, which
+//! are the desktop's tabs, and the windows the desktop's menus open.
+
+use eframe::egui;
+
+use super::{fmt_time, icon, on_color, palette_color, App};
+use crate::audio::{AudioCommand, PlaybackShared};
+use crate::engine::EngineView;
+use crate::lua_visualizer;
+use crate::playlist::LoopMode;
+use crate::visualizer::DisplayMode;
+
+/// The window size the desktop switches to with the mobile layout: about
+/// a phone's, standing up.
+const PHONE_SIZE: egui::Vec2 = egui::vec2(420.0, 880.0);
+/// And back to, without it (the size the app starts at).
+const DESKTOP_SIZE: egui::Vec2 = egui::vec2(1100.0, 750.0);
+
+/// The marquee's speed, in points a second, and the gap between the end of
+/// the name and its next start.
+const MARQUEE_SPEED: f32 = 40.0;
+const MARQUEE_GAP: f32 = 48.0;
+
+/// What the mobile layout shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Page {
+    #[default]
+    NowPlaying,
+    Songs,
+    Soundfonts,
+    Playlists,
+    Scripts,
+    Library,
+    Downloads,
+}
+
+impl Page {
+    const ALL: [Page; 7] = [
+        Self::NowPlaying,
+        Self::Songs,
+        Self::Soundfonts,
+        Self::Playlists,
+        Self::Scripts,
+        Self::Library,
+        Self::Downloads,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::NowPlaying => "Now playing",
+            Self::Songs => "Songs",
+            Self::Soundfonts => "Soundfonts",
+            Self::Playlists => "Playlists",
+            Self::Scripts => "Visualizers",
+            Self::Library => "Script library",
+            Self::Downloads => "Downloaded songs",
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::NowPlaying => "monitor-play",
+            Self::Songs => "music-notes",
+            Self::Soundfonts => "piano-keys",
+            Self::Playlists => "playlist",
+            Self::Scripts => "waveform",
+            Self::Library => "storefront",
+            Self::Downloads => "download-simple",
+        }
+    }
+}
+
+/// The mobile layout's own state (for the session; nothing's saved).
+#[derive(Default)]
+pub(super) struct Mobile {
+    page: Page,
+    drawer_open: bool,
+    /// The Now playing page's controls folded away.
+    collapsed: bool,
+}
+
+impl App {
+    /// Whether the mobile layout is showing: always on Android, else as
+    /// chosen (View > Mobile layout).
+    pub(super) fn mobile(&self) -> bool {
+        cfg!(target_os = "android") || self.config.mobile_layout
+    }
+
+    /// The window size to start the desktop app at, for its layout.
+    pub fn start_size(&self) -> egui::Vec2 {
+        if self.mobile() { PHONE_SIZE } else { DESKTOP_SIZE }
+    }
+
+    /// Switch the desktop between the two layouts, resizing the window to
+    /// suit.
+    pub(super) fn set_mobile_layout(&mut self, ctx: &egui::Context, on: bool) {
+        self.config.mobile_layout = on;
+        if let Err(e) = self.config.save() {
+            self.status = format!("Couldn't save preferences: {e}");
+        }
+        if !self.fullscreen {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(if on { PHONE_SIZE } else { DESKTOP_SIZE }));
+        }
+    }
+
+    pub(super) fn mobile_ui(&mut self, ui: &mut egui::Ui, shared: &PlaybackShared) {
+        let ctx = ui.ctx().clone();
+        let view = &shared.view;
+        let page = self.mobile_state.page;
+        let fill_screen = page == Page::NowPlaying && self.mobile_state.collapsed;
+
+        if !fill_screen {
+            egui::Panel::top("mobile_top_bar").show(ui, |ui| self.mobile_top_bar_ui(ui));
+        }
+        if page == Page::NowPlaying {
+            if !fill_screen {
+                egui::Panel::bottom("mobile_controls").show(ui, |ui| self.mobile_controls_ui(ui, view));
+            }
+            egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                self.script_error_ui(ui, false);
+                let mode = if fill_screen { DisplayMode::Dedicated } else { DisplayMode::Window };
+                self.show_visualizer(ui, &shared.notes, view, mode);
+            });
+            if fill_screen {
+                self.mobile_expand_handle_ui(&ctx);
+            }
+        } else {
+            egui::CentralPanel::default().show(ui, |ui| match page {
+                Page::NowPlaying => {}
+                Page::Songs => self.songs_ui(ui),
+                Page::Soundfonts => self.soundfont_ui(ui),
+                Page::Playlists => self.playlist_panel_ui(ui),
+                Page::Scripts => self.mobile_scripts_ui(ui),
+                Page::Library => self.library_ui(ui),
+                Page::Downloads => self.downloaded_songs_ui(ui),
+            });
+        }
+        if self.mobile_state.drawer_open {
+            self.mobile_drawer_ui(&ctx);
+        }
+    }
+
+    /// The menu button, the page's name, and notifications and feedback at
+    /// the right, as on the desktop.
+    fn mobile_top_bar_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui.add(big_icon_button("list", 36.0)).on_hover_text("Menu").clicked() {
+                self.mobile_state.drawer_open = true;
+            }
+            ui.heading(self.mobile_state.page.title());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.notifications_button_ui(ui);
+                self.feedback_button_ui(ui);
+            });
+        });
+    }
+
+    /// Under the visualizer: the seek bar, the song, the transport.
+    fn mobile_controls_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        // The seek bar, edge to edge: the line between the visualizer and
+        // the controls. In the tempo's color, as on the desktop.
+        let accent = self.transport_accent(ui.ctx(), view);
+        let mut position = view.position;
+        let changed = ui
+            .scope(|ui| {
+                if let Some(accent) = accent {
+                    let visuals = ui.visuals_mut();
+                    visuals.selection.bg_fill = accent;
+                    for state in [&mut visuals.widgets.inactive, &mut visuals.widgets.hovered, &mut visuals.widgets.active] {
+                        state.bg_fill = accent;
+                        state.fg_stroke = egui::Stroke::new(1.5, on_color(accent));
+                    }
+                }
+                ui.spacing_mut().slider_width = ui.available_width();
+                ui.spacing_mut().interact_size.y = 28.0;
+                ui.add(egui::Slider::new(&mut position, 0.0..=view.length.max(0.001)).show_value(false).trailing_fill(true))
+                    .changed()
+            })
+            .inner;
+        if changed {
+            self.send(AudioCommand::Seek(position));
+        }
+
+        ui.horizontal(|ui| {
+            ui.monospace(format!("{} / {}", fmt_time(view.position), fmt_time(view.length)));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(big_icon_button("caret-down", 32.0)).on_hover_text("Fold the controls away").clicked() {
+                    self.mobile_state.collapsed = true;
+                }
+            });
+        });
+
+        let title = view.track_name.as_deref().unwrap_or("Nothing playing");
+        marquee(ui, title, egui::TextStyle::Heading);
+        let mut detail = Vec::new();
+        if let Some(np) = &self.now_playing
+            && let Some(list) = self.playlists.lists.get(np.list)
+        {
+            detail.push(format!("{} {}/{}", list.playlist.name, np.entry + 1, list.playlist.entries.len()));
+        }
+        if view.has_midi {
+            detail.push(view.soundfont_name.clone().unwrap_or_else(|| "no soundfont".to_string()));
+        }
+        ui.weak(if detail.is_empty() { " ".to_string() } else { detail.join("  \u{b7}  ") });
+        ui.add_space(6.0);
+
+        // The transport, centered: shuffle and loop either side of
+        // previous, play/pause (biggest) and next.
+        let sizes = [40.0, 52.0, 68.0, 52.0, 40.0];
+        let gap = 12.0;
+        let width: f32 = sizes.iter().sum::<f32>() + gap * (sizes.len() - 1) as f32;
+        let row = egui::vec2(ui.available_width(), sizes[2]);
+        ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+            let shuffle = ui.add(big_icon_button("shuffle", sizes[0]).selected(self.shuffle));
+            if shuffle.on_hover_text(if self.shuffle { "Shuffle: on" } else { "Shuffle: off" }).clicked() {
+                self.set_shuffle(!self.shuffle);
+            }
+            if ui.add(big_icon_button("skip-back", sizes[1])).on_hover_text("Previous").clicked() {
+                self.previous_track(view.position);
+            }
+            let (glyph, color) = if view.paused { ("play", palette_color(2)) } else { ("pause", palette_color(1)) };
+            if ui
+                .add(egui::Button::new(egui::RichText::new(icon(glyph)).size(sizes[2] * 0.5).color(color)).min_size(egui::Vec2::splat(sizes[2])))
+                .on_hover_text(if view.paused { "Play" } else { "Pause" })
+                .clicked()
+            {
+                self.send(AudioCommand::TogglePause);
+            }
+            if ui
+                .add_enabled(self.now_playing.is_some(), big_icon_button("skip-forward", sizes[3]))
+                .on_hover_text("Next")
+                .clicked()
+            {
+                self.next_track();
+            }
+            let glyph = if self.loop_mode == LoopMode::One { "repeat-once" } else { "repeat" };
+            let hover = match self.loop_mode {
+                LoopMode::Off => "Loop: off",
+                LoopMode::All => "Loop: the playlist",
+                LoopMode::One => "Loop: this track",
+            };
+            if ui.add(big_icon_button(glyph, sizes[4]).selected(self.loop_mode != LoopMode::Off)).on_hover_text(hover).clicked() {
+                self.set_loop_mode(self.loop_mode.cycle());
+            }
+        });
+        ui.add_space(6.0);
+
+        // Which visualizer, and the way to pick another.
+        let script = self
+            .active_script
+            .and_then(|i| self.available_scripts.get(i))
+            .map(|p| lua_visualizer::display_name(p))
+            .unwrap_or_else(|| "(none)".to_string());
+        ui.vertical_centered(|ui| {
+            if ui.button(format!("{}  {script}", icon("waveform"))).on_hover_text("Pick a visualizer").clicked() {
+                self.mobile_state.page = Page::Scripts;
+            }
+        });
+        ui.add_space(6.0);
+    }
+
+    /// With the controls folded away: the way back, in a corner.
+    fn mobile_expand_handle_ui(&mut self, ctx: &egui::Context) {
+        egui::Area::new(egui::Id::new("mobile_expand_handle"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0))
+            .show(ctx, |ui| {
+                if ui.add(big_icon_button("caret-up", 40.0)).on_hover_text("Show the controls").clicked() {
+                    self.mobile_state.collapsed = false;
+                }
+            });
+    }
+
+    /// The Visualizers page: every script, with its preview; picking one
+    /// goes back to Now playing with it running.
+    fn mobile_scripts_ui(&mut self, ui: &mut egui::Ui) {
+        self.script_error_ui(ui, false);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            if let Some(idx) = self.script_list_ui(ui) {
+                self.load_script(idx);
+                self.mobile_state.page = Page::NowPlaying;
+            }
+        });
+    }
+
+    /// The menu: the pages, then what the desktop's menus open, over
+    /// everything else (a tap outside it closes it).
+    fn mobile_drawer_ui(&mut self, ctx: &egui::Context) {
+        let screen = ctx.content_rect();
+        let backdrop = egui::Area::new(egui::Id::new("mobile_drawer_backdrop"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                let (rect, response) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+                ui.painter().rect_filled(rect, 0.0, egui::Color32::from_black_alpha(140));
+                response
+            })
+            .inner;
+        if backdrop.clicked() {
+            self.mobile_state.drawer_open = false;
+        }
+
+        let width = (screen.width() * 0.8).min(320.0);
+        egui::Area::new(egui::Id::new("mobile_drawer"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                egui::Frame::side_top_panel(ui.style()).show(ui, |ui| {
+                    ui.set_width(width);
+                    ui.set_min_height(screen.height());
+                    egui::ScrollArea::vertical().show(ui, |ui| self.mobile_drawer_items_ui(ui));
+                });
+            });
+    }
+
+    fn mobile_drawer_items_ui(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().button_padding = egui::vec2(10.0, 10.0);
+        ui.add_space(8.0);
+        ui.heading("synththing");
+        ui.weak(format!("v{}", crate::build_info::describe()));
+        ui.add_space(8.0);
+        let mut picked = None;
+        for page in Page::ALL {
+            let text = format!("{}   {}", icon(page.icon()), page.title());
+            let item = egui::Button::selectable(self.mobile_state.page == page, text).min_size(egui::vec2(ui.available_width(), 0.0));
+            if ui.add(item).clicked() {
+                picked = Some(page);
+            }
+        }
+        if let Some(page) = picked {
+            self.mobile_state.page = page;
+            self.mobile_state.drawer_open = false;
+        }
+
+        ui.separator();
+        let item = |ui: &mut egui::Ui, glyph: &str, text: &str| {
+            ui.add(egui::Button::new(format!("{}   {text}", icon(glyph))).frame(false).min_size(egui::vec2(ui.available_width(), 36.0)))
+                .clicked()
+        };
+        let mut close = false;
+        if item(ui, "gear", "Preferences") {
+            self.preferences_open = true;
+            close = true;
+        }
+        if item(ui, "palette", "Themes") {
+            self.themes.open = true;
+            close = true;
+        }
+        if item(ui, "chat-text", "Send feedback") {
+            self.open_feedback();
+            close = true;
+        }
+        if item(ui, "arrows-clockwise", "Check for updates") {
+            self.launch_update_check = false;
+            self.updates_open = true;
+            self.updater.check(self.update_track());
+            close = true;
+        }
+        if item(ui, "clock-counter-clockwise", "Changelog") {
+            self.changelog = Some(None);
+            close = true;
+        }
+        if item(ui, "notepad", "Log") {
+            self.log_open = true;
+            close = true;
+        }
+        if item(ui, "info", "Credits & licenses") {
+            self.credits_open = true;
+            close = true;
+        }
+        if !cfg!(target_os = "android") && item(ui, "desktop", "Desktop layout") {
+            let ctx = ui.ctx().clone();
+            self.set_mobile_layout(&ctx, false);
+            close = true;
+        }
+        if close {
+            self.mobile_state.drawer_open = false;
+        }
+    }
+}
+
+/// An icon button `size` points square, big enough for a finger.
+fn big_icon_button(name: &str, size: f32) -> egui::Button<'static> {
+    egui::Button::new(egui::RichText::new(icon(name)).size(size * 0.5)).min_size(egui::Vec2::splat(size))
+}
+
+/// `text` on one line the width of `ui`, scrolling sideways (round and
+/// round) when it's too long to fit.
+fn marquee(ui: &mut egui::Ui, text: &str, style: egui::TextStyle) {
+    let font = style.resolve(ui.style());
+    let color = ui.visuals().strong_text_color();
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, galley.size().y), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    if galley.size().x <= width {
+        painter.galley(egui::pos2(rect.center().x - galley.size().x / 2.0, rect.top()), galley, color);
+        return;
+    }
+    let period = galley.size().x + MARQUEE_GAP;
+    let time = ui.input(|i| i.time) as f32;
+    let offset = (time * MARQUEE_SPEED) % period;
+    painter.galley(egui::pos2(rect.left() - offset, rect.top()), galley.clone(), color);
+    painter.galley(egui::pos2(rect.left() - offset + period, rect.top()), galley, color);
+    ui.ctx().request_repaint();
+}

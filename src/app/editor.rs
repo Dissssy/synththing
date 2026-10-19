@@ -1101,7 +1101,7 @@ impl App {
         let mut close = false;
         let mut restore = None;
         let response = egui::Modal::new(egui::Id::new("script_history")).show(ctx, |ui| {
-            ui.set_width(760.0);
+            ui.set_width(super::fit_width(ui, 760.0));
             ui.heading("Script history");
             ui.weak(
                 "synththing keeps a copy of the script when you open it and about once a minute while \\

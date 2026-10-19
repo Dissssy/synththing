@@ -13,6 +13,7 @@ mod editor;
 mod feedback;
 pub use editor::ApplyMode;
 mod loading;
+mod mobile;
 mod playlist_panel;
 mod identity;
 mod copyright;
@@ -386,6 +387,8 @@ pub struct App {
     tray_picture: Option<egui::TextureHandle>,
     /// The last recording saved, for "Show last recording".
     last_recording: Option<PathBuf>,
+    /// The mobile layout's page and what's open in it (`mobile.rs`).
+    mobile_state: mobile::Mobile,
 }
 
 impl App {
@@ -566,6 +569,7 @@ impl App {
             close_after_render: None,
             tray_picture: None,
             last_recording: None,
+            mobile_state: mobile::Mobile::default(),
         };
         if let Some(path) = app.script.path().map(Path::to_path_buf) {
             app.editor_opened(&path);
@@ -631,7 +635,7 @@ impl App {
         }
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("set_aside")).show(ctx, |ui| {
-            ui.set_width(480.0);
+            ui.set_width(fit_width(ui, 480.0));
             ui.heading("Some settings couldn't be read");
             ui.add_space(4.0);
             for (note, kept) in &self.set_aside {
@@ -660,7 +664,7 @@ impl App {
         let mut close = false;
         let mut show_all = false;
         let response = egui::Modal::new(egui::Id::new("changelog")).show(ctx, |ui| {
-            ui.set_width(560.0);
+            ui.set_width(fit_width(ui, 560.0));
             match since {
                 Some(since) => {
                     ui.heading("What's new");
@@ -1012,7 +1016,7 @@ impl App {
         let taken = self.config.layout_presets.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()));
         let built_in = layout::PRESETS.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()));
         let response = egui::Modal::new(egui::Id::new("save_layout")).show(ctx, |ui| {
-            ui.set_width(320.0);
+            ui.set_width(fit_width(ui, 320.0));
             ui.heading("Save layout");
             ui.label("Name:");
             let field = ui.text_edit_singleline(name);
@@ -1495,6 +1499,7 @@ impl App {
                 }
             });
             let mut toggled = Vec::new();
+            let mut switch_to_mobile = false;
             ui.menu_button("View", |ui| {
                 let mut section_checkbox = |ui: &mut egui::Ui, section: Section| {
                     let mut open = self.open_sections.contains(&section);
@@ -1514,7 +1519,14 @@ impl App {
                 section_checkbox(ui, Section::Downloads);
                 ui.separator();
                 ui.menu_button("Layout", |ui| self.layout_menu_ui(ui));
+                if ui.button("Mobile layout").on_hover_text("The Android app's layout, one page at a time, in a phone-sized window").clicked() {
+                    switch_to_mobile = true;
+                }
             });
+            if switch_to_mobile {
+                let ctx = ui.ctx().clone();
+                self.set_mobile_layout(&ctx, true);
+            }
             for (section, open) in toggled {
                 self.set_open(section, open);
             }
@@ -1569,7 +1581,7 @@ impl App {
 
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("app_log")).show(ctx, |ui| {
-            ui.set_width(720.0);
+            ui.set_width(fit_width(ui, 720.0));
             ui.heading("Log");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_id_salt("log_min_level")
@@ -1665,7 +1677,7 @@ impl App {
         let current = updater::current_version();
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("updates")).show(ctx, |ui| {
-            ui.set_width(440.0);
+            ui.set_width(fit_width(ui, 440.0));
             ui.heading("Updates");
             ui.add_space(4.0);
             let branch = match crate::build_info::channel() {
@@ -1968,7 +1980,7 @@ impl App {
 
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("credits")).show(ctx, |ui| {
-            ui.set_width(660.0);
+            ui.set_width(fit_width(ui, 660.0));
             ui.heading("Credits & licenses");
             ui.horizontal(|ui| {
                 ui.weak(format!("synththing v{}", crate::build_info::describe()));
@@ -2098,7 +2110,7 @@ impl App {
         let info = self.song_info.get(&path);
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("song_info")).show(ctx, |ui| {
-            ui.set_width(460.0);
+            ui.set_width(fit_width(ui, 460.0));
             ui.heading(nice_name(&path));
             ui.weak(path.display().to_string());
             ui.add_space(6.0);
@@ -2149,7 +2161,7 @@ impl App {
         let mut submit = false;
         let mut cancel = false;
         let response = egui::Modal::new(egui::Id::new("rename_script")).show(ctx, |ui| {
-            ui.set_width(380.0);
+            ui.set_width(fit_width(ui, 380.0));
             ui.heading("Rename script");
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -3030,7 +3042,7 @@ impl App {
         let mut welcome = false;
         let mut tour = false;
         let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
-            ui.set_width(600.0);
+            ui.set_width(fit_width(ui, 600.0));
             ui.heading("Preferences");
             ui.add_space(6.0);
             let titles = PrefTab::ALL.map(PrefTab::title);
@@ -3578,6 +3590,18 @@ impl eframe::App for App {
 
         if self.dedicated.is_some() {
             self.dedicated_ui(ui, &shared);
+        } else if self.mobile() {
+            self.mobile_ui(ui, &shared);
+            self.preferences_ui(&ctx);
+            self.updates_ui(&ctx);
+            self.log_ui(&ctx);
+            self.rename_ui(&ctx);
+            self.credits_ui(&ctx);
+            self.changelog_ui(&ctx);
+            self.set_aside_ui(&ctx);
+            self.welcome_ui(&ctx);
+            self.song_info_ui(&ctx);
+            self.history_ui(&ctx);
         } else {
             egui::Panel::top("top_bar").show(ui, |ui| self.top_bar_ui(ui));
             egui::Panel::bottom("controls_panel").show(ui, |ui| {
@@ -3853,6 +3877,12 @@ fn categories_body<S: AsRef<str>>(
                 });
         });
     });
+}
+
+/// `width`, or less on a screen too narrow for it (a phone's): what windows
+/// and dialogs set their width to.
+fn fit_width(ui: &egui::Ui, width: f32) -> f32 {
+    width.min(ui.ctx().content_rect().width() - 32.0).max(120.0)
 }
 
 /// A setting on one line (`add`), with an (i) after it: hovering either

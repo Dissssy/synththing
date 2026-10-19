@@ -113,7 +113,7 @@ impl App {
         let mut close = false;
         let mut send = false;
         let response = egui::Modal::new(egui::Id::new("copyright_notice")).show(ctx, |ui| {
-            ui.set_width(600.0);
+            ui.set_width(super::fit_width(ui, 600.0));
             let view = match &open.view {
                 None => {
                     ui.spinner();

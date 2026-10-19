@@ -698,7 +698,7 @@ impl App {
         let Some(mut open) = self.library.document.take() else { return };
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("library_document")).show(ctx, |ui| {
-            ui.set_width(640.0);
+            ui.set_width(super::fit_width(ui, 640.0));
             ui.horizontal(|ui| {
                 ui.heading(&open.title);
                 ui.weak(host(&open.server));
@@ -736,7 +736,7 @@ impl App {
         let mut go = false;
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("library_confirm_server")).show(ctx, |ui| {
-            ui.set_width(420.0);
+            ui.set_width(super::fit_width(ui, 420.0));
             if listed {
                 ui.heading(format!("Turn on {}?", host(&server)));
                 ui.label(format!(
@@ -1783,7 +1783,7 @@ impl App {
         let mut keep = false;
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("library_update")).show(ctx, |ui| {
-            ui.set_width(560.0);
+            ui.set_width(super::fit_width(ui, 560.0));
             ui.heading(format!("Update \"{}\"", draft.summary.name));
             ui.label(format!(
                 "Version {} is out on {}; you have version {}.",
@@ -1913,7 +1913,7 @@ impl App {
         if let Some((server, id, said)) = draft.done.clone() {
             let mut show = false;
             let response = egui::Modal::new(egui::Id::new("library_publish")).show(ctx, |ui| {
-                ui.set_width(480.0);
+                ui.set_width(super::fit_width(ui, 480.0));
                 ui.heading("Published");
                 ui.label(said.as_str());
                 ui.add_space(8.0);
@@ -1935,7 +1935,7 @@ impl App {
             return;
         }
         let response = egui::Modal::new(egui::Id::new("library_publish")).show(ctx, |ui| {
-            ui.set_width(480.0);
+            ui.set_width(super::fit_width(ui, 480.0));
             ui.heading(match (&updating, &draft.remix) {
                 (Some(_), _) => "Publish a new version",
                 (None, Some(_)) => "Publish a remix",

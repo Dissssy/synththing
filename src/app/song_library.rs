@@ -566,7 +566,7 @@ impl App {
         if let Some((server, id, said)) = draft.done.clone() {
             let mut show = false;
             let response = egui::Modal::new(egui::Id::new("publish_song")).show(ctx, |ui| {
-                ui.set_width(480.0);
+                ui.set_width(super::fit_width(ui, 480.0));
                 ui.heading("Published");
                 ui.label(said.as_str());
                 ui.add_space(8.0);
@@ -608,7 +608,7 @@ impl App {
         let scripts = self.library_scripts_on(&draft.server);
         let mut send = false;
         let response = egui::Modal::new(egui::Id::new("publish_song")).show(ctx, |ui| {
-            ui.set_width(520.0);
+            ui.set_width(super::fit_width(ui, 520.0));
             ui.heading(if updating.is_some() { "Publish a new version of a song" } else { "Publish a song" });
             ui.weak(draft.file.display().to_string());
             if taking.is_empty() {

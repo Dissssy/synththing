@@ -160,7 +160,7 @@ pub fn main() -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(build_info::window_title())
-            .with_inner_size([1100.0, 750.0])
+            .with_inner_size(app.start_size())
             .with_icon(icon),
         ..Default::default()
     };
