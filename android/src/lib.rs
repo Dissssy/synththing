@@ -51,6 +51,20 @@ pub extern "system" fn Java_nl_p51_synththing_Native_mediaCommand<'local>(
     synththing::android::media_command(command, position_ms);
 }
 
+/// `Native.insets(int left, int top, int right, int bottom)`: what the
+/// system bars, a notch and the keyboard cover, in pixels.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_nl_p51_synththing_Native_insets<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    left: jint,
+    top: jint,
+    right: jint,
+    bottom: jint,
+) {
+    synththing::android::set_insets(left, top, right, bottom);
+}
+
 /// `Native.pictureInPicture(boolean on)`: into or out of picture-in-picture.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_nl_p51_synththing_Native_pictureInPicture<'local>(

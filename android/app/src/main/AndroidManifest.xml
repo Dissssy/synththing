@@ -26,7 +26,7 @@
             android:launchMode="singleTask"
             android:supportsPictureInPicture="true"
             android:resizeableActivity="true"
-            android:windowSoftInputMode="adjustResize"
+            android:windowSoftInputMode="adjustNothing"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density">
             <meta-data android:name="android.app.lib_name" android:value="synththing_android" />
             <intent-filter>

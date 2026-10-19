@@ -120,6 +120,10 @@ impl App {
         let view = &shared.view;
         let page = self.mobile_state.page;
         let fill_screen = page == Page::NowPlaying && self.mobile_state.collapsed;
+        // The visualizer filling the screen is full screen: no status or
+        // navigation bar either (a swipe from the edge shows them a moment).
+        #[cfg(target_os = "android")]
+        crate::android::set_fullscreen(fill_screen);
 
         // Picture-in-picture: a small floating window, just the visualizer.
         #[cfg(target_os = "android")]

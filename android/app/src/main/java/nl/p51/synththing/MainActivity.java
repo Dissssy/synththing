@@ -12,6 +12,8 @@ import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.database.Cursor;
+import android.graphics.Color;
+import android.graphics.Insets;
 import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.Build;
@@ -20,6 +22,12 @@ import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.util.Log;
 import android.util.Rational;
+import android.view.DisplayCutout;
+import android.view.View;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.view.WindowManager;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -55,10 +63,100 @@ public class MainActivity extends NativeActivity {
         // here as well is what lets Native's methods find their code.
         System.loadLibrary(LIBRARY);
         super.onCreate(savedInstanceState);
+        drawEdgeToEdge();
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 0);
         }
+    }
+
+    // ---- The system bars ----
+
+    /**
+     * Draw under the status and navigation bars (and a notch), telling the
+     * Rust side what they cover (Native.insets) to keep its UI clear of;
+     * the same on every Android version, and what lets it hide them.
+     */
+    @SuppressWarnings("deprecation")
+    private void drawEdgeToEdge() {
+        Window window = getWindow();
+        View decor = window.getDecorView();
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false);
+        } else {
+            decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        }
+        window.setStatusBarColor(Color.TRANSPARENT);
+        window.setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.setNavigationBarContrastEnforced(false);
+        }
+        if (Build.VERSION.SDK_INT >= 28) {
+            WindowManager.LayoutParams attributes = window.getAttributes();
+            attributes.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            window.setAttributes(attributes);
+        }
+        decor.setOnApplyWindowInsetsListener((view, insets) -> {
+            int left, top, right, bottom;
+            if (Build.VERSION.SDK_INT >= 30) {
+                // Tappable elements: the status bar, and the navigation
+                // bar's buttons; with gesture navigation, not the handle
+                // (the app goes under it, as Android intends).
+                Insets covered = insets.getInsets(WindowInsets.Type.tappableElement()
+                        | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
+                left = covered.left;
+                top = covered.top;
+                right = covered.right;
+                bottom = covered.bottom;
+            } else {
+                left = insets.getSystemWindowInsetLeft();
+                top = insets.getSystemWindowInsetTop();
+                right = insets.getSystemWindowInsetRight();
+                bottom = insets.getSystemWindowInsetBottom();
+                if (Build.VERSION.SDK_INT >= 28 && insets.getDisplayCutout() != null) {
+                    DisplayCutout cutout = insets.getDisplayCutout();
+                    left = Math.max(left, cutout.getSafeInsetLeft());
+                    top = Math.max(top, cutout.getSafeInsetTop());
+                    right = Math.max(right, cutout.getSafeInsetRight());
+                    bottom = Math.max(bottom, cutout.getSafeInsetBottom());
+                }
+            }
+            Native.insets(left, top, right, bottom);
+            return view.onApplyWindowInsets(insets);
+        });
+    }
+
+    /**
+     * From Rust: hide the status and navigation bars (the visualizer filling
+     * the screen), or show them again. Hidden, a swipe from the edge shows
+     * them for a moment.
+     */
+    @SuppressWarnings("deprecation")
+    public void setFullscreen(boolean on) {
+        runOnUiThread(() -> {
+            if (Build.VERSION.SDK_INT >= 30) {
+                WindowInsetsController controller = getWindow().getInsetsController();
+                if (controller == null) {
+                    return;
+                }
+                controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                if (on) {
+                    controller.hide(WindowInsets.Type.systemBars());
+                } else {
+                    controller.show(WindowInsets.Type.systemBars());
+                }
+            } else {
+                int layout = View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+                int hidden = View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
+                getWindow().getDecorView().setSystemUiVisibility(on ? layout | hidden : layout);
+            }
+        });
     }
 
     // ---- Importing ----

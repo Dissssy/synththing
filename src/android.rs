@@ -16,7 +16,7 @@
 //! a playlist still moves on and the notification's buttons still work.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -81,8 +81,24 @@ struct Shared {
 }
 
 impl eframe::App for Shared {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // What the system bars, a notch and the keyboard cover, in points.
+        let px = |side: &AtomicI32| side.load(Ordering::Relaxed) as f32 / ctx.pixels_per_point();
+        let [left, top, right, bottom] = &INSETS;
+        raw_input.safe_area_insets = Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
+            left: px(left),
+            right: px(right),
+            top: px(top),
+            bottom: px(bottom),
+        }));
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        self.app.lock().unwrap().ui(ui, frame);
+        // The app draws under the system bars (edge to edge): their part
+        // gets the background, and the app the rest.
+        ui.painter().rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
+        let content = ui.ctx().content_rect();
+        ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| self.app.lock().unwrap().ui(ui, frame));
         // eframe has no clipboard on Android: what was copied goes to
         // Android's.
         let copied = ui.ctx().output(|o| {
@@ -297,6 +313,31 @@ pub fn media_command(command: i32, position_ms: i64) {
 /// The media buttons pressed since the last call.
 pub fn take_media_commands() -> Vec<MediaCommand> {
     std::mem::take(&mut *MEDIA_COMMANDS.lock().unwrap())
+}
+
+/// What the system bars, a notch and the keyboard cover of the window:
+/// left, top, right and bottom, in pixels (from Java, as they change).
+static INSETS: [AtomicI32; 4] = [const { AtomicI32::new(0) }; 4];
+
+/// From Java: the window's insets changed.
+pub fn set_insets(left: i32, top: i32, right: i32, bottom: i32) {
+    for (side, value) in INSETS.iter().zip([left, top, right, bottom]) {
+        side.store(value, Ordering::Relaxed);
+    }
+}
+
+/// Whether the system bars are hidden, as last asked.
+static FULLSCREEN: AtomicBool = AtomicBool::new(false);
+
+/// Hide the status and navigation bars (`on`), or show them again.
+pub fn set_fullscreen(on: bool) {
+    if FULLSCREEN.swap(on, Ordering::Relaxed) == on {
+        return;
+    }
+    call("going full screen", |env, activity| {
+        env.call_method(activity, "setFullscreen", "(Z)V", &[JValue::Bool(on.into())])?;
+        Ok(())
+    });
 }
 
 static PICTURE_IN_PICTURE: AtomicBool = AtomicBool::new(false);

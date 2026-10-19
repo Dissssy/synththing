@@ -10,6 +10,9 @@ final class Native {
     /** A media button: one of PlaybackService's COMMAND_*s. */
     static native void mediaCommand(int command, long positionMs);
 
+    /** What the system bars, a notch and the keyboard cover of the window, in pixels. */
+    static native void insets(int left, int top, int right, int bottom);
+
     /** The app went into picture-in-picture, or came out of it. */
     static native void pictureInPicture(boolean on);
 }
