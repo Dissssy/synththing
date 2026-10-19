@@ -2,7 +2,7 @@
 //! servers, searched across every server in use, installed into the
 //! scripts folder (with a `.source.json` beside each, saying where it came
 //! from), and the current script published (Publish...). Servers and the
-//! user's identity are set up in Preferences > Library. Its Songs side
+//! user's identity are set up in Preferences > Online Library. Its Songs side
 //! lists the songs on servers that take them, the same way; their own
 //! parts are in `song_library.rs`.
 //!
@@ -231,7 +231,7 @@ pub struct LibraryState {
     installed_by_slug: HashMap<(String, String, String), (PathBuf, u32)>,
     /// The user's identity, once there is one.
     identity: Option<Identity>,
-    /// Preferences > Library: the address typed in, the passphrase for
+    /// Preferences > Online Library: the address typed in, the passphrase for
     /// exporting or importing, and whether replacing the identity was
     /// clicked once (import confirms on the second).
     new_server: String,
@@ -757,7 +757,7 @@ impl App {
                     host(&server)
                 ));
             }
-            ui.weak("Its scripts then show up in your searches too. Preferences > Library turns it off again.");
+            ui.weak("Its scripts then show up in your searches too. Preferences > Online Library turns it off again.");
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if ui.button(if listed { "Turn on and show" } else { "Add and show" }).clicked() {
@@ -939,7 +939,7 @@ impl App {
                 self.library.key_changed.insert(server.clone(), info.key.clone());
                 self.library.errors.push((
                     server,
-                    "its key has changed since it was first used, so it isn't trusted (Preferences > Library)".into(),
+                    "its key has changed since it was first used, so it isn't trusted (Preferences > Online Library)".into(),
                 ));
                 return;
             }
@@ -1118,7 +1118,7 @@ impl App {
             });
         }
         if servers.is_empty() {
-            ui.weak("No servers in use: turn one on in Preferences > Library.");
+            ui.weak("No servers in use: turn one on in Preferences > Online Library.");
             return;
         }
         let pass = ui.ctx().cumulative_pass_nr();
@@ -2074,7 +2074,7 @@ impl App {
             match (&my_id, draft.anonymous) {
                 (_, true) => ui.weak("Anonymous: once it's up, it can't be changed or taken down from here."),
                 (Some(id), false) => ui.weak(format!("Signed as #{id}: you can publish new versions or delete it later.")),
-                (None, false) => ui.weak("Signed with your identity, made now (Preferences > Library to back it up)."),
+                (None, false) => ui.weak("Signed with your identity, made now (Preferences > Online Library to back it up)."),
             };
             if let Some(info) = self.library.infos.get(&draft.server) {
                 ui.weak(format!("Shared under {}. {}", info.license.replace('-', " "), info.rules));
@@ -2245,7 +2245,7 @@ impl App {
         Identity::load().ok_or_else(|| "it wasn't saved".to_string())
     }
 
-    /// Preferences > Library: the servers in use, and the identity.
+    /// Preferences > Online Library: the servers in use, and the identity.
     pub(super) fn library_preferences_ui(&mut self, ui: &mut egui::Ui) {
         if !crate::build_info::online_features() {
             ui.label(crate::build_info::OFFLINE_NOTE);
@@ -2454,7 +2454,7 @@ impl App {
 /// a branch build.
 fn no_server_hint() -> &'static str {
     if crate::build_info::online_features() {
-        "Turn on a library server first (Preferences > Library)"
+        "Turn on a library server first (Preferences > Online Library)"
     } else {
         crate::build_info::OFFLINE_NOTE
     }

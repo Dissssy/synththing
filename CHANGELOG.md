@@ -12,6 +12,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### Changed
 - Songs, Soundfonts and the playlist are one kind of list now and work alike: click selects, double-click plays a song, opens a folder or uses a soundfont.
 - A name too long for its list is cut short with "...", and hovering it shows all of it.
+- Preferences are arranged by what they're for: Appearance (with the theme), Playback, Songs, Visualizers, Online Library, Updates, App and Recording. In the mobile layout they're a page of their own, each section opening in its place, and back (or Escape) steps out again.
 - Feedback asking for something new is filed as a feature request for the developers to decide on; only bug reports go on to automatic fixes.
 
 ### Fixed

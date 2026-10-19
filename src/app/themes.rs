@@ -52,7 +52,7 @@ const MAX_SCALE: f32 = 2.0;
 
 impl App {
     /// The theme in use: the one picked, else the default.
-    fn current_theme(&self) -> Theme {
+    pub(super) fn current_theme(&self) -> Theme {
         let name = self.config.theme.as_deref().unwrap_or(theme::DEFAULT_THEME);
         theme::builtins()
             .into_iter()
@@ -61,11 +61,11 @@ impl App {
             .unwrap_or_else(|| theme::builtins().into_iter().find(|t| t.name == theme::DEFAULT_THEME).unwrap())
     }
 
-    fn theme_names(&self) -> Vec<String> {
+    pub(super) fn theme_names(&self) -> Vec<String> {
         theme::builtins().into_iter().map(|t| t.name).chain(self.themes.custom.iter().map(|t| t.name.clone())).collect()
     }
 
-    fn pick_theme(&mut self, ctx: &egui::Context, name: String) {
+    pub(super) fn pick_theme(&mut self, ctx: &egui::Context, name: String) {
         self.themes.renaming = None;
         self.themes.confirm_delete = false;
         self.config.theme = (name != theme::DEFAULT_THEME).then_some(name);

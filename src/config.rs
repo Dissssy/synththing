@@ -201,7 +201,7 @@ pub struct Session {
     pub script: Option<PathBuf>,
 }
 
-/// The script library's servers (Preferences > Library).
+/// The script library's servers (Preferences > Online Library).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LibrarySettings {

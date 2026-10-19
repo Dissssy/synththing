@@ -91,6 +91,16 @@ impl eframe::App for Shared {
             top: px(top),
             bottom: px(bottom),
         }));
+        // Android's back (the button, or the gesture) is the app's Escape:
+        // it closes what's open, and the mobile layout goes back a step
+        // (`mobile_back`).
+        for event in &mut raw_input.events {
+            if let egui::Event::Key { key, .. } = event
+                && *key == egui::Key::BrowserBack
+            {
+                *key = egui::Key::Escape;
+            }
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -349,6 +359,15 @@ pub fn set_fullscreen(on: bool, over_cutout: bool) {
     }
     call("going full screen", |env, activity| {
         env.call_method(activity, "setFullscreen", "(Z)V", &[JValue::Bool(on.into())])?;
+        Ok(())
+    });
+}
+
+/// Put the app in the background, as Android's back does on the home
+/// screen's apps (playback carries on).
+pub fn leave() {
+    call("leaving", |env, activity| {
+        env.call_method(activity, "moveTaskToBack", "(Z)Z", &[JValue::Bool(1)])?;
         Ok(())
     });
 }

@@ -1,6 +1,6 @@
 //! Closing the window: quitting, or (where there's a tray) hiding to it and
 //! carrying on, music and all. The first close asks which, once; after
-//! that it's Preferences > General. Either way, a recording running asks
+//! that it's Preferences > App. Either way, a recording running asks
 //! first what to do with it: recording needs the window, so it never
 //! carries on hidden.
 
@@ -216,7 +216,7 @@ fn first_time_text(ui: &mut egui::Ui) {
     ));
     ui.label(format!("{}  Right-click it to bring the window back.", super::icon("app-window")));
     ui.add_space(4.0);
-    ui.weak("Quit (in the synththing menu, or the mini player) always closes it completely. You can change this any time in Preferences > General.");
+    ui.weak("Quit (in the synththing menu, or the mini player) always closes it completely. You can change this any time in Preferences > App.");
 }
 
 fn live_recording_ui(ui: &mut egui::Ui, action: CloseAction, answer: &mut Option<Answer>) {

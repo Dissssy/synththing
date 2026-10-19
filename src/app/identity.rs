@@ -1,4 +1,4 @@
-//! The identity's recovery and rotation, in Preferences > Library
+//! The identity's recovery and rotation, in Preferences > Online Library
 //! (docs/SERVER.md, Authorities): an email attached at the authority (the
 //! official server) for recovery, a new key in place of the old one, and
 //! recovering with the email when the key's lost. The records of each
@@ -216,7 +216,7 @@ impl App {
         }
     }
 
-    /// Preferences > Library, under the identity: its email, a new key,
+    /// Preferences > Online Library, under the identity: its email, a new key,
     /// recovery.
     pub(super) fn recovery_ui(&mut self, ui: &mut egui::Ui, current: Option<&Identity>) {
         let (authority, key) = self.authority();

@@ -57,7 +57,7 @@ The existing workflows already handle the release side: `scripts.yml` skips scri
 
 ### Online features
 
-- **Branch builds**: online and library features are off. They're for testing a feature, not for uploading to the real library server. `build_info::online_features()` is false, so `enabled_servers()` is empty (Publish and Remix are disabled, nothing is searched or checked), the Online Library tab and Preferences > Library say so instead, and as a backstop every request through the library client fails before it's sent (a ureq middleware in `library/client.rs`; tests still reach their own server).
+- **Branch builds**: online and library features are off. They're for testing a feature, not for uploading to the real library server. `build_info::online_features()` is false, so `enabled_servers()` is empty (Publish and Remix are disabled, nothing is searched or checked), the Online Library tab and Preferences > Online Library say so instead, and as a backstop every request through the library client fails before it's sent (a ureq middleware in `library/client.rs`; tests still reach their own server).
 - **Canary**: online features stay on. When master changes anything about uploads or the library API (not scripts, covered above), a test server is set up by hand and testers add it as needed.
 
 ### Channels in the updater
@@ -65,7 +65,7 @@ The existing workflows already handle the release side: `scripts.yml` skips scri
 `updater::Track` is what a build follows:
 
 - **Stable**: `/releases/latest`, as before.
-- **Canary** (Preferences > General > Canary updates, `Config::canary_updates`): whichever is higher, `/releases/latest` or the `nightly` release. After 0.8.0 ships, it sorts above every `0.7.1` nightly, so canary installs the release; the next master commit is `0.8.1-nightly.1` and canary moves back to nightlies. Canary only ever moves forward, so it's a setting on the normal install, with no folder of its own (the config wipe above happens only when moving to an older build). Turning it off keeps the build you have until the next release.
+- **Canary** (Preferences > Updates > Canary updates, `Config::canary_updates`): whichever is higher, `/releases/latest` or the `nightly` release. After 0.8.0 ships, it sorts above every `0.7.1` nightly, so canary installs the release; the next master commit is `0.8.1-nightly.1` and canary moves back to nightlies. Canary only ever moves forward, so it's a setting on the normal install, with no folder of its own (the config wipe above happens only when moving to an older build). Turning it off keeps the build you have until the next release.
 - **Branch**: a branch build follows its own `branch-<name>` release, by commit (a rebased branch can count fewer commits). When that release is gone (the branch was merged or deleted), the startup check opens the Updates window, which says so and offers to open the usual synththing (the exe that installed it).
 
 The setting is a bool, not an enum of channels: a build reading a channel name it didn't know would fail to read the whole config.

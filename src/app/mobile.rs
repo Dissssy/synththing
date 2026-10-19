@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, AtomExt as _};
 
+use super::preferences::PrefTab;
 use super::{fmt_time, icon, on_color, palette_color, status_color, status_outcome, App};
 use crate::audio::{AudioCommand, PlaybackShared};
 use crate::engine::EngineView;
@@ -43,6 +44,8 @@ pub(super) enum Page {
     Scripts,
     Library,
     Downloads,
+    /// From the menu's lower part, not its pages.
+    Preferences,
 }
 
 impl Page {
@@ -65,6 +68,7 @@ impl Page {
             Self::Scripts => "Visualizers",
             Self::Library => "Script library",
             Self::Downloads => "Downloaded songs",
+            Self::Preferences => "Preferences",
         }
     }
 
@@ -77,6 +81,7 @@ impl Page {
             Self::Scripts => "waveform",
             Self::Library => "storefront",
             Self::Downloads => "download-simple",
+            Self::Preferences => "gear",
         }
     }
 }
@@ -98,6 +103,11 @@ pub(super) struct Mobile {
     /// being shown, since when (`status_toast_ui`).
     seen_status: Option<String>,
     toast: Option<(String, Instant)>,
+    /// The Preferences section open, if one is (else the list of them).
+    pref_section: Option<PrefTab>,
+    /// When back was pressed with nothing left to go back from: a second
+    /// press while its toast shows leaves (`mobile_back`).
+    back_to_leave: Option<Instant>,
 }
 
 /// How long a status shows: a failure longer, to be read.
@@ -130,6 +140,7 @@ impl App {
 
     pub(super) fn mobile_ui(&mut self, ui: &mut egui::Ui, shared: &PlaybackShared) {
         let ctx = ui.ctx().clone();
+        self.mobile_back(&ctx);
         let view = &shared.view;
         let page = self.mobile_state.page;
         let fill_screen = page == Page::NowPlaying && self.mobile_state.collapsed;
@@ -172,6 +183,7 @@ impl App {
                 Page::Scripts => self.mobile_scripts_ui(ui),
                 Page::Library => self.library_ui(ui),
                 Page::Downloads => self.downloaded_songs_ui(ui),
+                Page::Preferences => self.mobile_preferences_ui(ui),
             });
         }
         if self.mobile_state.drawer_open {
@@ -183,14 +195,77 @@ impl App {
     /// the right, as on the desktop.
     fn mobile_top_bar_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.add(big_icon_button("list", 36.0)).on_hover_text("Menu").clicked() {
-                self.mobile_state.drawer_open = true;
+            // In a Preferences section: back to the list of them instead.
+            match self.mobile_state.pref_section.filter(|_| self.mobile_state.page == Page::Preferences) {
+                Some(section) => {
+                    if ui.add(big_icon_button("arrow-left", 36.0)).on_hover_text("Back").clicked() {
+                        self.mobile_state.pref_section = None;
+                    }
+                    ui.heading(section.title());
+                }
+                None => {
+                    if ui.add(big_icon_button("list", 36.0)).on_hover_text("Menu").clicked() {
+                        self.mobile_state.drawer_open = true;
+                    }
+                    ui.heading(self.mobile_state.page.title());
+                }
             }
-            ui.heading(self.mobile_state.page.title());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.notifications_button_ui(ui);
                 self.feedback_button_ui(ui);
             });
+        });
+    }
+
+    /// Back (Android's back, Escape on the desktop), a step at a time: a
+    /// dialog or popup closes itself (egui's own Escape), then the menu,
+    /// a Preferences section, full screen, any page but Now playing, and
+    /// last, on Android, leaving (pressed twice, as other apps do).
+    fn mobile_back(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            || ctx.memory(|m| m.top_modal_layer().is_some())
+            || egui::Popup::is_any_open(ctx)
+        {
+            return;
+        }
+        let state = &mut self.mobile_state;
+        if state.drawer_open {
+            state.drawer_open = false;
+        } else if state.page == Page::Preferences && state.pref_section.is_some() {
+            state.pref_section = None;
+        } else if state.page == Page::NowPlaying && state.collapsed {
+            state.collapsed = false;
+        } else if state.page != Page::NowPlaying {
+            state.page = Page::NowPlaying;
+        } else if cfg!(target_os = "android") {
+            if state.back_to_leave.is_some_and(|at| at.elapsed() < TOAST) {
+                state.back_to_leave = None;
+                state.toast = None;
+                #[cfg(target_os = "android")]
+                crate::android::leave();
+            } else {
+                state.back_to_leave = Some(Instant::now());
+                state.toast = Some(("Back again to leave synththing.".into(), Instant::now()));
+            }
+        }
+    }
+
+    /// The Preferences page: the sections, each opening in its place.
+    fn mobile_preferences_ui(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.mobile_state.pref_section {
+            Some(section) => {
+                ui.spacing_mut().item_spacing.y = 8.0;
+                if let Some(jump) = self.preference_tab_ui(ui, section) {
+                    self.preference_jump(jump);
+                }
+            }
+            None => {
+                for section in PrefTab::available() {
+                    if section_row(ui, section).clicked() {
+                        self.mobile_state.pref_section = Some(section);
+                    }
+                }
+            }
         });
     }
 
@@ -494,7 +569,8 @@ impl App {
         };
         let mut close = false;
         if item(ui, "gear", "Preferences") {
-            self.preferences_open = true;
+            self.mobile_state.page = Page::Preferences;
+            self.mobile_state.pref_section = None;
             close = true;
         }
         if item(ui, "palette", "Themes") {
@@ -536,7 +612,7 @@ impl App {
 
 impl App {
     /// An available update, on Android: unless installing in the app is
-    /// on (Preferences > Experimental) and allowed, it's only announced,
+    /// on (Preferences > Updates) and allowed, it's only announced,
     /// once. `None` on the desktop, and on Android when it can be
     /// installed (the usual Install buttons follow); `Some(true)` once the
     /// announcement's been seen.
@@ -625,6 +701,35 @@ impl App {
 }
 
 /// An icon button `size` points square, big enough for a finger.
+/// A Preferences section in the list: its icon, title and what's in it,
+/// the width of `ui`.
+fn section_row(ui: &mut egui::Ui, section: PrefTab) -> egui::Response {
+    let height = 60.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
+    let visuals = ui.style().interact(&response);
+    if response.hovered() || response.is_pointer_button_down_on() {
+        ui.painter().rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
+    }
+    let painter = ui.painter();
+    let text = ui.visuals().text_color();
+    let weak = ui.visuals().weak_text_color();
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let small = egui::TextStyle::Small.resolve(ui.style());
+    let icon_font = egui::FontId::proportional(22.0);
+    painter.text(egui::pos2(rect.left() + 22.0, rect.center().y), egui::Align2::CENTER_CENTER, icon(section.icon()), icon_font.clone(), text);
+    let left = rect.left() + 48.0;
+    painter.text(egui::pos2(left, rect.center().y - 2.0), egui::Align2::LEFT_BOTTOM, section.title(), body, text);
+    painter.text(egui::pos2(left, rect.center().y + 2.0), egui::Align2::LEFT_TOP, section.summary(), small, weak);
+    painter.text(
+        egui::pos2(rect.right() - 16.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        icon("caret-right"),
+        egui::FontId::proportional(16.0),
+        weak,
+    );
+    response
+}
+
 fn big_icon_button(name: &str, size: f32) -> egui::Button<'static> {
     // (Growing, the icon is centered in the button.)
     egui::Button::new(egui::RichText::new(icon(name)).size(size * 0.5).atom_grow(true)).min_size(egui::Vec2::splat(size))
