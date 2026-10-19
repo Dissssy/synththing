@@ -380,6 +380,12 @@ pub fn stable_config_dir() -> Result<PathBuf> {
     Ok(dirs.config_dir().to_path_buf())
 }
 
+/// The song library of the mobile layout (`import.rs`): what's been
+/// imported, in the config folder.
+pub fn music_dir() -> Result<PathBuf> {
+    Ok(config_dir()?.join("music"))
+}
+
 /// Where downloads with no format of synththing's own go (ffmpeg, the
 /// starter soundfonts), so a branch build shares them with the stable one
 /// instead of downloading its own: the stable config directory, or

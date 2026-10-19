@@ -1172,6 +1172,7 @@ impl App {
     }
 
     /// Browse for soundfonts to add: one or several at once.
+    #[cfg(not(target_os = "android"))]
     fn open_soundfont_browser(&mut self) {
         if let Some(paths) = rfd::FileDialog::new()
             .add_filter("SoundFont", &["sf2"])
@@ -1417,7 +1418,11 @@ impl App {
     fn soundfont_ui(&mut self, ui: &mut egui::Ui) {
         self.starter_progress_ui(ui);
         ui.horizontal(|ui| {
-            if ui.button("Add soundfont...").clicked() {
+            if self.mobile() {
+                if ui.button(format!("{}  Import soundfonts...", icon("plus"))).on_hover_text("Copy soundfonts into synththing").clicked() {
+                    crate::import::start(ui.ctx(), crate::import::Kind::Soundfonts, &["sf2"]);
+                }
+            } else if ui.button("Add soundfont...").clicked() {
                 self.open_soundfont_browser();
             }
         });
@@ -2398,23 +2403,60 @@ impl App {
     }
 
     fn songs_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui
-                .button("Set as default")
-                .on_hover_text("Open the song browser in this folder from now on")
-                .clicked()
-            {
-                let dir = self.browser.cwd().to_path_buf();
-                self.status = match self.config.set_browse_dir(dir) {
-                    Ok(()) => "Default song folder updated.".to_string(),
-                    Err(e) => format!("Failed to save default folder: {e}"),
-                };
+        if self.mobile() {
+            // The song library: what's been imported, and nothing else.
+            let library = config::music_dir().and_then(|dir| {
+                std::fs::create_dir_all(&dir)?;
+                Ok(dir)
+            });
+            match library {
+                Ok(dir) => {
+                    self.browser.set_root(Some(dir));
+                }
+                Err(e) => self.status = format!("Couldn't open the song library: {e:#}"),
             }
-        });
+            if ui.button(format!("{}  Import songs...", icon("plus"))).on_hover_text("Copy songs into synththing's library").clicked() {
+                crate::import::start(ui.ctx(), crate::import::Kind::Songs, listed_song_extensions(&self.config));
+            }
+        } else {
+            if self.browser.set_root(None) {
+                self.browser.navigate_to(self.config.browse_start_dir());
+            }
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Set as default")
+                    .on_hover_text("Open the song browser in this folder from now on")
+                    .clicked()
+                {
+                    let dir = self.browser.cwd().to_path_buf();
+                    self.status = match self.config.set_browse_dir(dir) {
+                        Ok(()) => "Default song folder updated.".to_string(),
+                        Err(e) => format!("Failed to save default folder: {e}"),
+                    };
+                }
+            });
+        }
         let cache = &mut self.song_info;
         let info_open = &mut self.song_info_open;
         let mut publish = None;
+        let mut add_to: Option<(Option<usize>, PathBuf)> = None;
+        // With no dragging (touch), songs go onto playlists from their menu.
+        let touch = select_list::touch(ui.ctx());
+        let playlists: Vec<String> =
+            if touch { self.playlists.lists.iter().map(|l| l.playlist.name.clone()).collect() } else { Vec::new() };
         let mut menu = |ui: &mut egui::Ui, path: &Path| {
+            if touch {
+                ui.menu_button("Add to playlist", |ui| {
+                    for (i, name) in playlists.iter().enumerate() {
+                        if ui.button(name).clicked() {
+                            add_to = Some((Some(i), path.to_path_buf()));
+                        }
+                    }
+                    if ui.button("New playlist").clicked() {
+                        add_to = Some((None, path.to_path_buf()));
+                    }
+                });
+            }
             if is_midi_path(path)
                 && ui.button("Publish song...").on_hover_text("Share it on a library server that takes songs").clicked()
             {
@@ -2431,6 +2473,34 @@ impl App {
         }
         if let Some(path) = publish {
             self.open_publish_song(path);
+        }
+        if let Some((list, path)) = add_to {
+            self.add_to_playlist(list, vec![path]);
+        }
+    }
+
+    /// Imports that have finished (`import.rs`): songs show up in the
+    /// library, soundfonts join the list.
+    fn poll_imports(&mut self) {
+        for done in crate::import::take_finished() {
+            let paths = match done.result {
+                Ok(paths) => paths,
+                Err(e) => {
+                    self.status = format!("Couldn't import: {e}");
+                    continue;
+                }
+            };
+            if paths.is_empty() {
+                continue;
+            }
+            match done.kind {
+                crate::import::Kind::Songs => {
+                    self.browser.rescan();
+                    let n = paths.len();
+                    self.status = format!("Imported {n} song{}.", if n == 1 { "" } else { "s" });
+                }
+                crate::import::Kind::Soundfonts => self.add_soundfonts(paths),
+            }
         }
     }
 
@@ -3469,6 +3539,7 @@ impl eframe::App for App {
         let shared = self.shared.lock().unwrap().clone();
         let view = &shared.view;
         self.visualizer_drawn = false;
+        select_list::set_touch(&ctx, self.mobile());
         self.pad_frame = self.gamepads.poll(ctx.input(|i| i.focused));
         if !self.pad_frame.down.is_empty() || !self.pad_frame.released.is_empty() {
             ctx.request_repaint();
@@ -3691,6 +3762,7 @@ impl eframe::App for App {
         }
         self.sync_script_song(&view);
         self.poll_loads();
+        self.poll_imports();
         self.refresh_changed_folders(ctx);
         if self.song_info.poll() {
             ctx.request_repaint_after(Duration::from_millis(100));

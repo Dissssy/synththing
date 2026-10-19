@@ -26,6 +26,7 @@ mod ffmpeg;
 mod filebrowser;
 mod gamepad;
 mod headless;
+mod import;
 mod instance;
 mod layout;
 mod library;

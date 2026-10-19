@@ -225,6 +225,26 @@ impl App {
             .or_else(|| (!self.playlists.lists.is_empty()).then_some(0));
     }
 
+    /// Add `songs` to the end of playlist `list`, or a new playlist of
+    /// them (`None`): the touch layout's "Add to playlist", which has no
+    /// dragging.
+    pub(super) fn add_to_playlist(&mut self, list: Option<usize>, songs: Vec<PathBuf>) {
+        let count = songs.len();
+        let name = match list {
+            Some(list) => {
+                let end = self.playlists.lists.get(list).map_or(0, |l| l.playlist.entries.len());
+                self.insert_songs(list, end, songs);
+                self.playlists.lists.get(list).map(|l| l.playlist.name.clone()).unwrap_or_default()
+            }
+            None => {
+                let name = self.unique_playlist_name("New playlist");
+                self.create_playlist(&name, songs);
+                name
+            }
+        };
+        self.status = format!("Added {count} song{} to {name}.", if count == 1 { "" } else { "s" });
+    }
+
     /// Insert `songs` at `at`; a folder among them adds the songs directly
     /// in it.
     fn insert_songs(&mut self, list: usize, at: usize, songs: Vec<PathBuf>) {

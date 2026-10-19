@@ -65,8 +65,13 @@ pub fn download_size() -> u64 {
 }
 
 /// Where the songs go: Music\synththing\Starter songs (or under the home
-/// folder), somewhere easy to find.
+/// folder), somewhere easy to find. On Android, in the song library
+/// (`config::music_dir`).
 pub fn songs_dir() -> PathBuf {
+    #[cfg(target_os = "android")]
+    if let Ok(music) = crate::config::music_dir() {
+        return music.join("Starter songs");
+    }
     let dirs = UserDirs::new();
     let base = dirs
         .as_ref()

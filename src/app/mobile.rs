@@ -134,6 +134,7 @@ impl App {
                 self.mobile_expand_handle_ui(&ctx);
             }
         } else {
+            egui::Panel::bottom("mobile_now_playing_bar").show(ui, |ui| self.mobile_now_playing_bar_ui(ui, view));
             egui::CentralPanel::default().show(ui, |ui| match page {
                 Page::NowPlaying => {}
                 Page::Songs => self.songs_ui(ui),
@@ -268,6 +269,25 @@ impl App {
             }
         });
         ui.add_space(6.0);
+    }
+
+    /// On the other pages: what's playing, with play/pause; tapping the
+    /// name goes to Now playing.
+    fn mobile_now_playing_bar_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        ui.horizontal(|ui| {
+            let (glyph, color) = if view.paused { ("play", palette_color(2)) } else { ("pause", palette_color(1)) };
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let play = egui::Button::new(egui::RichText::new(icon(glyph)).size(20.0).color(color)).min_size(egui::Vec2::splat(40.0));
+                if ui.add(play).on_hover_text(if view.paused { "Play" } else { "Pause" }).clicked() {
+                    self.send(AudioCommand::TogglePause);
+                }
+                let title = view.track_name.as_deref().unwrap_or("Nothing playing");
+                let name = egui::Label::new(egui::RichText::new(title).strong()).truncate().sense(egui::Sense::click());
+                if ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(name)).inner.clicked() {
+                    self.mobile_state.page = Page::NowPlaying;
+                }
+            });
+        });
     }
 
     /// With the controls folded away: the way back, in a corner.
