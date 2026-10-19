@@ -81,6 +81,24 @@ enum Event {
     Encored(String, String, Result<library::EncoreState, String>),
 }
 
+/// What a click in the Library's list or details asks for, done once
+/// they're drawn (`library_ui`).
+#[derive(Default)]
+struct LibraryActions {
+    pick: Option<(String, String)>,
+    /// One linked from the details (a remix, its original, a song's
+    /// script): shown once it's fetched, added to the list if it isn't in it.
+    open: Option<(String, String)>,
+    install: Option<(String, ScriptSummary)>,
+    update: Option<PathBuf>,
+    use_script: Option<PathBuf>,
+    show_author: Option<(String, String)>,
+    delete: Option<(String, String)>,
+    encore: Option<(String, String, bool)>,
+    open_remote: Option<(String, library::RemixLink)>,
+    report: Option<(String, String, String, u32, bool)>,
+}
+
 /// The selected script's preview, from its server.
 struct LibraryPreview {
     server: String,
@@ -775,6 +793,20 @@ impl App {
         }
     }
 
+    /// Whether a pick's details are showing: always beside the list on the
+    /// desktop, a page of their own in the mobile layout (`library_ui`).
+    pub(super) fn library_details_open(&self) -> bool {
+        let found = |(server, id): &(String, String)| self.library.results.iter().any(|f| f.server == *server && f.summary.id == *id);
+        self.library.selected.as_ref().is_some_and(found)
+    }
+
+    /// The mobile layout's back from a pick's details, to the list.
+    pub(super) fn library_close_details(&mut self) {
+        self.library.selected = None;
+        self.library.details = None;
+        self.library.confirm_delete = None;
+    }
+
     /// Show a script in the Library's details (a server in use).
     pub(super) fn library_open_script(&mut self, server: String, id: String) {
         self.library.confirm_delete = None;
@@ -1034,69 +1066,74 @@ impl App {
             return;
         }
         let servers = self.config.library.enabled_servers();
+        // The mobile layout shows the list, and a pick's details on a page
+        // of their own (`library_close_details` goes back to the list).
+        let details_page = self.mobile() && self.library_details_open();
         let mut search = false;
         let mut open_moderation = false;
         let mut open_document: Option<(String, library::ServerDocument)> = None;
         let mut side = None;
-        ui.horizontal_wrapped(|ui| {
-            if ui.selectable_label(!self.library.songs, "Scripts").clicked() {
-                side = Some(false);
-            }
-            if ui.selectable_label(self.library.songs, "Songs").clicked() {
-                side = Some(true);
-            }
-            ui.separator();
-            let songs = self.library.songs;
-            let hint = if songs { "Search songs" } else { "Search scripts" };
-            let edit = ui.add(egui::TextEdit::singleline(&mut self.library.query).hint_text(hint).desired_width(220.0));
-            if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                search = true;
-            }
-            let (kinds, title): (Vec<&'static str>, fn(&str) -> &str) = if songs {
-                (songs::SOURCES.iter().map(|(s, _)| *s).collect(), songs::source_title)
-            } else {
-                (library::CATEGORIES.to_vec(), library::category_title)
-            };
-            let all = if songs { "From anywhere" } else { "All kinds" };
-            let category = self.library.category.map(title).unwrap_or(all);
-            egui::ComboBox::from_id_salt("library_category").selected_text(category).show_ui(ui, |ui| {
-                search |= ui.selectable_value(&mut self.library.category, None, all).clicked();
-                for c in kinds {
-                    let option = kind_option(ui, c, title(c));
-                    search |= ui.selectable_value(&mut self.library.category, Some(c), option).clicked();
+        if !details_page {
+            ui.horizontal_wrapped(|ui| {
+                if ui.selectable_label(!self.library.songs, "Scripts").clicked() {
+                    side = Some(false);
                 }
-            });
-            let sort = SORTS.iter().find(|(s, _)| *s == self.library.sort).map(|(_, t)| *t).unwrap_or("Newest");
-            egui::ComboBox::from_id_salt("library_sort").selected_text(sort).show_ui(ui, |ui| {
-                for (s, title) in SORTS {
-                    search |= ui.selectable_value(&mut self.library.sort, s, title).clicked();
+                if ui.selectable_label(self.library.songs, "Songs").clicked() {
+                    side = Some(true);
                 }
-            });
-            search |= ui.button("Search").clicked();
-            // Each server's documents (its EULA, privacy policy), to read.
-            for server in &servers {
-                let Some(info) = self.library.infos.get(server) else { continue };
-                for document in &info.documents {
-                    let hover = if servers.len() > 1 {
-                        format!("Read {} ({})", document.title, host(server))
-                    } else {
-                        format!("Read {}", document.title)
-                    };
-                    if ui.button(super::icon(&document.icon)).on_hover_text(hover).clicked() {
-                        open_document = Some((server.clone(), document.clone()));
+                ui.separator();
+                let songs = self.library.songs;
+                let hint = if songs { "Search songs" } else { "Search scripts" };
+                let edit = ui.add(egui::TextEdit::singleline(&mut self.library.query).hint_text(hint).desired_width(220.0));
+                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    search = true;
+                }
+                let (kinds, title): (Vec<&'static str>, fn(&str) -> &str) = if songs {
+                    (songs::SOURCES.iter().map(|(s, _)| *s).collect(), songs::source_title)
+                } else {
+                    (library::CATEGORIES.to_vec(), library::category_title)
+                };
+                let all = if songs { "From anywhere" } else { "All kinds" };
+                let category = self.library.category.map(title).unwrap_or(all);
+                egui::ComboBox::from_id_salt("library_category").selected_text(category).show_ui(ui, |ui| {
+                    search |= ui.selectable_value(&mut self.library.category, None, all).clicked();
+                    for c in kinds {
+                        let option = kind_option(ui, c, title(c));
+                        search |= ui.selectable_value(&mut self.library.category, Some(c), option).clicked();
+                    }
+                });
+                let sort = SORTS.iter().find(|(s, _)| *s == self.library.sort).map(|(_, t)| *t).unwrap_or("Newest");
+                egui::ComboBox::from_id_salt("library_sort").selected_text(sort).show_ui(ui, |ui| {
+                    for (s, title) in SORTS {
+                        search |= ui.selectable_value(&mut self.library.sort, s, title).clicked();
+                    }
+                });
+                search |= ui.button("Search").clicked();
+                // Each server's documents (its EULA, privacy policy), to read.
+                for server in &servers {
+                    let Some(info) = self.library.infos.get(server) else { continue };
+                    for document in &info.documents {
+                        let hover = if servers.len() > 1 {
+                            format!("Read {} ({})", document.title, host(server))
+                        } else {
+                            format!("Read {}", document.title)
+                        };
+                        if ui.button(super::icon(&document.icon)).on_hover_text(hover).clicked() {
+                            open_document = Some((server.clone(), document.clone()));
+                        }
                     }
                 }
-            }
-            if !READ_ONLY
-                && self.moderation.is_admin_anywhere()
-                && ui.button("Moderation").on_hover_text("Reports, bans and admins, on the servers you moderate").clicked()
-            {
-                open_moderation = true;
-            }
-            if self.library.searching > 0 {
-                ui.spinner();
-            }
-        });
+                if !READ_ONLY
+                    && self.moderation.is_admin_anywhere()
+                    && ui.button("Moderation").on_hover_text("Reports, bans and admins, on the servers you moderate").clicked()
+                {
+                    open_moderation = true;
+                }
+                if self.library.searching > 0 {
+                    ui.spinner();
+                }
+            });
+        }
         if open_moderation {
             self.open_moderation();
         }
@@ -1127,316 +1164,55 @@ impl App {
         if !self.library.searched || search || reopened {
             self.library_search();
         }
-        if let Some((server, id)) = self.library.author.clone() {
-            let mut everyone = false;
-            ui.horizontal_wrapped(|ui| {
-                let info = self.library.author_info.as_ref();
-                let names = info.map(|u| u.names.join(", ")).unwrap_or_default();
-                ui.strong(format!("Uploads by #{id}"));
-                if !names.is_empty() {
-                    ui.label(format!("(posts as {names})"));
-                }
-                if let Some(info) = info {
-                    ui.weak(format!(
-                        "{} script{}, {} encore{} on {}",
-                        info.scripts,
-                        if info.scripts == 1 { "" } else { "s" },
-                        info.encores,
-                        if info.encores == 1 { "" } else { "s" },
-                        host(&server)
-                    ));
-                }
-                everyone = ui.small_button("Show everyone's").clicked();
-            });
-            if everyone {
-                self.library_show_author(None);
-            }
-        }
-        for (server, error) in &self.library.errors {
-            ui.colored_label(ui.visuals().warn_fg_color, format!("{}: {error}", host(server)));
-        }
-        if self.library.songs && servers.iter().all(|s| self.library.infos.get(s).is_some_and(|i| !i.songs)) {
-            ui.weak("None of your library servers take songs: each server's owner decides whether it does.");
-        }
-        ui.separator();
-
-        let mut pick = None;
-        let mut install = None;
-        let mut update = None;
-        let mut use_script = None;
-        let mut show_author = None;
-        let mut delete = None;
-        let mut encore: Option<(String, String, bool)> = None;
-        let mut open_remote: Option<(String, library::RemixLink)> = None;
-        let mut report: Option<(String, String, String, u32, bool)> = None;
-        let my_id = self.library.my_id();
-        let official_id = library::official_id();
-        ui.columns(2, |columns| {
-            let ui = &mut columns[0];
-            egui::ScrollArea::vertical().id_salt("library_results").auto_shrink([false, false]).show(ui, |ui| {
-                if self.library.results.is_empty() && self.library.searching == 0 {
-                    ui.weak(if self.library.query.trim().is_empty() { "Nothing here yet." } else { "Nothing found." });
-                }
-                for found in &self.library.results {
-                    let selected = self
-                        .library
-                        .selected
-                        .as_ref()
-                        .is_some_and(|(s, id)| *s == found.server && *id == found.summary.id);
-                    let s = &found.summary;
-                    let official = s.author_id.as_deref() == Some(official_id.as_str());
-                    let kind = match &s.song {
-                        Some(_) => songs::source_title(&s.category),
-                        None => library::category_title(&s.category),
-                    };
-                    // (Its highlight goes under it, once it's known whether it's hovered.)
-                    let highlight = ui.painter().add(egui::Shape::Noop);
-                    let row = ui
-                        .scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
-                            egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 3)).show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                ui.spacing_mut().item_spacing.y = 2.0;
-                                // (Its text isn't selectable: a click anywhere picks the row.)
-                                ui.style_mut().interaction.selectable_labels = false;
-                                ui.label(egui::RichText::new(&s.name).strong());
-                                ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 4.0;
-                                    super::chip(ui, kind, kind_color(ui, &s.category));
-                                    if let Some(song) = &s.song {
-                                        ui.weak(format!("{} ·", song.composer));
-                                    }
-                                    ui.weak("by");
-                                    // An official script's author in gold.
-                                    let author = egui::RichText::new(&s.author_name);
-                                    ui.label(if official { author.color(OFFICIAL_GOLD) } else { author.weak() });
-                                    ui.weak(format!("·  {} encore{}", s.encores, if s.encores == 1 { "" } else { "s" }));
-                                });
-                            });
-                        })
-                        .response;
-                    let visuals = ui.visuals();
-                    let fill = if selected {
-                        Some(visuals.selection.bg_fill)
-                    } else if row.hovered() {
-                        Some(visuals.widgets.hovered.weak_bg_fill)
-                    } else {
-                        None
-                    };
-                    if let Some(fill) = fill {
-                        ui.painter().set(highlight, egui::Shape::rect_filled(row.rect, visuals.widgets.hovered.corner_radius, fill));
-                    }
-                    let response = row.on_hover_cursor(egui::CursorIcon::PointingHand);
-                    let response = if official { response.on_hover_text(OFFICIAL_HOVER) } else { response };
-                    let response = if servers.len() > 1 { response.on_hover_text(host(&found.server)) } else { response };
-                    if response.clicked() {
-                        pick = Some((found.server.clone(), s.id.clone()));
-                    }
-                }
-                for (server, total) in &self.library.totals {
-                    let shown = self.library.results.iter().filter(|f| f.server == *server).count() as u64;
-                    if *total > shown {
-                        ui.weak(format!("{}: the first {shown} of {total}; search to narrow it down", host(server)));
-                    }
-                }
-            });
-
-            let ui = &mut columns[1];
-            egui::ScrollArea::vertical().id_salt("library_details").auto_shrink([false, false]).show(ui, |ui| {
-                let Some((server, id)) = self.library.selected.clone() else {
-                    ui.weak(if self.library.songs { "Pick a song to see more." } else { "Pick a script to see more." });
-                    return;
-                };
-                let Some(s) =
-                    self.library.results.iter().find(|f| f.server == server && f.summary.id == id).map(|f| f.summary.clone())
-                else {
-                    return;
-                };
-                let s = &s;
-                let song = s.song.clone();
-                if song.is_some() {
-                    self.song_preview_ui(ui, &server, s);
-                    ui.separator();
-                } else {
-                    self.library_preview_ui(ui, &server, &id);
-                }
-                ui.heading(&s.name);
+        if !details_page {
+            if let Some((server, id)) = self.library.author.clone() {
+                let mut everyone = false;
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("by");
-                    if s.author_id.as_deref() == Some(official_id.as_str()) {
-                        ui.label(egui::RichText::new(&s.author_name).strong().color(OFFICIAL_GOLD)).on_hover_text(OFFICIAL_HOVER);
-                    } else {
-                        ui.label(&s.author_name);
+                    let info = self.library.author_info.as_ref();
+                    let names = info.map(|u| u.names.join(", ")).unwrap_or_default();
+                    ui.strong(format!("Uploads by #{id}"));
+                    if !names.is_empty() {
+                        ui.label(format!("(posts as {names})"));
                     }
-                    match &s.author_id {
-                        Some(author) => {
-                            let label = if my_id.as_deref() == Some(author) { format!("#{author} (you)") } else { format!("#{author}") };
-                            if ui.link(label).on_hover_text("Everything they've posted on this server").clicked() {
-                                show_author = Some((server.clone(), author.clone()));
-                            }
-                        }
-                        None => {
-                            ui.weak("(anonymous)");
-                        }
+                    if let Some(info) = info {
+                        ui.weak(format!(
+                            "{} script{}, {} encore{} on {}",
+                            info.scripts,
+                            if info.scripts == 1 { "" } else { "s" },
+                            info.encores,
+                            if info.encores == 1 { "" } else { "s" },
+                            host(&server)
+                        ));
                     }
+                    everyone = ui.small_button("Show everyone's").clicked();
                 });
-                ui.horizontal(|ui| {
-                    let kind = match &song {
-                        Some(_) => songs::source_title(&s.category),
-                        None => library::category_title(&s.category),
-                    };
-                    super::chip(ui, kind, kind_color(ui, &s.category));
-                    ui.weak(format!("on {}", host(&server)));
-                });
-                if !s.tags.is_empty() {
-                    ui.weak(s.tags.join(", "));
+                if everyone {
+                    self.library_show_author(None);
                 }
-                ui.add_space(6.0);
-                let installed = self.installed_copy(&server, s);
-                ui.horizontal(|ui| {
-                    match &installed {
-                        _ if song.is_some() => self.song_actions_ui(ui, &server, s),
-                        Some((path, version)) if *version >= s.version => {
-                            ui.label(format!("Installed (version {version})"));
-                            if ui.button("Use it").clicked() {
-                                use_script = Some(path.clone());
-                            }
-                        }
-                        Some((path, version)) => {
-                            ui.label(format!("Version {version} installed; {} is out", s.version));
-                            if ui.add_enabled(!self.library.busy, egui::Button::new("Update")).clicked() {
-                                update = Some(path.clone());
-                            }
-                        }
-                        None => {
-                            if ui.add_enabled(!self.library.busy, egui::Button::new("Install")).clicked() {
-                                install = Some((server.clone(), s.clone()));
-                            }
-                        }
-                    }
-                    if !READ_ONLY && s.author_id.is_some() && s.author_id == my_id {
-                        let confirming = self.library.confirm_delete.as_ref() == Some(&(server.clone(), id.clone()));
-                        let label = if confirming { "Click again to delete it" } else { "Delete" };
-                        if ui
-                            .add_enabled(!self.library.busy, egui::Button::new(label))
-                            .on_hover_text("Take it off the server, every version (your copy stays)")
-                            .clicked()
-                        {
-                            if confirming {
-                                delete = Some((server.clone(), id.clone()));
-                            } else {
-                                self.library.confirm_delete = Some((server.clone(), id.clone()));
-                            }
-                        }
-                    }
-                });
-                // Encores and reports (not of your own).
-                let here = self.library.details.as_ref().filter(|(ds, d)| *ds == server && d.summary.id == id).map(|(_, d)| d);
-                let encored = here.and_then(|d| d.encored) == Some(true);
-                let reportable = here.and_then(|d| d.newest_for(library::supported_version()).or(d.newest())).map(|v| v.version);
-                let mine = s.author_id.is_some() && s.author_id == my_id;
-                ui.horizontal(|ui| {
-                    let count = format!("{} encore{}", s.encores, if s.encores == 1 { "" } else { "s" });
-                    if mine || READ_ONLY {
-                        ui.weak(count);
-                        return;
-                    }
-                    let label = if encored { format!("Encored ({})", s.encores) } else { format!("Encore ({})", s.encores) };
-                    let hover = if encored { "Take your encore back" } else { "Say you liked it: the only vote there is" };
-                    let ready = here.is_some() && !self.library.encoring;
-                    if ui.add_enabled_ui(ready, |ui| ui.selectable_label(encored, label)).inner.on_hover_text(hover).clicked() {
-                        encore = Some((server.clone(), id.clone(), !encored));
-                    }
-                    if let Some(version) = reportable
-                        && ui.button("Report...").on_hover_text("Tell this server's moderators something's wrong with it").clicked()
-                    {
-                        report = Some((server.clone(), id.clone(), s.name.clone(), version, song.is_some()));
-                    }
-                });
-                ui.add_space(6.0);
-                let description = match &self.library.details {
-                    Some((ds, d)) if *ds == server && d.summary.id == id => d.summary.description.clone(),
-                    _ => s.description.clone(),
-                };
-                ui.label(description);
-                if let Some(song) = &song {
-                    ui.add_space(6.0);
-                    if let Some(script) = super::song_library::song_facts_ui(ui, song) {
-                        pick = Some((server.clone(), script));
-                    }
-                }
-                // (Versions and what they need are a script's: any app plays any MIDI file.)
-                if let Some((ds, d)) = &self.library.details
-                    && *ds == server
-                    && d.summary.id == id
-                    && song.is_none()
-                {
-                    ui.add_space(6.0);
-                    let versions = d.versions.len();
-                    let made = d.versions.first().map(|v| v.app_version.clone()).unwrap_or_default();
-                    ui.weak(format!(
-                        "{versions} version{}; first published with synththing {made}",
-                        if versions == 1 { "" } else { "s" }
-                    ));
-                    let app = library::supported_version();
-                    if let Some(newest) = d.newest()
-                        && !library::runs_on(&newest.min_app_version, app)
-                    {
-                        let note = match d.newest_for(app) {
-                            Some(v) => format!(
-                                "Version {} needs synththing {}; this app gets version {}.",
-                                newest.version, newest.min_app_version, v.version
-                            ),
-                            None => format!("It needs synththing {} or newer.", newest.min_app_version),
-                        };
-                        ui.colored_label(ui.visuals().warn_fg_color, note);
-                    }
-                    // Where it came from, and what came of it.
-                    if let Some(original) = &d.remix_of {
-                        ui.add_space(6.0);
-                        ui.horizontal_wrapped(|ui| {
-                            if original.gone {
-                                ui.weak("Remixed from a deleted script.");
-                            } else if original.server.is_empty() {
-                                ui.label("Remix of");
-                                if ui.link(&original.name).on_hover_text("Show the original").clicked() {
-                                    pick = Some((server.clone(), original.id.clone()));
-                                }
-                                if let Some(version) = original.version {
-                                    ui.weak(format!("(version {version})"));
-                                }
-                            } else {
-                                // On another server: shown from there (added to the list first, if
-                                // it isn't in use).
-                                let there = library::resolve_server(&original.server);
-                                let in_use = servers.contains(&there);
-                                ui.label("Remix of");
-                                let hover = if in_use {
-                                    format!("Show the original, from {}", host(&there))
-                                } else {
-                                    format!("Add {} to your servers, and show the original from there", host(&there))
-                                };
-                                if ui.link(format!("\"{}\"", original.name)).on_hover_text(hover).clicked() {
-                                    open_remote = Some((there.clone(), original.clone()));
-                                }
-                                ui.label(format!("on {}", host(&there)));
-                            }
-                        });
-                    }
-                    if !d.remixes.is_empty() {
-                        ui.add_space(6.0);
-                        ui.label(format!("Remixes ({})", d.remixes.len()));
-                        for remix in &d.remixes {
-                            ui.horizontal(|ui| {
-                                if ui.link(&remix.name).clicked() {
-                                    pick = Some((server.clone(), remix.id.clone()));
-                                }
-                                ui.weak(format!("by {}", remix.author_name));
-                            });
-                        }
-                    }
-                }
+            }
+            for (server, error) in &self.library.errors {
+                ui.colored_label(ui.visuals().warn_fg_color, format!("{}: {error}", host(server)));
+            }
+            if self.library.songs && servers.iter().all(|s| self.library.infos.get(s).is_some_and(|i| !i.songs)) {
+                ui.weak("None of your library servers take songs: each server's owner decides whether it does.");
+            }
+            ui.separator();
+        }
+
+        let mut act = LibraryActions::default();
+        let results = egui::ScrollArea::vertical().id_salt("library_results").auto_shrink([false, false]);
+        let details = egui::ScrollArea::vertical().id_salt("library_details").auto_shrink([false, false]);
+        if details_page {
+            details.show(ui, |ui| self.library_details_ui(ui, &servers, &mut act));
+        } else if self.mobile() {
+            results.show(ui, |ui| self.library_results_ui(ui, &servers, &mut act));
+        } else {
+            ui.columns(2, |columns| {
+                results.show(&mut columns[0], |ui| self.library_results_ui(ui, &servers, &mut act));
+                details.show(&mut columns[1], |ui| self.library_details_ui(ui, &servers, &mut act));
             });
-        });
+        }
+        let LibraryActions { pick, open, install, update, use_script, show_author, delete, encore, open_remote, report } = act;
 
         if let Some(selected) = pick {
             let (server, id) = selected.clone();
@@ -1447,6 +1223,9 @@ impl App {
             self.library.details = None;
             let viewer = self.library.identity.as_ref().map(Identity::public);
             self.spawn_request(move || Event::Details(server.clone(), client::details_as(&server, &id, viewer.as_deref())));
+        }
+        if let Some((server, id)) = open {
+            self.library_open_script(server, id);
         }
         if let Some((server, summary)) = install {
             match self.config.library.pinned.get(&server).cloned() {
@@ -1515,6 +1294,275 @@ impl App {
         {
             self.load_script(idx);
             self.set_open(crate::layout::Section::Visualizer, true);
+        }
+    }
+
+    /// The Library's search results, each picking itself when clicked.
+    fn library_results_ui(&mut self, ui: &mut egui::Ui, servers: &[String], act: &mut LibraryActions) {
+        let official_id = library::official_id();
+        if self.library.results.is_empty() && self.library.searching == 0 {
+            ui.weak(if self.library.query.trim().is_empty() { "Nothing here yet." } else { "Nothing found." });
+        }
+        for found in &self.library.results {
+            let selected = self
+                .library
+                .selected
+                .as_ref()
+                .is_some_and(|(s, id)| *s == found.server && *id == found.summary.id);
+            let s = &found.summary;
+            let official = s.author_id.as_deref() == Some(official_id.as_str());
+            let kind = match &s.song {
+                Some(_) => songs::source_title(&s.category),
+                None => library::category_title(&s.category),
+            };
+            // (Its highlight goes under it, once it's known whether it's hovered.)
+            let highlight = ui.painter().add(egui::Shape::Noop);
+            let row = ui
+                .scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
+                    egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 3)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        // (Its text isn't selectable: a click anywhere picks the row.)
+                        ui.style_mut().interaction.selectable_labels = false;
+                        ui.label(egui::RichText::new(&s.name).strong());
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            super::chip(ui, kind, kind_color(ui, &s.category));
+                            if let Some(song) = &s.song {
+                                ui.weak(format!("{} ·", song.composer));
+                            }
+                            ui.weak("by");
+                            // An official script's author in gold.
+                            let author = egui::RichText::new(&s.author_name);
+                            ui.label(if official { author.color(OFFICIAL_GOLD) } else { author.weak() });
+                            ui.weak(format!("·  {} encore{}", s.encores, if s.encores == 1 { "" } else { "s" }));
+                        });
+                    });
+                })
+                .response;
+            let visuals = ui.visuals();
+            let fill = if selected {
+                Some(visuals.selection.bg_fill)
+            } else if row.hovered() {
+                Some(visuals.widgets.hovered.weak_bg_fill)
+            } else {
+                None
+            };
+            if let Some(fill) = fill {
+                ui.painter().set(highlight, egui::Shape::rect_filled(row.rect, visuals.widgets.hovered.corner_radius, fill));
+            }
+            let response = row.on_hover_cursor(egui::CursorIcon::PointingHand);
+            let response = if official { response.on_hover_text(OFFICIAL_HOVER) } else { response };
+            let response = if servers.len() > 1 { response.on_hover_text(host(&found.server)) } else { response };
+            if response.clicked() {
+                act.pick = Some((found.server.clone(), s.id.clone()));
+            }
+        }
+        for (server, total) in &self.library.totals {
+            let shown = self.library.results.iter().filter(|f| f.server == *server).count() as u64;
+            if *total > shown {
+                ui.weak(format!("{}: the first {shown} of {total}; search to narrow it down", host(server)));
+            }
+        }
+    }
+
+    /// The picked script's (or song's) details: its preview, what it is,
+    /// and what can be done with it.
+    fn library_details_ui(&mut self, ui: &mut egui::Ui, servers: &[String], act: &mut LibraryActions) {
+        let my_id = self.library.my_id();
+        let official_id = library::official_id();
+        let Some((server, id)) = self.library.selected.clone() else {
+            ui.weak(if self.library.songs { "Pick a song to see more." } else { "Pick a script to see more." });
+            return;
+        };
+        let Some(s) =
+            self.library.results.iter().find(|f| f.server == server && f.summary.id == id).map(|f| f.summary.clone())
+        else {
+            return;
+        };
+        let s = &s;
+        let song = s.song.clone();
+        if song.is_some() {
+            self.song_preview_ui(ui, &server, s);
+            ui.separator();
+        } else {
+            self.library_preview_ui(ui, &server, &id);
+        }
+        ui.heading(&s.name);
+        ui.horizontal_wrapped(|ui| {
+            ui.label("by");
+            if s.author_id.as_deref() == Some(official_id.as_str()) {
+                ui.label(egui::RichText::new(&s.author_name).strong().color(OFFICIAL_GOLD)).on_hover_text(OFFICIAL_HOVER);
+            } else {
+                ui.label(&s.author_name);
+            }
+            match &s.author_id {
+                Some(author) => {
+                    let label = if my_id.as_deref() == Some(author) { format!("#{author} (you)") } else { format!("#{author}") };
+                    if ui.link(label).on_hover_text("Everything they've posted on this server").clicked() {
+                        act.show_author = Some((server.clone(), author.clone()));
+                    }
+                }
+                None => {
+                    ui.weak("(anonymous)");
+                }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            let kind = match &song {
+                Some(_) => songs::source_title(&s.category),
+                None => library::category_title(&s.category),
+            };
+            super::chip(ui, kind, kind_color(ui, &s.category));
+            ui.weak(format!("on {}", host(&server)));
+        });
+        if !s.tags.is_empty() {
+            ui.weak(s.tags.join(", "));
+        }
+        ui.add_space(6.0);
+        let installed = self.installed_copy(&server, s);
+        ui.horizontal_wrapped(|ui| {
+            match &installed {
+                _ if song.is_some() => self.song_actions_ui(ui, &server, s),
+                Some((path, version)) if *version >= s.version => {
+                    ui.label(format!("Installed (version {version})"));
+                    if ui.button("Use it").clicked() {
+                        act.use_script = Some(path.clone());
+                    }
+                }
+                Some((path, version)) => {
+                    ui.label(format!("Version {version} installed; {} is out", s.version));
+                    if ui.add_enabled(!self.library.busy, egui::Button::new("Update")).clicked() {
+                        act.update = Some(path.clone());
+                    }
+                }
+                None => {
+                    if ui.add_enabled(!self.library.busy, egui::Button::new("Install")).clicked() {
+                        act.install = Some((server.clone(), s.clone()));
+                    }
+                }
+            }
+            if !READ_ONLY && s.author_id.is_some() && s.author_id == my_id {
+                let confirming = self.library.confirm_delete.as_ref() == Some(&(server.clone(), id.clone()));
+                let label = if confirming { "Click again to delete it" } else { "Delete" };
+                if ui
+                    .add_enabled(!self.library.busy, egui::Button::new(label))
+                    .on_hover_text("Take it off the server, every version (your copy stays)")
+                    .clicked()
+                {
+                    if confirming {
+                        act.delete = Some((server.clone(), id.clone()));
+                    } else {
+                        self.library.confirm_delete = Some((server.clone(), id.clone()));
+                    }
+                }
+            }
+        });
+        // Encores and reports (not of your own).
+        let here = self.library.details.as_ref().filter(|(ds, d)| *ds == server && d.summary.id == id).map(|(_, d)| d);
+        let encored = here.and_then(|d| d.encored) == Some(true);
+        let reportable = here.and_then(|d| d.newest_for(library::supported_version()).or(d.newest())).map(|v| v.version);
+        let mine = s.author_id.is_some() && s.author_id == my_id;
+        ui.horizontal_wrapped(|ui| {
+            let count = format!("{} encore{}", s.encores, if s.encores == 1 { "" } else { "s" });
+            if mine || READ_ONLY {
+                ui.weak(count);
+                return;
+            }
+            let label = if encored { format!("Encored ({})", s.encores) } else { format!("Encore ({})", s.encores) };
+            let hover = if encored { "Take your encore back" } else { "Say you liked it: the only vote there is" };
+            let ready = here.is_some() && !self.library.encoring;
+            if ui.add_enabled_ui(ready, |ui| ui.selectable_label(encored, label)).inner.on_hover_text(hover).clicked() {
+                act.encore = Some((server.clone(), id.clone(), !encored));
+            }
+            if let Some(version) = reportable
+                && ui.button("Report...").on_hover_text("Tell this server's moderators something's wrong with it").clicked()
+            {
+                act.report = Some((server.clone(), id.clone(), s.name.clone(), version, song.is_some()));
+            }
+        });
+        ui.add_space(6.0);
+        let description = match &self.library.details {
+            Some((ds, d)) if *ds == server && d.summary.id == id => d.summary.description.clone(),
+            _ => s.description.clone(),
+        };
+        ui.label(description);
+        if let Some(song) = &song {
+            ui.add_space(6.0);
+            if let Some(script) = super::song_library::song_facts_ui(ui, song) {
+                act.open = Some((server.clone(), script));
+            }
+        }
+        // (Versions and what they need are a script's: any app plays any MIDI file.)
+        if let Some((ds, d)) = &self.library.details
+            && *ds == server
+            && d.summary.id == id
+            && song.is_none()
+        {
+            ui.add_space(6.0);
+            let versions = d.versions.len();
+            let made = d.versions.first().map(|v| v.app_version.clone()).unwrap_or_default();
+            ui.weak(format!(
+                "{versions} version{}; first published with synththing {made}",
+                if versions == 1 { "" } else { "s" }
+            ));
+            let app = library::supported_version();
+            if let Some(newest) = d.newest()
+                && !library::runs_on(&newest.min_app_version, app)
+            {
+                let note = match d.newest_for(app) {
+                    Some(v) => format!(
+                        "Version {} needs synththing {}; this app gets version {}.",
+                        newest.version, newest.min_app_version, v.version
+                    ),
+                    None => format!("It needs synththing {} or newer.", newest.min_app_version),
+                };
+                ui.colored_label(ui.visuals().warn_fg_color, note);
+            }
+            // Where it came from, and what came of it.
+            if let Some(original) = &d.remix_of {
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    if original.gone {
+                        ui.weak("Remixed from a deleted script.");
+                    } else if original.server.is_empty() {
+                        ui.label("Remix of");
+                        if ui.link(&original.name).on_hover_text("Show the original").clicked() {
+                            act.open = Some((server.clone(), original.id.clone()));
+                        }
+                        if let Some(version) = original.version {
+                            ui.weak(format!("(version {version})"));
+                        }
+                    } else {
+                        // On another server: shown from there (added to the list first, if
+                        // it isn't in use).
+                        let there = library::resolve_server(&original.server);
+                        let in_use = servers.contains(&there);
+                        ui.label("Remix of");
+                        let hover = if in_use {
+                            format!("Show the original, from {}", host(&there))
+                        } else {
+                            format!("Add {} to your servers, and show the original from there", host(&there))
+                        };
+                        if ui.link(format!("\"{}\"", original.name)).on_hover_text(hover).clicked() {
+                            act.open_remote = Some((there.clone(), original.clone()));
+                        }
+                        ui.label(format!("on {}", host(&there)));
+                    }
+                });
+            }
+            if !d.remixes.is_empty() {
+                ui.add_space(6.0);
+                ui.label(format!("Remixes ({})", d.remixes.len()));
+                for remix in &d.remixes {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.link(&remix.name).clicked() {
+                            act.open = Some((server.clone(), remix.id.clone()));
+                        }
+                        ui.weak(format!("by {}", remix.author_name));
+                    });
+                }
+            }
         }
     }
 
