@@ -1,12 +1,15 @@
-//! A minimal file browser widget: the Songs tab, where clicking a song plays
-//! it and marks it as playing. [`FileBrowser::ui`] returns `Some(path)` when
-//! a *file* row is clicked; clicking a directory navigates into it
-//! internally. File rows can also be dragged out (onto a playlist).
+//! A minimal file browser widget: the Songs tab, where double-clicking a song
+//! plays it and marks it as playing. [`FileBrowser::ui`] returns `Some(path)`
+//! when a *file* row is double-clicked; double-clicking a directory navigates
+//! into it internally. Rows can be selected several at a time and dragged
+//! out together (onto a playlist).
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
+
+use crate::select_list::{self, Selection};
 
 /// How many files a search scans below the current directory before giving up.
 const MAX_SEARCH_CANDIDATES: usize = 4000;
@@ -42,6 +45,8 @@ pub struct FileBrowser {
     search_candidates: Option<Vec<(String, PathBuf)>>,
     /// The file row under the pointer as of the last `ui` call.
     hovered: Option<PathBuf>,
+    /// Selected rows of what's listed (the folder, or the search results).
+    selection: Selection,
 }
 
 impl FileBrowser {
@@ -58,6 +63,7 @@ impl FileBrowser {
             search_query: String::new(),
             search_candidates: None,
             hovered: None,
+            selection: Selection::default(),
         };
         browser.refresh();
         browser
@@ -136,6 +142,7 @@ impl FileBrowser {
     }
 
     fn refresh(&mut self) {
+        self.selection.clear();
         self.entries.clear();
         self.error = None;
 
@@ -226,10 +233,10 @@ impl FileBrowser {
     }
 
     /// Draw the browser (search box + scrollable list) into `ui`. Returns
-    /// `Some(path)` the frame a file row is clicked; clicking a directory row
-    /// navigates into it internally and returns `None`. `trailing` draws
-    /// extra widgets at the right end of each file row (right to left).
-    /// `menu`, if given, draws a file row's right-click menu.
+    /// `Some(path)` the frame a file row is double-clicked; double-clicking a
+    /// directory row navigates into it internally and returns `None`.
+    /// `trailing` draws extra widgets at the right end of each file row
+    /// (right to left). `menu`, if given, draws a file row's right-click menu.
     pub fn ui(&mut self, ui: &mut egui::Ui, trailing: &mut dyn FnMut(&mut egui::Ui, &Path), mut menu: Option<RowMenu>) -> Option<PathBuf> {
         ui.weak(display_dir(&self.cwd));
 
@@ -250,6 +257,7 @@ impl FileBrowser {
                     .desired_width(f32::INFINITY),
             );
             if response.changed() {
+                self.selection.clear();
                 if self.search_query.trim().is_empty() {
                     self.search_candidates = None;
                 } else if self.search_candidates.is_none() {
@@ -258,59 +266,53 @@ impl FileBrowser {
             }
         });
         if hidden_changed {
-            self.refresh();
-            if !self.search_query.trim().is_empty() {
-                self.search_candidates = Some(self.collect_candidates());
-            }
+            self.rescan();
         }
 
         if let Some(err) = &self.error {
             ui.colored_label(egui::Color32::from_rgb(220, 90, 90), err);
         }
 
-        let query = self.search_query.trim().to_string();
-        let mut clicked: Option<(PathBuf, bool)> = None;
-        let mut hovered: Option<PathBuf> = None;
-        egui::ScrollArea::vertical()
-            .id_salt(&self.title)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if query.is_empty() {
-                    for entry in &self.entries {
-                        let response = row(ui, entry, self.active.as_deref(), trailing);
-                        if let Some(menu) = menu.as_mut().filter(|_| !entry.is_dir) {
-                            response.context_menu(|ui| menu(ui, &entry.path));
-                        }
-                        if response.clicked() {
-                            clicked = Some((entry.path.clone(), entry.is_dir));
-                        }
-                        if response.hovered() && !entry.is_dir {
-                            hovered = Some(entry.path.clone());
-                        }
-                    }
-                } else if let Some(candidates) = &self.search_candidates {
-                    for entry in ranked_matches(candidates, &query) {
-                        let response = row(ui, &entry, self.active.as_deref(), trailing);
-                        if let Some(menu) = menu.as_mut().filter(|_| !entry.is_dir) {
-                            response.context_menu(|ui| menu(ui, &entry.path));
-                        }
-                        if response.clicked() {
-                            clicked = Some((entry.path.clone(), entry.is_dir));
-                        }
-                        if response.hovered() && !entry.is_dir {
-                            hovered = Some(entry.path.clone());
-                        }
-                    }
+        let query = self.search_query.trim();
+        let matches;
+        let entries: &[Entry] = if query.is_empty() {
+            &self.entries
+        } else {
+            matches = self.search_candidates.as_deref().map(|c| ranked_matches(c, query)).unwrap_or_default();
+            &matches
+        };
+        let active = self.active.as_deref();
+        let output = select_list::show(ui, &self.title, entries, &mut self.selection, |ui, row, entry| {
+            let is_active = active == Some(entry.path.as_path());
+            // ".." stays out of drags: it would add the parent folder.
+            if entry.label != ".." && row.response.drag_started() {
+                let paths = row
+                    .rows()
+                    .into_iter()
+                    .filter_map(|i| entries.get(i).filter(|e| e.label != ".."))
+                    .map(|e| e.path.clone())
+                    .collect();
+                row.response.dnd_set_drag_payload(DraggedFiles(paths));
+            }
+            if let Some(menu) = menu.as_mut().filter(|_| !entry.is_dir) {
+                row.response.context_menu(|ui| menu(ui, &entry.path));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if !entry.is_dir {
+                    trailing(ui, &entry.path);
                 }
+                // Directories already carry a trailing "/" from `refresh`,
+                // so the label alone tells them apart.
+                let text = egui::RichText::new(&entry.label);
+                select_list::label(ui, if is_active { text.strong() } else { text }, None)
             });
+        });
 
-        self.hovered = hovered;
-        match clicked {
+        let picked = output.activated.and_then(|i| entries.get(i)).map(|e| (e.path.clone(), e.is_dir));
+        self.hovered = output.hovered.and_then(|i| entries.get(i)).filter(|e| !e.is_dir).map(|e| e.path.clone());
+        match picked {
             Some((path, true)) => {
-                self.cwd = path;
-                self.search_query.clear();
-                self.search_candidates = None;
-                self.refresh();
+                self.navigate_to(path);
                 None
             }
             Some((path, false)) => Some(path),
@@ -319,39 +321,10 @@ impl FileBrowser {
     }
 }
 
-/// Drag-and-drop payload for a file row dragged out of the browser (e.g.
-/// onto a playlist).
-pub struct DraggedFile(pub PathBuf);
-
-/// Draw one clickable row. File and folder rows (not "..") can also be
-/// dragged out, carrying a [`DraggedFile`] (a folder dropped on a playlist
-/// adds the songs in it). File rows get `trailing` at their right end.
-fn row(
-    ui: &mut egui::Ui,
-    entry: &Entry,
-    active: Option<&Path>,
-    trailing: &mut dyn FnMut(&mut egui::Ui, &Path),
-) -> egui::Response {
-    // Directories already carry a trailing "/" from `refresh`, so the label
-    // alone distinguishes them; the active file gets egui's own highlighted
-    // "selected" look rather than a marker glyph (icon fonts are a common
-    // source of missing-glyph boxes, so plain text + native styling wins).
-    let is_active = active == Some(entry.path.as_path());
-    if entry.label == ".." {
-        return ui.selectable_label(is_active, &entry.label);
-    }
-    ui.horizontal(|ui| {
-        let response = ui.add(
-            egui::Button::selectable(is_active, &entry.label).sense(egui::Sense::click_and_drag()),
-        );
-        response.dnd_set_drag_payload(DraggedFile(entry.path.clone()));
-        if !entry.is_dir {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| trailing(ui, &entry.path));
-        }
-        response
-    })
-    .inner
-}
+/// Drag-and-drop payload for file and folder rows dragged out of the
+/// browser (e.g. onto a playlist): the selection if the dragged row is part
+/// of it, else just that row.
+pub struct DraggedFiles(pub Vec<PathBuf>);
 
 /// Re-rank `candidates` against `query` and return the top matches as `Entry`s.
 fn ranked_matches(candidates: &[(String, PathBuf)], query: &str) -> Vec<Entry> {

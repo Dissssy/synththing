@@ -44,6 +44,9 @@ impl FolderWatch {
         let changed: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
         let sink = Arc::clone(&changed);
         let watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| match result {
+            // Reading a file or listing the folder isn't a change (and the
+            // refresh's own listing would otherwise set off another one).
+            Ok(event) if event.kind.is_access() => {}
             Ok(event) => {
                 if let Ok(mut changed) = sink.lock() {
                     changed.extend(event.paths);

@@ -43,7 +43,8 @@ use crate::credits::{self, Contributors, ContributorsState};
 use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, nice_name, Config, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
 use crate::engine::{EngineView, MAX_SPEED, MIN_SPEED};
-use crate::filebrowser::{DraggedFile, FileBrowser};
+use crate::filebrowser::{DraggedFiles, FileBrowser};
+use crate::select_list::{self, Selection};
 use crate::layout::{self, Section};
 use crate::loader::{self, Asset, AssetCache, SoundFontProbe};
 use crate::lua_completion::CompletionWorker;
@@ -122,9 +123,11 @@ pub struct App {
     commands: Sender<AudioCommand>,
     shared: Arc<Mutex<PlaybackShared>>,
     config: Config,
-    /// Always-visible song file browser. Clicking a `.mid` plays it immediately.
+    /// Always-visible song file browser. Double-clicking a song plays it.
     browser: FileBrowser,
     active_sf: Option<usize>,
+    /// Selected rows of the Soundfonts list.
+    soundfont_selection: Selection,
     tap: SampleTap,
     /// The visualizer's picture, shared with the windows that show it
     /// (`lock_panel`).
@@ -240,10 +243,8 @@ pub struct App {
     song_info: SongInfoCache,
     /// The song whose info modal is open.
     song_info_open: Option<PathBuf>,
-    /// Selected rows of the playlist on screen, sorted.
-    playlist_selection: Vec<usize>,
-    /// Where a Shift+click range starts: the last plain or Ctrl click.
-    selection_anchor: Option<usize>,
+    /// Selected rows of the playlist on screen.
+    playlist_selection: Selection,
     /// A Controls binding waiting for a key press: (action index, which of
     /// its keys to replace, or `None` to add one).
     binding_capture: Option<(usize, Option<usize>)>,
@@ -439,7 +440,7 @@ impl App {
         let buffer_ms = config.buffer_ms.map_or(DEFAULT_BUFFER_MS, |ms| ms.clamp(MIN_BUFFER_MS, MAX_BUFFER_MS));
         let status = match playlist_errors.first() {
             Some(e) => format!("Couldn't read a playlist ({e})"),
-            None => "Click a song to play it, click a soundfont to load it.".to_string(),
+            None => "Double-click a song to play it, a soundfont to load it.".to_string(),
         };
 
         let mut app = Self {
@@ -448,6 +449,7 @@ impl App {
             config,
             browser,
             active_sf: None,
+            soundfont_selection: Selection::default(),
             tap,
             visualizer: Arc::clone(&visualizer),
             script,
@@ -498,8 +500,7 @@ impl App {
             folder_watch: None,
             song_info: SongInfoCache::new(),
             song_info_open: None,
-            playlist_selection: Vec::new(),
-            selection_anchor: None,
+            playlist_selection: Selection::default(),
             binding_capture: None,
             script_window: None,
             script_window_tab: [0; 3],
@@ -1142,18 +1143,28 @@ impl App {
         Ok(note)
     }
 
-    fn remove_soundfont(&mut self, idx: usize) {
-        if idx >= self.config.soundfonts.len() {
-            return;
+    /// Take the soundfonts at `indices` off the list.
+    fn remove_soundfonts(&mut self, indices: &[usize]) {
+        let mut indices: Vec<usize> = indices.iter().copied().filter(|&i| i < self.config.soundfonts.len()).collect();
+        // Highest first, so the rest stay valid.
+        indices.sort_unstable_by(|a, b| b.cmp(a));
+        indices.dedup();
+        let names: Vec<String> = indices.iter().map(|&i| nice_name(&self.config.soundfonts[i])).collect();
+        for &idx in &indices {
+            self.config.remove_soundfont(idx);
+            self.active_sf = shift_active(self.active_sf, idx);
         }
-        let name = nice_name(&self.config.soundfonts[idx]);
-        self.config.remove_soundfont(idx);
-        self.status = match self.config.save() {
-            Err(e) => format!("Removed {name}, but failed to save list: {e}"),
-            Ok(()) => format!("Removed soundfont: {name}"),
-        };
-        self.active_sf = shift_active(self.active_sf, idx);
+        self.soundfont_selection.clear();
         self.pending_soundfont = None;
+        let removed = match names.as_slice() {
+            [] => return,
+            [name] => format!("soundfont: {name}"),
+            more => format!("{} soundfonts", more.len()),
+        };
+        self.status = match self.config.save() {
+            Err(e) => format!("Removed {removed}, but failed to save list: {e}"),
+            Ok(()) => format!("Removed {removed}"),
+        };
     }
 
     /// Browse for soundfonts to add: one or several at once.
@@ -1407,42 +1418,47 @@ impl App {
             }
         });
 
-        let mut clicked_idx = None;
-        let mut remove_idx = None;
-        egui::ScrollArea::vertical()
-            .id_salt("soundfonts_scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for (i, path) in self.config.soundfonts.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        if ui.small_button("x").clicked() {
-                            remove_idx = Some(i);
-                        }
-                        ui.separator();
-                        let mut label = nice_name(path);
-                        if !path.exists() {
-                            label.push_str("  (missing)");
-                        }
-                        let is_active = Some(i) == self.active_sf;
-                        let response = ui
-                            .add(
-                                egui::Button::selectable(is_active, label)
-                                    .sense(egui::Sense::click_and_drag()),
-                            )
-                            .on_hover_text("Click to use; drag onto a MIDI playlist entry to override its soundfont");
-                        response.dnd_set_drag_payload(DraggedSoundfont(path.clone()));
-                        if response.clicked() {
-                            clicked_idx = Some(i);
-                        }
-                    });
+        let active_sf = self.active_sf;
+        let mut remove = None;
+        let mut use_idx = None;
+        let output = select_list::show(ui, "soundfonts", &self.config.soundfonts, &mut self.soundfont_selection, |ui, row, path| {
+            if row.response.drag_started() {
+                row.response.dnd_set_drag_payload(DraggedSoundfont(path.clone()));
+            }
+            row.response.context_menu(|ui| {
+                if ui.button("Use").clicked() {
+                    use_idx = Some(row.idx);
+                }
+                let rows = row.rows();
+                let count = if rows.len() > 1 { format!(" ({})", rows.len()) } else { String::new() };
+                if ui.button(format!("Remove from the list{count}")).clicked() {
+                    remove = Some(rows);
                 }
             });
+            if ui.small_button("x").on_hover_text("Remove from the list").clicked() {
+                remove = Some(vec![row.idx]);
+            }
+            ui.separator();
+            let mut label = nice_name(path);
+            if !path.exists() {
+                label.push_str("  (missing)");
+            }
+            let text = egui::RichText::new(label);
+            let hover = format!(
+                "{}\nDouble-click to use; drag onto a MIDI playlist entry to override its soundfont",
+                path.display()
+            );
+            select_list::label(ui, if Some(row.idx) == active_sf { text.strong() } else { text }, Some(hover));
+        });
+        if output.delete {
+            remove = Some(self.soundfont_selection.rows().to_vec());
+        }
 
-        if let Some(i) = clicked_idx {
+        if let Some(i) = output.activated.or(use_idx) {
             self.activate_soundfont(i);
         }
-        if let Some(i) = remove_idx {
-            self.remove_soundfont(i);
+        if let Some(rows) = remove {
+            self.remove_soundfonts(&rows);
         }
     }
 
@@ -4188,8 +4204,12 @@ fn open_in_file_manager(path: &Path) {
 /// for it on its own.
 fn drag_ghost_ui(ctx: &egui::Context) {
     use egui::DragAndDrop;
-    let text = if let Some(file) = DragAndDrop::payload::<DraggedFile>(ctx) {
-        nice_name(&file.0)
+    let text = if let Some(files) = DragAndDrop::payload::<DraggedFiles>(ctx) {
+        match files.0.as_slice() {
+            [] => return,
+            [one] => nice_name(one),
+            [first, rest @ ..] => format!("{} and {} more", nice_name(first), rest.len()),
+        }
     } else if let Some(sf) = DragAndDrop::payload::<DraggedSoundfont>(ctx) {
         format!("SoundFont: {}", nice_name(&sf.0))
     } else if let Some(entry) = DragAndDrop::payload::<playlist_panel::DraggedEntry>(ctx) {
@@ -4351,7 +4371,7 @@ mod tests {
         assert_eq!(status_outcome("Soundfont not loaded"), Some(false));
         assert_eq!(status_outcome("Published \"Disco\" to synththing.p51.nl."), Some(true));
         assert_eq!(status_outcome("Soundfont loaded: GeneralUser-GS"), Some(true));
-        assert_eq!(status_outcome("Click a song to play it, click a soundfont to load it."), None);
+        assert_eq!(status_outcome("Double-click a song to play it, a soundfont to load it."), None);
         assert_eq!(status_outcome("Loading Canon in D..."), None);
     }
 }
