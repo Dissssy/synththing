@@ -162,6 +162,8 @@ pub fn show<T>(
                     .max_rect(rect)
                     .layout(egui::Layout::left_to_right(egui::Align::Center));
                 ui.scope_builder(builder, |ui| {
+                    // Selectable text would take the row's clicks and drags.
+                    ui.style_mut().interaction.selectable_labels = false;
                     if selected {
                         ui.visuals_mut().override_text_color = Some(visuals.text_color());
                     }
