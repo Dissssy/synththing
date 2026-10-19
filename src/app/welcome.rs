@@ -50,6 +50,9 @@ impl App {
         let state = self.welcome.downloader.state();
         let mut start = false;
         let mut tour = false;
+        // The tour shows the desktop layout's panels: none of them are in
+        // the mobile one.
+        let mobile = self.mobile();
         let response = egui::Modal::new(egui::Id::new("welcome")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 470.0));
             ui.heading("Welcome to synththing");
@@ -84,10 +87,14 @@ impl App {
                 ui.colored_label(egui::Color32::from_rgb(220, 90, 90), format!("The last download failed: {error}"));
             }
             ui.add_space(8.0);
-            ui.label("New here? The tour shows you around: playing songs, soundfonts, visualizers, playlists.");
-            ui.add_space(8.0);
+            if !mobile {
+                ui.label("New here? The tour shows you around: playing songs, soundfonts, visualizers, playlists.");
+                ui.add_space(8.0);
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                tour = ui.button("Take the tour").clicked();
+                if !mobile {
+                    tour = ui.button("Take the tour").clicked();
+                }
                 let label = if self.welcome.get_pack && !state.running { "Just get started" } else { "Close" };
                 start = ui.button(label).clicked();
             });

@@ -42,6 +42,11 @@ use crate::library::{
 };
 use crate::lua_visualizer;
 
+/// The Android app only reads the library: it browses, installs and
+/// updates, but has no identity, so it never publishes, encores, reports,
+/// deletes or moderates (nothing it does needs an account on a server).
+pub(super) const READ_ONLY: bool = cfg!(target_os = "android");
+
 /// Sort orders, as the API names them and as shown.
 const SORTS: [(&str, &str); 2] = [("new", "Newest"), ("top", "Most encores")];
 
@@ -1082,7 +1087,8 @@ impl App {
                     }
                 }
             }
-            if self.moderation.is_admin_anywhere()
+            if !READ_ONLY
+                && self.moderation.is_admin_anywhere()
                 && ui.button("Moderation").on_hover_text("Reports, bans and admins, on the servers you moderate").clicked()
             {
                 open_moderation = true;
@@ -1307,7 +1313,7 @@ impl App {
                             }
                         }
                     }
-                    if s.author_id.is_some() && s.author_id == my_id {
+                    if !READ_ONLY && s.author_id.is_some() && s.author_id == my_id {
                         let confirming = self.library.confirm_delete.as_ref() == Some(&(server.clone(), id.clone()));
                         let label = if confirming { "Click again to delete it" } else { "Delete" };
                         if ui
@@ -1330,7 +1336,7 @@ impl App {
                 let mine = s.author_id.is_some() && s.author_id == my_id;
                 ui.horizontal(|ui| {
                     let count = format!("{} encore{}", s.encores, if s.encores == 1 { "" } else { "s" });
-                    if mine {
+                    if mine || READ_ONLY {
                         ui.weak(count);
                         return;
                     }
@@ -1650,15 +1656,17 @@ impl App {
                     self.start_update(path.clone());
                 }
                 let servers = !self.config.library.enabled_servers().is_empty();
-                if ui
-                    .add_enabled(servers, egui::Button::new("Publish remix..."))
-                    .on_hover_text(format!("Share your take on \"{}\": it's credited as the original", installed.name))
-                    .on_disabled_hover_text(no_server_hint())
-                    .clicked()
+                if !READ_ONLY
+                    && ui
+                        .add_enabled(servers, egui::Button::new("Publish remix..."))
+                        .on_hover_text(format!("Share your take on \"{}\": it's credited as the original", installed.name))
+                        .on_disabled_hover_text(no_server_hint())
+                        .clicked()
                 {
                     self.open_publish(path, true);
                 }
             }
+            _ if READ_ONLY => {}
             _ => {
                 let servers = !self.config.library.enabled_servers().is_empty();
                 if ui
@@ -2217,6 +2225,9 @@ impl App {
     }
 
     pub(super) fn ensure_identity(&mut self) -> Result<Identity, String> {
+        if READ_ONLY {
+            return Err("this app only reads the library".to_string());
+        }
         if self.library.identity.is_none() {
             // A key file that's there but couldn't be read (kept differently
             // by another build) is moved aside, not replaced.
@@ -2327,9 +2338,11 @@ impl App {
             }
         }
 
-        ui.add_space(6.0);
-        ui.strong("Your identity");
-        self.identity_ui(ui);
+        if !READ_ONLY {
+            ui.add_space(6.0);
+            ui.strong("Your identity");
+            self.identity_ui(ui);
+        }
     }
 
     /// The identity: its ID, made on request; export and import.
@@ -2388,6 +2401,7 @@ impl App {
                 Err(e) => Some(format!("Couldn't make one: {e}")),
             };
         }
+        #[cfg(not(target_os = "android"))]
         if export && let Some(identity) = &self.library.identity {
             let file = rfd::FileDialog::new()
                 .set_file_name(format!("synththing identity {}.json", identity.id()))
@@ -2405,6 +2419,7 @@ impl App {
                 );
             }
         }
+        #[cfg(not(target_os = "android"))]
         if import {
             self.library.confirm_import = false;
             if let Some(file) = rfd::FileDialog::new().add_filter("Identity", &["json"]).pick_file() {
