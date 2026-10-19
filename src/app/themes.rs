@@ -1,6 +1,6 @@
-//! The Themes window (synththing > Themes...): its own OS window, kept on
-//! top, so the app can be clicked around and looked at while themes are
-//! picked and edited. Every change shows at once, everywhere. (The UI
+//! The Themes window (Preferences > Appearance > Edit themes...): its own
+//! OS window, kept on top, so the app can be clicked around and looked at
+//! while themes are picked and edited. Every change shows at once, everywhere. (The UI
 //! scale is in Preferences > Appearance; Ctrl + / Ctrl - / Ctrl 0 work
 //! anywhere too.)
 //!

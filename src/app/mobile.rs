@@ -265,12 +265,9 @@ impl App {
         }
     }
 
-    /// Preferences > Appearance > Edit themes..., from wherever.
+    /// Preferences > Appearance > Edit themes...: a level under it.
     pub(super) fn open_mobile_themes(&mut self) {
-        let state = &mut self.mobile_state;
-        state.page = Page::Preferences;
-        state.pref_section = Some(PrefTab::Appearance);
-        state.editing_themes = true;
+        self.mobile_state.editing_themes = true;
     }
 
     /// The Preferences page: the sections, each opening in its place.
@@ -629,10 +626,6 @@ impl App {
             self.mobile_state.page = Page::Preferences;
             self.mobile_state.pref_section = None;
             self.mobile_state.editing_themes = false;
-            close = true;
-        }
-        if item(ui, "palette", "Themes") {
-            self.open_mobile_themes();
             close = true;
         }
         if item(ui, "chat-text", "Send feedback") {

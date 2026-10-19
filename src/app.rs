@@ -1493,9 +1493,6 @@ impl App {
                 if ui.button("Preferences...").clicked() {
                     self.preferences_open = true;
                 }
-                if ui.button("Themes...").on_hover_text("Colors and shapes, in a window of its own").clicked() {
-                    self.themes.open = true;
-                }
                 ui.separator();
                 self.recording_menu_ui(ui);
                 ui.separator();
