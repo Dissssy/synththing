@@ -22,8 +22,9 @@ val synththingVersion: String = (findProperty("synththingVersion") as String?)
 // The icon's color: the build's accent, as on desktop (purple for a
 // release, yellow for canary, a branch's own color, off-white built
 // locally). Rust's build script works it out, and leaves it beside the
-// native library it built.
-val accent: String = rootProject.file("../target/aarch64-linux-android/release/synththing-accent").let { file ->
+// native library it built (in CARGO_TARGET_DIR, if that's set).
+val cargoTarget: File = System.getenv("CARGO_TARGET_DIR")?.let { File(it) } ?: rootProject.file("../target")
+val accent: String = cargoTarget.resolve("aarch64-linux-android/release/synththing-accent").let { file ->
     check(file.exists()) { "no ${file.path}: build the native library first (docs/ANDROID.md)" }
     file.readText().trim()
 }

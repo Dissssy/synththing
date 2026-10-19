@@ -100,7 +100,7 @@ jobs:
   # secrets): without it, this builds but adds nothing.
   android:
     needs: windows
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
 

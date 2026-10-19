@@ -50,7 +50,8 @@ jobs:
   # The Android app (docs/ANDROID.md): it builds, so the desktop app's
   # changes don't quietly break it.
   android:
-    runs-on: ubuntu-latest
+    # (Not for a fork's pull request: its code doesn't run on our runner.)
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
 

@@ -6,6 +6,11 @@
 # update only with the same key. The APK ends up as
 # synththing-android-arm64.apk, the name the in-app updater looks for
 # (src/updater.rs, ASSET_NAME).
+#
+# On GitHub's runners or Ethan's own (vars.RUNNER, deploy/ci-runner.compose.yml):
+# there, the SDK and NDK (ANDROID_HOME), Gradle's caches (~/.gradle), the
+# JDK (the tool cache) and cargo's builds (CARGO_TARGET_DIR) are kept on
+# volumes, so the GitHub caches are skipped.
 name: Android APK
 description: Build synththing-android-arm64.apk
 
@@ -37,7 +42,8 @@ runs:
 
     # One cache for every Android build (CI, test builds, releases): they're
     # all the same release build for the same target.
-    - uses: Swatinem/rust-cache@v2
+    - if: runner.environment == 'github-hosted'
+      uses: Swatinem/rust-cache@v2
       with:
         shared-key: android
 
@@ -50,9 +56,21 @@ runs:
         distribution: temurin
         java-version: "17"
 
+    # The SDK packages and NDK it's built with, the same everywhere: GitHub's
+    # image has them already (but its newest NDK changes), and on our own
+    # runner they're installed once, into the volume.
+    - uses: android-actions/setup-android@v3
+      with:
+        packages: "platforms;android-34 build-tools;34.0.0 ndk;27.2.12479018"
+
+    - name: NDK
+      shell: bash
+      run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
     - uses: gradle/actions/setup-gradle@v5
       with:
         gradle-version: "8.14.3"
+        cache-disabled: ${{ runner.environment == 'self-hosted' }}
 
     - name: Release key
       id: key

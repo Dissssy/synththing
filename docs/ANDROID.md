@@ -22,7 +22,7 @@ Left out: script editing (and the sprite editor), recording, the mini player and
 - `android/app/` is the Gradle project around it. `MainActivity` is a NativeActivity with what eframe can't do: the file picker, picture-in-picture and installing APKs. `PlaybackService` is the foreground service and media session. `Native` is Java's way back into Rust.
 - `src/app/mobile.rs` is the mobile layout, reusing the desktop pages' UI.
 
-The launcher icon is in the build's accent, as on desktop: purple for a release, yellow for canary, a branch build's own color, off-white for a local build. `build.rs` works it out and leaves it beside the native library (`target/aarch64-linux-android/release/synththing-accent`), where Gradle reads it.
+The launcher icon is in the build's accent, as on desktop: purple for a release, yellow for canary, a branch build's own color, off-white for a local build. `build.rs` works it out and leaves it beside the native library (`target/aarch64-linux-android/release/synththing-accent`, under `CARGO_TARGET_DIR` if that's set), where Gradle reads it.
 
 Only arm64 is built (every Android phone from the last several years); minSdk 26 (Android 8), targetSdk 34.
 
@@ -40,7 +40,7 @@ adb install android/app/build/outputs/apk/release/app-release.apk
 
 Without the release key, that's signed with your debug key: fine to try, but it won't update (or be updated by) a published APK. The app's log is in the app (menu > Log); `adb logcat -s synththing` has the Java side's.
 
-CI does the same in `.github/actions/android-apk`, which `ci.yml` (every pull request), `test-builds.yml` (the nightly) and `release.yml` share.
+CI does the same in `.github/actions/android-apk`, which `ci.yml` (every pull request), `test-builds.yml` (the nightly) and `release.yml` share. It pins the SDK packages and NDK (27.2.12479018) with setup-android. The jobs run on the self-hosted runner when the `RUNNER` repository variable names one (not for pull requests from forks), and on GitHub's otherwise; the runner keeps the SDK, Gradle's caches, the JDK and cargo's builds on volumes, so the GitHub caches are skipped there.
 
 ## 4. The release key (needs doing once)
 
