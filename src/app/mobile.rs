@@ -214,7 +214,13 @@ impl App {
                     if ui.add(big_icon_button("list", 36.0)).on_hover_text("Menu").clicked() {
                         self.mobile_state.drawer_open = true;
                     }
-                    ui.heading(self.mobile_state.page.title());
+                    // Now playing is the app's home: its name, as the
+                    // wordmark.
+                    if self.mobile_state.page == Page::NowPlaying {
+                        self.mobile_wordmark_ui(ui);
+                    } else {
+                        ui.heading(self.mobile_state.page.title());
+                    }
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -575,6 +581,16 @@ impl App {
         ctx.move_to_top(drawer.response.layer_id);
     }
 
+    /// The wordmark, a heading's size (the name as a heading if it can't be
+    /// drawn). One size wherever it's shown, so it's drawn once.
+    fn mobile_wordmark_ui(&mut self, ui: &mut egui::Ui) {
+        let height = ui.text_style_height(&egui::TextStyle::Heading) * 1.25;
+        match self.wordmark.image(ui.ctx(), height, ui.visuals().panel_fill) {
+            Some(image) => ui.add(image),
+            None => ui.heading("synththing"),
+        };
+    }
+
     /// The version, short; a tap shows all of it (the branch and commit
     /// of a test build).
     fn mobile_version_ui(&mut self, ui: &mut egui::Ui) {
@@ -588,7 +604,7 @@ impl App {
     fn mobile_drawer_items_ui(&mut self, ui: &mut egui::Ui) {
         ui.spacing_mut().button_padding = egui::vec2(10.0, 10.0);
         ui.add_space(8.0);
-        ui.heading("synththing");
+        self.mobile_wordmark_ui(ui);
         ui.add_space(8.0);
         let mut picked = None;
         for page in Page::ALL {
