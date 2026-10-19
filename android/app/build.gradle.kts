@@ -19,6 +19,15 @@ fun codeFor(version: String): Int {
 val synththingVersion: String = (findProperty("synththingVersion") as String?)
     ?: Regex("""(?m)^version = "(.+)"""").find(rootProject.file("../Cargo.toml").readText())!!.groupValues[1]
 
+// The icon's color: the build's accent, as on desktop (purple for a
+// release, yellow for canary, a branch's own color, off-white built
+// locally). Rust's build script works it out, and leaves it beside the
+// native library it built.
+val accent: String = rootProject.file("../target/aarch64-linux-android/release/synththing-accent").let { file ->
+    check(file.exists()) { "no ${file.path}: build the native library first (docs/ANDROID.md)" }
+    file.readText().trim()
+}
+
 android {
     namespace = "nl.p51.synththing"
     compileSdk = 34
@@ -29,6 +38,7 @@ android {
         targetSdk = 34
         versionCode = codeFor(synththingVersion)
         versionName = synththingVersion
+        resValue("color", "ic_launcher_background", accent)
         ndk {
             abiFilters += "arm64-v8a"
         }

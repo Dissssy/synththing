@@ -69,6 +69,19 @@ fn main() {
     let accent = accent(&stamp_build());
     println!("cargo:rustc-env=SYNTHTHING_ACCENT={accent}");
     generate_icon(&manifest_dir, &out_dir, &accent);
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        write_android_accent(&out_dir, &accent);
+    }
+}
+
+/// The Android app's icon is the APK's, which Gradle makes after this
+/// build, so the accent goes in a file for it beside the library
+/// (`target/<target>/<profile>/synththing-accent`, which
+/// android/app/build.gradle.kts reads): `OUT_DIR` is three folders below.
+fn write_android_accent(out_dir: &str, accent: &str) {
+    let profile_dir = Path::new(out_dir).ancestors().nth(3).expect("OUT_DIR is target/<target>/<profile>/build/<crate>/out");
+    let path = profile_dir.join("synththing-accent");
+    fs::write(&path, accent).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
 }
 
 // --- build stamp ---------------------------------------------------------

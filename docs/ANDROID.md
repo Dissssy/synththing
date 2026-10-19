@@ -22,6 +22,8 @@ Left out: script editing (and the sprite editor), recording, the mini player and
 - `android/app/` is the Gradle project around it. `MainActivity` is a NativeActivity with what eframe can't do: the file picker, picture-in-picture and installing APKs. `PlaybackService` is the foreground service and media session. `Native` is Java's way back into Rust.
 - `src/app/mobile.rs` is the mobile layout, reusing the desktop pages' UI.
 
+The launcher icon is in the build's accent, as on desktop: purple for a release, yellow for canary, a branch build's own color, off-white for a local build. `build.rs` works it out and leaves it beside the native library (`target/aarch64-linux-android/release/synththing-accent`), where Gradle reads it.
+
 Only arm64 is built (every Android phone from the last several years); minSdk 26 (Android 8), targetSdk 34.
 
 ## 3. Building it
