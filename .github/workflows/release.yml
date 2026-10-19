@@ -67,7 +67,13 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # Its own cache: by job name alone (the default) it would share CI's
+      # `linux` job's, which holds only debug builds from a newer Ubuntu,
+      # so every release build here started from scratch. Release and test
+      # builds share it: the same build, on the same Ubuntu.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-release
 
       - name: System libraries
         run: |
