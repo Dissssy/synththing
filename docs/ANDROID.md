@@ -59,7 +59,7 @@ The next push to master then puts an APK in the nightly, and the next release ha
 
 ## 5. Versions
 
-Android orders updates by `versionCode` (`android/app/build.gradle.kts`): a release's is its version times 1000 plus 999 (0.8.1 is 801999), and a nightly's (0.8.2-nightly.12) is its version's times 1000 plus its number (802012). So a nightly installs over the release before it, and the next release installs over every nightly leading up to it. Going back from a nightly to the release before it means uninstalling first.
+Android orders updates by `versionCode` (`android/app/build.gradle.kts`): a release's is its version times 1000 plus 999 (0.8.1 is 801999), and a test build's (0.8.2-nightly.12, or a branch's 0.8.2-branch.12) is its version's times 1000 plus its number (802012). So a test build installs over the release before it, and the next release installs over every test build leading up to it. Going back from a test build to the release before it means uninstalling first.
 
 ## 6. To check on a phone
 

@@ -3,13 +3,14 @@ plugins {
 }
 
 // Android only installs an update with a higher code: a release's is its
-// version's (1.2.3 is 10203) times 1000 plus 999, and a canary build's
-// (1.2.4-nightly.12, on the way to 1.2.4) is that version's times 1000 plus
-// its number, so a canary build installs over the release before it, and
-// the next release installs over every canary build leading up to it.
+// version's (1.2.3 is 10203) times 1000 plus 999, and a test build's
+// (1.2.4-nightly.12 or 1.2.4-branch.12, on the way to 1.2.4) is that
+// version's times 1000 plus its number, so a test build installs over the
+// release before it, and the next release installs over every test build
+// leading up to it.
 fun codeFor(version: String): Int {
     val (major, minor, patch) = version.substringBefore('-').split('.').map { it.toInt() }
-    val build = version.substringAfter("-nightly.", "").toIntOrNull()
+    val build = version.substringAfter('-', "").substringAfter('.', "").toIntOrNull()
     return (major * 10_000 + minor * 100 + patch) * 1000 + (build?.coerceAtMost(998) ?: 999)
 }
 

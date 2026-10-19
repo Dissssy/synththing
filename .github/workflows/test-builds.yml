@@ -126,9 +126,12 @@ jobs:
   # The Android app (docs/ANDROID.md), for the nightly only: a branch's
   # testers try its changes in the desktop build's mobile layout (View >
   # Mobile layout) instead. Published only with the release key.
+  #
+  # TEMPORARY: the Android app's own branch has them too, so its testers'
+  # phones follow it until it's merged. Take it out before merging.
   android:
     needs: stamp
-    if: needs.stamp.outputs.channel == 'nightly'
+    if: needs.stamp.outputs.channel == 'nightly' || github.ref_name == 'claude/project-thread-zl0cd9'
     runs-on: ubuntu-latest
     outputs:
       signed: ${{ steps.apk.outputs.signed }}
