@@ -17,12 +17,12 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use android_activity::AndroidApp;
 use eframe::egui;
-use jni::objects::{JObject, JValue};
+use jni::objects::{GlobalRef, JObject, JString, JThrowable, JValue};
 use jni::{JNIEnv, JavaVM};
 
 use crate::app::App;
@@ -31,6 +31,13 @@ use crate::import::{self, Kind};
 /// How often the app ticks while in the background.
 const BACKGROUND_TICK: Duration = Duration::from_millis(250);
 
+/// The JVM, for calls into Java from any thread.
+static VM: OnceLock<JavaVM> = OnceLock::new();
+
+/// The activity, whose methods those are: the current one (`android_main`
+/// runs again with a new one if Android recreates it).
+static ACTIVITY: Mutex<Option<GlobalRef>> = Mutex::new(None);
+
 /// Start the app (from `android_main`).
 pub fn main(android: AndroidApp) {
     if let Some(dir) = android.internal_data_path() {
@@ -38,6 +45,7 @@ pub fn main(android: AndroidApp) {
     }
     crate::applog::init(false);
     log::info!("synththing v{} starting on Android", crate::build_info::describe());
+    keep_activity(&android);
 
     let (app, stream) = match crate::startup::start() {
         Ok(started) => started,
@@ -75,6 +83,17 @@ struct Shared {
 impl eframe::App for Shared {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.app.lock().unwrap().ui(ui, frame);
+        // eframe has no clipboard on Android: what was copied goes to
+        // Android's.
+        let copied = ui.ctx().output(|o| {
+            o.commands.iter().rev().find_map(|c| match c {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+        });
+        if let Some(text) = copied {
+            copy_text(&text);
+        }
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
@@ -111,19 +130,33 @@ fn background_ticks(app: Arc<Mutex<App>>, last_frame: Arc<Mutex<Instant>>, ctx: 
     }
 }
 
-/// Run `f` with the JNI environment and the activity, logging (and
-/// clearing) whatever Java exception it ends in.
-fn call<R>(what: &str, f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<R>) -> Option<R> {
-    let context = ndk_context::android_context();
-    // SAFETY: android-activity set the context up with the process's JVM
-    // and the activity, both alive for as long as the app is.
-    let vm = match unsafe { JavaVM::from_raw(context.vm().cast()) } {
-        Ok(vm) => vm,
-        Err(e) => {
-            log::warn!("{what}: no JVM: {e}");
-            return None;
-        }
+/// Keep the JVM and `android`'s activity for [`call`]. (Not ndk-context's:
+/// android-activity gives that the Application, which hasn't the
+/// activity's methods.)
+fn keep_activity(android: &AndroidApp) {
+    // SAFETY: android-activity's pointers to the process's JVM and to the
+    // activity, which the global reference keeps alive.
+    let vm = match unsafe { JavaVM::from_raw(android.vm_as_ptr().cast()) } {
+        Ok(vm) => VM.get_or_init(|| vm),
+        Err(e) => return log::error!("no JVM: {e}"),
     };
+    let activity = vm.attach_current_thread_permanently().and_then(|env| {
+        let activity = unsafe { JObject::from_raw(android.activity_as_ptr().cast()) };
+        env.new_global_ref(activity)
+    });
+    match activity {
+        Ok(activity) => *ACTIVITY.lock().unwrap() = Some(activity),
+        Err(e) => log::error!("no activity: {e}"),
+    }
+}
+
+/// Run `f` with the JNI environment and the activity, logging (and
+/// clearing) whatever Java exception it ends in. Its local references
+/// are freed when it's done: the threads calling are never back in Java to
+/// free them.
+fn call<R>(what: &str, f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<R>) -> Option<R> {
+    let vm = VM.get()?;
+    let activity = ACTIVITY.lock().unwrap().clone()?;
     let mut env = match vm.attach_current_thread_permanently() {
         Ok(env) => env,
         Err(e) => {
@@ -131,17 +164,41 @@ fn call<R>(what: &str, f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Res
             return None;
         }
     };
-    // SAFETY: a global reference to the activity, held by android-activity.
-    let activity = unsafe { JObject::from_raw(context.context().cast()) };
-    match f(&mut env, &activity) {
-        Ok(r) => Some(r),
+    let result = env.with_local_frame(16, |env| match f(env, activity.as_obj()) {
+        Ok(r) => Ok(Some(r)),
         Err(e) => {
-            if env.exception_check().unwrap_or(false) {
-                let _ = env.exception_describe();
-                let _ = env.exception_clear();
-            }
-            log::warn!("{what}: {e}");
-            None
+            let exception = java_exception(env);
+            log::warn!("{what}: {}", exception.unwrap_or_else(|| e.to_string()));
+            Ok(None)
+        }
+    });
+    result.unwrap_or_else(|e: jni::errors::Error| {
+        log::warn!("{what}: {e}");
+        None
+    })
+}
+
+/// The Java exception pending, if there is one, cleared and as its stack
+/// trace (the exception, its message and where it was thrown).
+fn java_exception(env: &mut JNIEnv) -> Option<String> {
+    if !env.exception_check().ok()? {
+        return None;
+    }
+    let exception: JThrowable = env.exception_occurred().ok()?;
+    env.exception_clear().ok()?;
+    let trace = env
+        .call_static_method(
+            "android/util/Log",
+            "getStackTraceString",
+            "(Ljava/lang/Throwable;)Ljava/lang/String;",
+            &[JValue::Object(&exception)],
+        )
+        .and_then(|trace| trace.l());
+    match trace {
+        Ok(trace) => env.get_string(&JString::from(trace)).ok().map(String::from),
+        Err(_) => {
+            let _ = env.exception_clear();
+            Some("a Java exception (its trace couldn't be read)".to_string())
         }
     }
 }
@@ -275,6 +332,41 @@ pub fn can_install_packages() -> bool {
 pub fn open_install_settings() {
     call("opening the install setting", |env, activity| {
         env.call_method(activity, "openInstallSettings", "()V", &[])?;
+        Ok(())
+    });
+}
+
+/// Put `text` on Android's clipboard.
+fn copy_text(text: &str) {
+    call("copying", |env, activity| {
+        let text = env.new_string(text)?;
+        env.call_method(activity, "copyText", "(Ljava/lang/String;)V", &[JValue::Object(&text)])?;
+        Ok(())
+    });
+}
+
+/// The most of the log that's shared: Android passes it between apps in
+/// one message, which can't be much more than this.
+const SHARED_LOG_BYTES: usize = 256 * 1024;
+
+/// Share the log (`path`, the end of it if it's long) with an app the user
+/// picks: to send it, or keep it.
+pub fn share_log(path: &Path) {
+    let log = match std::fs::read(path) {
+        Ok(log) => log,
+        Err(e) => return log::warn!("couldn't read {} to share: {e}", path.display()),
+    };
+    let tail = &log[log.len().saturating_sub(SHARED_LOG_BYTES)..];
+    let text = String::from_utf8_lossy(tail);
+    call("sharing the log", |env, activity| {
+        let subject = env.new_string(format!("synththing {} log", crate::build_info::describe()))?;
+        let text = env.new_string(text)?;
+        env.call_method(
+            activity,
+            "shareText",
+            "(Ljava/lang/String;Ljava/lang/String;)V",
+            &[JValue::Object(&subject), JValue::Object(&text)],
+        )?;
         Ok(())
     });
 }

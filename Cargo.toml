@@ -59,7 +59,6 @@ rfd = "0.15"                                              # native file and fold
 eframe = { version = "0.36.1", default-features = false, features = ["android-native-activity", "default_fonts", "links", "wgpu"] }
 android-activity = "0.6"                                  # the AndroidApp eframe runs in (android.rs)
 jni = "0.21"                                              # calling the app's Java side (android.rs)
-ndk-context = "0.1"                                       # the JVM and the activity, for jni
 
 [build-dependencies]
 resvg = { version = "0.45", default-features = false }      # the app icon, from assets/synththing-icon.svg

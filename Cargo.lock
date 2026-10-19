@@ -5210,7 +5210,6 @@ dependencies = [
  "jni 0.21.1",
  "log",
  "mlua",
- "ndk-context",
  "notify",
  "png 0.18.1",
  "resvg",

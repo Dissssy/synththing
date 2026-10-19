@@ -6,6 +6,7 @@ import android.app.PendingIntent;
 import android.app.PictureInPictureParams;
 import android.app.RemoteAction;
 import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
@@ -278,6 +279,22 @@ public class MainActivity extends NativeActivity {
     public void onPictureInPictureModeChanged(boolean inPictureInPictureMode, Configuration newConfig) {
         super.onPictureInPictureModeChanged(inPictureInPictureMode, newConfig);
         Native.pictureInPicture(inPictureInPictureMode);
+    }
+
+    // ---- Clipboard and sharing ----
+
+    /** From Rust: put {@code text} on the clipboard (eframe has none of its own here). */
+    public void copyText(String text) {
+        runOnUiThread(() -> getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("synththing", text)));
+    }
+
+    /** From Rust: share {@code text} with an app the user picks. */
+    public void shareText(String subject, String text) {
+        Intent send = new Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_SUBJECT, subject)
+                .putExtra(Intent.EXTRA_TEXT, text);
+        runOnUiThread(() -> startActivity(Intent.createChooser(send, subject)));
     }
 
     // ---- Updates ----

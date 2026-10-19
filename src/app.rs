@@ -1634,10 +1634,19 @@ impl App {
                     let text: Vec<String> = shown.iter().map(|e| e.line()).collect();
                     ui.ctx().copy_text(text.join("\n"));
                 }
+                // (Android has no file manager to open: the log is shared,
+                // to whatever app the user picks, instead.)
+                #[cfg(not(target_os = "android"))]
                 if let Some(path) = applog::file_path()
                     && ui.button("Open log folder").clicked()
                 {
                     open_in_file_manager(&path);
+                }
+                #[cfg(target_os = "android")]
+                if let Some(path) = applog::file_path()
+                    && ui.button("Share log").clicked()
+                {
+                    crate::android::share_log(&path);
                 }
                 if ui.button("Clear").on_hover_text("Clears this view; the log file keeps everything").clicked() {
                     applog::clear();
