@@ -89,10 +89,17 @@ impl App {
 
     /// The authority (the official server) and its key, pinned or (the
     /// first time) asked for.
-    fn authority(&self) -> (String, Option<String>) {
+    pub(super) fn authority(&self) -> (String, Option<String>) {
         let server = library::official_url();
         let key = self.config.library.pinned.get(&server).cloned();
         (server, key)
+    }
+
+    /// Ask the authority about the identity afresh: it's another one now.
+    pub(super) fn forget_identity_status(&mut self) {
+        self.identity.status = None;
+        self.identity.asked = false;
+        self.identity.applied.clear();
     }
 
     /// Show `server` how the identity came to be its key, once a session.

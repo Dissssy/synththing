@@ -333,6 +333,24 @@ pub fn restore_identity(base: &str, server_key: &str, identity: &Identity) -> Re
     Ok(reply["restored"].as_u64().unwrap_or(0))
 }
 
+/// Park a sealed sign-in handoff on a server, for another device to take.
+pub fn pair_park(base: &str, server_key: &str, identity: &Identity, sealed: &str) -> Result<super::pairing::Parked, String> {
+    signed_post(base, server_key, identity, "/api/v1/pair", &serde_json::json!({ "sealed": sealed }))
+}
+
+/// Whether a handoff `identity` parked has been taken, and by which device.
+pub fn pair_status(base: &str, server_key: &str, identity: &Identity, id: &str) -> Result<super::pairing::PairStatus, String> {
+    signed_post(base, server_key, identity, &format!("/api/v1/pair/{id}"), &serde_json::json!({}))
+}
+
+/// Take a parked handoff (it's gone from the server after this), saying
+/// which device took it: the sealed handoff.
+pub fn pair_take(base: &str, id: &str, device: &str) -> Result<String, String> {
+    let take = super::pairing::Take { device: device.to_string() };
+    let reply: serde_json::Value = read(check(agent().post(format!("{base}/api/v1/pair/{id}/take")).send_json(&take))?)?;
+    reply["sealed"].as_str().map(str::to_string).ok_or_else(|| "the server sent no handoff".to_string())
+}
+
 /// `identity`'s notifications on a server, newest first (after `after`).
 pub fn notifications(
     base: &str,
@@ -1671,5 +1689,36 @@ mod tests {
     fn urls() {
         assert_eq!(normalize_url(" synththing.p51.nl/ "), "https://synththing.p51.nl");
         assert_eq!(normalize_url("http://localhost:7381"), "http://localhost:7381");
+    }
+
+    /// Signing in another device: a handoff parked, taken once, and its
+    /// taker's name seen only by the key that parked it.
+    #[test]
+    fn pairing() {
+        use crate::library::pairing::{self, Link};
+        let dir = std::env::temp_dir().join(format!("synththing-pair-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+
+        let secret = Link::secret().unwrap();
+        let sealed = pairing::seal(&secret, alice.export("").unwrap().as_bytes()).unwrap();
+        let parked = pair_park(&base, &key, &alice, &sealed).unwrap();
+        let link = Link::parse(&Link { server: base.clone(), id: parked.id.clone(), secret }.url()).unwrap();
+        assert_eq!(pair_status(&base, &key, &alice, &link.id).unwrap().taken, None);
+        assert!(pair_status(&base, &key, &bob, &link.id).is_err(), "only its own key asks");
+
+        let taken = pair_take(&link.server, &link.id, "Pixel 8").unwrap();
+        let text = String::from_utf8(pairing::open(&link.secret, &taken).unwrap()).unwrap();
+        assert_eq!(Identity::import(&text, "").unwrap().public(), alice.public());
+        assert!(pair_take(&base, &link.id, "thief").is_err(), "once");
+        assert_eq!(pair_status(&base, &key, &alice, &link.id).unwrap().taken.as_deref(), Some("Pixel 8"));
+        assert!(pair_take(&base, "00ff", "x").is_err());
+
+        running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

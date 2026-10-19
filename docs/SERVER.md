@@ -29,6 +29,15 @@ Stack: synchronous and small, so the desktop app doesn't carry an async runtime 
 - Signed: uploads, new versions, deletes, encores, reports, identity changes. A signature covers a canonical JSON of the request (the script's SHA-256, its metadata), a timestamp (rejected if more than 5 minutes off) and the server's own ID (its public key), so a signed request can't be replayed later or on another server.
 - Export identity saves the key to a file, encrypted with a passphrase if one is given; Import loads it on another machine. Losing the key loses the identity (ownership, encores received), never the scripts themselves, unless it's recovered (below).
 
+### Signing in another device
+
+Every device signed in as someone holds the same key: signing one in copies it there (`library/pairing.rs`, `server/pairing.rs`, `app/pairing.rs`).
+
+- A signed-in app exports the identity (unsealed, with its rotation records), seals it with ChaCha20-Poly1305 under a random 32-byte secret, and parks it on the authority (`POST /api/v1/pair`, signed). It shows `<server>/pair#<id>.<secret>` as a QR code and a link. The secret is after the `#`, which browsers never send, so the server only ever holds the sealed copy.
+- The other device takes it (`POST /api/v1/pair/{id}/take`, unsigned, with its name from `device.json`), opens it with the secret and saves the key. A handoff can be taken once and waits 10 minutes; they're kept in memory only, at most 5 per key.
+- The app that parked it asks whether it's been taken (`POST /api/v1/pair/{id}`, signed by the same key) and shows the device's name.
+- A rotation (or a recovery) signs every other device out: servers refuse the old key once it's applied.
+
 ### Server modes
 
 - **Open** (default): unsigned uploads are allowed, but they're anonymous and can never be edited or deleted by their uploader. Signed uploads get ownership.
@@ -204,6 +213,9 @@ POST /api/v1/identity/recover             start a recovery: a code to the email 
 POST /api/v1/identity/recover/confirm     the code: the rotation to the new key (authorities)
 GET  /api/v1/identity/cancel?token=       a code email's "that wasn't me" link (authorities)
 POST /api/v1/identity/apply               present rotation records (any server)
+POST /api/v1/pair                         signed: park a sealed sign-in handoff
+POST /api/v1/pair/{id}                    signed by the key that parked it: whether it's been taken, and by which device
+POST /api/v1/pair/{id}/take               the handoff, once (and the taking device's name)
 POST /api/v1/identity/delete              signed: delete the key's data here (in 30 days), or send a code first
 POST /api/v1/identity/delete/confirm      signed: the code
 POST /api/v1/identity/restore             signed: undo a deletion

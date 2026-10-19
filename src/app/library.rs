@@ -2392,6 +2392,7 @@ impl App {
         if let Some(message) = &lib.identity_message {
             ui.weak(message.as_str());
         }
+        self.pairing_ui(ui);
         let current = self.library.identity.clone();
         ui.add_space(4.0);
         self.recovery_ui(ui, current.as_ref());
@@ -2430,17 +2431,14 @@ impl App {
                         if passphrase.is_empty() && Identity::needs_passphrase(&text) {
                             return Err("it's sealed: type its passphrase above first".to_string());
                         }
-                        let identity = Identity::import(&text, &passphrase)?;
-                        // (With how it came to be this key, if it was rotated.)
-                        library::identity::save_rotations(&library::identity::exported_rotations(&text))?;
-                        Ok(identity)
-                    })
-                    .and_then(|identity| identity.save().map(|()| identity));
+                        library::identity::adopt(&text, &passphrase)
+                    });
                 self.library.identity_message = Some(match result {
                     Ok(identity) => {
                         let id = identity.id();
                         log::info!("imported the library identity #{id}");
                         self.library.identity = Some(identity);
+                        self.forget_identity_status();
                         format!("Now #{id}.")
                     }
                     Err(e) => format!("Couldn't import it: {e}"),

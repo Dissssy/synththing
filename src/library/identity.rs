@@ -201,6 +201,15 @@ impl Identity {
     }
 }
 
+/// Make an exported identity this app's own: opened with `passphrase` if
+/// it's sealed, and saved with how it came to be its key.
+pub fn adopt(text: &str, passphrase: &str) -> Result<Identity, String> {
+    let identity = Identity::import(text, passphrase)?;
+    save_rotations(&exported_rotations(text))?;
+    identity.save()?;
+    Ok(identity)
+}
+
 /// Write a secret where only its owner can read it (on Linux and macOS).
 pub fn save_secret(path: &Path, text: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
