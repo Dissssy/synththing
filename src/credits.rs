@@ -1,7 +1,7 @@
 //! Data for Help > Credits & licenses: who made synththing (the GitHub
 //! repository's contributors, fetched when the modal first opens), the
-//! Monogram font, Lua, and every library compiled into the app with its
-//! license text (`assets/licenses/third_party.json`, regenerated with
+//! Monogram and Noto Sans CJK fonts, Lua, and every library compiled into
+//! the app with its license text (`assets/licenses/third_party.json`, regenerated with
 //! `cargo run --example gen_licenses`).
 
 use std::sync::{Arc, Mutex, OnceLock};
@@ -13,6 +13,8 @@ use crate::updater::REPO;
 
 /// Monogram's own credits file, shipped with the font.
 pub const MONOGRAM_CREDITS: &str = include_str!("../assets/fonts/monogram/credits.txt");
+/// Noto Sans JP and KR's license (`app::fonts`).
+pub const NOTO_CJK_LICENSE: &str = include_str!("../assets/fonts/noto-sans-cjk/OFL.txt");
 /// Lua's copyright and license notice (from its source).
 pub const LUA_LICENSE: &str = include_str!("../assets/licenses/lua.txt");
 /// The starter pack's soundfonts (downloaded, not built in; see

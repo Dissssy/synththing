@@ -444,42 +444,9 @@ impl App {
     pub(super) fn playlist_panel_ui(&mut self, ui: &mut egui::Ui) {
         let panel_rect = ui.max_rect();
 
-        ui.horizontal(|ui| {
-            ui.menu_button("New playlist", |ui| {
-                if ui.button("Blank").clicked() {
-                    let name = self.unique_playlist_name("New playlist");
-                    self.create_playlist(&name, Vec::new());
-                    self.playlist_rename = Some(name);
-                }
-                let folder = self.browser.cwd().to_path_buf();
-                let folder_name = folder
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "Folder".to_string());
-                if ui
-                    .button(format!("From current folder ({folder_name})"))
-                    .on_hover_text("Every song directly in the folder the Songs browser is showing")
-                    .clicked()
-                {
-                    let songs = playlist::songs_in_folder(&folder, listed_song_extensions(&self.config));
-                    if songs.is_empty() {
-                        self.status = format!("No songs directly in {folder_name}.");
-                    } else {
-                        let name = self.unique_playlist_name(&folder_name);
-                        self.create_playlist(&name, songs);
-                    }
-                }
-                #[cfg(not(target_os = "android"))]
-                if ui.button("Import .m3u...").clicked() {
-                    self.import_m3u();
-                }
-            });
-        });
-
+        self.playlist_header_ui(ui);
         if self.playlists.lists.is_empty() {
-            ui.weak("No playlists yet. Make one with New, or drag a song from Songs into this panel.");
-        } else {
-            self.playlist_header_ui(ui);
+            ui.weak("No playlists yet. Make one with +, or drag a song from Songs into this panel.");
         }
 
         let mut row_drop = None;
@@ -544,54 +511,17 @@ impl App {
         }
     }
 
-    /// Playlist picker, rename/delete, and play-from-the-top.
+    /// One row: the playlist picker (a text box in its place while
+    /// renaming), then play-from-the-top, new, rename, export and delete.
     fn playlist_header_ui(&mut self, ui: &mut egui::Ui) {
         let viewed = self.viewed_playlist.filter(|&l| l < self.playlists.lists.len());
         let mut pick = None;
-        ui.horizontal(|ui| {
-            let current = viewed
-                .map(|l| self.playlists.lists[l].playlist.name.clone())
-                .unwrap_or_else(|| "(pick one)".to_string());
-            egui::ComboBox::from_id_salt("playlist_picker")
-                .selected_text(current)
-                .show_ui(ui, |ui| {
-                    for (i, stored) in self.playlists.lists.iter().enumerate() {
-                        let playing = self.now_playing.as_ref().is_some_and(|np| np.list == i);
-                        let label = if playing {
-                            format!("{} (playing)", stored.playlist.name)
-                        } else {
-                            stored.playlist.name.clone()
-                        };
-                        if ui.selectable_label(viewed == Some(i), label).clicked() {
-                            pick = Some(i);
-                        }
-                    }
-                });
-        });
-        if let Some(i) = pick {
-            self.viewed_playlist = Some(i);
-            self.playlist_rename = None;
-            self.confirm_delete_playlist = false;
-            self.playlist_selection.clear();
-        }
-
-        let Some(list) = viewed else {
-            return;
-        };
-        ui.horizontal(|ui| {
-            let empty = self.playlists.lists[list].playlist.entries.is_empty();
-            if ui.add_enabled(!empty, egui::Button::new("Play")).clicked() {
-                let start = if self.shuffle {
-                    (self.rng.next() % self.playlists.lists[list].playlist.entries.len() as u64) as usize
-                } else {
-                    0
-                };
-                self.play_entry(list, start);
-            }
-
-            if let Some(name) = &mut self.playlist_rename {
-                let response = ui.add(egui::TextEdit::singleline(name).desired_width(140.0));
-                let commit = response.lost_focus() || ui.button("OK").clicked();
+        ui.horizontal_wrapped(|ui| {
+            if let Some(list) = viewed
+                && let Some(name) = &mut self.playlist_rename
+            {
+                let response = ui.add(egui::TextEdit::singleline(name).desired_width(160.0));
+                let commit = response.lost_focus() || ui.add(super::icon_button("check")).on_hover_text("Rename").clicked();
                 if commit {
                     let name = name.trim().to_string();
                     if !name.is_empty() {
@@ -602,17 +532,60 @@ impl App {
                 } else if !response.has_focus() && !response.lost_focus() {
                     response.request_focus();
                 }
-            } else if ui.button("Rename").clicked() {
+            } else if !self.playlists.lists.is_empty() {
+                let current = viewed
+                    .map(|l| self.playlists.lists[l].playlist.name.clone())
+                    .unwrap_or_else(|| "(pick one)".to_string());
+                egui::ComboBox::from_id_salt("playlist_picker")
+                    .selected_text(current)
+                    .show_ui(ui, |ui| {
+                        for (i, stored) in self.playlists.lists.iter().enumerate() {
+                            let playing = self.now_playing.as_ref().is_some_and(|np| np.list == i);
+                            let label = if playing {
+                                format!("{} (playing)", stored.playlist.name)
+                            } else {
+                                stored.playlist.name.clone()
+                            };
+                            if ui.selectable_label(viewed == Some(i), label).clicked() {
+                                pick = Some(i);
+                            }
+                        }
+                    });
+            }
+
+            if let Some(list) = viewed {
+                let empty = self.playlists.lists[list].playlist.entries.is_empty();
+                if ui.add_enabled(!empty, super::icon_button("play")).on_hover_text("Play it from the top").clicked() {
+                    let start = if self.shuffle {
+                        (self.rng.next() % self.playlists.lists[list].playlist.entries.len() as u64) as usize
+                    } else {
+                        0
+                    };
+                    self.play_entry(list, start);
+                }
+            }
+
+            self.new_playlist_menu_ui(ui);
+
+            let Some(list) = viewed else { return };
+            if self.playlist_rename.is_none()
+                && ui.add(super::icon_button("pencil-simple")).on_hover_text("Rename").clicked()
+            {
                 self.playlist_rename = Some(self.playlists.lists[list].playlist.name.clone());
             }
-
             #[cfg(not(target_os = "android"))]
-            if ui.button("Export .m3u...").on_hover_text("Save as an .m3u8 playlist other players can open").clicked() {
+            if ui
+                .add(super::icon_button("export"))
+                .on_hover_text("Export .m3u...: save as an .m3u8 playlist other players can open")
+                .clicked()
+            {
                 self.export_m3u(list);
             }
-
-            let delete_label = if self.confirm_delete_playlist { "Really delete?" } else { "Delete" };
-            let response = ui.button(delete_label);
+            let response = if self.confirm_delete_playlist {
+                ui.add(egui::Button::new(egui::RichText::new("Really delete?").color(ui.visuals().error_fg_color)))
+            } else {
+                ui.add(super::icon_button("trash")).on_hover_text("Delete this playlist")
+            };
             if response.clicked() {
                 if self.confirm_delete_playlist {
                     self.confirm_delete_playlist = false;
@@ -625,6 +598,48 @@ impl App {
                 self.confirm_delete_playlist = false;
             }
         });
+        if let Some(i) = pick {
+            self.viewed_playlist = Some(i);
+            self.playlist_rename = None;
+            self.confirm_delete_playlist = false;
+            self.playlist_selection.clear();
+        }
+    }
+
+    /// +: a new playlist, blank, from the Songs browser's folder, or
+    /// imported from an .m3u.
+    fn new_playlist_menu_ui(&mut self, ui: &mut egui::Ui) {
+        egui::containers::menu::MenuButton::from_button(super::icon_button("plus")).ui(ui, |ui| {
+            if ui.button("Blank").clicked() {
+                let name = self.unique_playlist_name("New playlist");
+                self.create_playlist(&name, Vec::new());
+                self.playlist_rename = Some(name);
+            }
+            let folder = self.browser.cwd().to_path_buf();
+            let folder_name = folder
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Folder".to_string());
+            if ui
+                .button(format!("From current folder ({folder_name})"))
+                .on_hover_text("Every song directly in the folder the Songs browser is showing")
+                .clicked()
+            {
+                let songs = playlist::songs_in_folder(&folder, listed_song_extensions(&self.config));
+                if songs.is_empty() {
+                    self.status = format!("No songs directly in {folder_name}.");
+                } else {
+                    let name = self.unique_playlist_name(&folder_name);
+                    self.create_playlist(&name, songs);
+                }
+            }
+            #[cfg(not(target_os = "android"))]
+            if ui.button("Import .m3u...").clicked() {
+                self.import_m3u();
+            }
+        })
+        .0
+        .on_hover_text("New playlist");
     }
 
     /// The entries of playlist `list`: click to play, drag to reorder, drop

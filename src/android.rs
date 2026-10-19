@@ -62,7 +62,7 @@ pub fn main(android: AndroidApp) {
         "synththing",
         options,
         Box::new(move |cc| {
-            crate::app::install_fonts(&cc.egui_ctx);
+            crate::app::fonts::install(&cc.egui_ctx);
             background_ticks(Arc::clone(&app), Arc::clone(&last_frame), cc.egui_ctx.clone());
             Ok(Box::new(shared))
         }),

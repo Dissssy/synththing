@@ -11,6 +11,7 @@ mod branding;
 mod close;
 mod editor;
 mod feedback;
+pub mod fonts;
 pub use editor::ApplyMode;
 mod loading;
 mod mobile;
@@ -1414,7 +1415,7 @@ impl App {
                 if ui.button(format!("{}  Import soundfonts...", icon("plus"))).on_hover_text("Copy soundfonts into synththing").clicked() {
                     crate::import::start(crate::import::Kind::Soundfonts, &["sf2"]);
                 }
-            } else if ui.button("Add soundfont...").clicked() {
+            } else if ui.add(icon_button("plus")).on_hover_text("Add a soundfont...").clicked() {
                 self.open_soundfont_browser();
             }
         });
@@ -2068,13 +2069,20 @@ impl App {
                 }
 
                 ui.separator();
-                ui.strong("Font");
+                ui.strong("Fonts");
                 ui.horizontal_wrapped(|ui| {
                     ui.label("Script text uses Monogram by Vinícius Menézio (datagoblin), released to the public domain (CC0). Attribution isn't required, but it's given gladly.");
                     ui.hyperlink_to("datagoblin.itch.io/monogram", "https://datagoblin.itch.io/monogram");
                 });
                 egui::CollapsingHeader::new("Monogram's credits").id_salt("credits_monogram").show(ui, |ui| {
                     ui.label(egui::RichText::new(credits::MONOGRAM_CREDITS.trim()).monospace());
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Japanese and Korean text uses Noto Sans JP and Noto Sans KR by Google and Adobe, under the SIL Open Font License 1.1.");
+                    ui.hyperlink_to("github.com/notofonts/noto-cjk", "https://github.com/notofonts/noto-cjk");
+                });
+                egui::CollapsingHeader::new("Noto Sans CJK's license").id_salt("credits_noto_cjk").show(ui, |ui| {
+                    ui.label(egui::RichText::new(credits::NOTO_CJK_LICENSE.trim()).monospace());
                 });
 
                 ui.separator();
@@ -2424,11 +2432,11 @@ impl App {
         }
     }
 
-    /// The editor tab: plus the script picker when the visualizer (which
+    /// The editor tab: plus the script bar when the visualizer (which
     /// normally hosts it) is closed.
     fn editor_section_ui(&mut self, ui: &mut egui::Ui) {
         if !self.is_open(Section::Visualizer) {
-            self.script_picker_ui(ui);
+            self.script_bar_ui(ui, false);
         }
         self.script_error_ui(ui, false);
         self.visualizer_editor_ui(ui);
@@ -2452,24 +2460,22 @@ impl App {
                 // bring an offer to turn them on (`audio_import_ui`).
                 crate::import::start(crate::import::Kind::Songs, SONG_EXTENSIONS);
             }
-        } else {
-            if self.browser.set_root(None) {
-                self.browser.navigate_to(self.config.browse_start_dir());
-            }
-            ui.horizontal(|ui| {
-                if ui
-                    .button("Set as default")
-                    .on_hover_text("Open the song browser in this folder from now on")
-                    .clicked()
-                {
-                    let dir = self.browser.cwd().to_path_buf();
-                    self.status = match self.config.set_browse_dir(dir) {
-                        Ok(()) => "Default song folder updated.".to_string(),
-                        Err(e) => format!("Failed to save default folder: {e}"),
-                    };
-                }
-            });
+        } else if self.browser.set_root(None) {
+            self.browser.navigate_to(self.config.browse_start_dir());
         }
+        let mut set_default = None;
+        let default = self.config.browse_dir.clone();
+        let mut tools = |ui: &mut egui::Ui, cwd: &Path| {
+            let is_default = default.as_deref() == Some(cwd);
+            let hover = if is_default {
+                "Songs opens in this folder"
+            } else {
+                "Set as default: open Songs in this folder from now on"
+            };
+            if ui.add(icon_button("push-pin").selected(is_default)).on_hover_text(hover).clicked() && !is_default {
+                set_default = Some(cwd.to_path_buf());
+            }
+        };
         // (Both the names and the trailing widgets read the song info, one
         // after the other.)
         let cache = std::cell::RefCell::new(&mut self.song_info);
@@ -2503,10 +2509,17 @@ impl App {
         };
         let clicked = self.browser.ui(
             ui,
+            &mut tools,
             &mut |path| title_of(&mut cache.borrow_mut(), &naming, path),
             &mut |ui, path| song_info_widgets(ui, &mut cache.borrow_mut(), path, info_open),
             Some(&mut menu),
         );
+        if let Some(dir) = set_default {
+            self.status = match self.config.set_browse_dir(dir) {
+                Ok(()) => "Default song folder updated.".to_string(),
+                Err(e) => format!("Failed to save default folder: {e}"),
+            };
+        }
         if let Some(path) = clicked {
             self.play_path(path);
         }
@@ -2568,25 +2581,7 @@ impl App {
         mut notes: NotesSnapshot,
         playback: EngineView,
     ) {
-        let picker = ui.scope(|ui| self.script_picker_ui(ui)).response.rect;
-        self.tour.mark(tour::Target::ScriptPicker, picker);
-
-        ui.horizontal(|ui| {
-            let fullscreen = ui
-                .button("Fullscreen visualizer")
-                .on_hover_text("Just the visualizer, filling the screen, with mouse and keyboard going to the script. F11 toggles it, Esc exits.");
-            self.tour.mark(tour::Target::Fullscreen, fullscreen.rect);
-            if fullscreen.clicked() {
-                let ctx = ui.ctx().clone();
-                self.enter_dedicated(&ctx);
-            }
-            self.script_window_buttons_ui(ui);
-            self.recording_buttons_ui(ui);
-            // Cut short so a long path can't set the page's minimum width.
-            if let Some(path) = self.script.path() {
-                select_list::label(ui, egui::RichText::new(path.display().to_string()).weak(), None);
-            }
-        });
+        self.script_bar_ui(ui, true);
 
         self.script_error_ui(ui, true);
 
@@ -2960,91 +2955,83 @@ impl App {
         }
     }
 
-    /// Active script picker, "New" from template, and "Restore default" for
-    /// a bundled script. Shown above the visualizer, or above the editor
-    /// when the visualizer is off.
-    fn script_picker_ui(&mut self, ui: &mut egui::Ui) {
-        let mut picked_idx = None;
-        let mut restore_bundled: Option<String> = None;
-        let mut restart = false;
-        let mut rename: Option<PathBuf> = None;
-        ui.horizontal(|ui| {
-            ui.label("Script:");
+    /// The bar above the visualizer, or above the editor when the
+    /// visualizer is off: the script picker (which also holds what's done
+    /// to a script's file), Restart, and the script's Settings, Controls and
+    /// Debug; with `visualizer`, Fullscreen and recording too.
+    fn script_bar_ui(&mut self, ui: &mut egui::Ui, visualizer: bool) {
+        let mut picked = None;
+        // Wrapping onto a second row in a narrow tab, instead of cut off.
+        ui.horizontal_wrapped(|ui| {
             let current = self
                 .active_script
                 .and_then(|i| self.available_scripts.get(i))
                 .map(|p| lua_visualizer::display_name(p))
                 .unwrap_or_else(|| "(none)".to_string());
-            egui::ComboBox::from_id_salt("visualizer_script_picker")
+            let picker = egui::ComboBox::from_id_salt("visualizer_script_picker")
                 .selected_text(current)
                 .height(f32::INFINITY)
-                .show_ui(ui, |ui| picked_idx = self.script_list_ui(ui));
-
-            let mut new_from: Option<&'static str> = None;
-            egui::ComboBox::from_id_salt("visualizer_new_script")
-                .selected_text("New")
+                // Its sidebar has buttons (two-click ones among them).
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .show_ui(ui, |ui| {
-                    let mut heading = "";
-                    for (category, name, content) in lua_visualizer::new_script_templates() {
-                        if category != heading {
-                            heading = category;
-                            ui.label(egui::RichText::new(lua_visualizer::category_title(category)).weak().small());
-                        }
-                        if ui.selectable_label(false, name).clicked() {
-                            new_from = Some(content);
-                        }
+                    picked = self.script_list_ui(ui, true);
+                    if picked.is_some() || self.any_modal_open() {
+                        ui.close();
                     }
-                });
-            if let Some(content) = new_from {
-                self.new_script_from_template(content);
-            }
-
-            // Offer a re-sync when the active script is a bundled default
-            // (they're only written on first run, so an older copy on disk
-            // won't have newer host features).
-            if let Some(name) = self
-                .script
-                .path()
-                .and_then(|p| p.file_name())
-                .and_then(|n| n.to_str())
-                && let Some(bundled) = lua_visualizer::bundled_default(name)
-                && self.script.path().is_some_and(|p| !crate::library::installed_path(p).exists())
-                && ui.button("Restore default").clicked()
-            {
-                restore_bundled = Some(bundled.to_string());
-            }
+                })
+                .response
+                .on_hover_text("The script drawing the visualizer; open it for more scripts, a new one, and this one's file");
             if ui
-                .button("Restart")
-                .on_hover_text("Start the running script over from scratch: its state resets, its settings stay (F5)")
+                .add(icon_button("arrow-clockwise"))
+                .on_hover_text("Restart: start the script over from scratch; its state resets, its settings stay (F5)")
                 .clicked()
             {
-                restart = true;
+                self.restart_script();
             }
-            if let Some(path) = self.script.path()
-                && ui.button("Rename").on_hover_text("Rename this script's file (its settings come along)").clicked()
-            {
-                rename = Some(path.to_path_buf());
+            if visualizer {
+                self.tour.mark(tour::Target::ScriptPicker, picker.rect);
+                let fullscreen = ui.add(icon_button("corners-out")).on_hover_text(
+                    "Fullscreen visualizer: just the visualizer, filling the screen, with mouse and keyboard going to the script. F11 toggles it, Esc exits.",
+                );
+                self.tour.mark(tour::Target::Fullscreen, fullscreen.rect);
+                if fullscreen.clicked() {
+                    let ctx = ui.ctx().clone();
+                    self.enter_dedicated(&ctx);
+                }
             }
-            self.script_share_button(ui);
+            ui.separator();
+            self.script_window_buttons_ui(ui);
+            if visualizer {
+                self.recording_buttons_ui(ui);
+            }
         });
-        if let Some(path) = rename {
-            let name = lua_visualizer::display_name(&path);
-            self.rename = Some(RenameScript { path, name, error: None, focused_once: false, waiting: None });
+        match picked {
+            Some(previews::Picked::Script(idx)) => self.load_script(idx),
+            Some(previews::Picked::New(content)) => self.new_script_from_template(&content),
+            None => {}
         }
-        if restart {
-            self.restart_script();
-        }
-        if let Some(idx) = picked_idx {
-            self.load_script(idx);
-        }
-        if let Some(source) = restore_bundled {
-            if let Some(path) = self.script.path().map(Path::to_path_buf) {
-                self.editor_opened(&path);
-            }
-            self.editor_text = source;
+    }
+
+    /// In the picker's sidebar, for the running script (at `path`): what
+    /// can be done to its file.
+    fn script_file_buttons_ui(&mut self, ui: &mut egui::Ui, path: &Path) {
+        // A re-sync when it's a bundled default (they're only written on
+        // first run, so an older copy on disk won't have newer host
+        // features).
+        if let Some(bundled) = path.file_name().and_then(|n| n.to_str()).and_then(lua_visualizer::bundled_default)
+            && !crate::library::installed_path(path).exists()
+            && ui.button("Restore default").on_hover_text("Back to the script as synththing ships it").clicked()
+        {
+            self.editor_opened(path);
+            self.editor_text = bundled.to_string();
             self.completion.request(self.editor_text.clone());
             self.apply_editor();
         }
+        if ui.button("Rename...").on_hover_text("Rename this script's file (its settings come along)").clicked() {
+            let name = lua_visualizer::display_name(path);
+            self.rename = Some(RenameScript { path: path.to_path_buf(), name, error: None, focused_once: false, waiting: None });
+        }
+        self.script_share_button(ui);
     }
 
     /// Per-channel mute toggles for the current MIDI file (left-click
@@ -3690,15 +3677,6 @@ fn fit_width(ui: &egui::Ui, width: f32) -> f32 {
     width.min(ui.ctx().content_rect().width() - 32.0).max(120.0)
 }
 
-/// A setting on one line (`add`), with an (i) after it: hovering either
-/// shows `info`, the longer explanation.
-/// The fonts: egui's own, with the Phosphor icons (`icon`) mixed in.
-pub fn install_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-    ctx.set_fonts(fonts);
-}
-
 /// A Phosphor icon by its name (`shield-check`, `SCROLL`), for text: the
 /// scroll if there's no such icon.
 pub fn icon(name: &str) -> &'static str {
@@ -3709,6 +3687,8 @@ pub fn icon(name: &str) -> &'static str {
         .map_or(egui_phosphor::regular::SCROLL, |(_, glyph)| glyph)
 }
 
+/// A setting on one line (`add`), with an (i) after it: hovering either
+/// shows `info`, the longer explanation.
 fn with_info(ui: &mut egui::Ui, info: &str, add: impl FnOnce(&mut egui::Ui) -> egui::Response) {
     ui.horizontal(|ui| {
         add(ui).on_hover_text(info);
@@ -3981,8 +3961,9 @@ pub(super) fn palette_color(index: u8) -> egui::Color32 {
     egui::Color32::from_rgb(r, g, b)
 }
 
-/// A transport button: just its icon (Phosphor), a little larger than text.
-fn icon_button(name: &str) -> egui::Button<'static> {
+/// A toolbar button: just its icon (Phosphor), a little larger than text.
+/// Give it a hover text saying what it does.
+pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(icon(name)).size(16.0)).min_size(egui::vec2(28.0, 24.0))
 }
 

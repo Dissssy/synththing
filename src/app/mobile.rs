@@ -592,7 +592,7 @@ impl App {
     fn mobile_scripts_ui(&mut self, ui: &mut egui::Ui) {
         self.script_error_ui(ui, false);
         egui::ScrollArea::vertical().show(ui, |ui| {
-            if let Some(idx) = self.script_list_ui(ui) {
+            if let Some(super::previews::Picked::Script(idx)) = self.script_list_ui(ui, false) {
                 self.load_script(idx);
                 self.mobile_state.page = Page::NowPlaying;
             }

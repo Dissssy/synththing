@@ -7,17 +7,30 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### Added
 - An Android app, experimental: `synththing-android-arm64.apk` on each release. A layout made for a phone, with the visualizer on top and the controls under it; songs and soundfonts are imported from the phone; playback goes on in the background, with controls in the notification and on the lock screen; and leaving the app while it plays shrinks the visualizer into a floating window (Preferences > Visualizers turns it off or picks its shape). Scripts' previews come from the Online Library. Updates, the changelog, the log and the credits are pages of the menu, and an update found or installed at launch opens its page. It reads the Online Library without an account: install and update scripts, but no publishing or encores. See docs/ANDROID.md.
 - The mobile layout on desktop too (View > Mobile layout), to try it, or for a narrow window.
+
+### Changed
+- The toolbars are slimmer: Restart, Fullscreen, Settings, Controls and Debug above the visualizer, the playlist's Play, New, Rename, Export and Delete, the Songs browser's Browse, Set as default and hidden-files toggle, and the editor's Format, Find and History are icon buttons now (hover one to see what it does), and each toolbar is one row that wraps when its tab is narrow.
+- New script, Rename..., Restore default and Publish... moved into the script picker: New script lists the templates and examples, the sidebar's Make a copy starts a new script from any script, and the running script's card has its file's buttons and its full path.
+- The editor's Apply, Wrap and text size are under its cog.
+- Preferences are arranged by what they're for: Appearance (with the theme and the UI scale, which moved there from the Themes window), Playback, Songs, Visualizers, Online Library, Updates, App and Recording. In the mobile layout they're a page of their own, each section opening in its place, and back (or Escape) steps out again. Themes are edited from Appearance too (Edit themes..., in place of the synththing menu's Themes...); in the mobile layout that's a level under it, with the theme and its buttons along the top and the preview along the bottom.
+- Song names are set under Preferences > Appearance. On Android they show on the now-playing screen and in the notification too, and {file_path} is the folder inside the song library.
+
+### Fixed
+- With a very round theme, the seek bar's filled part no longer runs past its handle.
+
+## 0.9.0 (2026-10-19)
+
+### Added
 - Select several songs at once in Songs, the way a playlist already allows (Ctrl and Shift, Ctrl+A), and drag them onto a playlist together. The Soundfonts list selects the same way, so several can be removed at once.
-- Songs are named by their tags. Preferences > Appearance > Song names holds a list of patterns such as "{title} by {artist}"; the first one a song has every field of names it, and a song without them keeps its file name. Besides tags, a pattern can use {file_name}, {file_extension}, {file_path} (the folder, inside the Songs list's default folder, or the song library on Android), {length}, and for MIDI files {bpm} and {notes}. The name shows in the Songs list, playlists, the now-playing bar, the tray, and on Android the now-playing screen and notification. Search matches both the name and the file name, and a Sort button switches the list between the two. Tags are remembered between launches.
+- Songs are named by their tags. Preferences > Songs > Song names holds a list of patterns such as "{title} by {artist}"; the first one a song has every field of names it, and a song without them keeps its file name. Besides tags, a pattern can use {file_name}, {file_extension}, {file_path} (the folder, inside the Songs list's default folder), {length}, and for MIDI files {bpm} and {notes}. The name shows in the Songs list, playlists, the now-playing bar and the tray. Search matches both the name and the file name, and a Sort button switches the list between the two. Tags are remembered between launches.
+- Text in every script shows as written instead of as boxes: Japanese, Korean and Chinese (with punctuation like 『 』), and through the fonts installed on your computer, everything else they cover (Thai, Hebrew, symbols and more). This covers song names, tags and every other list. Japanese and Korean come with the app, in Noto Sans to match the rest of the text.
 
 ### Changed
 - Songs, Soundfonts and the playlist are one kind of list now and work alike: click selects, double-click plays a song, opens a folder or uses a soundfont.
 - A name too long for its list is cut short with "...", and hovering it shows all of it.
-- Preferences are arranged by what they're for: Appearance (with the theme and the UI scale, which moved there from the Themes window), Playback, Songs, Visualizers, Online Library, Updates, App and Recording. In the mobile layout they're a page of their own, each section opening in its place, and back (or Escape) steps out again. Themes are edited from Appearance too (Edit themes..., in place of the synththing menu's Themes...); in the mobile layout that's a level under it, with the theme and its buttons along the top and the preview along the bottom.
 - Feedback asking for something new is filed as a feature request for the developers to decide on; only bug reports go on to automatic fixes.
 
 ### Fixed
-- With a very round theme, the seek bar's filled part no longer runs past its handle.
 - A long script path on the Visualizer page no longer stops the page from getting narrower; it's cut short with "...", and hovering it shows all of it.
 - On Linux, the Songs list stopped re-reading its folder over and over just because files in it were read.
 - Right-clicking the tray icon closes the mini player as it brings the main window back, so the two aren't on screen together.

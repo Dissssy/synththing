@@ -168,7 +168,7 @@ pub fn main() -> Result<()> {
         "synththing",
         options,
         Box::new(|cc| {
-            app::install_fonts(&cc.egui_ctx);
+            app::fonts::install(&cc.egui_ctx);
             app.attach_tray(&cc.egui_ctx);
             if let Some(guard) = &instance {
                 app.listen_for_second_launch(guard.listen(&cc.egui_ctx));

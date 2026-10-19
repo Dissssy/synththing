@@ -299,6 +299,14 @@ fn fetch(servers: &[String], dir: &Path, sha256: &str) -> Result<(), String> {
 /// The picker's sidebar width.
 const SIDEBAR: f32 = 300.0;
 
+/// What was picked in the script picker.
+pub(super) enum Picked {
+    /// Use this script (of `available_scripts`).
+    Script(usize),
+    /// A new script, from this source.
+    New(String),
+}
+
 impl super::App {
     /// Where previews not made yet come from: made here with the starter
     /// pack's TimGM6mb (what library servers use), else the first soundfont
@@ -323,9 +331,11 @@ impl super::App {
 
     /// The scripts to pick from, for a combo box: grouped, the bundled
     /// visualizers and games, then the user's own (and copies of templates
-    /// and examples), beside a sidebar about the one under the mouse (its
-    /// preview, where it's from, its description). Returns the one clicked.
-    pub(super) fn script_list_ui(&self, ui: &mut egui::Ui) -> Option<usize> {
+    /// and examples), then new ones to start, beside a sidebar about the one
+    /// under the mouse (its preview, where it's from, its description, Make
+    /// a copy; for the running one, its file and what can be done to it). Without
+    /// `manage`, just the scripts to pick from and their cards.
+    pub(super) fn script_list_ui(&mut self, ui: &mut egui::Ui, manage: bool) -> Option<Picked> {
         let mut picked = None;
         let pass = ui.ctx().cumulative_pass_nr();
         {
@@ -363,8 +373,22 @@ impl super::App {
                                 self.script_previews.borrow_mut().shown = Some(path.clone());
                             }
                             if response.clicked() {
-                                picked = Some(i);
+                                picked = Some(Picked::Script(i));
                             }
+                        }
+                    }
+                    if !manage {
+                        return;
+                    }
+                    ui.label(egui::RichText::new("New script").weak().small());
+                    for (category, name, content) in lua_visualizer::new_script_templates() {
+                        let kind = if category == "examples" { "example" } else { "template" };
+                        if ui
+                            .selectable_label(false, format!("{} {name}", super::icon("plus")))
+                            .on_hover_text(format!("A new script of yours, from the {name} {kind}"))
+                            .clicked()
+                        {
+                            picked = Some(Picked::New(content.to_string()));
                         }
                     }
                 });
@@ -375,7 +399,41 @@ impl super::App {
                 let shown = self.script_previews.borrow().shown.clone();
                 let shown = shown.or_else(|| self.active_script.and_then(|i| self.available_scripts.get(i).cloned()));
                 match shown {
-                    Some(path) => self.script_card_ui(ui, &path),
+                    Some(path) => {
+                        let description = self.script_card_ui(ui, &path);
+                        if manage && description.is_some() {
+                            let running = self.script.path() == Some(path.as_path());
+                            ui.add_space(6.0);
+                            ui.horizontal_wrapped(|ui| {
+                                if ui
+                                    .button("Make a copy")
+                                    .on_hover_text("A new script of yours, starting from this one")
+                                    .clicked()
+                                {
+                                    match std::fs::read_to_string(&path) {
+                                        Ok(source) => picked = Some(Picked::New(source)),
+                                        Err(e) => self.status = format!("Couldn't read {}: {e}", path.display()),
+                                    }
+                                }
+                                if running {
+                                    self.script_file_buttons_ui(ui, &path);
+                                }
+                            });
+                            if running {
+                                ui.add(egui::Label::new(egui::RichText::new(path.display().to_string()).weak().small()).wrap());
+                            }
+                        }
+                        if let Some(description) = description.filter(|d| !d.is_empty()) {
+                            const MOST: usize = 600;
+                            let text = if description.chars().count() > MOST {
+                                description.chars().take(MOST).collect::<String>() + "..."
+                            } else {
+                                description
+                            };
+                            ui.add_space(4.0);
+                            ui.label(egui::RichText::new(text).small());
+                        }
+                    }
                     None => {
                         ui.weak("Point at a script to see it here.");
                     }
@@ -385,13 +443,15 @@ impl super::App {
         picked
     }
 
-    /// The sidebar for one script.
-    fn script_card_ui(&self, ui: &mut egui::Ui, script: &Path) {
+    /// The sidebar for one script, but for its description, which it
+    /// returns (to go under anything added to the card): None if the
+    /// script couldn't be read.
+    fn script_card_ui(&self, ui: &mut egui::Ui, script: &Path) -> Option<String> {
         let source = self.preview_source();
         let mut previews = self.script_previews.borrow_mut();
         let Some(card) = previews.card(script) else {
             ui.weak("Couldn't read it.");
-            return;
+            return None;
         };
         let (sha256, description, installed) = (card.sha256.clone(), card.description.clone(), card.installed.clone());
         match previews.preview(ui.ctx(), script, &sha256, source) {
@@ -447,15 +507,6 @@ impl super::App {
                 }
             }
         });
-        if !description.is_empty() {
-            const MOST: usize = 600;
-            let text = if description.chars().count() > MOST {
-                description.chars().take(MOST).collect::<String>() + "..."
-            } else {
-                description
-            };
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(text).small());
-        }
+        Some(description)
     }
 }
