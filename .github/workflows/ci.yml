@@ -32,7 +32,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Test
-        run: cargo test --bin synththing
+        run: cargo test --lib
 
   # Linux (experimental, see docs/LINUX.md): it builds and its tests pass,
   # and this keeps it that way.
@@ -56,4 +56,20 @@ jobs:
         run: cargo build
 
       - name: Test
-        run: cargo test --bin synththing
+        run: cargo test --lib
+
+  # The Android app (docs/ANDROID.md): it builds, so the desktop app's
+  # changes don't quietly break it.
+  android:
+    # (Not for a fork's pull request: its code doesn't run on our runner.)
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/android-apk
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android
+          path: synththing-android-arm64.apk
+          retention-days: 7

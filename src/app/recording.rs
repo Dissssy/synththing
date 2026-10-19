@@ -27,7 +27,9 @@ use eframe::egui::TextureHandle;
 
 use eframe::egui;
 
-use super::{is_midi_path, listed_song_extensions, open_in_file_manager, App};
+#[cfg(not(target_os = "android"))]
+use super::listed_song_extensions;
+use super::{is_midi_path, open_in_file_manager, App};
 use crate::config::nice_name;
 use crate::audio::AudioCommand;
 use crate::engine::EngineView;
@@ -841,7 +843,7 @@ impl App {
         let state = self.recording.download.state();
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("ffmpeg_prompt")).show(ctx, |ui| {
-            ui.set_width(420.0);
+            ui.set_width(super::fit_width(ui, 420.0));
             ui.heading("Recording needs ffmpeg");
             ui.add_space(6.0);
             ui.label(
@@ -940,6 +942,7 @@ impl App {
                 });
             }
         }
+        #[cfg(not(target_os = "android"))]
         if pick_folder && let Some(folder) = rfd::FileDialog::new().set_directory(&dir).pick_folder() {
             self.config.record_dir = Some(folder);
             if let Err(e) = self.config.save() {
@@ -983,7 +986,7 @@ impl App {
                         ui.selectable_value(&mut fps, option, format!("{option} fps"));
                     }
                 });
-                super::info_icon(ui).on_hover_text(
+                super::info_icon(ui, 
                     "Records just the visualizer, at this size whatever the window's size, with what you \
                      hear (your own notes included, before the volume slider). F9 starts and stops, F10 \
                      pauses. Bigger sizes cost the script more time per frame.",
@@ -1073,7 +1076,7 @@ impl App {
             .or(self.viewed_playlist)
             .is_some_and(|l| self.playlists.lists.get(l).is_some_and(|l| !l.playlist.entries.is_empty()));
         let response = egui::Modal::new(egui::Id::new("record_window")).show(ctx, |ui| {
-            ui.set_width(460.0);
+            ui.set_width(super::fit_width(ui, 460.0));
             ui.heading("Record");
             ui.add_space(6.0);
             egui::Grid::new("record_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
@@ -1194,6 +1197,7 @@ impl App {
                 }
             });
         });
+        #[cfg(not(target_os = "android"))]
         if choose_song
             && let Some(path) = rfd::FileDialog::new()
                 .add_filter("Songs", listed_song_extensions(&self.config))

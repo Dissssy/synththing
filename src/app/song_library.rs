@@ -566,7 +566,7 @@ impl App {
         if let Some((server, id, said)) = draft.done.clone() {
             let mut show = false;
             let response = egui::Modal::new(egui::Id::new("publish_song")).show(ctx, |ui| {
-                ui.set_width(480.0);
+                ui.set_width(super::fit_width(ui, 480.0));
                 ui.heading("Published");
                 ui.label(said.as_str());
                 ui.add_space(8.0);
@@ -608,7 +608,7 @@ impl App {
         let scripts = self.library_scripts_on(&draft.server);
         let mut send = false;
         let response = egui::Modal::new(egui::Id::new("publish_song")).show(ctx, |ui| {
-            ui.set_width(520.0);
+            ui.set_width(super::fit_width(ui, 520.0));
             ui.heading(if updating.is_some() { "Publish a new version of a song" } else { "Publish a song" });
             ui.weak(draft.file.display().to_string());
             if taking.is_empty() {
@@ -675,7 +675,7 @@ impl App {
                             ui.selectable_value(&mut draft.made_for, Some((id.clone(), name.clone())), name);
                         }
                     });
-                    info_icon(ui).on_hover_text(
+                    info_icon(ui, 
                         "A script on the same server it's meant to be played with (a game's level, say). The \
                          scripts you have from that server are listed.",
                     );
@@ -700,7 +700,7 @@ impl App {
                         Some(slug) => {
                             ui.horizontal(|ui| {
                                 ui.label(format!("{slug} (version after the last)"));
-                                info_icon(ui).on_hover_text(
+                                info_icon(ui, 
                                     "You published this song before, so it becomes its next version. Untick below \
                                      to publish it as a new song instead.",
                                 );
@@ -709,7 +709,7 @@ impl App {
                         None => {
                             ui.horizontal(|ui| {
                                 ui.add(egui::TextEdit::singleline(&mut draft.slug).desired_width(200.0));
-                                info_icon(ui).on_hover_text(
+                                info_icon(ui, 
                                     "Its name among your uploads: lowercase letters, digits and dashes. Publishing \
                                      again with the same slug adds a new version instead of a new song.",
                                 );

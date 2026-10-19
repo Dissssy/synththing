@@ -12,7 +12,7 @@ On a Linux machine with Rust (https://rustup.rs):
 sudo apt install build-essential pkg-config libasound2-dev libudev-dev libgtk-3-dev \
     libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
 cargo build
-cargo test --bin synththing
+cargo test --lib
 ```
 
 (Package names are Debian/Ubuntu's; Fedora's are `alsa-lib-devel`, `systemd-devel`, `gtk3-devel`, `libxkbcommon-devel`, `wayland-devel`, `libX11-devel` and friends.) What each is for:
@@ -34,7 +34,7 @@ CI (`.github/workflows/ci.yml`) has a `linux` job doing this on every push to ma
       - uses: actions/checkout@v5
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev libwayland-dev
       - run: cargo build
-      - run: cargo test --bin synththing
+      - run: cargo test --lib
 ```
 
 ## 2. Already handled in the code

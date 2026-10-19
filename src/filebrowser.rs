@@ -48,6 +48,9 @@ pub struct FileBrowser {
     hovered: Option<PathBuf>,
     /// Selected rows of what's listed (the folder, or the search results).
     selection: Selection,
+    /// The folder it's kept inside, if any (the mobile layout's song
+    /// library): no going above it, and no browsing elsewhere.
+    root: Option<PathBuf>,
     /// Files sorted by their files' names, not the names shown.
     sort_by_file_name: bool,
 }
@@ -68,6 +71,7 @@ impl FileBrowser {
             sort_by_file_name: false,
             hovered: None,
             selection: Selection::default(),
+            root: None,
         };
         browser.refresh();
         browser
@@ -116,8 +120,28 @@ impl FileBrowser {
         self.refresh();
     }
 
+    /// The folder it's kept inside, if any.
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
+
+    /// Keep the browser inside `root` (or let it go anywhere, `None`),
+    /// starting there when that's new. Whether it changed.
+    pub fn set_root(&mut self, root: Option<PathBuf>) -> bool {
+        let root = root.map(|r| r.canonicalize().unwrap_or(r));
+        if root == self.root {
+            return false;
+        }
+        self.root = root.clone();
+        if let Some(root) = root {
+            self.navigate_to(root);
+        }
+        true
+    }
+
     /// Open the OS's native folder-picker (drives, network shares, everything
     /// the system browser can reach) and jump there if the user picks one.
+    #[cfg(not(target_os = "android"))]
     fn browse_dialog(&mut self) {
         // Point the dialog at the *parent* of the current directory, not the
         // current directory itself. `set_directory` opens straight into that
@@ -155,7 +179,8 @@ impl FileBrowser {
         self.entries.clear();
         self.error = None;
 
-        if let Some(parent) = self.cwd.parent() {
+        let at_root = self.root.as_ref().is_some_and(|root| !self.cwd.starts_with(root) || self.cwd == *root);
+        if let Some(parent) = self.cwd.parent().filter(|_| !at_root) {
             self.entries.push(Entry {
                 label: "..".to_string(),
                 path: parent.to_path_buf(),
@@ -256,8 +281,13 @@ impl FileBrowser {
         trailing: &mut dyn FnMut(&mut egui::Ui, &Path),
         mut menu: Option<RowMenu>,
     ) -> Option<PathBuf> {
-        let dir = display_dir(&self.cwd);
-        ui.horizontal(|ui| select_list::label(ui, egui::RichText::new(&dir).weak(), None));
+        let dir = match &self.root {
+            Some(root) => display_dir(self.cwd.strip_prefix(root).unwrap_or(Path::new(""))),
+            None => display_dir(&self.cwd),
+        };
+        if !dir.is_empty() {
+            ui.horizontal(|ui| select_list::label(ui, egui::RichText::new(&dir).weak(), None));
+        }
 
         let mut hidden_changed = false;
         ui.horizontal(|ui| {
@@ -265,18 +295,21 @@ impl FileBrowser {
             // `desired_width(INFINITY)` to soak up whatever's left, sizing it
             // from `ui.available_width()` instead fed back into the layout
             // and made the row (and its containing panel) grow every frame.
-            if ui.add(crate::app::icon_button("folder-open")).on_hover_text("Browse: go to any folder or drive").clicked() {
-                self.browse_dialog();
-            }
-            tools(ui, &self.cwd);
-            let (eye, hover) = if self.show_hidden {
-                ("eye", "Hidden files are shown: click to hide them")
-            } else {
-                ("eye-slash", "Hidden files are left out: click to show them")
-            };
-            if ui.add(crate::app::icon_button(eye).selected(self.show_hidden)).on_hover_text(hover).clicked() {
-                self.show_hidden = !self.show_hidden;
-                hidden_changed = true;
+            if self.root.is_none() {
+                #[cfg(not(target_os = "android"))]
+                if ui.add(crate::app::icon_button("folder-open")).on_hover_text("Browse: go to any folder or drive").clicked() {
+                    self.browse_dialog();
+                }
+                tools(ui, &self.cwd);
+                let (eye, hover) = if self.show_hidden {
+                    ("eye", "Hidden files are shown: click to hide them")
+                } else {
+                    ("eye-slash", "Hidden files are left out: click to show them")
+                };
+                if ui.add(crate::app::icon_button(eye).selected(self.show_hidden)).on_hover_text(hover).clicked() {
+                    self.show_hidden = !self.show_hidden;
+                    hidden_changed = true;
+                }
             }
             let (sort, hint) = if self.sort_by_file_name {
                 ("Sort: file", "Sorted by the files' names. Click to sort by the songs' names.")

@@ -68,7 +68,7 @@ fn name_ui(ui: &mut egui::Ui, name: &str, labels: &ItemLabels) {
         let label = ui.label(name);
         if let Some(info) = &labels.info {
             label.on_hover_text(info);
-            info_icon(ui).on_hover_text(info);
+            info_icon(ui, info);
         }
     });
 }
@@ -127,7 +127,7 @@ impl App {
         let script = self.script.path().map(display_name).unwrap_or_else(|| "script".to_string());
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("script_window")).show(ctx, |ui| {
-            ui.set_width(600.0);
+            ui.set_width(super::fit_width(ui, 600.0));
             match window {
                 ScriptWindow::Settings => {
                     ui.heading(format!("{script}: settings"));

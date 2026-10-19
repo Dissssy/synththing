@@ -4,10 +4,19 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- An Android app, experimental: `synththing-android-arm64.apk` on each release. A layout made for a phone, with the visualizer on top and the controls under it; songs and soundfonts are imported from the phone; playback goes on in the background, with controls in the notification and on the lock screen; and leaving the app while it plays shrinks the visualizer into a floating window (Preferences > Visualizers turns it off or picks its shape). Scripts' previews come from the Online Library. Updates, the changelog, the log and the credits are pages of the menu, and an update found or installed at launch opens its page. It reads the Online Library without an account: install and update scripts, but no publishing or encores. See docs/ANDROID.md.
+- The mobile layout on desktop too (View > Mobile layout), to try it, or for a narrow window.
+
 ### Changed
 - The toolbars are slimmer: Restart, Fullscreen, Settings, Controls and Debug above the visualizer, the playlist's Play, New, Rename, Export and Delete, the Songs browser's Browse, Set as default and hidden-files toggle, and the editor's Format, Find and History are icon buttons now (hover one to see what it does), and each toolbar is one row that wraps when its tab is narrow.
 - New script, Rename..., Restore default and Publish... moved into the script picker: New script lists the templates and examples, the sidebar's Make a copy starts a new script from any script, and the running script's card has its file's buttons and its full path.
 - The editor's Apply, Wrap and text size are under its cog.
+- Preferences are arranged by what they're for: Appearance (with the theme and the UI scale, which moved there from the Themes window), Playback, Songs, Visualizers, Online Library, Updates, App and Recording. In the mobile layout they're a page of their own, each section opening in its place, and back (or Escape) steps out again. Themes are edited from Appearance too (Edit themes..., in place of the synththing menu's Themes...); in the mobile layout that's a level under it, with the theme and its buttons along the top and the preview along the bottom.
+- Song names are set under Preferences > Appearance. On Android they show on the now-playing screen and in the notification too, and {file_path} is the folder inside the song library.
+
+### Fixed
+- With a very round theme, the seek bar's filled part no longer runs past its handle.
 
 ## 0.9.0 (2026-10-19)
 

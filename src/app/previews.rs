@@ -4,6 +4,9 @@
 //! `synththing preview`, as a process of its own), or kept from the server
 //! when the script was installed, and cached by the source's SHA-256 in
 //! `library/previews` in the config folder: an edited script gets a new one.
+//! Android can't make them (no second process): there they're fetched from
+//! the servers by that SHA-256, every script there being bundled (published
+//! on the official server) or from a server.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -98,10 +101,21 @@ pub enum Shown<'a> {
     Missing(String),
 }
 
+/// Where a preview not made yet comes from.
+#[derive(Clone)]
+pub enum Source {
+    /// Made here, playing the starter songs with this soundfont.
+    Made(PathBuf),
+    /// The servers' own, for the same source.
+    Servers(Vec<String>),
+}
+
 /// Previews being made, one at a time.
 struct Making {
     sha256: String,
     done: Arc<AtomicBool>,
+    /// Why there's none, for now (not kept: tried again next launch).
+    failed: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// The script picker's previews and cards.
@@ -113,7 +127,7 @@ pub struct LocalPreviews {
     making: Option<Making>,
     /// The next to make, once the one under way is done (only the latest
     /// asked for: the one being looked at).
-    waiting: Option<(String, PathBuf, PathBuf)>,
+    waiting: Option<(String, PathBuf, Source)>,
     /// The sidebar's script: the last one hovered, while the list is open.
     pub shown: Option<PathBuf>,
     pub drawn_at: u64,
@@ -157,15 +171,21 @@ impl LocalPreviews {
         self.cards.get(script)
     }
 
-    /// `script`'s preview (its source's SHA-256 `sha256`): cached, or made
-    /// now (with `soundfont`) if it isn't.
-    pub fn preview(&mut self, ctx: &egui::Context, script: &Path, sha256: &str, soundfont: Option<PathBuf>) -> Shown<'_> {
+    /// `script`'s preview (its source's SHA-256 `sha256`): cached, or got
+    /// now from `source` if it isn't (or why it can't be).
+    pub fn preview(&mut self, ctx: &egui::Context, script: &Path, sha256: &str, source: Result<Source, String>) -> Shown<'_> {
         self.poll(ctx);
         if !self.images.contains_key(sha256)
             && let Some(dir) = cache_dir()
         {
             let still = std::fs::read(cached(&dir, sha256, false));
-            let missing = std::fs::read_to_string(dir.join(format!("{sha256}.none")));
+            // (What a script made here didn't draw. Android makes none:
+            // older builds there tried, and failed for every script.)
+            let missing = if cfg!(target_os = "android") {
+                Err(std::io::ErrorKind::NotFound.into())
+            } else {
+                std::fs::read_to_string(dir.join(format!("{sha256}.none")))
+            };
             if let Ok(still) = still {
                 let sheet = std::fs::read(cached(&dir, sha256, true)).ok();
                 let image = PreviewImage::from_png(ctx, sha256, &still, sheet.as_deref());
@@ -183,22 +203,37 @@ impl LocalPreviews {
         if self.making.as_ref().is_some_and(|m| m.sha256 == sha256) {
             return Shown::Making;
         }
-        let Some(soundfont) = soundfont else {
-            return Shown::Missing("Add a soundfont to see previews (they play the starter songs).".into());
+        let source = match source {
+            Ok(source) => source,
+            Err(why) => return Shown::Missing(why),
         };
         if self.making.is_some() {
-            self.waiting = Some((sha256.to_string(), script.to_path_buf(), soundfont));
+            self.waiting = Some((sha256.to_string(), script.to_path_buf(), source));
         } else {
-            self.start(ctx, sha256.to_string(), script.to_path_buf(), soundfont);
+            self.start(ctx, sha256.to_string(), script.to_path_buf(), source);
         }
         Shown::Making
     }
 
-    fn start(&mut self, ctx: &egui::Context, sha256: String, script: PathBuf, soundfont: PathBuf) {
+    fn start(&mut self, ctx: &egui::Context, sha256: String, script: PathBuf, source: Source) {
         let Some(dir) = cache_dir() else { return };
         let done = Arc::new(AtomicBool::new(false));
-        self.making = Some(Making { sha256: sha256.clone(), done: Arc::clone(&done) });
+        let failed = Arc::default();
+        self.making = Some(Making { sha256: sha256.clone(), done: Arc::clone(&done), failed: Arc::clone(&failed) });
         let ctx = ctx.clone();
+        let soundfont = match source {
+            Source::Made(soundfont) => soundfont,
+            Source::Servers(servers) => {
+                std::thread::spawn(move || {
+                    if let Err(why) = fetch(&servers, &dir, &sha256) {
+                        *failed.lock().unwrap() = Some(why);
+                    }
+                    done.store(true, Ordering::Relaxed);
+                    ctx.request_repaint();
+                });
+                return;
+            }
+        };
         std::thread::spawn(move || {
             let work = dir.join(format!("work-{sha256}"));
             let result = preview::run_process(&script, &soundfont, &work, TIME_LIMIT, false);
@@ -227,13 +262,38 @@ impl LocalPreviews {
         if !self.making.as_ref().is_some_and(|m| m.done.load(Ordering::Relaxed)) {
             return;
         }
-        self.making = None;
-        if let Some((sha256, script, soundfont)) = self.waiting.take()
+        if let Some(making) = self.making.take()
+            && let Some(why) = making.failed.lock().unwrap().take()
+        {
+            self.images.insert(making.sha256, Err(why));
+        }
+        if let Some((sha256, script, source)) = self.waiting.take()
             && !self.images.contains_key(&sha256)
         {
-            self.start(ctx, sha256, script, soundfont);
+            self.start(ctx, sha256, script, source);
         }
     }
+}
+
+/// The preview of the source `sha256` from the first of `servers` that has
+/// one, into the cache `dir`.
+fn fetch(servers: &[String], dir: &Path, sha256: &str) -> Result<(), String> {
+    let mut why = String::new();
+    for server in servers {
+        match library::client::preview_of_source(server, sha256, false) {
+            Ok(still) => {
+                let sheet = library::client::preview_of_source(server, sha256, true).ok();
+                std::fs::create_dir_all(dir).map_err(|e| format!("No preview: couldn't keep it ({e})."))?;
+                keep(sha256, &still, sheet.as_deref());
+                return Ok(());
+            }
+            Err(e) => {
+                log::info!("preview of {sha256} from {server}: {e}");
+                why = e;
+            }
+        }
+    }
+    Err(format!("No preview: {why}."))
 }
 
 /// The picker's sidebar width.
@@ -248,14 +308,25 @@ pub(super) enum Picked {
 }
 
 impl super::App {
-    /// What previews are made with here: the starter pack's TimGM6mb (what
-    /// library servers use), else the first soundfont in the list.
-    fn preview_soundfont(&self) -> Option<PathBuf> {
+    /// Where previews not made yet come from: made here with the starter
+    /// pack's TimGM6mb (what library servers use), else the first soundfont
+    /// in the list; on Android, the servers.
+    fn preview_source(&self) -> Result<Source, String> {
+        if cfg!(target_os = "android") {
+            let servers = self.config.library.enabled_servers();
+            return if servers.is_empty() {
+                Err("Previews come from the Online Library: turn on a server in Preferences > Online Library.".into())
+            } else {
+                Ok(Source::Servers(servers))
+            };
+        }
         crate::starter::soundfonts_dir()
             .ok()
             .map(|d| d.join(crate::starter::SOUNDFONTS[1].file))
             .filter(|p| p.exists())
             .or_else(|| self.config.soundfonts.iter().find(|p| p.exists()).cloned())
+            .map(Source::Made)
+            .ok_or_else(|| "Add a soundfont to see previews (they play the starter songs).".into())
     }
 
     /// The scripts to pick from, for a combo box: grouped, the bundled
@@ -376,14 +447,14 @@ impl super::App {
     /// returns (to go under anything added to the card): None if the
     /// script couldn't be read.
     fn script_card_ui(&self, ui: &mut egui::Ui, script: &Path) -> Option<String> {
-        let soundfont = self.preview_soundfont();
+        let source = self.preview_source();
         let mut previews = self.script_previews.borrow_mut();
         let Some(card) = previews.card(script) else {
             ui.weak("Couldn't read it.");
             return None;
         };
         let (sha256, description, installed) = (card.sha256.clone(), card.description.clone(), card.installed.clone());
-        match previews.preview(ui.ctx(), script, &sha256, soundfont) {
+        match previews.preview(ui.ctx(), script, &sha256, source) {
             Shown::Ready(image) => {
                 image.ui(ui, SIDEBAR);
             }

@@ -2,7 +2,7 @@
 //! servers, searched across every server in use, installed into the
 //! scripts folder (with a `.source.json` beside each, saying where it came
 //! from), and the current script published (Publish...). Servers and the
-//! user's identity are set up in Preferences > Library. Its Songs side
+//! user's identity are set up in Preferences > Online Library. Its Songs side
 //! lists the songs on servers that take them, the same way; their own
 //! parts are in `song_library.rs`.
 //!
@@ -41,6 +41,11 @@ use crate::library::{
     self, client, songs, Change, Info, Installed, Listing, Receipt, ScriptDetails, ScriptSummary, Upload, UserInfo,
 };
 use crate::lua_visualizer;
+
+/// The Android app only reads the library: it browses, installs and
+/// updates, but has no identity, so it never publishes, encores, reports,
+/// deletes or moderates (nothing it does needs an account on a server).
+pub(super) const READ_ONLY: bool = cfg!(target_os = "android");
 
 /// Sort orders, as the API names them and as shown.
 const SORTS: [(&str, &str); 2] = [("new", "Newest"), ("top", "Most encores")];
@@ -226,7 +231,7 @@ pub struct LibraryState {
     installed_by_slug: HashMap<(String, String, String), (PathBuf, u32)>,
     /// The user's identity, once there is one.
     identity: Option<Identity>,
-    /// Preferences > Library: the address typed in, the passphrase for
+    /// Preferences > Online Library: the address typed in, the passphrase for
     /// exporting or importing, and whether replacing the identity was
     /// clicked once (import confirms on the second).
     new_server: String,
@@ -698,7 +703,7 @@ impl App {
         let Some(mut open) = self.library.document.take() else { return };
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("library_document")).show(ctx, |ui| {
-            ui.set_width(640.0);
+            ui.set_width(super::fit_width(ui, 640.0));
             ui.horizontal(|ui| {
                 ui.heading(&open.title);
                 ui.weak(host(&open.server));
@@ -736,7 +741,7 @@ impl App {
         let mut go = false;
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("library_confirm_server")).show(ctx, |ui| {
-            ui.set_width(420.0);
+            ui.set_width(super::fit_width(ui, 420.0));
             if listed {
                 ui.heading(format!("Turn on {}?", host(&server)));
                 ui.label(format!(
@@ -752,7 +757,7 @@ impl App {
                     host(&server)
                 ));
             }
-            ui.weak("Its scripts then show up in your searches too. Preferences > Library turns it off again.");
+            ui.weak("Its scripts then show up in your searches too. Preferences > Online Library turns it off again.");
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if ui.button(if listed { "Turn on and show" } else { "Add and show" }).clicked() {
@@ -934,7 +939,7 @@ impl App {
                 self.library.key_changed.insert(server.clone(), info.key.clone());
                 self.library.errors.push((
                     server,
-                    "its key has changed since it was first used, so it isn't trusted (Preferences > Library)".into(),
+                    "its key has changed since it was first used, so it isn't trusted (Preferences > Online Library)".into(),
                 ));
                 return;
             }
@@ -1082,7 +1087,8 @@ impl App {
                     }
                 }
             }
-            if self.moderation.is_admin_anywhere()
+            if !READ_ONLY
+                && self.moderation.is_admin_anywhere()
                 && ui.button("Moderation").on_hover_text("Reports, bans and admins, on the servers you moderate").clicked()
             {
                 open_moderation = true;
@@ -1112,7 +1118,7 @@ impl App {
             });
         }
         if servers.is_empty() {
-            ui.weak("No servers in use: turn one on in Preferences > Library.");
+            ui.weak("No servers in use: turn one on in Preferences > Online Library.");
             return;
         }
         let pass = ui.ctx().cumulative_pass_nr();
@@ -1307,7 +1313,7 @@ impl App {
                             }
                         }
                     }
-                    if s.author_id.is_some() && s.author_id == my_id {
+                    if !READ_ONLY && s.author_id.is_some() && s.author_id == my_id {
                         let confirming = self.library.confirm_delete.as_ref() == Some(&(server.clone(), id.clone()));
                         let label = if confirming { "Click again to delete it" } else { "Delete" };
                         if ui
@@ -1330,7 +1336,7 @@ impl App {
                 let mine = s.author_id.is_some() && s.author_id == my_id;
                 ui.horizontal(|ui| {
                     let count = format!("{} encore{}", s.encores, if s.encores == 1 { "" } else { "s" });
-                    if mine {
+                    if mine || READ_ONLY {
                         ui.weak(count);
                         return;
                     }
@@ -1650,15 +1656,17 @@ impl App {
                     self.start_update(path.clone());
                 }
                 let servers = !self.config.library.enabled_servers().is_empty();
-                if ui
-                    .add_enabled(servers, egui::Button::new("Publish remix..."))
-                    .on_hover_text(format!("Share your take on \"{}\": it's credited as the original", installed.name))
-                    .on_disabled_hover_text(no_server_hint())
-                    .clicked()
+                if !READ_ONLY
+                    && ui
+                        .add_enabled(servers, egui::Button::new("Publish remix..."))
+                        .on_hover_text(format!("Share your take on \"{}\": it's credited as the original", installed.name))
+                        .on_disabled_hover_text(no_server_hint())
+                        .clicked()
                 {
                     self.open_publish(path, true);
                 }
             }
+            _ if READ_ONLY => {}
             _ => {
                 let servers = !self.config.library.enabled_servers().is_empty();
                 if ui
@@ -1783,7 +1791,7 @@ impl App {
         let mut keep = false;
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("library_update")).show(ctx, |ui| {
-            ui.set_width(560.0);
+            ui.set_width(super::fit_width(ui, 560.0));
             ui.heading(format!("Update \"{}\"", draft.summary.name));
             ui.label(format!(
                 "Version {} is out on {}; you have version {}.",
@@ -1913,7 +1921,7 @@ impl App {
         if let Some((server, id, said)) = draft.done.clone() {
             let mut show = false;
             let response = egui::Modal::new(egui::Id::new("library_publish")).show(ctx, |ui| {
-                ui.set_width(480.0);
+                ui.set_width(super::fit_width(ui, 480.0));
                 ui.heading("Published");
                 ui.label(said.as_str());
                 ui.add_space(8.0);
@@ -1935,7 +1943,7 @@ impl App {
             return;
         }
         let response = egui::Modal::new(egui::Id::new("library_publish")).show(ctx, |ui| {
-            ui.set_width(480.0);
+            ui.set_width(super::fit_width(ui, 480.0));
             ui.heading(match (&updating, &draft.remix) {
                 (Some(_), _) => "Publish a new version",
                 (None, Some(_)) => "Publish a remix",
@@ -1987,7 +1995,7 @@ impl App {
                         Some(slug) => {
                             ui.horizontal(|ui| {
                                 ui.label(format!("{slug} (version after the last)"));
-                                info_icon(ui).on_hover_text(
+                                info_icon(ui, 
                                     "You published this script before, so it becomes its next version. Untick \
                                      below to publish it as a new script instead.",
                                 );
@@ -1999,7 +2007,7 @@ impl App {
                                     if ui.add(egui::TextEdit::singleline(&mut draft.slug).desired_width(200.0)).changed() {
                                         draft.slug_edited = Some(Instant::now());
                                     }
-                                    info_icon(ui).on_hover_text(
+                                    info_icon(ui, 
                                         "Its name among your uploads: lowercase letters, digits and dashes. \
                                          Publishing again with the same slug adds a new version instead of a new \
                                          script.",
@@ -2066,7 +2074,7 @@ impl App {
             match (&my_id, draft.anonymous) {
                 (_, true) => ui.weak("Anonymous: once it's up, it can't be changed or taken down from here."),
                 (Some(id), false) => ui.weak(format!("Signed as #{id}: you can publish new versions or delete it later.")),
-                (None, false) => ui.weak("Signed with your identity, made now (Preferences > Library to back it up)."),
+                (None, false) => ui.weak("Signed with your identity, made now (Preferences > Online Library to back it up)."),
             };
             if let Some(info) = self.library.infos.get(&draft.server) {
                 ui.weak(format!("Shared under {}. {}", info.license.replace('-', " "), info.rules));
@@ -2217,6 +2225,9 @@ impl App {
     }
 
     pub(super) fn ensure_identity(&mut self) -> Result<Identity, String> {
+        if READ_ONLY {
+            return Err("this app only reads the library".to_string());
+        }
         if self.library.identity.is_none() {
             // A key file that's there but couldn't be read (kept differently
             // by another build) is moved aside, not replaced.
@@ -2234,7 +2245,7 @@ impl App {
         Identity::load().ok_or_else(|| "it wasn't saved".to_string())
     }
 
-    /// Preferences > Library: the servers in use, and the identity.
+    /// Preferences > Online Library: the servers in use, and the identity.
     pub(super) fn library_preferences_ui(&mut self, ui: &mut egui::Ui) {
         if !crate::build_info::online_features() {
             ui.label(crate::build_info::OFFLINE_NOTE);
@@ -2274,7 +2285,7 @@ impl App {
                 self.library.new_server.clear();
                 changed = true;
             }
-            info_icon(ui).on_hover_text(
+            info_icon(ui, 
                 "Anyone can run a library server (synththing serve). Its address, e.g. scripts.example.org \
                  (https is assumed; write http:// for one on your own network).",
             );
@@ -2327,9 +2338,11 @@ impl App {
             }
         }
 
-        ui.add_space(6.0);
-        ui.strong("Your identity");
-        self.identity_ui(ui);
+        if !READ_ONLY {
+            ui.add_space(6.0);
+            ui.strong("Your identity");
+            self.identity_ui(ui);
+        }
     }
 
     /// The identity: its ID, made on request; export and import.
@@ -2343,7 +2356,7 @@ impl App {
                     if ui.small_button("Copy").clicked() {
                         ui.ctx().copy_text(format!("#{id}"));
                     }
-                    info_icon(ui).on_hover_text(
+                    info_icon(ui, 
                         "A key made by this app, kept in its config folder: it signs what you publish, so only \
                          you can change or delete it. No account, no email. Back it up with Export: lost, it \
                          can't be replaced (your scripts stay up, but you can't change them).",
@@ -2388,6 +2401,7 @@ impl App {
                 Err(e) => Some(format!("Couldn't make one: {e}")),
             };
         }
+        #[cfg(not(target_os = "android"))]
         if export && let Some(identity) = &self.library.identity {
             let file = rfd::FileDialog::new()
                 .set_file_name(format!("synththing identity {}.json", identity.id()))
@@ -2405,6 +2419,7 @@ impl App {
                 );
             }
         }
+        #[cfg(not(target_os = "android"))]
         if import {
             self.library.confirm_import = false;
             if let Some(file) = rfd::FileDialog::new().add_filter("Identity", &["json"]).pick_file() {
@@ -2439,7 +2454,7 @@ impl App {
 /// a branch build.
 fn no_server_hint() -> &'static str {
     if crate::build_info::online_features() {
-        "Turn on a library server first (Preferences > Library)"
+        "Turn on a library server first (Preferences > Online Library)"
     } else {
         crate::build_info::OFFLINE_NOTE
     }

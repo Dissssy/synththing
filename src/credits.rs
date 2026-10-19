@@ -148,7 +148,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|p| in_build.contains(p["id"].as_str().unwrap_or_default()) && p["name"] != "synththing")
+            .filter(|p| in_build.contains(p["id"].as_str().unwrap_or_default()) && !["synththing", "synththing-android"].contains(&p["name"].as_str().unwrap_or_default()))
             .map(|p| (p["name"].as_str().unwrap().to_string(), p["version"].as_str().unwrap().to_string()))
             .collect();
         let mut embedded: Vec<(String, String)> =

@@ -475,7 +475,7 @@ impl App {
         let mut send = false;
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("library_report")).show(ctx, |ui| {
-            ui.set_width(680.0);
+            ui.set_width(super::fit_width(ui, 680.0));
             ui.heading(format!("Report \"{}\"", draft.name));
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut draft.copyright, false, "Report it to the moderators");
@@ -640,7 +640,7 @@ impl App {
         let mut fetch_source: Vec<(String, u32)> = Vec::new();
         let mut ban_author: Option<String> = None;
         let response = egui::Modal::new(egui::Id::new("library_moderation")).show(ctx, |ui| {
-            ui.set_width(760.0);
+            ui.set_width(super::fit_width(ui, 760.0));
             ui.horizontal(|ui| {
                 ui.heading("Moderation");
                 if self.moderation.admin_on.len() > 1 {

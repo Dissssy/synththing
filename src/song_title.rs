@@ -1,4 +1,4 @@
-//! A song's name: the first of the title patterns (Preferences > Songs,
+//! A song's name: the first of the title patterns (Preferences > Appearance,
 //! `Config::title_patterns`) that every field it uses is there for, e.g.
 //! "{title} by {artist}" then "{title}". With none of them, the file's
 //! name.
@@ -32,15 +32,15 @@ pub const FIELDS: [&str; 14] = [
 ];
 
 /// How songs are named: the patterns, and the folder `{file_path}` is
-/// relative to (the Songs list's default folder).
+/// relative to (the Songs list's default folder, or the song library).
 pub struct Naming<'a> {
     patterns: Option<&'a [String]>,
     folder: PathBuf,
 }
 
 impl<'a> Naming<'a> {
-    pub fn new(config: &'a Config) -> Self {
-        Self { patterns: config.title_patterns.as_deref(), folder: config.browse_start_dir() }
+    pub fn new(config: &'a Config, folder: PathBuf) -> Self {
+        Self { patterns: config.title_patterns.as_deref(), folder }
     }
 
     /// The song at `path`'s name, with what's been read of it (`info`).
@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn falls_back_to_the_file_name() {
         let config = Config::default();
-        let naming = Naming::new(&config);
+        let naming = Naming::new(&config, PathBuf::from("/music"));
         assert_eq!(naming.name(Path::new("/music/03 shuffle.mp3"), Some(&SongInfo::default())), "03 shuffle");
         assert_eq!(naming.name(Path::new("/music/song.mid"), None), "song");
     }

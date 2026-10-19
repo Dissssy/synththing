@@ -477,6 +477,19 @@ pub fn preview(base: &str, id: &str, version: u32, sheet: bool) -> Result<Vec<u8
         .map_err(|e| format!("couldn't read the preview ({e})"))
 }
 
+/// The preview of the script whose source has `sha256`, whichever script
+/// and version on the server it is: the animation (`sheet`), or the still.
+pub fn preview_of_source(base: &str, sha256: &str, sheet: bool) -> Result<Vec<u8>, String> {
+    let file = if sheet { "preview-sheet.png" } else { "preview.png" };
+    let mut response = check(agent().get(format!("{base}/api/v1/previews/{sha256}/{file}")).call())?;
+    response
+        .body_mut()
+        .with_config()
+        .limit(16 * 1024 * 1024)
+        .read_to_vec()
+        .map_err(|e| format!("couldn't read the preview ({e})"))
+}
+
 /// A downloaded script, checked against the server's signature.
 #[derive(Clone, Debug)]
 pub struct Download {
@@ -737,6 +750,11 @@ mod tests {
         assert!(preview(&base, &blank.id, 1, true).unwrap_err().contains("no preview"));
         // A later version asked for: the newest one up to it with a preview.
         assert!(preview(&base, &bars.id, 7, false).is_ok());
+        // By the source's hash, as Android asks: the same images.
+        let moving_sha = crate::library::sha256_hex(moving.as_bytes());
+        assert_eq!(preview_of_source(&base, &moving_sha, true).unwrap(), sheet);
+        assert!(preview_of_source(&base, &crate::library::sha256_hex(quitter.as_bytes()), true).is_err());
+        assert!(preview_of_source(&base, &crate::library::sha256_hex(b"unknown"), false).unwrap_err().contains("no preview"));
         running.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }

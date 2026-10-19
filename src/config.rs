@@ -119,6 +119,25 @@ pub struct Config {
     /// couldn't read the whole config (`read_json_or_set_aside`).
     #[serde(default)]
     pub canary_updates: bool,
+    /// On Android: download and install updates in the app (it needs
+    /// Install unknown apps allowed). Off, a new version is only announced.
+    #[serde(default)]
+    pub android_install_updates: bool,
+    /// The mobile layout (`app/mobile.rs`) instead of the desktop's, on the
+    /// desktop (View > Mobile layout). Android always uses it.
+    #[serde(default)]
+    pub mobile_layout: bool,
+    /// On Android: the visualizer filling the screen draws under a notch
+    /// or camera hole too (off: that strip is black).
+    #[serde(default)]
+    pub fullscreen_over_cutout: bool,
+    /// On Android: leaving the app while a song plays shrinks it into a
+    /// floating window of the visualizer, the mini player (`None`: on).
+    #[serde(default)]
+    pub mini_player: Option<bool>,
+    /// That window's shape.
+    #[serde(default)]
+    pub mini_player_shape: MiniPlayerShape,
     /// A release version the user chose to skip: the startup check doesn't
     /// bring it up again (a manual check still shows it).
     #[serde(default)]
@@ -164,6 +183,28 @@ pub struct Config {
 
 /// Which of the last session's settings the app starts with (Preferences >
 /// Playback): everything but the speed unless changed.
+/// The shape of Android's mini player (picture-in-picture): Android sizes
+/// it, and lets the user resize it, in this shape.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MiniPlayerShape {
+    #[default]
+    Square,
+    Wide,
+    Tall,
+}
+
+impl MiniPlayerShape {
+    pub const ALL: [Self; 3] = [Self::Square, Self::Wide, Self::Tall];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Square => "Square",
+            Self::Wide => "Wide (16:9)",
+            Self::Tall => "Tall (9:16)",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Remember {
@@ -193,7 +234,7 @@ pub struct Session {
     pub script: Option<PathBuf>,
 }
 
-/// The script library's servers (Preferences > Library).
+/// The script library's servers (Preferences > Online Library).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LibrarySettings {
@@ -279,9 +320,19 @@ impl Config {
 
     /// The saved config, for the app, which saves it as it goes: one it
     /// can't read is moved aside first (`read_json_or_set_aside`), so the
-    /// defaults it starts from aren't saved over it.
+    /// defaults it starts from aren't saved over it. What could be read of
+    /// it is saved in its place straight away: otherwise, if nothing changes
+    /// before the app is next started (Android has no closing to save on),
+    /// it would start without any of it.
     pub fn load_for_app() -> Result<Self> {
-        Ok(read_json_or_set_aside(&Self::file_path()?)?.unwrap_or_default())
+        let path = Self::file_path()?;
+        let config: Option<Self> = read_json_or_set_aside(&path)?;
+        if let Some(config) = &config
+            && !path.exists()
+        {
+            config.save()?;
+        }
+        Ok(config.unwrap_or_default())
     }
 
     pub fn preload_expiry(&self) -> std::time::Duration {
@@ -317,7 +368,9 @@ impl Config {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
-        let json = serde_json::to_string_pretty(self)?;
+        let mut json = serde_json::to_value(self)?;
+        finite_positions(&mut json);
+        let json = serde_json::to_string_pretty(&json)?;
         fs::write(&path, json).with_context(|| format!("writing {}", path.display()))?;
         Ok(())
     }
@@ -378,6 +431,12 @@ pub fn stable_config_dir() -> Result<PathBuf> {
     let dirs = ProjectDirs::from("", "", "synththing")
         .context("could not determine a config directory for this platform")?;
     Ok(dirs.config_dir().to_path_buf())
+}
+
+/// The song library of the mobile layout (`import.rs`): what's been
+/// imported, in the config folder.
+pub fn music_dir() -> Result<PathBuf> {
+    Ok(config_dir()?.join("music"))
 }
 
 /// Where downloads with no format of synththing's own go (ffmpeg, the
@@ -477,6 +536,24 @@ fn salvage<T: serde::de::DeserializeOwned>(data: &str) -> Option<(T, Vec<String>
     Some((value, dropped))
 }
 
+/// Make every position (`{"x": .., "y": ..}`) in `json` finite. A rect egui
+/// hasn't laid out yet (a dock layout that's never been drawn, as on Android
+/// and in the mobile layout) is infinite, which JSON can't hold: serde_json
+/// writes `null`, then can't read it back. They're laid out again before
+/// they're used, so 0 does.
+fn finite_positions(json: &mut serde_json::Value) {
+    match json {
+        serde_json::Value::Object(fields) if fields.len() == 2 && fields.contains_key("x") && fields.contains_key("y") => {
+            for value in fields.values_mut().filter(|v| v.is_null()) {
+                *value = 0.0.into();
+            }
+        }
+        serde_json::Value::Object(fields) => fields.values_mut().for_each(finite_positions),
+        serde_json::Value::Array(items) => items.iter_mut().for_each(finite_positions),
+        _ => {}
+    }
+}
+
 /// Move a file synththing can't read out of the way, to
 /// `<name>.unreadable-<unix time>` next to it, before something new is
 /// saved in its place. Returns where it went.
@@ -561,5 +638,17 @@ mod tests {
         assert!(aside[0].starts_with("soundfonts.json.unreadable-"), "{aside:?}");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A dock layout that's never been drawn (Android, the mobile layout)
+    /// has infinite rects: saved, it still reads back.
+    #[test]
+    fn undrawn_layouts_read_back() {
+        let config = Config { layout: Some(crate::layout::default_layout()), ..Config::default() };
+        let mut json = serde_json::to_value(&config).unwrap();
+        assert!(serde_json::from_value::<Config>(json.clone()).is_err(), "null positions, as serde_json writes infinities");
+        finite_positions(&mut json);
+        let read: Config = serde_json::from_value(json).expect("reads back");
+        assert!(read.layout.is_some());
     }
 }

@@ -4,6 +4,10 @@
 //! that owns the rows. Each list draws its own row contents with a closure
 //! given the entry; [`label`] is the entry's text, cut to the width left
 //! for it with the full text on hover.
+//!
+//! For touch (the mobile layout, [`set_touch`]) rows are taller, a tap
+//! opens or plays a row, a long press brings up its menu, and dragging
+//! scrolls the list instead of dragging rows.
 
 use eframe::egui;
 
@@ -86,6 +90,23 @@ impl Selection {
     }
 }
 
+/// The row height for touch: about a fingertip.
+const TOUCH_ROW_HEIGHT: f32 = 44.0;
+
+fn touch_id() -> egui::Id {
+    egui::Id::new("select_list_touch")
+}
+
+/// Lay lists out for touch (or not) from now on.
+pub fn set_touch(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(touch_id(), on));
+}
+
+/// Whether lists are laid out for touch.
+pub fn touch(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp(touch_id())).unwrap_or(false)
+}
+
 /// One row, as its drawing closure sees it.
 pub struct Row<'a> {
     pub idx: usize,
@@ -105,7 +126,7 @@ impl Row<'_> {
 /// What happened in a list this frame.
 #[derive(Default)]
 pub struct ListOutput {
-    /// The row double-clicked.
+    /// The row double-clicked (tapped, for touch).
     pub activated: Option<usize>,
     /// The row under the pointer.
     pub hovered: Option<usize>,
@@ -125,7 +146,9 @@ pub fn show<T>(
 ) -> ListOutput {
     let id = egui::Id::new(id_salt);
     let mut output = ListOutput::default();
-    let row_height = ui.spacing().interact_size.y;
+    let touch = touch(ui.ctx());
+    let row_height = if touch { TOUCH_ROW_HEIGHT } else { ui.spacing().interact_size.y };
+    let sense = if touch { egui::Sense::click() } else { egui::Sense::click_and_drag() };
     let modifiers = ui.input(|i| i.modifiers);
     let scroll = egui::ScrollArea::vertical()
         .id_salt(id)
@@ -134,8 +157,8 @@ pub fn show<T>(
             for idx in range {
                 let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), row_height));
                 // Not focusable: a focused row would count as typing and turn the keys off.
-                let response = ui.interact(rect, id.with(idx), egui::Sense::click_and_drag() - egui::Sense::FOCUSABLE);
-                if response.double_clicked() {
+                let response = ui.interact(rect, id.with(idx), sense - egui::Sense::FOCUSABLE);
+                if response.double_clicked() || (touch && response.clicked()) {
                     output.activated = Some(idx);
                 } else if response.clicked() {
                     selection.click(idx, modifiers);

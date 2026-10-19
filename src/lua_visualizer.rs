@@ -6844,7 +6844,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
     /// realistic worst-case sample count (two audio chunks landing between two
     /// 60fps frames) and a busy note load, so there's a real number behind
     /// "does this keep up at 60fps" rather than a guess. Run with
-    /// `cargo test --bin synththing -- --ignored --nocapture`.
+    /// `cargo test --lib -- --ignored --nocapture`.
     #[test]
     #[ignore = "prints timing, not a pass/fail check"]
     fn bundled_script_render_timing() {

@@ -251,7 +251,7 @@ pub fn run(data: &Path, bind: Option<String>) -> Result<(), String> {
 /// A running server.
 pub struct Running {
     pub addr: SocketAddr,
-    #[cfg_attr(not(test), expect(dead_code))] // (stopping is for tests so far)
+    #[cfg_attr(not(any(test, target_os = "android")), expect(dead_code))] // (stopping is for tests so far)
     http: Arc<tiny_http::Server>,
     threads: Vec<JoinHandle<()>>,
     state: Arc<State>,
@@ -278,7 +278,7 @@ impl Running {
     }
 
     /// Stop it, waiting for requests under way.
-    #[cfg_attr(not(test), expect(dead_code))]
+    #[cfg_attr(not(any(test, target_os = "android")), expect(dead_code))]
     pub fn stop(self) {
         self.http.unblock();
         for _ in 1..self.threads.len() {
@@ -781,6 +781,8 @@ fn handle(state: &Arc<State>, mut request: Request) {
         (Method::Get, ["api", "v1", "scripts", id, "source"]) => source(state, id, &query),
         (Method::Get, ["api", "v1", "scripts", id, "preview.png"]) => preview(state, id, &query, false),
         (Method::Get, ["api", "v1", "scripts", id, "preview-sheet.png"]) => preview(state, id, &query, true),
+        (Method::Get, ["api", "v1", "previews", sha256, "preview.png"]) => preview_of_source(state, sha256, false),
+        (Method::Get, ["api", "v1", "previews", sha256, "preview-sheet.png"]) => preview_of_source(state, sha256, true),
         (Method::Post, ["api", "v1", "songs"]) => {
             let ip = client_ip(state, &request);
             songs::upload(state, &mut request, &ip)
@@ -842,7 +844,7 @@ fn handle(state: &Arc<State>, mut request: Request) {
             authority::cancel(state, query.get("token").map(String::as_str).unwrap_or_default())
         }
         (Method::Get, [""]) => Response::from_string(format!(
-            "{}: a synththing script library. Add this address under Preferences > Library in the app.\n",
+            "{}: a synththing script library. Add this address under Preferences > Online Library in the app.\n",
             state.config.name
         ))
         .with_header(header("Content-Type", "text/plain; charset=utf-8")),
@@ -1134,6 +1136,35 @@ fn preview(state: &State, id: &str, query: &HashMap<String, String>, sheet: bool
     }
 }
 
+/// `GET /api/v1/previews/{sha256}/preview.png` (or `preview-sheet.png`):
+/// the preview of the script version whose source has that SHA-256, for
+/// apps that can't make one (Android): the same source draws the same.
+fn preview_of_source(state: &State, sha256: &str, sheet: bool) -> Reply {
+    let db = state.db();
+    let kinds = if sheet { "('animated')" } else { "('still', 'animated')" };
+    let found: rusqlite::Result<Option<(String, u32)>> = db
+        .query_row(
+            &format!(
+                "SELECT v.script_id, v.version FROM versions v JOIN scripts s ON s.id = v.script_id
+                 WHERE v.sha256 = ? AND s.hidden = 0 AND v.preview IN {kinds} LIMIT 1"
+            ),
+            [sha256],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional();
+    drop(db);
+    match found {
+        Ok(Some((id, version))) => match std::fs::read(state.preview_file(&id, version, sheet)) {
+            Ok(bytes) => Response::from_data(bytes)
+                .with_header(header("Content-Type", "image/png"))
+                .with_header(header("Cache-Control", "public, max-age=86400")),
+            Err(_) => error(404, "its preview is missing"),
+        },
+        Ok(None) => error(404, "no preview of that script here"),
+        Err(e) => error(500, format!("database: {e}")),
+    }
+}
+
 /// Read a request's body, up to `limit` bytes.
 fn read_body(request: &mut Request, limit: usize) -> Result<Vec<u8>, Reply> {
     read_body_or(request, limit, &format!("too big: scripts can be up to {} KB", MAX_SOURCE_BYTES / 1024))
@@ -1163,7 +1194,7 @@ fn signer(state: &State, request: &Request, method: &str, path: &str, body: &[u8
         let left = crate::song_info::format_length((until - now()).max(0) as f64);
         return Err(error(
             403,
-            format!("your identity's data here is being deleted: restore it first (Preferences > Library) if you want it back (another {left} to change your mind)"),
+            format!("your identity's data here is being deleted: restore it first (Preferences > Online Library) if you want it back (another {left} to change your mind)"),
         ));
     }
     Ok(key)

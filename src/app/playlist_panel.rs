@@ -225,6 +225,26 @@ impl App {
             .or_else(|| (!self.playlists.lists.is_empty()).then_some(0));
     }
 
+    /// Add `songs` to the end of playlist `list`, or a new playlist of
+    /// them (`None`): the touch layout's "Add to playlist", which has no
+    /// dragging.
+    pub(super) fn add_to_playlist(&mut self, list: Option<usize>, songs: Vec<PathBuf>) {
+        let count = songs.len();
+        let name = match list {
+            Some(list) => {
+                let end = self.playlists.lists.get(list).map_or(0, |l| l.playlist.entries.len());
+                self.insert_songs(list, end, songs);
+                self.playlists.lists.get(list).map(|l| l.playlist.name.clone()).unwrap_or_default()
+            }
+            None => {
+                let name = self.unique_playlist_name("New playlist");
+                self.create_playlist(&name, songs);
+                name
+            }
+        };
+        self.status = format!("Added {count} song{} to {name}.", if count == 1 { "" } else { "s" });
+    }
+
     /// Insert `songs` at `at`; a folder among them adds the songs directly
     /// in it.
     fn insert_songs(&mut self, list: usize, at: usize, songs: Vec<PathBuf>) {
@@ -553,6 +573,7 @@ impl App {
             {
                 self.playlist_rename = Some(self.playlists.lists[list].playlist.name.clone());
             }
+            #[cfg(not(target_os = "android"))]
             if ui
                 .add(super::icon_button("export"))
                 .on_hover_text("Export .m3u...: save as an .m3u8 playlist other players can open")
@@ -612,6 +633,7 @@ impl App {
                     self.create_playlist(&name, songs);
                 }
             }
+            #[cfg(not(target_os = "android"))]
             if ui.button("Import .m3u...").clicked() {
                 self.import_m3u();
             }
@@ -630,7 +652,7 @@ impl App {
         let selected_sf = self.active_sf.and_then(|i| self.config.soundfonts.get(i)).is_some();
         let selection = &mut self.playlist_selection;
         let cache = &mut self.song_info;
-        let naming = super::Naming::new(&self.config);
+        let naming = super::naming(&self.config, &self.browser);
         let info_open = &mut self.song_info_open;
 
         // Total time from what's been read so far.
@@ -732,6 +754,7 @@ impl App {
     }
 
     /// New playlist from an .m3u/.m3u8 file (named after it).
+    #[cfg(not(target_os = "android"))]
     fn import_m3u(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("M3U playlist", &["m3u", "m3u8"])
@@ -772,6 +795,7 @@ impl App {
     }
 
     /// Save playlist `list` as an .m3u8 file.
+    #[cfg(not(target_os = "android"))]
     fn export_m3u(&mut self, list: usize) {
         let Some(stored) = self.playlists.lists.get(list) else {
             return;

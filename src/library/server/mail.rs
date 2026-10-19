@@ -23,7 +23,7 @@ pub enum Mailer {
     Off,
     SendGrid { key: String, from: String, name: String },
     /// What would have been sent (tests).
-    #[cfg_attr(not(test), expect(dead_code))]
+    #[cfg_attr(not(any(test, target_os = "android")), expect(dead_code))]
     Outbox(Mutex<Vec<Mail>>),
 }
 
@@ -150,7 +150,7 @@ mod tests {
     /// Sends the real emails through SendGrid, to see how they look.
     /// `SYNTHTHING_TEST_MAIL_KEY` names a file with the API key,
     /// `SYNTHTHING_TEST_MAIL_FROM` and `SYNTHTHING_TEST_MAIL_TO` the
-    /// addresses: `cargo test --bin synththing sends_real_emails -- --ignored`.
+    /// addresses: `cargo test --lib sends_real_emails -- --ignored`.
     #[test]
     #[ignore = "sends real email"]
     fn sends_real_emails() {

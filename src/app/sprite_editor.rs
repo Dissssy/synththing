@@ -655,7 +655,7 @@ impl App {
         let mut create = false;
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("new_sprite")).show(ctx, |ui| {
-            ui.set_width(340.0);
+            ui.set_width(super::fit_width(ui, 340.0));
             ui.heading("New sprite");
             egui::Grid::new("new_sprite_grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label("Name");

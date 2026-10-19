@@ -106,7 +106,7 @@ impl App {
         let mut send = false;
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("feedback")).show(ctx, |ui| {
-            ui.set_width(520.0);
+            ui.set_width(super::fit_width(ui, 520.0));
             ui.heading("Send feedback");
             if let Channel::Branch(name) = build_info::channel() {
                 ui.label(format!("This is the test build of \"{name}\": say how what it's trying works for you."));

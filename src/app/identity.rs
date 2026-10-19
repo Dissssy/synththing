@@ -1,4 +1,4 @@
-//! The identity's recovery and rotation, in Preferences > Library
+//! The identity's recovery and rotation, in Preferences > Online Library
 //! (docs/SERVER.md, Authorities): an email attached at the authority (the
 //! official server) for recovery, a new key in place of the old one, and
 //! recovering with the email when the key's lost. The records of each
@@ -216,7 +216,7 @@ impl App {
         }
     }
 
-    /// Preferences > Library, under the identity: its email, a new key,
+    /// Preferences > Online Library, under the identity: its email, a new key,
     /// recovery.
     pub(super) fn recovery_ui(&mut self, ui: &mut egui::Ui, current: Option<&Identity>) {
         let (authority, key) = self.authority();
@@ -284,7 +284,7 @@ impl App {
                         }
                     }
                 }
-                super::info_icon(ui).on_hover_text(format!(
+                super::info_icon(ui, format!(
                     "An email attached to your identity on {} gets it back if you lose your key: a code is sent \
                      to it, and the identity moves to a new key. Only a hash of the address is kept, it's never \
                      shown or shared, and changing or taking it off needs a code sent to it too.",
@@ -344,7 +344,7 @@ impl App {
         let mut close = false;
         let mut go = false;
         let response = egui::Modal::new(egui::Id::new("identity_flow")).show(ctx, |ui| {
-            ui.set_width(440.0);
+            ui.set_width(super::fit_width(ui, 440.0));
             match &mut state.flow {
                 Flow::Email { removing, address, current, sent, code, current_code } => {
                     let changing = matches!(&self.identity.status, Some(Ok(s)) if s.email) && !*removing;

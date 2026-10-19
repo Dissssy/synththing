@@ -88,7 +88,7 @@ With `--song-start`, it makes a song's preview instead (the MIDI file given): th
 synththing serve [--data DIR] [--bind ADDR]
 ```
 
-Runs a script library server (the design is in docs/SERVER.md): the app's Online Library tab browses, installs and publishes scripts on it once its address is added under Preferences > Library. It serves until stopped (Ctrl+C), printing a line per upload.
+Runs a script library server (the design is in docs/SERVER.md): the app's Online Library tab browses, installs and publishes scripts on it once its address is added under Preferences > Online Library. It serves until stopped (Ctrl+C), printing a line per upload.
 
 | Option | Default | |
 |---|---|---|

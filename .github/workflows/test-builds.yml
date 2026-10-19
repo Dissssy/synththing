@@ -80,7 +80,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Test
-        run: cargo test --bin synththing
+        run: cargo test --lib
 
       - name: Build
         run: cargo build --release
@@ -118,7 +118,7 @@ jobs:
           sudo apt-get install -y libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev libwayland-dev
 
       - name: Test
-        run: cargo test --bin synththing
+        run: cargo test --lib
 
       - name: Build
         run: cargo build --release
@@ -129,15 +129,51 @@ jobs:
           path: target/release/synththing
           retention-days: 1
 
-  # Both builds into the release at once, once both have passed: a release
-  # never has one platform's build newer than the other's.
+  # The Android app (docs/ANDROID.md), for the nightly only: a branch's
+  # testers try its changes in the desktop build's mobile layout (View >
+  # Mobile layout) instead. Published only with the release key.
+  android:
+    needs: stamp
+    if: needs.stamp.outputs.channel == 'nightly'
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
+    outputs:
+      signed: ${{ steps.apk.outputs.signed }}
+    env:
+      SYNTHTHING_CHANNEL: ${{ needs.stamp.outputs.channel }}
+      SYNTHTHING_BUILD_NUMBER: ${{ needs.stamp.outputs.number }}
+      SYNTHTHING_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: apk
+        uses: ./.github/actions/android-apk
+        with:
+          version: ${{ needs.stamp.outputs.version }}
+          keystore: ${{ secrets.ANDROID_KEYSTORE }}
+          keystore-password: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          key-alias: ${{ secrets.ANDROID_KEY_ALIAS }}
+          key-password: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - if: steps.apk.outputs.signed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: android
+          path: synththing-android-arm64.apk
+          retention-days: 1
+
+  # The builds into the release at once, once they've passed: a release
+  # never has one platform's build newer than another's. The Android app is
+  # still experimental, so it failing (or being skipped) doesn't hold the
+  # desktop builds back; the release then has no APK.
   publish:
-    needs: [stamp, windows, linux]
+    needs: [stamp, windows, linux, android]
+    if: always() && needs.windows.result == 'success' && needs.linux.result == 'success'
     runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
     env:
       GH_TOKEN: ${{ github.token }}
       CHANNEL: ${{ needs.stamp.outputs.channel }}
       VERSION: ${{ needs.stamp.outputs.version }}
+      ANDROID: ${{ needs.android.result == 'success' && needs.android.outputs.signed == 'true' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -155,11 +191,22 @@ jobs:
           name: linux
           path: linux
 
+      - if: env.ANDROID == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: android
+          path: android-apk
+
       - name: Publish
         run: |
           mv windows/synththing.exe synththing-windows-x86_64.exe
           mv linux/synththing synththing-linux-x86_64
           chmod +x synththing-linux-x86_64
+          files=(synththing-windows-x86_64.exe synththing-linux-x86_64)
+          if [ "$ANDROID" = true ]; then
+            mv android-apk/synththing-android-arm64.apk .
+            files+=(synththing-android-arm64.apk)
+          fi
 
           # The notes: the commit first (the updater reads it), then who
           # and what. For a branch, its commits that master doesn't have.
@@ -181,8 +228,13 @@ jobs:
             # Move the tag to this commit, then replace the files.
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$CHANNEL" -f sha="$GITHUB_SHA" -F force=true > /dev/null
             gh release edit "$CHANNEL" --title "$VERSION" --notes-file notes.md --prerelease --latest=false
-            gh release upload "$CHANNEL" synththing-windows-x86_64.exe synththing-linux-x86_64 --clobber
+            gh release upload "$CHANNEL" "${files[@]}" --clobber
+            if [ "$ANDROID" != true ]; then
+              # Not last build's APK with this build's notes: the app would
+              # take it for this build.
+              gh release delete-asset "$CHANNEL" synththing-android-arm64.apk --yes 2> /dev/null || true
+            fi
           else
-            gh release create "$CHANNEL" synththing-windows-x86_64.exe synththing-linux-x86_64 \
+            gh release create "$CHANNEL" "${files[@]}" \
               --target "$GITHUB_SHA" --title "$VERSION" --notes-file notes.md --prerelease --latest=false
           fi

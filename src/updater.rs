@@ -33,8 +33,12 @@ pub const ASSET_NAME: &str = "synththing-windows-x86_64.exe";
 /// The Linux build (experimental, see docs/LINUX.md). Releases before
 /// 0.3.3 don't have one, so a Linux build finds nothing to install from
 /// them rather than swapping itself for the Windows exe.
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "android")))]
 pub const ASSET_NAME: &str = "synththing-linux-x86_64";
+/// The Android app (docs/ANDROID.md), installed by handing it to
+/// Android's installer, which asks the user.
+#[cfg(target_os = "android")]
+pub const ASSET_NAME: &str = "synththing-android-arm64.apk";
 
 pub fn current_version() -> Version {
     Version::parse(crate::build_info::VERSION).expect("Cargo.toml version is valid semver")
@@ -342,9 +346,31 @@ fn download_and_replace(release: &Release, updater: &Updater) -> Result<()> {
     let path = download(release, |downloaded| {
         updater.set(UpdateState::Downloading { release: release.clone(), downloaded });
     })?;
-    let result = self_replace::self_replace(&path).context("replacing the running program");
-    let _ = std::fs::remove_file(&path);
-    result
+    // Android's installer takes it from here (it asks first), and the
+    // file stays until the next download replaces it.
+    #[cfg(target_os = "android")]
+    {
+        crate::android::install_apk(&path);
+        Ok(())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let result = self_replace::self_replace(&path).context("replacing the running program");
+        let _ = std::fs::remove_file(&path);
+        result
+    }
+}
+
+/// Where downloads go before they're installed: the temporary folder, or
+/// on Android (which has none an app can write to) the config folder.
+fn download_dir() -> Result<PathBuf> {
+    if cfg!(target_os = "android") {
+        let dir = crate::config::config_dir()?.join("updates");
+        std::fs::create_dir_all(&dir).with_context(|| format!("making {}", dir.display()))?;
+        Ok(dir)
+    } else {
+        Ok(std::env::temp_dir())
+    }
 }
 
 /// Download `release`'s file for this platform to a temporary file and
@@ -359,7 +385,7 @@ pub fn download(release: &Release, mut progress: impl FnMut(u64)) -> Result<Path
     // can't fill the disk.
     let mut reader = response.into_body().into_with_config().limit(release.asset_size + 1024).reader();
 
-    let path: PathBuf = std::env::temp_dir().join(format!("synththing-update-{}-{ASSET_NAME}", release.version));
+    let path: PathBuf = download_dir()?.join(format!("synththing-update-{}-{ASSET_NAME}", release.version));
     let mut file = File::create(&path).with_context(|| format!("creating {}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
