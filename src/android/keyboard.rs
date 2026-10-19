@@ -104,8 +104,9 @@ pub(super) fn before_frame(ctx: &egui::Context, raw_input: &mut egui::RawInput) 
             }
             let cursor = replaced.start + inserted.chars().count();
             field.selection = cursor..cursor;
-            if typed.selection != field.selection {
-                *selection = Some(typed.selection);
+            // (Replacing any left from an earlier edit.)
+            *selection = (typed.selection != field.selection).then_some(typed.selection);
+            if selection.is_some() {
                 ctx.request_repaint();
             }
             field.text = typed.text;
