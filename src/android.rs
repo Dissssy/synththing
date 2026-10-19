@@ -240,12 +240,13 @@ pub fn pick_files(kind: Kind, extensions: &[&str], dir: &Path) {
     });
 }
 
-/// From Java: an import's done (`paths` copied in), or failed.
-pub fn imported(kind: i32, paths: Vec<PathBuf>, error: Option<String>) {
+/// From Java: an import's done (`copied` in; `skipped`, the names of
+/// those not of a type it takes), or failed.
+pub fn imported(kind: i32, copied: Vec<PathBuf>, skipped: Vec<String>, error: Option<String>) {
     let Some(kind) = Kind::from_code(kind) else { return };
     let result = match error {
         Some(error) => Err(error),
-        None => Ok(paths),
+        None => Ok(import::Imported { copied, skipped }),
     };
     import::finish(import::Finished { kind, result });
 }

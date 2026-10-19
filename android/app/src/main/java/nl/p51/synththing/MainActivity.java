@@ -174,7 +174,7 @@ public class MainActivity extends NativeActivity {
             try {
                 startActivityForResult(intent, PICK_FILES);
             } catch (Exception e) {
-                Native.imported(kind, new String[0], "couldn't open the file picker: " + e.getMessage());
+                Native.imported(kind, new String[0], new String[0], "couldn't open the file picker: " + e.getMessage());
             }
         });
     }
@@ -219,10 +219,7 @@ public class MainActivity extends NativeActivity {
                     break;
                 }
             }
-            if (error == null && copied.isEmpty() && !skipped.isEmpty()) {
-                error = "synththing can't play " + String.join(", ", skipped);
-            }
-            Native.imported(kind, copied.toArray(new String[0]), error);
+            Native.imported(kind, copied.toArray(new String[0]), skipped.toArray(new String[0]), error);
         }).start();
     }
 

@@ -50,11 +50,19 @@ impl Kind {
     }
 }
 
-/// An import that's done: the files now in synththing's folder (empty if
-/// the picker was cancelled), or why it failed.
+/// An import that's done: what it brought in, or why it failed.
 pub struct Finished {
     pub kind: Kind,
-    pub result: Result<Vec<PathBuf>, String>,
+    pub result: Result<Imported, String>,
+}
+
+/// What an import brought in (both empty if the picker was cancelled).
+#[derive(Debug, Default, PartialEq)]
+pub struct Imported {
+    /// The files now in synththing's folder.
+    pub copied: Vec<PathBuf>,
+    /// The names of those picked that aren't of a type it takes.
+    pub skipped: Vec<String>,
 }
 
 static FINISHED: Mutex<Vec<Finished>> = Mutex::new(Vec::new());
@@ -98,10 +106,25 @@ pub fn start(kind: Kind, extensions: &[&str]) {
         let extensions: Vec<String> = extensions.iter().map(|e| e.to_string()).collect();
         std::thread::spawn(move || {
             let picked = rfd::FileDialog::new().add_filter("Files", &extensions).pick_files().unwrap_or_default();
-            let result = picked.iter().map(|path| copy_into(path, &dir)).collect::<Result<Vec<_>>>();
-            finish(Finished { kind, result: result.map_err(|e| format!("{e:#}")) });
+            finish(Finished { kind, result: import_files(&picked, &extensions, &dir).map_err(|e| format!("{e:#}")) });
         });
     }
+}
+
+/// Copy those of `files` with one of `extensions` into `dir`
+/// ([`copy_into`]); the rest are skipped. (On Android, Java does this.)
+#[cfg(not(target_os = "android"))]
+fn import_files(files: &[PathBuf], extensions: &[String], dir: &Path) -> Result<Imported> {
+    let mut imported = Imported::default();
+    for file in files {
+        let ext = file.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        if extensions.contains(&ext) {
+            imported.copied.push(copy_into(file, dir)?);
+        } else {
+            imported.skipped.push(file.file_name().unwrap_or_default().to_string_lossy().into_owned());
+        }
+    }
+    Ok(imported)
 }
 
 /// Copy `file` into `dir`, keeping its name; a different file already

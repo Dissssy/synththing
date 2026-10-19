@@ -10,9 +10,11 @@
 //! brings them back). The menu at the top left opens the other pages, which
 //! are the desktop's tabs, and the windows the desktop's menus open.
 
+use std::time::{Duration, Instant};
+
 use eframe::egui;
 
-use super::{fmt_time, icon, on_color, palette_color, App};
+use super::{fmt_time, icon, on_color, palette_color, status_color, status_outcome, App};
 use crate::audio::{AudioCommand, PlaybackShared};
 use crate::engine::EngineView;
 use crate::lua_visualizer;
@@ -89,7 +91,18 @@ pub(super) struct Mobile {
     /// What the media session was last told, and when.
     #[cfg(target_os = "android")]
     told: Option<(crate::android::Playback, std::time::Instant)>,
+    /// Audio files just imported with audio files turned off: whether to
+    /// turn them on (`audio_import_ui`).
+    audio_import: Option<Vec<std::path::PathBuf>>,
+    /// The status last seen (`None` before the first frame), and the one
+    /// being shown, since when (`status_toast_ui`).
+    seen_status: Option<String>,
+    toast: Option<(String, Instant)>,
 }
+
+/// How long a status shows: a failure longer, to be read.
+const TOAST: Duration = Duration::from_secs(4);
+const FAILURE_TOAST: Duration = Duration::from_secs(8);
 
 impl App {
     /// Whether the mobile layout is showing: always on Android, else as
@@ -179,6 +192,97 @@ impl App {
                 self.feedback_button_ui(ui);
             });
         });
+    }
+
+    /// Ask whether to turn audio files on, for `files`: just imported,
+    /// with them off.
+    pub(super) fn offer_audio_files(&mut self, files: Vec<std::path::PathBuf>) {
+        self.mobile_state.audio_import = Some(files);
+    }
+
+    /// Audio files were imported with audio files turned off: turn them on
+    /// (and they're in the library), or not (and they go again).
+    pub(super) fn audio_import_ui(&mut self, ctx: &egui::Context) {
+        let Some(files) = &self.mobile_state.audio_import else { return };
+        let names: Vec<String> = files.iter().map(|f| super::nice_name(f)).collect();
+        let mut answer = None;
+        egui::Modal::new(egui::Id::new("audio_import")).show(ctx, |ui| {
+            ui.set_width(super::fit_width(ui, 420.0));
+            ui.heading("Play audio files too?");
+            ui.add_space(4.0);
+            ui.label(format!(
+                "{} {} audio, not MIDI. synththing plays audio files once they're turned on (Preferences > \
+                 Songs > Show audio files), which lists them with your songs.",
+                names.join(", "),
+                if names.len() == 1 { "is" } else { "are" },
+            ));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Turn them on").clicked() {
+                    answer = Some(true);
+                }
+                if ui.button("No, don't import them").clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        let Some(on) = answer else { return };
+        let files = self.mobile_state.audio_import.take().unwrap_or_default();
+        if on {
+            self.config.show_audio_files = true;
+            self.browser.set_extensions(super::listed_song_extensions(&self.config));
+            self.status = match self.config.save() {
+                Ok(()) => "Audio files turned on.".to_string(),
+                Err(e) => format!("Couldn't save preferences: {e}"),
+            };
+        } else {
+            for file in &files {
+                if let Err(e) = std::fs::remove_file(file) {
+                    log::warn!("couldn't remove {}: {e}", file.display());
+                }
+            }
+            self.browser.rescan();
+            self.status = format!("Removed {} audio file{}.", files.len(), if files.len() == 1 { "" } else { "s" });
+        }
+    }
+
+    /// The mobile layout has no status line: what gets done or fails shows
+    /// a moment at the bottom instead (a tap puts it away).
+    pub(super) fn status_toast_ui(&mut self, ctx: &egui::Context) {
+        let state = &mut self.mobile_state;
+        if state.seen_status.as_deref() != Some(self.status.as_str()) {
+            // (Not what was there before the first frame.)
+            if state.seen_status.is_some() && status_outcome(&self.status).is_some() {
+                state.toast = Some((self.status.clone(), Instant::now()));
+            }
+            state.seen_status = Some(self.status.clone());
+        }
+        let Some((text, since)) = &state.toast else { return };
+        let failed = status_outcome(text) == Some(false);
+        if since.elapsed() > if failed { FAILURE_TOAST } else { TOAST } {
+            state.toast = None;
+            return;
+        }
+        ctx.request_repaint_after(Duration::from_millis(250));
+        let screen = ctx.content_rect();
+        let width = (screen.width() - 32.0).min(480.0);
+        let response = egui::Area::new(egui::Id::new("status_toast"))
+            .order(egui::Order::Tooltip)
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_max_width(width);
+                    let mut label = egui::RichText::new(text.as_str());
+                    if let Some(color) = status_color(ui, text) {
+                        label = label.color(color);
+                    }
+                    ui.add(egui::Label::new(label).wrap());
+                });
+            })
+            .response;
+        if response.interact(egui::Sense::click()).clicked() {
+            self.mobile_state.toast = None;
+        }
     }
 
     /// Under the visualizer: the seek bar, the song, the transport.

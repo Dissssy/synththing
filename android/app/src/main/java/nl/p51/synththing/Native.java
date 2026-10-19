@@ -4,8 +4,11 @@ package nl.p51.synththing;
 final class Native {
     private Native() {}
 
-    /** An import is done: {@code paths} copied in, or {@code error} why not. */
-    static native void imported(int kind, String[] paths, String error);
+    /**
+     * An import is done: {@code paths} copied in, {@code skipped} the names of
+     * those picked that aren't of a type it takes; or {@code error} why not.
+     */
+    static native void imported(int kind, String[] paths, String[] skipped, String error);
 
     /** A media button: one of PlaybackService's COMMAND_*s. */
     static native void mediaCommand(int command, long positionMs);

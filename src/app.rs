@@ -2445,7 +2445,9 @@ impl App {
                 Err(e) => self.status = format!("Couldn't open the song library: {e:#}"),
             }
             if ui.button(format!("{}  Import songs...", icon("plus"))).on_hover_text("Copy songs into synththing's library").clicked() {
-                crate::import::start(crate::import::Kind::Songs, listed_song_extensions(&self.config));
+                // Every type it can play: audio files with audio files off
+                // bring an offer to turn them on (`audio_import_ui`).
+                crate::import::start(crate::import::Kind::Songs, SONG_EXTENSIONS);
             }
         } else {
             if self.browser.set_root(None) {
@@ -2510,26 +2512,44 @@ impl App {
     }
 
     /// Imports that have finished (`import.rs`): songs show up in the
-    /// library, soundfonts join the list.
+    /// library, soundfonts join the list. What was picked but isn't of a
+    /// type synththing takes is said, and audio files with audio files
+    /// turned off bring an offer to turn them on.
     fn poll_imports(&mut self) {
         for done in crate::import::take_finished() {
-            let paths = match done.result {
-                Ok(paths) => paths,
+            let imported = match done.result {
+                Ok(imported) => imported,
                 Err(e) => {
                     self.status = format!("Couldn't import: {e}");
                     continue;
                 }
             };
-            if paths.is_empty() {
+            let skipped = match imported.skipped.as_slice() {
+                [] => None,
+                [one] => Some(format!("{one} isn't a file synththing can play.")),
+                more => Some(format!("{} aren't files synththing can play.", more.join(", "))),
+            };
+            if imported.copied.is_empty() {
+                if let Some(skipped) = skipped {
+                    self.status = format!("Couldn't import: {skipped}");
+                }
                 continue;
             }
+            let n = imported.copied.len();
+            let plural = if n == 1 { "" } else { "s" };
             match done.kind {
                 crate::import::Kind::Songs => {
                     self.browser.rescan();
-                    let n = paths.len();
-                    self.status = format!("Imported {n} song{}.", if n == 1 { "" } else { "s" });
+                    self.status = format!("Imported {n} song{plural}.");
+                    let audio: Vec<PathBuf> = imported.copied.into_iter().filter(|p| !is_midi_path(p)).collect();
+                    if !audio.is_empty() && !self.config.show_audio_files {
+                        self.offer_audio_files(audio);
+                    }
                 }
-                crate::import::Kind::Soundfonts => self.add_soundfonts(paths),
+                crate::import::Kind::Soundfonts => self.add_soundfonts(imported.copied),
+            }
+            if let Some(skipped) = skipped {
+                self.status = format!("{} {skipped}", self.status);
             }
         }
     }
@@ -3779,6 +3799,8 @@ impl eframe::App for App {
             self.welcome_ui(&ctx);
             self.song_info_ui(&ctx);
             self.history_ui(&ctx);
+            self.audio_import_ui(&ctx);
+            self.status_toast_ui(&ctx);
         } else {
             egui::Panel::top("top_bar").show(ui, |ui| self.top_bar_ui(ui));
             egui::Panel::bottom("controls_panel").show(ui, |ui| {

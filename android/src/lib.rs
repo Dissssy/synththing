@@ -17,27 +17,39 @@ fn android_main(app: AndroidApp) {
     synththing::android::main(app);
 }
 
-/// `Native.imported(int kind, String[] paths, String error)`: an import's
-/// done (`error` null), or failed.
+/// `Native.imported(int kind, String[] paths, String[] skipped, String
+/// error)`: an import's done (`error` null), or failed.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_nl_p51_synththing_Native_imported<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     kind: jint,
     paths: JObjectArray<'local>,
+    skipped: JObjectArray<'local>,
     error: JString<'local>,
 ) {
-    let mut list = Vec::new();
-    let len = env.get_array_length(&paths).unwrap_or(0);
-    for i in 0..len {
-        if let Ok(path) = env.get_object_array_element(&paths, i)
-            && let Ok(path) = env.get_string(&JString::from(path))
-        {
-            list.push(PathBuf::from(String::from(path)));
-        }
-    }
-    let error = if error.is_null() { None } else { env.get_string(&error).ok().map(String::from) };
-    synththing::android::imported(kind, list, error);
+    let copied = strings(&mut env, &paths)
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    let skipped = strings(&mut env, &skipped);
+    let error = if error.is_null() {
+        None
+    } else {
+        env.get_string(&error).ok().map(String::from)
+    };
+    synththing::android::imported(kind, copied, skipped, error);
+}
+
+/// A Java `String[]`'s strings.
+fn strings(env: &mut JNIEnv, array: &JObjectArray) -> Vec<String> {
+    let len = env.get_array_length(array).unwrap_or(0);
+    (0..len)
+        .filter_map(|i| {
+            let item = env.get_object_array_element(array, i).ok()?;
+            env.get_string(&JString::from(item)).ok().map(String::from)
+        })
+        .collect()
 }
 
 /// `Native.mediaCommand(int command, long positionMs)`: a media button.
