@@ -37,7 +37,7 @@ Every device signed in as someone holds the same key: signing one in copies it t
 - The other device takes it (`POST /api/v1/pair/{id}/take`, unsigned, with its name from `device.json`), opens it with the secret and saves the key. A handoff can be taken once and waits 10 minutes; they're kept in memory only, at most 5 per key.
 - The app that parked it asks whether it's been taken (`POST /api/v1/pair/{id}`, signed by the same key) and shows the device's name.
 - Outside the app, a link lands on `GET /pair`: a page whose Open in synththing button hands the link (still with its `#`) to the Android app as `synththing:<link>`. With `android_fingerprints` in `server.json`, `/.well-known/assetlinks.json` lets Android open the official server's links in the app directly.
-- A rotation (or a recovery) signs every other device out: servers refuse the old key once it's applied.
+- A rotation (or a recovery) signs every other device out: servers refuse the old key once it's applied, with a 410 whose `replaced` names it, and an app holding that key forgets it and says it's signed out. The app warns about this before New key... and Recover....
 
 ### Server modes
 

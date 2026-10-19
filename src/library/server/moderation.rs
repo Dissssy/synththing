@@ -104,7 +104,7 @@ pub(super) fn limit(state: &State, bucket: &str, ip: &str, most: usize, window: 
     recent.retain(|t| t.elapsed() < window);
     if recent.len() >= most {
         let wait = recent.first().map(|t| window.saturating_sub(t.elapsed()).as_secs()).unwrap_or(0);
-        return Err(json(429, &ApiError { error: format!("that's all the {what} for now from here"), retry_after: Some(wait) }));
+        return Err(json(429, &ApiError { error: format!("that's all the {what} for now from here"), retry_after: Some(wait), replaced: None }));
     }
     recent.push(Instant::now());
     Ok(())

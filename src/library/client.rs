@@ -65,6 +65,17 @@ pub fn normalize_url(url: &str) -> String {
 
 type Reply = ureq::http::Response<ureq::Body>;
 
+/// The last key a server refused as replaced by a rotation, until the app
+/// takes it.
+static REPLACED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// The key (hex) a server last refused because a rotation replaced it, if
+/// one has since the last call: if it's the app's, another device moved
+/// the identity to a new key, and this one is signed out.
+pub fn take_replaced() -> Option<String> {
+    REPLACED.lock().unwrap_or_else(|p| p.into_inner()).take()
+}
+
 /// The response, or the error it is (the server's message if it sent one).
 fn check(result: Result<Reply, ureq::Error>) -> Result<Reply, String> {
     let mut response = result.map_err(|e| format!("couldn't reach the server ({e})"))?;
@@ -73,7 +84,11 @@ fn check(result: Result<Reply, ureq::Error>) -> Result<Reply, String> {
         return Ok(response);
     }
     match response.body_mut().read_json::<ApiError>() {
-        Ok(ApiError { error, retry_after: Some(wait) }) => {
+        Ok(ApiError { error, replaced: Some(key), .. }) => {
+            *REPLACED.lock().unwrap_or_else(|p| p.into_inner()) = Some(key);
+            Err(error)
+        }
+        Ok(ApiError { error, retry_after: Some(wait), .. }) => {
             Err(format!("{error} (try again in {})", crate::song_info::format_length(wait as f64)))
         }
         Ok(ApiError { error, .. }) => Err(error),
@@ -915,6 +930,8 @@ mod tests {
         let first = rotate(&base, &key, &alice, &alice2).unwrap();
         assert_eq!((first.how.as_str(), first.new.as_str()), ("key", alice2.public().as_str()));
         assert!(identity_status(&base, &key, &alice).unwrap_err().contains("replaced"));
+        assert_eq!(take_replaced(), Some(alice.public()), "the app hears its key was replaced: signed out");
+        assert_eq!(take_replaced(), None);
         assert_eq!(details(&base, &here.id).unwrap().summary.author_id, Some(alice2.id()));
         assert!(identity_status(&base, &key, &alice2).unwrap().email, "the email came along");
 

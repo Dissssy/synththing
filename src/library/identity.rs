@@ -210,6 +210,19 @@ pub fn adopt(text: &str, passphrase: &str) -> Result<Identity, String> {
     Ok(identity)
 }
 
+/// Forget the saved identity (its key and rotation records): signed out.
+pub fn forget() -> Result<(), String> {
+    if let Some(path) = Identity::path() {
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(format!("couldn't delete {}: {e}", path.display()));
+            }
+            _ => {}
+        }
+    }
+    save_rotations(&[])
+}
+
 /// Write a secret where only its owner can read it (on Linux and macOS).
 pub fn save_secret(path: &Path, text: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {

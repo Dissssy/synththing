@@ -2275,6 +2275,10 @@ impl App {
         self.library.identity = Some(identity);
     }
 
+    pub(super) fn clear_library_identity(&mut self) {
+        self.library.identity = None;
+    }
+
     pub(super) fn library_identity_message(&mut self, message: &str) {
         self.library.identity_message = Some(message.to_string());
     }
