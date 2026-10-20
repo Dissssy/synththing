@@ -18,6 +18,7 @@ use super::preferences::PrefTab;
 use super::{fmt_time, icon, palette_color, status_color, status_outcome, App};
 use crate::audio::{AudioCommand, PlaybackShared};
 use crate::engine::EngineView;
+use crate::frame_timing;
 use crate::lua_visualizer;
 use crate::playlist::LoopMode;
 use crate::visualizer::DisplayMode;
@@ -182,11 +183,12 @@ impl App {
         }
 
         if !fill_screen {
-            egui::Panel::top("mobile_top_bar").show(ui, |ui| self.mobile_top_bar_ui(ui));
+            egui::Panel::top("mobile_top_bar").show(ui, |ui| frame_timing::time("top bar", || self.mobile_top_bar_ui(ui)));
         }
         if page == Page::NowPlaying {
             if !fill_screen {
-                egui::Panel::bottom("mobile_controls").show(ui, |ui| self.mobile_controls_ui(ui, view));
+                egui::Panel::bottom("mobile_controls")
+                    .show(ui, |ui| frame_timing::time("controls bar", || self.mobile_controls_ui(ui, view)));
             }
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                 self.script_error_ui(ui, false);
@@ -197,7 +199,9 @@ impl App {
                 self.mobile_expand_handle_ui(&ctx);
             }
         } else {
-            egui::Panel::bottom("mobile_now_playing_bar").show(ui, |ui| self.mobile_now_playing_bar_ui(ui, view));
+            egui::Panel::bottom("mobile_now_playing_bar")
+                .show(ui, |ui| frame_timing::time("now playing bar", || self.mobile_now_playing_bar_ui(ui, view)));
+            let _timing = frame_timing::scope(page.title());
             egui::CentralPanel::default().show(ui, |ui| match page {
                 Page::NowPlaying => {}
                 Page::Songs => self.songs_ui(ui),
@@ -226,7 +230,7 @@ impl App {
             });
         }
         if self.mobile_state.drawer_open {
-            self.mobile_drawer_ui(&ctx);
+            frame_timing::time("menu", || self.mobile_drawer_ui(&ctx));
         }
     }
 
