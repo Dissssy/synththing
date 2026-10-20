@@ -18,6 +18,7 @@ use crate::config::Config;
 use crate::library::identity::{self, Identity};
 use crate::library::{self, client};
 use crate::device::Device;
+use crate::frame_timing;
 use crate::playlist_sync;
 use crate::settings_sync::{self, Change, Fields, State, Winner};
 use crate::song_store::Stored;
@@ -56,6 +57,16 @@ impl Blob {
 
     fn index(self) -> usize {
         self as usize
+    }
+
+    /// Its section in the slow-frame log, taking in a sync.
+    fn synced_section(self) -> &'static str {
+        match self {
+            Blob::Settings => "settings synced",
+            Blob::Playlists => "playlists synced",
+            Blob::Library => "library synced",
+            Blob::Transfers => "transfers synced",
+        }
     }
 }
 
@@ -305,7 +316,7 @@ impl App {
                     self.start_blob(blob);
                 }
             }
-            // (The songs' as the worker reads them: `songs_loaded`.)
+            // (The songs' once the worker has read them: `Reply::Loaded`.)
             for blob in [Blob::Library, Blob::Transfers] {
                 *self.channel(blob) = Channel::default();
             }
@@ -317,6 +328,10 @@ impl App {
             self.channel(Blob::Settings).dirty_since = Some(Instant::now());
         }
         while let Ok((blob, result)) = self.sync.events.1.try_recv() {
+            let _timing = frame_timing::scope(blob.synced_section());
+            if let Ok(outcome) = &result {
+                log::info!("{} synced: revision {}, {} changed", blob.name(), outcome.revision, outcome.changes.len());
+            }
             self.channel(blob).running = false;
             if result.is_ok() {
                 self.channel(blob).adopt = false;
@@ -339,9 +354,9 @@ impl App {
             }
         }
         while let Ok(reply) = self.sync.worker.1.try_recv() {
-            self.take_reply(reply);
+            frame_timing::time("sync worker replies", || self.take_reply(reply));
         }
-        self.poll_moves();
+        frame_timing::time("poll_moves", || self.poll_moves());
         if self.sync.songs_dirty && self.sync.on && !self.sync.songs_pending {
             self.sync.songs_dirty = false;
             self.sync.songs_pending = true;
@@ -357,7 +372,7 @@ impl App {
                 channel.dirty_since = None;
                 channel.wanted = None;
                 let adopt = channel.adopt;
-                self.start_sync(blob, adopt);
+                frame_timing::time("start_sync", || self.start_sync(blob, adopt));
             }
         }
     }

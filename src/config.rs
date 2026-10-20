@@ -373,6 +373,7 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
+        let _timing = crate::frame_timing::scope("config save");
         let path = Self::file_path()?;
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
