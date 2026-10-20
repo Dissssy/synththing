@@ -8,6 +8,12 @@
 
 ## Tier 2 - solid value, moderate effort
 
+[M][.] Soundfonts in the song library (intentionally deferred, Ethan
+    2026-10-20): soundfonts could go into the hashed store and sync like
+    songs (song_store.rs, song_sync.rs), so a playlist entry's soundfont
+    follows it to your other devices. Left out of the 1.0.0 song library
+    on purpose; pick it up only when asked.
+
 [S][.] Chinese text style (only if it comes up): Noto Sans JP is the
     bundled font for Han characters (app/fonts.rs). Chinese-only characters
     it lacks come from whatever CJK font is installed, so their style can

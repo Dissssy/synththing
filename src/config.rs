@@ -92,6 +92,9 @@ pub struct Config {
     /// Preference: list audio files (MP3, WAV, ...) as songs, not only MIDI.
     #[serde(default)]
     pub show_audio_files: bool,
+    /// The Songs list's columns, sorting and grouping.
+    #[serde(default)]
+    pub songs_view: crate::song_list::View,
     /// Preference: how songs are named from their tags, the first that
     /// works for a song (`song_title`; `None`: `song_title::DEFAULT_PATTERNS`).
     #[serde(default)]

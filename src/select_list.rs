@@ -225,6 +225,36 @@ pub fn label(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, hover: Option
     .inner
 }
 
+/// A tag's chip: its name on its color (`song_store::Tag`), in text that
+/// reads on it.
+pub fn chip(ui: &mut egui::Ui, name: &str, color: [u8; 3]) -> egui::Response {
+    let [r, g, b] = color;
+    let light = 0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b) > 150.0;
+    let text = if light { egui::Color32::BLACK } else { egui::Color32::WHITE };
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(r, g, b))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::symmetric(5, 0))
+        .show(ui, |ui| ui.add(egui::Label::new(egui::RichText::new(name).small().color(text)).selectable(false)))
+        .response
+}
+
+/// Tags' chips, in a row (right to left in a right-to-left layout).
+pub fn chips<'a>(ui: &mut egui::Ui, tags: impl DoubleEndedIterator<Item = (&'a str, [u8; 3])>) {
+    let spacing = ui.spacing().item_spacing.x;
+    ui.spacing_mut().item_spacing.x = 3.0;
+    if ui.layout().prefer_right_to_left() {
+        for (name, color) in tags.rev() {
+            chip(ui, name, color);
+        }
+    } else {
+        for (name, color) in tags {
+            chip(ui, name, color);
+        }
+    }
+    ui.spacing_mut().item_spacing.x = spacing;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
