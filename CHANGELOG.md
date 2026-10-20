@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 0.11.1 (2026-10-20)
+
 ### Fixed
 - Songs move between your devices again when one of them is too big for the server: it's named in the sync error and stays where it is, and the rest still move (before, every other song waited behind it). A failed song no longer stops the others either.
 - Sync turned on before updating starts syncing playlists and songs, without turning it off and on again.
