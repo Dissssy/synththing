@@ -13,9 +13,21 @@
     <!-- Installing updates in the app (Preferences > Experimental), once
          the user allows it in Android's settings. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Removing a branch build's app (Updates > Branch builds), which
+         Android asks the user about. -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+
+    <!-- Seeing which branch builds' apps are installed: apps only see
+         others they ask for, and they're all launcher apps. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
 
     <application
-        android:label="synththing"
+        android:label="${appLabel}"
         android:icon="@mipmap/ic_launcher"
         android:hasCode="true"
         android:theme="@android:style/Theme.Material.NoActionBar">

@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use android_activity::AndroidApp;
 use eframe::egui;
-use jni::objects::{GlobalRef, JObject, JString, JThrowable, JValue};
+use jni::objects::{GlobalRef, JObject, JObjectArray, JString, JThrowable, JValue};
 use jni::{JNIEnv, JavaVM};
 
 use crate::app::App;
@@ -488,6 +488,44 @@ pub fn install_apk(path: &Path) {
     call("installing an update", |env, activity| {
         let path = env.new_string(path.to_string_lossy())?;
         env.call_method(activity, "installApk", "(Ljava/lang/String;)V", &[JValue::Object(&path)])?;
+        Ok(())
+    });
+}
+
+/// The installed apps whose ids start with `prefix`, with their launcher
+/// names (`MainActivity.branchApps`).
+pub fn branch_apps(prefix: &str) -> Vec<(String, String)> {
+    call("listing branch builds' apps", |env, activity| {
+        let prefix = env.new_string(prefix)?;
+        let array = JObjectArray::from(
+            env.call_method(activity, "branchApps", "(Ljava/lang/String;)[Ljava/lang/String;", &[JValue::Object(&prefix)])?
+                .l()?,
+        );
+        let mut texts = Vec::new();
+        for i in 0..env.get_array_length(&array)? {
+            let text = JString::from(env.get_object_array_element(&array, i)?);
+            texts.push(String::from(env.get_string(&text)?));
+            env.delete_local_ref(text)?;
+        }
+        Ok(texts.chunks_exact(2).map(|pair| (pair[0].clone(), pair[1].clone())).collect())
+    })
+    .unwrap_or_default()
+}
+
+/// Start the installed app `id`.
+pub fn open_app(id: &str) {
+    call("opening an app", |env, activity| {
+        let id = env.new_string(id)?;
+        env.call_method(activity, "openApp", "(Ljava/lang/String;)V", &[JValue::Object(&id)])?;
+        Ok(())
+    });
+}
+
+/// Ask to uninstall the app `id` (Android asks the user).
+pub fn uninstall_app(id: &str) {
+    call("uninstalling an app", |env, activity| {
+        let id = env.new_string(id)?;
+        env.call_method(activity, "uninstallApp", "(Ljava/lang/String;)V", &[JValue::Object(&id)])?;
         Ok(())
     });
 }

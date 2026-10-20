@@ -17,6 +17,8 @@
 #![cfg_attr(target_os = "android", allow(dead_code))]
 
 mod app;
+#[cfg(any(target_os = "android", test))]
+mod android_id;
 mod applog;
 mod audio;
 mod build_info;
