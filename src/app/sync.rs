@@ -546,6 +546,7 @@ impl App {
         self.viewed_playlist = viewed
             .and_then(|id| self.playlists.find(&id))
             .or_else(|| (!self.playlists.lists.is_empty()).then_some(0));
+        self.refresh_smart(true);
         self.refresh_missing();
         self.plan_upcoming();
     }

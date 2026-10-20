@@ -4,6 +4,9 @@
 //! `<config dir>/playlists/`, naming each song by its key in the library.
 //! Each file is named by the playlist's ID (random, the same on every
 //! device it syncs to: `playlist_sync.rs`); its name is only a field.
+//! A smart playlist keeps its rules (`smart.rs`) instead of its songs:
+//! they're worked out again here whenever the library changes
+//! (`App::refresh_smart`).
 //!
 //! This module is the data model and the pure "what plays next" logic; the
 //! panel UI, drag-and-drop and actually loading/playing tracks live in
@@ -38,15 +41,20 @@ impl PlaylistEntry {
 #[derive(Clone, Debug, Default)]
 pub struct Playlist {
     pub name: String,
+    /// A smart playlist's are its rules' songs, as last worked out.
     pub entries: Vec<PlaylistEntry>,
+    /// A smart playlist's rules.
+    pub smart: Option<crate::smart::Rules>,
 }
 
 /// A playlist as saved: each song by its key in the library.
 #[derive(Serialize, Deserialize)]
 struct PlaylistFile {
     name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     entries: Vec<EntryFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    smart: Option<crate::smart::Rules>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -103,7 +111,7 @@ impl Library {
                             .into_iter()
                             .map(|e| PlaylistEntry { soundfont: e.soundfont, ..PlaylistEntry::new(crate::song_store::path_of(&songs, &e.song)) })
                             .collect();
-                        lists.push(StoredPlaylist { id, playlist: Playlist { name: saved.name, entries } });
+                        lists.push(StoredPlaylist { id, playlist: Playlist { name: saved.name, entries, smart: saved.smart } });
                     }
                     Err(e) => errors.push(format!("{}: {e}", file.display())),
                 }
@@ -118,6 +126,7 @@ impl Library {
         let playlist = Playlist {
             name: name.to_string(),
             entries: songs.into_iter().map(PlaylistEntry::new).collect(),
+            smart: None,
         };
         self.put(&new_id(), playlist)
     }
@@ -157,15 +166,16 @@ impl Library {
         let Some(stored) = self.lists.get(idx) else {
             return Ok(());
         };
-        let saved = PlaylistFile {
-            name: stored.playlist.name.clone(),
-            entries: stored
+        let entries = match stored.playlist.smart {
+            Some(_) => Vec::new(),
+            None => stored
                 .playlist
                 .entries
                 .iter()
                 .filter_map(|e| Some(EntryFile { song: crate::song_store::key_in(&self.songs, &e.path)?.to_string(), soundfont: e.soundfont.clone() }))
                 .collect(),
         };
+        let saved = PlaylistFile { name: stored.playlist.name.clone(), entries, smart: stored.playlist.smart.clone() };
         let json = serde_json::to_string_pretty(&saved)?;
         fs::create_dir_all(&self.dir).with_context(|| format!("creating {}", self.dir.display()))?;
         let file = self.file(&stored.id);
@@ -485,7 +495,7 @@ mod tests {
         let at = |path: &str| PathBuf::from(format!("{root}{path}"));
         let base = at("music/lists");
         let base = base.as_path();
-        let mut playlist = Playlist { name: "Mix".into(), entries: Vec::new() };
+        let mut playlist = Playlist { name: "Mix".into(), ..Playlist::default() };
         let mut first = PlaylistEntry::new(at("music/a.mid"));
         first.soundfont = Some(at("sf/piano.sf2"));
         playlist.entries.push(first);
@@ -524,7 +534,7 @@ mod tests {
         let made = library.create("a/b: c?", vec![songs.join("x.mid")]).unwrap();
         let id = library.lists[made].id.clone();
         assert!(is_id(&id) && id != by_hand);
-        let renamed = Playlist { name: "Renamed".into(), entries: Vec::new() };
+        let renamed = Playlist { name: "Renamed".into(), ..Playlist::default() };
         assert_eq!(library.put(&id, renamed).unwrap(), made);
         let (library, _) = Library::load(dir.clone(), songs);
         assert_eq!(library.lists.iter().map(|l| l.playlist.name.as_str()).collect::<Vec<_>>(), ["By hand", "Renamed"]);

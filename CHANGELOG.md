@@ -4,6 +4,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Smart playlists: + > Smart playlist... in Playlists makes a playlist of the songs that match your rules (artist contains, year in a range, added in the last 30 days, has a tag, starred...), all of them or any, optionally limited to some songs, minutes, hours, MB or GB picked at random, by title, by album, newest... It keeps up as songs come in, the same on all your devices (random picks too: Re-seed picks again, everywhere). Edit its rules from the playlist's sliders button, or keep a copy that stays as it is. On a phone the rules can be looked at, not edited yet.
+- Rulesets (Preferences > Songs): rules that make a playlist for each artist, album, genre, year, composer or tag of the songs they match. By Artist and By Album are built in, and you can make your own. They sync like your other settings. For now Preferences lists the playlists each makes: the Artists and Albums views come next, on top of them.
+
 ## 1.1.0 (2026-10-20)
 
 ### Added

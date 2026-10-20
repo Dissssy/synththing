@@ -72,7 +72,7 @@ impl PrefTab {
         match self {
             Self::Appearance => "Theme, UI scale, the seek bar, full screen, song names",
             Self::Playback => "Audio buffer, what's kept from last time",
-            Self::Songs => "Audio files, loading",
+            Self::Songs => "Audio files, loading, rulesets",
             Self::Visualizers => "Script logs",
             Self::Library => "Servers and identity",
             Self::Updates => "Checking for updates, canary builds",
@@ -323,6 +323,9 @@ impl App {
                         label | ui.add(egui::Slider::new(&mut expiry, PRELOAD_EXPIRY_RANGE).suffix(" s").logarithmic(true))
                     },
                 );
+                ui.separator();
+                self.rulesets_ui(ui);
+                ui.separator();
                 let loaded = self.assets.summary();
                 egui::CollapsingHeader::new(format!("Loaded right now ({})", loaded.len()))
                     .id_salt("preferences_loaded_files")
