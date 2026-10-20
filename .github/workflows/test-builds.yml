@@ -9,6 +9,9 @@
 # or `gh release download` without a tag see. branch-cleanup.yml removes
 # a branch's release when the branch is deleted.
 #
+# A release commit (cargo release's "Release X.Y.Z", release.toml) builds
+# no canary: release.yml builds that same commit as the release.
+#
 # The release's name is the build's version (0.7.1-nightly.12) and its
 # notes start with the commit, which is how the in-app updater tells
 # builds apart.
@@ -30,6 +33,7 @@ jobs:
   # Which build this is: its channel, its number (commits since the release
   # in Cargo.toml) and the release it goes to.
   stamp:
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Release ')
     runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
     outputs:
       channel: ${{ steps.stamp.outputs.channel }}
