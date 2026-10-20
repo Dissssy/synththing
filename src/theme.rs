@@ -4,14 +4,12 @@
 //! border width, shadows) on top, nothing that moves things around, so no
 //! theme can break a layout.
 //!
-//! Built-in themes can't be changed; your own live in `<config
-//! dir>/themes/<name>.json` (colors as `#rrggbb` hex), made by duplicating
-//! another. The Themes window (`app/themes.rs`) picks and edits them.
+//! Built-in themes can't be changed; your own live in the config
+//! (`Config::custom_themes`, colors as `#rrggbb` hex), so settings sync
+//! carries them, made by duplicating another. The Themes window (`app/themes.rs`) picks and edits them.
 
-use std::fs;
-use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use eframe::egui::{self, Color32, CornerRadius, Shadow, Stroke, Visuals};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -312,55 +310,6 @@ impl Theme {
     }
 }
 
-/// `<config dir>/themes`.
-pub fn themes_dir() -> Result<PathBuf> {
-    Ok(crate::config::config_dir()?.join("themes"))
-}
-
-/// Your themes, sorted by name. Unreadable files are skipped (logged).
-pub fn load_custom() -> Vec<Theme> {
-    let Ok(dir) = themes_dir() else { return Vec::new() };
-    let Ok(entries) = fs::read_dir(&dir) else { return Vec::new() };
-    let mut themes: Vec<Theme> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|e| e == "json"))
-        .filter_map(|path| {
-            let read = fs::read_to_string(&path).map_err(anyhow::Error::from).and_then(|text| {
-                serde_json::from_str::<Theme>(&text).map_err(anyhow::Error::from)
-            });
-            match read {
-                Ok(theme) => Some(theme),
-                Err(e) => {
-                    log::warn!("couldn't read the theme {}: {e:#}", path.display());
-                    None
-                }
-            }
-        })
-        .collect();
-    themes.sort_by_key(|t| t.name.to_lowercase());
-    themes
-}
-
-/// A file name for a theme called `name` (Windows-safe).
-fn file_name(name: &str) -> String {
-    let safe: String =
-        name.chars().map(|c| if c.is_alphanumeric() || " -_()".contains(c) { c } else { '_' }).collect();
-    format!("{}.json", safe.trim())
-}
-
-pub fn save_custom(theme: &Theme) -> Result<()> {
-    let dir = themes_dir()?;
-    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let path = dir.join(file_name(&theme.name));
-    fs::write(&path, serde_json::to_string_pretty(theme)?).with_context(|| format!("writing {}", path.display()))
-}
-
-pub fn delete_custom(name: &str) -> Result<()> {
-    let path = themes_dir()?.join(file_name(name));
-    fs::remove_file(&path).with_context(|| format!("deleting {}", path.display()))
-}
-
 /// Whether `name` would do for a new theme: not empty, not taken (built-in
 /// or your own, ignoring case).
 pub fn check_name(name: &str, taken: &[String]) -> Result<()> {
@@ -436,7 +385,6 @@ mod tests {
         let mut more = taken.clone();
         more.push("Dark copy".into());
         assert_eq!(copy_name("Dark", &more), "Dark copy 2");
-        assert_eq!(file_name("a/b: c"), "a_b_ c.json");
         assert!(builtins().iter().any(|t| t.name == DEFAULT_THEME));
     }
 }

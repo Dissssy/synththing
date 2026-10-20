@@ -170,6 +170,10 @@ pub struct Config {
     /// The theme in use, by name (`None`: the default, Dark).
     #[serde(default)]
     pub theme: Option<String>,
+    /// Your own themes, by name (the built-in ones are
+    /// `theme::builtins()`). In the config so settings sync carries them.
+    #[serde(default)]
+    pub custom_themes: std::collections::BTreeMap<String, crate::theme::Theme>,
     /// How big the UI is drawn (`None`: 100%).
     #[serde(default)]
     pub ui_scale: Option<f32>,

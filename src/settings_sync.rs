@@ -83,7 +83,7 @@ pub const CATEGORIES: &[Category] = &[
     Category {
         name: "Appearance",
         settings: &[
-            setting("theme", "Theme", &["theme"]),
+            setting("theme", "Theme", &["theme", "custom_themes"]),
             setting("beat_pulse", "Beat pulse", &["beat_pulse", "beat_pulse_length"]),
             setting("song_names", "Song names", &["title_patterns"]),
         ],
@@ -386,18 +386,29 @@ pub fn merge(base: &Fields, local: &Fields, server: &Fields, choices: &Choices) 
 }
 
 /// Set `config`'s synced leaves to `fields`' (removing those `fields`
-/// doesn't have), each only if the config still reads with it: what's
-/// left out is a newer app's (or a value this one can't take), carried
-/// along in the sync state but not here.
+/// doesn't have). All at once if the config reads with them (a new
+/// custom theme is many leaves, none of which reads alone); else each
+/// only if the config still reads with it: what's left out is a newer
+/// app's (or a value this one can't take), carried along in the sync
+/// state but not here.
 pub fn apply<T: serde::de::DeserializeOwned>(config: &mut Value, fields: &Fields, choices: &Choices) {
     let current = synced_leaves(config, choices);
     let paths: std::collections::BTreeSet<&String> =
         current.keys().chain(fields.keys().filter(|p| synced(p, choices))).collect();
-    for path in paths {
-        let wanted = fields.get(path).map(|f| &f.value);
-        if current.get(path) == wanted {
-            continue;
-        }
+    let differing: Vec<(&String, Option<&Value>)> = paths
+        .into_iter()
+        .map(|path| (path, fields.get(path).map(|f| &f.value)))
+        .filter(|(path, wanted)| current.get(*path) != *wanted)
+        .collect();
+    let mut all = config.clone();
+    for (path, wanted) in &differing {
+        set_leaf(&mut all, path, wanted.cloned());
+    }
+    if serde_json::from_value::<T>(all.clone()).is_ok() {
+        *config = all;
+        return;
+    }
+    for (path, wanted) in differing {
         let mut tried = config.clone();
         set_leaf(&mut tried, path, wanted.cloned());
         if serde_json::from_value::<T>(tried.clone()).is_ok() {
@@ -406,8 +417,34 @@ pub fn apply<T: serde::de::DeserializeOwned>(config: &mut Value, fields: &Fields
     }
 }
 
+/// Set the leaf at `path` to `value`, or remove it (`None`), with the
+/// objects it leaves empty: an empty object is a leaf of its own
+/// (`synced_leaves`), so one that's only there for removed leaves isn't
+/// wanted.
 fn set_leaf(config: &mut Value, path: &str, value: Option<Value>) {
-    let mut parts: Vec<String> = path.split('/').map(|p| p.replace("~1", "/").replace("~0", "~")).collect();
+    let parts: Vec<String> = path.split('/').map(|p| p.replace("~1", "/").replace("~0", "~")).collect();
+    match value {
+        Some(value) => insert_leaf(config, &parts, value),
+        None => {
+            remove_leaf(config, &parts);
+        }
+    }
+}
+
+/// Remove the leaf at `parts`; whether that emptied its object.
+fn remove_leaf(node: &mut Value, parts: &[String]) -> bool {
+    let (Value::Object(map), Some((first, rest))) = (node, parts.split_first()) else { return false };
+    let removed = if rest.is_empty() {
+        map.remove(first).is_some()
+    } else {
+        let emptied = map.get_mut(first).is_some_and(|child| remove_leaf(child, rest));
+        emptied && map.remove(first).is_some()
+    };
+    removed && map.is_empty()
+}
+
+fn insert_leaf(config: &mut Value, parts: &[String], value: Value) {
+    let mut parts = parts.to_vec();
     let Some(last) = parts.pop() else { return };
     let mut node = config;
     for part in parts {
@@ -421,14 +458,7 @@ fn set_leaf(config: &mut Value, path: &str, value: Option<Value>) {
         *node = Value::Object(Default::default());
     }
     let Value::Object(map) = node else { return };
-    match value {
-        Some(value) => {
-            map.insert(last, value);
-        }
-        None => {
-            map.remove(&last);
-        }
-    }
+    map.insert(last, value);
 }
 
 #[cfg(test)]
@@ -527,5 +557,32 @@ mod tests {
         let synced = fields(&[("shape", json!("Hexagon"), 5), ("theme", json!("light"), 5), ("from_newer", json!(1), 5)]);
         apply::<Config>(&mut config, &synced, &Choices::new());
         assert_eq!(config, json!({ "shape": "Square", "theme": "light", "from_newer": 1 }));
+    }
+
+    #[test]
+    fn custom_themes_come_and_go_whole() {
+        use crate::config::Config;
+        let leaves = |config: &Config| -> Fields {
+            synced_leaves(&serde_json::to_value(config).unwrap(), &Choices::new())
+                .into_iter()
+                .map(|(path, value)| (path, Field { value, changed: 5 }))
+                .collect()
+        };
+        let mut other = Config::default();
+        let mut mine = crate::theme::builtins().remove(0);
+        mine.name = "Mine".into();
+        other.custom_themes.insert(mine.name.clone(), mine.clone());
+        other.theme = Some(mine.name.clone());
+
+        let mut config = serde_json::to_value(Config::default()).unwrap();
+        apply::<Config>(&mut config, &leaves(&other), &Choices::new());
+        let applied: Config = serde_json::from_value(config.clone()).unwrap();
+        assert_eq!(applied.custom_themes.get("Mine"), Some(&mine));
+        assert_eq!(applied.theme.as_deref(), Some("Mine"));
+
+        apply::<Config>(&mut config, &leaves(&Config::default()), &Choices::new());
+        let applied: Config = serde_json::from_value(config.clone()).unwrap();
+        assert!(applied.custom_themes.is_empty());
+        assert_eq!(config["custom_themes"], json!({}), "left as the other device has it");
     }
 }
