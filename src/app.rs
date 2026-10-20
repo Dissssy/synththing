@@ -2657,6 +2657,16 @@ impl App {
         };
     }
 
+    /// Mark playlist entries missing, or not, as their songs leave or come
+    /// into the library.
+    fn refresh_missing(&mut self) {
+        for stored in &mut self.playlists.lists {
+            for entry in &mut stored.playlist.entries {
+                entry.missing = !entry.path.exists();
+            }
+        }
+    }
+
     /// Asked to remove songs from the library: are you sure?
     fn remove_songs_ui(&mut self, ctx: &egui::Context) {
         if self.remove_songs.is_empty() {
@@ -2686,11 +2696,7 @@ impl App {
                     self.status = format!("Couldn't remove a song: {e:#}");
                 }
             }
-            for stored in &mut self.playlists.lists {
-                for entry in &mut stored.playlist.entries {
-                    entry.missing = !entry.path.exists();
-                }
-            }
+            self.refresh_missing();
             self.song_list.clear_selection();
             if self.status.is_empty() || !self.status.starts_with("Couldn't") {
                 self.status = format!("Removed {what} from the library.");
@@ -2745,6 +2751,7 @@ impl App {
                         soundfonts.push(song.soundfont);
                         self.songs.add(song.stored, None);
                     }
+                    self.refresh_missing();
                     let plural = if n == 1 { "" } else { "s" };
                     self.status = format!("Imported {n} song{plural}.");
                     self.after_import(done.then, paths.clone(), soundfonts);
