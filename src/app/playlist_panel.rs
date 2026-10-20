@@ -60,7 +60,11 @@ impl App {
     /// mode.
     pub(super) fn playlist_tick(&mut self, view: &EngineView) {
         // (A recording the script prepares moves on itself, at each take's end.)
-        if self.now_playing.is_some() && !self.recording.holds_advance() {
+        if self.listed.as_ref().is_some_and(|p| p.planned != self.song_list.generation()) {
+            // The list changed: what comes next may have too.
+            self.plan_listed();
+        }
+        if self.has_next() && !self.recording.holds_advance() {
             if !view.finished {
                 self.advance_armed = true;
             } else if self.advance_armed {
@@ -79,7 +83,7 @@ impl App {
         let wanted = match self.loop_mode {
             LoopMode::Off => false,
             LoopMode::One => true,
-            LoopMode::All => self.now_playing.is_none(),
+            LoopMode::All => !self.has_next(),
         };
         if wanted != self.engine_loop {
             self.engine_loop = wanted;
@@ -107,6 +111,7 @@ impl App {
             return;
         };
         self.now_playing = Some(np.clone());
+        self.listed = None;
         self.plan_upcoming();
         self.request_play(&entry.path, entry.soundfont.as_deref(), Some(np), skip_on_failure);
     }
@@ -134,6 +139,10 @@ impl App {
     /// `plan_upcoming`). One that fails to load is skipped, at most one pass
     /// through the list (see `loading.rs`).
     pub(super) fn next_track(&mut self) {
+        if self.listed.is_some() {
+            self.listed_next();
+            return;
+        }
         let Some(mut np) = self.now_playing.clone() else {
             return;
         };
@@ -168,6 +177,12 @@ impl App {
     /// (or there's no playlist / nothing before it), else go back one.
     pub(super) fn previous_track(&mut self, position: f64) {
         let restart = position > PREVIOUS_RESTARTS_AFTER_SECS;
+        if self.listed.is_some() {
+            if restart || !self.listed_previous() {
+                self.send(AudioCommand::Seek(0.0));
+            }
+            return;
+        }
         let target = self.now_playing.as_ref().filter(|_| !restart).and_then(|np| {
             let len = self.playlists.lists.get(np.list)?.playlist.entries.len();
             playlist::previous_entry(len, np.entry, self.loop_mode, self.shuffle, &np.history)
@@ -678,7 +693,7 @@ impl App {
         ui.weak(summary);
         ui.separator();
 
-        let output = select_list::show(ui, "playlist_rows", entries, selection, |ui, row, entry| {
+        let output = select_list::show(ui, "playlist_rows", entries, selection, playing, |ui, row, entry| {
             let idx = row.idx;
             if row.response.drag_started() {
                 let label = super::title_of(cache, &naming, &entry.path);
@@ -715,8 +730,7 @@ impl App {
                 }
             });
 
-            // The playing entry is marked in the number column; the
-            // highlight is the selection.
+            // The playing entry is marked in the number column too.
             if playing == Some(idx) {
                 ui.strong(" > ").on_hover_text("Playing");
             } else {

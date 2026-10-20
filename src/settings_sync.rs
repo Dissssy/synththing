@@ -95,7 +95,7 @@ pub const CATEGORIES: &[Category] = &[
         name: "Playback",
         settings: &[
             setting("remember", "What's remembered between launches", &["remember"]),
-            setting("modes", "Loop and Shuffle", &["loop_mode", "shuffle"]),
+            setting("modes", "Loop, Shuffle and Autoplay", &["loop_mode", "shuffle", "autoplay"]),
             setting("heavy_midi", "Warning before a very large MIDI file", &["warn_heavy_midi"]),
             setting("channel_chips", "Channel chips", &["channel_chips"]),
             Setting { key: "volume", name: "Last volume (taken at the next launch)", paths: &["session/volume"], on: false },
@@ -108,6 +108,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("audio_files", "Show audio files", &["show_audio_files"]),
             setting("songs_view", "Columns, sorting and grouping", &["songs_view"]),
             setting("preload", "Preload songs on hover", &["preload_on_hover"]),
+            setting("autoplay_collapsed", "Autoplay skips closed groups", &["autoplay_skip_collapsed"]),
             setting("unload", "Unload preloaded files after", &["preload_expiry_secs"]),
             PLAYLISTS,
             SONGS,

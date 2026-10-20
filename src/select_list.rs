@@ -136,12 +136,15 @@ pub struct ListOutput {
 
 /// Draw `items` as a scrolling list filling `ui`, each row's contents drawn
 /// left to right by `draw` on top of the row's own click-and-drag area
-/// (widgets it adds, such as buttons, take their clicks first).
+/// (widgets it adds, such as buttons, take their clicks first). The row
+/// `playing` is outlined and tinted in the theme's playing color, under
+/// any selection or hover.
 pub fn show<T>(
     ui: &mut egui::Ui,
     id_salt: impl egui::AsId,
     items: &[T],
     selection: &mut Selection,
+    playing: Option<usize>,
     mut draw: impl FnMut(&mut egui::Ui, &Row, &T),
 ) -> ListOutput {
     let id = egui::Id::new(id_salt);
@@ -150,6 +153,7 @@ pub fn show<T>(
     let row_height = if touch { TOUCH_ROW_HEIGHT } else { ui.spacing().interact_size.y };
     let sense = if touch { egui::Sense::click() } else { egui::Sense::click_and_drag() };
     let modifiers = ui.input(|i| i.modifiers);
+    let playing_color = crate::theme::playing_color(ui.ctx());
     let scroll = egui::ScrollArea::vertical()
         .id_salt(id)
         .auto_shrink([false, false])
@@ -168,8 +172,17 @@ pub fn show<T>(
                 }
 
                 let selected = selection.contains(idx);
+                let marked = playing == Some(idx) && !selected && !response.hovered();
                 let visuals = ui.style().interact_selectable(&response, selected);
-                if selected || response.hovered() {
+                if marked {
+                    ui.painter().rect(
+                        rect,
+                        visuals.corner_radius,
+                        playing_color.gamma_multiply(0.15),
+                        egui::Stroke::new(1.0, playing_color),
+                        egui::StrokeKind::Inside,
+                    );
+                } else if selected || response.hovered() {
                     ui.painter().rect(
                         rect.expand(visuals.expansion),
                         visuals.corner_radius,
@@ -192,6 +205,8 @@ pub fn show<T>(
                     ui.style_mut().interaction.selectable_labels = false;
                     if selected {
                         ui.visuals_mut().override_text_color = Some(visuals.text_color());
+                    } else if marked {
+                        ui.visuals_mut().override_text_color = Some(playing_color);
                     }
                     draw(ui, &row, &items[idx]);
                 });

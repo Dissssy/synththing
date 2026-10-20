@@ -375,7 +375,7 @@ fn theme_editor_ui(ui: &mut egui::Ui, theme: &mut Theme) {
     ui.checkbox(&mut theme.dark, "Dark base")
         .on_hover_text("Built on egui's dark look (else its light one): what the rest of the details start from");
     let p = &mut theme.palette;
-    let colors: [(&str, &str, &mut theme::Hex); 19] = [
+    let colors: [(&str, &str, &mut theme::Hex); 20] = [
         ("Background", "Behind the tabs and panels", &mut p.background),
         ("Windows", "Windows, popups and menus", &mut p.window),
         ("Faint", "Subtle stripes and highlights", &mut p.faint),
@@ -395,6 +395,7 @@ fn theme_editor_ui(ui: &mut egui::Ui, theme: &mut Theme) {
         ("Pressed", "A widget being pressed", &mut p.widget_pressed),
         ("Outline", "Around a widget being hovered or pressed", &mut p.widget_outline),
         ("Borders", "Separators, window and widget borders", &mut p.border),
+        ("Playing", "Outlining and tinting the song playing, in lists", &mut p.playing),
     ];
     // Two to a row, or one where there isn't room (a phone).
     let per_row = if ui.available_width() < 420.0 { 1 } else { 2 };

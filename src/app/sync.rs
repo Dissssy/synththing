@@ -1048,20 +1048,8 @@ impl App {
             return;
         }
         ctx.request_repaint_after(Duration::from_millis(250));
-        let width = (ctx.content_rect().width() - 32.0).min(480.0);
-        let clicked = egui::Area::new(egui::Id::new("sync_toast"))
-            .order(egui::Order::Tooltip)
-            .sense(egui::Sense::click())
-            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 48.0))
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_max_width(width);
-                    ui.add(egui::Label::new(text.as_str()).wrap());
-                });
-            })
-            .response
-            .clicked();
-        if clicked {
+        let text = egui::RichText::new(text.as_str());
+        if super::toast::draw(ctx, "sync_toast", egui::Align2::CENTER_TOP, egui::vec2(0.0, 48.0), text) {
             self.sync.toast = None;
         }
     }
