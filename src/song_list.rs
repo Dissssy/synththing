@@ -7,9 +7,10 @@
 //! selected several at a time and dragged out together (onto a playlist).
 //! For touch, the column sorted by goes on a second line, and sorting and
 //! grouping are in a menu.
+//! Autoplay plays on down the list as it is when each song ends (`next`).
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
@@ -23,6 +24,78 @@ const MAX_SEARCH_RESULTS: usize = 200;
 const TRAILING_WIDTH: f32 = 36.0;
 /// The least the name keeps: columns that don't fit beside it are left out.
 const MIN_NAME_WIDTH: f32 = 120.0;
+
+/// What a song started from the list plays on through when it ends
+/// (`Config::autoplay`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Autoplay {
+    /// Just the song.
+    #[default]
+    Off,
+    /// The rest of its group (the whole list, when it isn't grouped).
+    Group,
+    /// The rest of the list, group after group.
+    All,
+}
+
+impl Autoplay {
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Off => Self::Group,
+            Self::Group => Self::All,
+            Self::All => Self::Off,
+        }
+    }
+}
+
+/// A song's place in the list: the song, the group it's in there (its
+/// header's key; `None` when the list isn't grouped), and its row in the
+/// list's play order, to carry on from if it leaves the list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Position {
+    pub path: PathBuf,
+    pub group: Option<String>,
+    at: usize,
+}
+
+/// Playing on down the list (`Autoplay`): the song playing, the songs
+/// that have had their turn this pass through (oldest first, the one
+/// playing last), so none plays twice, and the one picked to come next
+/// (so it can be preloaded, and a shuffle's pick holds).
+#[derive(Clone, Debug)]
+pub struct Playing {
+    pub at: Position,
+    pub history: Vec<PathBuf>,
+    /// With whether it starts a new pass (see [`SongList::next`]).
+    pub upcoming: Option<(Position, bool)>,
+    /// The list's `generation` `upcoming` was picked from.
+    pub planned: u64,
+}
+
+impl Playing {
+    pub fn new(at: Position) -> Self {
+        Self { history: vec![at.path.clone()], at, upcoming: None, planned: 0 }
+    }
+}
+
+/// How the next song's picked: how far autoplay goes, whether it goes
+/// round again at the end, shuffles, and skips the closed groups.
+#[derive(Clone, Copy, Debug)]
+pub struct Rules {
+    pub autoplay: Autoplay,
+    pub loop_all: bool,
+    pub shuffle: bool,
+    pub skip_collapsed: bool,
+}
+
+/// A song in the list's play order: every song listed, the closed groups'
+/// too, each in the group it's listed in.
+#[derive(Clone, Debug)]
+struct Queued {
+    path: PathBuf,
+    group: Option<String>,
+    collapsed: bool,
+}
 
 /// Draws a row's right-click menu, given the songs it applies to (the
 /// selection, if the row's in it).
@@ -146,6 +219,8 @@ struct Built {
     /// There are no songs at all.
     empty: bool,
     items: Vec<Item>,
+    /// What autoplay goes through, in order.
+    queue: Vec<Queued>,
 }
 
 enum Item {
@@ -168,13 +243,16 @@ pub struct SongList {
     /// The groups closed, by their headers' text (lowercase).
     collapsed: BTreeSet<String>,
     built: Option<Built>,
+    /// Counts the times the rows were made, so autoplay knows when to
+    /// look again at what comes next.
+    generation: u64,
 }
 
 /// What [`SongList::ui`] reports.
 #[derive(Default)]
 pub struct Output {
-    /// The song double-clicked.
-    pub play: Option<PathBuf>,
+    /// The song double-clicked, where it was.
+    pub play: Option<Position>,
     /// Delete was pressed with these selected.
     pub delete: Vec<PathBuf>,
     /// The view changed (to save).
@@ -298,6 +376,47 @@ impl SongList {
         self.selection.clear();
     }
 
+    /// Goes up each time the rows are made again (the songs, the view, the
+    /// search or the groups closed changed).
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// How many songs autoplay could go through (the closed groups' too).
+    pub fn queue_len(&self) -> usize {
+        self.built.as_ref().map_or(0, |b| b.queue.len())
+    }
+
+    /// Where the song on row `row` is: its group is the header above it.
+    fn position_of_row(&self, row: usize) -> Option<Position> {
+        let built = self.built.as_ref()?;
+        let Some(Item::Song(entry)) = built.items.get(row) else { return None };
+        let group = built.items[..row].iter().rev().find_map(|item| match item {
+            Item::Group { key, .. } => Some(key.clone()),
+            Item::Song(_) => None,
+        });
+        let at = built.queue.iter().position(|q| q.path == entry.path && q.group == group).unwrap_or(0);
+        Some(Position { path: entry.path.clone(), group, at })
+    }
+
+    /// Where `path` is in the list (in its first group, if it's in several).
+    pub fn position_of(&self, path: &Path) -> Option<Position> {
+        let queue = &self.built.as_ref()?.queue;
+        let at = queue.iter().position(|q| q.path == path)?;
+        Some(Position { path: path.to_path_buf(), group: queue[at].group.clone(), at })
+    }
+
+    /// The song to play after `playing`'s, in the list as it is now, and
+    /// whether it starts a new pass through (the history starts again).
+    pub fn next(&self, playing: &Playing, rules: Rules, random: u64) -> Option<(Position, bool)> {
+        next_in(&self.built.as_ref()?.queue, playing, rules, random)
+    }
+
+    /// The song "Previous" goes to from `playing`'s.
+    pub fn previous(&self, playing: &Playing, rules: Rules) -> Option<Position> {
+        previous_in(&self.built.as_ref()?.queue, playing, rules)
+    }
+
     /// Draw the list (toolbar, search box, column headers, rows) into
     /// `ui`, as `view` says. `songs` gives the songs to list, and
     /// `describe` one's name, file name and the values of the columns
@@ -380,13 +499,16 @@ impl SongList {
             .is_none_or(|b| b.revision != revision || b.view != *view || b.keys != keys || b.query != query);
         if stale {
             let songs = songs();
-            let items = if query.is_empty() {
+            let (items, queue) = if query.is_empty() {
                 self.sorted(&songs, view, &keys, sort_at, group_at, describe)
             } else {
-                ranked_matches(&songs, query, &keys, describe).into_iter().map(Item::Song).collect()
+                let found = ranked_matches(&songs, query, &keys, describe);
+                let queue = found.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false }).collect();
+                (found.into_iter().map(Item::Song).collect(), queue)
             };
             let query = query.to_string();
-            self.built = Some(Built { revision, view: view.clone(), keys: keys.clone(), query, empty: songs.is_empty(), items });
+            self.generation += 1;
+            self.built = Some(Built { revision, view: view.clone(), keys: keys.clone(), query, empty: songs.is_empty(), items, queue });
         }
         let built = self.built.as_ref().expect("the rows were just made");
         let items = built.items.as_slice();
@@ -472,7 +594,7 @@ impl SongList {
         });
         self.hovered = output.hovered.and_then(path_of);
         let output = Output {
-            play: output.activated.and_then(path_of),
+            play: output.activated.and_then(|i| self.position_of_row(i)),
             delete: if output.delete { unique(self.selection.rows().iter().filter_map(|&i| path_of(i))) } else { Vec::new() },
             view_changed,
         };
@@ -551,7 +673,7 @@ impl SongList {
         sort_at: Option<usize>,
         group_at: Option<usize>,
         describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
-    ) -> Vec<Item> {
+    ) -> (Vec<Item>, Vec<Queued>) {
         /// A song in one of its groups, and what it sorts by: the group
         /// (its header's text and that in lowercase, `None` for the songs
         /// without a value, and the value) and its place in it.
@@ -595,10 +717,12 @@ impl SongList {
             }
         });
         if group_at.is_none() && !by_tag {
-            return sorting.into_iter().map(|s| Item::Song(s.entry)).collect();
+            let queue = sorting.iter().map(|s| Queued { path: s.entry.path.clone(), group: None, collapsed: false }).collect();
+            return (sorting.into_iter().map(|s| Item::Song(s.entry)).collect(), queue);
         }
         let missing = if by_tag { "Untagged" } else { "Unknown" };
         let mut items = Vec::new();
+        let mut queue = Vec::with_capacity(sorting.len());
         let mut current: Option<(usize, Option<String>)> = None;
         for Sorting { label, group, entry, .. } in sorting {
             let at = match &current {
@@ -611,14 +735,96 @@ impl SongList {
                     items.len() - 1
                 }
             };
-            let Item::Group { count, collapsed, .. } = &mut items[at] else { unreachable!("`current` is a group's header") };
+            let Item::Group { key, count, collapsed, .. } = &mut items[at] else { unreachable!("`current` is a group's header") };
             *count += 1;
+            queue.push(Queued { path: entry.path.clone(), group: Some(key.clone()), collapsed: *collapsed });
             if !*collapsed {
                 items.push(Item::Song(entry));
             }
         }
-        items
+        (items, queue)
     }
+}
+
+/// Where `at` is in `queue` now, and the group it's in there: its own
+/// group, else (the list grouped another way) its first, else (it's left
+/// the list) `None`, in the group of the song now in its old place.
+fn locate(queue: &[Queued], at: &Position) -> (Option<usize>, Option<String>) {
+    let found = queue
+        .iter()
+        .position(|q| q.path == at.path && q.group == at.group)
+        .or_else(|| queue.iter().position(|q| q.path == at.path));
+    match found {
+        Some(i) => (Some(i), queue[i].group.clone()),
+        None => (None, queue.get(at.at.min(queue.len().saturating_sub(1))).and_then(|q| q.group.clone())),
+    }
+}
+
+/// The rows of `queue` autoplay goes through from a song in `group`.
+fn scope(queue: &[Queued], group: &Option<String>, rules: Rules) -> Vec<usize> {
+    (0..queue.len())
+        .filter(|&i| rules.autoplay == Autoplay::All || queue[i].group == *group)
+        .filter(|&i| !(rules.skip_collapsed && queue[i].collapsed))
+        .collect()
+}
+
+fn position(queue: &[Queued], i: usize) -> Position {
+    Position { path: queue[i].path.clone(), group: queue[i].group.clone(), at: i }
+}
+
+/// The song after `playing`'s in `queue` (see [`SongList::next`]): the
+/// next row down that hasn't played this pass (any of them, shuffling),
+/// going round to the top only when looping. `None` with autoplay off.
+fn next_in(queue: &[Queued], playing: &Playing, rules: Rules, random: u64) -> Option<(Position, bool)> {
+    if rules.autoplay == Autoplay::Off || queue.is_empty() {
+        return None;
+    }
+    let (here, group) = locate(queue, &playing.at);
+    let rows = scope(queue, &group, rules);
+    let played: HashSet<&Path> = playing.history.iter().map(PathBuf::as_path).collect();
+    let fresh = |i: &&usize| !played.contains(queue[**i].path.as_path());
+    let next = if rules.shuffle {
+        let unplayed: Vec<usize> = rows.iter().filter(fresh).copied().collect();
+        (!unplayed.is_empty()).then(|| unplayed[(random % unplayed.len() as u64) as usize])
+    } else {
+        let start = here.map_or(playing.at.at, |i| i + 1);
+        rows.iter().filter(fresh).find(|&&i| i >= start).copied()
+    };
+    if let Some(i) = next {
+        return Some((position(queue, i), false));
+    }
+    if !rules.loop_all || rows.is_empty() {
+        return None;
+    }
+    // A new pass: from the top, or shuffled, anything but the song that
+    // just finished (unless it's the only one).
+    let i = if rules.shuffle {
+        let others: Vec<usize> = rows.iter().copied().filter(|&i| queue[i].path != playing.at.path).collect();
+        if others.is_empty() { rows[0] } else { others[(random % others.len() as u64) as usize] }
+    } else {
+        rows[0]
+    };
+    Some((position(queue, i), true))
+}
+
+/// The song "Previous" goes to from `playing`'s in `queue`: the one before
+/// it this pass when shuffling, else the row above it (going round to the
+/// bottom only when looping).
+fn previous_in(queue: &[Queued], playing: &Playing, rules: Rules) -> Option<Position> {
+    if rules.shuffle {
+        let path = playing.history.iter().rev().nth(1)?;
+        let at = queue.iter().position(|q| &q.path == path && q.group == playing.at.group).or_else(|| queue.iter().position(|q| &q.path == path));
+        return Some(match at {
+            Some(i) => position(queue, i),
+            None => Position { path: path.clone(), group: playing.at.group.clone(), at: playing.at.at },
+        });
+    }
+    let (here, group) = locate(queue, &playing.at);
+    let rows = scope(queue, &group, rules);
+    let here = here.unwrap_or(playing.at.at);
+    let above = rows.iter().rev().find(|&&i| i < here).copied();
+    let i = above.or_else(|| rules.loop_all.then(|| rows.last().copied()).flatten())?;
+    Some(position(queue, i))
 }
 
 /// Drag-and-drop payload for song rows dragged out of the list (onto a
@@ -788,7 +994,7 @@ mod tests {
         };
         let view = View { group: group.into(), ..View::default() };
         let group_at = (group == "album").then_some(0);
-        shape(&list.sorted(&paths, &view, &["album"], None, group_at, &mut describe))
+        shape(&list.sorted(&paths, &view, &["album"], None, group_at, &mut describe).0)
     }
 
     #[test]
@@ -811,6 +1017,87 @@ mod tests {
     fn songs_without_a_value_go_last_apart_from_one_named_unknown() {
         let songs: &[(&str, Option<&str>, &[&str])] = &[("a", None, &[]), ("b", Some("Unknown"), &[]), ("c", Some("Abc"), &[])];
         assert_eq!(grouped(&SongList::default(), "album", songs), ["Abc (1)", "c", "Unknown (1)", "b", "Unknown (1)", "a"]);
+    }
+
+    /// A play order of (song, group, closed).
+    fn queue(rows: &[(&str, Option<&str>, bool)]) -> Vec<Queued> {
+        rows.iter().map(|(p, g, c)| Queued { path: PathBuf::from(p), group: g.map(str::to_string), collapsed: *c }).collect()
+    }
+
+    /// Playing `path` (in `group`, at row `at`), with `history` played before it this pass.
+    fn playing(path: &str, group: Option<&str>, at: usize, history: &[&str]) -> Playing {
+        let mut playing = Playing::new(Position { path: PathBuf::from(path), group: group.map(str::to_string), at });
+        playing.history = history.iter().chain([&path]).map(PathBuf::from).collect();
+        playing
+    }
+
+    fn rules(autoplay: Autoplay, loop_all: bool) -> Rules {
+        Rules { autoplay, loop_all, shuffle: false, skip_collapsed: false }
+    }
+
+    fn next_path(queue: &[Queued], playing: &Playing, rules: Rules) -> Option<(String, bool)> {
+        next_in(queue, playing, rules, 0).map(|(at, new_pass)| (at.path.to_string_lossy().into_owned(), new_pass))
+    }
+
+    #[test]
+    fn autoplay_stays_in_the_group_or_goes_on_through_the_list() {
+        let q = queue(&[("a", Some("x"), false), ("b", Some("x"), false), ("c", Some("y"), false)]);
+        let at_b = playing("b", Some("x"), 1, &["a"]);
+        assert_eq!(next_path(&q, &playing("a", Some("x"), 0, &[]), rules(Autoplay::Group, false)), Some(("b".into(), false)));
+        assert_eq!(next_path(&q, &at_b, rules(Autoplay::Group, false)), None, "the end of the group");
+        assert_eq!(next_path(&q, &at_b, rules(Autoplay::Group, true)), Some(("a".into(), true)), "round the group again");
+        assert_eq!(next_path(&q, &at_b, rules(Autoplay::All, false)), Some(("c".into(), false)), "into the next group");
+        assert_eq!(next_path(&q, &playing("c", Some("y"), 2, &["a", "b"]), rules(Autoplay::All, true)), Some(("a".into(), true)));
+        assert_eq!(next_path(&q, &at_b, rules(Autoplay::Off, true)), None);
+    }
+
+    #[test]
+    fn autoplay_plays_a_song_in_several_groups_once_a_pass() {
+        let q = queue(&[("a", Some("t1"), false), ("b", Some("t1"), false), ("a", Some("t2"), false), ("c", Some("t2"), false)]);
+        assert_eq!(next_path(&q, &playing("b", Some("t1"), 1, &["a"]), rules(Autoplay::All, false)), Some(("c".into(), false)));
+        // (Played from its second group: on from there.)
+        assert_eq!(next_path(&q, &playing("a", Some("t2"), 2, &[]), rules(Autoplay::All, false)), Some(("c".into(), false)));
+    }
+
+    #[test]
+    fn autoplay_follows_the_list_as_it_is_now() {
+        // "b" was playing at row 1 and has left the list: on from where it was.
+        let q = queue(&[("a", None, false), ("c", None, false), ("d", None, false)]);
+        assert_eq!(next_path(&q, &playing("b", None, 1, &["a"]), rules(Autoplay::All, false)), Some(("c".into(), false)));
+        // Re-sorted: on from where "a" is now.
+        let q = queue(&[("c", None, false), ("a", None, false), ("d", None, false)]);
+        assert_eq!(next_path(&q, &playing("a", None, 0, &[]), rules(Autoplay::All, false)), Some(("d".into(), false)));
+    }
+
+    #[test]
+    fn autoplay_can_skip_closed_groups() {
+        let q = queue(&[("a", Some("x"), false), ("b", Some("y"), true), ("c", Some("z"), false)]);
+        let at_a = playing("a", Some("x"), 0, &[]);
+        assert_eq!(next_path(&q, &at_a, rules(Autoplay::All, false)), Some(("b".into(), false)));
+        let skip = Rules { skip_collapsed: true, ..rules(Autoplay::All, false) };
+        assert_eq!(next_path(&q, &at_a, skip), Some(("c".into(), false)));
+    }
+
+    #[test]
+    fn autoplay_previous_is_the_row_above() {
+        let q = queue(&[("a", Some("x"), false), ("b", Some("x"), false), ("c", Some("y"), false)]);
+        let path = |at: Option<Position>| at.map(|at| at.path.to_string_lossy().into_owned());
+        assert_eq!(path(previous_in(&q, &playing("b", Some("x"), 1, &["a"]), rules(Autoplay::Group, false))), Some("a".into()));
+        assert_eq!(path(previous_in(&q, &playing("a", Some("x"), 0, &[]), rules(Autoplay::Group, false))), None);
+        assert_eq!(path(previous_in(&q, &playing("a", Some("x"), 0, &[]), rules(Autoplay::Group, true))), Some("b".into()), "round the group");
+        assert_eq!(path(previous_in(&q, &playing("c", Some("y"), 2, &[]), rules(Autoplay::All, false))), Some("b".into()));
+    }
+
+    #[test]
+    fn autoplay_shuffles_each_song_once_a_pass() {
+        let q = queue(&[("a", None, false), ("b", None, false), ("c", None, false)]);
+        let shuffle = Rules { shuffle: true, ..rules(Autoplay::All, true) };
+        for random in 0..6 {
+            let (at, new_pass) = next_in(&q, &playing("b", None, 1, &["a"]), shuffle, random).unwrap();
+            assert_eq!((at.path, new_pass), (PathBuf::from("c"), false));
+            let (at, new_pass) = next_in(&q, &playing("c", None, 2, &["a", "b"]), shuffle, random).unwrap();
+            assert!(new_pass && at.path != Path::new("c"), "a new pass, not the same song twice in a row");
+        }
     }
 
     #[test]

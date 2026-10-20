@@ -517,8 +517,9 @@ impl App {
             ui.spacing_mut().item_spacing.x = gap;
             ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
             let shuffle = ui.add(big_icon_button("shuffle", sizes[0]).selected(self.shuffle));
-            if shuffle.on_hover_text(if self.shuffle { "Shuffle: on" } else { "Shuffle: off" }).clicked() {
+            if shuffle.on_hover_text(super::shuffle_text(self.shuffle)).clicked() {
                 self.set_shuffle(!self.shuffle);
+                super::toast::show(ui.ctx(), super::shuffle_text(self.shuffle));
             }
             if ui.add(big_icon_button("skip-back", sizes[1])).on_hover_text("Previous").clicked() {
                 self.previous_track(view.position);
@@ -532,20 +533,17 @@ impl App {
                 self.send(AudioCommand::TogglePause);
             }
             if ui
-                .add_enabled(self.now_playing.is_some(), big_icon_button("skip-forward", sizes[3]))
+                .add_enabled(self.has_next(), big_icon_button("skip-forward", sizes[3]))
                 .on_hover_text("Next")
                 .clicked()
             {
                 self.next_track();
             }
             let glyph = if self.loop_mode == LoopMode::One { "repeat-once" } else { "repeat" };
-            let hover = match self.loop_mode {
-                LoopMode::Off => "Loop: off",
-                LoopMode::All => "Loop: the playlist",
-                LoopMode::One => "Loop: this track",
-            };
+            let hover = super::loop_text(self.loop_mode);
             if ui.add(big_icon_button(glyph, sizes[4]).selected(self.loop_mode != LoopMode::Off)).on_hover_text(hover).clicked() {
                 self.set_loop_mode(self.loop_mode.cycle());
+                super::toast::show(ui.ctx(), super::loop_text(self.loop_mode));
             }
         });
         ui.add_space(6.0);
@@ -796,7 +794,7 @@ impl App {
                 MediaCommand::Play if view.paused => self.send(AudioCommand::TogglePause),
                 MediaCommand::Pause if !view.paused => self.send(AudioCommand::TogglePause),
                 MediaCommand::Play | MediaCommand::Pause => {}
-                MediaCommand::Next if self.now_playing.is_some() => self.next_track(),
+                MediaCommand::Next if self.has_next() => self.next_track(),
                 MediaCommand::Next => {}
                 MediaCommand::Previous => self.previous_track(view.position),
                 MediaCommand::Seek(to) => self.send(AudioCommand::Seek(to)),
@@ -815,7 +813,7 @@ impl App {
             playing: has_song && !view.paused && !view.finished,
             position_ms: (view.position * 1000.0) as i64,
             length_ms: (view.length * 1000.0) as i64,
-            has_next: self.now_playing.is_some(),
+            has_next: self.has_next(),
         };
         // The session moves the position along by itself while playing:
         // only a change, or a jump (a seek), is worth telling it.

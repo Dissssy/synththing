@@ -1,0 +1,119 @@
+//! Autoplay from the Songs list (`song_list::Autoplay`): when a song ends,
+//! what plays next is worked out from the list as it is then, under the
+//! same Loop and Shuffle as playlists.
+
+use eframe::egui;
+
+use super::{icon_button, App};
+use crate::playlist::LoopMode;
+use crate::song_list::{Autoplay, Playing, Position, Rules};
+
+/// What Autoplay is set to, for its button's hover and toast.
+pub(super) fn text(mode: Autoplay) -> &'static str {
+    match mode {
+        Autoplay::Off => "Autoplay: off",
+        Autoplay::Group => "Autoplay: the group",
+        Autoplay::All => "Autoplay: the whole list",
+    }
+}
+
+/// The Songs list's Autoplay button, set to `mode`; whether it was clicked.
+pub(super) fn button_ui(ui: &mut egui::Ui, mode: Autoplay) -> bool {
+    let glyph = if mode == Autoplay::Group { "stack" } else { "queue" };
+    ui.add(icon_button(glyph).selected(mode != Autoplay::Off))
+        .on_hover_text(format!("{}: when a song started here ends, play on down the list", text(mode)))
+        .clicked()
+}
+
+impl App {
+    pub(super) fn has_next(&self) -> bool {
+        self.now_playing.is_some() || self.listed.is_some()
+    }
+
+    fn listed_rules(&self) -> Rules {
+        Rules {
+            autoplay: self.autoplay,
+            loop_all: self.loop_mode == LoopMode::All,
+            shuffle: self.shuffle,
+            skip_collapsed: self.config.autoplay_skip_collapsed,
+        }
+    }
+
+    /// A song double-clicked in the Songs list: it plays, leaving any
+    /// playlist, and with Autoplay on the list plays on from it.
+    pub(super) fn play_listed(&mut self, at: Position) {
+        self.now_playing = None;
+        self.listed = (self.autoplay != Autoplay::Off).then(|| Playing::new(at.clone()));
+        self.plan_listed();
+        self.request_play(&at.path, None, None, false);
+    }
+
+    /// Turn Autoplay to `mode`. Turned on with a song from the list
+    /// playing, the list plays on from it.
+    pub(super) fn set_autoplay(&mut self, mode: Autoplay) {
+        self.autoplay = mode;
+        if mode == Autoplay::Off {
+            self.listed = None;
+        } else if self.listed.is_none()
+            && self.now_playing.is_none()
+            && let Some(at) = self.current_song.as_deref().and_then(|p| self.song_list.position_of(p))
+        {
+            self.listed = Some(Playing::new(at));
+        }
+        self.plan_listed();
+        self.save_playback_modes();
+    }
+
+    /// Pick what plays after the song playing now (so it can be preloaded,
+    /// and a shuffle's pick holds), from the list as it is.
+    pub(super) fn plan_listed(&mut self) {
+        let rules = self.listed_rules();
+        let random = self.rng.next();
+        let generation = self.song_list.generation();
+        let Some(playing) = &self.listed else { return };
+        let upcoming = self.song_list.next(playing, rules, random);
+        if let Some(playing) = &mut self.listed {
+            playing.upcoming = upcoming;
+            playing.planned = generation;
+        }
+    }
+
+    /// On to the song picked to come next (see `plan_listed`); one that
+    /// fails to load is skipped (see `loading.rs`).
+    pub(super) fn listed_next(&mut self) {
+        if self.listed.as_ref().is_some_and(|p| p.planned != self.song_list.generation()) {
+            self.plan_listed();
+        }
+        let Some(mut playing) = self.listed.clone() else { return };
+        let Some((at, new_pass)) = playing.upcoming.take() else {
+            // Ran off the end: stay on the last song, finished.
+            self.status = "End of the list.".to_string();
+            return;
+        };
+        if new_pass {
+            playing.history.clear();
+        }
+        playing.history.push(at.path.clone());
+        playing.at = at.clone();
+        self.listed = Some(playing);
+        self.plan_listed();
+        self.request_play(&at.path, None, None, true);
+    }
+
+    /// Back to the song before this one; whether there was one.
+    pub(super) fn listed_previous(&mut self) -> bool {
+        let rules = self.listed_rules();
+        let Some(mut playing) = self.listed.clone() else { return false };
+        let Some(at) = self.song_list.previous(&playing, rules) else { return false };
+        playing.history.pop();
+        if playing.history.last() != Some(&at.path) {
+            playing.history.push(at.path.clone());
+        }
+        playing.at = at.clone();
+        playing.upcoming = None;
+        self.listed = Some(playing);
+        self.plan_listed();
+        self.request_play(&at.path, None, None, false);
+        true
+    }
+}

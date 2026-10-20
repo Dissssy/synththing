@@ -7,6 +7,7 @@
 //! around, split, float them out into windows. Closing a tab only hides that
 //! section; the View menu brings it back (see `layout.rs` for where).
 
+mod autoplay;
 mod branding;
 mod close;
 mod editor;
@@ -33,6 +34,7 @@ mod song_names;
 mod storage;
 mod sprite_editor;
 mod themes;
+mod toast;
 mod tray_panel;
 mod tour;
 mod welcome;
@@ -52,7 +54,7 @@ use crate::credits::{self, Contributors, ContributorsState};
 use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, nice_name, Config};
 use crate::engine::{EngineView, MAX_SPEED, MIN_SPEED};
-use crate::song_list::{self, DraggedFiles, SongList};
+use crate::song_list::{self, Autoplay, DraggedFiles, SongList};
 use crate::song_store::{self, SongStore, Stored};
 use crate::select_list::{self, Selection};
 use crate::layout::{self, Section};
@@ -239,6 +241,7 @@ pub struct App {
     buffer_ms: u32,
     loop_mode: LoopMode,
     shuffle: bool,
+    autoplay: Autoplay,
     /// What the engine was last told about looping the current track, see
     /// `sync_engine_loop`.
     engine_loop: bool,
@@ -391,6 +394,9 @@ pub struct App {
     /// Set while playing from a playlist; `None` for a song picked straight
     /// from the browser.
     now_playing: Option<NowPlaying>,
+    /// Set while autoplay goes down the Songs list (never with
+    /// `now_playing`).
+    listed: Option<song_list::Playing>,
     /// Becomes true once the current playlist track is seen playing (not
     /// finished), so the "finished" that ends it advances exactly once, not
     /// again on a stale snapshot from before the next track loaded.
@@ -527,8 +533,11 @@ impl App {
         }
         let dock = config.layout.clone().map(layout::sanitize).unwrap_or_else(layout::default_layout);
         let saved_layout_json = serde_json::to_string(&dock).unwrap_or_default();
-        let (loop_mode, shuffle) =
-            if config.remember.modes { (config.loop_mode, config.shuffle) } else { (LoopMode::Off, false) };
+        let (loop_mode, shuffle, autoplay) = if config.remember.modes {
+            (config.loop_mode, config.shuffle, config.autoplay)
+        } else {
+            (LoopMode::Off, false, Autoplay::Off)
+        };
         let volume = config.session.volume.filter(|_| config.remember.volume).map_or(1.0, |v| v.clamp(0.0, 1.0));
         let buffer_ms = config.buffer_ms.map_or(DEFAULT_BUFFER_MS, |ms| ms.clamp(MIN_BUFFER_MS, MAX_BUFFER_MS));
         let status = match playlist_errors.first() {
@@ -559,6 +568,7 @@ impl App {
             volume,
             buffer_ms,
             loop_mode,
+            autoplay,
             shuffle,
             engine_loop: false,
             status,
@@ -630,6 +640,7 @@ impl App {
             playlists,
             viewed_playlist,
             now_playing: None,
+            listed: None,
             advance_armed: false,
             rng: Rng::from_time(),
             playlist_rename: None,
@@ -1139,6 +1150,7 @@ impl App {
     /// A song picked straight from the browser, leaves any playlist.
     fn play_path(&mut self, path: PathBuf) {
         self.now_playing = None;
+        self.listed = None;
         self.request_play(&path, None, None, false);
     }
 
@@ -1399,9 +1411,9 @@ impl App {
                 }
             }
             if ui
-                .add_enabled(self.now_playing.is_some(), icon_button("skip-forward"))
-                .on_hover_text("Next: the next playlist track")
-                .on_disabled_hover_text("Play something from a playlist to queue up a next track")
+                .add_enabled(self.has_next(), icon_button("skip-forward"))
+                .on_hover_text("Next: the next playlist track, or the next song autoplay plays")
+                .on_disabled_hover_text("Play something from a playlist, or from Songs with Autoplay on, to queue up a next track")
                 .clicked()
             {
                 self.next_track();
@@ -1423,16 +1435,18 @@ impl App {
                 self.set_open(Section::Playlists, !playlists);
             }
             let (glyph, hover) = match self.loop_mode {
-                LoopMode::Off => ("repeat", "Loop: off (click: loop the playlist)"),
-                LoopMode::All => ("repeat", "Loop: the playlist (click: this track)"),
+                LoopMode::Off => ("repeat", "Loop: off (click: loop the playlist, or what autoplay plays)"),
+                LoopMode::All => ("repeat", "Loop: the playlist, or what autoplay plays (click: this track)"),
                 LoopMode::One => ("repeat-once", "Loop: this track (click: off)"),
             };
             if ui.add(icon_button(glyph).selected(self.loop_mode != LoopMode::Off)).on_hover_text(hover).clicked() {
                 self.set_loop_mode(self.loop_mode.cycle());
+                toast::show(ui.ctx(), loop_text(self.loop_mode));
             }
-            let hover = if self.shuffle { "Shuffle: on" } else { "Shuffle: off" };
+            let hover = shuffle_text(self.shuffle);
             if ui.add(icon_button("shuffle").selected(self.shuffle)).on_hover_text(hover).clicked() {
                 self.set_shuffle(!self.shuffle);
+                toast::show(ui.ctx(), shuffle_text(self.shuffle));
             }
 
             ui.separator();
@@ -2519,12 +2533,13 @@ impl App {
         }
     }
 
-    /// Remember Loop and Shuffle for next launch.
+    /// Remember Loop, Shuffle and Autoplay for next launch.
     fn save_playback_modes(&mut self) {
         self.config.loop_mode = self.loop_mode;
         self.config.shuffle = self.shuffle;
+        self.config.autoplay = self.autoplay;
         if let Err(e) = self.config.save() {
-            self.status = format!("Couldn't save loop/shuffle: {e}");
+            self.status = format!("Couldn't save loop/shuffle/autoplay: {e}");
         }
     }
 
@@ -2602,6 +2617,8 @@ impl App {
         let mut info_for: Option<PathBuf> = None;
         let mut info_clicked = false;
         let moving = self.songs_moving();
+        let autoplay = self.autoplay;
+        let mut autoplay_clicked = false;
         let mut tools = |ui: &mut egui::Ui| {
             // Every type it can play: audio files with audio files off
             // bring an offer to turn them on (`audio_import_ui`).
@@ -2626,6 +2643,7 @@ impl App {
                 info_clicked = true;
             }
             sync::songs_moving_ui(ui, moving);
+            autoplay_clicked |= autoplay::button_ui(ui, autoplay);
         };
         // (Both the names and the trailing widgets read the song info, one
         // after the other.)
@@ -2692,8 +2710,12 @@ impl App {
         if !output.delete.is_empty() {
             remove = output.delete;
         }
-        if let Some(path) = output.play {
-            self.play_path(path);
+        if let Some(at) = output.play {
+            self.play_listed(at);
+        }
+        if autoplay_clicked {
+            self.set_autoplay(self.autoplay.cycle());
+            toast::show(ui.ctx(), autoplay::text(self.autoplay));
         }
         if let Some(path) = info_for.or(selected.filter(|_| info_clicked)) {
             self.song_info_open = Some(path);
@@ -3005,7 +3027,7 @@ impl App {
                 tray_panel::Action::TogglePause => self.send(AudioCommand::TogglePause),
                 tray_panel::Action::Previous => self.previous_track(view.position),
                 tray_panel::Action::Next => {
-                    if self.now_playing.is_some() {
+                    if self.has_next() {
                         self.next_track();
                     }
                 }
@@ -3125,6 +3147,7 @@ impl App {
         if mode != self.loop_mode {
             self.loop_mode = mode;
             self.plan_upcoming();
+            self.plan_listed();
             self.save_playback_modes();
         }
     }
@@ -3136,7 +3159,11 @@ impl App {
             if let Some(np) = &mut self.now_playing {
                 np.history = vec![np.entry];
             }
+            if let Some(playing) = &mut self.listed {
+                playing.history = vec![playing.at.path.clone()];
+            }
             self.plan_upcoming();
+            self.plan_listed();
             self.save_playback_modes();
         }
     }
@@ -3753,7 +3780,7 @@ impl eframe::App for App {
         if toggle_visualizer {
             self.set_open(Section::Visualizer, !self.is_open(Section::Visualizer));
         }
-        if next && self.now_playing.is_some() {
+        if next && self.has_next() {
             self.next_track();
         }
         if previous {
@@ -3831,6 +3858,7 @@ impl eframe::App for App {
         self.identity_flow_ui(&ctx);
         self.pairing_flow_ui(&ctx);
         self.sync_toast_ui(&ctx);
+        toast::ui(&ctx);
         self.notification_ui(&ctx);
         self.copyright_ui(&ctx);
         self.moderation_ui(&ctx);
@@ -4273,6 +4301,19 @@ pub(super) fn palette_color(index: u8) -> egui::Color32 {
 /// Give it a hover text saying what it does.
 pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(icon(name)).size(16.0)).min_size(egui::vec2(28.0, 24.0))
+}
+
+/// What Loop is set to, for the toast its button shows.
+fn loop_text(mode: LoopMode) -> &'static str {
+    match mode {
+        LoopMode::Off => "Loop: off",
+        LoopMode::All => "Loop: all",
+        LoopMode::One => "Loop: this track",
+    }
+}
+
+fn shuffle_text(on: bool) -> &'static str {
+    if on { "Shuffle: on" } else { "Shuffle: off" }
 }
 
 /// As `icon_button`, its icon in `color`.

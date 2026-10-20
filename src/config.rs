@@ -145,6 +145,12 @@ pub struct Config {
     pub loop_mode: LoopMode,
     #[serde(default)]
     pub shuffle: bool,
+    /// The Songs list's Autoplay button, remembered with Loop and Shuffle.
+    #[serde(default)]
+    pub autoplay: crate::song_list::Autoplay,
+    /// Preference: autoplay leaves out the songs in closed groups.
+    #[serde(default)]
+    pub autoplay_skip_collapsed: bool,
     /// Recording size and frame rate (`None`: the default, 60).
     #[serde(default)]
     pub record_resolution: crate::recorder::Resolution,
@@ -217,7 +223,7 @@ pub struct Remember {
     pub soundfont: bool,
     pub script: bool,
     pub speed: bool,
-    /// Loop and shuffle.
+    /// Loop, shuffle and autoplay.
     pub modes: bool,
 }
 

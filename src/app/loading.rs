@@ -246,6 +246,15 @@ impl App {
         };
         self.status = format!("Failed to read '{}': {error}", self.song_title(&pending.path));
         let Some(np) = pending.entry else {
+            if pending.skip_on_failure && self.listed.is_some() {
+                self.skips_in_a_row += 1;
+                if self.skips_in_a_row < self.song_list.queue_len() {
+                    self.next_track();
+                } else {
+                    self.skips_in_a_row = 0;
+                    self.status = "Nothing left in the list could be played.".to_string();
+                }
+            }
             return;
         };
         let len = match self.playlists.lists.get_mut(np.list) {
@@ -312,11 +321,16 @@ impl App {
         }
     }
 
-    /// The playlist track that'll play after this one, with its soundfont,
-    /// if there is one worth preloading. Looping one track has no next.
+    /// The playlist track (or the song autoplay picked) that'll play after
+    /// this one, with its soundfont, if there is one worth preloading.
+    /// Looping one track has no next.
     fn upcoming_song(&self) -> Option<(PathBuf, Option<PathBuf>)> {
         if self.loop_mode == LoopMode::One {
             return None;
+        }
+        if let Some(playing) = &self.listed {
+            let (at, _) = playing.upcoming.as_ref()?;
+            return Some((at.path.clone(), self.soundfont_for(&at.path, None)));
         }
         let np = self.now_playing.as_ref()?;
         let entry = self.playlists.lists.get(np.list)?.playlist.entries.get(np.upcoming?)?;
