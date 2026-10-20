@@ -60,6 +60,7 @@ pub struct Stored {
     pub name: String,
 }
 
+#[derive(Clone)]
 pub struct SongStore {
     dir: PathBuf,
     songs: BTreeMap<String, Song>,

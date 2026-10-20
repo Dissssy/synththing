@@ -186,7 +186,7 @@ pub struct Relay {
 }
 
 /// What came of a task.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Moved {
     /// Sent: mark it ready.
     Sent(String),
