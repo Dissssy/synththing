@@ -30,6 +30,7 @@ mod notifications;
 mod previews;
 mod library;
 mod recording;
+mod repair;
 mod script_windows;
 mod song_names;
 mod storage;
@@ -359,6 +360,7 @@ pub struct App {
     feedback: feedback::FeedbackState,
     /// Preferences > App > Storage.
     storage: storage::StorageState,
+    repair: repair::RepairState,
     /// The identity's recovery email, new keys and recovery.
     identity: identity::IdentityState,
     /// Signing in another device, or this one with a link.
@@ -625,6 +627,7 @@ impl App {
             moderation: Default::default(),
             feedback: Default::default(),
             storage: Default::default(),
+            repair: Default::default(),
             identity: Default::default(),
             pairing: Default::default(),
             sync: Default::default(),
@@ -3633,6 +3636,10 @@ impl App {
         if frame_timing::time("song_info", || self.song_info.poll()) {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+        frame_timing::time("repair", || {
+            self.poll_repair();
+            self.suggest_repair();
+        });
         if !self.preferences_open {
             frame_timing::time("playlist_tick", || self.playlist_tick(&view));
         }
@@ -3849,6 +3856,7 @@ impl eframe::App for App {
         }
         let windows = frame_timing::scope("windows");
         self.remove_songs_ui(&ctx);
+        self.repair_ui(&ctx);
         self.tags_ui(&ctx);
         self.close_requested_ui(&ctx);
         self.close_prompt_ui(&ctx);

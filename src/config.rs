@@ -140,6 +140,10 @@ pub struct Config {
     /// bring it up again (a manual check still shows it).
     #[serde(default)]
     pub skipped_update: Option<String>,
+    /// Repair library has been suggested, after a song in the library
+    /// couldn't be read (it's only suggested once).
+    #[serde(default)]
+    pub repair_offered: bool,
     /// The Loop and Shuffle buttons, remembered between launches.
     #[serde(default)]
     pub loop_mode: LoopMode,
