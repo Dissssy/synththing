@@ -2659,6 +2659,7 @@ impl App {
                 entry.missing = !entry.path.exists();
             }
         }
+        self.songs_changed();
     }
 
     /// Asked to remove songs from the library: are you sure?
@@ -2676,7 +2677,8 @@ impl App {
             ui.set_max_width(360.0);
             ui.heading("Remove from library?");
             ui.label(format!(
-                "This deletes synththing's copy of {what} on this device. Playlists keep them, shown as unavailable here."
+                "This deletes synththing's copy of {what} on this device. Playlists keep them, shown as unavailable here. \
+                 Your other devices keep theirs, and this one won't fetch them from them again."
             ));
             ui.horizontal(|ui| {
                 remove = ui.button("Remove").clicked();

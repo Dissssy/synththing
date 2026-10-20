@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Songs come over from your other devices, through the server (encrypted on your device first, so it can't tell which songs they are): with sync on, a song in a playlist that isn't on this device is fetched from one that has it. Every song, under Songs in What this device syncs, fetches every song in your library instead, wherever it was imported. Removing a song deletes it on this device only: the others keep theirs, and this one doesn't fetch it again (Songs removed from this device, under the switch, lists them, to fetch one again). Server: `relay_song_mb` (100) and `relay_mb_per_identity` (2048) in `server.json`, and `POST /api/v1/relay/{id}`.
 - Sync playlists between your devices, with your settings: the switch is now Sync settings and playlists between my devices (Playlists, under Songs in What this device syncs, turns it off on one device). A playlist renamed or changed on one device changes on the others; changed on two at once, the newer change wins. A song a device doesn't have yet shows as unavailable there, by its name. Which soundfont an entry uses stays on each device. Sync turns itself off once after this update: turn it back on.
 
 ## 0.10.2 (2026-10-20)

@@ -219,6 +219,7 @@ pub(super) fn purge_as_of(state: &State, time: i64) {
             tx.execute("DELETE FROM codes WHERE key = ?", [&key])?;
             tx.execute("DELETE FROM recoveries WHERE key = ?", [&key])?;
             tx.execute("DELETE FROM sync WHERE key = ?", [&key])?;
+            tx.execute("DELETE FROM relay WHERE key = ?", [&key])?;
             tx.execute("DELETE FROM deletions WHERE key = ?", [&key])?;
             tx.commit()
         })();

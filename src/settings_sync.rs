@@ -109,6 +109,8 @@ pub const CATEGORIES: &[Category] = &[
             setting("preload", "Preload songs on hover", &["preload_on_hover"]),
             setting("unload", "Unload preloaded files after", &["preload_expiry_secs"]),
             PLAYLISTS,
+            SONGS,
+            EVERY_SONG,
         ],
     },
     Category {
@@ -154,6 +156,12 @@ const OTHER: Setting = setting("other", "Anything else", &[]);
 /// The playlists (`playlist_sync.rs`): no settings of their own, but
 /// chosen with them.
 pub const PLAYLISTS: Setting = setting("playlists", "Playlists", &[]);
+
+/// Fetching songs from the other devices (`song_sync.rs`): those in
+/// playlists, or with `EVERY_SONG`, every one in the library.
+pub const SONGS: Setting = setting("songs", "Songs from my other devices", &[]);
+pub const EVERY_SONG: Setting =
+    Setting { key: "every_song", name: "Every song, not only those in playlists", paths: &[], on: false };
 
 fn under(path: &str, prefix: &str) -> bool {
     path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
