@@ -3,12 +3,14 @@
      in a NativeActivity of our own (MainActivity) that adds what eframe
      can't do: picking files, picture-in-picture, installing updates. The
      playback service keeps music going in the background, with the media
-     controls in the notification and on the lock screen. -->
+     controls in the notification and on the lock screen; the sync service
+     keeps songs moving between devices, with its progress in another. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Installing updates in the app (Preferences > Experimental), once
          the user allows it in Android's settings. -->
@@ -67,6 +69,11 @@
             android:name=".PlaybackService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <service
+            android:name=".SyncService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <receiver
             android:name=".InstallReceiver"

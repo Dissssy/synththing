@@ -139,6 +139,7 @@ impl App {
         let mut separate = self.config.separate_fullscreen_layout;
         let mut expiry = self.config.preload_expiry_secs.unwrap_or(DEFAULT_PRELOAD_EXPIRY_SECS);
         let mut hover_preload = self.config.preload_on_hover;
+        let mut skip_collapsed = self.config.autoplay_skip_collapsed;
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
         let mut canary = self.config.canary_updates();
         let mut close_to_tray = self.config.close_to_tray.unwrap_or(false);
@@ -269,7 +270,7 @@ impl App {
                     ),
                     (&mut remember.script, "Visualizer script", "Off: the first script in the list."),
                     (&mut remember.speed, "Speed", "Off: normal speed every time."),
-                    (&mut remember.modes, "Loop and shuffle", "Off: both off every time."),
+                    (&mut remember.modes, "Loop, shuffle and autoplay", "Off: all three off every time."),
                 ] {
                     with_info(ui, info, |ui| ui.checkbox(on, label));
                 }
@@ -294,6 +295,12 @@ impl App {
                         |ui| ui.checkbox(&mut hover_preload, "Preload songs on hover"),
                     );
                 }
+                with_info(
+                    ui,
+                    "Autoplay (the button at the top of Songs) goes on to the next song in the list when \
+                     one ends. On: it leaves out the songs in groups you've closed.",
+                    |ui| ui.checkbox(&mut skip_collapsed, "Autoplay skips closed groups"),
+                );
                 with_info(
                     ui,
                     "Songs and soundfonts load in the background, and the next playlist track is \
@@ -413,6 +420,7 @@ impl App {
         let expiry = Some(expiry).filter(|&s| s != DEFAULT_PRELOAD_EXPIRY_SECS);
         if expiry != self.config.preload_expiry_secs
             || hover_preload != self.config.preload_on_hover
+            || skip_collapsed != self.config.autoplay_skip_collapsed
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
             || canary != self.config.canary_updates()
             || (self.tray.is_some() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
@@ -455,6 +463,7 @@ impl App {
             }
             self.config.preload_expiry_secs = expiry;
             self.config.preload_on_hover = hover_preload;
+            self.config.autoplay_skip_collapsed = skip_collapsed;
             changed = true;
         }
         // (A layout preference change saves the config itself, below.)

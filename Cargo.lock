@@ -5291,7 +5291,7 @@ dependencies = [
 
 [[package]]
 name = "synththing"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "android-activity",
  "anyhow",

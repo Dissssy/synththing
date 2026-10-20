@@ -106,6 +106,9 @@ pub(super) struct Mobile {
     /// What the media session was last told, and when.
     #[cfg(target_os = "android")]
     told: Option<(crate::android::Playback, std::time::Instant)>,
+    /// The songs moving between devices the sync service was last told of.
+    #[cfg(target_os = "android")]
+    sync_told: Option<(usize, usize)>,
     /// What picture-in-picture was last set to: whether leaving goes into
     /// it, and its shape.
     #[cfg(target_os = "android")]
@@ -445,24 +448,11 @@ impl App {
             return;
         }
         ctx.request_repaint_after(Duration::from_millis(250));
-        let screen = ctx.content_rect();
-        let width = (screen.width() - 32.0).min(480.0);
-        let response = egui::Area::new(egui::Id::new("status_toast"))
-            .order(egui::Order::Tooltip)
-            .sense(egui::Sense::click())
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_max_width(width);
-                    let mut label = egui::RichText::new(text.as_str());
-                    if let Some(color) = status_color(ui, text) {
-                        label = label.color(color);
-                    }
-                    ui.add(egui::Label::new(label).wrap());
-                });
-            })
-            .response;
-        if response.clicked() {
+        let mut label = egui::RichText::new(text.as_str());
+        if let Some(color) = status_color(&ctx.global_style().visuals, text) {
+            label = label.color(color);
+        }
+        if super::toast::draw(ctx, "status_toast", egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0), label) {
             self.mobile_state.toast = None;
         }
     }
@@ -517,8 +507,9 @@ impl App {
             ui.spacing_mut().item_spacing.x = gap;
             ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
             let shuffle = ui.add(big_icon_button("shuffle", sizes[0]).selected(self.shuffle));
-            if shuffle.on_hover_text(if self.shuffle { "Shuffle: on" } else { "Shuffle: off" }).clicked() {
+            if shuffle.on_hover_text(super::shuffle_text(self.shuffle)).clicked() {
                 self.set_shuffle(!self.shuffle);
+                super::toast::show(ui.ctx(), super::shuffle_text(self.shuffle));
             }
             if ui.add(big_icon_button("skip-back", sizes[1])).on_hover_text("Previous").clicked() {
                 self.previous_track(view.position);
@@ -532,20 +523,17 @@ impl App {
                 self.send(AudioCommand::TogglePause);
             }
             if ui
-                .add_enabled(self.now_playing.is_some(), big_icon_button("skip-forward", sizes[3]))
+                .add_enabled(self.has_next(), big_icon_button("skip-forward", sizes[3]))
                 .on_hover_text("Next")
                 .clicked()
             {
                 self.next_track();
             }
             let glyph = if self.loop_mode == LoopMode::One { "repeat-once" } else { "repeat" };
-            let hover = match self.loop_mode {
-                LoopMode::Off => "Loop: off",
-                LoopMode::All => "Loop: the playlist",
-                LoopMode::One => "Loop: this track",
-            };
+            let hover = super::loop_text(self.loop_mode);
             if ui.add(big_icon_button(glyph, sizes[4]).selected(self.loop_mode != LoopMode::Off)).on_hover_text(hover).clicked() {
                 self.set_loop_mode(self.loop_mode.cycle());
+                super::toast::show(ui.ctx(), super::loop_text(self.loop_mode));
             }
         });
         ui.add_space(6.0);
@@ -789,7 +777,8 @@ impl App {
 
     /// The Android side of `tick`: open a sign-in link the app was opened
     /// with, carry out the media buttons pressed outside the app, and keep the media session (the notification, the
-    /// lock screen) up to date with what's playing.
+    /// lock screen) up to date with what's playing, and the sync service
+    /// with the songs moving between devices.
     pub(super) fn android_tick(&mut self, view: &EngineView) {
         use crate::android::{self, MediaCommand, Playback};
 
@@ -801,7 +790,7 @@ impl App {
                 MediaCommand::Play if view.paused => self.send(AudioCommand::TogglePause),
                 MediaCommand::Pause if !view.paused => self.send(AudioCommand::TogglePause),
                 MediaCommand::Play | MediaCommand::Pause => {}
-                MediaCommand::Next if self.now_playing.is_some() => self.next_track(),
+                MediaCommand::Next if self.has_next() => self.next_track(),
                 MediaCommand::Next => {}
                 MediaCommand::Previous => self.previous_track(view.position),
                 MediaCommand::Seek(to) => self.send(AudioCommand::Seek(to)),
@@ -820,7 +809,7 @@ impl App {
             playing: has_song && !view.paused && !view.finished,
             position_ms: (view.position * 1000.0) as i64,
             length_ms: (view.length * 1000.0) as i64,
-            has_next: self.now_playing.is_some(),
+            has_next: self.has_next(),
         };
         // The session moves the position along by itself while playing:
         // only a change, or a jump (a seek), is worth telling it.
@@ -841,6 +830,12 @@ impl App {
         if stale && (has_song || self.mobile_state.told.is_some()) {
             android::set_playback(&playback);
             self.mobile_state.told = Some((playback, std::time::Instant::now()));
+        }
+        let moving = self.songs_moving();
+        if moving != self.mobile_state.sync_told {
+            let (done, total) = moving.unwrap_or_default();
+            android::set_sync_progress(done, total);
+            self.mobile_state.sync_told = moving;
         }
     }
 }
