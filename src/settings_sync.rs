@@ -112,6 +112,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("preload", "Preload songs on hover", &["preload_on_hover"]),
             setting("autoplay_collapsed", "Autoplay skips closed groups", &["autoplay_skip_collapsed"]),
             setting("unload", "Unload preloaded files after", &["preload_expiry_secs"]),
+            setting("rulesets", "Rulesets", &["rulesets"]),
             PLAYLISTS,
             SONGS,
             STARRED_SONGS,

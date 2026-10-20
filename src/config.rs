@@ -159,6 +159,10 @@ pub struct Config {
     /// starred songs (one picked by hand still plays).
     #[serde(default)]
     pub only_starred: bool,
+    /// The user's own rulesets (`smart.rs`), by ID, beside the built-in
+    /// ones (`smart::builtin`).
+    #[serde(default)]
+    pub rulesets: std::collections::BTreeMap<String, crate::smart::Ruleset>,
     /// Recording size and frame rate (`None`: the default, 60).
     #[serde(default)]
     pub record_resolution: crate::recorder::Resolution,

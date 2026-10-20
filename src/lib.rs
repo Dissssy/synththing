@@ -57,6 +57,7 @@ mod recorder;
 mod script_host;
 mod select_list;
 mod settings_sync;
+mod smart;
 mod snippets;
 mod song_info;
 mod song_list;

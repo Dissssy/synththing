@@ -33,6 +33,7 @@ mod library;
 mod recording;
 mod repair;
 mod script_windows;
+mod smart;
 mod song_meta;
 mod song_names;
 mod storage;
@@ -214,6 +215,13 @@ pub struct App {
     /// The store's and the song info's revisions when the songs' files were
     /// last looked at for what they say (`note_song_meta`).
     meta_seen: Option<(u64, u64)>,
+    /// The library's revision the smart playlists were last worked out
+    /// for (`smart::refresh_smart`).
+    smart_seen: Option<u64>,
+    /// The rules being edited (or looked at), if any.
+    rules_editor: Option<smart::RulesEditor>,
+    /// The rulesets' playlists, as Preferences last showed them.
+    ruleset_groups: smart::RulesetGroups,
     /// Songs asked to be removed from the library, waiting on Remove.
     remove_songs: Vec<PathBuf>,
     active_sf: Option<usize>,
@@ -562,6 +570,9 @@ impl App {
             old_import,
             song_list: SongList::default(),
             meta_seen: None,
+            smart_seen: None,
+            rules_editor: None,
+            ruleset_groups: Default::default(),
             remove_songs: Vec::new(),
             active_sf: None,
             soundfont_selection: Selection::default(),
@@ -2716,14 +2727,18 @@ impl App {
         let mut add_to: Option<(Option<usize>, Vec<PathBuf>)> = None;
         // With no dragging (touch), songs go onto playlists from their menu.
         let touch = select_list::touch(ui.ctx());
-        let playlists: Vec<String> =
-            if touch { self.playlists.lists.iter().map(|l| l.playlist.name.clone()).collect() } else { Vec::new() };
+        // (Not the smart ones: their rules say what's on them.)
+        let playlists: Vec<(usize, String)> = if touch {
+            self.playlists.lists.iter().enumerate().filter(|(_, l)| l.playlist.smart.is_none()).map(|(i, l)| (i, l.playlist.name.clone())).collect()
+        } else {
+            Vec::new()
+        };
         let mut menu = |ui: &mut egui::Ui, paths: &[PathBuf]| {
             if touch {
                 ui.menu_button("Add to playlist", |ui| {
-                    for (i, name) in playlists.iter().enumerate() {
+                    for (i, name) in &playlists {
                         if ui.button(name).clicked() {
-                            add_to = Some((Some(i), paths.to_vec()));
+                            add_to = Some((Some(*i), paths.to_vec()));
                         }
                     }
                     if ui.button("New playlist").clicked() {
@@ -3686,6 +3701,7 @@ impl App {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         frame_timing::time("note_song_meta", || self.note_song_meta());
+        frame_timing::time("refresh_smart", || self.refresh_smart(false));
         frame_timing::time("repair", || {
             self.poll_repair();
             self.suggest_repair();
@@ -3908,6 +3924,7 @@ impl eframe::App for App {
         self.remove_songs_ui(&ctx);
         self.repair_ui(&ctx);
         self.tags_ui(&ctx);
+        self.rules_editor_ui(&ctx);
         self.close_requested_ui(&ctx);
         self.close_prompt_ui(&ctx);
         if self.tray.is_some() {

@@ -5,6 +5,9 @@
 //! change. Which soundfont an entry uses isn't synced: soundfonts are each
 //! device's own.
 //!
+//! A smart playlist goes as its rules, no songs: each device works them
+//! out from its own library.
+//!
 //! Each song goes by its key in the song library, with its name, so a
 //! device that doesn't have it yet knows what it is (`SongStore::know`),
 //! and shows it as unavailable until it's there.
@@ -25,7 +28,10 @@ pub const NAME: &str = "playlists";
 #[derive(Serialize, Deserialize)]
 struct SyncedPlaylist {
     name: String,
+    #[serde(default)]
     songs: Vec<SyncedSong>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    smart: Option<crate::smart::Rules>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -40,9 +46,8 @@ pub fn leaves(library: &Library, store: &SongStore) -> BTreeMap<String, Value> {
         .lists
         .iter()
         .map(|stored| {
-            let songs = stored
-                .playlist
-                .entries
+            let entries = if stored.playlist.smart.is_some() { &[][..] } else { &stored.playlist.entries[..] };
+            let songs = entries
                 .iter()
                 .filter_map(|e| {
                     let key = song_store::key_in(library.songs_dir(), &e.path)?.to_string();
@@ -50,7 +55,7 @@ pub fn leaves(library: &Library, store: &SongStore) -> BTreeMap<String, Value> {
                     Some(SyncedSong { key, name })
                 })
                 .collect();
-            let synced = SyncedPlaylist { name: stored.playlist.name.clone(), songs };
+            let synced = SyncedPlaylist { name: stored.playlist.name.clone(), songs, smart: stored.playlist.smart.clone() };
             (stored.id.clone(), serde_json::to_value(synced).unwrap_or_default())
         })
         .collect()
@@ -84,7 +89,7 @@ pub fn apply(library: &mut Library, store: &mut SongStore, fields: &Fields) -> R
             }
             entries.push(entry);
         }
-        library.put(id, Playlist { name: synced.name, entries }).map_err(|e| format!("{e:#}"))?;
+        library.put(id, Playlist { name: synced.name, entries, smart: synced.smart }).map_err(|e| format!("{e:#}"))?;
         touched.push(id.clone());
     }
     for id in current.keys().filter(|id| !fields.contains_key(*id)) {
@@ -100,6 +105,33 @@ pub fn apply(library: &mut Library, store: &mut SongStore, fields: &Fields) -> R
 mod tests {
     use super::*;
     use crate::settings_sync::Field;
+
+    #[test]
+    fn smart_playlists_go_as_their_rules() {
+        let root = std::env::temp_dir().join(format!("synththing-smart-sync-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (music, lists) = (root.join("music"), root.join("playlists"));
+        let mut store = SongStore::open(music.clone());
+        let here = song_store::write_in(b"here", "Here.mid", &music).unwrap();
+        store.add(here.clone());
+        let (mut library, _) = Library::load(lists.clone(), music.clone());
+        let smart = library.create("Smart", vec![song_store::path_of(&music, &here.key)]).unwrap();
+        let rules = crate::smart::Rules { seed: 3, ..crate::smart::Rules::default() };
+        library.lists[smart].playlist.smart = Some(rules.clone());
+        library.save(smart).unwrap();
+        let id = library.lists[smart].id.clone();
+        let sent = leaves(&library, &store);
+        assert_eq!(sent[&id]["songs"], serde_json::json!([]), "its songs are each device's own");
+        assert_eq!(sent[&id]["smart"]["seed"], 3);
+
+        let (mut elsewhere, _) = Library::load(root.join("other"), music.clone());
+        let fields: Fields = sent.into_iter().map(|(k, value)| (k, crate::settings_sync::Field { value, changed: 1 })).collect();
+        apply(&mut elsewhere, &mut store, &fields).unwrap();
+        assert_eq!(elsewhere.lists[0].playlist.smart.as_ref(), Some(&rules));
+        let (reloaded, _) = Library::load(root.join("other"), music.clone());
+        assert_eq!(reloaded.lists[0].playlist.smart.as_ref(), Some(&rules), "saved with it");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn playlists_come_and_go_whole() {
