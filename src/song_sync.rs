@@ -94,8 +94,7 @@ pub fn wanted(store: &SongStore, playlists: &Library, every: bool) -> BTreeSet<S
         .lists
         .iter()
         .flat_map(|stored| &stored.playlist.entries)
-        .filter(|e| e.path.parent() == Some(store.dir()))
-        .filter_map(|e| e.path.file_name()?.to_str())
+        .filter_map(|e| song_store::key_in(store.dir(), &e.path))
         .filter(|key| lacks(key))
         .map(str::to_string)
         .collect()
@@ -248,7 +247,7 @@ pub fn run(relay: &Relay, task: &Task) -> Moved {
     let id = crate::library::sync::relay_id(&relay.sync_key, &key);
     let (server, server_key, identity) = (&relay.server, &relay.server_key, &relay.identity);
     let done = match task {
-        Task::Send { .. } => client::relay_put(server, server_key, identity, &relay.sync_key, &id, &relay.dir.join(&key)).map(|()| Moved::Sent(key.clone())),
+        Task::Send { .. } => client::relay_put(server, server_key, identity, &relay.sync_key, &id, &song_store::path_of(&relay.dir, &key)).map(|()| Moved::Sent(key.clone())),
         Task::Fetch(_) => {
             let mut incoming = match song_store::Incoming::new(&key, &relay.dir) {
                 Ok(incoming) => incoming,
@@ -294,7 +293,7 @@ pub fn run_all(relay: &Relay, tasks: &[Task], room: Room, mut done: impl FnMut(M
     for (i, task) in tasks.iter().enumerate() {
         let moved = match task {
             Task::Send { key, to } => {
-                let file = relay.dir.join(key);
+                let file = song_store::path_of(&relay.dir, key);
                 let mut streamed = None;
                 while let Some(device) = streams_to(to, &listening) {
                     let id = crate::library::sync::relay_id(&relay.sync_key, key);
@@ -439,7 +438,7 @@ mod tests {
         assert!(incoming.finish().is_err());
         assert_eq!(std::fs::read_dir(root.join("elsewhere")).unwrap().count(), 0, "nothing left behind");
         // Removed here: not wanted again.
-        phone.remove(&phone_dir.join(&song.key)).unwrap();
+        phone.remove(&song_store::path_of(&phone_dir, &song.key)).unwrap();
         assert!(wanted(&phone, &playlists, true).is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -468,7 +467,7 @@ mod tests {
 
         assert_eq!(run(&relay("desktop"), &send(&song.key)), Moved::Sent(song.key.clone()));
         assert_eq!(run(&relay("phone"), &Task::Fetch(song.key.clone())), Moved::Fetched(song.key.clone()));
-        assert_eq!(std::fs::read(root.join("phone").join(&song.key)).unwrap(), b"a song");
+        assert_eq!(std::fs::read(song_store::path_of(&root.join("phone"), &song.key)).unwrap(), b"a song");
         // Someone else's ID for it, or a key that can't open it: not theirs.
         let stranger = Relay { identity: Identity::generate().unwrap(), ..relay("stranger") };
         assert_eq!(run(&stranger, &Task::Fetch(song.key.clone())), Moved::Gone(song.key.clone()));
@@ -480,8 +479,8 @@ mod tests {
         let big = song_store::write_in(&vec![1; 2 * 1024 * 1024], "Big.wav", &root.join("desktop")).unwrap();
         let info = client::info(&server).unwrap();
         assert_eq!(info.relay_song_mb, 1);
-        assert!(fits(&root.join("desktop").join(&song.key), info.relay_song_mb));
-        assert!(!fits(&root.join("desktop").join(&big.key), info.relay_song_mb), "known too big before sending");
+        assert!(fits(&song_store::path_of(&root.join("desktop"), &song.key), info.relay_song_mb));
+        assert!(!fits(&song_store::path_of(&root.join("desktop"), &big.key), info.relay_song_mb), "known too big before sending");
         assert!(matches!(run(&relay("desktop"), &send(&big.key)), Moved::Failed(..)));
         assert_eq!(run_all("desktop", &[send(&big.key)]), [Moved::TooBig(big.key.clone())], "not tried");
         // Past the identity's room: the oldest go.
@@ -517,7 +516,7 @@ mod tests {
         let tasks = [Task::Send { key: huge.key.clone(), to: vec!["tablet".into(), "phone".into()] }];
         assert_eq!(run_all("desktop", &tasks), [Moved::Streamed { key: huge.key.clone(), to: "phone".into() }]);
         assert_eq!(listener.join().unwrap(), Ok(Some(Moved::Fetched(huge.key.clone()))));
-        assert_eq!(std::fs::metadata(root.join("phone").join(&huge.key)).unwrap().len(), 3 * mb);
+        assert_eq!(std::fs::metadata(song_store::path_of(&root.join("phone"), &huge.key)).unwrap().len(), 3 * mb);
         let kept: u64 = std::fs::read_dir(root.join("relay")).unwrap().flatten().map(|e| e.metadata().unwrap().len()).sum();
         assert!(kept < mb, "not kept on the server");
         // Still listening a moment after (between songs). The tablet never

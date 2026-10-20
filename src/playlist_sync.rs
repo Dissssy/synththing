@@ -44,9 +44,8 @@ pub fn leaves(library: &Library, store: &SongStore) -> BTreeMap<String, Value> {
                 .playlist
                 .entries
                 .iter()
-                .filter(|e| e.path.parent() == Some(library.songs_dir()))
                 .filter_map(|e| {
-                    let key = e.path.file_name()?.to_str()?.to_string();
+                    let key = song_store::key_in(library.songs_dir(), &e.path)?.to_string();
                     let name = store.get(&e.path).map_or_else(|| key.clone(), |s| s.name.clone());
                     Some(SyncedSong { key, name })
                 })
@@ -79,7 +78,7 @@ pub fn apply(library: &mut Library, store: &mut SongStore, fields: &Fields) -> R
         let mut entries = Vec::new();
         for song in &synced.songs {
             store.know(&song.key, &song.name);
-            let mut entry = PlaylistEntry::new(store.dir().join(&song.key));
+            let mut entry = PlaylistEntry::new(store.path(&song.key));
             if let Some(at) = soundfonts.iter().position(|(path, _)| *path == entry.path) {
                 entry.soundfont = Some(soundfonts.remove(at).1);
             }
@@ -111,7 +110,7 @@ mod tests {
         let here = song_store::write_in(b"here", "Here.mid", &music).unwrap();
         store.add(here.clone());
         let (mut library, _) = Library::load(lists.clone(), music.clone());
-        let mine = library.create("Mine", vec![music.join(&here.key)]).unwrap();
+        let mine = library.create("Mine", vec![song_store::path_of(&music, &here.key)]).unwrap();
         library.lists[mine].playlist.entries[0].soundfont = Some("/piano.sf2".into());
         library.save(mine).unwrap();
         let mine = library.lists[mine].id.clone();
