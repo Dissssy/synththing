@@ -4,11 +4,15 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Songs go straight to your other devices that are open: streamed through the server as they're sent, kept nowhere, and of any size. Only for a device that isn't open do they wait on the server.
+
 ### Fixed
-- Syncing a big library to a slower device no longer loses songs on the way: a device sends songs only while the server has room for them, then waits for your other devices to download what's there. Before, it kept sending, and the server dropped songs nobody had downloaded yet to make room, only for them to be sent again.
+- Syncing a big library to a slower device no longer loses songs on the way: a device leaves songs on the server only while it has room for them, then waits for your other devices to download what's there. Before, it kept sending, and the server dropped songs nobody had downloaded yet to make room, only for them to be sent again.
+- A song too big for the server waits until the device that wants it is open, instead of never moving.
 
 ### Changed
-- Server: `POST /api/v1/relay/room` says how much more of an identity's songs the relay holds. Apps need it to send songs, so update the server first.
+- Server: songs stream between devices (`/api/v1/relay/inbox/{inbox}`, `/api/v1/relay/{id}/send/{inbox}`, `/api/v1/relay/listening`), and `/api/v1/relay/room` says how much more of an identity's songs the relay holds. Relay requests are signed without their body (songs are sealed in chunks now). Apps and server need to be updated together, server first. Behind nginx, `/api/v1/relay/` needs `client_max_body_size 0`, `proxy_request_buffering off` and `proxy_buffering off` (docs/DEPLOY.md); Caddy needs nothing.
 
 ## 1.0.0 (2026-10-20)
 

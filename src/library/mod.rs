@@ -857,6 +857,9 @@ pub const VERSION_HEADER: &str = "X-Synththing-Version";
 pub const SHA256_HEADER: &str = "X-Synththing-Sha256";
 pub const SIGNATURE_HEADER: &str = "X-Synththing-Signature";
 
+/// The header a song streamed to a device comes with: its relay ID.
+pub const RELAY_ID_HEADER: &str = "X-Synththing-Relay-Id";
+
 /// Headers a signed request comes with: the signer's public key (hex),
 /// the time (Unix seconds) and the signature over `request_message`.
 pub const KEY_HEADER: &str = "X-Synththing-Key";

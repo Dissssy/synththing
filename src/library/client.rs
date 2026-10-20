@@ -379,51 +379,132 @@ pub fn sync_write(
     signed_post(base, server_key, identity, &format!("/api/v1/sync/{name}"), &body)
 }
 
-/// How long sending or fetching a song through the relay may take.
+/// How long fetching a song left on the relay may take (they're up to the
+/// server's `relay_song_mb`).
 const RELAY_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long a device listening for songs waits for one to start coming
+/// (the server answers sooner, with none).
+const INBOX_WAIT: Duration = Duration::from_secs(60);
+/// The most a song streamed to this device may take to arrive, once it
+/// starts.
+const INBOX_TIMEOUT: Duration = Duration::from_secs(3600);
 
-/// A signed request about relayed file `id` (`path` after it), with `body`.
-fn relay_post(base: &str, server_key: &str, identity: &Identity, id: &str, path: &str, body: &[u8]) -> Result<Reply, String> {
-    let path = format!("/api/v1/relay/{id}{path}");
-    let request = agent().post(format!("{base}{path}")).config().timeout_global(Some(RELAY_TIMEOUT)).build();
-    let request = request.header("Content-Type", "application/octet-stream");
-    check(signed(request, server_key, identity, "POST", &path, body).send(body))
+/// How long sending `len` bytes of song may take: slower than 32 KB/s,
+/// something's wrong.
+fn sending_timeout(len: u64) -> Duration {
+    Duration::from_secs(60 + len / (32 * 1024))
 }
 
-/// Leave the song `plain` on the relay as `id`, sealed with the sync key.
-pub fn relay_put(base: &str, server_key: &str, identity: &Identity, sync_key: &[u8; 32], id: &str, plain: &[u8]) -> Result<(), String> {
-    let sealed = super::sync::seal_bytes(sync_key, plain)?;
-    relay_post(base, server_key, identity, id, "", &sealed).map(|_| ())
+/// A request to the relay (`path` under `/api/v1/relay/`), signed. (Its
+/// body isn't: a song is sealed with the sync key, so it can't be changed
+/// unseen.)
+fn relay_request(base: &str, server_key: &str, identity: &Identity, path: &str, timeout: Option<Duration>) -> ureq::RequestBuilder<ureq::typestate::WithBody> {
+    let path = format!("/api/v1/relay/{path}");
+    let request = agent().post(format!("{base}{path}")).config().timeout_global(timeout).build();
+    signed(request, server_key, identity, "POST", &path, &[]).header("Content-Type", "application/octet-stream")
+}
+
+/// The song at `file`, sealed with the sync key as it's sent to `path`.
+fn send_song(request: ureq::RequestBuilder<ureq::typestate::WithBody>, sync_key: &[u8; 32], file: &std::path::Path) -> Result<Reply, String> {
+    let plain = std::fs::File::open(file).map_err(|e| format!("couldn't read the song ({e})"))?;
+    let len = plain.metadata().map_err(|e| format!("couldn't read the song ({e})"))?.len();
+    let mut sealed = super::sync::SealedReader::new(sync_key, plain)?;
+    let request = request.header("Content-Length", super::sync::sealed_len(len));
+    request.send(ureq::SendBody::from_reader(&mut sealed)).map_err(|e| format!("couldn't reach the server ({e})"))
+}
+
+/// The timeout for sending the song at `file`.
+fn send_timeout(file: &std::path::Path) -> Option<Duration> {
+    Some(sending_timeout(std::fs::metadata(file).map_or(0, |m| m.len())))
 }
 
 /// How much more of `identity`'s songs the relay takes now (bytes, sealed).
 pub fn relay_room(base: &str, server_key: &str, identity: &Identity) -> Result<u64, String> {
-    let reply: serde_json::Value = signed_post(base, server_key, identity, "/api/v1/relay/room", &serde_json::json!({}))?;
+    let reply: serde_json::Value = read(check(relay_request(base, server_key, identity, "room", None).send_empty())?)?;
     reply["room"].as_u64().ok_or_else(|| "the server didn't say how much room it has for your songs".to_string())
 }
 
-/// The song waiting on the relay as `id`, opened with the sync key (`None`
-/// if it isn't there).
-pub fn relay_get(base: &str, server_key: &str, identity: &Identity, sync_key: &[u8; 32], id: &str) -> Result<Option<Vec<u8>>, String> {
-    let path = format!("/api/v1/relay/{id}/get");
-    let request = agent().post(format!("{base}{path}")).config().timeout_global(Some(RELAY_TIMEOUT)).build();
-    let response = signed(request, server_key, identity, "POST", &path, &[]).send(&[][..]).map_err(|e| format!("couldn't reach the server ({e})"))?;
-    if response.status().as_u16() == 404 {
-        return Ok(None);
+/// Leave the song at `file` on the relay as `id`, sealed with the sync key.
+pub fn relay_put(base: &str, server_key: &str, identity: &Identity, sync_key: &[u8; 32], id: &str, file: &std::path::Path) -> Result<(), String> {
+    check(Ok(send_song(relay_request(base, server_key, identity, id, send_timeout(file)), sync_key, file)?)).map(|_| ())
+}
+
+/// Open a song sealed with the sync key coming in `response`, into `to`:
+/// whether it opened (one that doesn't is as good as not there).
+fn open_song(sync_key: &[u8; 32], mut response: Reply, to: impl std::io::Write) -> Result<bool, String> {
+    let sealed = response.body_mut().with_config().limit(u64::MAX).reader();
+    match super::sync::open_stream(sync_key, sealed, to) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Ok(false),
+        Err(e) => Err(format!("couldn't fetch the song ({e})")),
     }
-    let mut response = check(Ok(response))?;
-    let sealed = response
-        .body_mut()
-        .with_config()
-        .limit(u64::MAX)
-        .read_to_vec()
-        .map_err(|e| format!("couldn't fetch the song ({e})"))?;
-    super::sync::open_bytes(sync_key, &sealed).map(Some)
+}
+
+/// Fetch the song waiting on the relay as `id`, opened with the sync key,
+/// into `to`: whether it was there.
+pub fn relay_get(base: &str, server_key: &str, identity: &Identity, sync_key: &[u8; 32], id: &str, to: impl std::io::Write) -> Result<bool, String> {
+    let response = relay_request(base, server_key, identity, &format!("{id}/get"), Some(RELAY_TIMEOUT))
+        .send_empty()
+        .map_err(|e| format!("couldn't reach the server ({e})"))?;
+    if response.status().as_u16() == 404 {
+        return Ok(false);
+    }
+    open_song(sync_key, check(Ok(response))?, to)
 }
 
 /// Delete the song waiting on the relay as `id`.
 pub fn relay_delete(base: &str, server_key: &str, identity: &Identity, id: &str) -> Result<(), String> {
-    relay_post(base, server_key, identity, id, "/delete", &[]).map(|_| ())
+    check(relay_request(base, server_key, identity, &format!("{id}/delete"), None).send_empty()).map(|_| ())
+}
+
+/// Which of `inboxes` (`sync::inbox_id`) are listening for songs now.
+pub fn relay_listening(base: &str, server_key: &str, identity: &Identity, inboxes: &[String]) -> Result<Vec<String>, String> {
+    let reply: serde_json::Value = signed_post(base, server_key, identity, "/api/v1/relay/listening", &serde_json::json!({ "inboxes": inboxes }))?;
+    Ok(reply["listening"].as_array().into_iter().flatten().filter_map(|i| i.as_str().map(str::to_string)).collect())
+}
+
+/// Stream the song at `file` (as `id`) straight to the device listening as
+/// `inbox`, sealed with the sync key: whether it took it (`false`: it
+/// wasn't listening after all).
+pub fn relay_send(base: &str, server_key: &str, identity: &Identity, sync_key: &[u8; 32], id: &str, inbox: &str, file: &std::path::Path) -> Result<bool, String> {
+    let response = send_song(relay_request(base, server_key, identity, &format!("{id}/send/{inbox}"), send_timeout(file)), sync_key, file)?;
+    if response.status().as_u16() == 404 {
+        return Ok(false);
+    }
+    check(Ok(response)).map(|_| true)
+}
+
+/// Listen as `inbox` for a song streamed to this device, for a while:
+/// `None` if none came, or the ID it came as, written into what `take`
+/// gives for that ID (which, if nothing, turns it away), opened with the
+/// sync key.
+pub fn relay_inbox<W: std::io::Write>(
+    base: &str,
+    server_key: &str,
+    identity: &Identity,
+    sync_key: &[u8; 32],
+    inbox: &str,
+    take: impl FnOnce(&str) -> Option<W>,
+) -> Result<Option<(String, W)>, String> {
+    let path = format!("/api/v1/relay/inbox/{inbox}");
+    let request = agent()
+        .post(format!("{base}{path}"))
+        .config()
+        .timeout_global(None)
+        .timeout_recv_response(Some(INBOX_WAIT))
+        .timeout_recv_body(Some(INBOX_TIMEOUT))
+        .build();
+    let response = check(signed(request, server_key, identity, "POST", &path, &[]).send_empty())?;
+    if response.status().as_u16() == 204 {
+        return Ok(None);
+    }
+    let id = response.headers().get(super::RELAY_ID_HEADER).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+    let Some(mut to) = take(&id) else { return Ok(None) };
+    if open_song(sync_key, response, &mut to)? {
+        Ok(Some((id, to)))
+    } else {
+        Err("a song streamed here didn't open with this device's sync key".into())
+    }
 }
 
 /// Park a sealed sign-in handoff on a server, for another device to take.
