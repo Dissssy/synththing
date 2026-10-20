@@ -40,8 +40,13 @@ struct Queue {
     ready: Condvar,
 }
 
+/// How many letters a tile without art shows, unless set otherwise.
+pub const DEFAULT_LETTERS: u8 = 2;
+
 #[derive(Default)]
 pub struct AlbumArt {
+    /// How many letters (1 to 4) tiles without art show (`Config::tile_letters`).
+    pub letters: u8,
     kept: HashMap<Request, Kept>,
     queue: Arc<Queue>,
     done: Option<mpsc::Receiver<(Request, Option<egui::ColorImage>)>>,
@@ -99,7 +104,7 @@ impl AlbumArt {
                 return;
             }
         }
-        generated_tile(ui.painter(), rect, name, radius);
+        generated_tile(ui.painter(), rect, name, radius, self.letters);
     }
 
     fn ask(&mut self, ctx: &egui::Context, request: Request) {
@@ -190,21 +195,40 @@ fn color_of(name: &str) -> egui::Color32 {
     egui::ecolor::Hsva::new(hue, 0.45, 0.55, 1.0).into()
 }
 
-/// Up to two letters for an album: its first two words' first letters.
-fn initials(name: &str) -> String {
-    name.split_whitespace().filter_map(|w| w.chars().find(|c| c.is_alphanumeric())).take(2).flat_map(char::to_uppercase).collect()
+/// Up to `n` letters for an album: its first words' first letters.
+fn initials(name: &str, n: usize) -> String {
+    name.split_whitespace().filter_map(|w| w.chars().find(|c| c.is_alphanumeric())).take(n).flat_map(char::to_uppercase).collect()
 }
 
 /// The tile an album without art gets: its color, darker to the bottom,
-/// with its initials.
-fn generated_tile(painter: &egui::Painter, rect: egui::Rect, name: &str, radius: f32) {
+/// with up to `letters` of its initials, in a row (one to three) or a
+/// square of two over two (four).
+fn generated_tile(painter: &egui::Painter, rect: egui::Rect, name: &str, radius: f32, letters: u8) {
     let color = color_of(name);
     painter.rect_filled(rect, radius, color);
     let lower = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.center().y), rect.max);
     let shade = egui::CornerRadius { nw: 0, ne: 0, sw: radius as u8, se: radius as u8 };
     painter.rect_filled(lower, shade, egui::Color32::from_black_alpha(40));
-    let font = egui::FontId::proportional(rect.height() * 0.32);
-    painter.text(rect.center(), egui::Align2::CENTER_CENTER, initials(name), font, egui::Color32::from_white_alpha(220));
+    let text = egui::Color32::from_white_alpha(220);
+    let letters = letters.clamp(1, 4) as usize;
+    let initials = initials(name, letters);
+    if letters == 4 && initials.chars().count() > 2 {
+        let chars: Vec<char> = initials.chars().collect();
+        let font = egui::FontId::proportional(rect.height() * 0.26);
+        let lines = [chars[..2].iter().collect::<String>(), chars[2..].iter().collect::<String>()];
+        let gap = rect.height() * 0.14;
+        for (i, line) in lines.iter().enumerate() {
+            let y = rect.center().y + if i == 0 { -gap } else { gap };
+            painter.text(egui::pos2(rect.center().x, y), egui::Align2::CENTER_CENTER, line, font.clone(), text);
+        }
+        return;
+    }
+    let size = match letters {
+        1 => 0.5,
+        2 => 0.32,
+        _ => 0.24,
+    };
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, initials, egui::FontId::proportional(rect.height() * size), text);
 }
 
 #[cfg(test)]
@@ -213,9 +237,10 @@ mod tests {
 
     #[test]
     fn initials_skip_punctuation() {
-        assert_eq!(initials("Tribute To Nujabes"), "TT");
-        assert_eq!(initials("\"NuJams\""), "N");
-        assert_eq!(initials(""), "");
+        assert_eq!(initials("Tribute To Nujabes", 2), "TT");
+        assert_eq!(initials("Tribute To Nujabes", 4), "TTN", "as many as there are words");
+        assert_eq!(initials("\"NuJams\"", 2), "N");
+        assert_eq!(initials("", 1), "");
     }
 
     #[test]

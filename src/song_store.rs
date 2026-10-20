@@ -382,6 +382,11 @@ impl SongStore {
         self.songs.get(self.key_of(path)?)
     }
 
+    /// What's known of song `key` (here or not).
+    pub fn get_by_key(&self, key: &str) -> Option<&Song> {
+        self.songs.get(key)
+    }
+
     /// Every song here: its file and what's known of it.
     pub fn songs(&self) -> impl Iterator<Item = (PathBuf, &Song)> {
         self.present.iter().filter_map(|key| Some((path_of(&self.dir, key), self.songs.get(key)?)))

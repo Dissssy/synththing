@@ -159,6 +159,10 @@ pub struct Config {
     /// starred songs (one picked by hand still plays).
     #[serde(default)]
     pub only_starred: bool,
+    /// Preference: how many letters (1 to 4) a tile without art shows of
+    /// its name (`album_art`; `None`: 2).
+    #[serde(default)]
+    pub tile_letters: Option<u8>,
     /// The user's own rulesets (`smart.rs`), by ID, beside the built-in
     /// ones (`smart::builtin`).
     #[serde(default)]

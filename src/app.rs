@@ -30,7 +30,7 @@ mod notifications;
 mod overflow;
 mod previews;
 mod library;
-mod library_views;
+mod groupings;
 mod recording;
 mod repair;
 mod script_windows;
@@ -213,8 +213,8 @@ pub struct App {
     old_import: Option<std::sync::mpsc::Receiver<song_store::OldImport>>,
     /// The Songs tab: the library's songs. Double-clicking one plays it.
     song_list: SongList,
-    /// The Songs, Artists and Albums views' state, for the session.
-    library_views: library_views::LibraryViews,
+    /// The Groupings' state, for the session.
+    groupings: groupings::Groupings,
     /// The store's and the song info's revisions when the songs' files were
     /// last looked at for what they say (`note_song_meta`).
     meta_seen: Option<(u64, u64)>,
@@ -575,7 +575,7 @@ impl App {
             songs,
             old_import,
             song_list: SongList::default(),
-            library_views: library_views::LibraryViews::default(),
+            groupings: groupings::Groupings::default(),
             meta_seen: None,
             smart_seen: None,
             rules_editor: None,
@@ -1623,6 +1623,7 @@ impl App {
                     }
                 };
                 section_checkbox(ui, Section::Songs);
+                section_checkbox(ui, Section::Groupings);
                 section_checkbox(ui, Section::Soundfonts);
                 section_checkbox(ui, Section::Playlists);
                 ui.separator();
@@ -2672,6 +2673,15 @@ impl App {
         }
         self.script_error_ui(ui, false);
         self.visualizer_editor_ui(ui);
+    }
+
+    /// The revision of what the songs are listed from: it changes whenever
+    /// the songs, what's been read of them, or how they're named do.
+    fn songs_revision(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (self.songs.revision(), self.song_info.revision(), &self.config.title_patterns, listed_song_extensions(&self.config)).hash(&mut hasher);
+        hasher.finish()
     }
 
     fn songs_ui(&mut self, ui: &mut egui::Ui) {
@@ -4030,7 +4040,8 @@ impl TabViewer for SectionTabs<'_> {
         let _timing = frame_timing::scope(tab.title());
         app.tour.mark(tour::Target::Tab(*tab), ui.max_rect());
         match tab {
-            Section::Songs => app.library_section_ui(ui),
+            Section::Songs => app.songs_ui(ui),
+            Section::Groupings => app.groupings_ui(ui),
             Section::Soundfonts => app.soundfont_ui(ui),
             Section::Playlists => app.playlist_panel_ui(ui),
             Section::Visualizer => {

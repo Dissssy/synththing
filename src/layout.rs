@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Section {
     Songs,
+    /// The playlists each ruleset makes (By Album, By Artist...).
+    Groupings,
     Soundfonts,
     Playlists,
     Visualizer,
@@ -32,8 +34,9 @@ pub enum Section {
 
 impl Section {
     /// Every section there is.
-    pub const ALL: [Section; 8] = [
+    pub const ALL: [Section; 9] = [
         Self::Songs,
+        Self::Groupings,
         Self::Soundfonts,
         Self::Playlists,
         Self::Visualizer,
@@ -46,6 +49,7 @@ impl Section {
     pub fn title(self) -> &'static str {
         match self {
             Self::Songs => "Songs",
+            Self::Groupings => "Groupings",
             Self::Soundfonts => "Soundfonts",
             Self::Playlists => "Playlists",
             Self::Visualizer => "Visualizer",
@@ -60,7 +64,7 @@ impl Section {
     fn column(self) -> Column {
         match self {
             Self::Songs | Self::Soundfonts => Column::Left,
-            Self::Visualizer | Self::Editor | Self::Removed | Self::Reference | Self::Sprites | Self::Library => {
+            Self::Groupings | Self::Visualizer | Self::Editor | Self::Removed | Self::Reference | Self::Sprites | Self::Library => {
                 Column::Center
             }
             Self::Playlists => Column::Right,
@@ -74,7 +78,7 @@ impl Section {
             Self::Soundfonts => Some(Self::Songs),
             Self::Visualizer => Some(Self::Editor),
             Self::Editor => Some(Self::Visualizer),
-            Self::Playlists | Self::Removed | Self::Reference | Self::Sprites | Self::Library => None,
+            Self::Groupings | Self::Playlists | Self::Removed | Self::Reference | Self::Sprites | Self::Library => None,
         }
     }
 }

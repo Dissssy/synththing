@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, AtomExt as _};
 
-use super::library_views::View;
 use super::preferences::PrefTab;
 use super::{fmt_time, icon, palette_color, status_color, status_outcome, App};
 use crate::audio::{AudioCommand, PlaybackShared};
@@ -36,8 +35,9 @@ pub(super) enum Page {
     #[default]
     NowPlaying,
     Songs,
-    Artists,
-    Albums,
+    /// A ruleset's playlists (`Groupings::show` says which); the menu has
+    /// one for each.
+    Grouping,
     Soundfonts,
     Playlists,
     Scripts,
@@ -52,11 +52,9 @@ pub(super) enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 8] = [
+    const ALL: [Page; 6] = [
         Self::NowPlaying,
         Self::Songs,
-        Self::Artists,
-        Self::Albums,
         Self::Soundfonts,
         Self::Playlists,
         Self::Scripts,
@@ -67,8 +65,7 @@ impl Page {
         match self {
             Self::NowPlaying => "Now playing",
             Self::Songs => "Songs",
-            Self::Artists => "Artists",
-            Self::Albums => "Albums",
+            Self::Grouping => "Groupings",
             Self::Soundfonts => "Soundfonts",
             Self::Playlists => "Playlists",
             Self::Scripts => "Visualizers",
@@ -84,9 +81,8 @@ impl Page {
     fn icon(self) -> &'static str {
         match self {
             Self::NowPlaying => "monitor-play",
-            Self::Songs => View::Songs.icon(),
-            Self::Artists => View::Artists.icon(),
-            Self::Albums => View::Albums.icon(),
+            Self::Songs => "music-notes",
+            Self::Grouping => "squares-four",
             Self::Soundfonts => "piano-keys",
             Self::Playlists => "playlist",
             Self::Scripts => "waveform",
@@ -96,24 +92,6 @@ impl Page {
             Self::Changelog => "clock-counter-clockwise",
             Self::Log => "notepad",
             Self::Credits => "info",
-        }
-    }
-
-    /// The library view it is, if it's one.
-    fn view(self) -> Option<View> {
-        match self {
-            Self::Songs => Some(View::Songs),
-            Self::Artists => Some(View::Artists),
-            Self::Albums => Some(View::Albums),
-            _ => None,
-        }
-    }
-
-    fn of_view(view: View) -> Self {
-        match view {
-            View::Songs => Self::Songs,
-            View::Artists => Self::Artists,
-            View::Albums => Self::Albums,
         }
     }
 }
@@ -232,14 +210,8 @@ impl App {
             let _timing = frame_timing::scope(page.title());
             egui::CentralPanel::default().show(ui, |ui| match page {
                 Page::NowPlaying => {}
-                Page::Songs | Page::Artists | Page::Albums => {
-                    if let Some(view) = page.view() {
-                        self.library_view_ui(ui, view);
-                    }
-                    if let Some(view) = self.library_views.jump.take() {
-                        self.mobile_state.page = Page::of_view(view);
-                    }
-                }
+                Page::Songs => self.songs_ui(ui),
+                Page::Grouping => self.grouping_ui(ui),
                 Page::Soundfonts => self.soundfont_ui(ui),
                 Page::Playlists => self.playlist_panel_ui(ui),
                 Page::Scripts => self.mobile_scripts_ui(ui),
@@ -295,7 +267,7 @@ impl App {
     /// the right, as on the desktop.
     fn mobile_top_bar_ui(&mut self, ui: &mut egui::Ui) {
         let library_details = self.mobile_state.page == Page::Library && self.library_details_open();
-        let pushed = self.mobile_state.page.view().and_then(|view| Some((view, self.library_views.pushed_title(view)?)));
+        let grouping = (self.mobile_state.page == Page::Grouping).then(|| self.grouping_title());
         ui.horizontal(|ui| {
             // In a Preferences section or a library pick's details: back to
             // the list instead.
@@ -311,9 +283,9 @@ impl App {
                     }
                     ui.heading(if state.editing_themes { "Themes" } else { section.title() });
                 }
-                None if let Some((view, title)) = &pushed => {
+                None if let Some((title, true)) = &grouping => {
                     if ui.add(big_icon_button("arrow-left", 36.0)).on_hover_text("Back").clicked() {
-                        self.library_views.back(*view);
+                        self.groupings.back();
                     }
                     ui.add(egui::Label::new(egui::RichText::new(title).heading()).truncate());
                 }
@@ -331,6 +303,10 @@ impl App {
                     // wordmark.
                     match self.mobile_state.page {
                         Page::NowPlaying => self.mobile_wordmark_ui(ui),
+                        Page::Grouping => {
+                            let title = grouping.as_ref().map_or(Page::Grouping.title(), |(t, _)| t.as_str());
+                            ui.add(egui::Label::new(egui::RichText::new(title).heading()).truncate());
+                        }
                         Page::Changelog if self.mobile_state.changelog_since.is_some() => {
                             ui.heading("What's new");
                         }
@@ -369,7 +345,7 @@ impl App {
             state.pref_section = None;
         } else if library_details {
             self.library_close_details();
-        } else if state.page.view().is_some_and(|view| self.library_views.back(view)) {
+        } else if state.page == Page::Grouping && self.groupings.back() {
         } else if state.page == Page::NowPlaying && state.collapsed {
             state.collapsed = false;
         } else if state.page != Page::NowPlaying {
@@ -716,10 +692,24 @@ impl App {
         self.mobile_wordmark_ui(ui);
         ui.add_space(8.0);
         let mut picked = None;
+        let showing = (self.mobile_state.page == Page::Grouping).then(|| self.groupings.shown_id());
+        let mut ruleset = None;
         for page in Page::ALL {
             if ui.add(drawer_item(ui, self.mobile_state.page == page, page.icon(), page.title())).clicked() {
                 picked = Some(page);
             }
+            // Each ruleset's playlists, after Songs.
+            if page == Page::Songs {
+                for (id, set) in self.all_rulesets() {
+                    if ui.add(drawer_item(ui, showing.as_deref() == Some(id.as_str()), Page::Grouping.icon(), &set.name)).clicked() {
+                        ruleset = Some(id);
+                    }
+                }
+            }
+        }
+        if let Some(id) = ruleset {
+            self.groupings.show(&id);
+            picked = Some(Page::Grouping);
         }
         if let Some(page) = picked {
             self.mobile_state.page = page;

@@ -40,7 +40,6 @@ mod import;
 mod instance;
 mod layout;
 mod library;
-mod library_index;
 mod live;
 mod loader;
 mod lua_analysis;
