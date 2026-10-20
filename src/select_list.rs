@@ -208,6 +208,10 @@ pub fn show<T>(
                     } else if marked {
                         ui.visuals_mut().override_text_color = Some(playing_color);
                     }
+                    if touch {
+                        // (Clear of the selection's edge.)
+                        ui.add_space(4.0);
+                    }
                     draw(ui, &row, &items[idx]);
                 });
             }
@@ -240,6 +244,34 @@ pub fn label(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, hover: Option
         Some(hover) => response.on_hover_text(hover),
         None => response,
     }
+}
+
+/// A row's text on a touch screen, the shape every list there shares:
+/// `name` after `tags`' chips, over `detail` in small, weak text (or
+/// `name` alone, centered, without one). Draw a row's right-hand widgets
+/// first (in a right-to-left layout), then this.
+pub fn two_lines<'a>(
+    ui: &mut egui::Ui,
+    tags: impl DoubleEndedIterator<Item = (&'a str, [u8; 3])>,
+    name: impl Into<egui::WidgetText>,
+    detail: Option<String>,
+    scroll: bool,
+) {
+    let Some(detail) = detail else {
+        chips(ui, tags);
+        label(ui, name, None, scroll);
+        return;
+    };
+    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.add_space(3.0);
+        ui.spacing_mut().item_spacing.y = 1.0;
+        let line = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+        ui.allocate_ui_with_layout(line, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            chips(ui, tags);
+            label(ui, name, None, scroll);
+        });
+        label(ui, egui::RichText::new(detail).small().weak(), None, scroll);
+    });
 }
 
 /// Whether a row's text scrolls when it's cut short: on the `playing` row

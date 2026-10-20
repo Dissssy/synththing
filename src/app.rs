@@ -1506,9 +1506,10 @@ impl App {
         });
 
         let active_sf = self.active_sf;
+        let touch = select_list::touch(ui.ctx());
         let mut remove = None;
         let mut use_idx = None;
-        let output = select_list::show(ui, "soundfonts", &self.config.soundfonts, &mut self.soundfont_selection, None, |ui, row, path| {
+        let output = select_list::show(ui, "soundfonts", &self.config.soundfonts, &mut self.soundfont_selection, active_sf, |ui, row, path| {
             if row.response.drag_started() {
                 row.response.dnd_set_drag_payload(DraggedSoundfont(path.clone()));
             }
@@ -1522,22 +1523,25 @@ impl App {
                     remove = Some(rows);
                 }
             });
-            if ui.small_button("x").on_hover_text("Remove from the list").clicked() {
-                remove = Some(vec![row.idx]);
-            }
-            ui.separator();
-            let mut label = nice_name(path);
-            if !path.exists() {
-                label.push_str("  (missing)");
-            }
-            let text = egui::RichText::new(label);
-            let hover = format!(
-                "{}\nDouble-click to use; drag onto a MIDI playlist entry to override its soundfont",
-                path.display()
-            );
             let active = Some(row.idx) == active_sf;
+            let text = egui::RichText::new(nice_name(path));
+            let text = if active { text.strong() } else { text };
             let scroll = select_list::scrolls(row, active);
-            select_list::label(ui, if active { text.strong() } else { text }, Some(hover), scroll);
+            // Its size, or that it's gone.
+            let size = std::fs::metadata(path).map_or_else(|_| "missing".to_string(), |m| crate::storage::size_text(m.len()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if touch {
+                    let detail = if active { format!("in use · {size}") } else { size };
+                    select_list::two_lines(ui, std::iter::empty(), text, Some(detail), scroll);
+                    return;
+                }
+                ui.weak(size);
+                let hover = format!(
+                    "{}\nDouble-click to use; drag onto a MIDI playlist entry to override its soundfont",
+                    path.display()
+                );
+                select_list::label(ui, text, Some(hover), scroll);
+            });
         });
         if output.delete {
             remove = Some(self.soundfont_selection.rows().to_vec());
@@ -4119,6 +4123,15 @@ fn inline_code_job(ui: &egui::Ui, prefix: &str, text: &str) -> egui::text::Layou
     job
 }
 
+/// A song's length to read ("3:25"): "..." while it's being read, "--:--"
+/// for one without a length.
+fn length_text(info: Option<&crate::song_info::SongInfo>) -> String {
+    match info {
+        None => "...".to_string(),
+        Some(info) => info.length.map(format_length).unwrap_or_else(|| "--:--".to_string()),
+    }
+}
+
 /// A song's length and an info button (greyed out when the file has no
 /// details to show), for the end of a list row; laid out right to left.
 /// A song's length (`with_length`) and a warning for a very large MIDI
@@ -4126,11 +4139,7 @@ fn inline_code_job(ui: &egui::Ui, prefix: &str, text: &str) -> egui::text::Layou
 fn song_info_widgets(ui: &mut egui::Ui, cache: &mut SongInfoCache, path: &Path, with_length: bool) {
     let info = cache.get(path);
     if with_length {
-        let length = match &info {
-            None => "...".to_string(),
-            Some(info) => info.length.map(format_length).unwrap_or_else(|| "--:--".to_string()),
-        };
-        ui.weak(length);
+        ui.weak(length_text(info.as_deref()));
     }
     if let Some(info) = info.filter(|i| i.is_heavy()) {
         ui.colored_label(egui::Color32::from_rgb(230, 80, 80), "!").on_hover_text(format!(
