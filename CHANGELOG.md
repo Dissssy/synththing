@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.0.1 (2026-10-20)
+
 ### Added
 - Songs go straight to your other devices that are open: streamed through the server as they're sent, kept nowhere, and of any size. Only for a device that isn't open do they wait on the server.
 - Send feedback can include how smoothly the app ran over the last minute (on unless you untick it): how many frames took too long, and how long each part of the app took on average and at worst. It helps track down stutters.
