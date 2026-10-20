@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.1.0 (2026-10-20)
+
 ### Added
 - Starred songs: click the alien at the left of a song, in Songs or a playlist, to star it (again to unstar it). Its neon green is part of the theme.
 - Only play starred songs (Preferences > Playback): shuffle, autoplay and playlists playing on go only to starred songs. A song you pick yourself still plays.
