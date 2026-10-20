@@ -30,6 +30,7 @@ mod config;
 mod device;
 mod credits;
 mod engine;
+mod frame_timing;
 mod ffmpeg;
 mod gamepad;
 mod headless;
