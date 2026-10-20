@@ -60,15 +60,17 @@ pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> B
 /// Take the synced library: every song's name and tags, and the tags
 /// (those gone from it deleted here).
 pub fn apply_library(store: &mut SongStore, fields: &Fields) {
+    let mut songs = Vec::new();
     for (key, field) in fields {
         if let Some(id) = key.strip_prefix(TAG) {
             if let Ok(tag) = serde_json::from_value::<Tag>(field.value.clone()) {
                 store.set_tag(id, tag);
             }
         } else if let Ok(song) = serde_json::from_value::<SyncedSong>(field.value.clone()) {
-            store.learn(key, &song.name, song.tags);
+            songs.push((key.clone(), song.name, song.tags));
         }
     }
+    store.learn(songs);
     let gone: Vec<String> = store.tags().keys().filter(|id| !fields.contains_key(&format!("{TAG}{id}"))).cloned().collect();
     for id in gone {
         store.remove_tag(&id);
