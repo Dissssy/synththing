@@ -192,11 +192,13 @@ impl App {
         if let Err(e) = self.playlists.save(list) {
             self.status = format!("Couldn't save playlist: {e}");
         }
+        self.playlists_changed();
     }
 
     fn create_playlist(&mut self, name: &str, songs: Vec<PathBuf>) {
         match self.playlists.create(name, songs) {
             Ok(idx) => {
+                self.playlists_changed();
                 self.viewed_playlist = Some(idx);
                 self.playlist_rename = None;
                 self.confirm_delete_playlist = false;
@@ -212,6 +214,7 @@ impl App {
             self.status = format!("Couldn't delete playlist: {e}");
             return;
         }
+        self.playlists_changed();
         self.status = format!("Deleted playlist: {name}");
         self.playlist_selection.clear();
         self.now_playing = self.now_playing.take().and_then(|mut np| {

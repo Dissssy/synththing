@@ -7,11 +7,12 @@
 //!
 //! Getting a file in ([`copy_in`], [`move_in`], [`write_in`]) is plain file
 //! work, done off the main thread; [`SongStore::add`] then records it. The
-//! files are the truth: [`SongStore::open`] adds any file the index lacks
-//! (a copy that finished as the app quit) and drops entries whose file is
-//! gone.
+//! files say which songs are here: [`SongStore::open`] adds any file the
+//! index lacks (a copy that finished as the app quit). The index also
+//! keeps songs that aren't (removed here, or in a playlist synced from
+//! another device: [`SongStore::know`]), so they keep their names.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -42,6 +43,8 @@ pub struct Stored {
 pub struct SongStore {
     dir: PathBuf,
     songs: BTreeMap<String, Song>,
+    /// The keys whose files are here.
+    present: BTreeSet<String>,
 }
 
 impl SongStore {
@@ -51,19 +54,17 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{INDEX}: {e}")).ok())
             .unwrap_or_default();
-        let on_disk: Vec<String> = std::fs::read_dir(&dir)
+        let present: BTreeSet<String> = std::fs::read_dir(&dir)
             .map(|entries| entries.flatten().filter_map(|e| e.file_name().to_str().filter(|n| is_key(n)).map(str::to_string)).collect())
             .unwrap_or_default();
-        let before = songs.len();
-        songs.retain(|key, _| on_disk.contains(key));
-        let mut changed = songs.len() != before;
-        for key in on_disk {
-            songs.entry(key).or_insert_with_key(|key| {
+        let mut changed = false;
+        for key in &present {
+            songs.entry(key.clone()).or_insert_with_key(|key| {
                 changed = true;
                 Song { name: key.clone(), imported: now() }
             });
         }
-        let store = Self { dir, songs };
+        let store = Self { dir, songs, present };
         if changed {
             store.save();
         }
@@ -88,10 +89,21 @@ impl SongStore {
         if song.name == stored.key {
             song.name = stored.name;
         }
+        self.present.insert(stored.key);
         self.save();
     }
 
-    /// Delete the song at `path` from the store.
+    /// Note a song that isn't here (yet) by its key and name, unless it's
+    /// known already.
+    pub fn know(&mut self, key: &str, name: &str) {
+        if !is_key(key) || self.songs.contains_key(key) {
+            return;
+        }
+        self.songs.insert(key.to_string(), Song { name: name.to_string(), imported: now() });
+        self.save();
+    }
+
+    /// Delete the song at `path` from the store (it stays known).
     pub fn remove(&mut self, path: &Path) -> Result<()> {
         let Some(key) = self.key_of(path).map(str::to_string) else { return Ok(()) };
         match std::fs::remove_file(path) {
@@ -99,19 +111,19 @@ impl SongStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e).with_context(|| format!("deleting {}", path.display())),
         }
-        self.songs.remove(&key);
-        self.save();
+        self.present.remove(&key);
         Ok(())
     }
 
-    /// The song stored at `path`, if it's one of the store's.
+    /// What's known of the song at `path` (here or not), if it's one of
+    /// the store's.
     pub fn get(&self, path: &Path) -> Option<&Song> {
         self.songs.get(self.key_of(path)?)
     }
 
-    /// Every song: its file and what's known of it.
+    /// Every song here: its file and what's known of it.
     pub fn songs(&self) -> impl Iterator<Item = (PathBuf, &Song)> {
-        self.songs.iter().map(|(key, song)| (self.dir.join(key), song))
+        self.present.iter().filter_map(|key| Some((self.dir.join(key), self.songs.get(key)?)))
     }
 
     /// The key of the song at `path`, if it's in this store.
@@ -133,7 +145,7 @@ impl SongStore {
 
 /// Whether `name` is a stored song's file name: 64 hex digits, a dot, an
 /// extension.
-fn is_key(name: &str) -> bool {
+pub fn is_key(name: &str) -> bool {
     name.split_once('.').is_some_and(|(hash, ext)| {
         hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) && !ext.is_empty()
     })
@@ -380,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn the_files_are_the_truth() {
+    fn the_files_say_whats_here() {
         let dir = temp_dir("truth");
         let kept = write_in(b"kept", "kept.mid", &dir).unwrap();
         let gone = write_in(b"gone", "gone.mid", &dir).unwrap();
@@ -392,12 +404,22 @@ mod tests {
         let unrecorded = write_in(b"new", "new.ogg", &dir).unwrap();
         std::fs::write(dir.join("not a song.txt"), b"").unwrap();
 
-        let store = SongStore::open(dir.clone());
+        let mut store = SongStore::open(dir.clone());
         let keys: Vec<String> = store.songs().map(|(p, _)| file_name(&p)).collect();
         let mut expected = vec![kept.key.clone(), unrecorded.key.clone()];
         expected.sort();
         assert_eq!(keys, expected);
         assert_eq!(store.get(&dir.join(&kept.key)).unwrap().name, "kept.mid");
+        // Gone from here, still known by name.
+        assert_eq!(store.get(&dir.join(&gone.key)).unwrap().name, "gone.mid");
+        // Known from elsewhere: named, not here.
+        let elsewhere = format!("{}.mid", "a".repeat(64));
+        store.know(&elsewhere, "Elsewhere.mid");
+        store.know("../escape", "nope");
+        let store = SongStore::open(dir.clone());
+        assert_eq!(store.get(&dir.join(&elsewhere)).unwrap().name, "Elsewhere.mid");
+        assert!(store.get(&dir.join("../escape")).is_none());
+        assert_eq!(store.songs().count(), 2);
     }
 
     #[test]

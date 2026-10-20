@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Sync playlists between your devices, with your settings: the switch is now Sync settings and playlists between my devices (Playlists, under Songs in What this device syncs, turns it off on one device). A playlist renamed or changed on one device changes on the others; changed on two at once, the newer change wins. A song a device doesn't have yet shows as unavailable there, by its name. Which soundfont an entry uses stays on each device. Sync turns itself off once after this update: turn it back on.
+
 ## 0.10.2 (2026-10-20)
 
 ### Changed

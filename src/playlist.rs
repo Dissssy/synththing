@@ -2,6 +2,8 @@
 //! (`song_store.rs`), each entry optionally carrying its own soundfont
 //! override (MIDI only), persisted one JSON file per playlist under
 //! `<config dir>/playlists/`, naming each song by its key in the library.
+//! Each file is named by the playlist's ID (random, the same on every
+//! device it syncs to: `playlist_sync.rs`); its name is only a field.
 //!
 //! This module is the data model and the pure "what plays next" logic; the
 //! panel UI, drag-and-drop and actually loading/playing tracks live in
@@ -54,11 +56,9 @@ struct EntryFile {
     soundfont: Option<PathBuf>,
 }
 
-/// A playlist plus the file it's saved in. The file name is fixed at
-/// creation; renaming only changes `playlist.name`, so a rename never has to
-/// touch the filesystem beyond the usual save.
+/// A playlist and its ID (its file's name).
 pub struct StoredPlaylist {
-    file: PathBuf,
+    pub id: String,
     pub playlist: Playlist,
 }
 
@@ -72,15 +72,26 @@ pub struct Library {
 impl Library {
     /// Load every `*.json` in `dir`, sorted by name, their songs in the
     /// library in `songs`. Unreadable files are skipped and reported back
-    /// rather than failing the whole load.
+    /// rather than failing the whole load. A file not named by an ID (put
+    /// there by hand) is given one.
     pub fn load(dir: PathBuf, songs: PathBuf) -> (Self, Vec<String>) {
         let mut lists = Vec::new();
         let mut errors = Vec::new();
         if let Ok(read_dir) = fs::read_dir(&dir) {
             for entry in read_dir.flatten() {
-                let file = entry.path();
+                let mut file = entry.path();
                 if file.extension().and_then(|e| e.to_str()) != Some("json") {
                     continue;
+                }
+                let mut id = file.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+                if !is_id(&id) {
+                    id = new_id();
+                    let renamed = dir.join(format!("{id}.json"));
+                    if let Err(e) = fs::rename(&file, &renamed) {
+                        errors.push(format!("{}: {e}", file.display()));
+                        continue;
+                    }
+                    file = renamed;
                 }
                 let parsed = fs::read_to_string(&file)
                     .map_err(anyhow::Error::from)
@@ -92,7 +103,7 @@ impl Library {
                             .into_iter()
                             .map(|e| PlaylistEntry { soundfont: e.soundfont, ..PlaylistEntry::new(songs.join(e.song)) })
                             .collect();
-                        lists.push(StoredPlaylist { file, playlist: Playlist { name: saved.name, entries } });
+                        lists.push(StoredPlaylist { id, playlist: Playlist { name: saved.name, entries } });
                     }
                     Err(e) => errors.push(format!("{}: {e}", file.display())),
                 }
@@ -104,23 +115,42 @@ impl Library {
 
     /// Create and save a new playlist, returning its index.
     pub fn create(&mut self, name: &str, songs: Vec<PathBuf>) -> Result<usize> {
-        fs::create_dir_all(&self.dir)
-            .with_context(|| format!("creating {}", self.dir.display()))?;
-        let stem = file_stem_for(name);
-        let mut file = self.dir.join(format!("{stem}.json"));
-        let mut n = 2;
-        while file.exists() || self.lists.iter().any(|l| l.file == file) {
-            file = self.dir.join(format!("{stem}-{n}.json"));
-            n += 1;
-        }
         let playlist = Playlist {
             name: name.to_string(),
             entries: songs.into_iter().map(PlaylistEntry::new).collect(),
         };
-        self.lists.push(StoredPlaylist { file, playlist });
-        let idx = self.lists.len() - 1;
+        self.put(&new_id(), playlist)
+    }
+
+    /// Save `playlist` as the one with `id`, replacing it if there is one
+    /// (else added at the end); its index.
+    pub fn put(&mut self, id: &str, playlist: Playlist) -> Result<usize> {
+        let idx = match self.find(id) {
+            Some(idx) => {
+                self.lists[idx].playlist = playlist;
+                idx
+            }
+            None => {
+                self.lists.push(StoredPlaylist { id: id.to_string(), playlist });
+                self.lists.len() - 1
+            }
+        };
         self.save(idx)?;
         Ok(idx)
+    }
+
+    /// The index of the playlist with `id`.
+    pub fn find(&self, id: &str) -> Option<usize> {
+        self.lists.iter().position(|l| l.id == id)
+    }
+
+    /// The song library's folder.
+    pub fn songs_dir(&self) -> &Path {
+        &self.songs
+    }
+
+    fn file(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.json"))
     }
 
     pub fn save(&self, idx: usize) -> Result<()> {
@@ -138,8 +168,9 @@ impl Library {
                 .collect(),
         };
         let json = serde_json::to_string_pretty(&saved)?;
-        fs::write(&stored.file, json)
-            .with_context(|| format!("writing {}", stored.file.display()))
+        fs::create_dir_all(&self.dir).with_context(|| format!("creating {}", self.dir.display()))?;
+        let file = self.file(&stored.id);
+        fs::write(&file, json).with_context(|| format!("writing {}", file.display()))
     }
 
     pub fn delete(&mut self, idx: usize) -> Result<()> {
@@ -147,24 +178,28 @@ impl Library {
             return Ok(());
         }
         let stored = self.lists.remove(idx);
-        if stored.file.exists() {
-            fs::remove_file(&stored.file)
-                .with_context(|| format!("deleting {}", stored.file.display()))?;
+        let file = self.file(&stored.id);
+        match fs::remove_file(&file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(e).with_context(|| format!("deleting {}", file.display()))
+            }
+            _ => Ok(()),
         }
-        Ok(())
     }
 }
 
-/// A filesystem-safe file stem for a playlist name, anything outside
-/// `[A-Za-z0-9 _-]` becomes `_`, so names like "a/b: c?" can't escape the
-/// playlists folder or trip Windows' reserved characters.
-fn file_stem_for(name: &str) -> String {
-    let stem: String = name
-        .trim()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-') { c } else { '_' })
-        .collect();
-    if stem.trim().is_empty() { "playlist".to_string() } else { stem }
+/// A playlist ID: 16 lowercase hex digits.
+pub fn is_id(id: &str) -> bool {
+    id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
+fn new_id() -> String {
+    let mut bytes = [0u8; 8];
+    if getrandom::fill(&mut bytes).is_err() {
+        // (No randomness: the time will do, for one device's playlists.)
+        bytes = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64).to_le_bytes();
+    }
+    crate::library::hex(&bytes)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -464,9 +499,26 @@ mod tests {
     }
 
     #[test]
-    fn file_stems_are_filesystem_safe() {
-        assert_eq!(file_stem_for("chill / study: mix?"), "chill _ study_ mix_");
-        assert_eq!(file_stem_for("   "), "playlist");
-        assert_eq!(file_stem_for("../../etc"), "______etc");
+    fn playlists_are_files_named_by_id() {
+        let root = std::env::temp_dir().join(format!("synththing-playlist-ids-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (dir, songs) = (root.join("playlists"), root.join("music"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("By hand.json"), r#"{ "name": "By hand", "entries": [] }"#).unwrap();
+        let (mut library, errors) = Library::load(dir.clone(), songs.clone());
+        assert!(errors.is_empty(), "{errors:?}");
+        let by_hand = library.lists[0].id.clone();
+        assert!(is_id(&by_hand), "{by_hand}");
+        assert!(dir.join(format!("{by_hand}.json")).exists() && !dir.join("By hand.json").exists());
+
+        let made = library.create("a/b: c?", vec![songs.join("x.mid")]).unwrap();
+        let id = library.lists[made].id.clone();
+        assert!(is_id(&id) && id != by_hand);
+        let renamed = Playlist { name: "Renamed".into(), entries: Vec::new() };
+        assert_eq!(library.put(&id, renamed).unwrap(), made);
+        let (library, _) = Library::load(dir.clone(), songs);
+        assert_eq!(library.lists.iter().map(|l| l.playlist.name.as_str()).collect::<Vec<_>>(), ["By hand", "Renamed"]);
+        assert_eq!(library.find(&id), Some(1));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

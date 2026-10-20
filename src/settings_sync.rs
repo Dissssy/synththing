@@ -5,9 +5,13 @@
 //! The config is flattened to its leaves (`library/servers`, `theme`, ...),
 //! and each synced one is kept with when it last changed. Every save of
 //! the config (`Config::save`) stamps the leaves that changed since the
-//! last one, so nothing else needs to know about sync. `sync.json` holds
-//! this device's state: its leaves, the server's as of the last sync (the
-//! base a merge starts from) and the revision that was.
+//! last one, so nothing else needs to know about sync. `sync-settings.json`
+//! holds this device's state: its leaves, the server's as of the last sync
+//! (the base a merge starts from) and the revision that was.
+//!
+//! The same state and merge carry other synced data as leaves of its own
+//! (`playlist_sync.rs`: a leaf per playlist), each in its own blob and
+//! `sync-<name>.json`.
 //!
 //! Merging is per leaf, against the base: a leaf only one side changed
 //! takes that side's value, and one both changed takes the newer change.
@@ -104,6 +108,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("audio_files", "Show audio files", &["show_audio_files"]),
             setting("preload", "Preload songs on hover", &["preload_on_hover"]),
             setting("unload", "Unload preloaded files after", &["preload_expiry_secs"]),
+            PLAYLISTS,
         ],
     },
     Category {
@@ -145,6 +150,10 @@ pub const CATEGORIES: &[Category] = &[
 
 /// Leaves no setting lists: a newer app's, or ones not listed yet.
 const OTHER: Setting = setting("other", "Anything else", &[]);
+
+/// The playlists (`playlist_sync.rs`): no settings of their own, but
+/// chosen with them.
+pub const PLAYLISTS: Setting = setting("playlists", "Playlists", &[]);
 
 fn under(path: &str, prefix: &str) -> bool {
     path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
@@ -192,7 +201,7 @@ pub enum Winner {
     Server,
 }
 
-/// This device's sync state (`sync.json`).
+/// This device's state for one synced blob (`sync-<name>.json`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct State {
     /// Which sync key it's for (`key_check`): a state for another one (signed
@@ -209,7 +218,7 @@ pub struct State {
     /// can't take).
     pub applied: BTreeMap<String, Value>,
     /// The settings this device syncs, where they differ from their
-    /// defaults.
+    /// defaults (the settings' state only).
     #[serde(default)]
     pub choices: Choices,
 }
@@ -217,8 +226,8 @@ pub struct State {
 /// A save changed a synced setting since this was last asked.
 static DIRTY: AtomicBool = AtomicBool::new(false);
 
-fn path() -> Option<PathBuf> {
-    crate::config::config_dir().ok().map(|d| d.join("sync.json"))
+fn path(name: &str) -> Option<PathBuf> {
+    crate::config::config_dir().ok().map(|d| d.join(format!("sync-{name}.json")))
 }
 
 /// A short check of a sync key, to tell which one a state is for (not the
@@ -233,32 +242,41 @@ pub fn now() -> i64 {
 }
 
 impl State {
-    /// The saved state, if sync is on here (for the sync key there is now).
-    pub fn load() -> Option<Self> {
+    /// The saved state for the blob `name`, if it syncs here (for the sync
+    /// key there is now).
+    pub fn load(name: &str) -> Option<Self> {
         let sync_key = crate::library::identity::sync_key()?;
-        let state: Self = serde_json::from_str(&std::fs::read_to_string(path()?).ok()?).ok()?;
+        let state: Self = serde_json::from_str(&std::fs::read_to_string(path(name)?).ok()?).ok()?;
         (state.key == key_check(&sync_key)).then_some(state)
     }
 
-    /// A new state (sync turned on), its leaves those of `config`.
+    /// A new settings state (sync turned on), its leaves those of `config`.
     pub fn new(sync_key: &[u8; 32], config: &Value) -> Self {
-        let choices = Choices::new();
-        let applied = synced_leaves(config, &choices);
-        let at = now();
-        let fields = applied.iter().map(|(k, v)| (k.clone(), Field { value: v.clone(), changed: at })).collect();
-        Self { key: key_check(sync_key), revision: 0, base: Fields::new(), fields, applied, choices }
+        Self::of(sync_key, synced_leaves(config, &Choices::new()))
     }
 
-    pub fn save(&self) -> Result<(), String> {
-        let path = path().ok_or("no config folder")?;
+    /// A new state whose leaves are `leaves`, all changed now.
+    pub fn of(sync_key: &[u8; 32], applied: BTreeMap<String, Value>) -> Self {
+        let at = now();
+        let fields = applied.iter().map(|(k, v)| (k.clone(), Field { value: v.clone(), changed: at })).collect();
+        Self { key: key_check(sync_key), revision: 0, base: Fields::new(), fields, applied, choices: Choices::new() }
+    }
+
+    pub fn save(&self, name: &str) -> Result<(), String> {
+        let path = path(name).ok_or("no config folder")?;
         std::fs::write(&path, serde_json::to_string(self).unwrap_or_default())
             .map_err(|e| format!("couldn't write {}: {e}", path.display()))
     }
 
-    /// Stamp the leaves of `config` that changed since `applied`; whether
-    /// any did.
+    /// Stamp the synced leaves of `config` that changed since `applied`;
+    /// whether any did.
     pub fn record(&mut self, config: &Value, at: i64) -> bool {
         let leaves = synced_leaves(config, &self.choices);
+        self.record_leaves(leaves, at)
+    }
+
+    /// Stamp the leaves that changed since `applied`; whether any did.
+    pub fn record_leaves(&mut self, leaves: BTreeMap<String, Value>, at: i64) -> bool {
         let mut changed = false;
         for (path, value) in &leaves {
             if self.applied.get(path) != Some(value) {
@@ -295,19 +313,21 @@ impl State {
     }
 }
 
-/// Turn sync off here (`State::load` finds nothing after this).
-pub fn turn_off() {
-    if let Some(path) = path() {
+/// Stop syncing the blob `name` here (`State::load` finds nothing after
+/// this); what the server has stays.
+pub fn stop(name: &str) {
+    if let Some(path) = path(name) {
         let _ = std::fs::remove_file(path);
     }
 }
 
+
 /// The config was saved (`Config::save`): with sync on, stamp what changed,
 /// and note that it did.
 pub fn record(config: &Value) {
-    let Some(mut state) = State::load() else { return };
+    let Some(mut state) = State::load(NAME) else { return };
     if state.record(config, now()) {
-        if let Err(e) = state.save() {
+        if let Err(e) = state.save(NAME) {
             log::warn!("settings sync: {e}");
         }
         DIRTY.store(true, Ordering::Relaxed);
@@ -352,12 +372,17 @@ pub fn synced_leaves(config: &Value, choices: &Choices) -> BTreeMap<String, Valu
 /// the result, and what it changed of `local`'s. A leaf this device doesn't
 /// sync (`choices`) keeps the server's.
 pub fn merge(base: &Fields, local: &Fields, server: &Fields, choices: &Choices) -> (Fields, Vec<Change>) {
+    merge_where(base, local, server, |path| syncs(choices, setting_of(path)))
+}
+
+/// `merge`, for leaves that sync here where `syncs` says.
+pub fn merge_where(base: &Fields, local: &Fields, server: &Fields, syncs: impl Fn(&str) -> bool) -> (Fields, Vec<Change>) {
     let mut merged = Fields::new();
     let mut changes = Vec::new();
     let paths: std::collections::BTreeSet<&String> = local.keys().chain(server.keys()).chain(base.keys()).collect();
     for path in paths {
         let (b, l, s) = (base.get(path).map(|f| &f.value), local.get(path), server.get(path));
-        if !syncs(choices, setting_of(path)) {
+        if !syncs(path) {
             if let Some(field) = s {
                 merged.insert(path.clone(), field.clone());
             }
