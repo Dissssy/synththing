@@ -1063,6 +1063,7 @@ impl App {
     /// format, and (for a script that can) whether it plays itself.
     pub(super) fn record_window_ui(&mut self, ctx: &egui::Context, view: &EngineView) {
         let Some(mut draft) = self.recording.window.clone() else { return };
+        let song_name = draft.song.clone().map(|song| self.song_title(&song));
         let mut start = false;
         let mut close = false;
         let mut picked_script = None;
@@ -1085,7 +1086,7 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.radio_value(&mut draft.kind, RecordKind::Song, "A song, from the start")
                             .on_hover_text("Plays the song from the top and records until it ends.");
-                        let name = draft.song.as_deref().map(nice_name);
+                        let name = song_name.clone();
                         let playing = draft.song.is_some() && draft.song == self.current_song;
                         match name {
                             Some(name) if playing => ui.label(format!("{name} (playing)")),
@@ -1201,7 +1202,6 @@ impl App {
         if choose_song
             && let Some(path) = rfd::FileDialog::new()
                 .add_filter("Songs", listed_song_extensions(&self.config))
-                .set_directory(self.config.browse_start_dir())
                 .pick_file()
         {
             draft.song = Some(path);

@@ -1,6 +1,6 @@
 //! Live refresh for the folders the app shows: tells the app when files
-//! appear, disappear or change in the Songs browser's current folder or the
-//! scripts folder, so those views update without a manual refresh.
+//! appear, disappear or change in the scripts folder, so the script picker
+//! updates without a manual refresh.
 //!
 //! Uses the OS's own change notifications (via `notify`), not polling, so
 //! watching costs nothing while nothing changes, even on a network drive.
@@ -21,8 +21,6 @@ const SETTLE: Duration = Duration::from_millis(300);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Watched {
-    /// The folder the Songs browser is showing.
-    Songs,
     /// The visualizer scripts folder.
     Scripts,
 }

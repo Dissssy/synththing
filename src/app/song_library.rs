@@ -1,9 +1,8 @@
 //! Songs in the Library (docs/SERVER.md): a song's own part of its details
-//! (its credits and facts, Download), downloading songs into the `Library`
-//! folder (in the song browser's default folder, else beside the starter
-//! songs), each with a `.song.json` saying where it came from, the
-//! Downloaded songs tab, and Publish song... (the song browser's
-//! right-click menu). Searching, encores, reports and deleting are the
+//! (its credits and facts, Download), downloading songs into the song
+//! library (`song_store.rs`, which notes where each came from), the
+//! Downloaded songs tab, and Publish song... (the Songs list's right-click
+//! menu). Searching, encores, reports and deleting are the
 //! Library's own (`library.rs`), the same for songs as for scripts.
 //!
 //! The selected song's preview is played here, not fetched as images: its
@@ -14,7 +13,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::{Duration, Instant};
 
 use eframe::egui;
 
@@ -25,6 +23,7 @@ use crate::library::songs::{self, SongSource, SongUpload};
 use crate::library::{self, client, Info, Receipt, ScriptSummary};
 use crate::loader::{Asset, LoadState};
 use crate::song_preview::{PreviewOutput, SongPreview};
+use crate::song_store;
 
 /// A song on a server, as previewed: (server, ID, version).
 type SongKey = (String, String, u32);
@@ -71,14 +70,8 @@ struct SongDraft {
 pub struct SongLibraryState {
     events: (Sender<Event>, Receiver<Event>),
     publish: Option<SongDraft>,
-    /// Songs saved from libraries: their file, and where they came from.
-    downloaded: Vec<(PathBuf, SongSource)>,
-    /// When `downloaded` was last read from the folder.
-    scanned: Option<Instant>,
     /// A download is under way.
     busy: bool,
-    /// Delete was clicked once (for this file); the next click confirms.
-    confirm_delete: Option<PathBuf>,
     /// Where previews play.
     output: PreviewOutput,
     /// The selected song's file (`None` while it's coming).
@@ -105,10 +98,7 @@ impl SongLibraryState {
         Self {
             events: mpsc::channel(),
             publish: None,
-            downloaded: Vec::new(),
-            scanned: None,
             busy: false,
-            confirm_delete: None,
             output,
             file: None,
             playing: None,
@@ -124,13 +114,6 @@ impl SongLibraryState {
     }
 }
 
-/// How often the Library folder is read again, while it's on screen.
-const RESCAN_EVERY: Duration = Duration::from_secs(2);
-
-fn is_midi(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
-}
-
 impl App {
     fn spawn_songs(&self, job: impl FnOnce() -> Event + Send + 'static) {
         let tx = self.song_library.events.0.clone();
@@ -139,45 +122,13 @@ impl App {
         });
     }
 
-    /// Where songs from libraries are saved: `Library` in the song
-    /// browser's default folder, or beside the starter songs.
-    pub(super) fn library_songs_dir(&self) -> PathBuf {
-        let base = self.config.browse_dir.clone().filter(|d| d.is_dir()).unwrap_or_else(|| {
-            let starter = crate::starter::songs_dir();
-            starter.parent().map(Path::to_path_buf).unwrap_or(starter)
-        });
-        base.join("Library")
-    }
-
-    /// Read the Library folder again (if it's been a while).
-    fn rescan_downloaded(&mut self, force: bool) {
-        if !force && self.song_library.scanned.is_some_and(|at| at.elapsed() < RESCAN_EVERY) {
-            return;
-        }
-        let dir = self.library_songs_dir();
-        let mut found: Vec<(PathBuf, SongSource)> = std::fs::read_dir(&dir)
-            .map(|entries| {
-                entries
-                    .flatten()
-                    .map(|e| e.path())
-                    .filter(|p| is_midi(p))
-                    .filter_map(|p| SongSource::read(&p).map(|s| (p, s)))
-                    .collect()
-            })
-            .unwrap_or_default();
-        found.sort_by_key(|(_, s)| s.name.to_lowercase());
-        self.song_library.downloaded = found;
-        self.song_library.scanned = Some(Instant::now());
-    }
-
-    /// The downloaded copy of a song on `server`: its file and version.
-    fn downloaded_copy(&mut self, server: &str, id: &str) -> Option<(PathBuf, u32)> {
-        self.rescan_downloaded(false);
-        self.song_library
-            .downloaded
-            .iter()
-            .find(|(_, s)| s.id == id && library::resolve_server(&s.server) == server)
-            .map(|(p, s)| (p.clone(), s.version))
+    /// The downloaded copy of a song on `server`: its file in the song
+    /// library, and its version.
+    fn downloaded_copy(&self, server: &str, id: &str) -> Option<(PathBuf, u32)> {
+        self.songs.songs().find_map(|(path, song)| {
+            let source = song.source.as_ref()?;
+            (source.id == id && library::resolve_server(&source.server) == server).then_some((path, source.version))
+        })
     }
 
     /// Per frame: requests that finished.
@@ -208,23 +159,9 @@ impl App {
         }
     }
 
-    /// Write a downloaded song into the Library folder (over the copy
-    /// downloaded before, if there is one), noting where it came from.
+    /// Put a downloaded song into the song library, noting where it came
+    /// from. A newer version takes the older one's place, in playlists too.
     fn save_download(&mut self, server: &str, summary: &ScriptSummary, download: client::SongDownload) {
-        let dir = self.library_songs_dir();
-        let path = match self.downloaded_copy(server, &summary.id) {
-            Some((path, _)) => path,
-            None => {
-                let stem = library::file_stem_for(&summary.name);
-                let mut path = dir.join(format!("{stem}.mid"));
-                let mut n = 2;
-                while path.exists() {
-                    path = dir.join(format!("{stem} ({n}).mid"));
-                    n += 1;
-                }
-                path
-            }
-        };
         let source = SongSource {
             server: server.to_string(),
             id: summary.id.clone(),
@@ -238,16 +175,38 @@ impl App {
             song: summary.song.clone().unwrap_or_default(),
             receipt: None,
         };
-        let written = std::fs::create_dir_all(&dir)
-            .and_then(|()| std::fs::write(&path, &download.bytes))
-            .and_then(|()| source.write(&path));
-        match written {
-            Ok(()) => {
-                log::info!("downloaded song {} from {server} as {}", summary.id, path.display());
-                self.rescan_downloaded(true);
-                self.status = format!("Downloaded \"{}\": it's in Downloaded songs.", summary.name);
+        let name = format!("{}.mid", library::file_stem_for(&summary.name));
+        let stored = match song_store::write_in(&download.bytes, &name, self.songs.dir()) {
+            Ok(stored) => stored,
+            Err(e) => return self.status = format!("Couldn't save {}: {e:#}", summary.name),
+        };
+        let path = self.songs.dir().join(&stored.key);
+        let older = self.downloaded_copy(server, &summary.id).map(|(p, _)| p).filter(|p| *p != path);
+        self.songs.add(stored, Some(source));
+        if let Some(older) = older {
+            self.replace_song(&older, &path);
+            if let Err(e) = self.songs.remove(&older) {
+                log::warn!("couldn't remove the older version: {e:#}");
             }
-            Err(e) => self.status = format!("Couldn't save {}: {e}", path.display()),
+        }
+        log::info!("downloaded song {} from {server} as {}", summary.id, path.display());
+        self.status = format!("Downloaded \"{}\": it's in your songs.", summary.name);
+    }
+
+    /// The song at `old` is at `new` now, in every playlist.
+    fn replace_song(&mut self, old: &Path, new: &Path) {
+        for i in 0..self.playlists.lists.len() {
+            let mut changed = false;
+            for entry in &mut self.playlists.lists[i].playlist.entries {
+                if entry.path == old {
+                    entry.path = new.to_path_buf();
+                    entry.missing = false;
+                    changed = true;
+                }
+            }
+            if changed {
+                self.save_playlist(i);
+            }
         }
     }
 
@@ -390,14 +349,11 @@ impl App {
                 if ui.button("Play").clicked() {
                     self.play_path(path.clone());
                 }
-                if ui.button("Show in folder").clicked() {
-                    super::open_in_file_manager(&path);
-                }
             }
             None => {
                 download = ui
                     .add_enabled(!self.song_library.busy, egui::Button::new("Download"))
-                    .on_hover_text(format!("Save it in {}", self.library_songs_dir().display()))
+                    .on_hover_text("Put it in your songs")
                     .clicked();
             }
         }
@@ -418,26 +374,21 @@ impl App {
         });
     }
 
-    /// The Downloaded songs tab: songs saved from libraries.
+    /// The Downloaded songs tab: the songs in the library that came from
+    /// libraries.
     pub(super) fn downloaded_songs_ui(&mut self, ui: &mut egui::Ui) {
-        self.rescan_downloaded(false);
-        let dir = self.library_songs_dir();
+        let mut downloaded: Vec<(PathBuf, SongSource)> =
+            self.songs.songs().filter_map(|(path, song)| Some((path, song.source.clone().filter(|s| s.receipt.is_none())?))).collect();
+        downloaded.sort_by_key(|(_, s)| s.name.to_lowercase());
         let mut open_library = false;
-        ui.horizontal(|ui| {
-            if dir.is_dir() && ui.add(super::icon_button("folder-open")).on_hover_text("Open the folder").clicked() {
-                super::open_in_file_manager(&dir);
-            }
-            crate::select_list::label(ui, egui::RichText::new(dir.display().to_string()).weak(), None);
-        });
-        ui.separator();
-        if self.song_library.downloaded.is_empty() {
+        if downloaded.is_empty() {
             ui.weak("No songs downloaded yet.");
             open_library = ui.button("Find some in the Library").clicked();
         }
         let mut play = None;
-        let mut delete = None;
+        let mut remove = None;
         egui::ScrollArea::vertical().id_salt("downloaded_songs").auto_shrink([false, false]).show(ui, |ui| {
-            for (path, source) in &self.song_library.downloaded {
+            for (path, source) in &downloaded {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.strong(&source.name);
@@ -453,12 +404,8 @@ impl App {
                         ui.weak(format!("{rights} · from {}", host(&library::resolve_server(&source.server))));
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let confirming = self.song_library.confirm_delete.as_ref() == Some(path);
-                        if ui.button(if confirming { "Click again to delete" } else { "Delete" }).clicked() {
-                            delete = Some((path.clone(), confirming));
-                        }
-                        if ui.button("Show in folder").clicked() {
-                            super::open_in_file_manager(path);
+                        if ui.button("Remove...").on_hover_text("Remove it from your songs").clicked() {
+                            remove = Some(path.clone());
                         }
                         if ui.button("Play").clicked() {
                             play = Some(path.clone());
@@ -471,19 +418,8 @@ impl App {
         if let Some(path) = play {
             self.play_path(path);
         }
-        match delete {
-            Some((path, true)) => {
-                self.song_library.confirm_delete = None;
-                let removed = std::fs::remove_file(&path);
-                let _ = std::fs::remove_file(songs::source_path(&path));
-                self.status = match removed {
-                    Ok(()) => format!("Deleted {}.", path.display()),
-                    Err(e) => format!("Couldn't delete {}: {e}", path.display()),
-                };
-                self.rescan_downloaded(true);
-            }
-            Some((path, false)) => self.song_library.confirm_delete = Some(path),
-            None => {}
+        if let Some(path) = remove {
+            self.remove_songs = vec![path];
         }
         if open_library {
             self.set_open(crate::layout::Section::Library, true);
@@ -500,7 +436,11 @@ impl App {
                 return;
             }
         };
-        let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("Song").to_string();
+        let stem = std::path::Path::new(super::naming(&self.config, &self.songs).file_name(&file))
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Song")
+            .to_string();
         let suggested = songs::suggest(&bytes, &stem);
         let servers = self.config.library.enabled_servers();
         // (Which of them take songs isn't known until each has been asked.)
@@ -508,7 +448,7 @@ impl App {
             let server = server.clone();
             self.spawn_songs(move || Event::Info(server.clone(), client::info(&server)));
         }
-        let published = SongSource::read(&file).filter(|s| s.receipt.is_some());
+        let published = self.songs.get(&file).and_then(|s| s.source.clone()).filter(|s| s.receipt.is_some());
         let my_id = self.library.my_id();
         let server = published
             .as_ref()
@@ -874,9 +814,7 @@ impl App {
             },
             receipt: Some(receipt.clone()),
         };
-        if let Err(e) = source.write(&file) {
-            log::warn!("couldn't note where {} was published: {e}", file.display());
-        }
+        self.songs.set_source(&file, source);
         log::info!("published song {} to {server} as {} v{}", file.display(), receipt.id, receipt.version);
         let said = if receipt.version > 1 {
             format!("Published version {} of \"{}\" to {}.", receipt.version, upload.name, host(&server))

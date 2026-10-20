@@ -6,7 +6,7 @@
 
 use eframe::egui;
 
-use super::{categories_body, fit_width, listed_song_extensions, nice_name, with_info, App};
+use super::{categories_body, fit_width, nice_name, with_info, App};
 use crate::audio::{AudioCommand, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
 
@@ -439,7 +439,6 @@ impl App {
             self.config.buffer_ms = (buffer_ms != DEFAULT_BUFFER_MS).then_some(buffer_ms);
             self.config.channel_chips = channel_chips;
             self.config.show_audio_files = audio_files;
-            self.browser.set_extensions(listed_song_extensions(&self.config));
             self.config.script_log_to_app = script_log;
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
             self.config.beat_pulse = Some(beat_pulse / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE).abs() > 1e-4);

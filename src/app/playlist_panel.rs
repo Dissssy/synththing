@@ -15,7 +15,7 @@ use super::{
 use crate::audio::AudioCommand;
 use crate::config::nice_name;
 use crate::engine::EngineView;
-use crate::filebrowser::DraggedFiles;
+use crate::song_list::DraggedFiles;
 use crate::layout::Section;
 use crate::playlist::{self, LoopMode, NowPlaying, PlaylistEntry};
 use crate::select_list;
@@ -26,8 +26,8 @@ use crate::song_info::format_length;
 pub(super) struct DraggedEntry {
     pub list: usize,
     pub indices: Vec<usize>,
-    /// The row grabbed, for the label following the pointer.
-    pub path: PathBuf,
+    /// The row grabbed's name, for the label following the pointer.
+    pub label: String,
 }
 
 /// Something dropped onto a playlist row this frame.
@@ -49,7 +49,6 @@ enum RowAction {
     Remove(Vec<usize>),
     ClearSoundfont(Vec<usize>),
     UseCurrentSoundfont(Vec<usize>),
-    RevealInSongs(usize),
 }
 
 impl App {
@@ -189,7 +188,7 @@ impl App {
 
     // --- editing -----------------------------------------------------------
 
-    fn save_playlist(&mut self, list: usize) {
+    pub(super) fn save_playlist(&mut self, list: usize) {
         if let Err(e) = self.playlists.save(list) {
             self.status = format!("Couldn't save playlist: {e}");
         }
@@ -245,17 +244,9 @@ impl App {
         self.status = format!("Added {count} song{} to {name}.", if count == 1 { "" } else { "s" });
     }
 
-    /// Insert `songs` at `at`; a folder among them adds the songs directly
-    /// in it.
+    /// Insert `songs` (the library's) at `at`.
     fn insert_songs(&mut self, list: usize, at: usize, songs: Vec<PathBuf>) {
-        let songs: Vec<PathBuf> = songs
-            .into_iter()
-            .flat_map(|p| {
-                if p.is_dir() { playlist::songs_in_folder(&p, listed_song_extensions(&self.config)) } else { vec![p] }
-            })
-            .collect();
         if songs.is_empty() {
-            self.status = "No songs directly in that folder.".to_string();
             return;
         }
         self.playlist_selection.clear();
@@ -417,7 +408,7 @@ impl App {
             if has_ext(&path, &["sf2", "sf3"]) {
                 soundfonts.push(path);
             } else if path.is_dir() {
-                songs.extend(playlist::songs_in_folder(&path, listed_song_extensions(&self.config)));
+                songs.extend(crate::song_store::songs_under(&path, listed_song_extensions(&self.config)));
             } else if has_ext(&path, SONG_EXTENSIONS) {
                 songs.push(path);
             }
@@ -428,14 +419,44 @@ impl App {
         if songs.is_empty() {
             return;
         }
+        // Into the library first, for the playlist; just played from
+        // where it is, with none showing.
         match self.viewed_playlist.filter(|_| self.is_open(Section::Playlists)) {
             Some(list) => {
                 let at = self.playlists.lists.get(list).map_or(0, |l| l.playlist.entries.len());
-                let count = songs.len();
-                self.insert_songs(list, at, songs);
-                self.status = format!("Added {count} song(s) to the playlist.");
+                let files = songs.into_iter().map(|p| (p, None)).collect();
+                crate::import::songs(files, SONG_EXTENSIONS, crate::import::Then::Insert { list, at });
             }
             None => self.play_path(songs.swap_remove(0)),
+        }
+    }
+
+    /// Imported songs (`paths`, the library's, each with its playlist
+    /// soundfont) are in: put them where they were headed.
+    pub(super) fn after_import(&mut self, then: crate::import::Then, paths: Vec<PathBuf>, soundfonts: Vec<Option<PathBuf>>) {
+        let list = match then {
+            crate::import::Then::Keep => return,
+            crate::import::Then::Insert { list, at } if list < self.playlists.lists.len() => {
+                let count = paths.len();
+                self.insert_songs(list, at, paths);
+                self.status = format!("Added {count} song{} to the playlist.", if count == 1 { "" } else { "s" });
+                return;
+            }
+            crate::import::Then::Insert { .. } => return,
+            crate::import::Then::NewPlaylist { name } => {
+                let name = self.unique_playlist_name(&name);
+                self.create_playlist(&name, paths);
+                self.status = format!("Imported the playlist \"{name}\".");
+                self.viewed_playlist
+            }
+        };
+        if let Some(list) = list
+            && let Some(stored) = self.playlists.lists.get_mut(list)
+        {
+            for (entry, soundfont) in stored.playlist.entries.iter_mut().zip(soundfonts) {
+                entry.soundfont = soundfont;
+            }
+            self.save_playlist(list);
         }
     }
 
@@ -470,7 +491,7 @@ impl App {
                     }
                 };
                 let at = self.playlists.lists.get(list).map_or(0, |l| l.playlist.entries.len());
-                self.insert_songs(list, at, files.0.clone());
+                self.insert_songs(list, at, files.paths.clone());
             } else if egui::DragAndDrop::take_payload::<DraggedSoundfont>(ui.ctx()).is_some() {
                 self.status = "Drop a soundfont onto a MIDI entry to override its soundfont.".to_string();
             }
@@ -498,13 +519,6 @@ impl App {
                 match selected {
                     Some(sf) => self.set_entries_soundfont(list, &rows, Some(sf)),
                     None => self.status = "No soundfont in use.".to_string(),
-                }
-            }
-            Some(RowAction::RevealInSongs(idx)) => {
-                let dir = self.playlists.lists[list].playlist.entries[idx].path.parent().map(Path::to_path_buf);
-                if let Some(dir) = dir {
-                    self.browser.navigate_to(dir);
-                    self.set_open(Section::Songs, true);
                 }
             }
             None => {}
@@ -606,32 +620,13 @@ impl App {
         }
     }
 
-    /// +: a new playlist, blank, from the Songs browser's folder, or
-    /// imported from an .m3u.
+    /// +: a new playlist, blank or imported from an .m3u.
     fn new_playlist_menu_ui(&mut self, ui: &mut egui::Ui) {
         egui::containers::menu::MenuButton::from_button(super::icon_button("plus")).ui(ui, |ui| {
             if ui.button("Blank").clicked() {
                 let name = self.unique_playlist_name("New playlist");
                 self.create_playlist(&name, Vec::new());
                 self.playlist_rename = Some(name);
-            }
-            let folder = self.browser.cwd().to_path_buf();
-            let folder_name = folder
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Folder".to_string());
-            if ui
-                .button(format!("From current folder ({folder_name})"))
-                .on_hover_text("Every song directly in the folder the Songs browser is showing")
-                .clicked()
-            {
-                let songs = playlist::songs_in_folder(&folder, listed_song_extensions(&self.config));
-                if songs.is_empty() {
-                    self.status = format!("No songs directly in {folder_name}.");
-                } else {
-                    let name = self.unique_playlist_name(&folder_name);
-                    self.create_playlist(&name, songs);
-                }
             }
             #[cfg(not(target_os = "android"))]
             if ui.button("Import .m3u...").clicked() {
@@ -652,7 +647,7 @@ impl App {
         let selected_sf = self.active_sf.and_then(|i| self.config.soundfonts.get(i)).is_some();
         let selection = &mut self.playlist_selection;
         let cache = &mut self.song_info;
-        let naming = super::naming(&self.config, &self.browser);
+        let naming = super::naming(&self.config, &self.songs);
         let info_open = &mut self.song_info_open;
 
         // Total time from what's been read so far.
@@ -680,7 +675,8 @@ impl App {
         let output = select_list::show(ui, "playlist_rows", entries, selection, |ui, row, entry| {
             let idx = row.idx;
             if row.response.drag_started() {
-                row.response.dnd_set_drag_payload(DraggedEntry { list, indices: row.rows(), path: entry.path.clone() });
+                let label = super::title_of(cache, &naming, &entry.path);
+                row.response.dnd_set_drag_payload(DraggedEntry { list, indices: row.rows(), label });
             }
             row.response.context_menu(|ui| {
                 let rows = row.rows();
@@ -698,9 +694,6 @@ impl App {
                     if ui.button(format!("Clear soundfont override{count}")).clicked() {
                         action = Some(RowAction::ClearSoundfont(rows.clone()));
                     }
-                }
-                if ui.button("Show in Songs").clicked() {
-                    action = Some(RowAction::RevealInSongs(idx));
                 }
                 if ui.button(format!("Remove from playlist{count}")).clicked() {
                     action = Some(RowAction::Remove(rows));
@@ -758,7 +751,6 @@ impl App {
     fn import_m3u(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("M3U playlist", &["m3u", "m3u8"])
-            .set_directory(self.config.browse_start_dir())
             .pick_file()
         else {
             return;
@@ -772,25 +764,17 @@ impl App {
         };
         let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let entries = playlist::from_m3u(&text, &base);
-        if entries.is_empty() {
+        let missing = entries.iter().filter(|e| e.missing).count();
+        let files: Vec<(PathBuf, Option<PathBuf>)> =
+            entries.into_iter().filter(|e| !e.missing).map(|e| (e.path, e.soundfont)).collect();
+        if files.is_empty() {
             self.status = format!("No songs found in {}.", nice_name(&path));
             return;
         }
-        let name = self.unique_playlist_name(&nice_name(&path));
-        let songs: Vec<PathBuf> = entries.iter().map(|e| e.path.clone()).collect();
-        self.create_playlist(&name, songs);
-        if let Some(list) = self.viewed_playlist
-            && let Some(stored) = self.playlists.lists.get_mut(list)
-        {
-            for (entry, imported) in stored.playlist.entries.iter_mut().zip(&entries) {
-                entry.soundfont = imported.soundfont.clone();
-            }
-            self.save_playlist(list);
-        }
-        let missing = entries.iter().filter(|e| e.missing).count();
+        crate::import::songs(files, SONG_EXTENSIONS, crate::import::Then::NewPlaylist { name: nice_name(&path) });
         self.status = match missing {
-            0 => format!("Imported {} songs as \"{name}\".", entries.len()),
-            n => format!("Imported {} songs as \"{name}\" ({n} not found).", entries.len()),
+            0 => format!("Importing {}...", nice_name(&path)),
+            n => format!("Importing {} ({n} of its songs weren't found)...", nice_name(&path)),
         };
     }
 
@@ -808,7 +792,10 @@ impl App {
             return;
         };
         let cache = &mut self.song_info;
-        let text = playlist::to_m3u(&stored.playlist, |p| cache.get(p).and_then(|i| i.length));
+        let naming = super::naming(&self.config, &self.songs);
+        let text = playlist::to_m3u(&stored.playlist, |p| {
+            (super::title_of(cache, &naming, p), cache.get(p).and_then(|i| i.length))
+        });
         self.status = match std::fs::write(&path, text) {
             Ok(()) => format!("Exported to {}.", path.display()),
             Err(e) => format!("Couldn't write {}: {e}", path.display()),
@@ -842,7 +829,7 @@ fn row_drop_ui(ui: &egui::Ui, row: &egui::Response, list: usize, idx: usize, is_
     if egui::DragAndDrop::has_payload_of_type::<DraggedFiles>(ctx) {
         ui.painter().hline(rect.x_range(), line_y, stroke);
         if released && let Some(files) = egui::DragAndDrop::take_payload::<DraggedFiles>(ctx) {
-            return Some(RowDrop::Songs(files.0.clone(), insert_at));
+            return Some(RowDrop::Songs(files.paths.clone(), insert_at));
         }
     } else if let Some(entry) = egui::DragAndDrop::payload::<DraggedEntry>(ctx)
         && entry.list == list

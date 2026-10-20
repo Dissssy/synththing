@@ -106,9 +106,9 @@ pub struct SongInfo {
     pub preview_start: f64,
 }
 
-/// Where a song file came from, or went to (`<file>.song.json` beside
-/// it): what the Downloaded songs tab shows, and what publishing it again
-/// makes a new version of.
+/// Where a song in the library came from, or went to (`song_store::Song`):
+/// what the Downloaded songs tab shows, and what publishing it again makes
+/// a new version of.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SongSource {
     /// The server's address.
@@ -130,6 +130,8 @@ pub struct SongSource {
     pub receipt: Option<super::Receipt>,
 }
 
+/// Where a song's source was kept before the song library: beside its
+/// file (`<file>.song.json`), for the one-time import.
 pub fn source_path(file: &std::path::Path) -> std::path::PathBuf {
     let mut name = file.as_os_str().to_os_string();
     name.push(".song.json");
@@ -139,10 +141,6 @@ pub fn source_path(file: &std::path::Path) -> std::path::PathBuf {
 impl SongSource {
     pub fn read(file: &std::path::Path) -> Option<Self> {
         serde_json::from_str(&std::fs::read_to_string(source_path(file)).ok()?).ok()
-    }
-
-    pub fn write(&self, file: &std::path::Path) -> std::io::Result<()> {
-        std::fs::write(source_path(file), serde_json::to_string_pretty(self).unwrap_or_default())
     }
 }
 

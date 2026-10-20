@@ -17,6 +17,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use directories::UserDirs;
 use sha2::{Digest, Sha256};
 
+use crate::song_store::{self, Stored};
+
 /// `assets/starter/soundfonts/` at the commit that added them.
 const BASE_URL: &str =
     "https://raw.githubusercontent.com/Dissssy/synththing/57110acf83cab319a62766fa883893f6539d0609/assets/starter/soundfonts/";
@@ -64,14 +66,10 @@ pub fn download_size() -> u64 {
     SOUNDFONTS.iter().map(|sf| sf.size).sum()
 }
 
-/// Where the songs go: Music\synththing\Starter songs (or under the home
-/// folder), somewhere easy to find. On Android, in the song library
-/// (`config::music_dir`).
-pub fn songs_dir() -> PathBuf {
-    #[cfg(target_os = "android")]
-    if let Ok(music) = crate::config::music_dir() {
-        return music.join("Starter songs");
-    }
+/// Where the starter songs went before the song library:
+/// Music\synththing\Starter songs (or under the home folder), for the
+/// one-time import (`song_store::import_old`).
+pub fn old_songs_dir() -> PathBuf {
     let dirs = UserDirs::new();
     let base = dirs
         .as_ref()
@@ -87,18 +85,9 @@ pub fn soundfonts_dir() -> Result<PathBuf> {
     Ok(crate::config::shared_dir()?.join("soundfonts"))
 }
 
-/// Write the songs to `songs_dir()` (leaving any already there alone), and
-/// return the folder.
-pub fn write_songs() -> Result<PathBuf> {
-    let dir = songs_dir();
-    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    for (name, bytes) in SONGS {
-        let path = dir.join(name);
-        if !path.exists() {
-            fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
-        }
-    }
-    Ok(dir)
+/// Write the songs into the song library in `dir`, for `SongStore::add`.
+pub fn write_songs(dir: &Path) -> Result<Vec<Stored>> {
+    SONGS.iter().map(|(name, bytes)| song_store::write_in(bytes, name, dir)).collect()
 }
 
 #[derive(Clone, Debug, Default)]

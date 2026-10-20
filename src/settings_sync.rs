@@ -33,7 +33,6 @@ pub const NAME: &str = "settings";
 /// played, its updates and how it looks on its screen.
 const LOCAL: &[&str] = &[
     "soundfonts",
-    "browse_dir",
     "record_dir",
     "layout",
     "separate_fullscreen_layout",

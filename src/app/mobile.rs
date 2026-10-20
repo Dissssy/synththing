@@ -383,8 +383,8 @@ impl App {
     /// Audio files were imported with audio files turned off: turn them on
     /// (and they're in the library), or not (and they go again).
     pub(super) fn audio_import_ui(&mut self, ctx: &egui::Context) {
-        let Some(files) = &self.mobile_state.audio_import else { return };
-        let names: Vec<String> = files.iter().map(|f| super::nice_name(f)).collect();
+        let Some(files) = self.mobile_state.audio_import.clone() else { return };
+        let names: Vec<String> = files.iter().map(|f| self.song_title(f)).collect();
         let mut answer = None;
         egui::Modal::new(egui::Id::new("audio_import")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 420.0));
@@ -410,18 +410,16 @@ impl App {
         let files = self.mobile_state.audio_import.take().unwrap_or_default();
         if on {
             self.config.show_audio_files = true;
-            self.browser.set_extensions(super::listed_song_extensions(&self.config));
             self.status = match self.config.save() {
                 Ok(()) => "Audio files turned on.".to_string(),
                 Err(e) => format!("Couldn't save preferences: {e}"),
             };
         } else {
             for file in &files {
-                if let Err(e) = std::fs::remove_file(file) {
-                    log::warn!("couldn't remove {}: {e}", file.display());
+                if let Err(e) = self.songs.remove(file) {
+                    log::warn!("couldn't remove {}: {e:#}", file.display());
                 }
             }
-            self.browser.rescan();
             self.status = format!("Removed {} audio file{}.", files.len(), if files.len() == 1 { "" } else { "s" });
         }
     }

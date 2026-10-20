@@ -46,7 +46,7 @@ These have non-Windows branches already (written blind, so still worth checking)
 - **Recording file names** (`recorder.rs`). `local_timestamp` uses UTC off Windows (no time zone lookup without another dependency); a crate like `time` or `chrono` with local offsets would fix it.
 - **Show in folder** (`app.rs`, `open_in_file_manager`). Uses `xdg-open` on the folder (it can't select the file the way Explorer does).
 - **The updater** (`updater.rs`). `ASSET_NAME` is per platform: on Linux it looks for `synththing-linux-x86_64` (attached to releases from 0.3.3), marks the download executable, and swaps it in with `self-replace` like on Windows. Untested on Linux so far.
-- **Folders.** `directories` gives `~/.config/synththing` for the config (scripts, playlists, themes, logs), and `~/Music/synththing/Starter songs` for the starter songs (falling back to the home folder when there's no XDG music folder).
+- **Folders.** `directories` gives `~/.config/synththing` for the config (scripts, playlists, themes, logs), with the song library in its `music` folder.
 - **Paths and file names.** Extensions are compared case-insensitively. Script renames reject names Windows wouldn't allow, which is stricter than Linux needs but harmless.
 
 ## 3. Likely to need work or testing

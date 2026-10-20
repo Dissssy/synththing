@@ -1,6 +1,7 @@
-//! Saved playlists: named, ordered lists of songs, each entry optionally
-//! carrying its own soundfont override (MIDI only), persisted one JSON file
-//! per playlist under `<config dir>/playlists/`.
+//! Saved playlists: named, ordered lists of songs from the song library
+//! (`song_store.rs`), each entry optionally carrying its own soundfont
+//! override (MIDI only), persisted one JSON file per playlist under
+//! `<config dir>/playlists/`, naming each song by its key in the library.
 //!
 //! This module is the data model and the pure "what plays next" logic; the
 //! panel UI, drag-and-drop and actually loading/playing tracks live in
@@ -13,16 +14,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct PlaylistEntry {
+    /// The song's file in the library.
     pub path: PathBuf,
     /// Soundfont to use for this entry instead of the one selected in the
     /// Soundfonts panel. Only meaningful for MIDI entries.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soundfont: Option<PathBuf>,
-    /// Cached `!path.exists()`, refreshed on load/add rather than stat'ing
-    /// every row every frame.
-    #[serde(skip)]
+    /// Cached `!path.exists()` (the song isn't on this device), refreshed
+    /// on load/add rather than stat'ing every row every frame.
     pub missing: bool,
 }
 
@@ -33,11 +33,25 @@ impl PlaylistEntry {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default)]
 pub struct Playlist {
     pub name: String,
-    #[serde(default)]
     pub entries: Vec<PlaylistEntry>,
+}
+
+/// A playlist as saved: each song by its key in the library.
+#[derive(Serialize, Deserialize)]
+struct PlaylistFile {
+    name: String,
+    #[serde(default)]
+    entries: Vec<EntryFile>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct EntryFile {
+    song: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    soundfont: Option<PathBuf>,
 }
 
 /// A playlist plus the file it's saved in. The file name is fixed at
@@ -50,13 +64,16 @@ pub struct StoredPlaylist {
 
 pub struct Library {
     dir: PathBuf,
+    /// The song library's folder, where the entries' songs are.
+    songs: PathBuf,
     pub lists: Vec<StoredPlaylist>,
 }
 
 impl Library {
-    /// Load every `*.json` in `dir`, sorted by name. Unreadable files are
-    /// skipped and reported back rather than failing the whole load.
-    pub fn load(dir: PathBuf) -> (Self, Vec<String>) {
+    /// Load every `*.json` in `dir`, sorted by name, their songs in the
+    /// library in `songs`. Unreadable files are skipped and reported back
+    /// rather than failing the whole load.
+    pub fn load(dir: PathBuf, songs: PathBuf) -> (Self, Vec<String>) {
         let mut lists = Vec::new();
         let mut errors = Vec::new();
         if let Ok(read_dir) = fs::read_dir(&dir) {
@@ -67,20 +84,22 @@ impl Library {
                 }
                 let parsed = fs::read_to_string(&file)
                     .map_err(anyhow::Error::from)
-                    .and_then(|s| serde_json::from_str::<Playlist>(&s).map_err(Into::into));
+                    .and_then(|s| serde_json::from_str::<PlaylistFile>(&s).map_err(Into::into));
                 match parsed {
-                    Ok(mut playlist) => {
-                        for e in &mut playlist.entries {
-                            e.missing = !e.path.exists();
-                        }
-                        lists.push(StoredPlaylist { file, playlist });
+                    Ok(saved) => {
+                        let entries = saved
+                            .entries
+                            .into_iter()
+                            .map(|e| PlaylistEntry { soundfont: e.soundfont, ..PlaylistEntry::new(songs.join(e.song)) })
+                            .collect();
+                        lists.push(StoredPlaylist { file, playlist: Playlist { name: saved.name, entries } });
                     }
                     Err(e) => errors.push(format!("{}: {e}", file.display())),
                 }
             }
         }
         lists.sort_by_key(|l| l.playlist.name.to_lowercase());
-        (Self { dir, lists }, errors)
+        (Self { dir, songs, lists }, errors)
     }
 
     /// Create and save a new playlist, returning its index.
@@ -108,7 +127,17 @@ impl Library {
         let Some(stored) = self.lists.get(idx) else {
             return Ok(());
         };
-        let json = serde_json::to_string_pretty(&stored.playlist)?;
+        let saved = PlaylistFile {
+            name: stored.playlist.name.clone(),
+            entries: stored
+                .playlist
+                .entries
+                .iter()
+                .filter(|e| e.path.parent() == Some(self.songs.as_path()))
+                .filter_map(|e| Some(EntryFile { song: e.path.file_name()?.to_str()?.to_string(), soundfont: e.soundfont.clone() }))
+                .collect(),
+        };
+        let json = serde_json::to_string_pretty(&saved)?;
         fs::write(&stored.file, json)
             .with_context(|| format!("writing {}", stored.file.display()))
     }
@@ -136,27 +165,6 @@ fn file_stem_for(name: &str) -> String {
         .map(|c| if c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-') { c } else { '_' })
         .collect();
     if stem.trim().is_empty() { "playlist".to_string() } else { stem }
-}
-
-/// Every file directly in `dir` (not subfolders) whose extension is in
-/// `extensions`, sorted case-insensitively by file name, the "new playlist
-/// from current folder" contents.
-pub fn songs_in_folder(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
-    let Ok(read_dir) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut songs: Vec<PathBuf> = read_dir
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_file()
-                && p.extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|ext| extensions.iter().any(|x| ext.eq_ignore_ascii_case(x)))
-        })
-        .collect();
-    songs.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()));
-    songs
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -283,14 +291,15 @@ pub fn new_positions(order: &[usize]) -> Vec<usize> {
 const M3U_SOUNDFONT: &str = "#SYNTHTHING-SOUNDFONT:";
 
 /// `playlist` as an extended M3U (UTF-8): a `#EXTINF` line per entry with
-/// its length in whole seconds (-1 when unknown, as M3U expects) and name,
-/// its soundfont override if any, then its absolute path.
-pub fn to_m3u(playlist: &Playlist, mut length_of: impl FnMut(&Path) -> Option<f64>) -> String {
+/// its length in whole seconds (-1 when unknown, as M3U expects) and name
+/// (`described` gives both), its soundfont override if any, then its
+/// absolute path.
+pub fn to_m3u(playlist: &Playlist, mut described: impl FnMut(&Path) -> (String, Option<f64>)) -> String {
     let mut out = String::from("#EXTM3U\n");
     out.push_str(&format!("#PLAYLIST:{}\n", playlist.name));
     for entry in &playlist.entries {
-        let seconds = length_of(&entry.path).map_or(-1, |s| s.round() as i64);
-        let name = entry.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let (name, length) = described(&entry.path);
+        let seconds = length.map_or(-1, |s| s.round() as i64);
         out.push_str(&format!("#EXTINF:{seconds},{name}\n"));
         if let Some(sf) = &entry.soundfont {
             out.push_str(&format!("{M3U_SOUNDFONT}{}\n", sf.display()));
@@ -436,7 +445,9 @@ mod tests {
         first.soundfont = Some(at("sf/piano.sf2"));
         playlist.entries.push(first);
         playlist.entries.push(PlaylistEntry::new(at("music/b.mp3")));
-        let text = to_m3u(&playlist, |p| (p.extension().unwrap() == "mp3").then_some(61.4));
+        let text = to_m3u(&playlist, |p| {
+            (p.file_stem().unwrap().to_string_lossy().into_owned(), (p.extension().unwrap() == "mp3").then_some(61.4))
+        });
         assert!(text.starts_with("#EXTM3U\n#PLAYLIST:Mix\n#EXTINF:-1,a\n#SYNTHTHING-SOUNDFONT:"), "{text}");
         assert!(text.contains("#EXTINF:61,b\n"));
 

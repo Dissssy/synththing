@@ -61,7 +61,7 @@ struct Step {
 const STEPS: &[Step] = &[
     Step {
         title: "Play a song",
-        text: "These are the songs in a folder (the starter songs, if you added them). Double-click one to play it.",
+        text: "These are your songs (the starter songs, if you added them; + imports more). Double-click one to play it.",
         target: Some(Target::Tab(Section::Songs)),
         tabs: &[Section::Songs],
         done: DoneWhen::SongLoaded,

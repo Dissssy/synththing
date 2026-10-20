@@ -92,7 +92,7 @@ enum Column {
 /// Share of the window a side column gets when it's (re)created.
 const SIDE_SHARE: f32 = 0.25;
 
-/// First launch: the song browser on the left with the soundfonts below
+/// First launch: the songs on the left with the soundfonts below
 /// it, the visualizer on the right: what's needed to start listening and
 /// watching. Everything else (playlists included) is a View menu click
 /// away.
