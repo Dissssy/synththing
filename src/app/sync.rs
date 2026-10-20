@@ -521,6 +521,7 @@ impl App {
 
     /// The songs as they are here, for the worker.
     fn songs_now(&mut self) -> Box<songs::Songs> {
+        let _timing = crate::frame_timing::scope("songs for the sync worker");
         let device = self.sync.device.get_or_insert_with(|| Device::load().id).clone();
         let every = settings_sync::syncs(&self.sync.choices, &settings_sync::EVERY_SONG);
         let (authority, _) = self.authority();
