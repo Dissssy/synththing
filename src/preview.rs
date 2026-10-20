@@ -19,19 +19,13 @@
 //!
 //! `check` is the same run, cut short: a library server refuses an upload
 //! that doesn't compile, or errors in its first seconds.
-//!
-//! A song's preview as images (`render_song`, `preview --song-start`) is
-//! drawn by the bundled keyboard visualizer (falling notes): `SONG_SECONDS`
-//! from a given point, every kept frame in order (`SONG_FRAMES`). The app
-//! plays songs' previews live instead (`song_preview.rs`), with the same
-//! script.
 
 use std::io::Cursor;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::lua_visualizer::{PlaybackRequest, RecordKind, RecordPhase, RecordingTake, SettingValue};
+use crate::lua_visualizer::{PlaybackRequest, RecordKind, RecordPhase, RecordingTake};
 use crate::offline::Stage;
 use crate::starter::SONGS;
 
@@ -59,11 +53,6 @@ const SETTLE: f64 = 1.0;
 const PREPARE_LIMIT: f64 = 30.0;
 /// How much of the first song `check` runs (preparing included).
 const CHECK_SECONDS: f64 = 4.0;
-/// A song's preview: this long from its `preview_start`, all of it kept.
-pub const SONG_SECONDS: f64 = crate::library::songs::PREVIEW_SECONDS;
-pub const SONG_FRAMES: usize = (SONG_SECONDS * FPS) as usize;
-/// What draws songs' previews (bundled).
-pub const SONG_SCRIPT: &str = "keyboard.lua";
 /// The start of the error for a script that doesn't run.
 pub const SCRIPT_ERROR: &str = "the script has an error: ";
 /// The most memory a script may use while its preview is made.
@@ -174,43 +163,6 @@ pub fn check(script: &Path, soundfont: &Path, work: &Path) -> Result<(), String>
     let result = render_songs(source, script, soundfont, None, &songs);
     let _ = std::fs::remove_dir_all(&songs);
     result.map(|_| ())
-}
-
-/// Make `song`'s preview (a MIDI file) in `out`, from `start` seconds:
-/// `SHEET` (`SONG_FRAMES` frames; if the song ends sooner, its last frame
-/// fills the rest) and the middle frame as `STILL`.
-pub fn render_song(song: &Path, soundfont: &Path, out: &Path, start: f64) -> Result<Made, String> {
-    std::fs::create_dir_all(out).map_err(|e| format!("couldn't make {}: {e}", out.display()))?;
-    for name in [STILL, SHEET] {
-        let _ = std::fs::remove_file(out.join(name));
-    }
-    let source = crate::lua_visualizer::bundled_default(SONG_SCRIPT).ok_or("the keyboard visualizer isn't bundled")?;
-    let mut stage = Stage::new(source.to_string(), None, WIDTH, HEIGHT, RUN_FPS);
-    stage.visualizer.detach_store();
-    stage.visualizer.set_setting("play_along", SettingValue::Bool(false));
-    stage.load_song(song, Some(soundfont), &[], false)?;
-    stage.engine.seek(start.max(0.0));
-    let mut frames: Vec<Vec<u32>> = Vec::with_capacity(SONG_FRAMES);
-    let mut count = 0u32;
-    while frames.len() < SONG_FRAMES {
-        let (_, view) = stage.frame();
-        if let Some(error) = stage.visualizer.error() {
-            return Err(format!("the keyboard visualizer failed: {error}"));
-        }
-        if count.is_multiple_of(KEEP_EVERY) {
-            frames.push(stage.pixels.clone());
-        }
-        count += 1;
-        if view.finished {
-            break;
-        }
-    }
-    let last = frames.last().cloned().ok_or("it drew nothing")?;
-    frames.resize(SONG_FRAMES, last);
-    write_png(&out.join(STILL), &frames[SONG_FRAMES / 2], WIDTH, HEIGHT)?;
-    let cells: Vec<&Vec<u32>> = frames.iter().collect();
-    write_png(&out.join(SHEET), &grid(&cells), WIDTH * COLUMNS, HEIGHT * SONG_FRAMES.div_ceil(COLUMNS))?;
-    Ok(Made::Animated)
 }
 
 /// The preview's frames, written into `out`; or, without one, the check.
@@ -468,23 +420,6 @@ mod tests {
 
     fn soundfont() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/starter/soundfonts/TimGM6mb.sf2")
-    }
-
-    #[test]
-    fn makes_song_previews() {
-        let out = std::env::temp_dir().join(format!("synththing-song-preview-{}", std::process::id()));
-        let song = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/starter/songs/Ode to Joy.mid");
-        assert_eq!(render_song(&song, &soundfont(), &out, 2.0).unwrap(), Made::Animated);
-        let (w, h, sheet) = decode_png(&std::fs::read(out.join(SHEET)).unwrap()).unwrap();
-        assert_eq!((w, h), (WIDTH * COLUMNS, HEIGHT * SONG_FRAMES / COLUMNS));
-        // Notes fall: the first frame and a later one differ.
-        let cell = |i: usize| {
-            let (cx, cy) = ((i % COLUMNS) * WIDTH, (i / COLUMNS) * HEIGHT);
-            (0..HEIGHT).flat_map(|y| sheet[((cy + y) * w + cx) * 4..((cy + y) * w + cx + WIDTH) * 4].to_vec()).collect::<Vec<u8>>()
-        };
-        assert_ne!(cell(0), cell(24));
-        assert!(out.join(STILL).exists());
-        let _ = std::fs::remove_dir_all(&out);
     }
 
     #[test]

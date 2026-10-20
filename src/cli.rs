@@ -70,9 +70,7 @@ pub enum Command {
     /// that never draws anything gets none. Library servers make these for
     /// every upload; the app makes them for the script picker. With
     /// --check, only checks it runs (what a library server does before
-    /// taking an upload). With --song-start, it's a song's (a MIDI file's)
-    /// preview instead: the keyboard visualizer drawing 12 seconds of it
-    /// from there, 144 frames. Exit code 0 if it made one (or checked out),
+    /// taking an upload). Exit code 0 if it made one (or checked out),
     /// 1 if the script has an error, 2 if something couldn't be loaded.
     Preview(PreviewArgs),
 
@@ -212,12 +210,8 @@ pub enum AdminCommand {
 
 #[derive(Args, Debug)]
 pub struct PreviewArgs {
-    /// The script (a .lua file); a MIDI file with --song-start.
+    /// The script (a .lua file).
     pub script: PathBuf,
-
-    /// Make a song's preview, from this many seconds in.
-    #[arg(long, value_name = "SECONDS", conflicts_with = "check")]
-    pub song_start: Option<f64>,
 
     /// The folder to write preview.png and preview-sheet.png in.
     #[arg(long, value_name = "DIR", default_value = ".")]

@@ -43,7 +43,6 @@ pub(super) enum Page {
     Playlists,
     Scripts,
     Library,
-    Downloads,
     /// From the menu's lower part, not its pages.
     Preferences,
     Updates,
@@ -54,14 +53,13 @@ pub(super) enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 7] = [
+    const ALL: [Page; 6] = [
         Self::NowPlaying,
         Self::Songs,
         Self::Soundfonts,
         Self::Playlists,
         Self::Scripts,
         Self::Library,
-        Self::Downloads,
     ];
 
     fn title(self) -> &'static str {
@@ -72,7 +70,6 @@ impl Page {
             Self::Playlists => "Playlists",
             Self::Scripts => "Visualizers",
             Self::Library => "Script library",
-            Self::Downloads => "Downloaded songs",
             Self::Preferences => "Preferences",
             Self::Updates => "Updates",
             Self::Changelog => "Changelog",
@@ -89,7 +86,6 @@ impl Page {
             Self::Playlists => "playlist",
             Self::Scripts => "waveform",
             Self::Library => "storefront",
-            Self::Downloads => "download-simple",
             Self::Preferences => "gear",
             Self::Updates => "arrows-clockwise",
             Self::Changelog => "clock-counter-clockwise",
@@ -209,7 +205,6 @@ impl App {
                 Page::Playlists => self.playlist_panel_ui(ui),
                 Page::Scripts => self.mobile_scripts_ui(ui),
                 Page::Library => self.library_ui(ui),
-                Page::Downloads => self.downloaded_songs_ui(ui),
                 Page::Preferences => self.mobile_preferences_ui(ui),
                 Page::Updates => {
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

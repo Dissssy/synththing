@@ -12,7 +12,6 @@ use crate::app::App;
 use crate::audio::{AudioEngine, AudioRing, PlaybackShared, SynthSource};
 use crate::config::Config;
 use crate::engine::Engine;
-use crate::song_preview;
 use crate::visualizer::SampleTap;
 
 /// Start playback and make the app, ready to hand to eframe. The audio
@@ -47,9 +46,6 @@ pub fn start() -> Result<(App, rodio::MixerDeviceSink)> {
     stream
         .mixer()
         .add(SynthSource::new(live_ring.clone(), Arc::new(AtomicBool::new(false)), sample_rate));
-    // Songs' previews in the Online Library: their own ring, muted until clicked.
-    let (preview_output, preview_source) = song_preview::PreviewOutput::new();
-    stream.mixer().add(preview_source);
 
     // Render thread, owns the engine, produces into the ring.
     let audio = AudioEngine::new(
@@ -71,7 +67,7 @@ pub fn start() -> Result<(App, rodio::MixerDeviceSink)> {
     let mut config = Config::load_for_app()?;
     config.soundfonts.sort();
 
-    let mut app = App::new(command_tx, shared, config, tap, sample_rate, preview_output);
+    let mut app = App::new(command_tx, shared, config, tap, sample_rate);
     app.autoload_soundfont();
     app.check_for_updates_on_launch();
     app.whats_new_on_launch(ran_before);

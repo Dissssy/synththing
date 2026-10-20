@@ -58,7 +58,6 @@ mod song_info;
 mod song_list;
 mod song_store;
 mod song_title;
-mod song_preview;
 mod spectrum;
 mod sprite_code;
 mod starter;

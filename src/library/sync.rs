@@ -8,6 +8,7 @@
 //! Every write is announced on the notification stream, so the other
 //! devices fetch it.
 
+use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use serde::{Deserialize, Serialize};
@@ -70,7 +71,7 @@ pub fn seal(sync_key: &[u8; 32], plain: &[u8]) -> Result<String, String> {
     let sealed = ChaCha20Poly1305::new(sync_key.into())
         .encrypt(&Nonce::from(nonce), plain)
         .map_err(|e| e.to_string())?;
-    Ok(super::songs::encode(&[nonce.as_slice(), &sealed].concat()))
+    Ok(base64::engine::general_purpose::STANDARD.encode([nonce.as_slice(), &sealed].concat()))
 }
 
 /// What `seal` sealed, opened with the same sync key. An error for one
@@ -78,7 +79,7 @@ pub fn seal(sync_key: &[u8; 32], plain: &[u8]) -> Result<String, String> {
 /// damaged blob.
 pub fn open(sync_key: &[u8; 32], sealed: &str) -> Result<Vec<u8>, String> {
     let damaged = "the synced data is damaged";
-    let bytes = super::songs::decode(sealed).ok().filter(|b| b.len() > 12).ok_or(damaged)?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(sealed.trim()).ok().filter(|b| b.len() > 12).ok_or(damaged)?;
     let (nonce, sealed) = bytes.split_at(12);
     let nonce = <[u8; 12]>::try_from(nonce).map_err(|_| damaged)?;
     ChaCha20Poly1305::new(sync_key.into())
