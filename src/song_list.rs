@@ -4,8 +4,8 @@
 //! one on the fly, with a fuzzy search over the names, file names and tags.
 //! Double-clicking a song plays it (and marks it as playing); rows can be
 //! selected several at a time and dragged out together (onto a playlist).
-//! For touch, the columns go on a second line, and sorting and grouping
-//! are in a menu.
+//! For touch, the column sorted by goes on a second line, and sorting and
+//! grouping are in a menu.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -36,15 +36,13 @@ pub struct View {
     /// `"name"`, or a column's key.
     pub sort: String,
     pub descending: bool,
-    /// A column's key, or empty for no groups.
+    /// A groupable column's key, or empty for no groups.
     pub group: String,
-    /// For touch: the column on each row's second line, or empty for none.
-    pub second_line: String,
 }
 
 impl Default for View {
     fn default() -> Self {
-        Self { columns: vec!["artist".into(), "album".into(), "length".into()], sort: "name".into(), descending: false, group: String::new(), second_line: "artist".into() }
+        Self { columns: vec!["artist".into(), "album".into(), "length".into()], sort: "name".into(), descending: false, group: String::new() }
     }
 }
 
@@ -54,22 +52,28 @@ pub struct Column {
     pub key: &'static str,
     pub title: &'static str,
     width: f32,
+    /// Songs share its values often enough to group by them.
+    groups: bool,
+}
+
+const fn col(key: &'static str, title: &'static str, width: f32, groups: bool) -> Column {
+    Column { key, title, width, groups }
 }
 
 pub const COLUMNS: &[Column] = &[
-    Column { key: "artist", title: "Artist", width: 140.0 },
-    Column { key: "album", title: "Album", width: 140.0 },
-    Column { key: "album_artist", title: "Album artist", width: 140.0 },
-    Column { key: "composer", title: "Composer", width: 140.0 },
-    Column { key: "genre", title: "Genre", width: 100.0 },
-    Column { key: "track", title: "#", width: 36.0 },
-    Column { key: "year", title: "Year", width: 48.0 },
-    Column { key: "length", title: "Length", width: 56.0 },
-    Column { key: "bpm", title: "BPM", width: 48.0 },
-    Column { key: "notes", title: "Notes", width: 72.0 },
-    Column { key: "file_extension", title: "Type", width: 48.0 },
-    Column { key: "imported", title: "Imported", width: 88.0 },
-    Column { key: "file_name", title: "File", width: 160.0 },
+    col("artist", "Artist", 140.0, true),
+    col("album", "Album", 140.0, true),
+    col("album_artist", "Album artist", 140.0, true),
+    col("composer", "Composer", 140.0, true),
+    col("genre", "Genre", 100.0, true),
+    col("track", "Track", 48.0, false),
+    col("year", "Year", 52.0, true),
+    col("length", "Length", 60.0, false),
+    col("bpm", "BPM", 52.0, false),
+    col("notes", "Notes", 72.0, false),
+    col("file_extension", "Type", 52.0, true),
+    col("imported", "Imported", 96.0, true),
+    col("file_name", "File", 160.0, false),
 ];
 
 fn column(key: &str) -> Option<&'static Column> {
@@ -178,55 +182,55 @@ fn group_label(key: &str, value: Option<&Value>) -> String {
     }
 }
 
-/// The menu of the view: what to sort and group by, and which columns (for
-/// touch, which one goes on the second line).
+/// The menu of the view: what to sort and group by, and (not for touch)
+/// which columns.
 fn view_menu(ui: &mut egui::Ui, view: &mut View, touch: bool) -> bool {
     let before = view.clone();
-    ui.label("Sort by");
-    ui.radio_value(&mut view.sort, "name".to_string(), "Name");
-    for c in COLUMNS {
-        ui.radio_value(&mut view.sort, c.key.to_string(), c.title);
-    }
-    ui.checkbox(&mut view.descending, "Descending");
-    ui.separator();
+    ui.menu_button("Sort by", |ui| {
+        ui.radio_value(&mut view.sort, "name".to_string(), "Name");
+        for c in COLUMNS {
+            ui.radio_value(&mut view.sort, c.key.to_string(), c.title);
+        }
+        ui.separator();
+        ui.checkbox(&mut view.descending, "Descending");
+    });
     ui.menu_button("Group by", |ui| {
         ui.radio_value(&mut view.group, String::new(), "Nothing");
-        for c in COLUMNS.iter().filter(|c| c.key != "file_name") {
+        ui.separator();
+        for c in COLUMNS.iter().filter(|c| c.groups) {
             ui.radio_value(&mut view.group, c.key.to_string(), c.title);
         }
     });
-    if touch {
-        ui.menu_button("Second line", |ui| {
-            ui.radio_value(&mut view.second_line, String::new(), "Nothing");
+    if !touch {
+        ui.menu_button("Columns", |ui| {
             for c in COLUMNS {
-                ui.radio_value(&mut view.second_line, c.key.to_string(), c.title);
-            }
-        });
-        return *view != before;
-    }
-    ui.menu_button("Columns", |ui| {
-        for c in COLUMNS {
-            let mut shown = view.columns.iter().any(|k| k == c.key);
-            if ui.checkbox(&mut shown, c.title).changed() {
-                if shown {
-                    view.columns.push(c.key.to_string());
-                } else {
-                    view.columns.retain(|k| k != c.key);
+                let mut shown = view.columns.iter().any(|k| k == c.key);
+                if ui.checkbox(&mut shown, c.title).changed() {
+                    if shown {
+                        view.columns.push(c.key.to_string());
+                    } else {
+                        view.columns.retain(|k| k != c.key);
+                    }
                 }
             }
-        }
-    });
+        });
+    }
     *view != before
 }
 
-/// A cell `width` wide, its text cut short to fit.
+/// A column's cell `width` wide (in a right-to-left layout), its text cut
+/// short to fit, with a line before it.
 fn cell(ui: &mut egui::Ui, width: f32, text: impl Into<egui::WidgetText>) -> egui::Response {
     let size = egui::vec2(width, ui.available_height());
-    ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.set_width(width);
-        ui.add(egui::Label::new(text).truncate().selectable(false))
-    })
-    .inner
+    let response = ui
+        .allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_width(width);
+            ui.add(egui::Label::new(text).truncate().selectable(false))
+        })
+        .inner;
+    let x = response.rect.left() - ui.spacing().item_spacing.x / 2.0;
+    ui.painter().vline(x, ui.max_rect().y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
+    response
 }
 
 impl SongList {
@@ -297,16 +301,19 @@ impl SongList {
             }
         });
 
-        // The columns that fit beside the name (for touch, the one on the
-        // second line).
+        // The columns that fit beside the name, and the one sorted by
+        // (for touch, just that, on the second line).
         let room = ui.available_width() - TRAILING_WIDTH - MIN_NAME_WIDTH;
         let mut used = 0.0;
+        let sorted = column(&view.sort);
         let shown: Vec<&Column> = if touch {
-            column(&view.second_line).into_iter().collect()
+            sorted.into_iter().collect()
         } else {
-            view.columns
-                .iter()
-                .filter_map(|k| column(k))
+            let hidden = sorted.filter(|c| !view.columns.iter().any(|k| k == c.key));
+            // (One that isn't a column of the user's goes first, to fit.)
+            hidden
+                .into_iter()
+                .chain(view.columns.iter().filter_map(|k| column(k)))
                 .take_while(|c| {
                     used += c.width + ui.spacing().item_spacing.x;
                     used <= room
@@ -369,11 +376,24 @@ impl SongList {
             Some(Item::Song(entry)) => Some(entry.path.clone()),
             _ => None,
         };
+        let grouped_by = column(&view.group);
         let output = select_list::show(ui, "songs", items, &mut self.selection, |ui, row, item| {
+            if touch {
+                // (Clear of the selection's edge.)
+                ui.add_space(4.0);
+            }
             let entry = match item {
                 Item::Group { label, key, count, collapsed } => {
                     let arrow = crate::app::icon(if *collapsed { "caret-right" } else { "caret-down" });
-                    select_list::label(ui, egui::RichText::new(format!("{arrow} {label} ({count})")).strong(), None);
+                    let rect = ui.max_rect();
+                    ui.painter().rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
+                    ui.painter().hline(rect.x_range(), rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
+                    ui.label(egui::RichText::new(arrow).strong());
+                    if let Some(c) = grouped_by {
+                        ui.label(egui::RichText::new(format!("{}:", c.title)).weak());
+                    }
+                    ui.label(egui::RichText::new(label).strong());
+                    ui.label(egui::RichText::new(format!("({count})")).weak());
                     if row.response.clicked() {
                         toggle = Some(key.clone());
                     }
@@ -400,16 +420,23 @@ impl SongList {
                     trailing(ui, &entry.path);
                 });
                 if touch {
+                    // The name and the tags, and under them the value
+                    // sorted by.
                     let second = shown.first().and(entry.song.values.first()).cloned().flatten();
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                        ui.add_space(4.0);
+                    let Some(second) = second else {
+                        select_list::chips(ui, entry.tags());
                         select_list::label(ui, text, None);
-                        ui.horizontal(|ui| {
+                        return;
+                    };
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.add_space(3.0);
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        let line = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+                        ui.allocate_ui_with_layout(line, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             select_list::chips(ui, entry.tags());
-                            if let Some(second) = second {
-                                select_list::label(ui, egui::RichText::new(second.text).small().weak(), None);
-                            }
+                            select_list::label(ui, text, None);
                         });
+                        select_list::label(ui, egui::RichText::new(second.text).small().weak(), None);
                     });
                     return;
                 }
@@ -442,32 +469,40 @@ impl SongList {
     /// The column headers: click one to sort by it (again to turn it
     /// around), right-click for the view's menu.
     fn header_ui(&mut self, ui: &mut egui::Ui, view: &mut View, shown: &[&Column]) -> bool {
+        let height = ui.spacing().interact_size.y;
+        // The whole row first, under the headers, for right-clicks between them.
+        let (rect, background) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
+        ui.painter().rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
+        ui.painter().hline(rect.x_range(), rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
+        let arrow = format!(" {}", crate::app::icon(if view.descending { "caret-down" } else { "caret-up" }));
+        let title = |key: &str, title: &str| {
+            let text = if view.sort == key { format!("{title}{arrow}") } else { title.to_string() };
+            egui::RichText::new(text).strong()
+        };
+        let hint = "Click to sort by it (again to turn it around); right-click for columns and groups";
+        let mut headers: Vec<(&str, egui::Response)> = Vec::new();
+        let builder = egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center));
+        ui.scope_builder(builder, |ui| {
+            ui.add_space(TRAILING_WIDTH + ui.spacing().item_spacing.x);
+            for c in shown.iter().rev() {
+                let response = cell(ui, c.width, title(c.key, c.title)).interact(egui::Sense::click());
+                headers.push((c.key, response));
+            }
+            let name = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(title("name", "Name")).truncate().selectable(false).sense(egui::Sense::click()))
+            });
+            headers.push(("name", name.inner));
+        });
         let mut changed = false;
         let mut sort_by = None;
-        let header = ui
-            .horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(TRAILING_WIDTH + ui.spacing().item_spacing.x);
-                    let arrow = format!(" {}", crate::app::icon(if view.descending { "caret-down" } else { "caret-up" }));
-                    let title = |key: &str, title: &str| if view.sort == key { format!("{title}{arrow}") } else { title.to_string() };
-                    let hint = "Click to sort by it (again to turn it around); right-click for columns and groups";
-                    for c in shown.iter().rev() {
-                        let text = egui::RichText::new(title(c.key, c.title)).small().strong();
-                        if cell(ui, c.width, text).interact(egui::Sense::click()).on_hover_text(hint).clicked() {
-                            sort_by = Some(c.key);
-                        }
-                    }
-                    let text = egui::RichText::new(title("name", "Name")).small().strong();
-                    let name = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add(egui::Label::new(text).truncate().selectable(false).sense(egui::Sense::click()))
-                    });
-                    if name.inner.on_hover_text(hint).clicked() {
-                        sort_by = Some("name");
-                    }
-                });
-            })
-            .response;
-        header.context_menu(|ui| changed |= view_menu(ui, view, false));
+        for (key, response) in &headers {
+            let response = response.clone().on_hover_text(hint);
+            if response.clicked() {
+                sort_by = Some(*key);
+            }
+            response.context_menu(|ui| changed |= view_menu(ui, view, false));
+        }
+        background.context_menu(|ui| changed |= view_menu(ui, view, false));
         if let Some(key) = sort_by {
             if view.sort == key {
                 view.descending = !view.descending;
