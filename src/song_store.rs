@@ -275,6 +275,7 @@ impl SongStore {
     /// Write `library.json` (even with nothing in it: the one-time import
     /// has run).
     fn save(&mut self) {
+        let _timing = crate::frame_timing::scope("song store save");
         self.revision += 1;
         let written = std::fs::create_dir_all(&self.dir)
             .and_then(|()| write_atomically(&self.dir.join(INDEX), serde_json::to_string_pretty(&self.songs).unwrap_or_default().as_bytes()));
@@ -284,6 +285,7 @@ impl SongStore {
     }
 
     fn save_tags(&mut self) {
+        let _timing = crate::frame_timing::scope("song store save");
         self.revision += 1;
         let path = self.dir.join(TAGS);
         let written = std::fs::create_dir_all(&self.dir).and_then(|()| write_atomically(&path, serde_json::to_string_pretty(&self.tags).unwrap_or_default().as_bytes()));
@@ -293,6 +295,7 @@ impl SongStore {
     }
 
     fn save_blocked(&mut self) {
+        let _timing = crate::frame_timing::scope("song store save");
         self.revision += 1;
         let path = self.dir.join(BLOCKED);
         if let Err(e) = write_atomically(&path, serde_json::to_string(&self.blocked).unwrap_or_default().as_bytes()) {

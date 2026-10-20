@@ -2738,6 +2738,7 @@ impl App {
     /// Mark playlist entries missing, or not, as their songs leave or come
     /// into the library.
     fn refresh_missing(&mut self) {
+        let _timing = frame_timing::scope("refresh_missing");
         for stored in &mut self.playlists.lists {
             for entry in &mut stored.playlist.entries {
                 entry.missing = !entry.path.exists();

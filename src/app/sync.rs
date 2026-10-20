@@ -17,6 +17,7 @@ use crate::config::Config;
 use crate::library::identity::{self, Identity};
 use crate::library::{self, client};
 use crate::device::Device;
+use crate::frame_timing;
 use crate::playlist_sync;
 use crate::settings_sync::{self, Change, Fields, State, Winner};
 use crate::song_store::Stored;
@@ -301,6 +302,7 @@ impl App {
             self.channel(Blob::Settings).dirty_since = Some(Instant::now());
         }
         while let Ok((blob, result)) = self.sync.events.1.try_recv() {
+            let _timing = frame_timing::scope("sync results");
             self.channel(blob).running = false;
             if result.is_ok() {
                 self.channel(blob).adopt = false;
@@ -318,10 +320,10 @@ impl App {
                 }
             }
         }
-        self.poll_moves();
+        frame_timing::time("poll_moves", || self.poll_moves());
         if std::mem::take(&mut self.sync.songs_dirty) && self.sync.on {
-            self.record_library();
-            self.plan_transfers();
+            frame_timing::time("record_library", || self.record_library());
+            frame_timing::time("plan_transfers", || self.plan_transfers());
         }
         for blob in Blob::ALL {
             let channel = &self.sync.channels[blob.index()];
@@ -332,7 +334,7 @@ impl App {
                 channel.dirty_since = None;
                 channel.wanted = None;
                 let adopt = channel.adopt;
-                self.start_sync(blob, adopt);
+                frame_timing::time("start_sync", || self.start_sync(blob, adopt));
             }
         }
     }
