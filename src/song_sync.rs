@@ -1,18 +1,19 @@
 //! Songs between devices (`settings_sync.rs` carries the lists, as blobs
 //! of their own; `library/sync.rs` the files):
 //!
-//! - `library`: every song in any device's library, by key, with its name
-//!   and tags (songs are only ever added: a song removed on one device
-//!   stays in the others'), and the tags themselves (`tag/<id>`). Each
-//!   device knows them all (`SongStore::learn`).
+//! - `library`: every song in any device's library, by key, with its name,
+//!   tags, when it was first imported and what its file says of itself
+//!   (`song_store::Song`: songs are only ever added: a song removed on one
+//!   device stays in the others'), and the tags themselves (`tag/<id>`).
+//!   Each device knows them all (`SongStore::learn`).
 //! - `transfers`: which songs each device wants (`want/<device>/<key>`)
 //!   and which are waiting on the relay (`ready/<key>`), and the devices
 //!   themselves (`device/<device>`: its name, and when it last said it's
 //!   there, once a day). A device that says nothing for `FORGET_AFTER` is
 //!   forgotten, wants and all, as is one removed by hand (`forget`); it
 //!   comes back if it syncs again. A device wants a
-//!   song it lacks and hasn't blocked that's in a playlist, or, taking
-//!   every song, in the library. A device that has a song another wants
+//!   song it lacks and hasn't blocked that's in a playlist (or starred,
+//!   taking starred songs), or, taking every song, in the library. A device that has a song another wants
 //!   sends it to the relay and marks it ready; the one that wanted it
 //!   fetches it and stops wanting it; once no one does, it's deleted from
 //!   the relay.
@@ -33,19 +34,11 @@ use crate::library::client;
 use crate::library::identity::Identity;
 use crate::playlist::Library;
 use crate::settings_sync::Fields;
-use crate::song_store::{self, SongStore, Tag};
+use crate::song_store::{self, Song, SongStore, Tag};
 
 /// The synced data's names on the server.
 pub const LIBRARY: &str = "library";
 pub const TRANSFERS: &str = "transfers";
-
-/// A song in the synced library.
-#[derive(Serialize, Deserialize)]
-struct SyncedSong {
-    name: String,
-    #[serde(default)]
-    tags: Vec<String>,
-}
 
 const TAG: &str = "tag/";
 
@@ -57,8 +50,7 @@ pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> B
     let mut leaves: BTreeMap<String, Value> = applied.iter().filter(|(k, _)| !k.starts_with(TAG)).map(|(k, v)| (k.clone(), v.clone())).collect();
     for (key, song) in store.known() {
         if applied.contains_key(key) || store.has(key) {
-            let synced = SyncedSong { name: song.name.clone(), tags: song.tags.clone() };
-            leaves.insert(key.to_string(), serde_json::to_value(synced).unwrap_or_default());
+            leaves.insert(key.to_string(), serde_json::to_value(song).unwrap_or_default());
         }
     }
     for (id, tag) in store.tags() {
@@ -67,8 +59,8 @@ pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> B
     leaves
 }
 
-/// Take the synced library: every song's name and tags, and the tags
-/// (those gone from it deleted here).
+/// Take the synced library: every song's name, tags and what's known of
+/// it, and the tags (those gone from it deleted here).
 pub fn apply_library(store: &mut SongStore, fields: &Fields) {
     let mut songs = Vec::new();
     for (key, field) in fields {
@@ -76,8 +68,8 @@ pub fn apply_library(store: &mut SongStore, fields: &Fields) {
             if let Ok(tag) = serde_json::from_value::<Tag>(field.value.clone()) {
                 store.set_tag(id, tag);
             }
-        } else if let Ok(song) = serde_json::from_value::<SyncedSong>(field.value.clone()) {
-            songs.push((key.clone(), song.name, song.tags));
+        } else if let Ok(song) = serde_json::from_value::<Song>(field.value.clone()) {
+            songs.push((key.clone(), song));
         }
     }
     store.learn(songs);
@@ -87,21 +79,21 @@ pub fn apply_library(store: &mut SongStore, fields: &Fields) {
     }
 }
 
+/// Which songs a device takes from the others: those in its playlists,
+/// and the starred ones too, or every one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Wants {
+    pub starred: bool,
+    pub every: bool,
+}
+
 /// The songs this device wants: those it lacks and hasn't blocked, in a
-/// playlist or (`every`) anywhere in the library.
-pub fn wanted(store: &SongStore, playlists: &Library, every: bool) -> BTreeSet<String> {
+/// playlist, starred, or anywhere in the library, as `wants` says.
+pub fn wanted(store: &SongStore, playlists: &Library, wants: Wants) -> BTreeSet<String> {
     let lacks = |key: &str| song_store::is_key(key) && !store.has(key) && !store.is_blocked(key);
-    if every {
-        return store.known().map(|(key, _)| key).filter(|key| lacks(key)).map(str::to_string).collect();
-    }
-    playlists
-        .lists
-        .iter()
-        .flat_map(|stored| &stored.playlist.entries)
-        .filter_map(|e| song_store::key_in(store.dir(), &e.path))
-        .filter(|key| lacks(key))
-        .map(str::to_string)
-        .collect()
+    let known = store.known().filter(|(_, song)| wants.every || (wants.starred && song.tags.iter().any(|t| t == song_store::STARRED)));
+    let listed = playlists.lists.iter().flat_map(|stored| &stored.playlist.entries).filter_map(|e| song_store::key_in(store.dir(), &e.path));
+    known.map(|(key, _)| key).chain(listed).filter(|key| lacks(key)).map(str::to_string).collect()
 }
 
 /// What to do about the transfers.
@@ -473,14 +465,27 @@ mod tests {
         desktop.set_song_tags(&song.key, vec!["t1".into()]);
         let library = library_leaves(&desktop, &BTreeMap::new());
         assert_eq!(library[&song.key]["name"], "Song.mid");
+        desktop.note_meta([(song.key.clone(), song_store::Meta { title: Some("Song".into()), track: Some(3), size: 4, ..Default::default() })]);
+        let library = library_leaves(&desktop, &BTreeMap::new());
+        assert_eq!(library[&song.key]["meta"], serde_json::json!({ "t": "Song", "n": 3, "s": 4 }), "short names");
         let fields = library.iter().map(|(k, v)| (k.clone(), crate::settings_sync::Field { value: v.clone(), changed: 1 })).collect();
         apply_library(&mut phone, &fields);
         assert_eq!(phone.tags()["t1"].name, "Chill");
-        assert_eq!(phone.known().find(|(k, _)| *k == song.key).unwrap().1.tags, ["t1"]);
+        let known = phone.known().find(|(k, _)| *k == song.key).unwrap().1.clone();
+        assert_eq!(known.tags, ["t1"]);
+        assert_eq!(known.meta.unwrap().title.as_deref(), Some("Song"), "known without the file");
+        assert_eq!(known.imported, desktop.known().next().unwrap().1.imported, "imported when it first was");
         assert_eq!(library_leaves(&phone, &library), library, "nothing new to say");
         let (playlists, _) = Library::load(root.join("playlists"), phone_dir.clone());
-        assert!(wanted(&phone, &playlists, false).is_empty(), "in no playlist");
-        let wants = wanted(&phone, &playlists, true);
+        let (only_listed, starred, every) =
+            (Wants { starred: false, every: false }, Wants { starred: true, every: false }, Wants { starred: false, every: true });
+        assert!(wanted(&phone, &playlists, only_listed).is_empty(), "in no playlist");
+        assert!(wanted(&phone, &playlists, starred).is_empty(), "not starred");
+        let mut starred_phone = phone.clone();
+        starred_phone.set_song_tags(&song.key, vec!["t1".into(), song_store::STARRED.into()]);
+        assert_eq!(wanted(&starred_phone, &playlists, starred), BTreeSet::from([song.key.clone()]));
+        assert!(starred_phone.tags_of(&song_store::path_of(&phone_dir, &song.key)).iter().all(|(id, _)| *id != song_store::STARRED), "never a chip");
+        let wants = wanted(&phone, &playlists, every);
         assert_eq!(wants, BTreeSet::from([song.key.clone()]));
 
         let none = BTreeSet::new();
@@ -500,7 +505,7 @@ mod tests {
         std::io::Write::write_all(&mut incoming, b"song").unwrap();
         incoming.finish().unwrap();
         phone.add(song_store::Stored { key: song.key.clone(), name: "Song.mid".into() });
-        let fetched = plan(&sent, "phone", &phone, &wanted(&phone, &playlists, true), &none, &none);
+        let fetched = plan(&sent, "phone", &phone, &wanted(&phone, &playlists, every), &none, &none);
         assert_eq!(fetched.tasks, [Task::Delete(song.key.clone())]);
         assert!(fetched.leaves.is_empty());
 
@@ -511,8 +516,37 @@ mod tests {
         assert_eq!(std::fs::read_dir(root.join("elsewhere")).unwrap().count(), 0, "nothing left behind");
         // Removed here: not wanted again.
         phone.remove(&song_store::path_of(&phone_dir, &song.key)).unwrap();
-        assert!(wanted(&phone, &playlists, true).is_empty());
+        assert!(wanted(&phone, &playlists, every).is_empty());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_big_library_fits_one_blob() {
+        // 5,000 songs, each with every field: deflated and sealed, well
+        // within what a blob can be.
+        let mut leaves = BTreeMap::new();
+        for i in 0..5000u32 {
+            // (Hashes, as keys are: they don't compress.)
+            let key = format!("{}.mp3", crate::library::hex(&<sha2::Sha256 as sha2::Digest>::digest(i.to_le_bytes())));
+            let meta = song_store::Meta {
+                title: Some(format!("Song number {i}")),
+                artist: Some(format!("Artist {}", i % 300)),
+                album: Some(format!("Album {}", i % 400)),
+                album_artist: Some(format!("Artist {}", i % 300)),
+                composer: Some(format!("Composer {}", i % 200)),
+                genre: Some(["Jazz", "Rock", "Game", "Classical"][i as usize % 4].into()),
+                track: Some(i % 14 + 1),
+                disc: Some(1),
+                year: Some(1980 + i % 40),
+                length: Some(f64::from(120 + i % 300) + 0.25),
+                size: 4_000_000 + u64::from(i) * 977,
+            };
+            let song = Song { name: format!("{:02} Song number {i}.mp3", i % 14 + 1), imported: 1_790_000_000 + i64::from(i), tags: vec![song_store::STARRED.into()], meta: Some(meta) };
+            leaves.insert(key, crate::settings_sync::Field { value: serde_json::to_value(song).unwrap(), changed: 1_790_000_000 });
+        }
+        let plain = serde_json::to_vec(&leaves).unwrap();
+        let sealed = crate::library::sync::seal(&[1; 32], &crate::library::sync::pack(&plain)).unwrap();
+        assert!(sealed.len() < crate::library::sync::MAX_DATA * 3 / 4, "{} KB sealed, from {} KB", sealed.len() / 1024, plain.len() / 1024);
     }
 
     #[test]

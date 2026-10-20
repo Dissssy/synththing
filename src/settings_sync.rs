@@ -97,6 +97,7 @@ pub const CATEGORIES: &[Category] = &[
         settings: &[
             setting("remember", "What's remembered between launches", &["remember"]),
             setting("modes", "Loop, Shuffle and Autoplay", &["loop_mode", "shuffle", "autoplay"]),
+            setting("only_starred", "Only play starred songs", &["only_starred"]),
             setting("heavy_midi", "Warning before a very large MIDI file", &["warn_heavy_midi"]),
             setting("channel_chips", "Channel chips", &["channel_chips"]),
             Setting { key: "volume", name: "Last volume (taken at the next launch)", paths: &["session/volume"], on: false },
@@ -113,6 +114,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("unload", "Unload preloaded files after", &["preload_expiry_secs"]),
             PLAYLISTS,
             SONGS,
+            STARRED_SONGS,
             EVERY_SONG,
         ],
     },
@@ -161,8 +163,11 @@ const OTHER: Setting = setting("other", "Anything else", &[]);
 pub const PLAYLISTS: Setting = setting("playlists", "Playlists", &[]);
 
 /// Fetching songs from the other devices (`song_sync.rs`): those in
-/// playlists, or with `EVERY_SONG`, every one in the library.
+/// playlists, with `STARRED_SONGS` the starred ones too, or with
+/// `EVERY_SONG`, every one in the library.
 pub const SONGS: Setting = setting("songs", "Songs from my other devices", &[]);
+pub const STARRED_SONGS: Setting =
+    Setting { key: "starred_songs", name: "Starred songs, not only those in playlists", paths: &[], on: false };
 pub const EVERY_SONG: Setting =
     Setting { key: "every_song", name: "Every song, not only those in playlists", paths: &[], on: false };
 

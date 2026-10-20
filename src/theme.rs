@@ -86,10 +86,33 @@ pub struct Palette {
     /// Outlining and tinting the song playing, in lists.
     #[serde(default = "default_playing")]
     pub playing: Hex,
+    /// Starred songs' alien, in lists.
+    #[serde(default = "default_star")]
+    pub star: Hex,
 }
 
 fn default_playing() -> Hex {
     hex(0x4caf50)
+}
+
+/// Neon green, for the dark themes (`light_star` on light ones).
+fn default_star() -> Hex {
+    hex(0x39ff14)
+}
+
+/// Neon green dark enough to read on a light background.
+fn light_star() -> Hex {
+    hex(0x1fc40a)
+}
+
+/// The theme's `Palette::star`, kept where lists find it (`star_color`).
+fn star_id() -> egui::Id {
+    egui::Id::new("theme_star_color")
+}
+
+/// The color starred songs' note is in, in lists.
+pub fn star_color(ctx: &egui::Context) -> Color32 {
+    ctx.data(|d| d.get_temp(star_id())).unwrap_or(default_star().0)
 }
 
 /// The theme's `Palette::playing`, kept where lists find it (`playing_color`).
@@ -154,6 +177,7 @@ fn dark() -> Theme {
             widget_outline: hex(0x6d9eff),
             border: hex(0x3a3d46),
             playing: default_playing(),
+            star: default_star(),
         },
         shape: Shape { widget_radius: 4, window_radius: 8, border_width: 1.0, shadow: 16 },
     }
@@ -184,6 +208,7 @@ fn light() -> Theme {
             widget_outline: hex(0x2f6fde),
             border: hex(0xcdd0d7),
             playing: default_playing(),
+            star: light_star(),
         },
         shape: Shape { widget_radius: 4, window_radius: 8, border_width: 1.0, shadow: 12 },
     }
@@ -215,6 +240,7 @@ fn frutiger_aero() -> Theme {
             widget_outline: hex(0x0a93d1),
             border: hex(0x66b7df),
             playing: default_playing(),
+            star: light_star(),
         },
         shape: Shape { widget_radius: 10, window_radius: 14, border_width: 1.0, shadow: 22 },
     }
@@ -254,6 +280,7 @@ fn from_visuals(name: &str, visuals: &Visuals) -> Theme {
             widget_outline: Hex(w.hovered.bg_stroke.color),
             border: Hex(w.noninteractive.bg_stroke.color),
             playing: default_playing(),
+            star: default_star(),
         },
         shape: Shape {
             widget_radius: w.inactive.corner_radius.nw,
@@ -328,7 +355,10 @@ impl Theme {
         let theme = if self.dark { egui::Theme::Dark } else { egui::Theme::Light };
         ctx.set_theme(theme);
         ctx.set_visuals_of(theme, self.visuals());
-        ctx.data_mut(|d| d.insert_temp(playing_id(), self.palette.playing.0));
+        ctx.data_mut(|d| {
+            d.insert_temp(playing_id(), self.palette.playing.0);
+            d.insert_temp(star_id(), self.palette.star.0);
+        });
     }
 }
 
@@ -379,6 +409,8 @@ mod tests {
         for theme in builtins() {
             let mut back = from_visuals(&theme.name, &theme.visuals());
             back.shape.shadow = theme.shape.shadow;
+            // (Like the playing color, the star isn't one of egui's.)
+            back.palette.star = theme.palette.star;
             assert_eq!(back.palette, theme.palette, "{}", theme.name);
         }
     }

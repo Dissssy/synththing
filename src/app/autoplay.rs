@@ -36,6 +36,7 @@ impl App {
             loop_all: self.loop_mode == LoopMode::All,
             shuffle: self.shuffle,
             skip_collapsed: self.config.autoplay_skip_collapsed,
+            only_starred: self.config.only_starred,
         }
     }
 

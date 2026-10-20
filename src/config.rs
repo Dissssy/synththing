@@ -155,6 +155,10 @@ pub struct Config {
     /// Preference: autoplay leaves out the songs in closed groups.
     #[serde(default)]
     pub autoplay_skip_collapsed: bool,
+    /// Preference: shuffle, autoplay and playlists playing on play only
+    /// starred songs (one picked by hand still plays).
+    #[serde(default)]
+    pub only_starred: bool,
     /// Recording size and frame rate (`None`: the default, 60).
     #[serde(default)]
     pub record_resolution: crate::recorder::Resolution,

@@ -280,6 +280,31 @@ pub fn scrolls(row: &Row, playing: bool) -> bool {
     playing || row.response.contains_pointer()
 }
 
+/// The icon starred songs are marked with (`star`): an alien, filled when
+/// starred, in outline when not.
+pub const STAR_ICON: &str = "alien";
+/// How wide a song's star is, at the left of its row.
+pub const STAR_WIDTH: f32 = 18.0;
+
+/// A song's star, at the left of its row: its alien filled in the theme's
+/// star color when it's starred, a faint outline when it isn't. Whether it
+/// was clicked (to star or unstar it).
+pub fn star(ui: &mut egui::Ui, starred: bool) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(STAR_WIDTH, ui.available_height()), egui::Sense::click());
+    let weak = ui.visuals().weak_text_color();
+    let color = match (starred, response.hovered()) {
+        (true, _) => crate::theme::star_color(ui.ctx()),
+        (false, true) => weak,
+        (false, false) => weak.gamma_multiply(0.3),
+    };
+    let mut font = egui::TextStyle::Body.resolve(ui.style());
+    if starred {
+        font.family = egui::FontFamily::Name(crate::app::fonts::PHOSPHOR_FILL.into());
+    }
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, crate::app::icon(STAR_ICON), font, color);
+    response.on_hover_text(if starred { "Starred: click to unstar" } else { "Click to star" }).clicked()
+}
+
 /// A tag's chip: its name on its color (`song_store::Tag`), in text that
 /// reads on it.
 pub fn chip(ui: &mut egui::Ui, name: &str, color: [u8; 3]) -> egui::Response {

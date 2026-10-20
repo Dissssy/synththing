@@ -17,7 +17,12 @@
 //! another device: [`SongStore::know`]), so they keep their names.
 //!
 //! Songs can carry tags of the user's own (a name and a color, defined
-//! once in `tags.json`), by the tags' IDs.
+//! once in `tags.json`), by the tags' IDs, and one built in: starred
+//! (`STARRED`), never defined and never shown as a tag.
+//!
+//! Each song keeps what its file says of itself (`Meta`: its tags, length
+//! and size), read on the device that has it (`App::note_song_meta`) and
+//! synced, so every device can list and sort the songs it doesn't have.
 //!
 //! A song removed here is blocked (`blocked.json`): this device doesn't
 //! fetch it from the others again (`song_sync.rs`), until it's unblocked
@@ -35,6 +40,10 @@ const INDEX: &str = "library.json";
 const BLOCKED: &str = "blocked.json";
 const TAGS: &str = "tags.json";
 
+/// The built-in tag starred songs have: hidden from the tag editor and
+/// the chips, it syncs like any other.
+pub const STARRED: &str = "starred";
+
 /// What's known of a stored song.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Song {
@@ -46,6 +55,66 @@ pub struct Song {
     /// Its tags, by ID (`SongStore::tags`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// What its file says of itself, once a device that has it has read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+}
+
+impl Song {
+    fn new(name: String) -> Self {
+        Self { name, imported: now(), tags: Vec::new(), meta: None }
+    }
+}
+
+/// What a song's file says of itself: its tags (`song_info::Tags`), how
+/// long it is and its size. Kept under short names: the synced library has
+/// one for every song.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Meta {
+    #[serde(rename = "t", skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(rename = "ar", skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    #[serde(rename = "al", skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
+    #[serde(rename = "aa", skip_serializing_if = "Option::is_none")]
+    pub album_artist: Option<String>,
+    #[serde(rename = "c", skip_serializing_if = "Option::is_none")]
+    pub composer: Option<String>,
+    #[serde(rename = "g", skip_serializing_if = "Option::is_none")]
+    pub genre: Option<String>,
+    #[serde(rename = "n", skip_serializing_if = "Option::is_none")]
+    pub track: Option<u32>,
+    #[serde(rename = "d", skip_serializing_if = "Option::is_none")]
+    pub disc: Option<u32>,
+    #[serde(rename = "y", skip_serializing_if = "Option::is_none")]
+    pub year: Option<u32>,
+    /// Seconds.
+    #[serde(rename = "l", skip_serializing_if = "Option::is_none")]
+    pub length: Option<f64>,
+    /// Bytes.
+    #[serde(rename = "s")]
+    pub size: u64,
+}
+
+impl Meta {
+    /// The tag `name` (as a title pattern writes it), if the file has it.
+    pub fn tag(&self, name: &str) -> Option<String> {
+        let text = |t: &Option<String>| t.clone();
+        match name {
+            "title" => text(&self.title),
+            "artist" => text(&self.artist),
+            "album" => text(&self.album),
+            "album_artist" => text(&self.album_artist),
+            "composer" => text(&self.composer),
+            "genre" => text(&self.genre),
+            "track" => self.track.map(|n| n.to_string()),
+            "disc" => self.disc.map(|n| n.to_string()),
+            "year" => self.year.map(|n| n.to_string()),
+            _ => None,
+        }
+    }
 }
 
 /// A tag of the user's own.
@@ -91,7 +160,7 @@ impl SongStore {
         for key in &present {
             songs.entry(key.clone()).or_insert_with_key(|key| {
                 changed = true;
-                Song { name: key.clone(), imported: now(), tags: Vec::new() }
+                Song::new(key.clone())
             });
         }
         let blocked = std::fs::read_to_string(dir.join(BLOCKED))
@@ -122,7 +191,7 @@ impl SongStore {
     /// Record a file now in the store (keeping what's known of it if it
     /// was already there), and save.
     pub fn add(&mut self, stored: Stored) {
-        let song = self.songs.entry(stored.key.clone()).or_insert_with(|| Song { name: stored.name.clone(), imported: now(), tags: Vec::new() });
+        let song = self.songs.entry(stored.key.clone()).or_insert_with(|| Song::new(stored.name.clone()));
         // (Found on disk with nothing known of it: named after its key.)
         if song.name == stored.key {
             song.name = stored.name;
@@ -140,28 +209,56 @@ impl SongStore {
         if !is_key(key) || self.songs.contains_key(key) {
             return;
         }
-        self.songs.insert(key.to_string(), Song { name: name.to_string(), imported: now(), tags: Vec::new() });
+        self.songs.insert(key.to_string(), Song::new(name.to_string()));
         self.save();
     }
 
-    /// Take what the synced library says of each song (key, name, tags):
-    /// its name and tags (knowing it, if it wasn't). Saved once, at the end.
-    pub fn learn(&mut self, songs: impl IntoIterator<Item = (String, String, Vec<String>)>) {
+    /// Take what the synced library says of each song: its name, tags and
+    /// what its file says (when a device has read it), and the first time
+    /// any device imported it (knowing it, if it wasn't). Saved once, at
+    /// the end.
+    pub fn learn(&mut self, songs: impl IntoIterator<Item = (String, Song)>) {
         let mut changed = false;
-        for (key, name, tags) in songs {
+        for (key, synced) in songs {
             if !is_key(&key) {
                 continue;
             }
-            let song = self.songs.entry(key).or_insert_with(|| Song { name: name.clone(), imported: now(), tags: Vec::new() });
-            if song.name != name || song.tags != tags {
-                song.name = name;
-                song.tags = tags;
+            let song = self.songs.entry(key).or_insert_with(|| Song::new(synced.name.clone()));
+            let mut learned = Song { meta: synced.meta.or_else(|| song.meta.clone()), ..synced };
+            // (One from before it was synced says 0.)
+            if learned.imported == 0 || song.imported < learned.imported {
+                learned.imported = song.imported;
+            }
+            if *song != learned {
+                *song = learned;
                 changed = true;
             }
         }
         if changed {
             self.save();
         }
+    }
+
+    /// Note what the songs' files say of themselves, for those not known
+    /// yet (a device that read them first said it, for all of them).
+    /// Saved once, at the end: whether anything changed.
+    pub fn note_meta(&mut self, metas: impl IntoIterator<Item = (String, Meta)>) -> bool {
+        let mut changed = false;
+        for (key, meta) in metas {
+            if let Some(song) = self.songs.get_mut(&key).filter(|s| s.meta.is_none()) {
+                song.meta = Some(meta);
+                changed = true;
+            }
+        }
+        if changed {
+            self.save();
+        }
+        changed
+    }
+
+    /// Whether the song at `path` is starred.
+    pub fn is_starred(&self, path: &Path) -> bool {
+        self.get(path).is_some_and(|song| song.tags.iter().any(|t| t == STARRED))
     }
 
     /// Delete the song at `path` from the store, and block it (it stays

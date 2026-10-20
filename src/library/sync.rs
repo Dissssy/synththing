@@ -1,8 +1,8 @@
 //! Sync (docs/SERVER.md, Sync): what's synced between the devices signed
 //! in as one identity is kept on the authority as named blobs
-//! (`settings`, ...), each sealed with the identity's sync key
-//! (`identity::sync_key`) before it leaves the device, so the server only
-//! ever holds ciphertext. Each blob has a revision: a write says which
+//! (`settings`, ...), each deflated (`pack`) and sealed with the
+//! identity's sync key (`identity::sync_key`) before it leaves the device,
+//! so the server only ever holds ciphertext. Each blob has a revision: a write says which
 //! revision it was made from, and one made from an older revision than
 //! the server's is refused, for the device to merge and write again.
 //! Every write is announced on the notification stream, so the other
@@ -16,7 +16,7 @@
 //! server can't tell the song from (`relay_id`). The synced data says
 //! which songs are wanted and which are waiting there (`song_sync.rs`).
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write as _};
 
 use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit};
@@ -71,6 +71,28 @@ pub struct Changed {
 #[derive(Serialize, Deserialize)]
 pub struct ChangedEvent {
     pub sync: Changed,
+}
+
+/// `plain` (a blob's JSON) deflated, as it's sealed: the song library's
+/// index takes a few hundred bytes a song as JSON, and a blob is capped at
+/// `MAX_DATA`.
+pub fn pack(plain: &[u8]) -> Vec<u8> {
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    // (Writing to a Vec can't fail.)
+    let _ = encoder.write_all(plain);
+    encoder.finish().unwrap_or_default()
+}
+
+/// What `pack` packed. A blob written before blobs were deflated is its
+/// JSON as it is (it starts with `{`, which a zlib stream never does), and
+/// is taken as that until it's next written.
+pub fn unpack(packed: &[u8]) -> Result<Vec<u8>, String> {
+    if packed.first() == Some(&b'{') {
+        return Ok(packed.to_vec());
+    }
+    let mut plain = Vec::new();
+    flate2::read::ZlibDecoder::new(packed).read_to_end(&mut plain).map_err(|_| "the synced data is damaged".to_string())?;
+    Ok(plain)
 }
 
 /// `plain` sealed with the sync key: the nonce, then the sealed bytes.
@@ -248,6 +270,11 @@ mod tests {
 
     #[test]
     fn sealing() {
+        let json = b"{\"theme\":\"dark\"}";
+        assert_eq!(unpack(&pack(json)).unwrap(), json);
+        assert_ne!(pack(json).first(), Some(&b'{'));
+        assert_eq!(unpack(json).unwrap(), json, "written before blobs were deflated");
+        assert!(unpack(b"not a blob").is_err());
         let sealed = seal(&[1; 32], b"{\"theme\":\"dark\"}").unwrap();
         assert_eq!(open(&[1; 32], &sealed).unwrap(), b"{\"theme\":\"dark\"}");
         assert!(open(&[2; 32], &sealed).is_err());

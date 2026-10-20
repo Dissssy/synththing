@@ -241,30 +241,27 @@ impl NowPlaying {
     }
 }
 
-/// The entry to play after `current` in a list of `len`, or `None` when
-/// playback should stop. `history` is this pass's already-played entries
-/// (only consulted when shuffling); `random` is any random number.
+/// The entry to play after `current` in a list whose entries can each be
+/// played on to or not (`playable`: "Only play starred songs" leaves the
+/// others out), or `None` when playback should stop. `history` is this
+/// pass's already-played entries (only consulted when shuffling); `random`
+/// is any random number.
 pub fn next_entry(
-    len: usize,
+    playable: &[bool],
     current: usize,
     loop_mode: LoopMode,
     shuffle: bool,
     history: &[usize],
     random: u64,
 ) -> Option<usize> {
-    if len == 0 {
+    let rows: Vec<usize> = (0..playable.len()).filter(|&i| playable[i]).collect();
+    if rows.is_empty() {
         return None;
     }
     if !shuffle {
-        return if current + 1 < len {
-            Some(current + 1)
-        } else if loop_mode == LoopMode::All {
-            Some(0)
-        } else {
-            None
-        };
+        return rows.iter().copied().find(|&i| i > current).or_else(|| (loop_mode == LoopMode::All).then_some(rows[0]));
     }
-    let unplayed: Vec<usize> = (0..len).filter(|i| !history.contains(i)).collect();
+    let unplayed: Vec<usize> = rows.iter().copied().filter(|i| !history.contains(i)).collect();
     if !unplayed.is_empty() {
         return Some(unplayed[(random % unplayed.len() as u64) as usize]);
     }
@@ -273,10 +270,10 @@ pub fn next_entry(
     }
     // New pass: anything but the track that just finished, so a reshuffle
     // never plays the same song twice in a row (unless it's the only one).
-    if len == 1 {
-        return Some(0);
+    let others: Vec<usize> = rows.iter().copied().filter(|&i| i != current).collect();
+    if others.is_empty() {
+        return Some(rows[0]);
     }
-    let others: Vec<usize> = (0..len).filter(|&i| i != current).collect();
     Some(others[(random % others.len() as u64) as usize])
 }
 
@@ -415,10 +412,24 @@ mod tests {
 
     #[test]
     fn sequential_next_stops_or_wraps() {
-        assert_eq!(next_entry(3, 0, LoopMode::Off, false, &[], 0), Some(1));
-        assert_eq!(next_entry(3, 2, LoopMode::Off, false, &[], 0), None);
-        assert_eq!(next_entry(3, 2, LoopMode::All, false, &[], 0), Some(0));
-        assert_eq!(next_entry(0, 0, LoopMode::All, false, &[], 0), None);
+        assert_eq!(next_entry(&[true; 3], 0, LoopMode::Off, false, &[], 0), Some(1));
+        assert_eq!(next_entry(&[true; 3], 2, LoopMode::Off, false, &[], 0), None);
+        assert_eq!(next_entry(&[true; 3], 2, LoopMode::All, false, &[], 0), Some(0));
+        assert_eq!(next_entry(&[true; 0], 0, LoopMode::All, false, &[], 0), None);
+    }
+
+    #[test]
+    fn only_the_playable_entries_are_played_on_to() {
+        let starred = [true, false, true, false];
+        assert_eq!(next_entry(&starred, 0, LoopMode::Off, false, &[], 0), Some(2));
+        assert_eq!(next_entry(&starred, 1, LoopMode::Off, false, &[], 0), Some(2), "after one picked by hand");
+        assert_eq!(next_entry(&starred, 2, LoopMode::Off, false, &[], 0), None);
+        assert_eq!(next_entry(&starred, 2, LoopMode::All, false, &[], 0), Some(0));
+        for r in 0..10 {
+            assert_eq!(next_entry(&starred, 0, LoopMode::Off, true, &[0], r), Some(2));
+            assert_eq!(next_entry(&starred, 2, LoopMode::All, true, &[0, 2], r), Some(0), "never the one just played");
+        }
+        assert_eq!(next_entry(&[false; 3], 0, LoopMode::All, true, &[], 0), None);
     }
 
     #[test]
@@ -426,7 +437,7 @@ mod tests {
         let mut rng = Rng(12345);
         let mut history = vec![0];
         let mut current = 0;
-        while let Some(next) = next_entry(5, current, LoopMode::Off, true, &history, rng.next()) {
+        while let Some(next) = next_entry(&[true; 5], current, LoopMode::Off, true, &history, rng.next()) {
             assert!(!history.contains(&next));
             history.push(next);
             current = next;
@@ -439,10 +450,10 @@ mod tests {
     #[test]
     fn shuffle_new_pass_never_repeats_the_last_track() {
         for r in 0..20 {
-            let next = next_entry(3, 1, LoopMode::All, true, &[0, 2, 1], r).unwrap();
+            let next = next_entry(&[true; 3], 1, LoopMode::All, true, &[0, 2, 1], r).unwrap();
             assert_ne!(next, 1);
         }
-        assert_eq!(next_entry(1, 0, LoopMode::All, true, &[0], 7), Some(0));
+        assert_eq!(next_entry(&[true; 1], 0, LoopMode::All, true, &[0], 7), Some(0));
     }
 
     #[test]

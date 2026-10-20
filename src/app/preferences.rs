@@ -142,6 +142,7 @@ impl App {
         let mut expiry = self.config.preload_expiry_secs.unwrap_or(DEFAULT_PRELOAD_EXPIRY_SECS);
         let mut hover_preload = self.config.preload_on_hover;
         let mut skip_collapsed = self.config.autoplay_skip_collapsed;
+        let mut only_starred = self.config.only_starred;
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
         let mut canary = self.config.canary_updates();
         let mut close_to_tray = self.config.close_to_tray.unwrap_or(false);
@@ -260,6 +261,15 @@ impl App {
                         crate::song_info::thousands(crate::song_info::HEAVY_MIDI_NOTES)
                     ),
                     |ui| ui.checkbox(&mut warn_heavy, "Warn before playing a very large MIDI file"),
+                );
+                with_info(
+                    ui,
+                    &format!(
+                        "Shuffle, autoplay and playlists playing on go only to songs you've starred (the {} at the left of \
+                         a song). A song you pick yourself still plays.",
+                        super::icon(crate::select_list::STAR_ICON)
+                    ),
+                    |ui| ui.checkbox(&mut only_starred, "Only play starred songs"),
                 );
                 ui.add_space(6.0);
                 ui.strong("Start with what was set last time");
@@ -430,6 +440,7 @@ impl App {
         if expiry != self.config.preload_expiry_secs
             || hover_preload != self.config.preload_on_hover
             || skip_collapsed != self.config.autoplay_skip_collapsed
+            || only_starred != self.config.only_starred
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
             || canary != self.config.canary_updates()
             || (self.tray.is_some() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
@@ -473,6 +484,10 @@ impl App {
             self.config.preload_expiry_secs = expiry;
             self.config.preload_on_hover = hover_preload;
             self.config.autoplay_skip_collapsed = skip_collapsed;
+            if self.config.only_starred != only_starred {
+                self.config.only_starred = only_starred;
+                self.plan_upcoming();
+            }
             changed = true;
         }
         // (A layout preference change saves the config itself, below.)

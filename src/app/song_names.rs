@@ -78,7 +78,7 @@ impl App {
         ui.add_space(4.0);
         egui::Frame::group(ui.style()).show(ui, |ui| {
             let info = example_info();
-            let example = Song { file_name: "harbour_lights.mid", info: Some(&info) };
+            let example = Song { file_name: "harbour_lights.mid", info: Some(&info), meta: None };
             let named = patterns.iter().find_map(|p| render(p, &example)).unwrap_or_else(|| "harbour_lights".to_string());
             ui.horizontal_wrapped(|ui| {
                 ui.weak("A song with every field:");
@@ -129,6 +129,7 @@ fn example_info() -> SongInfo {
         composer: Some("Ada Moreau".into()),
         genre: Some("Jazz".into()),
         track: Some("3".into()),
+        disc: None,
         year: Some("2010".into()),
     };
     SongInfo { length: Some(203.0), bpm: Some(92.0), notes: Some(4210), tags, ..SongInfo::default() }

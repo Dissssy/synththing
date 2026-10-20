@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::config::Config;
 use crate::song_info::{format_length, thousands, SongInfo};
-use crate::song_store::SongStore;
+use crate::song_store::{Meta, SongStore};
 
 /// The patterns until changed.
 pub const DEFAULT_PATTERNS: [&str; 2] = ["{title} by {artist}", "{title}"];
@@ -52,9 +52,11 @@ impl<'a> Naming<'a> {
     }
 
     /// The song at `path`, with what's been read of it (`info`), for its
-    /// fields.
+    /// fields: without that, what the library knows of it (read on another
+    /// device).
     pub fn song<'p>(&'p self, path: &'p Path, info: Option<&'p SongInfo>) -> Song<'p> {
-        Song { file_name: self.file_name(path), info }
+        let meta = if info.is_none() { self.store.get(path).and_then(|s| s.meta.as_ref()) } else { None };
+        Song { file_name: self.file_name(path), info, meta }
     }
 
     /// When the song at `path` came into the library (Unix seconds).
@@ -86,6 +88,8 @@ pub struct Song<'a> {
     /// The song's original file name.
     pub file_name: &'a str,
     pub info: Option<&'a SongInfo>,
+    /// What the library knows of it, for a song not read here.
+    pub meta: Option<&'a Meta>,
 }
 
 impl Song<'_> {
@@ -95,31 +99,47 @@ impl Song<'_> {
         let value = match name {
             "file_name" => stem(self.file_name).to_string(),
             "file_extension" => Path::new(self.file_name).extension()?.to_string_lossy().into_owned(),
-            "length" => format_length(info?.length?),
+            "length" => format_length(self.length()?),
             "bpm" => {
                 let bpm = info?.bpm?;
                 if (bpm - bpm.round()).abs() < 0.05 { format!("{bpm:.0}") } else { format!("{bpm:.1}") }
             }
             "notes" => thousands(info?.notes?),
-            tag => info?.tags.get(tag)?.to_string(),
+            tag => match info {
+                Some(info) => info.tags.get(tag)?.to_string(),
+                None => self.meta?.tag(tag)?,
+            },
         };
         (!value.is_empty()).then_some(value)
     }
 }
 
 impl Song<'_> {
+    fn length(&self) -> Option<f64> {
+        match self.info {
+            Some(info) => info.length,
+            None => self.meta?.length,
+        }
+    }
+
     /// The field `name` as a number, for the ones that are (to sort by).
     pub fn number(&self, name: &str) -> Option<f64> {
-        let info = self.info?;
+        if name == "length" {
+            return self.length();
+        }
+        let Some(info) = self.info else {
+            let meta = self.meta?;
+            return match name {
+                "track" => meta.track,
+                "year" => meta.year,
+                _ => None,
+            }
+            .map(f64::from);
+        };
         match name {
-            "length" => info.length,
             "bpm" => info.bpm,
             "notes" => info.notes.map(|n| n as f64),
-            "track" | "year" => {
-                let tag = info.tags.get(name)?;
-                let digits: String = tag.trim().chars().take_while(char::is_ascii_digit).collect();
-                digits.parse().ok()
-            }
+            "track" | "year" => crate::song_info::leading_number(info.tags.get(name)?).map(f64::from),
             _ => None,
         }
     }
@@ -163,7 +183,7 @@ mod tests {
     }
 
     fn song<'a>(file_name: &'a str, info: &'a SongInfo) -> Song<'a> {
-        Song { file_name, info: Some(info) }
+        Song { file_name, info: Some(info), meta: None }
     }
 
     #[test]
