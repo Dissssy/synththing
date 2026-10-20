@@ -5,7 +5,8 @@
 //! The app runs in eframe as on the desktop, always in the mobile layout.
 //! What eframe can't do, Java does: the foreground service and media
 //! session that keep music playing with the app in the background and put
-//! it in the notification and on the lock screen, the document picker for
+//! it in the notification and on the lock screen, the one that keeps songs
+//! moving between devices meanwhile, the document picker for
 //! imports, picture-in-picture, installing updates, and the keyboard's
 //! connection to text fields ([`keyboard`]). Rust calls into Java through
 //! methods on the activity ([`call`]); Java calls back through the
@@ -305,6 +306,21 @@ pub fn set_playback(playback: &Playback) {
                 JValue::Long(playback.length_ms),
                 JValue::Bool(playback.has_next.into()),
             ],
+        )?;
+        Ok(())
+    });
+}
+
+/// Tell the Java side how far songs being moved between devices have got
+/// (`done` of `total`; 0 of 0 once finished): its sync service keeps them
+/// moving in the background meanwhile, with the progress in a notification.
+pub fn set_sync_progress(done: usize, total: usize) {
+    call("updating the sync notification", |env, activity| {
+        env.call_method(
+            activity,
+            "setSyncProgress",
+            "(II)V",
+            &[JValue::Int(done.try_into().unwrap_or(i32::MAX)), JValue::Int(total.try_into().unwrap_or(i32::MAX))],
         )?;
         Ok(())
     });
