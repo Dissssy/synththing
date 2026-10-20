@@ -2289,12 +2289,20 @@ impl App {
                     if !matches {
                         continue;
                     }
-                    egui::CollapsingHeader::new(format!(
-                        "{} {}   {}",
-                        package.name, package.version, package.license
-                    ))
-                    .id_salt(("credits_package", &package.name, &package.version))
-                    .show(ui, |ui| {
+                    // (A header of its own: a collapsing header's text never
+                    // wraps or shortens, and long license names ran off a
+                    // phone's screen.)
+                    let id = ui.make_persistent_id(("credits_package", &package.name, &package.version));
+                    let mut clicked = false;
+                    let mut header = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+                        .show_header(ui, |ui| {
+                            let text = format!("{} {}   {}", package.name, package.version, package.license);
+                            clicked = ui.add(egui::Label::new(text).truncate().sense(egui::Sense::click())).clicked();
+                        });
+                    if clicked {
+                        header.toggle();
+                    }
+                    header.body(|ui| {
                         if !package.authors.is_empty() {
                             ui.weak(format!("By {}", package.authors.join(", ")));
                         }

@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Fixed
+- On a phone, Credits & licenses fits the screen (long license names in the library list are cut short instead of widening the page), and the Profiler scrolls sideways instead of growing past it.
 - On a phone, more fits the screen: long group names in Songs, playlist entries, soundfonts and the song name at the bottom scroll instead of running off or being cut short (in lists, on the playing row and the one you touch); the Visualizers page, the Branch builds list, notifications and a notification's window fit the screen's width.
 
 ### Changed
