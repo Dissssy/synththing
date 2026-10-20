@@ -343,7 +343,7 @@ fn act(state: &State, action: &AdminAction) -> Acted {
                 .query_row(
                     &format!("SELECT {}, hidden, hidden_reason FROM scripts WHERE id = ?", super::SUMMARY_COLUMNS),
                     [script],
-                    |r| Ok((super::summary_from_row(r)?, r.get::<_, i64>(13)? != 0, r.get::<_, Option<String>>(14)?)),
+                    |r| Ok((super::summary_from_row(r)?, r.get::<_, i64>(12)? != 0, r.get::<_, Option<String>>(13)?)),
                 )
                 .optional()
                 .map_err(db_error)?
@@ -375,11 +375,7 @@ fn act(state: &State, action: &AdminAction) -> Acted {
                 )
                 .optional()
                 .map_err(db_error)?;
-            let (version, mut source) = found.ok_or((404, "no such script or version".to_string()))?;
-            // (A song has no code: what there is to see of it instead.)
-            if let Some(song) = super::songs::info(&db, script) {
-                source = super::songs::describe(&song);
-            }
+            let (version, source) = found.ok_or((404, "no such script or version".to_string()))?;
             Ok(serde_json::json!({ "version": version, "source": source }))
         }
         AdminAction::Hide { script, reason } => {

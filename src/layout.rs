@@ -19,21 +19,20 @@ pub enum Section {
     Playlists,
     Visualizer,
     Editor,
-    /// The old Script Settings tab, now the Settings, Controls and Debug
-    /// windows. Only here so layouts saved with it still load; `sanitize`
-    /// drops it.
-    Settings,
     Reference,
     Sprites,
     /// The script library (scripts shared on servers).
     Library,
-    /// Songs saved from library servers.
-    Downloads,
+    /// A tab that's gone (the old Script Settings and Downloaded songs, or
+    /// any this build doesn't know): only so layouts with one still load;
+    /// `sanitize` drops it.
+    #[serde(other)]
+    Removed,
 }
 
 impl Section {
-    /// Every section there is (not the removed `Settings`).
-    pub const ALL: [Section; 9] = [
+    /// Every section there is.
+    pub const ALL: [Section; 8] = [
         Self::Songs,
         Self::Soundfonts,
         Self::Playlists,
@@ -42,7 +41,6 @@ impl Section {
         Self::Reference,
         Self::Sprites,
         Self::Library,
-        Self::Downloads,
     ];
 
     pub fn title(self) -> &'static str {
@@ -52,18 +50,17 @@ impl Section {
             Self::Playlists => "Playlists",
             Self::Visualizer => "Visualizer",
             Self::Editor => "Script Editor",
-            Self::Settings => "Script Settings",
+            Self::Removed => "Removed",
             Self::Reference => "Scripting Reference",
             Self::Sprites => "Sprite Editor",
             Self::Library => "Online Library",
-            Self::Downloads => "Downloaded songs",
         }
     }
 
     fn column(self) -> Column {
         match self {
-            Self::Songs | Self::Soundfonts | Self::Downloads => Column::Left,
-            Self::Visualizer | Self::Editor | Self::Settings | Self::Reference | Self::Sprites | Self::Library => {
+            Self::Songs | Self::Soundfonts => Column::Left,
+            Self::Visualizer | Self::Editor | Self::Removed | Self::Reference | Self::Sprites | Self::Library => {
                 Column::Center
             }
             Self::Playlists => Column::Right,
@@ -77,7 +74,7 @@ impl Section {
             Self::Soundfonts => Some(Self::Songs),
             Self::Visualizer => Some(Self::Editor),
             Self::Editor => Some(Self::Visualizer),
-            Self::Playlists | Self::Settings | Self::Reference | Self::Sprites | Self::Library | Self::Downloads => None,
+            Self::Playlists | Self::Removed | Self::Reference | Self::Sprites | Self::Library => None,
         }
     }
 }
@@ -92,7 +89,7 @@ enum Column {
 /// Share of the window a side column gets when it's (re)created.
 const SIDE_SHARE: f32 = 0.25;
 
-/// First launch: the song browser on the left with the soundfonts below
+/// First launch: the songs on the left with the soundfonts below
 /// it, the visualizer on the right: what's needed to start listening and
 /// watching. Everything else (playlists included) is a View menu click
 /// away.
@@ -204,12 +201,12 @@ pub fn fullscreen_default() -> DockState<Section> {
 }
 
 /// A layout loaded from the config, cleaned up: a section appearing more
-/// than once (hand-edited config, say) keeps only its first copy, and the
-/// removed Script Settings tab goes.
+/// than once (hand-edited config, say) keeps only its first copy, and
+/// removed tabs go.
 pub fn sanitize(mut dock: DockState<Section>) -> DockState<Section> {
     let mut seen = Vec::new();
     dock.retain_tabs(|tab| {
-        if seen.contains(tab) || *tab == Section::Settings {
+        if seen.contains(tab) || *tab == Section::Removed {
             false
         } else {
             seen.push(*tab);
@@ -469,9 +466,12 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_drops_the_old_script_settings_tab() {
+    fn sanitize_drops_removed_tabs() {
+        for old in ["\"Settings\"", "\"Downloads\""] {
+            assert_eq!(serde_json::from_str::<Section>(old).unwrap(), Section::Removed);
+        }
         let mut dock = DockState::new(vec![Section::Editor]);
-        dock.main_surface_mut().split_below(NodeIndex::root(), 0.5, vec![Section::Settings]);
+        dock.main_surface_mut().split_below(NodeIndex::root(), 0.5, vec![Section::Removed]);
         let dock = sanitize(dock);
         assert_eq!(dock.iter_all_tabs().map(|(_, t)| *t).collect::<Vec<_>>(), [Section::Editor]);
     }

@@ -25,11 +25,11 @@ It needs 64-bit Windows 10 or 11. There's an experimental Linux build on each re
 
 ## First steps
 
-The first time synththing runs, a welcome window offers a starter pack (the soundfonts download in the background; the songs land in `Music\synththing\Starter songs`) and a tour that walks you through all of this on the real buttons. Help > Welcome... and Help > Tour bring them back. Or, by hand:
+The first time synththing runs, a welcome window offers a starter pack (the soundfonts download in the background; the songs go into your library) and a tour that walks you through all of this on the real buttons. Help > Welcome... and Help > Tour bring them back. Or, by hand:
 
-1. **Pick your music.** The Songs tab is a file browser: the folder button jumps to any folder or drive, the pin makes it open there next time, and the search box finds songs in subfolders too. Double-click a song to play it.
+1. **Pick your music.** The Songs tab is your library: synththing keeps its own copy of each song, so moving or renaming the originals never breaks a playlist. **+** imports songs, the folder button a whole folder (subfolders too), and the search box finds them by name. Double-click a song to play it; dropping a file on the window plays it without importing it. Right-click a song for Save a copy as... and Remove from library.
 2. **Add a soundfont for MIDI.** MIDI files are just notes; a SoundFont supplies the instruments. In the Soundfonts tab, **+** adds one: pick any General MIDI `.sf2` (plenty are free online). Compressed `.sf3` soundfonts aren't supported; Polyphone can convert them to `.sf2`.
-3. **Make a playlist.** Open View > Playlists and drag songs (or folders) in from Songs; dropping onto an empty Playlists tab starts a new one. Drag a soundfont onto a MIDI entry to give it its own.
+3. **Make a playlist.** Open View > Playlists and drag songs in from Songs (or files and folders from outside, which are imported); dropping onto an empty Playlists tab starts a new one. Drag a soundfont onto a MIDI entry to give it its own.
 4. **Watch the visualizer.** It's on the right to begin with (View > Visualizer if you've closed it); pick a script above it. The corners button (or F11) fills the screen with it; Esc comes back.
 
 The View menu shows and hides each section; drag tabs around to arrange them however you like, and the layout is remembered. View > Layout switches between ready-made arrangements (Listening, Watching, Script writing, Sprite editing) and ones you've saved with "Save current layout as...". Each keeps whatever changes you make while it's showing; a changed built-in one has a Reset button to go back to how it comes.
@@ -50,7 +50,7 @@ The View menu shows and hides each section; drag tabs around to arrange them how
 | F10 | Pause / resume the recording |
 | Esc | Back to windowed |
 
-In the Songs, Soundfonts and Playlists lists: click to select (Ctrl and Shift for more), double-click to play or open, Ctrl+A selects all, and drag the selection (from Songs onto a playlist, or within a playlist to reorder it). Delete removes the selection from a playlist or the soundfont list. Right-click a row for more.
+In the Songs, Soundfonts and Playlists lists: click to select (Ctrl and Shift for more), double-click to play or open, Ctrl+A selects all, and drag the selection (from Songs onto a playlist, or within a playlist to reorder it). Delete removes the selection from a playlist or the soundfont list, or (asking first) from the library. Right-click a row for more.
 
 ## Visualizer scripts
 

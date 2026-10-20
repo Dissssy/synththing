@@ -22,12 +22,6 @@ pub const DEFAULT_BEAT_PULSE_LENGTH: f32 = 0.35;
 pub struct Config {
     #[serde(default)]
     pub soundfonts: Vec<PathBuf>,
-    /// Folder the file browser opens in, set via the "Set as default" button
-    /// in the Songs panel (or by editing `soundfonts.json` directly). If
-    /// unset or no longer a directory, falls back to the home directory, then
-    /// the working directory.
-    #[serde(default)]
-    pub browse_dir: Option<PathBuf>,
     /// The dock layout, which sections are open and how they're arranged.
     /// Remembered so the app reopens the way you left it; `None` (first
     /// launch) means `layout::default_layout()`.
@@ -359,23 +353,13 @@ impl Config {
         self.record_dir.clone().unwrap_or_else(default_recordings_dir)
     }
 
-    /// Folder the file browser should open in.
-    pub fn browse_start_dir(&self) -> PathBuf {
-        if let Some(dir) = &self.browse_dir
-            && dir.is_dir()
-        {
-            return dir.clone();
-        }
-        if let Some(dirs) = UserDirs::new() {
-            return dirs.home_dir().to_path_buf();
-        }
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    }
-
-    /// Persist `dir` as the folder the song browser opens in from now on.
-    pub fn set_browse_dir(&mut self, dir: PathBuf) -> Result<()> {
-        self.browse_dir = Some(dir);
-        self.save()
+    /// The Songs folder from before the song library (`browse_dir`, which
+    /// isn't a setting any more), for the one-time import: read from the
+    /// file, since the config doesn't keep it.
+    pub fn old_songs_folder() -> Option<PathBuf> {
+        let text = fs::read_to_string(Self::file_path().ok()?).ok()?;
+        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+        json.get("browse_dir")?.as_str().map(PathBuf::from)
     }
 
     pub fn save(&self) -> Result<()> {

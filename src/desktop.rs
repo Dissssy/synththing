@@ -31,11 +31,7 @@ fn preview_command(args: &cli::PreviewArgs, config: &Config) -> i32 {
             }
         };
     }
-    let made = match args.song_start {
-        Some(start) => preview::render_song(&args.script, &soundfont, &args.out, start),
-        None => preview::render(&args.script, &soundfont, &args.out),
-    };
-    match made {
+    match preview::render(&args.script, &soundfont, &args.out) {
         Ok(made) => {
             let what = match made {
                 preview::Made::Animated => format!("{} and {}", preview::STILL, preview::SHEET),

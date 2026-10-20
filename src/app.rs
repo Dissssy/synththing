@@ -28,7 +28,6 @@ mod previews;
 mod library;
 mod recording;
 mod script_windows;
-mod song_library;
 mod song_names;
 mod sprite_editor;
 mod themes;
@@ -50,7 +49,8 @@ use crate::credits::{self, Contributors, ContributorsState};
 use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, nice_name, Config};
 use crate::engine::{EngineView, MAX_SPEED, MIN_SPEED};
-use crate::filebrowser::{DraggedFiles, FileBrowser};
+use crate::song_list::{DraggedFiles, SongList};
+use crate::song_store::{self, SongStore, Stored};
 use crate::select_list::{self, Selection};
 use crate::layout::{self, Section};
 use crate::loader::{self, Asset, AssetCache, SoundFontProbe};
@@ -71,7 +71,7 @@ use crate::visualizer::{DisplayMode, NotesSnapshot, SampleTap, ShowOutput, Visua
 const VISUALIZER_WIDTH: usize = 800;
 const VISUALIZER_HEIGHT: usize = 320;
 
-/// Extensions the song browser lists. MIDI files drive the synth; everything
+/// Extensions the Songs list shows. MIDI files drive the synth; everything
 /// else is decoded as plain audio (rodio/symphonia, or ffmpeg for what they
 /// can't, figure out the actual format themselves; this list is just what
 /// shows up in the picker).
@@ -85,7 +85,7 @@ const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 impl App {
     /// The song at `path`'s name, from its tags (Preferences > Appearance).
     fn song_title(&mut self, path: &Path) -> String {
-        title_of(&mut self.song_info, &naming(&self.config, &self.browser), path)
+        title_of(&mut self.song_info, &naming(&self.config, &self.songs), path)
     }
 
     /// The playing song's name, if a song is playing.
@@ -94,17 +94,36 @@ impl App {
     }
 }
 
-/// How songs are named: by the title patterns, with `{file_path}` inside
-/// the Songs list's folder (the song library on mobile, else the default
-/// folder).
-fn naming<'a>(config: &'a Config, browser: &FileBrowser) -> Naming<'a> {
-    let folder = browser.root().map(Path::to_path_buf).unwrap_or_else(|| config.browse_start_dir());
-    Naming::new(config, folder)
+/// How songs are named: by the title patterns, from their tags and the
+/// names the library knows them by.
+fn naming<'a>(config: &'a Config, songs: &'a SongStore) -> Naming<'a> {
+    Naming::new(config, songs)
 }
 
 /// The song at `path`'s name, by `naming`.
 fn title_of(cache: &mut SongInfoCache, naming: &Naming, path: &Path) -> String {
     naming.name(path, cache.get(path).as_deref())
+}
+
+/// Start the one-time import of the songs from before the library (the
+/// Songs folder, or the starter songs' folder; on Android, the files
+/// imported into the library's folder under their own names) and the
+/// playlists naming them, on a thread of its own: its result comes back
+/// on the returned channel.
+fn start_old_import(dir: PathBuf) -> std::sync::mpsc::Receiver<song_store::OldImport> {
+    let folders: Vec<PathBuf> = if cfg!(target_os = "android") {
+        vec![dir.clone()]
+    } else {
+        let starter = crate::starter::old_songs_dir();
+        let old = Config::old_songs_folder().or_else(|| starter.parent().map(Path::to_path_buf));
+        old.into_iter().filter(|d| d.is_dir()).collect()
+    };
+    let playlists = config::playlists_dir().unwrap_or_else(|_| PathBuf::from("playlists"));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(song_store::import_old(&folders, &dir, &playlists, SONG_EXTENSIONS));
+    });
+    rx
 }
 
 fn listed_song_extensions(config: &Config) -> &'static [&'static str] {
@@ -156,8 +175,15 @@ pub struct App {
     commands: Sender<AudioCommand>,
     shared: Arc<Mutex<PlaybackShared>>,
     config: Config,
-    /// Always-visible song file browser. Double-clicking a song plays it.
-    browser: FileBrowser,
+    /// The song library (`song_store.rs`).
+    songs: SongStore,
+    /// The one-time import of the songs and playlists from before the
+    /// library, while it runs.
+    old_import: Option<std::sync::mpsc::Receiver<song_store::OldImport>>,
+    /// The Songs tab: the library's songs. Double-clicking one plays it.
+    song_list: SongList,
+    /// Songs asked to be removed from the library, waiting on Remove.
+    remove_songs: Vec<PathBuf>,
     active_sf: Option<usize>,
     /// Selected rows of the Soundfonts list.
     soundfont_selection: Selection,
@@ -311,7 +337,6 @@ pub struct App {
     notifications: notifications::NotificationsState,
     /// A copyright notice on one of the user's uploads, open.
     copyright: copyright::CopyrightState,
-    song_library: song_library::SongLibraryState,
     /// The changelog window: `Some(since)` lists only the versions newer
     /// than that (What's new, after an update), `None` all of them
     /// (Help > Changelog...).
@@ -328,7 +353,7 @@ pub struct App {
     credits_open: bool,
     contributors: Contributors,
     credits_search: String,
-    /// Watches the Songs folder and the scripts folder for changes on disk.
+    /// Watches the scripts folder for changes on disk.
     /// Made on the first frame (it needs the egui context to wake the UI).
     folder_watch: Option<FolderWatch>,
     playlists: Library,
@@ -434,9 +459,10 @@ impl App {
         config: Config,
         tap: SampleTap,
         sample_rate: u32,
-        preview_output: crate::song_preview::PreviewOutput,
     ) -> Self {
-        let browser = FileBrowser::new("songs", config.browse_start_dir(), listed_song_extensions(&config));
+        let songs_dir = config::music_dir().unwrap_or_else(|_| PathBuf::from("music"));
+        let old_import = (!SongStore::exists(&songs_dir)).then(|| start_old_import(songs_dir.clone()));
+        let songs = SongStore::open(songs_dir.clone());
 
         let scripts_dir = lua_visualizer::scripts_dir().unwrap_or_else(|_| PathBuf::from("."));
         // (The bundled visualizers and games count as installed from the
@@ -464,7 +490,7 @@ impl App {
         };
 
         let (playlists, playlist_errors) =
-            Library::load(config::playlists_dir().unwrap_or_else(|_| PathBuf::from("playlists")));
+            Library::load(config::playlists_dir().unwrap_or_else(|_| PathBuf::from("playlists")), songs_dir);
         let viewed_playlist = (!playlists.lists.is_empty()).then_some(0);
         let mut config = config;
         if config.layout.is_none() && config.active_layout.is_none() {
@@ -486,7 +512,10 @@ impl App {
             commands,
             shared,
             config,
-            browser,
+            songs,
+            old_import,
+            song_list: SongList::default(),
+            remove_songs: Vec::new(),
             active_sf: None,
             soundfont_selection: Selection::default(),
             tap,
@@ -559,7 +588,6 @@ impl App {
             sync: Default::default(),
             notifications: Default::default(),
             copyright: Default::default(),
-            song_library: song_library::SongLibraryState::new(preview_output),
             changelog: None,
             welcome: welcome::Welcome::default(),
             preferences_tab: PrefTab::default(),
@@ -1188,7 +1216,6 @@ impl App {
         #[cfg(not(target_os = "android"))]
         if let Some(paths) = rfd::FileDialog::new()
             .add_filter("SoundFont", &["sf2"])
-            .set_directory(self.config.browse_start_dir())
             .pick_files()
         {
             self.add_soundfonts(paths);
@@ -1519,7 +1546,6 @@ impl App {
                 section_checkbox(ui, Section::Reference);
                 section_checkbox(ui, Section::Sprites);
                 section_checkbox(ui, Section::Library);
-                section_checkbox(ui, Section::Downloads);
                 ui.separator();
                 ui.menu_button("Layout", |ui| self.layout_menu_ui(ui));
                 if ui.button("Mobile layout").on_hover_text("The Android app's layout, one page at a time, in a phone-sized window").clicked() {
@@ -2362,7 +2388,6 @@ impl App {
             || self.identity.open()
             || self.notifications.open()
             || self.copyright.open()
-            || self.song_library.open()
             || self.editor.history_open
             || self.layout_save.is_some()
             || self.heavy_prompt.is_some()
@@ -2371,20 +2396,49 @@ impl App {
             || !self.set_aside.is_empty()
     }
 
-    /// Pick up files added, removed or changed on disk in the folders on
-    /// screen: the Songs browser's current folder and the scripts folder.
+    /// Pick up scripts added, removed or changed on disk.
     fn refresh_changed_folders(&mut self, ctx: &egui::Context) {
         let watch = self.folder_watch.get_or_insert_with(|| FolderWatch::new(ctx.clone()));
-        watch.watch(Watched::Songs, self.browser.cwd());
         watch.watch(Watched::Scripts, &self.scripts_dir);
         for which in watch.poll() {
             match which {
-                Watched::Songs => {
-                    self.song_info.forget_folder(self.browser.cwd());
-                    self.browser.rescan();
-                }
                 Watched::Scripts => self.rescan_scripts(),
             }
+        }
+    }
+
+    /// The one-time import of the songs from before the library, once it's
+    /// done: its songs join the library (with what's been read of them),
+    /// and the playlists, now naming them, are read again.
+    fn poll_old_import(&mut self) {
+        let Some(done) = self.old_import.as_ref().and_then(|rx| rx.try_recv().ok()) else { return };
+        self.old_import = None;
+        let count = done.moved.len();
+        for (old, new) in &done.moved {
+            self.song_info.rename(old, new);
+        }
+        self.songs = SongStore::open(self.songs.dir().to_path_buf());
+        let (playlists, errors) = Library::load(
+            config::playlists_dir().unwrap_or_else(|_| PathBuf::from("playlists")),
+            self.songs.dir().to_path_buf(),
+        );
+        self.playlists = playlists;
+        self.viewed_playlist = (!self.playlists.lists.is_empty()).then_some(0);
+        self.now_playing = None;
+        let mut status = match count {
+            0 => String::new(),
+            1 => "Brought 1 song into the library.".to_string(),
+            n => format!("Brought {n} songs into the library."),
+        };
+        if done.dropped > 0 {
+            status.push_str(&format!(" {} playlist entries were left out: their files weren't there any more.", done.dropped));
+        }
+        if let Some(e) = done.failed.first().or(errors.first()) {
+            log::warn!("bringing the old songs in: {:?} {:?}", done.failed, errors);
+            status.push_str(&format!(" Some couldn't be brought in ({e})."));
+        }
+        if !status.is_empty() {
+            self.status = status.trim().to_string();
         }
     }
 
@@ -2488,99 +2542,175 @@ impl App {
     }
 
     fn songs_ui(&mut self, ui: &mut egui::Ui) {
-        if self.mobile() {
-            // The song library: what's been imported, and nothing else.
-            let library = config::music_dir().and_then(|dir| {
-                std::fs::create_dir_all(&dir)?;
-                Ok(dir)
+        if self.old_import.is_some() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Bringing your songs into the library...");
             });
-            match library {
-                Ok(dir) => {
-                    self.browser.set_root(Some(dir));
-                }
-                Err(e) => self.status = format!("Couldn't open the song library: {e:#}"),
-            }
-            if ui.button(format!("{}  Import songs...", icon("plus"))).on_hover_text("Copy songs into synththing's library").clicked() {
-                // Every type it can play: audio files with audio files off
-                // bring an offer to turn them on (`audio_import_ui`).
+            return;
+        }
+        let extensions = listed_song_extensions(&self.config);
+        let songs: Vec<PathBuf> =
+            self.songs.songs().map(|(path, _)| path).filter(|p| song_store::has_extension(p, extensions)).collect();
+        let mut tools = |ui: &mut egui::Ui| {
+            // Every type it can play: audio files with audio files off
+            // bring an offer to turn them on (`audio_import_ui`).
+            if ui.add(icon_button("plus")).on_hover_text("Import songs: copy them into synththing's library").clicked() {
                 crate::import::start(crate::import::Kind::Songs, SONG_EXTENSIONS);
             }
-        } else if self.browser.set_root(None) {
-            self.browser.navigate_to(self.config.browse_start_dir());
-        }
-        let mut set_default = None;
-        let default = self.config.browse_dir.clone();
-        let mut tools = |ui: &mut egui::Ui, cwd: &Path| {
-            let is_default = default.as_deref() == Some(cwd);
-            let hover = if is_default {
-                "Songs opens in this folder"
-            } else {
-                "Set as default: open Songs in this folder from now on"
-            };
-            if ui.add(icon_button("push-pin").selected(is_default)).on_hover_text(hover).clicked() && !is_default {
-                set_default = Some(cwd.to_path_buf());
+            #[cfg(not(target_os = "android"))]
+            if ui
+                .add(icon_button("folder-plus"))
+                .on_hover_text("Import a folder: every song in it and in the folders inside it")
+                .clicked()
+            {
+                crate::import::start_folder(SONG_EXTENSIONS);
             }
         };
         // (Both the names and the trailing widgets read the song info, one
         // after the other.)
         let cache = std::cell::RefCell::new(&mut self.song_info);
-        let naming = naming(&self.config, &self.browser);
+        let naming = naming(&self.config, &self.songs);
         let info_open = &mut self.song_info_open;
-        let mut publish = None;
-        let mut add_to: Option<(Option<usize>, PathBuf)> = None;
+        #[cfg(not(target_os = "android"))]
+        let mut save_copy = None;
+        let mut remove = Vec::new();
+        let mut add_to: Option<(Option<usize>, Vec<PathBuf>)> = None;
         // With no dragging (touch), songs go onto playlists from their menu.
         let touch = select_list::touch(ui.ctx());
         let playlists: Vec<String> =
             if touch { self.playlists.lists.iter().map(|l| l.playlist.name.clone()).collect() } else { Vec::new() };
-        let mut menu = |ui: &mut egui::Ui, path: &Path| {
+        let mut menu = |ui: &mut egui::Ui, paths: &[PathBuf]| {
             if touch {
                 ui.menu_button("Add to playlist", |ui| {
                     for (i, name) in playlists.iter().enumerate() {
                         if ui.button(name).clicked() {
-                            add_to = Some((Some(i), path.to_path_buf()));
+                            add_to = Some((Some(i), paths.to_vec()));
                         }
                     }
                     if ui.button("New playlist").clicked() {
-                        add_to = Some((None, path.to_path_buf()));
+                        add_to = Some((None, paths.to_vec()));
                     }
                 });
             }
-            if library::PUBLISHING
-                && is_midi_path(path)
-                && ui.button("Publish song...").on_hover_text("Share it on a library server that takes songs").clicked()
+            #[cfg(not(target_os = "android"))]
+            if let [path] = paths
+                && ui.button("Save a copy as...").on_hover_text("Write the song to a file, under its own name").clicked()
             {
-                publish = Some(path.to_path_buf());
+                save_copy = Some(path.clone());
+            }
+            if ui.button("Remove from library...").on_hover_text("Delete synththing's copy on this device").clicked() {
+                remove = paths.to_vec();
             }
         };
-        let clicked = self.browser.ui(
+        let output = self.song_list.ui(
             ui,
+            &songs,
             &mut tools,
             &mut |path| title_of(&mut cache.borrow_mut(), &naming, path),
+            &|path| naming.file_name(path).to_string(),
             &mut |ui, path| song_info_widgets(ui, &mut cache.borrow_mut(), path, info_open),
-            Some(&mut menu),
+            &mut menu,
         );
-        if let Some(dir) = set_default {
-            self.status = match self.config.set_browse_dir(dir) {
-                Ok(()) => "Default song folder updated.".to_string(),
-                Err(e) => format!("Failed to save default folder: {e}"),
-            };
+        if !output.delete.is_empty() {
+            remove = output.delete;
         }
-        if let Some(path) = clicked {
+        if let Some(path) = output.play {
             self.play_path(path);
         }
-        if let Some(path) = publish {
-            self.open_publish_song(path);
+        #[cfg(not(target_os = "android"))]
+        if let Some(path) = save_copy {
+            self.save_song_copy(&path);
         }
-        if let Some((list, path)) = add_to {
-            self.add_to_playlist(list, vec![path]);
+        if !remove.is_empty() {
+            self.remove_songs = remove;
+        }
+        if let Some((list, paths)) = add_to {
+            self.add_to_playlist(list, paths);
         }
     }
 
-    /// Imports that have finished (`import.rs`): songs show up in the
-    /// library, soundfonts join the list. What was picked but isn't of a
-    /// type synththing takes is said, and audio files with audio files
-    /// turned off bring an offer to turn them on.
+    /// Save a copy of the library's song at `path`, under its own name.
+    #[cfg(not(target_os = "android"))]
+    fn save_song_copy(&mut self, path: &Path) {
+        let name = naming(&self.config, &self.songs).file_name(path).to_string();
+        let Some(to) = rfd::FileDialog::new().set_file_name(&name).save_file() else { return };
+        self.status = match std::fs::copy(path, &to) {
+            Ok(_) => format!("Saved a copy as {}.", to.display()),
+            Err(e) => format!("Couldn't save {}: {e}", to.display()),
+        };
+    }
+
+    /// Put songs now in the store into the library: every way a song comes
+    /// in goes through here, so playlists waiting on one stop showing it
+    /// missing.
+    pub(super) fn add_to_library(&mut self, songs: impl IntoIterator<Item = Stored>) {
+        for stored in songs {
+            self.songs.add(stored);
+        }
+        self.refresh_missing();
+    }
+
+    /// Mark playlist entries missing, or not, as their songs leave or come
+    /// into the library.
+    fn refresh_missing(&mut self) {
+        for stored in &mut self.playlists.lists {
+            for entry in &mut stored.playlist.entries {
+                entry.missing = !entry.path.exists();
+            }
+        }
+    }
+
+    /// Asked to remove songs from the library: are you sure?
+    fn remove_songs_ui(&mut self, ctx: &egui::Context) {
+        if self.remove_songs.is_empty() {
+            return;
+        }
+        let what = match self.remove_songs.as_slice() {
+            [one] => format!("\"{}\"", self.song_title(&one.clone())),
+            more => format!("{} songs", more.len()),
+        };
+        let mut close = false;
+        let mut remove = false;
+        let modal = egui::Modal::new(egui::Id::new("remove_songs")).show(ctx, |ui| {
+            ui.set_max_width(360.0);
+            ui.heading("Remove from library?");
+            ui.label(format!(
+                "This deletes synththing's copy of {what} on this device. Playlists keep them, shown as unavailable here."
+            ));
+            ui.horizontal(|ui| {
+                remove = ui.button("Remove").clicked();
+                close = ui.button("Cancel").clicked();
+            });
+        });
+        if remove {
+            let paths = std::mem::take(&mut self.remove_songs);
+            for path in &paths {
+                if let Err(e) = self.songs.remove(path) {
+                    self.status = format!("Couldn't remove a song: {e:#}");
+                }
+            }
+            self.refresh_missing();
+            self.song_list.clear_selection();
+            if self.status.is_empty() || !self.status.starts_with("Couldn't") {
+                self.status = format!("Removed {what} from the library.");
+            }
+        } else if close || modal.should_close() {
+            self.remove_songs.clear();
+        }
+    }
+
+    /// Imports that have finished (`import.rs`): songs join the library
+    /// (and go where they were headed: a playlist), soundfonts join the
+    /// list. What was picked but isn't of a type synththing takes is said,
+    /// and audio files with audio files turned off bring an offer to turn
+    /// them on.
     fn poll_imports(&mut self) {
+        // (Waiting for the one-time import, which writes the library's
+        // index last: until then, nothing else may.)
+        if self.old_import.is_some() {
+            return;
+        }
         for done in crate::import::take_finished() {
             let imported = match done.result {
                 Ok(imported) => imported,
@@ -2589,32 +2719,46 @@ impl App {
                     continue;
                 }
             };
-            let skipped = match imported.skipped.as_slice() {
-                [] => None,
-                [one] => Some(format!("{one} isn't a file synththing can play.")),
-                more => Some(format!("{} aren't files synththing can play.", more.join(", "))),
-            };
-            if imported.copied.is_empty() {
-                if let Some(skipped) = skipped {
-                    self.status = format!("Couldn't import: {skipped}");
+            let mut notes = Vec::new();
+            match imported.skipped.as_slice() {
+                [] => {}
+                [one] => notes.push(format!("{one} isn't a file synththing can play.")),
+                more => notes.push(format!("{} aren't files synththing can play.", more.join(", "))),
+            }
+            if let Some(e) = imported.failed.first() {
+                log::warn!("importing: {:?}", imported.failed);
+                notes.push(format!("{} couldn't be imported ({e}).", imported.failed.len()));
+            }
+            let n = imported.songs.len() + imported.soundfonts.len();
+            if n == 0 {
+                if !notes.is_empty() {
+                    self.status = format!("Couldn't import: {}", notes.join(" "));
                 }
                 continue;
             }
-            let n = imported.copied.len();
-            let plural = if n == 1 { "" } else { "s" };
             match done.kind {
                 crate::import::Kind::Songs => {
-                    self.browser.rescan();
+                    let mut paths = Vec::new();
+                    let mut soundfonts = Vec::new();
+                    let mut stored = Vec::new();
+                    for song in imported.songs {
+                        paths.push(self.songs.dir().join(&song.stored.key));
+                        soundfonts.push(song.soundfont);
+                        stored.push(song.stored);
+                    }
+                    self.add_to_library(stored);
+                    let plural = if n == 1 { "" } else { "s" };
                     self.status = format!("Imported {n} song{plural}.");
-                    let audio: Vec<PathBuf> = imported.copied.into_iter().filter(|p| !is_midi_path(p)).collect();
+                    self.after_import(done.then, paths.clone(), soundfonts);
+                    let audio: Vec<PathBuf> = paths.into_iter().filter(|p| !is_midi_path(p)).collect();
                     if !audio.is_empty() && !self.config.show_audio_files {
                         self.offer_audio_files(audio);
                     }
                 }
-                crate::import::Kind::Soundfonts => self.add_soundfonts(imported.copied),
+                crate::import::Kind::Soundfonts => self.add_soundfonts(imported.soundfonts),
             }
-            if let Some(skipped) = skipped {
-                self.status = format!("{} {skipped}", self.status);
+            if !notes.is_empty() {
+                self.status = format!("{} {}", self.status, notes.join(" "));
             }
         }
     }
@@ -2797,7 +2941,11 @@ impl App {
                 .playlists
                 .lists
                 .iter()
-                .map(|l| (l.playlist.name.clone(), l.playlist.entries.iter().map(|e| nice_name(&e.path)).collect()))
+                .map(|l| {
+                    let naming = naming(&self.config, &self.songs);
+                    let names = l.playlist.entries.iter().map(|e| title_of(&mut self.song_info, &naming, &e.path)).collect();
+                    (l.playlist.name.clone(), names)
+                })
                 .collect(),
             playing: self.now_playing.as_ref().map(|n| (n.list, n.entry)),
             script: self.script.path().map(nice_name),
@@ -2820,13 +2968,12 @@ impl App {
 
     /// Nothing was drawn last frame (hidden in the tray, minimized), so what
     /// only plays while it's on screen stops, as `ui` would have stopped it
-    /// on noticing it gone: a script's held notes and a song preview.
+    /// on noticing it gone: a script's held notes.
     fn nothing_drawn(&mut self) {
         if self.visualizer_was_drawn {
             self.send(AudioCommand::Live(crate::live::LiveCommand::StopAll));
             self.visualizer_was_drawn = false;
         }
-        self.stop_song_preview();
     }
 
     /// Hand the script the song the audio thread now reports as loaded.
@@ -2851,6 +2998,7 @@ impl App {
 
     /// What scripts see of the playlist and the loop/shuffle modes.
     fn script_transport(&mut self) -> lua_visualizer::Transport {
+        let naming = naming(&self.config, &self.songs);
         let playlist = self.script_playlist().map(|list| {
             let stored = &self.playlists.lists[list].playlist;
             let playing = self.now_playing.as_ref().filter(|np| np.list == list);
@@ -2858,7 +3006,7 @@ impl App {
                 .entries
                 .iter()
                 .map(|entry| lua_visualizer::PlaylistEntryView {
-                    name: nice_name(&entry.path),
+                    name: title_of(&mut self.song_info, &naming, &entry.path),
                     length: self.song_info.get(&entry.path).and_then(|info| info.length),
                     missing: entry.missing,
                 })
@@ -3338,6 +3486,7 @@ impl App {
         self.sync_script_song(&view);
         self.poll_loads();
         self.poll_imports();
+        self.poll_old_import();
         #[cfg(target_os = "android")]
         self.android_tick(&view);
         self.refresh_changed_folders(ctx);
@@ -3355,7 +3504,6 @@ impl App {
         self.poll_notifications(ctx);
         self.poll_sync();
         self.poll_copyright();
-        self.poll_song_library();
         if self.status != self.logged_status {
             log::info!(target: STATUS_TARGET, "{}", self.status);
             self.logged_status = self.status.clone();
@@ -3453,7 +3601,7 @@ impl eframe::App for App {
         self.visualizer_output = ShowOutput::default();
 
         // Single-key shortcuts are suspended whenever some widget (namely the
-        // song browser's search box) has keyboard focus, so typing "v" there
+        // Songs search box) has keyboard focus, so typing "v" there
         // types a "v" instead of toggling the visualizer.
         let typing = ctx.memory(|m| m.focused().is_some()) || self.any_modal_open() || self.binding_capture.is_some();
         let mut toggle_fullscreen = false;
@@ -3512,7 +3660,7 @@ impl eframe::App for App {
         // drawing anything.
         self.sync_layout_slot();
 
-        self.browser.clear_hovered();
+        self.song_list.clear_hovered();
         self.hovered_playlist_entry = None;
         self.tour.begin_frame();
 
@@ -3551,6 +3699,7 @@ impl eframe::App for App {
             self.layout_save_ui(&ctx);
             self.new_sprite_ui(&ctx);
         }
+        self.remove_songs_ui(&ctx);
         self.close_requested_ui(&ctx);
         self.close_prompt_ui(&ctx);
         if self.tray.is_some() {
@@ -3571,8 +3720,6 @@ impl eframe::App for App {
         self.sync_toast_ui(&ctx);
         self.notification_ui(&ctx);
         self.copyright_ui(&ctx);
-        self.publish_song_ui(&ctx);
-        self.song_preview_tick(&ctx);
         self.moderation_ui(&ctx);
         self.feedback_ui(&ctx);
         self.heavy_midi_ui(&ctx);
@@ -3656,12 +3803,11 @@ impl TabViewer for SectionTabs<'_> {
                 app.visualizer_preview_ui(ui, self.shared.notes.clone(), self.shared.view.clone());
             }
             Section::Editor => app.editor_section_ui(ui),
-            // (Removed: dropped from layouts as they load.)
-            Section::Settings => {}
+            // (Dropped from layouts as they load.)
+            Section::Removed => {}
             Section::Reference => app.docs_ui(ui),
             Section::Sprites => app.sprite_editor_ui(ui),
             Section::Library => app.library_ui(ui),
-            Section::Downloads => app.downloaded_songs_ui(ui),
         }
     }
 
@@ -4101,15 +4247,11 @@ fn open_in_file_manager(path: &Path) {
 fn drag_ghost_ui(ctx: &egui::Context) {
     use egui::DragAndDrop;
     let text = if let Some(files) = DragAndDrop::payload::<DraggedFiles>(ctx) {
-        match files.0.as_slice() {
-            [] => return,
-            [one] => nice_name(one),
-            [first, rest @ ..] => format!("{} and {} more", nice_name(first), rest.len()),
-        }
+        files.label.clone()
     } else if let Some(sf) = DragAndDrop::payload::<DraggedSoundfont>(ctx) {
         format!("SoundFont: {}", nice_name(&sf.0))
     } else if let Some(entry) = DragAndDrop::payload::<playlist_panel::DraggedEntry>(ctx) {
-        nice_name(&entry.path)
+        entry.label.clone()
     } else {
         return;
     };

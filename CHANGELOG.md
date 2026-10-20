@@ -4,6 +4,12 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- Songs is your song library now, on the desktop as on Android: synththing keeps its own copy of each song (named by its contents, so the same song is the same everywhere), and playlists name songs in it, so moving or renaming the originals never breaks one. + imports songs and the folder button a whole folder; Library downloads, the starter songs and files dropped onto a playlist go into it too. Right-click a song for Save a copy as... and Remove from library (a playlist keeps a removed song, shown as unavailable). The first launch brings in the songs from your Songs folder and changes your playlists over, leaving the folder as it was. Songs no longer browses folders on disk; a file dropped on the window still plays from where it is. Song names lose `{file_path}`, and `{file_name}` is the name the file had when it was imported.
+
+### Removed
+- Songs in the Online Library: its Songs side, downloading and publishing songs, their previews and the Downloaded songs tab. The Library is for scripts again; songs are to sync between your own devices instead. Server: `/api/v1/songs` and the `songs` setting are gone (songs already stored stay in the database, unused), and so is `synththing preview --song-start`.
+
 ## 0.10.1 (2026-10-20)
 
 ### Added

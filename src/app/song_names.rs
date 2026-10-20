@@ -3,7 +3,7 @@
 //! of your own songs, a different few every few seconds.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use eframe::egui;
 
@@ -19,8 +19,8 @@ impl App {
     pub(super) fn song_names_ui(&mut self, ui: &mut egui::Ui) {
         ui.strong("Song names");
         ui.weak(format!(
-            "Each song is named by the first of these it has every field of, or else by its file's name. \
-             {{file_path}} is the folder it's in, inside the Songs list's folder. Fields: {}.",
+            "Each song is named by the first of these it has every field of, or else by its file's name \
+             (as it was before it was imported). Fields: {}.",
             FIELDS.map(|f| format!("{{{f}}}")).join(", ")
         ));
         let mut patterns: Vec<String> =
@@ -78,11 +78,7 @@ impl App {
         ui.add_space(4.0);
         egui::Frame::group(ui.style()).show(ui, |ui| {
             let info = example_info();
-            let example = Song {
-                path: Path::new("/music/games/ds3/harbour_lights.mid"),
-                info: Some(&info),
-                folder: Path::new("/music"),
-            };
+            let example = Song { file_name: "harbour_lights.mid", info: Some(&info) };
             let named = patterns.iter().find_map(|p| render(p, &example)).unwrap_or_else(|| "harbour_lights".to_string());
             ui.horizontal_wrapped(|ui| {
                 ui.weak("A song with every field:");
@@ -92,18 +88,17 @@ impl App {
             if !songs.is_empty() {
                 ui.weak("Yours:");
             }
-            let naming = super::naming(&self.config, &self.browser);
+            let naming = super::naming(&self.config, &self.songs);
             for song in songs {
                 let name = title_of(&mut self.song_info, &naming, &song);
-                ui.label(name).on_hover_text(song.display().to_string());
+                ui.label(name).on_hover_text(naming.file_name(&song));
             }
         });
     }
 
-    /// A few songs from the Songs list's folder, a different few every
-    /// `PREVIEW_SECS`.
+    /// A few songs from the library, a different few every `PREVIEW_SECS`.
     fn preview_songs(&self, ui: &egui::Ui) -> Vec<PathBuf> {
-        let files: Vec<PathBuf> = self.browser.files().map(|p| p.to_path_buf()).collect();
+        let files: Vec<PathBuf> = self.songs.songs().map(|(path, _)| path).collect();
         if files.len() <= PREVIEW_SONGS {
             return files;
         }

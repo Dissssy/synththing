@@ -78,7 +78,7 @@ impl App {
         }
         self.pending_play = Some(PendingPlay { path: path.to_path_buf(), soundfont, entry, skip_on_failure });
         self.advance_armed = false;
-        self.status = format!("Loading {}...", nice_name(path));
+        self.status = format!("Loading {}...", self.song_title(path));
         self.poll_pending_play();
     }
 
@@ -233,7 +233,7 @@ impl App {
                 return;
             }
         }
-        self.browser.set_active(Some(path.clone()));
+        self.song_list.set_active(Some(path.clone()));
         self.current_song = Some(path);
         self.advance_armed = false;
         self.skips_in_a_row = 0;
@@ -244,7 +244,7 @@ impl App {
         let Some(pending) = self.pending_play.take() else {
             return;
         };
-        self.status = format!("Failed to read '{}': {error}", nice_name(&pending.path));
+        self.status = format!("Failed to read '{}': {error}", self.song_title(&pending.path));
         let Some(np) = pending.entry else {
             return;
         };
@@ -331,7 +331,7 @@ impl App {
     /// sooner.
     fn preload_hovered(&mut self, ctx: &egui::Context, now: Instant) {
         let hovered = self
-            .browser
+            .song_list
             .hovered()
             .map(|p| (p.to_path_buf(), None))
             .or_else(|| self.hovered_playlist_entry.clone());
@@ -363,6 +363,7 @@ impl App {
     /// "This MIDI is very large": play it anyway, or don't.
     pub(super) fn heavy_midi_ui(&mut self, ctx: &egui::Context) {
         let Some((path, notes)) = self.heavy_prompt.clone() else { return };
+        let name = self.song_title(&path);
         let mut play = false;
         let mut cancel = false;
         let mut dont_ask = !self.config.warn_heavy_midi.unwrap_or(true);
@@ -370,7 +371,7 @@ impl App {
             ui.set_width(super::fit_width(ui, 420.0));
             ui.heading("Very large MIDI file");
             ui.add_space(6.0);
-            ui.label(format!("{} has {} notes.", nice_name(&path), thousands(notes)));
+            ui.label(format!("{name} has {} notes.", thousands(notes)));
             ui.label(
                 "Playing it is fine, but a visualizer script that goes through every note (charting \
                  games like highway, falling notes far ahead) can stall on it for seconds, or \
@@ -402,7 +403,7 @@ impl App {
         } else if cancel || response.should_close() {
             self.heavy_prompt = None;
             self.pending_play = None;
-            self.status = format!("Didn't play {}.", nice_name(&path));
+            self.status = format!("Didn't play {name}.");
         }
     }
 }

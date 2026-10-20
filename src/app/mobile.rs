@@ -43,7 +43,6 @@ pub(super) enum Page {
     Playlists,
     Scripts,
     Library,
-    Downloads,
     /// From the menu's lower part, not its pages.
     Preferences,
     Updates,
@@ -54,14 +53,13 @@ pub(super) enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 7] = [
+    const ALL: [Page; 6] = [
         Self::NowPlaying,
         Self::Songs,
         Self::Soundfonts,
         Self::Playlists,
         Self::Scripts,
         Self::Library,
-        Self::Downloads,
     ];
 
     fn title(self) -> &'static str {
@@ -72,7 +70,6 @@ impl Page {
             Self::Playlists => "Playlists",
             Self::Scripts => "Visualizers",
             Self::Library => "Script library",
-            Self::Downloads => "Downloaded songs",
             Self::Preferences => "Preferences",
             Self::Updates => "Updates",
             Self::Changelog => "Changelog",
@@ -89,7 +86,6 @@ impl Page {
             Self::Playlists => "playlist",
             Self::Scripts => "waveform",
             Self::Library => "storefront",
-            Self::Downloads => "download-simple",
             Self::Preferences => "gear",
             Self::Updates => "arrows-clockwise",
             Self::Changelog => "clock-counter-clockwise",
@@ -209,7 +205,6 @@ impl App {
                 Page::Playlists => self.playlist_panel_ui(ui),
                 Page::Scripts => self.mobile_scripts_ui(ui),
                 Page::Library => self.library_ui(ui),
-                Page::Downloads => self.downloaded_songs_ui(ui),
                 Page::Preferences => self.mobile_preferences_ui(ui),
                 Page::Updates => {
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -383,8 +378,8 @@ impl App {
     /// Audio files were imported with audio files turned off: turn them on
     /// (and they're in the library), or not (and they go again).
     pub(super) fn audio_import_ui(&mut self, ctx: &egui::Context) {
-        let Some(files) = &self.mobile_state.audio_import else { return };
-        let names: Vec<String> = files.iter().map(|f| super::nice_name(f)).collect();
+        let Some(files) = self.mobile_state.audio_import.clone() else { return };
+        let names: Vec<String> = files.iter().map(|f| self.song_title(f)).collect();
         let mut answer = None;
         egui::Modal::new(egui::Id::new("audio_import")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 420.0));
@@ -410,18 +405,16 @@ impl App {
         let files = self.mobile_state.audio_import.take().unwrap_or_default();
         if on {
             self.config.show_audio_files = true;
-            self.browser.set_extensions(super::listed_song_extensions(&self.config));
             self.status = match self.config.save() {
                 Ok(()) => "Audio files turned on.".to_string(),
                 Err(e) => format!("Couldn't save preferences: {e}"),
             };
         } else {
             for file in &files {
-                if let Err(e) = std::fs::remove_file(file) {
-                    log::warn!("couldn't remove {}: {e}", file.display());
+                if let Err(e) = self.songs.remove(file) {
+                    log::warn!("couldn't remove {}: {e:#}", file.display());
                 }
             }
-            self.browser.rescan();
             self.status = format!("Removed {} audio file{}.", files.len(), if files.len() == 1 { "" } else { "s" });
         }
     }

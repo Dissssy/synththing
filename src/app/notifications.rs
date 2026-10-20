@@ -61,7 +61,6 @@ fn wording(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "encore_milestone" => "\"{name}\" has {count} encores!",
         "download_milestone" => "\"{name}\" has been installed {count} times!",
-        "song_download_milestone" => "\"{name}\" has been downloaded {count} times!",
         "hidden" => "The moderators hid \"{name}\": {reason}",
         "reinstated" => "\"{name}\" is back up",
         "removed" => "The moderators deleted \"{name}\"",
@@ -85,7 +84,7 @@ fn wording(kind: &str) -> Option<&'static str> {
 fn icon_of(kind: &str) -> &'static str {
     super::icon(match kind {
         "encore_milestone" => "heart",
-        "download_milestone" | "song_download_milestone" => "download-simple",
+        "download_milestone" => "download-simple",
         "hidden" => "eye-slash",
         "reinstated" => "arrow-counter-clockwise",
         "removed" => "trash",
@@ -104,7 +103,7 @@ fn icon_of(kind: &str) -> &'static str {
 /// kind this app doesn't know.
 fn tier_of(kind: &str) -> u8 {
     match kind {
-        "encore_milestone" | "download_milestone" | "song_download_milestone" | "remixed" => 1,
+        "encore_milestone" | "download_milestone" | "remixed" => 1,
         "reinstated" | "dispute_upheld" | "notice_withdrawn" | "report_handled" | "notice_rejected" => 2,
         "new_report" | "new_feedback" | "new_notice" | "new_dispute" | "notice_disputed" | "hidden" => 3,
         "copyright_notice" | "takedown_stood" | "removed" => 4,
@@ -125,7 +124,7 @@ fn color_of(ui: &egui::Ui, n: &Notification) -> egui::Color32 {
     }
     match n.kind.as_str() {
         "encore_milestone" => palette(6),
-        "download_milestone" | "song_download_milestone" => palette(2),
+        "download_milestone" => palette(2),
         "remixed" => palette(4),
         "reinstated" | "dispute_upheld" | "notice_withdrawn" => palette(5),
         "report_handled" | "notice_rejected" => palette(0),
@@ -562,7 +561,6 @@ mod tests {
         let kinds = [
             "encore_milestone",
             "download_milestone",
-            "song_download_milestone",
             "hidden",
             "reinstated",
             "removed",

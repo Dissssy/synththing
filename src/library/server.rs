@@ -37,7 +37,6 @@ mod moderation;
 mod notifications;
 mod pairing;
 mod remixes;
-mod songs;
 mod sync;
 mod update;
 
@@ -123,8 +122,6 @@ pub struct ServerConfig {
     /// Refuse uploads that don't run here: they don't compile, or error in
     /// their first seconds (`synththing preview --check`).
     pub check_uploads: bool,
-    /// Take songs (MIDI files) too.
-    pub songs: bool,
     /// Keep signed-in apps' synced data (settings, ...), sealed so only
     /// their devices can read it.
     pub sync: bool,
@@ -164,7 +161,6 @@ impl Default for ServerConfig {
             mail: None,
             unverified_uploads_per_day: 3,
             documents: Vec::new(),
-            songs: false,
             sync: false,
             intake: false,
             android_fingerprints: Vec::new(),
@@ -666,7 +662,7 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
         db.execute_batch(copyright::SCHEMA_V11)?;
     }
     if version < 12 {
-        db.execute_batch(songs::SCHEMA_V12)?;
+        db.execute_batch(SCHEMA_V12)?;
     }
     if version < 13 {
         db.execute_batch(feedback::SCHEMA_V13)?;
@@ -693,6 +689,33 @@ ALTER TABLE scripts ADD COLUMN author_id TEXT;
 CREATE UNIQUE INDEX scripts_author_slug ON scripts(author_key, slug) WHERE author_key IS NOT NULL;
 CREATE INDEX scripts_author_id ON scripts(author_id);
 PRAGMA user_version = 2;
+COMMIT;
+";
+
+/// Songs, kept beside scripts (`kind = 'song'`) while the library took
+/// them. It no longer does: listings and lookups only see scripts, and any
+/// songs already here stay put, unused.
+const SCHEMA_V12: &str = "
+BEGIN;
+ALTER TABLE scripts ADD COLUMN kind TEXT NOT NULL DEFAULT 'script';
+CREATE INDEX scripts_kind ON scripts(kind);
+ALTER TABLE versions ADD COLUMN data BLOB;
+CREATE TABLE songs (
+    id TEXT PRIMARY KEY REFERENCES scripts(id) ON DELETE CASCADE,
+    composer TEXT NOT NULL,
+    arranger TEXT NOT NULL,
+    from_title TEXT NOT NULL,
+    copyright TEXT,
+    rights TEXT NOT NULL,
+    license TEXT NOT NULL,
+    made_for TEXT,
+    length REAL NOT NULL,
+    notes INTEGER NOT NULL,
+    tracks INTEGER NOT NULL,
+    channels INTEGER NOT NULL,
+    preview_start REAL NOT NULL
+);
+PRAGMA user_version = 12;
 COMMIT;
 ";
 
@@ -801,13 +824,6 @@ fn handle(state: &Arc<State>, mut request: Request) {
         (Method::Get, ["api", "v1", "scripts", id, "preview-sheet.png"]) => preview(state, id, &query, true),
         (Method::Get, ["api", "v1", "previews", sha256, "preview.png"]) => preview_of_source(state, sha256, false),
         (Method::Get, ["api", "v1", "previews", sha256, "preview-sheet.png"]) => preview_of_source(state, sha256, true),
-        (Method::Post, ["api", "v1", "songs"]) => {
-            let ip = client_ip(state, &request);
-            songs::upload(state, &mut request, &ip)
-        }
-        (Method::Get, ["api", "v1", "songs", id, "file"]) => {
-            songs::file(state, id, query.get("version").and_then(|v| v.parse().ok()), !query.contains_key("preview"))
-        }
         (Method::Get, ["api", "v1", "users", id]) => user(state, id),
         (Method::Get, ["api", "v1", "users", id, "scripts", slug]) => by_slug(state, id, slug),
         (Method::Post, ["api", "v1", "scripts"]) => {
@@ -923,7 +939,6 @@ fn info(state: &State) -> Info {
         contact: state.config.contact.clone(),
         authority: state.config.authority,
         mail: state.config.authority && state.mailer.on(),
-        songs: state.config.songs,
         sync: state.config.sync,
     }
 }
@@ -962,7 +977,7 @@ fn percent_decode(text: &str) -> String {
 }
 
 const SUMMARY_COLUMNS: &str =
-    "id, name, description, category, tags, author_name, author_key, latest, encores, created, updated, slug, kind";
+    "id, name, description, category, tags, author_name, author_key, latest, encores, created, updated, slug";
 
 fn summary_from_row(row: &rusqlite::Row) -> rusqlite::Result<ScriptSummary> {
     let tags: String = row.get(4)?;
@@ -980,16 +995,7 @@ fn summary_from_row(row: &rusqlite::Row) -> rusqlite::Result<ScriptSummary> {
         created: row.get(9)?,
         updated: row.get(10)?,
         slug: row.get(11)?,
-        kind: row.get(12)?,
-        song: None,
     })
-}
-
-/// Songs' own details, for the songs among `summaries`.
-fn add_song_info(db: &Connection, summaries: &mut [ScriptSummary]) {
-    for summary in summaries.iter_mut().filter(|s| s.kind == "song") {
-        summary.song = songs::info(db, &summary.id);
-    }
 }
 
 /// A search typed by someone as an FTS5 query: each word a prefix, all of
@@ -1005,9 +1011,8 @@ fn fts_query(text: &str) -> Option<String> {
 }
 
 fn list(state: &State, query: &HashMap<String, String>) -> Reply {
-    let mut clauses = vec!["hidden = 0".to_string(), "kind = ?".to_string()];
-    let kind = if query.get("kind").is_some_and(|k| k == "song") { "song" } else { "script" };
-    let mut args: Vec<rusqlite::types::Value> = vec![kind.to_string().into()];
+    let mut clauses = vec!["hidden = 0".to_string(), "kind = 'script'".to_string()];
+    let mut args: Vec<rusqlite::types::Value> = Vec::new();
     if let Some(category) = query.get("category").filter(|c| !c.is_empty()) {
         clauses.push("category = ?".into());
         args.push(category.clone().into());
@@ -1046,7 +1051,6 @@ fn list(state: &State, query: &HashMap<String, String>) -> Reply {
         });
     match (total, scripts) {
         (Ok(total), Ok(mut scripts)) => {
-            add_song_info(&db, &mut scripts);
             for script in &mut scripts {
                 if script.description.chars().count() > 200 {
                     script.description = script.description.chars().take(200).collect::<String>() + "...";
@@ -1059,11 +1063,12 @@ fn list(state: &State, query: &HashMap<String, String>) -> Reply {
 }
 
 fn find_summary(db: &Connection, id: &str) -> rusqlite::Result<Option<ScriptSummary>> {
-    let mut found = db
-        .query_row(&format!("SELECT {SUMMARY_COLUMNS} FROM scripts WHERE id = ? AND hidden = 0"), [id], summary_from_row)
-        .optional()?;
-    add_song_info(db, found.as_mut_slice());
-    Ok(found)
+    db.query_row(
+        &format!("SELECT {SUMMARY_COLUMNS} FROM scripts WHERE id = ? AND hidden = 0 AND kind = 'script'"),
+        [id],
+        summary_from_row,
+    )
+    .optional()
 }
 
 fn details(state: &State, id: &str, query: &HashMap<String, String>) -> Reply {
@@ -1115,8 +1120,7 @@ fn details(state: &State, id: &str, query: &HashMap<String, String>) -> Reply {
 fn source(state: &State, id: &str, query: &HashMap<String, String>) -> Reply {
     let db = state.db();
     let summary = match find_summary(&db, id) {
-        Ok(Some(summary)) if summary.kind == "script" => summary,
-        Ok(Some(_)) => return error(404, "that's a song, not a script: this app doesn't know songs yet"),
+        Ok(Some(summary)) => summary,
         Ok(None) => return error(404, "no such script"),
         Err(e) => return error(500, format!("database: {e}")),
     };
@@ -1550,7 +1554,7 @@ fn by_slug(state: &State, author_id: &str, slug: &str) -> Reply {
     let found = state
         .db()
         .query_row(
-            &format!("SELECT {SUMMARY_COLUMNS} FROM scripts WHERE author_id = ? AND slug = ? AND hidden = 0"),
+            &format!("SELECT {SUMMARY_COLUMNS} FROM scripts WHERE author_id = ? AND slug = ? AND hidden = 0 AND kind = 'script'"),
             params![author_id, slug],
             summary_from_row,
         )

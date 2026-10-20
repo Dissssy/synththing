@@ -236,10 +236,12 @@ impl SongInfoCache {
         });
     }
 
-    /// Forget everything cached for files directly in `dir` (they changed
-    /// on disk), so they're read again when next shown.
-    pub fn forget_folder(&mut self, dir: &Path) {
-        self.slots.retain(|path, slot| matches!(slot, Slot::Pending(_)) || path.parent() != Some(dir));
+    /// The file at `from` is at `to` now (brought into the song library):
+    /// what's known of it goes along.
+    pub fn rename(&mut self, from: &Path, to: &Path) {
+        if let Some(slot) = self.slots.remove(from).filter(|s| !matches!(s, Slot::Pending(_))) {
+            self.slots.entry(to.to_path_buf()).or_insert(slot);
+        }
     }
 }
 

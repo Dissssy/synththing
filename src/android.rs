@@ -268,11 +268,12 @@ pub fn pick_files(kind: Kind, extensions: &[&str], dir: &Path) {
 /// those not of a type it takes), or failed.
 pub fn imported(kind: i32, copied: Vec<PathBuf>, skipped: Vec<String>, error: Option<String>) {
     let Some(kind) = Kind::from_code(kind) else { return };
-    let result = match error {
-        Some(error) => Err(error),
-        None => Ok(import::Imported { copied, skipped }),
+    let result = match (error, kind) {
+        (Some(error), _) => Err(error),
+        (None, Kind::Songs) => Ok(import::Imported { skipped, ..import::songs_copied(copied) }),
+        (None, Kind::Soundfonts) => Ok(import::Imported { soundfonts: copied, skipped, ..Default::default() }),
     };
-    import::finish(import::Finished { kind, result });
+    import::finish(import::Finished { kind, then: import::Then::Keep, result });
 }
 
 /// What's playing, for the notification, the lock screen and Bluetooth.

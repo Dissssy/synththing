@@ -56,8 +56,6 @@ struct ReportDraft {
     reason: &'static str,
     details: String,
     source: Option<Result<String, String>>,
-    /// It's a song: no code to point at.
-    song: bool,
     sprites_found: Vec<SpriteCall>,
     lines: BTreeSet<u32>,
     /// The line clicked last, for shift-click ranges.
@@ -226,9 +224,7 @@ impl App {
     }
 
     /// Report... for `version` of a script.
-    /// Report... for a script (or, with `song`, a song: it has no code to
-    /// point at).
-    pub(super) fn open_report(&mut self, server: &str, id: &str, name: &str, version: u32, song: bool) {
+    pub(super) fn open_report(&mut self, server: &str, id: &str, name: &str, version: u32) {
         let Some(key) = self.config.library.pinned.get(server).cloned() else { return };
         self.moderation.report = Some(ReportDraft {
             server: server.to_string(),
@@ -237,8 +233,7 @@ impl App {
             version,
             reason: REPORT_REASONS[0].0,
             details: String::new(),
-            source: song.then(|| Ok(String::new())),
-            song,
+            source: None,
             sprites_found: Vec::new(),
             lines: BTreeSet::new(),
             anchor: None,
@@ -248,9 +243,6 @@ impl App {
             copyright: false,
             claim: CopyrightNotice { item: id.to_string(), ..Default::default() },
         });
-        if song {
-            return;
-        }
         let (server, id) = (server.to_string(), id.to_string());
         self.spawn_moderation(move || {
             let source = client::download(&server, &id, Some(version), &key).map(|d| d.source);
@@ -495,11 +487,8 @@ impl App {
                 ui.label("Anything the moderators should know (optional)");
                 ui.add(egui::TextEdit::multiline(&mut draft.details).desired_rows(3).desired_width(f32::INFINITY).char_limit(MAX_REPORT_DETAILS));
                 ui.add_space(6.0);
-                if !draft.song {
-                    ui.label("Point at the problem (optional): click lines of its code, shift-click for a range.");
-                }
+                ui.label("Point at the problem (optional): click lines of its code, shift-click for a range.");
                 match &draft.source {
-                    _ if draft.song => {}
                     None => {
                         ui.spinner();
                     }

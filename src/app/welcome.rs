@@ -73,10 +73,7 @@ impl App {
                     "Two soundfonts, the instruments MIDI files are played with: GeneralUser GS (full and \
                      detailed) and TimGM6mb (small and light). They download in the background.",
                 );
-                ui.weak(format!(
-                    "Four songs to try, each instrument on its own channel, in {}. The Songs tab opens there.",
-                    starter::songs_dir().display()
-                ));
+                ui.weak("Four songs to try, each instrument on its own channel, in the Songs tab.");
             });
             if state.running {
                 ui.add_space(4.0);
@@ -112,16 +109,10 @@ impl App {
         }
     }
 
-    /// Write the songs (and open the Songs tab there), and start fetching
-    /// the soundfonts.
+    /// Put the songs in the library, and start fetching the soundfonts.
     fn install_starter(&mut self) {
-        match starter::write_songs() {
-            Ok(dir) => {
-                self.browser.navigate_to(dir.clone());
-                if let Err(e) = self.config.set_browse_dir(dir) {
-                    log::warn!("couldn't save the songs folder: {e:#}");
-                }
-            }
+        match starter::write_songs(self.songs.dir()) {
+            Ok(songs) => self.add_to_library(songs),
             Err(e) => self.status = format!("Couldn't write the starter songs: {e:#}"),
         }
         self.welcome.registered = 0;

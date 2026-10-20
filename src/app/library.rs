@@ -2,9 +2,7 @@
 //! servers, searched across every server in use, installed into the
 //! scripts folder (with a `.source.json` beside each, saying where it came
 //! from), and the current script published (Publish...). Servers and the
-//! user's identity are set up in Preferences > Online Library. Its Songs side
-//! lists the songs on servers that take them, the same way; their own
-//! parts are in `song_library.rs`.
+//! user's identity are set up in Preferences > Online Library.
 //!
 //! Publishing is signed with the user's identity (made the first time
 //! it's needed) unless they choose to post anonymously; a signed script
@@ -38,13 +36,12 @@ use super::{info_icon, with_info, App};
 use crate::config::LibraryServer;
 use crate::library::identity::Identity;
 use crate::library::{
-    self, client, songs, Change, Info, Installed, Listing, Receipt, ScriptDetails, ScriptSummary, Upload, UserInfo,
+    self, client, Change, Info, Installed, Listing, Receipt, ScriptDetails, ScriptSummary, Upload, UserInfo,
 };
 use crate::lua_visualizer;
 
-/// Publishing (scripts, remixes, songs) and moderating are for the desktop
-/// app: the Android app has no script editor, and imports songs rather
-/// than browsing them. Signed in (`App::can_sign`), it encores, reports
+/// Publishing (scripts, remixes) and moderating are for the desktop app:
+/// the Android app has no script editor. Signed in (`App::can_sign`), it encores, reports
 /// and deletes its own uploads like the desktop.
 pub(super) const PUBLISHING: bool = !cfg!(target_os = "android");
 
@@ -87,8 +84,7 @@ enum Event {
 #[derive(Default)]
 struct LibraryActions {
     pick: Option<(String, String)>,
-    /// One linked from the details (a remix, its original, a song's
-    /// script): shown once it's fetched, added to the list if it isn't in it.
+    /// One linked from the details (a remix, its original): shown once it's fetched, added to the list if it isn't in it.
     open: Option<(String, String)>,
     install: Option<(String, ScriptSummary)>,
     update: Option<PathBuf>,
@@ -97,7 +93,7 @@ struct LibraryActions {
     delete: Option<(String, String)>,
     encore: Option<(String, String, bool)>,
     open_remote: Option<(String, library::RemixLink)>,
-    report: Option<(String, String, String, u32, bool)>,
+    report: Option<(String, String, String, u32)>,
 }
 
 /// The selected script's preview, from its server.
@@ -205,8 +201,6 @@ struct PublishDraft {
 }
 
 pub struct LibraryState {
-    /// The Songs side, not the Scripts one.
-    songs: bool,
     query: String,
     category: Option<&'static str>,
     sort: &'static str,
@@ -270,7 +264,6 @@ pub struct LibraryState {
 impl LibraryState {
     pub fn new() -> Self {
         Self {
-            songs: false,
             query: String::new(),
             category: None,
             sort: "new",
@@ -352,18 +345,14 @@ fn diff_ui(ui: &mut egui::Ui, diff: &[(Change, String)]) {
     }
 }
 
-/// The color of a script's kind or a song's source (where it's from), from
-/// the channel palette (`lua_visualizer::default_channel_color`); grey for
-/// "other" and anything unknown. Video-game songs share games' color.
+/// The color of a script's kind, from the channel palette
+/// (`lua_visualizer::default_channel_color`); grey for anything unknown.
 pub(super) fn kind_color(ui: &egui::Ui, kind: &str) -> egui::Color32 {
     let palette = match kind {
-        "visualizer" | "classical" => Some(0),
+        "visualizer" => Some(0),
         "game" => Some(1),
-        "original" => Some(2),
-        "popular" => Some(3),
-        "film" => Some(4),
-        "toy" | "anime" => Some(6),
-        "example" | "traditional" => Some(7),
+        "toy" => Some(6),
+        "example" => Some(7),
         _ => None,
     };
     match palette {
@@ -375,7 +364,7 @@ pub(super) fn kind_color(ui: &egui::Ui, kind: &str) -> egui::Color32 {
     }
 }
 
-/// A kind or source as an option in a dropdown: a dot of its color first.
+/// A kind as an option in a dropdown: a dot of its color first.
 pub(super) fn kind_option(ui: &egui::Ui, kind: &str, title: &str) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     let style = ui.style();
@@ -401,16 +390,12 @@ impl App {
     /// are only looked for on their server).
     fn library_query(&self, server: &str) -> Option<client::Search> {
         let lib = &self.library;
-        // (Songs only from servers that take them.)
-        if lib.songs && lib.infos.get(server).is_some_and(|i| !i.songs) {
-            return None;
-        }
         let author = match &lib.author {
             Some((on, id)) if on == server => Some(id.clone()),
             Some(_) => return None,
             None => None,
         };
-        Some(client::Search { query: lib.query.clone(), category: lib.category, sort: lib.sort, author, page: 0, songs: lib.songs })
+        Some(client::Search { query: lib.query.clone(), category: lib.category, sort: lib.sort, author, page: 0 })
     }
 
     /// Search every server in use (with what's typed and picked).
@@ -448,53 +433,9 @@ impl App {
         self.refresh_installed();
     }
 
-    /// Switch to the Songs side (or back to Scripts).
-    pub(super) fn library_show_songs(&mut self, songs: bool) {
-        if self.library.songs == songs {
-            return;
-        }
-        self.library.songs = songs;
-        self.library.category = None;
-        self.library.selected = None;
-        self.library.details = None;
-        self.library.preview = None;
-        self.library_search();
-    }
-
     /// What `server` last said about itself, if it's been asked.
     pub(super) fn library_server_info(&self, server: &str) -> Option<&Info> {
         self.library.infos.get(server)
-    }
-
-    /// A server's info, fetched elsewhere (Publish song...): kept, its key
-    /// pinned the first time, unless it isn't the one pinned.
-    pub(super) fn note_server_info(&mut self, server: String, info: Info) {
-        match self.config.library.pinned.get(&server) {
-            Some(pinned) if *pinned != info.key => return,
-            Some(_) => {}
-            None => {
-                self.config.library.pinned.insert(server.clone(), info.key.clone());
-                let _ = self.config.save();
-            }
-        }
-        self.library.infos.insert(server, info);
-    }
-
-    /// The scripts the user has from `server` (installed or published):
-    /// their IDs and names.
-    pub(super) fn library_scripts_on(&self, server: &str) -> Vec<(String, String)> {
-        let mut scripts: Vec<(String, String)> = self
-            .library
-            .installed
-            .iter()
-            .filter(|((s, _), _)| s == server)
-            .map(|((_, id), (path, _))| {
-                let name = Installed::read(path).map_or_else(|| lua_visualizer::display_name(path), |i| i.name);
-                (id.clone(), name)
-            })
-            .collect();
-        scripts.sort_by_key(|(_, name)| name.to_lowercase());
-        scripts
     }
 
     /// Show only `id`'s uploads on `server` (or everyone's again).
@@ -852,10 +793,6 @@ impl App {
     /// (or the newest earlier one's, if it hasn't one).
     fn fetch_library_preview(&mut self, server: &str, details: &ScriptDetails) {
         self.library.preview = None;
-        // (Songs' previews aren't shown yet.)
-        if details.summary.kind == "song" {
-            return;
-        }
         let target = details.newest_for(library::supported_version()).or(details.newest()).map_or(0, |v| v.version);
         let pending = details.versions.iter().any(|v| v.version == target && v.preview == library::Preview::Pending);
         let found = details.preview_for(target).map(|v| (v.version, v.preview == library::Preview::Animated));
@@ -1073,33 +1010,19 @@ impl App {
         let mut search = false;
         let mut open_moderation = false;
         let mut open_document: Option<(String, library::ServerDocument)> = None;
-        let mut side = None;
         if !details_page {
             ui.horizontal_wrapped(|ui| {
-                if ui.selectable_label(!self.library.songs, "Scripts").clicked() {
-                    side = Some(false);
-                }
-                if ui.selectable_label(self.library.songs, "Songs").clicked() {
-                    side = Some(true);
-                }
-                ui.separator();
-                let songs = self.library.songs;
-                let hint = if songs { "Search songs" } else { "Search scripts" };
-                let edit = ui.add(egui::TextEdit::singleline(&mut self.library.query).hint_text(hint).desired_width(220.0));
+                let edit =
+                    ui.add(egui::TextEdit::singleline(&mut self.library.query).hint_text("Search scripts").desired_width(220.0));
                 if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     search = true;
                 }
-                let (kinds, title): (Vec<&'static str>, fn(&str) -> &str) = if songs {
-                    (songs::SOURCES.iter().map(|(s, _)| *s).collect(), songs::source_title)
-                } else {
-                    (library::CATEGORIES.to_vec(), library::category_title)
-                };
-                let all = if songs { "From anywhere" } else { "All kinds" };
-                let category = self.library.category.map(title).unwrap_or(all);
+                let all = "All kinds";
+                let category = self.library.category.map(library::category_title).unwrap_or(all);
                 egui::ComboBox::from_id_salt("library_category").selected_text(category).show_ui(ui, |ui| {
                     search |= ui.selectable_value(&mut self.library.category, None, all).clicked();
-                    for c in kinds {
-                        let option = kind_option(ui, c, title(c));
+                    for c in library::CATEGORIES {
+                        let option = kind_option(ui, c, library::category_title(c));
                         search |= ui.selectable_value(&mut self.library.category, Some(c), option).clicked();
                     }
                 });
@@ -1137,9 +1060,6 @@ impl App {
         }
         if open_moderation {
             self.open_moderation();
-        }
-        if let Some(songs) = side {
-            self.library_show_songs(songs);
         }
         if let Some((server, document)) = open_document {
             self.library.document = Some(OpenDocument {
@@ -1193,9 +1113,6 @@ impl App {
             }
             for (server, error) in &self.library.errors {
                 ui.colored_label(ui.visuals().warn_fg_color, format!("{}: {error}", host(server)));
-            }
-            if self.library.songs && servers.iter().all(|s| self.library.infos.get(s).is_some_and(|i| !i.songs)) {
-                ui.weak("None of your library servers take songs: each server's owner decides whether it does.");
             }
             ui.separator();
         }
@@ -1277,8 +1194,8 @@ impl App {
                 (_, None) => self.status = "That server's key isn't known yet: search again.".to_string(),
             }
         }
-        if let Some((server, id, name, version, song)) = report {
-            self.open_report(&server, &id, &name, version, song);
+        if let Some((server, id, name, version)) = report {
+            self.open_report(&server, &id, &name, version);
         }
         if let Some((server, original)) = open_remote {
             if self.config.library.enabled_servers().contains(&server) {
@@ -1317,10 +1234,7 @@ impl App {
                 .is_some_and(|(s, id)| *s == found.server && *id == found.summary.id);
             let s = &found.summary;
             let official = s.author_id.as_deref() == Some(official_id.as_str());
-            let kind = match &s.song {
-                Some(_) => songs::source_title(&s.category),
-                None => library::category_title(&s.category),
-            };
+            let kind = library::category_title(&s.category);
             // (Its highlight goes under it, once it's known whether it's hovered.)
             let highlight = ui.painter().add(egui::Shape::Noop);
             let row = ui
@@ -1334,9 +1248,6 @@ impl App {
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;
                             super::chip(ui, kind, kind_color(ui, &s.category));
-                            if let Some(song) = &s.song {
-                                ui.weak(format!("{} ·", song.composer));
-                            }
                             ui.weak("by");
                             // An official script's author in gold.
                             let author = egui::RichText::new(&s.author_name);
@@ -1372,14 +1283,14 @@ impl App {
         }
     }
 
-    /// The picked script's (or song's) details: its preview, what it is,
+    /// The picked script's details: its preview, what it is,
     /// and what can be done with it.
     fn library_details_ui(&mut self, ui: &mut egui::Ui, servers: &[String], act: &mut LibraryActions) {
         let my_id = self.library.my_id();
         let can_sign = self.can_sign();
         let official_id = library::official_id();
         let Some((server, id)) = self.library.selected.clone() else {
-            ui.weak(if self.library.songs { "Pick a song to see more." } else { "Pick a script to see more." });
+            ui.weak("Pick a script to see more.");
             return;
         };
         let Some(s) =
@@ -1388,13 +1299,7 @@ impl App {
             return;
         };
         let s = &s;
-        let song = s.song.clone();
-        if song.is_some() {
-            self.song_preview_ui(ui, &server, s);
-            ui.separator();
-        } else {
-            self.library_preview_ui(ui, &server, &id);
-        }
+        self.library_preview_ui(ui, &server, &id);
         ui.heading(&s.name);
         ui.horizontal_wrapped(|ui| {
             ui.label("by");
@@ -1416,11 +1321,7 @@ impl App {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            let kind = match &song {
-                Some(_) => songs::source_title(&s.category),
-                None => library::category_title(&s.category),
-            };
-            super::chip(ui, kind, kind_color(ui, &s.category));
+            super::chip(ui, library::category_title(&s.category), kind_color(ui, &s.category));
             ui.weak(format!("on {}", host(&server)));
         });
         if !s.tags.is_empty() {
@@ -1430,7 +1331,6 @@ impl App {
         let installed = self.installed_copy(&server, s);
         ui.horizontal_wrapped(|ui| {
             match &installed {
-                _ if song.is_some() => self.song_actions_ui(ui, &server, s),
                 Some((path, version)) if *version >= s.version => {
                     ui.label(format!("Installed (version {version})"));
                     if ui.button("Use it").clicked() {
@@ -1485,7 +1385,7 @@ impl App {
             if let Some(version) = reportable
                 && ui.button("Report...").on_hover_text("Tell this server's moderators something's wrong with it").clicked()
             {
-                act.report = Some((server.clone(), id.clone(), s.name.clone(), version, song.is_some()));
+                act.report = Some((server.clone(), id.clone(), s.name.clone(), version));
             }
         });
         ui.add_space(6.0);
@@ -1494,17 +1394,9 @@ impl App {
             _ => s.description.clone(),
         };
         ui.label(description);
-        if let Some(song) = &song {
-            ui.add_space(6.0);
-            if let Some(script) = super::song_library::song_facts_ui(ui, song) {
-                act.open = Some((server.clone(), script));
-            }
-        }
-        // (Versions and what they need are a script's: any app plays any MIDI file.)
         if let Some((ds, d)) = &self.library.details
             && *ds == server
             && d.summary.id == id
-            && song.is_none()
         {
             ui.add_space(6.0);
             let versions = d.versions.len();

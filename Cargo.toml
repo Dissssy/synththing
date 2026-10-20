@@ -46,7 +46,7 @@ chacha20poly1305 = "0.11.0"
 png = "0.18"                                              # script previews (preview.rs)
 egui_commonmark = "0.25"                                  # library servers' documents (EULA, privacy policy), as Markdown
 egui-phosphor = "0.14"
-base64 = "0.23"                                           # songs' MIDI files, in uploads (library/songs.rs)
+base64 = "0.23"                                           # sealed sync blobs (library/sync.rs)
 resvg = { version = "0.45", default-features = false }      # the wordmark in the menu bar (app/branding.rs)                                    # icons (the Phosphor set, as a font)
 fontdb = "0.24"                                           # finding installed fonts to fall back on (app/fonts.rs)
 skrifa = "0.44"                                           # reading which characters a font has; the same copy egui renders with
