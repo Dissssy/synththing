@@ -588,7 +588,7 @@ fn controls_ui(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut State, act: &
     match state.tab {
         Tab::Playlists => {
             if snapshot.playlists.is_empty() {
-                ui.weak("No playlists yet: make one in the Playlists tab.");
+                ui.weak("No playlists yet: make one in Groupings > Playlists.");
             } else {
                 let shown = state
                     .playlist

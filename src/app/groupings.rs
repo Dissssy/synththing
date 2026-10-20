@@ -1,9 +1,10 @@
-//! Groupings: the playlists each ruleset makes (`crate::smart`: By Album,
-//! By Artist and the user's own), shown as a grid of tiles or a list. On
-//! the desktop it's a tab with the rulesets along its top; on a phone each
-//! ruleset is a page of the menu. A group opens on a page of its own (a
-//! pushed page, on a phone): its art, title, play, shuffle, star them
-//! all, "find in" and its songs.
+//! Groupings: the user's playlists, then the playlists each ruleset makes
+//! (`crate::smart`: By Album, By Artist and the user's own), shown as a
+//! grid of tiles or a list. On the desktop it's a tab with Playlists and
+//! the rulesets along its top; on a phone each is a page of the menu. A
+//! group opens on a page of its own (a pushed page, on a phone): its art,
+//! title, play, shuffle, star them all, "find in" and its songs. A
+//! playlist opens as itself, to play and edit (`playlist_panel`).
 //!
 //! A group's tile is its album's art when the ruleset splits by album and
 //! a song of it with a picture is here (`album_art`); else, and while the
@@ -14,7 +15,7 @@
 //! by each scroll area's ID): nothing of it is saved or synced. Only the
 //! tiles and rows in sight are drawn.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -30,8 +31,10 @@ use crate::song_store::STARRED;
 
 /// The built-in ruleset of artists, where an album's artist links to.
 const ARTISTS: &str = "artists";
+/// The user's playlists, the first of the Groupings (not a ruleset).
+pub(super) const PLAYLISTS: &str = "playlists";
 /// The ruleset shown first.
-const FIRST: &str = "albums";
+const FIRST: &str = PLAYLISTS;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Sort {
@@ -93,6 +96,9 @@ pub(super) struct Groupings {
     /// The open group's songs, and what they were made from (the songs'
     /// revision, the ruleset and the group).
     page: Option<(u64, String, String, Arc<Vec<Track>>)>,
+    /// The playlists as groups, and the fingerprint of the playlists
+    /// they were made from.
+    playlists: Option<(u64, Arc<Vec<Group>>)>,
 }
 
 impl Groupings {
@@ -109,11 +115,6 @@ impl Groupings {
         self.shown().to_string()
     }
 
-    /// Back from the open group's page: whether one was open.
-    pub(super) fn back(&mut self) -> bool {
-        let id = self.shown().to_string();
-        self.views.get_mut(&id).is_some_and(|view| view.open.take().is_some())
-    }
 
     fn view(&mut self) -> &mut RulesetView {
         let id = self.shown().to_string();
@@ -126,10 +127,13 @@ enum Act {
     /// Play these songs (each with whether it's starred) from the one at
     /// the index.
     Play(Vec<(PathBuf, bool)>, usize),
+    /// Play the playlist with this ID.
+    PlayPlaylist(String),
     Shuffle(Vec<(PathBuf, bool)>),
     Star(Vec<PathBuf>, bool),
     Info(PathBuf),
-    /// Open group `key` of ruleset `id`.
+    /// Open group `key` of ruleset `id` (a playlist, by its ID, for
+    /// `PLAYLISTS`).
     Open(String, String),
 }
 
@@ -138,9 +142,43 @@ fn count(n: usize, what: &str) -> String {
     format!("{} {what}{}", thousands(n), if n == 1 { "" } else { "s" })
 }
 
+/// What a ruleset's playlists are of, one of them.
+fn what(ruleset: &Ruleset) -> &'static str {
+    ruleset.rules.split.as_ref().map_or("playlist", |s| match s.by {
+        SplitBy::Album => "album",
+        SplitBy::Artist | SplitBy::AlbumArtist => "artist",
+        SplitBy::Composer => "composer",
+        SplitBy::Genre => "genre",
+        SplitBy::Year => "year",
+        SplitBy::Tag => "tag",
+    })
+}
+
+/// Whether a ruleset's playlists are albums (with their art).
+fn albums(ruleset: &Ruleset) -> bool {
+    ruleset.rules.split.as_ref().is_some_and(|s| s.by == SplitBy::Album)
+}
+
 /// How tall a row is.
 fn row_height(ui: &egui::Ui) -> f32 {
     if select_list::touch(ui.ctx()) { 44.0 } else { ui.spacing().interact_size.y }
+}
+
+/// The icon in the corner of a smart playlist's tile.
+const SMART_BADGE: &str = "engine";
+
+/// A smart playlist's mark on its tile at `rect`: the engine, in the
+/// theme's accent, on a dimmed notch in the bottom right corner (its inner
+/// corner rounded).
+fn smart_badge(ui: &egui::Ui, rect: egui::Rect) {
+    let size = (rect.height() * 0.3).clamp(18.0, 44.0);
+    let notch = egui::Rect::from_min_max(rect.max - egui::vec2(size, size), rect.max);
+    let corners = egui::CornerRadius { nw: (size * 0.35) as u8, ne: 0, sw: 0, se: 4 };
+    let painter = ui.painter();
+    painter.rect_filled(notch, corners, egui::Color32::from_black_alpha(150));
+    let font = egui::FontId::new(size * 0.62, egui::FontFamily::Name(super::fonts::PHOSPHOR_FILL.into()));
+    let color = ui.visuals().selection.stroke.color.gamma_multiply(0.85);
+    painter.text(notch.center(), egui::Align2::CENTER_CENTER, super::icon(SMART_BADGE), font, color);
 }
 
 /// Draw only the rows of `heights` in sight, in a scroll area filling
@@ -174,6 +212,10 @@ impl App {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     egui::ScrollArea::horizontal().id_salt("ruleset_chips").show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            let chip = egui::Button::selectable(self.groupings.shown() == PLAYLISTS, "Playlists").corner_radius(12.0);
+                            if ui.add(chip).clicked() {
+                                pick = Some(PLAYLISTS.to_string());
+                            }
                             for (id, ruleset) in &rulesets {
                                 let chip = egui::Button::selectable(self.groupings.shown() == id, &ruleset.name).corner_radius(12.0);
                                 if ui.add(chip).clicked() {
@@ -193,19 +235,16 @@ impl App {
 
     /// The ruleset shown: its groups, or the one open.
     pub(super) fn grouping_ui(&mut self, ui: &mut egui::Ui) {
-        let rulesets = self.all_rulesets();
-        let Some((id, ruleset)) = rulesets.iter().find(|(id, _)| id == self.groupings.shown()).or(rulesets.first()).cloned() else { return };
-        self.groupings.shown = Some(id.clone());
-        let groups = self.groups_of(&id, &ruleset.rules);
         self.groupings.art.frame(ui.ctx());
         self.groupings.art.letters = self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS);
-        let open = self.groupings.view().open.clone().and_then(|key| groups.iter().find(|g| g.key == key).cloned());
-        let act = match open {
-            Some(group) => self.group_page_ui(ui, &id, &ruleset, &group),
-            None => self.groups_ui(ui, &id, &ruleset, &groups),
-        };
+        let act = if self.groupings.shown() == PLAYLISTS { self.playlists_grouping_ui(ui) } else { self.ruleset_ui(ui) };
         match act {
             Some(Act::Play(tracks, start)) => self.play_tracks(tracks, start),
+            Some(Act::PlayPlaylist(key)) => {
+                if let Some(list) = self.playlists.find(&key) {
+                    self.play_playlist(list);
+                }
+            }
             Some(Act::Shuffle(tracks)) if !tracks.is_empty() => {
                 self.set_shuffle(true);
                 let start = (self.rng.next() % tracks.len() as u64) as usize;
@@ -213,6 +252,11 @@ impl App {
             }
             Some(Act::Star(paths, on)) => self.tag_songs(super::tags::TagAction::Set(STARRED.into(), on), &paths),
             Some(Act::Info(path)) => self.song_info_open = Some(path),
+            Some(Act::Open(id, key)) if id == PLAYLISTS => {
+                if let Some(list) = self.playlists.find(&key) {
+                    self.open_playlist(Some(list));
+                }
+            }
             Some(Act::Open(id, key)) => {
                 self.groupings.shown = Some(id);
                 let view = self.groupings.view();
@@ -224,10 +268,114 @@ impl App {
         }
     }
 
+    /// The ruleset shown: its groups, or the one open.
+    fn ruleset_ui(&mut self, ui: &mut egui::Ui) -> Option<Act> {
+        let rulesets = self.all_rulesets();
+        let (id, ruleset) = rulesets.iter().find(|(id, _)| id == self.groupings.shown()).or(rulesets.first()).cloned()?;
+        self.groupings.shown = Some(id.clone());
+        let groups = self.groups_of(&id, &ruleset.rules);
+        let open = self.groupings.view().open.clone().and_then(|key| groups.iter().find(|g| g.key == key).cloned());
+        match open {
+            Some(group) => self.group_page_ui(ui, &id, &ruleset, &group),
+            None => self.groups_ui(ui, &id, what(&ruleset), albums(&ruleset), self.songs.revision(), &groups),
+        }
+    }
+
+    /// The playlists: as tiles or rows (dropping songs there makes a new
+    /// one of them), or the one open.
+    fn playlists_grouping_ui(&mut self, ui: &mut egui::Ui) -> Option<Act> {
+        if let Some(list) = self.viewed_playlist.filter(|&l| l < self.playlists.lists.len()) {
+            self.playlist_panel_ui(ui, list);
+            return None;
+        }
+        self.viewed_playlist = None;
+        let area = ui.max_rect();
+        let (revision, groups) = self.playlist_groups();
+        let act = self.groups_ui(ui, PLAYLISTS, "playlist", false, revision, &groups);
+        if ui.rect_contains_pointer(area)
+            && ui.input(|i| i.pointer.any_released())
+            && let Some(files) = egui::DragAndDrop::take_payload::<DraggedFiles>(ui.ctx())
+        {
+            let name = self.unique_playlist_name("New playlist");
+            self.create_playlist(&name, Vec::new());
+            if let Some(list) = self.viewed_playlist {
+                self.insert_songs(list, 0, files.paths.clone());
+            }
+        }
+        act
+    }
+
+    /// The playlists as groups, by name, made again when they change.
+    fn playlist_groups(&mut self) -> (u64, Arc<Vec<Group>>) {
+        let fingerprint = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            for stored in &self.playlists.lists {
+                (&stored.id, &stored.playlist.name, stored.playlist.smart.is_some()).hash(&mut hasher);
+                for entry in &stored.playlist.entries {
+                    entry.path.hash(&mut hasher);
+                }
+            }
+            hasher.finish()
+        };
+        if let Some((seen, groups)) = &self.groupings.playlists
+            && *seen == fingerprint
+        {
+            return (fingerprint, groups.clone());
+        }
+        let dir = self.songs.dir();
+        let mut groups: Vec<Group> = self
+            .playlists
+            .lists
+            .iter()
+            .map(|stored| Group {
+                key: stored.id.clone(),
+                title: stored.playlist.name.clone(),
+                subtitle: None,
+                songs: stored.playlist.entries.iter().filter_map(|e| crate::song_store::key_in(dir, &e.path).map(str::to_string)).collect(),
+            })
+            .collect();
+        groups.sort_by_cached_key(|g| g.title.to_lowercase());
+        let groups = Arc::new(groups);
+        self.groupings.playlists = Some((fingerprint, groups.clone()));
+        (fingerprint, groups)
+    }
+
+    /// Show playlist `list` on its page (`None`: back to them all).
+    pub(super) fn open_playlist(&mut self, list: Option<usize>) {
+        self.viewed_playlist = list;
+        self.playlist_rename = None;
+        self.confirm_delete_playlist = false;
+        self.playlist_selection.clear();
+    }
+
+    /// Whether a group's (or a playlist's) page is open.
+    pub(super) fn grouping_open(&self) -> bool {
+        match self.groupings.shown() {
+            PLAYLISTS => self.viewed_playlist.is_some(),
+            id => self.groupings.views.get(id).is_some_and(|v| v.open.is_some()),
+        }
+    }
+
+    /// Back from the open group's (or playlist's) page.
+    pub(super) fn grouping_back(&mut self) {
+        if self.groupings.shown() == PLAYLISTS {
+            self.open_playlist(None);
+        } else {
+            self.groupings.view().open = None;
+        }
+    }
+
     /// What a phone's top bar names the Groupings page: the open group,
     /// with Back (`true`), else the ruleset.
     pub(super) fn grouping_title(&self) -> (String, bool) {
         let id = self.groupings.shown();
+        if id == PLAYLISTS {
+            return match self.viewed_playlist.and_then(|l| self.playlists.lists.get(l)) {
+                Some(stored) => (stored.playlist.name.clone(), true),
+                None => ("Playlists".into(), false),
+            };
+        }
         let open = self.groupings.views.get(id).and_then(|v| v.open.as_ref());
         let group = open.and_then(|key| self.ruleset_groups.get(id)?.2.iter().find(|g| &g.key == key));
         match group {
@@ -244,32 +392,22 @@ impl App {
 
     /// Where `group`'s art comes from: the first song of it here that
     /// isn't MIDI, when the ruleset splits by album.
-    fn art_from(&self, ruleset: &Ruleset, group: &Group) -> Option<PathBuf> {
-        let albums = ruleset.rules.split.as_ref().is_some_and(|s| s.by == SplitBy::Album);
+    fn art_from(&self, albums: bool, group: &Group) -> Option<PathBuf> {
         albums.then(|| group.songs.iter().filter(|key| self.songs.has(key)).map(|key| self.songs.path(key)).find(|p| !is_midi_path(p))).flatten()
     }
 
-    /// Every group, as tiles or rows, with Play all, search and sort.
-    fn groups_ui(&mut self, ui: &mut egui::Ui, id: &str, ruleset: &Ruleset, groups: &[Group]) -> Option<Act> {
-        if groups.is_empty() {
-            ui.weak(format!("{} has nothing yet: its playlists come from your songs' tags.", ruleset.name));
-            return None;
-        }
-        let albums = ruleset.rules.split.as_ref().is_some_and(|s| s.by == SplitBy::Album);
-        let revision = self.songs.revision();
+    /// Every group of `id` (each one `what`; `albums` have art), as tiles
+    /// or rows, with Play all, search and sort (worked out again when
+    /// `revision` changes), and + for a new one, for the playlists.
+    fn groups_ui(&mut self, ui: &mut egui::Ui, id: &str, what: &str, albums: bool, revision: u64, groups: &[Group]) -> Option<Act> {
         let mut act = None;
-        let view = self.groupings.view();
-        let mut list = view.list.unwrap_or(!albums);
-        let what = ruleset.rules.split.as_ref().map_or("playlist", |s| match s.by {
-            SplitBy::Album => "album",
-            SplitBy::Artist | SplitBy::AlbumArtist => "artist",
-            SplitBy::Composer => "composer",
-            SplitBy::Genre => "genre",
-            SplitBy::Year => "year",
-            SplitBy::Tag => "tag",
-        });
         let mut play_all = false;
+        let mut list = self.groupings.view().list.unwrap_or(!albums);
         ui.horizontal(|ui| {
+            if id == PLAYLISTS {
+                self.new_playlist_menu_ui(ui);
+            }
+            let view = self.groupings.view();
             play_all = ui.add(icon_button("play")).on_hover_text("Play them all").clicked();
             ui.weak(count(groups.len(), what));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -294,7 +432,12 @@ impl App {
                 ui.add(egui::TextEdit::singleline(&mut view.search).hint_text(format!("search {what}s...")).desired_width(f32::INFINITY));
             });
         });
+        let view = self.groupings.view();
         view.list = Some(list);
+        if groups.is_empty() {
+            ui.weak(if id == PLAYLISTS { "No playlists yet: make one with +, or drag songs here from Songs." } else { "Nothing here yet: these come from your songs' tags." });
+            return None;
+        }
 
         // The groups shown, in order: worked out again when the library,
         // the search or the sort change.
@@ -329,7 +472,23 @@ impl App {
             act = Some(Act::Play(all, 0));
         }
 
-        // (Art's looked for only for the tiles in sight.)
+        // Smart playlists have a badge on their tiles.
+        let smart: HashSet<String> = if id == PLAYLISTS {
+            self.playlists.lists.iter().filter(|l| l.playlist.smart.is_some()).map(|l| l.id.clone()).collect()
+        } else {
+            HashSet::new()
+        };
+        let tile_ui = |ui: &egui::Ui, art: &mut AlbumArt, rect: egui::Rect, from: Option<PathBuf>, group: &Group| {
+            art.tile(ui, rect, from.as_deref(), &group.title);
+            if smart.contains(&group.key) {
+                smart_badge(ui, rect);
+            }
+        };
+
+        // (Art's looked for only for the tiles in sight. Each row's drawn
+        // in a child of its own, so what's put in it can't move the
+        // cursor: the rows must take exactly the height `show_rows` was
+        // told.)
         let mut opened = None;
         if list {
             let height = 56.0;
@@ -339,14 +498,15 @@ impl App {
                 for row in range {
                     let group = &groups[shown[row]];
                     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
+                    let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(rect));
                     if response.hovered() {
                         ui.painter().rect_filled(rect, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
                     } else if row % 2 == 1 {
                         ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
                     }
                     let tile = egui::Rect::from_min_size(rect.min + egui::vec2(6.0, 6.0), egui::vec2(44.0, 44.0));
-                    let from = self.art_from(ruleset, group);
-                    self.groupings.art.tile(ui, tile, from.as_deref(), &group.title);
+                    let from = self.art_from(albums, group);
+                    tile_ui(ui, &mut self.groupings.art, tile, from, group);
                     let button = egui::Rect::from_min_size(rect.right_center() - egui::vec2(36.0, 12.0), egui::vec2(28.0, 24.0));
                     if ui.put(button, icon_button("play")).on_hover_text("Play").clicked() {
                         play = Some(shown[row]);
@@ -367,7 +527,7 @@ impl App {
                 }
             });
             if let Some(i) = play {
-                act = Some(Act::Play(self.playable(&groups[i]), 0));
+                act = Some(if id == PLAYLISTS { Act::PlayPlaylist(groups[i].key.clone()) } else { Act::Play(self.playable(&groups[i]), 0) });
             }
         } else {
             let gap = 12.0;
@@ -381,14 +541,15 @@ impl App {
             egui::ScrollArea::vertical().id_salt(("grouping_grid", id)).auto_shrink([false, false]).show_rows(ui, height, rows, |ui, range| {
                 for row in range {
                     let (_, line) = ui.allocate_space(egui::vec2(width, height));
+                    let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(line));
                     for (column, &i) in shown.iter().skip(row * columns).take(columns).enumerate() {
                         let group = &groups[i];
                         let min = line.min + egui::vec2(column as f32 * (tile + gap), 0.0);
                         let rect = egui::Rect::from_min_size(min, egui::vec2(tile, tile + 40.0));
                         let response = ui.interact(rect, ui.id().with(("group_tile", &group.key)), egui::Sense::click());
                         let cover = egui::Rect::from_min_size(rect.min, egui::vec2(tile, tile));
-                        let from = self.art_from(ruleset, group);
-                        self.groupings.art.tile(ui, cover, from.as_deref(), &group.title);
+                        let from = self.art_from(albums, group);
+                        tile_ui(ui, &mut self.groupings.art, cover, from, group);
                         if response.hovered() {
                             ui.painter().rect_stroke(cover, 4.0, ui.visuals().widgets.hovered.fg_stroke, egui::StrokeKind::Inside);
                         }
@@ -459,9 +620,9 @@ impl App {
     fn group_page_ui(&mut self, ui: &mut egui::Ui, id: &str, ruleset: &Ruleset, group: &Group) -> Option<Act> {
         let tracks = self.group_tracks(id, group);
         let phone = self.mobile();
-        let art_from = self.art_from(ruleset, group);
+        let albums = albums(ruleset);
+        let art_from = self.art_from(albums, group);
         let current = self.current_song.clone();
-        let albums = ruleset.rules.split.as_ref().is_some_and(|s| s.by == SplitBy::Album);
         let links_to_artist = albums && id == "albums";
         let view = self.groupings.view();
         ui.horizontal(|ui| {
@@ -655,11 +816,12 @@ mod tests {
     #[test]
     fn every_ruleset_keeps_its_own_view() {
         let mut groupings = Groupings::default();
+        assert_eq!(groupings.shown(), PLAYLISTS, "the playlists come first");
+        groupings.show("albums");
         groupings.view().open = Some("modal soul\u{0}nujabes".into());
         groupings.show(ARTISTS);
         assert!(groupings.view().open.is_none(), "another ruleset's view is its own");
-        assert!(!groupings.back());
-        groupings.show(FIRST);
-        assert!(groupings.back(), "back closes the album, still open after switching away and back");
+        groupings.show("albums");
+        assert!(groupings.view().open.is_some(), "the album's still open after switching away and back");
     }
 }

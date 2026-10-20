@@ -15,10 +15,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Section {
     Songs,
-    /// The playlists each ruleset makes (By Album, By Artist...).
+    /// The playlists: the user's, then each ruleset's (By Album, By
+    /// Artist...).
     Groupings,
     Soundfonts,
-    Playlists,
     Visualizer,
     Editor,
     Reference,
@@ -34,11 +34,10 @@ pub enum Section {
 
 impl Section {
     /// Every section there is.
-    pub const ALL: [Section; 9] = [
+    pub const ALL: [Section; 8] = [
         Self::Songs,
         Self::Groupings,
         Self::Soundfonts,
-        Self::Playlists,
         Self::Visualizer,
         Self::Editor,
         Self::Reference,
@@ -51,7 +50,6 @@ impl Section {
             Self::Songs => "Songs",
             Self::Groupings => "Groupings",
             Self::Soundfonts => "Soundfonts",
-            Self::Playlists => "Playlists",
             Self::Visualizer => "Visualizer",
             Self::Editor => "Script Editor",
             Self::Removed => "Removed",
@@ -67,7 +65,6 @@ impl Section {
             Self::Groupings | Self::Visualizer | Self::Editor | Self::Removed | Self::Reference | Self::Sprites | Self::Library => {
                 Column::Center
             }
-            Self::Playlists => Column::Right,
         }
     }
 
@@ -78,7 +75,7 @@ impl Section {
             Self::Soundfonts => Some(Self::Songs),
             Self::Visualizer => Some(Self::Editor),
             Self::Editor => Some(Self::Visualizer),
-            Self::Groupings | Self::Playlists | Self::Removed | Self::Reference | Self::Sprites | Self::Library => None,
+            Self::Groupings | Self::Removed | Self::Reference | Self::Sprites | Self::Library => None,
         }
     }
 }
@@ -95,8 +92,8 @@ const SIDE_SHARE: f32 = 0.25;
 
 /// First launch: the songs on the left with the soundfonts below
 /// it, the visualizer on the right: what's needed to start listening and
-/// watching. Everything else (playlists included) is a View menu click
-/// away.
+/// watching. Everything else (Groupings, with the playlists, included)
+/// is a View menu click away.
 pub fn default_layout() -> DockState<Section> {
     let mut dock = DockState::new(vec![Section::Songs]);
     let surface = dock.main_surface_mut();
@@ -121,7 +118,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Watching",
-        description: "The visualizer big in the middle, songs and soundfonts on the left, playlists on the right",
+        description: "The visualizer big in the middle, songs and soundfonts on the left, playlists and albums on the right",
         build: watching_layout,
     },
     Preset {
@@ -148,7 +145,7 @@ fn watching_layout() -> DockState<Section> {
     let mut dock = DockState::new(vec![Section::Visualizer]);
     let surface = dock.main_surface_mut();
     let [center, _] = surface.split_left(NodeIndex::root(), 0.78, vec![Section::Songs, Section::Soundfonts]);
-    surface.split_right(center, 0.75, vec![Section::Playlists]);
+    surface.split_right(center, 0.75, vec![Section::Groupings]);
     dock
 }
 
@@ -358,10 +355,10 @@ mod tests {
     #[test]
     fn default_layout_is_songs_soundfonts_and_the_visualizer() {
         assert_eq!(open(&default_layout()), vec![Section::Songs, Section::Soundfonts, Section::Visualizer]);
-        // Playlists can go in the visualizer's spot, as a tab beside it.
+        // Groupings can go in the visualizer's spot, as a tab beside it.
         let mut dock = default_layout();
-        assert!(tab_alongside(&mut dock, Section::Playlists, Section::Visualizer, true));
-        assert_eq!(dock.find_tab(&Section::Playlists).unwrap().node_path(), dock.find_tab(&Section::Visualizer).unwrap().node_path());
+        assert!(tab_alongside(&mut dock, Section::Groupings, Section::Visualizer, true));
+        assert_eq!(dock.find_tab(&Section::Groupings).unwrap().node_path(), dock.find_tab(&Section::Visualizer).unwrap().node_path());
     }
 
     #[test]
@@ -421,11 +418,11 @@ mod tests {
         assert_eq!(open(&dock), vec![Section::Songs, Section::Visualizer]);
 
         let mut floated = DockState::new(vec![Section::Songs]);
-        floated.add_window(vec![Section::Playlists]);
+        floated.add_window(vec![Section::Groupings]);
         hide(&mut floated, Section::Songs);
         let mut floated = sanitize(floated);
         show(&mut floated, Section::Editor);
-        assert_eq!(open(&floated), vec![Section::Playlists, Section::Editor]);
+        assert_eq!(open(&floated), vec![Section::Groupings, Section::Editor]);
     }
 
     #[test]

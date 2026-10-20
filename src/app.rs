@@ -408,8 +408,8 @@ pub struct App {
     /// Made on the first frame (it needs the egui context to wake the UI).
     folder_watch: Option<FolderWatch>,
     playlists: Library,
-    /// The playlist shown in the Playlists panel (not necessarily the one
-    /// playing).
+    /// The playlist open in Groupings > Playlists (not necessarily the
+    /// one playing); none: they're all shown.
     viewed_playlist: Option<usize>,
     /// The entry each playlist (by ID) last played, to continue from, for
     /// the session.
@@ -433,7 +433,7 @@ pub struct App {
     /// (it needs `&mut` to both the layout and the app), see `dock_ui`.
     dock: DockState<Section>,
     /// True while `dock` is moved out; show/hide requests made meanwhile
-    /// (e.g. "Show in Songs" from inside the Playlists tab) queue up in
+    /// (e.g. "Show in Songs" from inside a playlist) queue up in
     /// `pending_layout` and apply right after.
     dock_in_use: bool,
     pending_layout: Vec<(Section, bool)>,
@@ -548,7 +548,6 @@ impl App {
 
         let (playlists, playlist_errors) =
             Library::load(config::playlists_dir().unwrap_or_else(|_| PathBuf::from("playlists")), songs_dir);
-        let viewed_playlist = (!playlists.lists.is_empty()).then_some(0);
         let mut config = config;
         if config.layout.is_none() && config.active_layout.is_none() {
             // A first launch starts on the Listening layout.
@@ -667,7 +666,7 @@ impl App {
             contributors: Contributors::default(),
             credits_search: String::new(),
             playlists,
-            viewed_playlist,
+            viewed_playlist: None,
             playlist_positions: std::collections::HashMap::new(),
             now_playing: None,
             listed: None,
@@ -1460,9 +1459,15 @@ impl App {
             if ui.add(icon_button("monitor-play").selected(visualizer)).on_hover_text("Visualizer").clicked() {
                 self.set_open(Section::Visualizer, !visualizer);
             }
-            let playlists = self.is_open(Section::Playlists);
+            let playlists = self.is_open(Section::Groupings) && self.groupings.shown_id() == groupings::PLAYLISTS;
             if ui.add(icon_button("playlist").selected(playlists)).on_hover_text("Playlists").clicked() {
-                self.set_open(Section::Playlists, !playlists);
+                if playlists {
+                    self.set_open(Section::Groupings, false);
+                } else {
+                    self.groupings.show(groupings::PLAYLISTS);
+                    self.set_open(Section::Groupings, true);
+                    layout::focus(&mut self.dock, Section::Groupings);
+                }
             }
             let (glyph, hover) = match self.loop_mode {
                 LoopMode::Off => ("repeat", "Loop: off (click: loop the playlist, or what autoplay plays)"),
@@ -1625,7 +1630,6 @@ impl App {
                 section_checkbox(ui, Section::Songs);
                 section_checkbox(ui, Section::Groupings);
                 section_checkbox(ui, Section::Soundfonts);
-                section_checkbox(ui, Section::Playlists);
                 ui.separator();
                 section_checkbox(ui, Section::Visualizer);
                 section_checkbox(ui, Section::Editor);
@@ -2556,7 +2560,7 @@ impl App {
             self.songs.dir().to_path_buf(),
         );
         self.playlists = playlists;
-        self.viewed_playlist = (!self.playlists.lists.is_empty()).then_some(0);
+        self.viewed_playlist = None;
         self.now_playing = None;
         let mut status = match count {
             0 => String::new(),
@@ -3199,7 +3203,7 @@ impl App {
     }
 
     /// The playlist scripts see (`playlist()`): the one playing, else the
-    /// one open in the Playlists tab.
+    /// one open in Groupings.
     fn script_playlist(&self) -> Option<usize> {
         self.now_playing
             .as_ref()
@@ -4043,7 +4047,6 @@ impl TabViewer for SectionTabs<'_> {
             Section::Songs => app.songs_ui(ui),
             Section::Groupings => app.groupings_ui(ui),
             Section::Soundfonts => app.soundfont_ui(ui),
-            Section::Playlists => app.playlist_panel_ui(ui),
             Section::Visualizer => {
                 app.visualizer_preview_ui(ui, self.shared.notes.clone(), self.shared.view.clone());
             }

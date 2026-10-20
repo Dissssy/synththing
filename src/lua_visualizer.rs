@@ -1515,7 +1515,7 @@ pub struct Transport {
     pub playlist: Option<PlaylistView>,
 }
 
-/// The playlist that's playing, or else the one open in the Playlists tab.
+/// The playlist that's playing, or else the one open in Groupings.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PlaylistView {
     pub name: String,

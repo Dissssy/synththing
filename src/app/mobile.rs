@@ -35,11 +35,10 @@ pub(super) enum Page {
     #[default]
     NowPlaying,
     Songs,
-    /// A ruleset's playlists (`Groupings::show` says which); the menu has
-    /// one for each.
+    /// The playlists, or a ruleset's (`Groupings::show` says which); the
+    /// menu has one for each.
     Grouping,
     Soundfonts,
-    Playlists,
     Scripts,
     Library,
     /// From the menu's lower part, not its pages.
@@ -52,11 +51,10 @@ pub(super) enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 6] = [
+    const ALL: [Page; 5] = [
         Self::NowPlaying,
         Self::Songs,
         Self::Soundfonts,
-        Self::Playlists,
         Self::Scripts,
         Self::Library,
     ];
@@ -67,7 +65,6 @@ impl Page {
             Self::Songs => "Songs",
             Self::Grouping => "Groupings",
             Self::Soundfonts => "Soundfonts",
-            Self::Playlists => "Playlists",
             Self::Scripts => "Visualizers",
             Self::Library => "Script library",
             Self::Preferences => "Preferences",
@@ -84,7 +81,6 @@ impl Page {
             Self::Songs => "music-notes",
             Self::Grouping => "squares-four",
             Self::Soundfonts => "piano-keys",
-            Self::Playlists => "playlist",
             Self::Scripts => "waveform",
             Self::Library => "storefront",
             Self::Preferences => "gear",
@@ -213,7 +209,6 @@ impl App {
                 Page::Songs => self.songs_ui(ui),
                 Page::Grouping => self.grouping_ui(ui),
                 Page::Soundfonts => self.soundfont_ui(ui),
-                Page::Playlists => self.playlist_panel_ui(ui),
                 Page::Scripts => self.mobile_scripts_ui(ui),
                 Page::Library => self.library_ui(ui),
                 Page::Preferences => self.mobile_preferences_ui(ui),
@@ -285,7 +280,7 @@ impl App {
                 }
                 None if let Some((title, true)) = &grouping => {
                     if ui.add(big_icon_button("arrow-left", 36.0)).on_hover_text("Back").clicked() {
-                        self.groupings.back();
+                        self.grouping_back();
                     }
                     ui.add(egui::Label::new(egui::RichText::new(title).heading()).truncate());
                 }
@@ -336,6 +331,7 @@ impl App {
             return;
         }
         let library_details = self.mobile_state.page == Page::Library && self.library_details_open();
+        let grouping_open = self.grouping_open();
         let state = &mut self.mobile_state;
         if state.drawer_open {
             state.drawer_open = false;
@@ -345,7 +341,8 @@ impl App {
             state.pref_section = None;
         } else if library_details {
             self.library_close_details();
-        } else if state.page == Page::Grouping && self.groupings.back() {
+        } else if state.page == Page::Grouping && grouping_open {
+            self.grouping_back();
         } else if state.page == Page::NowPlaying && state.collapsed {
             state.collapsed = false;
         } else if state.page != Page::NowPlaying {
@@ -698,8 +695,11 @@ impl App {
             if ui.add(drawer_item(ui, self.mobile_state.page == page, page.icon(), page.title())).clicked() {
                 picked = Some(page);
             }
-            // Each ruleset's playlists, after Songs.
+            // The playlists, then each ruleset's, after Songs.
             if page == Page::Songs {
+                if ui.add(drawer_item(ui, showing.as_deref() == Some(super::groupings::PLAYLISTS), "playlist", "Playlists")).clicked() {
+                    ruleset = Some(super::groupings::PLAYLISTS.to_string());
+                }
                 for (id, set) in self.all_rulesets() {
                     if ui.add(drawer_item(ui, showing.as_deref() == Some(id.as_str()), Page::Grouping.icon(), &set.name)).clicked() {
                         ruleset = Some(id);

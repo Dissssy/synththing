@@ -196,8 +196,8 @@ impl App {
                     None => match self.playlists.create(&playlist.name, Vec::new()) {
                         Ok(at) => {
                             self.playlists.lists[at].playlist.smart = playlist.smart;
-                            self.viewed_playlist = Some(at);
-                            self.playlist_selection.clear();
+                            self.groupings.show(super::groupings::PLAYLISTS);
+                            self.open_playlist(Some(at));
                             at
                         }
                         Err(e) => {
