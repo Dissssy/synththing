@@ -7,6 +7,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### Added
 - Sync playlists between your devices, with your settings: the switch is now Sync settings and playlists between my devices (Playlists, under Songs in What this device syncs, turns it off on one device). A playlist renamed or changed on one device changes on the others; changed on two at once, the newer change wins. A song a device doesn't have yet shows as unavailable there, by its name. Which soundfont an entry uses stays on each device. Sync turns itself off once after this update: turn it back on.
 
+## 0.10.2 (2026-10-20)
+
 ### Changed
 - Songs is your song library now, on the desktop as on Android: synththing keeps its own copy of each song (named by its contents, so the same song is the same everywhere), and playlists name songs in it, so moving or renaming the originals never breaks one. + imports songs and the folder button a whole folder; Library downloads, the starter songs and files dropped onto a playlist go into it too. Right-click a song for Save a copy as... and Remove from library (a playlist keeps a removed song, shown as unavailable). The first launch brings in the songs from your Songs folder and changes your playlists over, leaving the folder as it was. Songs no longer browses folders on disk; a file dropped on the window still plays from where it is. Song names lose `{file_path}`, and `{file_name}` is the name the file had when it was imported.
 
