@@ -47,6 +47,7 @@ use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{DockArea, DockState, TabViewer};
 
 use crate::applog;
+use crate::frame_timing;
 use crate::credits::{self, Contributors, ContributorsState};
 use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, nice_name, Config};
@@ -2869,6 +2870,7 @@ impl App {
     /// Draw (and run) the visualizer into the rest of `ui`, and pass on
     /// whatever it asked for.
     fn show_visualizer(&mut self, ui: &mut egui::Ui, notes: &NotesSnapshot, playback: &EngineView, mode: DisplayMode) {
+        let _timing = frame_timing::scope("visualizer");
         // A render has its own copy of the script: this one rests meanwhile.
         if self.recording.render.is_some() {
             self.render_progress_ui(ui);
@@ -3560,7 +3562,7 @@ impl App {
         }
         self.minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
         let view = self.shared.lock().unwrap().view.clone();
-        self.handle_tray(ctx, &view);
+        frame_timing::time("handle_tray", || self.handle_tray(ctx, &view));
         if self.second_launch.as_ref().is_some_and(|f| f.swap(false, std::sync::atomic::Ordering::Relaxed)) {
             log::info!("launched again: showing the window");
             self.show_window(ctx);
@@ -3571,30 +3573,30 @@ impl App {
         if !self.hidden && !self.minimized && self.tray_panel.is_open() {
             self.tray_panel.hide(ctx);
         }
-        self.sync_script_song(&view);
-        self.poll_loads();
-        self.poll_imports();
-        self.poll_old_import();
+        frame_timing::time("sync_script_song", || self.sync_script_song(&view));
+        frame_timing::time("poll_loads", || self.poll_loads());
+        frame_timing::time("poll_imports", || self.poll_imports());
+        frame_timing::time("poll_old_import", || self.poll_old_import());
         #[cfg(target_os = "android")]
         self.android_tick(&view);
-        self.refresh_changed_folders(ctx);
-        if self.song_info.poll() {
+        frame_timing::time("refresh_changed_folders", || self.refresh_changed_folders(ctx));
+        if frame_timing::time("song_info", || self.song_info.poll()) {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         if !self.preferences_open {
-            self.playlist_tick(&view);
+            frame_timing::time("playlist_tick", || self.playlist_tick(&view));
         }
-        self.poll_library();
-        self.poll_moderation();
-        self.poll_feedback();
-        self.poll_identity();
-        self.poll_pairing();
-        self.poll_notifications(ctx);
-        self.poll_sync();
+        frame_timing::time("poll_library", || self.poll_library());
+        frame_timing::time("poll_moderation", || self.poll_moderation());
+        frame_timing::time("poll_feedback", || self.poll_feedback());
+        frame_timing::time("poll_identity", || self.poll_identity());
+        frame_timing::time("poll_pairing", || self.poll_pairing());
+        frame_timing::time("poll_notifications", || self.poll_notifications(ctx));
+        frame_timing::time("poll_sync", || self.poll_sync());
         if self.songs_moving().is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
-        self.poll_copyright();
+        frame_timing::time("poll_copyright", || self.poll_copyright());
         if self.status != self.logged_status {
             log::info!(target: STATUS_TARGET, "{}", self.status);
             self.logged_status = self.status.clone();
@@ -3602,9 +3604,9 @@ impl App {
                 self.unseen_failure = true;
             }
         }
-        self.keep_loaded(ctx);
-        self.poll_starter(ctx);
-        self.editor_tick(ctx);
+        frame_timing::time("keep_loaded", || self.keep_loaded(ctx));
+        frame_timing::time("poll_starter", || self.poll_starter(ctx));
+        frame_timing::time("editor_tick", || self.editor_tick(ctx));
         self.close_after_render_tick(ctx);
 
         // Stay idle otherwise, but while a song plays keep ticking, so the
@@ -3617,9 +3619,10 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut Frame) {
+        frame_timing::report(frame.info().cpu_usage);
         let ctx = ui.ctx().clone();
-        self.sync_theme(&ctx);
+        frame_timing::time("sync_theme", || self.sync_theme(&ctx));
         if self.hidden {
             // Hidden in the tray, this still runs while a tray window (a
             // child of this one) is up: draw nothing, least of all the
@@ -3629,6 +3632,7 @@ impl eframe::App for App {
             if self.tray.is_some() {
                 self.tray_panel.register(&ctx);
             }
+            frame_timing::end();
             return;
         }
         let shared = self.shared.lock().unwrap().clone();
@@ -3636,7 +3640,7 @@ impl eframe::App for App {
         self.visualizer_drawn = false;
         select_list::set_touch(&ctx, self.mobile());
         crate::import::set_waker(&ctx);
-        self.pad_frame = self.gamepads.poll(ctx.input(|i| i.focused));
+        self.pad_frame = frame_timing::time("gamepads", || self.gamepads.poll(ctx.input(|i| i.focused)));
         if !self.pad_frame.down.is_empty() || !self.pad_frame.released.is_empty() {
             ctx.request_repaint();
         }
@@ -3756,9 +3760,9 @@ impl eframe::App for App {
         self.tour.begin_frame();
 
         if self.dedicated.is_some() {
-            self.dedicated_ui(ui, &shared);
+            frame_timing::time("dedicated", || self.dedicated_ui(ui, &shared));
         } else if self.mobile() {
-            self.mobile_ui(ui, &shared);
+            frame_timing::time("mobile", || self.mobile_ui(ui, &shared));
             // (Only for the launch check: the windows are pages here.)
             self.updates_ui(&ctx);
             self.open_mobile_pages(&ctx);
@@ -3770,13 +3774,15 @@ impl eframe::App for App {
             self.audio_import_ui(&ctx);
             self.status_toast_ui(&ctx);
         } else {
-            egui::Panel::top("top_bar").show(ui, |ui| self.top_bar_ui(ui));
+            egui::Panel::top("top_bar").show(ui, |ui| frame_timing::time("top bar", || self.top_bar_ui(ui)));
             egui::Panel::bottom("controls_panel").show(ui, |ui| {
+                let _timing = frame_timing::scope("controls bar");
                 self.controls_bar_ui(ui, view);
                 self.tour.mark(tour::Target::Controls, ui.min_rect());
             });
-            self.dock_ui(ui, &shared);
-            self.autosave_layout(&ctx);
+            frame_timing::time("dock", || self.dock_ui(ui, &shared));
+            frame_timing::time("autosave_layout", || self.autosave_layout(&ctx));
+            let windows = frame_timing::scope("windows");
             self.preferences_ui(&ctx);
             self.updates_ui(&ctx);
             self.log_ui(&ctx);
@@ -3789,7 +3795,9 @@ impl eframe::App for App {
             self.history_ui(&ctx);
             self.layout_save_ui(&ctx);
             self.new_sprite_ui(&ctx);
+            drop(windows);
         }
+        let windows = frame_timing::scope("windows");
         self.remove_songs_ui(&ctx);
         self.tags_ui(&ctx);
         self.close_requested_ui(&ctx);
@@ -3820,6 +3828,7 @@ impl eframe::App for App {
         self.script_busy_ui(&ctx);
         self.tour_ui(&ctx, &shared);
         self.themes_window(&ctx);
+        drop(windows);
 
         drag_ghost_ui(&ctx);
 
@@ -3834,6 +3843,7 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
         self.ui_drawn = true;
+        frame_timing::end();
     }
 
     /// Everything that has to keep going whether or not anything's drawn:
@@ -3842,7 +3852,8 @@ impl eframe::App for App {
     /// playlist goes on to its next track, loads finish and the library
     /// keeps polling either way.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
-        self.tick(ctx);
+        frame_timing::begin();
+        frame_timing::time("tick", || self.tick(ctx));
     }
 
     /// Last chance to save a layout change the once-a-second autosave
@@ -3886,6 +3897,7 @@ impl TabViewer for SectionTabs<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Section) {
         let app = &mut *self.app;
+        let _timing = frame_timing::scope(tab.title());
         app.tour.mark(tour::Target::Tab(*tab), ui.max_rect());
         match tab {
             Section::Songs => app.songs_ui(ui),

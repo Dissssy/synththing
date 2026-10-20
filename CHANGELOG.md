@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Frames that take too long to draw (over 16 ms, or one part over 8 ms) are noted in the log (Help > Log), with how long each part of the app took, to track down stutters.
+
 ## 1.0.0 (2026-10-20)
 
 ### Added
