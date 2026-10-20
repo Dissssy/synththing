@@ -64,6 +64,7 @@ mod spectrum;
 mod sprite_code;
 mod starter;
 mod startup;
+mod storage;
 mod theme;
 mod tray;
 mod typing;

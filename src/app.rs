@@ -30,6 +30,7 @@ mod library;
 mod recording;
 mod script_windows;
 mod song_names;
+mod storage;
 mod sprite_editor;
 mod themes;
 mod tray_panel;
@@ -351,6 +352,8 @@ pub struct App {
     /// Reports, and the Moderation window.
     moderation: moderation::ModerationState,
     feedback: feedback::FeedbackState,
+    /// Preferences > App > Storage.
+    storage: storage::StorageState,
     /// The identity's recovery email, new keys and recovery.
     identity: identity::IdentityState,
     /// Signing in another device, or this one with a link.
@@ -609,6 +612,7 @@ impl App {
             script_previews: Default::default(),
             moderation: Default::default(),
             feedback: Default::default(),
+            storage: Default::default(),
             identity: Default::default(),
             pairing: Default::default(),
             sync: Default::default(),
