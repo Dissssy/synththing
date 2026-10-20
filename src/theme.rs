@@ -86,7 +86,7 @@ pub struct Palette {
     /// Outlining and tinting the song playing, in lists.
     #[serde(default = "default_playing")]
     pub playing: Hex,
-    /// Starred songs' note, in lists.
+    /// Starred songs' alien, in lists.
     #[serde(default = "default_star")]
     pub star: Hex,
 }
@@ -95,8 +95,14 @@ fn default_playing() -> Hex {
     hex(0x4caf50)
 }
 
+/// Neon green, for the dark themes (`light_star` on light ones).
 fn default_star() -> Hex {
-    hex(0xf2b33d)
+    hex(0x39ff14)
+}
+
+/// Neon green dark enough to read on a light background.
+fn light_star() -> Hex {
+    hex(0x1fc40a)
 }
 
 /// The theme's `Palette::star`, kept where lists find it (`star_color`).
@@ -202,7 +208,7 @@ fn light() -> Theme {
             widget_outline: hex(0x2f6fde),
             border: hex(0xcdd0d7),
             playing: default_playing(),
-            star: default_star(),
+            star: light_star(),
         },
         shape: Shape { widget_radius: 4, window_radius: 8, border_width: 1.0, shadow: 12 },
     }
@@ -234,7 +240,7 @@ fn frutiger_aero() -> Theme {
             widget_outline: hex(0x0a93d1),
             border: hex(0x66b7df),
             playing: default_playing(),
-            star: default_star(),
+            star: light_star(),
         },
         shape: Shape { widget_radius: 10, window_radius: 14, border_width: 1.0, shadow: 22 },
     }
@@ -403,6 +409,8 @@ mod tests {
         for theme in builtins() {
             let mut back = from_visuals(&theme.name, &theme.visuals());
             back.shape.shadow = theme.shape.shadow;
+            // (Like the playing color, the star isn't one of egui's.)
+            back.palette.star = theme.palette.star;
             assert_eq!(back.palette, theme.palette, "{}", theme.name);
         }
     }

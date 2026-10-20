@@ -5,7 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
-- Starred songs: click the note at the left of a song, in Songs or a playlist, to star it (again to unstar it). Its color is part of the theme.
+- Starred songs: click the alien at the left of a song, in Songs or a playlist, to star it (again to unstar it). Its neon green is part of the theme.
 - Only play starred songs (Preferences > Playback): shuffle, autoplay and playlists playing on go only to starred songs. A song you pick yourself still plays.
 - Starred songs as a sync choice, beside songs in playlists and every song: a device can fetch your starred songs from your others too.
 - Every song's details (title, artist, album, album artist, composer, genre, track, disc, year, length and size, and when it was first imported) sync with the library, so a device knows them for songs it doesn't have yet: a playlist shows their names, for one.

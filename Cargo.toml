@@ -45,7 +45,7 @@ argon2 = "0.6.0"
 chacha20poly1305 = "0.11.0"
 png = "0.18"                                              # script previews (preview.rs)
 egui_commonmark = "0.25"                                  # library servers' documents (EULA, privacy policy), as Markdown
-egui-phosphor = "0.14"
+egui-phosphor = { version = "0.14", features = ["regular", "fill"] } # icons; the filled set for starred songs (select_list::star)
 base64 = "0.23"                                           # sealed sync blobs (library/sync.rs)
 flate2 = "1.1.10"                                         # deflating sync blobs before they're sealed (library/sync.rs)
 resvg = { version = "0.45", default-features = false }      # the wordmark in the menu bar (app/branding.rs)                                    # icons (the Phosphor set, as a font)

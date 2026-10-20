@@ -396,7 +396,7 @@ fn theme_editor_ui(ui: &mut egui::Ui, theme: &mut Theme) {
         ("Outline", "Around a widget being hovered or pressed", &mut p.widget_outline),
         ("Borders", "Separators, window and widget borders", &mut p.border),
         ("Playing", "Outlining and tinting the song playing, in lists", &mut p.playing),
-        ("Star", "The note marking starred songs, in lists", &mut p.star),
+        ("Star", "The alien marking starred songs, in lists", &mut p.star),
     ];
     // Two to a row, or one where there isn't room (a phone).
     let per_row = if ui.available_width() < 420.0 { 1 } else { 2 };

@@ -250,14 +250,15 @@ pub fn marquee(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, scroll: boo
         .inner
 }
 
-/// The icon starred songs are marked with (`star`): a musical note.
-pub const STAR_ICON: &str = "music-note";
+/// The icon starred songs are marked with (`star`): an alien, filled when
+/// starred, in outline when not.
+pub const STAR_ICON: &str = "alien";
 /// How wide a song's star is, at the left of its row.
 pub const STAR_WIDTH: f32 = 18.0;
 
-/// A song's star, at the left of its row: its note in the theme's star
-/// color when it's starred, faint when it isn't. Whether it was clicked
-/// (to star or unstar it).
+/// A song's star, at the left of its row: its alien filled in the theme's
+/// star color when it's starred, a faint outline when it isn't. Whether it
+/// was clicked (to star or unstar it).
 pub fn star(ui: &mut egui::Ui, starred: bool) -> bool {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(STAR_WIDTH, ui.available_height()), egui::Sense::click());
     let weak = ui.visuals().weak_text_color();
@@ -266,7 +267,10 @@ pub fn star(ui: &mut egui::Ui, starred: bool) -> bool {
         (false, true) => weak,
         (false, false) => weak.gamma_multiply(0.3),
     };
-    let font = egui::TextStyle::Body.resolve(ui.style());
+    let mut font = egui::TextStyle::Body.resolve(ui.style());
+    if starred {
+        font.family = egui::FontFamily::Name(crate::app::fonts::PHOSPHOR_FILL.into());
+    }
     ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, crate::app::icon(STAR_ICON), font, color);
     response.on_hover_text(if starred { "Starred: click to unstar" } else { "Click to star" }).clicked()
 }

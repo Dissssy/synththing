@@ -5,7 +5,7 @@
 //! fuzzy search over the names, file names and tags.
 //! Double-clicking a song plays it (and marks it as playing); rows can be
 //! selected several at a time and dragged out together (onto a playlist).
-//! The note at the left of each row stars it, or unstars it.
+//! The alien at the left of each row stars it, or unstars it.
 //! For touch, the column sorted by goes on a second line, and sorting and
 //! grouping are in a menu.
 //! Autoplay plays on down the list as it is when each song ends (`next`).
