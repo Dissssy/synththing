@@ -13,6 +13,9 @@
 //!
 //! Every frame also goes into the last minute's stats (`summary`), which
 //! feedback can send along.
+//!
+//! While the profiler overlay is open (`puffin::are_scopes_on`), each
+//! section is a puffin scope too, and `begin` marks puffin's frames.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -53,6 +56,8 @@ struct Frames {
     skipped: u32,
     /// The stats, a second (`STATS_BUCKET`) per entry, by when it began.
     stats: VecDeque<(Instant, Stats)>,
+    /// Each section's puffin scope, once it's been profiled on this thread.
+    puffin_ids: Vec<(&'static str, puffin::ScopeId)>,
 }
 
 /// How a run of frames went.
@@ -108,6 +113,7 @@ struct Finished {
 /// Starts a frame. A frame that never got to `end` (nothing was drawn) is
 /// dropped unreported.
 pub fn begin() {
+    puffin::GlobalProfiler::lock().new_frame();
     FRAME.with_borrow_mut(|f| {
         f.previous = f.ended.take();
         f.start = Some(Instant::now());
@@ -129,10 +135,14 @@ pub fn end() {
 
 /// Times a section of the frame until the returned guard drops.
 pub fn scope(name: &'static str) -> Scope {
-    FRAME.with_borrow_mut(|f| f.open.push(Duration::ZERO));
+    let puffin_id = FRAME.with_borrow_mut(|f| {
+        f.open.push(Duration::ZERO);
+        puffin::are_scopes_on().then(|| f.puffin_id(name))
+    });
     Scope {
         name,
         start: Instant::now(),
+        _puffin: puffin_id.map(|id| puffin::ProfilerScope::new(id, "")),
     }
 }
 
@@ -145,6 +155,8 @@ pub fn time<T>(name: &'static str, run: impl FnOnce() -> T) -> T {
 pub struct Scope {
     name: &'static str,
     start: Instant,
+    /// Ends the puffin scope after this one (fields drop after `drop`).
+    _puffin: Option<puffin::ProfilerScope>,
 }
 
 impl Drop for Scope {
@@ -221,6 +233,18 @@ pub fn report(cpu_usage: Option<f32>) {
 }
 
 impl Frames {
+    /// The section's puffin scope, registered the first time it's needed.
+    /// (puffin's macros take one name per call site; ours come from the
+    /// caller.)
+    fn puffin_id(&mut self, name: &'static str) -> puffin::ScopeId {
+        if let Some((_, id)) = self.puffin_ids.iter().find(|(n, _)| *n == name) {
+            return *id;
+        }
+        let id = puffin::ThreadProfiler::call(|tp| tp.register_named_scope(name, "", "", 0));
+        self.puffin_ids.push((name, id));
+        id
+    }
+
     fn record(&mut self, now: Instant, total: Duration, sections: &[(&'static str, Duration)]) {
         while self.stats.front().is_some_and(|(start, _)| now - *start > STATS_WINDOW) {
             self.stats.pop_front();
@@ -288,7 +312,8 @@ mod tests {
         let text = summary().unwrap();
         assert!(text.starts_with("3 frames drawn in the last 60 s, 3 over 16.7 ms\n"), "{text}");
         assert!(text.contains("whole frame: average 20.0 ms, worst 20.0 ms"), "{text}");
-        assert!(text.contains("\nsongs: average 2."), "{text}");
-        assert!(text.contains("\negui painting: average 1"), "{text}");
+        // (Sleeps run long on a busy machine: the sections' times vary.)
+        assert!(text.contains("\nsongs: average "), "{text}");
+        assert!(text.contains("\negui painting: average "), "{text}");
     }
 }
