@@ -141,16 +141,22 @@ impl SongStore {
         self.save();
     }
 
-    /// Take what the synced library says of the song `key`: its name and
-    /// tags (knowing it, if it wasn't).
-    pub fn learn(&mut self, key: &str, name: &str, tags: Vec<String>) {
-        if !is_key(key) {
-            return;
+    /// Take what the synced library says of each song (key, name, tags):
+    /// its name and tags (knowing it, if it wasn't). Saved once, at the end.
+    pub fn learn(&mut self, songs: impl IntoIterator<Item = (String, String, Vec<String>)>) {
+        let mut changed = false;
+        for (key, name, tags) in songs {
+            if !is_key(&key) {
+                continue;
+            }
+            let song = self.songs.entry(key).or_insert_with(|| Song { name: name.clone(), imported: now(), tags: Vec::new() });
+            if song.name != name || song.tags != tags {
+                song.name = name;
+                song.tags = tags;
+                changed = true;
+            }
         }
-        let song = self.songs.entry(key.to_string()).or_insert_with(|| Song { name: name.to_string(), imported: now(), tags: Vec::new() });
-        if song.name != name || song.tags != tags {
-            song.name = name.to_string();
-            song.tags = tags;
+        if changed {
             self.save();
         }
     }
