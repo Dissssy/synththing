@@ -670,6 +670,7 @@ impl App {
         let naming = super::naming(&self.config, &self.songs);
         let info_open = &mut self.song_info_open;
         let store = &self.songs;
+        let touch = select_list::touch(ui.ctx());
 
         // Total time from what's been read so far.
         let (mut total, mut unknown) = (0.0, 0usize);
@@ -730,35 +731,49 @@ impl App {
                 }
             });
 
-            // The playing entry is marked in the number column too.
-            if playing == Some(idx) {
-                ui.strong(" > ").on_hover_text("Playing");
+            let tags = store.tags_of(&entry.path);
+            let tags = tags.iter().map(|(_, tag)| (tag.name.as_str(), tag.color));
+            let mut label = super::title_of(cache, &naming, &entry.path);
+            let scroll = select_list::scrolls(row, playing == Some(idx));
+            if touch {
+                // Under the name: the entry's number, length and anything
+                // else to know of it.
+                let info = cache.get(&entry.path);
+                let mut detail = vec![(idx + 1).to_string(), super::length_text(info.as_deref())];
+                if let Some(sf) = &entry.soundfont {
+                    detail.push(format!("SF: {}", nice_name(sf)));
+                }
+                if info.is_some_and(|i| i.is_heavy()) {
+                    detail.push("a very large MIDI file".to_string());
+                }
+                if entry.missing {
+                    detail.push("missing".to_string());
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    select_list::two_lines(ui, tags, label, Some(detail.join(" · ")), scroll);
+                });
             } else {
                 ui.weak(format!("{:>3}", idx + 1));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    song_info_widgets(ui, cache, &entry.path, true);
+                    if let Some(sf) = &entry.soundfont
+                        && ui
+                            .small_button(format!("SF: {}", nice_name(sf)))
+                            .on_hover_text(format!(
+                                "Plays with this soundfont instead of the current one.\n{}\nClick to clear.",
+                                sf.display()
+                            ))
+                            .clicked()
+                    {
+                        action = Some(RowAction::ClearSoundfont(vec![idx]));
+                    }
+                    select_list::chips(ui, tags);
+                    if entry.missing {
+                        label.push_str("  (missing)");
+                    }
+                    select_list::label(ui, label, Some(format!("{}\nDouble-click to play", entry.path.display())), scroll);
+                });
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("x").on_hover_text("Remove from playlist").clicked() {
-                    action = Some(RowAction::Remove(vec![idx]));
-                }
-                song_info_widgets(ui, cache, &entry.path, true);
-                if let Some(sf) = &entry.soundfont
-                    && ui
-                        .small_button(format!("SF: {}", nice_name(sf)))
-                        .on_hover_text(format!(
-                            "Plays with this soundfont instead of the current one.\n{}\nClick to clear.",
-                            sf.display()
-                        ))
-                        .clicked()
-                {
-                    action = Some(RowAction::ClearSoundfont(vec![idx]));
-                }
-                select_list::chips(ui, store.tags_of(&entry.path).into_iter().map(|(_, tag)| (tag.name.as_str(), tag.color)));
-                let mut label = super::title_of(cache, &naming, &entry.path);
-                if entry.missing {
-                    label.push_str("  (missing)");
-                }
-                select_list::label(ui, label, Some(format!("{}\nDouble-click to play", entry.path.display())));
-            });
 
             if let Some(drop) = row_drop_ui(ui, &row.response, list, idx, is_midi_path(&entry.path)) {
                 row_drop = Some(drop);

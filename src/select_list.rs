@@ -208,6 +208,10 @@ pub fn show<T>(
                     } else if marked {
                         ui.visuals_mut().override_text_color = Some(playing_color);
                     }
+                    if touch {
+                        // (Clear of the selection's edge.)
+                        ui.add_space(4.0);
+                    }
                     draw(ui, &row, &items[idx]);
                 });
             }
@@ -227,27 +231,53 @@ pub fn show<T>(
     output
 }
 
-/// An entry's text, filling the width left in the row and cut short with
-/// "..." where it doesn't fit; hovering a cut one shows all of it, or
-/// `hover` instead whenever it's given (so that should hold the full text
-/// too). Draw a row's right-hand widgets first (in a right-to-left layout),
-/// then this.
-pub fn label(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, hover: Option<String>) -> egui::Response {
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        let label = egui::Label::new(text).truncate().selectable(false);
-        match hover {
-            Some(hover) => ui.add(label.show_tooltip_when_elided(false)).on_hover_text(hover),
-            None => ui.add(label),
-        }
-    })
-    .inner
+/// An entry's text, filling the width left in the row: while `scroll` is
+/// on, text that doesn't fit scrolls sideways (see [`crate::marquee`]),
+/// else it's cut short with "...". Hovering it shows `hover`, when given
+/// (so that should hold the full text too). Draw a row's right-hand
+/// widgets first (in a right-to-left layout), then this.
+pub fn label(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, hover: Option<String>, scroll: bool) -> egui::Response {
+    let response = ui
+        .with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| crate::marquee::show(ui, text, scroll))
+        .inner;
+    match hover {
+        Some(hover) => response.on_hover_text(hover),
+        None => response,
+    }
 }
 
-/// Like [`label`], but text that's cut short scrolls sideways instead while
-/// `scroll` is on (see [`crate::marquee::show`]).
-pub fn marquee(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, scroll: bool) -> egui::Response {
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| crate::marquee::show(ui, text, scroll))
-        .inner
+/// A row's text on a touch screen, the shape every list there shares:
+/// `name` after `tags`' chips, over `detail` in small, weak text (or
+/// `name` alone, centered, without one). Draw a row's right-hand widgets
+/// first (in a right-to-left layout), then this.
+pub fn two_lines<'a>(
+    ui: &mut egui::Ui,
+    tags: impl DoubleEndedIterator<Item = (&'a str, [u8; 3])>,
+    name: impl Into<egui::WidgetText>,
+    detail: Option<String>,
+    scroll: bool,
+) {
+    let Some(detail) = detail else {
+        chips(ui, tags);
+        label(ui, name, None, scroll);
+        return;
+    };
+    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.add_space(3.0);
+        ui.spacing_mut().item_spacing.y = 1.0;
+        let line = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+        ui.allocate_ui_with_layout(line, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            chips(ui, tags);
+            label(ui, name, None, scroll);
+        });
+        label(ui, egui::RichText::new(detail).small().weak(), None, scroll);
+    });
+}
+
+/// Whether a row's text scrolls when it's cut short: on the `playing` row
+/// and the one under the pointer (or finger), to keep the list calm.
+pub fn scrolls(row: &Row, playing: bool) -> bool {
+    playing || row.response.contains_pointer()
 }
 
 /// A tag's chip: its name on its color (`song_store::Tag`), in text that
