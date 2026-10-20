@@ -5,6 +5,8 @@
 --   left mouse     paint            right mouse   erase
 --   scroll         brush size       1-5           pick a color
 --   c              clear            WASD/arrows   move the square
+--   fingers        paint, one stroke per finger (touchscreens)
+--   tap a swatch   pick a color (touch)
 --   h              toggle the system cursor (hidden by default, we draw
 --                  our own crosshair instead)
 --   l              toggle cursor locking (only does anything in the
@@ -92,21 +94,36 @@ function render(width, height, left, right)
     while scroll_acc >= 30 do brush = math.min(brush + 1, 12); scroll_acc = scroll_acc - 30 end
     while scroll_acc <= -30 do brush = math.max(brush - 1, 0); scroll_acc = scroll_acc + 30 end
 
-    -- Paint along the whole path the pointer took this frame, so a fast
+    -- Paint along the whole path a pointer took this frame, so a fast
     -- stroke stays a line instead of a row of dots.
+    local function stroke(x1, y1, dx, dy, value)
+        local steps = math.max(1, math.ceil(math.max(math.abs(dx), math.abs(dy)) / cell))
+        for s = 0, steps do
+            local t = s / steps
+            stamp(math.floor((x1 - dx * (1 - t)) / cell), math.floor((y1 - dy * (1 - t)) / cell), value)
+        end
+    end
+
+    -- Touch: every finger paints its own stroke, and tapping a swatch
+    -- picks it. The first finger also works the mouse, for scripts that
+    -- only know the mouse, so skip the mouse while fingers are down.
+    local fingers = touches()
+    for _, t in ipairs(fingers) do
+        local swatch = t.y < 22 and math.floor((t.x - 4) / 18) + 1
+        if t.pressed and swatch and palette[swatch] then
+            color = swatch
+        elseif not swatch then
+            stroke(t.x, t.y, t.dx, t.dy, color)
+        end
+    end
+
     local mx, my = mouse()
+    if #fingers > 0 then mx, my = nil, nil end
     if mx then
         local erase = mouse_down("right")
         if mouse_down("left") or erase then
-            local value = (not erase) and color or nil
             local dx, dy = mouse_delta()
-            local steps = math.max(1, math.ceil(math.max(math.abs(dx), math.abs(dy)) / cell))
-            for s = 0, steps do
-                local t = s / steps
-                local x = mx - dx * (1 - t)
-                local y = my - dy * (1 - t)
-                stamp(math.floor(x / cell), math.floor(y / cell), value)
-            end
+            stroke(mx, my, dx, dy, (not erase) and color or nil)
         end
     end
 
@@ -134,9 +151,10 @@ function render(width, height, left, right)
         rect(x, 6, x + 12, 18, c)
     end
 
-    -- Which display mode we're in: three boxes, top right, one lit.
-    for i, m in ipairs({ "window", "fullscreen", "dedicated" }) do
-        local x = width - 6 - (4 - i) * 14
+    -- Which display mode we're in: a box each, top right, one lit.
+    local modes = { "window", "fullscreen", "dedicated", "mini", "pip" }
+    for i, m in ipairs(modes) do
+        local x = width - 6 - (#modes + 1 - i) * 14
         local lit = (m == mode) and 1.0 or 0.25
         rect(x, 6, x + 10, 16, { r = 200, g = 200, b = 255, a = lit })
     end
@@ -147,6 +165,13 @@ function render(width, height, left, right)
     rect(0, height - 2, width, height, edge)
     rect(0, 0, 2, height, edge)
     rect(width - 2, 0, width, height, edge)
+
+    -- A ring under each finger, brighter the harder it presses (where the
+    -- screen reports pressure).
+    for _, t in ipairs(fingers) do
+        local c = palette[color]
+        circle_outline(t.x, t.y, math.max(10, (brush + 1) * cell + 6), { r = c.r, g = c.g, b = c.b, a = 0.4 + 0.6 * (t.force or 1) })
+    end
 
     -- Our own cursor: a crosshair in the brush color, sized like the brush.
     if mx then

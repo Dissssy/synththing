@@ -30,7 +30,8 @@
 -- use the Fullscreen visualizer): arrow keys or WASD steer, as do a
 -- controller's d-pad and left stick, or whatever you bind under Controls
 -- (the Controls button). It drives itself again
--- whenever the visualizer loses focus. Your best length is saved
+-- whenever the visualizer loses focus. On a touchscreen, swipe to steer.
+-- On a phone (is_mobile()) crashes throw fewer particles, to go easy on it. Your best length is saved
 -- (store_set), and the scoreboard (text) shows every snake's length.
 -- Apples are sprites, one per snake color.
 
@@ -124,6 +125,7 @@ local disable_on_death = true
 -- queued from key presses, and the best length ever reached (saved).
 local player_ch = nil
 local turn_queue = {}
+local swipes = {} -- [touch id] = where its current swipe started
 local best = store_get("best_length") or 0
 -- Steering actions, rebindable with the Controls button; the
 -- value is the direction each one turns to.
@@ -163,7 +165,7 @@ end
 
 local function burst(px, py, n, c, speed)
     for _ = 1, n do
-        if #parts >= MAX_PARTICLES then return end
+        if #parts >= (is_mobile() and MAX_PARTICLES // 4 or MAX_PARTICLES) then return end
         local ang = math.random() * 6.2832
         local sp = (0.4 + math.random()) * speed * cell
         parts[#parts + 1] = {
@@ -543,8 +545,8 @@ local function draw_scores(width, height)
         end
     end
     if player_ch then
-        local line = has_focus() and ("best " .. best .. "  (arrows / WASD)")
-            or ("click to steer channel " .. (player_ch + 1))
+        local line = has_focus() and ("best " .. best .. (is_mobile() and "  (swipe)" or "  (arrows / WASD)"))
+            or ((is_mobile() and "tap" or "click") .. " to steer channel " .. (player_ch + 1))
         local tw = text_size(line, th)
         local lx, ly = ox + pad, oy + rows * cell - th - pad
         rect(lx, ly - pad / 2, lx + tw + pad * 2, ly + th + pad / 2, { r = 0, g = 0, b = 0, a = 0.35 })
@@ -583,6 +585,20 @@ function render(width, height, left, right)
             if input(action) == "pressed" and #turn_queue < 2 then
                 turn_queue[#turn_queue + 1] = d
             end
+        end
+        -- Swipes: a finger that's moved a few cells from where its swipe
+        -- began turns that way, then starts a new swipe from there, so one
+        -- long drag can turn more than once.
+        local reach = math.max(cell, 6) * 3
+        for _, t in ipairs(touches()) do
+            local from = swipes[t.id] or { x = t.x, y = t.y }
+            local dx, dy = t.x - from.x, t.y - from.y
+            if math.max(math.abs(dx), math.abs(dy)) >= reach then
+                local d = math.abs(dx) > math.abs(dy) and (dx > 0 and 1 or 3) or (dy > 0 and 2 or 4)
+                if #turn_queue < 2 then turn_queue[#turn_queue + 1] = d end
+                from = { x = t.x, y = t.y }
+            end
+            swipes[t.id] = not t.released and from or nil
         end
         if not has_focus() then turn_queue = {} end
     end

@@ -121,7 +121,7 @@ function render(width, height, left, right)
         local th = (height >= 500) and FONT_HEIGHT * 2 or FONT_HEIGHT
         local color = { r = 230, g = 230, b = 245, a = 0.85 }
         -- (Just the tempo in the mini player: it's small.)
-        local mini = display_mode() == "mini"
+        local mini = display_mode() == "mini" or display_mode() == "pip"
         if b then
             local num, den = time_signature()
             text(th / 2, th / 2, string.format("%d bpm  %d/%d", math.floor(tempo() + 0.5), num, den), color, th)

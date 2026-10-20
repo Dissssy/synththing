@@ -180,7 +180,7 @@ impl App {
         #[cfg(target_os = "android")]
         if crate::android::picture_in_picture() {
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-                self.show_visualizer(ui, &shared.notes, view, DisplayMode::Mini);
+                self.show_visualizer(ui, &shared.notes, view, DisplayMode::Pip);
             });
             return;
         }

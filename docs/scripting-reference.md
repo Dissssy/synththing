@@ -561,8 +561,10 @@ scroll() -> dx, dy            -- scrolling since last frame (positive y is up)
 mouse_down([button])          -- held; "left" (default), "right", "middle"
 mouse_pressed([button])       -- went down this frame
 mouse_released([button])      -- went up this frame
+touches() -> list             -- fingers on the visualizer, see Touch below
 has_focus() -> bool           -- whether keys come to this script
-display_mode() -> string      -- "window", "fullscreen", "dedicated" or "mini"
+display_mode() -> string      -- "window", "fullscreen", "dedicated", "mini" or "pip"
+is_mobile() -> bool           -- the app is in its mobile layout
 ```
 
 Mouse state is reported while the pointer is over the visualizer (and while it has focus, so a drag that wanders off still ends cleanly). Keys only while the visualizer has focus: click into it to give it focus, click anywhere else to take it back. While it has focus the app's own shortcuts (space to pause, arrows to seek, ...) are off, so those keys are the script's. An unknown button name is a script error that says so. `scroll()` arrives smoothed, a little per frame, so add it up rather than treating each frame as one notch.
@@ -573,7 +575,24 @@ Five keys always belong to the app, and are never reported to a script in any mo
 
 While the visualizer is being recorded (synththing > Record...), `render()` gets the recording's size as `width` and `height` (1920 x 1080, say) whatever the panel's size, and the picture is shown letterboxed in the panel, with `mouse()` still in the picture's own pixels. It's also called once per video frame rather than once per screen refresh, with `DT` the video time that passed (1/60 s at 60 fps, more if it had to catch up), so motion in the video is perfectly even. A script that lays itself out from `width` and `height` and moves things by `DT` needs nothing special; a bigger recording size just costs more time per frame, and a script too slow for it makes the video repeat frames.
 
-`display_mode()` tells a script where it's being shown: `"window"` (a tab in the normal window), `"fullscreen"` (a tab, with the whole app fullscreen), or `"dedicated"` (the Fullscreen visualizer button or F11: nothing but the visualizer, filling the screen, with focus), or `"mini"` (in the mini player, the tray panel pinned and expanded: about 711 by 400 points, a fraction of a screen, where fine detail and small text are hard to make out, so a script might leave them out or draw bigger; the bundled visualizers do: fewer frequency labels in `fft.lua` and `spectrogram.lua`, just the tempo in `pulse.lua`, no panel titles or legend in `dashboard.lua`, no help line in `keyboard.lua`). `"mini"` is since 0.7.0.
+`display_mode()` tells a script where it's being shown: `"window"` (a tab in the normal window), `"fullscreen"` (a tab, with the whole app fullscreen), or `"dedicated"` (the Fullscreen visualizer button or F11: nothing but the visualizer, filling the screen, with focus), or `"mini"` (in the mini player, the tray panel pinned and expanded: about 711 by 400 points, a fraction of a screen, where fine detail and small text are hard to make out, so a script might leave them out or draw bigger; the bundled visualizers do: fewer frequency labels in `fft.lua` and `spectrogram.lua`, just the tempo in `pulse.lua`, no panel titles or legend in `dashboard.lua`, no help line in `keyboard.lua`). `"mini"` is since 0.7.0. On Android, `"pip"` is picture-in-picture: the app shrunk to a small floating window over other apps, often under 300 by 200 points, smaller than the mini player, so draw only the essentials there, bigger (the bundled visualizers treat it like `"mini"`). `"pip"` is since 1.1.0.
+
+`is_mobile()` is true when the app is in its mobile layout: always on Android, and on desktop after View > Mobile layout (handy for trying a script out). A phone has less to spare than a desktop and a smaller screen, so a script might draw a lighter, less demanding picture: fewer particles, a lower-detail history, bigger text. Since 1.1.0.
+
+### Touch
+
+```lua
+for _, t in ipairs(touches()) do
+    -- t.id: the same number for one finger from touching down to lifting
+    -- t.x, t.y: where it is, buffer pixels; t.dx, t.dy: movement since last frame
+    -- t.force: 0 to 1, or nil where the screen doesn't report pressure
+    -- t.pressed: touched down this frame; t.released: lifted this frame
+end
+```
+
+`touches()` lists every finger that touched down on the visualizer, from that frame until the one it lifts in (that frame's entry has `released = true` and its last position; a finger lifted off the edge of the screen counts as lifted too). A finger that touches down elsewhere and slides onto the visualizer isn't listed. Several fingers at once each get their own entry, so a script can pinch, use two thumbs, or put a virtual stick under one and buttons under another. A touchscreen on a desktop reports the same way. Since 1.1.0. The bundled scripts show it off: `keyboard.lua` plays the key under each finger, `snake.lua` steers the player's snake by swiping, `input_demo.lua` paints a stroke per finger, and `disco.lua` and `snake.lua` draw lighter when `is_mobile()`.
+
+Touch also still works the mouse, as before, for scripts written for one: the first finger down moves `mouse()` and holds the left button, and `mouse()` goes back to nil when it lifts. A script that handles touch itself can ignore the mouse while `#touches() > 0`.
 
 ```lua
 set_cursor_visible(visible)   -- false: hide the system cursor over the visualizer
@@ -974,7 +993,9 @@ mouse_delta() --> 0, 0
 scroll() --> 0, -2.5              -- arrives smoothed: a little each frame
 mouse_down() --> false
 has_focus() --> false
-display_mode() --> "window"       -- or "fullscreen", "dedicated", "mini"
+display_mode() --> "window"       -- or "fullscreen", "dedicated", "mini", "pip"
+is_mobile() --> false             -- true on a phone
+touches() --> { { id = 0, x = 120, y = 88.5, dx = 0, dy = -3, force = nil, pressed = false, released = false } }
 input_register("jump", { "space", "w" }) --> 1   -- an id, 1, 2, 3, ... in order
 input(jump) --> "up"              -- or "pressed", "held", "released"
 input_down(jump) --> false

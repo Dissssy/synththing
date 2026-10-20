@@ -209,6 +209,8 @@ pub enum DisplayMode {
     Dedicated,
     /// Small, in the mini player.
     Mini,
+    /// Android picture-in-picture: a small floating window over other apps.
+    Pip,
 }
 
 impl DisplayMode {
@@ -218,6 +220,7 @@ impl DisplayMode {
             Self::Fullscreen => "fullscreen",
             Self::Dedicated => "dedicated",
             Self::Mini => "mini",
+            Self::Pip => "pip",
         }
     }
 }
@@ -232,6 +235,24 @@ pub const RESERVED_KEYS: [egui::Key; 5] =
 pub const MOUSE_BUTTONS: [egui::PointerButton; 3] =
     [egui::PointerButton::Primary, egui::PointerButton::Secondary, egui::PointerButton::Middle];
 
+/// A finger on the visualizer, in buffer pixels. Tracked from when it
+/// touches down on the picture until it lifts (wherever it is by then).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Touch {
+    pub id: u64,
+    pub x: f32,
+    pub y: f32,
+    /// Movement since last frame.
+    pub dx: f32,
+    pub dy: f32,
+    /// 0 to 1, where the screen reports it.
+    pub force: Option<f32>,
+    /// Touched down this frame.
+    pub pressed: bool,
+    /// Lifted (or cancelled) this frame: its last report.
+    pub released: bool,
+}
+
 /// One frame of pointer and keyboard input, as a visualizer script sees it.
 /// Mouse state only while the pointer is over the visualizer (or it has
 /// focus, so a drag that leaves it still ends); keys only while it has
@@ -240,6 +261,8 @@ pub const MOUSE_BUTTONS: [egui::PointerButton; 3] =
 #[derive(Clone, Debug, Default)]
 pub struct VisualizerInput {
     pub mode: DisplayMode,
+    /// The app is in its mobile layout (a phone, or the desktop setting).
+    pub mobile: bool,
     pub focused: bool,
     /// Pointer position in buffer pixels; `None` when it isn't over the
     /// visualizer.
@@ -260,6 +283,9 @@ pub struct VisualizerInput {
     /// Game controllers (`gamepad.rs`): buttons and stick directions held,
     /// pressed and released, the analogue axes, and who's connected.
     pub pads: PadFrame,
+    /// Fingers on a touchscreen. Touch also still drives the mouse (the
+    /// first finger is the left button).
+    pub touches: Vec<Touch>,
 }
 
 impl VisualizerInput {
@@ -343,6 +369,7 @@ impl VisualizerInput {
     /// current state (position, held buttons and keys) is the later one's.
     fn absorb(&mut self, later: VisualizerInput) {
         self.mode = later.mode;
+        self.mobile = later.mobile;
         self.focused = later.focused;
         self.pointer = later.pointer;
         self.pointer_delta = (self.pointer_delta.0 + later.pointer_delta.0, self.pointer_delta.1 + later.pointer_delta.1);
@@ -361,6 +388,16 @@ impl VisualizerInput {
         self.pads.released.extend(later.pads.released);
         self.pads.axes = later.pads.axes;
         self.pads.connected = later.pads.connected;
+        for touch in later.touches {
+            match self.touches.iter_mut().find(|t| t.id == touch.id && !t.released) {
+                Some(t) => {
+                    t.dx += touch.dx;
+                    t.dy += touch.dy;
+                    (t.x, t.y, t.force, t.released) = (touch.x, touch.y, touch.force, touch.released);
+                }
+                None => self.touches.push(touch),
+            }
+        }
     }
 }
 
@@ -405,6 +442,12 @@ pub struct VisualizerPanel {
     last_samples: Vec<StereoFrame>,
     /// This frame's controller input, from the app (`set_pads`).
     pads: PadFrame,
+    /// Whether the app is in its mobile layout (`set_mobile`).
+    mobile: bool,
+    /// Fingers on the visualizer, and the egui pass they were last
+    /// updated in (see `track_touches`).
+    touches: Vec<Touch>,
+    touch_pass: u64,
     /// What the script asked for in the frames drawn since `take_effects`.
     effects: Effects,
 }
@@ -422,6 +465,9 @@ impl VisualizerPanel {
             pending_input: None,
             last_samples: Vec::new(),
             pads: PadFrame::default(),
+            mobile: false,
+            touches: Vec::new(),
+            touch_pass: 0,
             effects: Effects::default(),
         }
     }
@@ -436,6 +482,44 @@ impl VisualizerPanel {
     /// This frame's controller input, for the next `show`.
     pub fn set_pads(&mut self, pads: PadFrame) {
         self.pads = pads;
+    }
+
+    /// Whether the app is in its mobile layout, for the next `show`.
+    pub fn set_mobile(&mut self, mobile: bool) {
+        self.mobile = mobile;
+    }
+
+    /// Follow this frame's touch events: fingers that touch down on the
+    /// picture at `rect`, until they lift. `scale` turns points into
+    /// buffer pixels. Fingers still down when the visualizer wasn't shown
+    /// last pass (frozen, or another page) are let go, since their end may
+    /// have gone by unseen.
+    fn track_touches(&mut self, ctx: &egui::Context, rect: egui::Rect, scale: (f32, f32)) {
+        let pass = ctx.cumulative_pass_nr();
+        let missed = pass > self.touch_pass + 1;
+        self.touch_pass = pass;
+        self.touches.retain(|t| !t.released);
+        for touch in &mut self.touches {
+            (touch.dx, touch.dy, touch.pressed, touch.released) = (0.0, 0.0, false, missed);
+        }
+        ctx.input(|i| {
+            for event in &i.events {
+                let egui::Event::Touch { id, phase, pos, force, .. } = event else { continue };
+                let (x, y) = ((pos.x - rect.min.x) * scale.0, (pos.y - rect.min.y) * scale.1);
+                if *phase == egui::TouchPhase::Start {
+                    if rect.contains(*pos) {
+                        let touch =
+                            Touch { id: id.0, x, y, dx: 0.0, dy: 0.0, force: *force, pressed: true, released: false };
+                        self.touches.push(touch);
+                    }
+                } else if let Some(t) = self.touches.iter_mut().find(|t| t.id == id.0 && !t.released) {
+                    t.dx += x - t.x;
+                    t.dy += y - t.y;
+                    (t.x, t.y, t.force) = (x, y, *force);
+                    t.released = *phase != egui::TouchPhase::Move;
+                }
+            }
+        });
     }
 
     /// For recording: the audio the last drawn frame was given, and its
@@ -520,6 +604,10 @@ impl VisualizerPanel {
         let (buf_w, buf_h) = fixed_size.unwrap_or_else(|| logical_buffer_size(available));
         let mut input = gather_input(&ctx, &response, rect, (buf_w, buf_h), focused, mode);
         input.pads = std::mem::take(&mut self.pads);
+        input.mobile = self.mobile;
+        let scale = (buf_w as f32 / rect.width().max(1.0), buf_h as f32 / rect.height().max(1.0));
+        self.track_touches(&ctx, rect, scale);
+        input.touches = self.touches.clone();
         let pointer_over = input.pointer.is_some();
         match &mut self.pending_input {
             Some(pending) => pending.absorb(input),
@@ -680,6 +768,22 @@ fn logical_buffer_size(available: egui::Vec2) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skipped_frames_keep_every_touch() {
+        let touch = |id, x, dx, pressed, released| Touch { id, x, y: 0.0, dx, dy: 0.0, force: None, pressed, released };
+        let mut pending =
+            VisualizerInput { touches: vec![touch(1, 5.0, 1.0, true, false), touch(2, 0.0, 1.0, false, true)], ..Default::default() };
+        pending.absorb(VisualizerInput {
+            touches: vec![touch(1, 6.0, 1.0, false, false), touch(3, 9.0, 0.0, true, false)],
+            ..Default::default()
+        });
+        // 1 touched down then moved twice, 2 lifted in the skipped frame, 3 is new.
+        assert_eq!(
+            pending.touches,
+            [touch(1, 6.0, 2.0, true, false), touch(2, 0.0, 1.0, false, true), touch(3, 9.0, 0.0, true, false)]
+        );
+    }
 
     #[test]
     fn live_audio_mixes_into_the_song_one_for_one() {
