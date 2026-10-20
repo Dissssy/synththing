@@ -53,6 +53,7 @@ mod preview;
 mod recorder;
 mod script_host;
 mod select_list;
+mod settings_sync;
 mod snippets;
 mod song_info;
 mod song_title;

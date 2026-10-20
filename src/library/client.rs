@@ -348,6 +348,42 @@ pub fn restore_identity(base: &str, server_key: &str, identity: &Identity) -> Re
     Ok(reply["restored"].as_u64().unwrap_or(0))
 }
 
+/// Synced data `name`, opened with the sync key: its revision and what it
+/// holds (revision 0 and nothing if there's none yet). Data sealed with
+/// another sync key (from before a recovery by email) is nothing too:
+/// sync starts over from what the devices have.
+pub fn sync_get(
+    base: &str,
+    server_key: &str,
+    identity: &Identity,
+    sync_key: &[u8; 32],
+    name: &str,
+) -> Result<(i64, Option<Vec<u8>>), String> {
+    let blob: super::sync::Blob = signed_post(base, server_key, identity, &format!("/api/v1/sync/{name}/get"), &serde_json::json!({}))?;
+    let plain = blob.data.and_then(|data| {
+        super::sync::open(sync_key, &data).map_err(|e| log::warn!("synced {name} from {base}: {e}")).ok()
+    });
+    Ok((blob.revision, plain))
+}
+
+/// Write synced data `name`, sealed with the sync key, made from revision
+/// `revision` (0 if this device has never had it): whether it was stored
+/// (it isn't if the server has a newer one, to merge with and write
+/// again), and the server's revision now.
+pub fn sync_write(
+    base: &str,
+    server_key: &str,
+    identity: &Identity,
+    sync_key: &[u8; 32],
+    name: &str,
+    revision: i64,
+    plain: &[u8],
+) -> Result<super::sync::Written, String> {
+    let write = super::sync::Write { base: revision, data: super::sync::seal(sync_key, plain)? };
+    let body = serde_json::to_value(&write).map_err(|e| e.to_string())?;
+    signed_post(base, server_key, identity, &format!("/api/v1/sync/{name}"), &body)
+}
+
 /// Park a sealed sign-in handoff on a server, for another device to take.
 pub fn pair_park(base: &str, server_key: &str, identity: &Identity, sealed: &str) -> Result<super::pairing::Parked, String> {
     signed_post(base, server_key, identity, "/api/v1/pair", &serde_json::json!({ "sealed": sealed }))
@@ -389,15 +425,23 @@ pub fn mark_notifications(
     signed_post::<serde_json::Value>(base, server_key, identity, "/api/v1/notifications/mark", &body).map(|_| ())
 }
 
-/// Listen for new notifications, calling `each` with every one as it
-/// comes, until the server or the connection ends it, `STREAM_FOR` is up
-/// (ureq's body timeout is for the whole body: the caller reconnects), or
-/// `each` says to stop, with false.
+/// What comes on the notification stream.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StreamEvent {
+    Notification(super::Notification),
+    /// Synced data changed (`sync_get` it, if this device is behind).
+    Sync(super::sync::Changed),
+}
+
+/// Listen for new notifications (and synced data changing), calling
+/// `each` with every one as it comes, until the server or the connection
+/// ends it, `STREAM_FOR` is up (ureq's body timeout is for the whole
+/// body: the caller reconnects), or `each` says to stop, with false.
 pub fn notification_stream(
     base: &str,
     server_key: &str,
     identity: &Identity,
-    mut each: impl FnMut(super::Notification) -> bool,
+    mut each: impl FnMut(StreamEvent) -> bool,
 ) -> Result<(), String> {
     use std::io::BufRead;
     static STREAMING: OnceLock<Agent> = OnceLock::new();
@@ -416,10 +460,15 @@ pub fn notification_stream(
     let reader = std::io::BufReader::new(response.into_body().into_reader());
     for line in reader.lines() {
         let line = line.map_err(|e| format!("the stream ended ({e})"))?;
-        if let Some(data) = line.strip_prefix("data: ")
-            && let Ok(notification) = serde_json::from_str(data)
-            && !each(notification)
-        {
+        let Some(data) = line.strip_prefix("data: ") else { continue };
+        let event = match serde_json::from_str::<super::sync::ChangedEvent>(data) {
+            Ok(changed) => StreamEvent::Sync(changed.sync),
+            Err(_) => match serde_json::from_str(data) {
+                Ok(notification) => StreamEvent::Notification(notification),
+                Err(_) => continue,
+            },
+        };
+        if !each(event) {
             return Ok(());
         }
     }
@@ -1153,6 +1202,58 @@ mod tests {
     }
 
     #[test]
+    fn synced_data() {
+        let dir = std::env::temp_dir().join(format!("synththing-sync-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false, "check_uploads": false, "authority": true, "sync": true }"#)
+            .unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        assert!(info(&base).unwrap().sync);
+        let (alice, sync_key) = (Identity::generate().unwrap(), [5; 32]);
+
+        // Alice's other device listens.
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let (base, key, alice) = (base.clone(), key.clone(), alice.clone());
+            std::thread::spawn(move || {
+                let _ = notification_stream(&base, &key, &alice, |event| tx.send(event).is_ok());
+            });
+        }
+        std::thread::sleep(Duration::from_millis(300));
+
+        assert_eq!(sync_get(&base, &key, &alice, &sync_key, "settings").unwrap(), (0, None));
+        let first = sync_write(&base, &key, &alice, &sync_key, "settings", 0, b"one").unwrap();
+        assert_eq!((first.stored, first.revision), (true, 1));
+        let changed = crate::library::sync::Changed { name: "settings".into(), revision: 1 };
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), StreamEvent::Sync(changed));
+        // Made from an older revision: refused, with the server's.
+        let stale = sync_write(&base, &key, &alice, &sync_key, "settings", 0, b"stale").unwrap();
+        assert_eq!((stale.stored, stale.revision), (false, 1));
+        assert!(sync_write(&base, &key, &alice, &sync_key, "settings", 1, b"two").unwrap().stored);
+        assert_eq!(sync_get(&base, &key, &alice, &sync_key, "settings").unwrap(), (2, Some(b"two".to_vec())));
+        assert_eq!(sync_get(&base, &key, &alice, &[6; 32], "settings").unwrap(), (2, None), "another sync key's");
+        assert!(sync_get(&base, &key, &Identity::generate().unwrap(), &sync_key, "settings").unwrap().1.is_none(), "only hers");
+        assert!(sync_write(&base, &key, &alice, &sync_key, "../x", 0, b"x").is_err());
+
+        // A new key: the synced data comes along.
+        let alice2 = Identity::generate().unwrap();
+        rotate(&base, &key, &alice, &alice2).unwrap();
+        assert_eq!(sync_get(&base, &key, &alice2, &sync_key, "settings").unwrap(), (2, Some(b"two".to_vec())));
+        running.stop();
+
+        // Sync off: refused.
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false, "check_uploads": false }"#).unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        assert!(sync_get(&base, &key, &alice2, &sync_key, "settings").unwrap_err().contains("doesn't sync"));
+        running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn notifications_are_kept_and_pushed() {
         use crate::library::{AdminAction, ReportRequest};
         let dir = std::env::temp_dir().join(format!("synththing-notifications-test-{}", std::process::id()));
@@ -1176,7 +1277,10 @@ mod tests {
         {
             let (base, key, alice) = (base.clone(), key.clone(), alice.clone());
             std::thread::spawn(move || {
-                let _ = notification_stream(&base, &key, &alice, |n| tx.send(n).is_ok());
+                let _ = notification_stream(&base, &key, &alice, |event| match event {
+                    StreamEvent::Notification(n) => tx.send(n).is_ok(),
+                    StreamEvent::Sync(_) => true,
+                });
             });
         }
         std::thread::sleep(Duration::from_millis(300));
@@ -1722,7 +1826,7 @@ mod tests {
         let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
 
         let secret = Link::secret().unwrap();
-        let sealed = pairing::seal(&secret, alice.export("").unwrap().as_bytes()).unwrap();
+        let sealed = pairing::seal(&secret, alice.export("", &[3; 32]).unwrap().as_bytes()).unwrap();
         let parked = pair_park(&base, &key, &alice, &sealed).unwrap();
         let link = Link::parse(&Link { server: base.clone(), id: parked.id.clone(), secret }.url()).unwrap();
         assert_eq!(pair_status(&base, &key, &alice, &link.id).unwrap().taken, None);
@@ -1730,7 +1834,7 @@ mod tests {
 
         let taken = pair_take(&link.server, &link.id, "Pixel 8").unwrap();
         let text = String::from_utf8(pairing::open(&link.secret, &taken).unwrap()).unwrap();
-        assert_eq!(Identity::import(&text, "").unwrap().public(), alice.public());
+        assert_eq!(Identity::import(&text, "").unwrap().0.public(), alice.public());
         assert!(pair_take(&base, &link.id, "thief").is_err(), "once");
         assert_eq!(pair_status(&base, &key, &alice, &link.id).unwrap().taken.as_deref(), Some("Pixel 8"));
         assert!(pair_take(&base, "00ff", "x").is_err());

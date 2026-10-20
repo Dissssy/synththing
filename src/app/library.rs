@@ -2466,6 +2466,7 @@ impl App {
             ui.weak(message.as_str());
         }
         self.pairing_ui(ui);
+        self.sync_ui(ui);
         let current = self.library.identity.clone();
         ui.add_space(4.0);
         self.recovery_ui(ui, current.as_ref());
@@ -2483,7 +2484,9 @@ impl App {
                 .save_file();
             if let Some(file) = file {
                 self.library.identity_message = Some(
-                    match identity.export(&self.library.passphrase).and_then(|text| library::identity::save_secret(&file, &text)) {
+                    match library::identity::ensure_sync_key()
+                        .and_then(|sync_key| identity.export(&self.library.passphrase, &sync_key))
+                        .and_then(|text| library::identity::save_secret(&file, &text)) {
                         Ok(()) if self.library.passphrase.is_empty() => {
                             format!("Exported to {} (not sealed: keep it private).", file.display())
                         }

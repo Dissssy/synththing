@@ -167,7 +167,7 @@ impl App {
         self.spawn_pairing(move || {
             Event::Parked((|| {
                 let secret = Link::secret()?;
-                let sealed = pairing::seal(&secret, identity.export("")?.as_bytes())?;
+                let sealed = pairing::seal(&secret, identity.export("", &crate::library::identity::ensure_sync_key()?)?.as_bytes())?;
                 let parked = client::pair_park(&authority, &key, &identity, &sealed)?;
                 Ok((Link { server: authority, id: parked.id.clone(), secret }, parked))
             })())

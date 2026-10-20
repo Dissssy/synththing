@@ -1,0 +1,104 @@
+//! Sync (`library/sync.rs`): each identity's sealed blobs, by name, with
+//! their revisions. On with `"sync": true`. A rotation moves them to the
+//! new key; deleting the identity's data deletes them.
+
+use rusqlite::{params, OptionalExtension};
+use tiny_http::Request;
+
+use super::{error, json, notifications, now, read_body_or, signer, Reply, State};
+use crate::library::sync::{valid_name, Blob, Changed, ChangedEvent, Write, Written, MAX_BLOBS, MAX_DATA};
+
+pub(super) const SCHEMA_V16: &str = "
+BEGIN;
+CREATE TABLE sync (
+    key TEXT NOT NULL,              -- whose
+    name TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    data TEXT NOT NULL,             -- sealed with their sync key, base64
+    updated INTEGER NOT NULL,
+    PRIMARY KEY (key, name)
+);
+PRAGMA user_version = 16;
+COMMIT;
+";
+
+/// The signer of a request for blob `name`, once sync is on here.
+fn signed(state: &State, request: &mut Request, path: &str, name: &str, limit: usize) -> Result<(String, Vec<u8>), Reply> {
+    if !state.config.sync {
+        return Err(error(404, "this server doesn't sync"));
+    }
+    if !valid_name(name) {
+        return Err(error(404, "no such synced data"));
+    }
+    let body = read_body_or(request, limit, "that's too much to sync")?;
+    let key = signer(state, request, "POST", path, &body)?.ok_or_else(|| error(401, "that needs your signature"))?;
+    Ok((key, body))
+}
+
+/// `POST /api/v1/sync/{name}`, signed: write the blob, if it was made
+/// from the revision the server has.
+pub(super) fn write(state: &State, request: &mut Request, name: &str) -> Reply {
+    let (key, body) = match signed(state, request, &format!("/api/v1/sync/{name}"), name, MAX_DATA + 1024) {
+        Ok(found) => found,
+        Err(reply) => return reply,
+    };
+    let write: Write = match serde_json::from_slice(&body) {
+        Ok(write) => write,
+        Err(e) => return error(400, format!("not understood: {e}")),
+    };
+    if write.data.is_empty() || write.data.len() > MAX_DATA {
+        return error(400, "the synced data is empty or too big");
+    }
+    let db = state.db();
+    let written = (|| -> rusqlite::Result<Option<Written>> {
+        let tx = db.unchecked_transaction()?;
+        let current: Option<i64> =
+            tx.query_row("SELECT revision FROM sync WHERE key = ? AND name = ?", params![key, name], |r| r.get(0)).optional()?;
+        if current.unwrap_or(0) != write.base {
+            return Ok(Some(Written { stored: false, revision: current.unwrap_or(0) }));
+        }
+        if current.is_none() {
+            let blobs: i64 = tx.query_row("SELECT COUNT(*) FROM sync WHERE key = ?", [&key], |r| r.get(0))?;
+            if blobs >= MAX_BLOBS as i64 {
+                return Ok(None);
+            }
+        }
+        let revision = write.base + 1;
+        tx.execute(
+            "INSERT OR REPLACE INTO sync (key, name, revision, data, updated) VALUES (?, ?, ?, ?, ?)",
+            params![key, name, revision, write.data, now()],
+        )?;
+        tx.commit()?;
+        Ok(Some(Written { stored: true, revision }))
+    })();
+    drop(db);
+    match written {
+        Ok(Some(written)) => {
+            if written.stored {
+                let event = ChangedEvent { sync: Changed { name: name.to_string(), revision: written.revision } };
+                notifications::push(state, &key, &serde_json::to_string(&event).unwrap_or_default());
+            }
+            json(200, &written)
+        }
+        Ok(None) => error(400, format!("there's a limit of {MAX_BLOBS} kinds of synced data")),
+        Err(e) => error(500, format!("database: {e}")),
+    }
+}
+
+/// `POST /api/v1/sync/{name}/get`, signed: the blob and its revision.
+pub(super) fn get(state: &State, request: &mut Request, name: &str) -> Reply {
+    let key = match signed(state, request, &format!("/api/v1/sync/{name}/get"), name, 1024) {
+        Ok((key, _)) => key,
+        Err(reply) => return reply,
+    };
+    let found = state
+        .db()
+        .query_row("SELECT revision, data FROM sync WHERE key = ? AND name = ?", params![key, name], |r| {
+            Ok(Blob { revision: r.get(0)?, data: Some(r.get(1)?) })
+        })
+        .optional();
+    match found {
+        Ok(blob) => json(200, &blob.unwrap_or_default()),
+        Err(e) => error(500, format!("database: {e}")),
+    }
+}

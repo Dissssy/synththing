@@ -20,6 +20,7 @@ use preferences::PrefTab;
 mod playlist_panel;
 mod identity;
 mod pairing;
+mod sync;
 mod copyright;
 mod moderation;
 mod notifications;
@@ -304,6 +305,8 @@ pub struct App {
     identity: identity::IdentityState,
     /// Signing in another device, or this one with a link.
     pairing: pairing::PairingState,
+    /// Settings sync between the identity's devices.
+    sync: sync::SyncState,
     /// Notifications from library servers.
     notifications: notifications::NotificationsState,
     /// A copyright notice on one of the user's uploads, open.
@@ -553,6 +556,7 @@ impl App {
             feedback: Default::default(),
             identity: Default::default(),
             pairing: Default::default(),
+            sync: Default::default(),
             notifications: Default::default(),
             copyright: Default::default(),
             song_library: song_library::SongLibraryState::new(preview_output),
@@ -3349,6 +3353,7 @@ impl App {
         self.poll_identity();
         self.poll_pairing();
         self.poll_notifications(ctx);
+        self.poll_sync();
         self.poll_copyright();
         self.poll_song_library();
         if self.status != self.logged_status {
@@ -3563,6 +3568,7 @@ impl eframe::App for App {
         self.report_ui(&ctx);
         self.identity_flow_ui(&ctx);
         self.pairing_flow_ui(&ctx);
+        self.sync_toast_ui(&ctx);
         self.notification_ui(&ctx);
         self.copyright_ui(&ctx);
         self.publish_song_ui(&ctx);

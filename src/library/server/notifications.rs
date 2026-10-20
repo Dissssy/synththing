@@ -8,6 +8,7 @@
 //! ever gain more. They're listed (`POST /api/v1/notifications`, signed)
 //! and pushed while the app's open (`GET /api/v1/notifications/stream`,
 //! signed, Server-Sent Events), and marked read or handled by the app.
+//! The stream also says when synced data changed (`sync.rs`), unstored.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -105,10 +106,14 @@ pub(super) fn notify(state: &State, db: &Connection, key: &str, kind: &str, data
         handled: false,
         resolution: None,
     };
-    let message = serde_json::to_string(&notification).unwrap_or_default();
+    push(state, key, &serde_json::to_string(&notification).unwrap_or_default());
+}
+
+/// Send `message` (one event's JSON) to `key`'s open streams.
+pub(super) fn push(state: &State, key: &str, message: &str) {
     let mut streams = state.streams.lock().unwrap_or_else(|p| p.into_inner());
     if let Some(senders) = streams.senders.get_mut(key) {
-        senders.retain(|sender| sender.send(message.clone()).is_ok());
+        senders.retain(|sender| sender.send(message.to_string()).is_ok());
     }
 }
 

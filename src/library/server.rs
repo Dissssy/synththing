@@ -38,6 +38,7 @@ mod notifications;
 mod pairing;
 mod remixes;
 mod songs;
+mod sync;
 mod update;
 
 use std::collections::HashMap;
@@ -124,6 +125,9 @@ pub struct ServerConfig {
     pub check_uploads: bool,
     /// Take songs (MIDI files) too.
     pub songs: bool,
+    /// Keep signed-in apps' synced data (settings, ...), sealed so only
+    /// their devices can read it.
+    pub sync: bool,
     /// Hand feedback out to be filed as GitHub issues, with the intake
     /// token (`intake.token`, made on first run).
     pub intake: bool,
@@ -161,6 +165,7 @@ impl Default for ServerConfig {
             unverified_uploads_per_day: 3,
             documents: Vec::new(),
             songs: false,
+            sync: false,
             intake: false,
             android_fingerprints: Vec::new(),
         }
@@ -672,6 +677,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 15 {
         db.execute_batch(intake::SCHEMA_V15)?;
     }
+    if version < 16 {
+        db.execute_batch(sync::SCHEMA_V16)?;
+    }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
 }
@@ -839,6 +847,14 @@ fn handle(state: &Arc<State>, mut request: Request) {
             let id = id.to_string();
             pairing::take(state, &mut request, &id)
         }
+        (Method::Post, ["api", "v1", "sync", name]) => {
+            let name = name.to_string();
+            sync::write(state, &mut request, &name)
+        }
+        (Method::Post, ["api", "v1", "sync", name, "get"]) => {
+            let name = name.to_string();
+            sync::get(state, &mut request, &name)
+        }
         (Method::Post, ["api", "v1", "identity", "rotate"]) => authority::rotate(state, &mut request),
         (Method::Post, ["api", "v1", "identity", "apply"]) => {
             let ip = client_ip(state, &request);
@@ -908,6 +924,7 @@ fn info(state: &State) -> Info {
         authority: state.config.authority,
         mail: state.config.authority && state.mailer.on(),
         songs: state.config.songs,
+        sync: state.config.sync,
     }
 }
 

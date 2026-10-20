@@ -13,6 +13,7 @@ pub mod songs;
 pub mod identity;
 pub mod pairing;
 pub mod server;
+pub mod sync;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -335,6 +336,9 @@ pub struct Info {
     /// It takes songs (MIDI files) as well as scripts.
     #[serde(default)]
     pub songs: bool,
+    /// It keeps signed-in apps' synced data (`sync.rs`).
+    #[serde(default)]
+    pub sync: bool,
 }
 
 /// A notification (`/api/v1/notifications`): what happened, as a kind and

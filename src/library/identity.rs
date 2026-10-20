@@ -10,6 +10,11 @@
 //! the records of how, from the authority, beside it
 //! (`identity.rotations.json`, and in an export): the app shows them to
 //! each server, which moves what the older keys had to this one.
+//!
+//! Beside it is the sync key (`sync.key`): 32 random bytes that encrypt
+//! what's synced (`library/sync.rs`), the same on every device signed in
+//! as the identity. It goes along in an export and a sign-in handoff, and
+//! stays the same through rotations.
 
 use std::path::{Path, PathBuf};
 
@@ -46,6 +51,43 @@ struct Exported {
     /// How it came to be this key (`rotations`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     rotations: Vec<Rotation>,
+    /// The sync key, in hex, if it isn't sealed (sealed, it's after the
+    /// secret). Files made before sync have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sync_key: Option<String>,
+}
+
+/// Where the sync key is kept.
+fn sync_key_path() -> Option<PathBuf> {
+    crate::config::config_dir().ok().map(|d| d.join("sync.key"))
+}
+
+/// The saved sync key, if there is one.
+pub fn sync_key() -> Option<[u8; 32]> {
+    let text = std::fs::read_to_string(sync_key_path()?).ok()?;
+    <[u8; 32]>::try_from(unhex(text.trim())?).ok()
+}
+
+/// The saved sync key, made (and saved) if there isn't one yet.
+pub fn ensure_sync_key() -> Result<[u8; 32], String> {
+    if let Some(key) = sync_key() {
+        return Ok(key);
+    }
+    let key: [u8; 32] = random()?;
+    save_sync_key(Some(&key))?;
+    Ok(key)
+}
+
+/// Save the sync key, or (with none) delete it.
+fn save_sync_key(key: Option<&[u8; 32]>) -> Result<(), String> {
+    let path = sync_key_path().ok_or("no config folder")?;
+    match key {
+        Some(key) => save_secret(&path, &hex(key)),
+        None => match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("couldn't delete {}: {e}", path.display())),
+            _ => Ok(()),
+        },
+    }
 }
 
 /// Where the rotation records are kept.
@@ -143,10 +185,10 @@ impl Identity {
         sign_hex(&self.key, message)
     }
 
-    /// The identity as a file's contents, sealed with `passphrase` unless
-    /// it's empty.
-    pub fn export(&self, passphrase: &str) -> Result<String, String> {
-        let secret = self.key.to_bytes();
+    /// The identity and its sync key as a file's contents, sealed with
+    /// `passphrase` unless it's empty.
+    pub fn export(&self, passphrase: &str, sync_key: &[u8; 32]) -> Result<String, String> {
+        let secret = [self.key.to_bytes(), *sync_key].concat();
         let rotations = load_rotations();
         // (Only if they lead here: an imported identity's own.)
         let rotations = if rotations.last().is_some_and(|r| r.new == self.public()) { rotations } else { Vec::new() };
@@ -158,9 +200,11 @@ impl Identity {
             nonce: None,
             sealed: None,
             rotations,
+            sync_key: None,
         };
         if passphrase.is_empty() {
-            exported.key = Some(hex(&secret));
+            exported.key = Some(hex(&self.key.to_bytes()));
+            exported.sync_key = Some(hex(sync_key));
         } else {
             let salt: [u8; 16] = random()?;
             let nonce: [u8; 12] = random()?;
@@ -179,39 +223,51 @@ impl Identity {
         serde_json::from_str::<Exported>(text).is_ok_and(|e| e.sealed.is_some())
     }
 
-    /// An exported identity, opened with `passphrase` if it's sealed.
-    pub fn import(text: &str, passphrase: &str) -> Result<Self, String> {
+    /// An exported identity, opened with `passphrase` if it's sealed, and
+    /// its sync key if the file has one.
+    pub fn import(text: &str, passphrase: &str) -> Result<(Self, Option<[u8; 32]>), String> {
         let exported: Exported = serde_json::from_str(text).map_err(|_| "that isn't a synththing identity file")?;
-        let identity = match (exported.key, exported.salt, exported.nonce, exported.sealed) {
-            (Some(key), ..) => Self::from_hex(&key).ok_or("the file's key is damaged")?,
+        let (secret, sync_key) = match (exported.key, exported.salt, exported.nonce, exported.sealed) {
+            (Some(key), ..) => (key, exported.sync_key),
             (None, Some(salt), Some(nonce), Some(sealed)) => {
                 let (salt, sealed) = (unhex(&salt).ok_or("damaged file")?, unhex(&sealed).ok_or("damaged file")?);
                 let nonce = <[u8; 12]>::try_from(unhex(&nonce).ok_or("damaged file")?).map_err(|_| "damaged file")?;
-                let secret = passphrase_cipher(passphrase, &salt)?
+                let opened = passphrase_cipher(passphrase, &salt)?
                     .decrypt(&Nonce::from(nonce), sealed.as_slice())
                     .map_err(|_| "wrong passphrase")?;
-                Self::from_hex(&hex(&secret)).ok_or("the file's key is damaged")?
+                let (secret, sync_key) = opened.split_at(opened.len().min(32));
+                (hex(secret), (!sync_key.is_empty()).then(|| hex(sync_key)))
             }
             _ => return Err("the file has no key in it".into()),
         };
+        let identity = Self::from_hex(&secret).ok_or("the file's key is damaged")?;
         if identity.id() != exported.id {
             return Err("the file's key doesn't match its ID (damaged?)".into());
         }
-        Ok(identity)
+        let sync_key = match sync_key {
+            Some(key) => Some(unhex(&key).and_then(|k| <[u8; 32]>::try_from(k).ok()).ok_or("the file's sync key is damaged")?),
+            None => None,
+        };
+        Ok((identity, sync_key))
     }
 }
 
 /// Make an exported identity this app's own: opened with `passphrase` if
-/// it's sealed, and saved with how it came to be its key.
+/// it's sealed, and saved with how it came to be its key and its sync key.
+/// (A file without a sync key leaves none: the one here belonged to
+/// another identity, or to this one before its synced data was lost.)
 pub fn adopt(text: &str, passphrase: &str) -> Result<Identity, String> {
-    let identity = Identity::import(text, passphrase)?;
+    let (identity, sync_key) = Identity::import(text, passphrase)?;
     save_rotations(&exported_rotations(text))?;
+    save_sync_key(sync_key.as_ref())?;
     identity.save()?;
     Ok(identity)
 }
 
-/// Forget the saved identity (its key and rotation records): signed out.
+/// Forget the saved identity (its key, rotation records and sync key):
+/// signed out.
 pub fn forget() -> Result<(), String> {
+    save_sync_key(None)?;
     if let Some(path) = Identity::path() {
         match std::fs::remove_file(&path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -244,15 +300,23 @@ mod tests {
     #[test]
     fn export_and_import() {
         let identity = Identity::generate().unwrap();
-        let plain = identity.export("").unwrap();
+        let sync_key = [9; 32];
+        let plain = identity.export("", &sync_key).unwrap();
         assert!(!Identity::needs_passphrase(&plain));
-        assert_eq!(Identity::import(&plain, "").unwrap().public(), identity.public());
+        let (opened, opened_sync) = Identity::import(&plain, "").unwrap();
+        assert_eq!((opened.public(), opened_sync), (identity.public(), Some(sync_key)));
 
-        let sealed = identity.export("correct horse").unwrap();
+        let sealed = identity.export("correct horse", &sync_key).unwrap();
         assert!(Identity::needs_passphrase(&sealed));
         assert!(!sealed.contains(&hex(&identity.key.to_bytes())), "the secret isn't in it");
-        assert_eq!(Identity::import(&sealed, "correct horse").unwrap().id(), identity.id());
+        assert!(!sealed.contains(&hex(&sync_key)), "nor the sync key");
+        let (opened, opened_sync) = Identity::import(&sealed, "correct horse").unwrap();
+        assert_eq!((opened.id(), opened_sync), (identity.id(), Some(sync_key)));
         assert_eq!(Identity::import(&sealed, "wrong").err().as_deref(), Some("wrong passphrase"));
         assert!(Identity::import("{}", "").is_err());
+
+        // (A file from before sync: no sync key.)
+        let old = format!(r#"{{"synththing_identity": 1, "id": "{}", "key": "{}"}}"#, identity.id(), identity.secret_hex());
+        assert_eq!(Identity::import(&old, "").unwrap().1, None);
     }
 }
