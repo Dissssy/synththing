@@ -294,7 +294,7 @@ function render(width, height, left, right)
         end
         -- Which key, and the controls; not in the mini player, too small
         -- for a line of help.
-        if display_mode() ~= "mini" then
+        if display_mode() ~= "mini" and display_mode() ~= "pip" then
             local label = note_name(tonic, false) .. " major   A-L play   Left/Right move   Up/Down key"
             if not notes_playable() then
                 label = "play along needs a MIDI song and a soundfont"

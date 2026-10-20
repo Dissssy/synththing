@@ -90,7 +90,8 @@ function render(width, height, left, right)
     if show_labels then
         local muted = { r = 200, g = 200, b = 220, a = 0.55 }
         local span = math.log(MAX_FREQUENCY_HZ / MIN_FREQUENCY_HZ)
-        for _, f in ipairs(display_mode() == "mini" and MINI_LABEL_FREQS or LABEL_FREQS) do
+        local small = display_mode() == "mini" or display_mode() == "pip"
+        for _, f in ipairs(small and MINI_LABEL_FREQS or LABEL_FREQS) do
             local x = math.floor(math.log(f / MIN_FREQUENCY_HZ) / span * width + 0.5)
             line(x, 0, x, height, { r = 255, g = 255, b = 255, a = 0.06 })
             local label = (f >= 1000) and ((f // 1000) .. "k") or tostring(f)

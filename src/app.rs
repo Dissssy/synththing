@@ -2906,6 +2906,7 @@ impl App {
         {
             let mut panel = lock_panel(&self.visualizer);
             panel.set_pads(self.pad_frame.clone());
+            panel.set_mobile(self.mobile());
         }
         let fixed_size = self.recording.frame_size();
         let (hold, timestep) = self.pace_recording();
