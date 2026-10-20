@@ -22,6 +22,9 @@
 -- as the key does (note_on/note_off) and sound like the song's own
 -- instrument on the "play_channel" setting's channel (0: the song's
 -- first). Every key can be rebound with the Controls button.
+--
+-- On a touchscreen, touch the keyboard itself to play: every finger plays
+-- the key under it, and sliding along the keys plays each one in turn.
 
 local FIRST_KEY = 21   -- A0
 local LAST_KEY = 108   -- C8
@@ -91,6 +94,8 @@ local function clamp_span()
     while step_key(span) < FIRST_KEY do span = span + 1 end
 end
 clamp_span()
+
+local touched = {} -- [touch id] = { key = .., channel = .. } while a finger holds a key
 
 local function release_all()
     for _, s in pairs(sounding) do
@@ -165,6 +170,47 @@ local function key_box(key, width)
     return layout.keys[key]
 end
 
+-- The key at x, y on a keyboard from kb_top down, its black keys black_h
+-- tall (they sit on top, so they're checked first). nil above it.
+local function key_at(x, y, width, kb_top, black_h)
+    if y < kb_top then return nil end
+    for pass = 1, 2 do
+        local want_white = pass == 2
+        if want_white or y < kb_top + black_h then
+            for k = FIRST_KEY, LAST_KEY do
+                local box = key_box(k, width)
+                if box.white == want_white and x >= box.x0 and x < box.x1 then return k end
+            end
+        end
+    end
+    return nil
+end
+
+-- Touch: each finger holds the key under it, moving to the next key as it
+-- slides, and lets go when it lifts or leaves the keyboard (or everything,
+-- when playing along is off).
+local function touch_play(playing, width, kb_top, black_h, channel, velocity)
+    local seen = {}
+    for _, t in ipairs(touches()) do
+        seen[t.id] = true
+        local key = playing and not t.released and key_at(t.x, t.y, width, kb_top, black_h) or nil
+        local held = touched[t.id]
+        if held and held.key ~= key then
+            note_off(held.key, held.channel)
+            touched[t.id] = nil
+        end
+        if key and not touched[t.id] and note_on(key, { channel = channel, velocity = velocity }) then
+            touched[t.id] = { key = key, channel = channel }
+        end
+    end
+    for id, held in pairs(touched) do
+        if not seen[id] then
+            note_off(held.key, held.channel)
+            touched[id] = nil
+        end
+    end
+end
+
 function render(width, height, left, right)
     local background = setting_color("background", { r = 14, g = 14, b = 20 })
     local key_idle_white = setting_color("key_idle_white", { r = 232, g = 232, b = 238 })
@@ -194,6 +240,8 @@ function render(width, height, left, right)
     end
     local kb_h = math.max(1, math.floor(math.min(layout.white_w * WHITE_KEY_ASPECT, height * MAX_KEYBOARD_FRACTION)))
     local kb_top = height - kb_h
+    local black_h = math.floor(kb_h * 0.62)
+    touch_play(playing, width, kb_top, black_h, play_channel > 0 and (play_channel - 1) or nil, play_velocity)
     local lane_height = math.max(1, kb_top)
 
     local function time_to_y(t)
@@ -213,6 +261,9 @@ function render(width, height, left, right)
         end
     end
     for _, s in pairs(sounding) do
+        held[s.key] = PLAYER_COLOR
+    end
+    for _, s in pairs(touched) do
         held[s.key] = PLAYER_COLOR
     end
 
@@ -270,7 +321,6 @@ function render(width, height, left, right)
         end
     end
 
-    local black_h = math.floor(kb_h * 0.62)
     for k = FIRST_KEY, LAST_KEY do
         local box = key_box(k, width)
         if box and not box.white then
@@ -296,6 +346,9 @@ function render(width, height, left, right)
         -- for a line of help.
         if display_mode() ~= "mini" and display_mode() ~= "pip" then
             local label = note_name(tonic, false) .. " major   A-L play   Left/Right move   Up/Down key"
+            if is_mobile() then
+                label = "touch the keys to play"
+            end
             if not notes_playable() then
                 label = "play along needs a MIDI song and a soundfont"
             end

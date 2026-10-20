@@ -590,7 +590,7 @@ for _, t in ipairs(touches()) do
 end
 ```
 
-`touches()` lists every finger that touched down on the visualizer, from that frame until the one it lifts in (that frame's entry has `released = true` and its last position; a finger lifted off the edge of the screen counts as lifted too). A finger that touches down elsewhere and slides onto the visualizer isn't listed. Several fingers at once each get their own entry, so a script can pinch, use two thumbs, or put a virtual stick under one and buttons under another. A touchscreen on a desktop reports the same way. Since 1.1.0.
+`touches()` lists every finger that touched down on the visualizer, from that frame until the one it lifts in (that frame's entry has `released = true` and its last position; a finger lifted off the edge of the screen counts as lifted too). A finger that touches down elsewhere and slides onto the visualizer isn't listed. Several fingers at once each get their own entry, so a script can pinch, use two thumbs, or put a virtual stick under one and buttons under another. A touchscreen on a desktop reports the same way. Since 1.1.0. The bundled scripts show it off: `keyboard.lua` plays the key under each finger, `snake.lua` steers the player's snake by swiping, `input_demo.lua` paints a stroke per finger, and `disco.lua` and `snake.lua` draw lighter when `is_mobile()`.
 
 Touch also still works the mouse, as before, for scripts written for one: the first finger down moves `mouse()` and holds the left button, and `mouse()` goes back to nil when it lifts. A script that handles touch itself can ignore the mouse while `#touches() > 0`.
 
