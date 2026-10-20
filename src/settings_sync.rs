@@ -51,6 +51,7 @@ const LOCAL: &[&str] = &[
     "buffer_ms",
     "last_version",
     "skipped_update",
+    "repair_offered",
     "check_updates_on_launch",
     "canary_updates",
     "android_install_updates",

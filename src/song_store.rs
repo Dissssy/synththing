@@ -179,6 +179,20 @@ impl SongStore {
         Ok(())
     }
 
+    /// Delete the song `key`'s file, damaged, without blocking it: this
+    /// device fetches it from the others again.
+    pub fn discard(&mut self, key: &str) -> Result<()> {
+        let path = self.path(key);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("deleting {}", path.display())),
+        }
+        self.present.remove(key);
+        self.revision += 1;
+        Ok(())
+    }
+
     /// Fetch the song `key` from the other devices again.
     pub fn unblock(&mut self, key: &str) {
         if self.blocked.remove(key) {
@@ -364,6 +378,21 @@ fn bucket_flat_files(dir: &Path) {
             log::warn!("couldn't move {} into its subfolder: {e}", entry.path().display());
         }
     }
+}
+
+/// Whether the file at `path` still hashes to `key`, the song it's kept as.
+pub fn intact(path: &Path, key: &str) -> std::io::Result<bool> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0; 1 << 16];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    Ok(key_for(&hasher.finalize(), key) == key)
 }
 
 /// Make the folder for `to`, a song's file, if need be.
@@ -698,6 +727,23 @@ mod tests {
         assert_eq!(store.get(&path_of(&dir, &elsewhere)).unwrap().name, "Elsewhere.mid");
         assert!(store.get(&dir.join("../escape")).is_none());
         assert_eq!(store.songs().count(), 2);
+    }
+
+    #[test]
+    fn a_damaged_song_is_fetched_again() {
+        let dir = temp_dir("damaged");
+        let stored = write_in(b"whole", "song.mp3", &dir).unwrap();
+        let mut store = SongStore::open(dir.clone());
+        store.add(stored.clone());
+        let path = path_of(&dir, &stored.key);
+        assert!(intact(&path, &stored.key).unwrap());
+        std::fs::write(&path, b"wh").unwrap();
+        assert!(!intact(&path, &stored.key).unwrap());
+        store.discard(&stored.key).unwrap();
+        assert!(!path.exists());
+        assert!(!store.has(&stored.key));
+        assert!(!store.is_blocked(&stored.key), "not removed: fetched again");
+        assert_eq!(store.known().count(), 1, "still known by name");
     }
 
     #[test]
