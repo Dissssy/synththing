@@ -4,6 +4,12 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- You can see songs moving between your devices: a spinner and a count (done, of how many) above Songs, in the status bar and under the sync switch, then "Downloaded 12 songs from your other devices." once they're in. With "Show what each sync changed" on, each song shows as it arrives or goes.
+
+### Fixed
+- Settings sync failing with "invalid type: null, expected f32" on a device with a layout that had never been shown.
+
 ## 0.11.1 (2026-10-20)
 
 ### Fixed
