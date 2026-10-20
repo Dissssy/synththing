@@ -112,11 +112,7 @@ impl App {
     /// Put the songs in the library, and start fetching the soundfonts.
     fn install_starter(&mut self) {
         match starter::write_songs(self.songs.dir()) {
-            Ok(songs) => {
-                for song in songs {
-                    self.songs.add(song, None);
-                }
-            }
+            Ok(songs) => self.add_to_library(songs.into_iter().map(|song| (song, None))),
             Err(e) => self.status = format!("Couldn't write the starter songs: {e:#}"),
         }
         self.welcome.registered = 0;

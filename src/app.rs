@@ -51,7 +51,8 @@ use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_M
 use crate::config::{self, nice_name, Config};
 use crate::engine::{EngineView, MAX_SPEED, MIN_SPEED};
 use crate::song_list::{DraggedFiles, SongList};
-use crate::song_store::{self, SongStore};
+use crate::library::songs::SongSource;
+use crate::song_store::{self, SongStore, Stored};
 use crate::select_list::{self, Selection};
 use crate::layout::{self, Section};
 use crate::loader::{self, Asset, AssetCache, SoundFontProbe};
@@ -2657,6 +2658,16 @@ impl App {
         };
     }
 
+    /// Put songs now in the store into the library: every way a song comes
+    /// in goes through here, so playlists waiting on one stop showing it
+    /// missing.
+    pub(super) fn add_to_library(&mut self, songs: impl IntoIterator<Item = (Stored, Option<SongSource>)>) {
+        for (stored, source) in songs {
+            self.songs.add(stored, source);
+        }
+        self.refresh_missing();
+    }
+
     /// Mark playlist entries missing, or not, as their songs leave or come
     /// into the library.
     fn refresh_missing(&mut self) {
@@ -2746,12 +2757,13 @@ impl App {
                 crate::import::Kind::Songs => {
                     let mut paths = Vec::new();
                     let mut soundfonts = Vec::new();
+                    let mut stored = Vec::new();
                     for song in imported.songs {
                         paths.push(self.songs.dir().join(&song.stored.key));
                         soundfonts.push(song.soundfont);
-                        self.songs.add(song.stored, None);
+                        stored.push((song.stored, None));
                     }
-                    self.refresh_missing();
+                    self.add_to_library(stored);
                     let plural = if n == 1 { "" } else { "s" };
                     self.status = format!("Imported {n} song{plural}.");
                     self.after_import(done.then, paths.clone(), soundfonts);

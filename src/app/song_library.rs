@@ -182,7 +182,7 @@ impl App {
         };
         let path = self.songs.dir().join(&stored.key);
         let older = self.downloaded_copy(server, &summary.id).map(|(p, _)| p).filter(|p| *p != path);
-        self.songs.add(stored, Some(source));
+        self.add_to_library([(stored, Some(source))]);
         if let Some(older) = older {
             self.replace_song(&older, &path);
             if let Err(e) = self.songs.remove(&older) {
