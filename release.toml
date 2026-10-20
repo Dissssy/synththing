@@ -4,6 +4,9 @@
 # which builds the Windows exe and publishes the GitHub Release the in-app
 # updater looks for.
 publish = false
+# The workspace (the Android crate, the vendored rustysynth) would make this one
+# commit for all packages, where {{version}} has no single value.
+consolidate-commits = false
 allow-branch = ["master"]
 tag-name = "v{{version}}"
 pre-release-commit-message = "Release {{version}}"
