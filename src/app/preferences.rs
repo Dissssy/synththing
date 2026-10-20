@@ -403,6 +403,8 @@ impl App {
                         jump = Some(PrefJump::Tour);
                     }
                 });
+                ui.separator();
+                self.storage_ui(ui);
             }
             PrefTab::Recording => self.recording_preferences_ui(ui),
         }
