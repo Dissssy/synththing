@@ -92,6 +92,18 @@ pub struct SyncState {
     moves: (Sender<Moving>, Receiver<Moving>),
     /// A move failed: no more until then.
     moves_paused: Option<Instant>,
+    /// How the songs being moved are going.
+    progress: Progress,
+}
+
+/// How a round of songs being moved is going: those to fetch or send, how
+/// many are done, and of those, fetched and sent.
+#[derive(Default)]
+struct Progress {
+    total: usize,
+    done: usize,
+    fetched: usize,
+    sent: usize,
 }
 
 /// How the songs being moved are going.
@@ -115,6 +127,7 @@ impl Default for SyncState {
             busy: BTreeSet::new(),
             moves: mpsc::channel(),
             moves_paused: None,
+            progress: Progress::default(),
         }
     }
 }
@@ -360,7 +373,7 @@ impl App {
         // (Turned off meanwhile.)
         let Some(mut state) = State::load(settings_sync::NAME) else { return };
         let (result, _) = settings_sync::merge(&outcome.local, &state.fields, &outcome.merged, &state.choices);
-        let mut json = match serde_json::to_value(&self.config) {
+        let mut json = match self.config.to_json() {
             Ok(json) => json,
             Err(e) => return log::warn!("settings sync: {e}"),
         };
@@ -382,7 +395,7 @@ impl App {
             }
             Err(e) => return log::warn!("settings sync: {e}"),
         }
-        state.applied = settings_sync::synced_leaves(&serde_json::to_value(&self.config).unwrap_or_default(), &state.choices);
+        state.applied = settings_sync::synced_leaves(&self.config.to_json().unwrap_or_default(), &state.choices);
         if result != outcome.merged {
             self.channel(Blob::Settings).dirty_since = Some(Instant::now());
         }
@@ -564,6 +577,7 @@ impl App {
         let Some((server, server_key, identity, sync_key)) = self.sync_with() else { return };
         let relay = Relay { server, server_key, identity, sync_key, dir: self.songs.dir().to_path_buf() };
         self.sync.busy = tasks.iter().map(|t| t.key().to_string()).collect();
+        self.sync.progress = Progress { total: tasks.iter().filter(|t| !matches!(t, Task::Delete(_))).count(), ..Progress::default() };
         let tx = self.sync.moves.0.clone();
         std::thread::Builder::new()
             .name("song transfers".into())
@@ -588,12 +602,42 @@ impl App {
                 Moving::Finished => {
                     self.sync.busy.clear();
                     self.sync.songs_dirty = true;
+                    let Progress { fetched, sent, .. } = std::mem::take(&mut self.sync.progress);
+                    let songs = |n: usize| if n == 1 { "1 song".to_string() } else { format!("{n} songs") };
+                    match (fetched, sent) {
+                        (0, 0) => {}
+                        (_, 0) => self.status = format!("Downloaded {} from your other devices.", songs(fetched)),
+                        (0, _) => self.status = format!("Sent {} for your other devices.", songs(sent)),
+                        _ => self.status = format!("Downloaded {} from your other devices, and sent {}.", songs(fetched), songs(sent)),
+                    }
                     continue;
                 }
             };
+            let progress = &mut self.sync.progress;
+            if !matches!(moved, Moved::Deleted) {
+                progress.done = (progress.done + 1).min(progress.total);
+            }
+            let name = |key: &str| self.songs.known().find(|(k, _)| *k == key).map_or_else(|| key.to_string(), |(_, s)| s.name.clone());
+            let shown = match &moved {
+                Moved::Fetched(key) => {
+                    progress.fetched += 1;
+                    Some(format!("Downloaded {}", name(key)))
+                }
+                Moved::Sent(key) => {
+                    progress.sent += 1;
+                    Some(format!("Sent {}", name(key)))
+                }
+                _ => None,
+            };
+            if let Some(text) = shown
+                && self.config.sync_debug
+            {
+                let Progress { done, total, .. } = self.sync.progress;
+                self.sync.toast = Some((format!("{text} ({done} of {total})"), Instant::now()));
+            }
             match &moved {
                 Moved::Fetched(key) => {
-                    let name = self.songs.known().find(|(k, _)| k == key).map_or_else(|| key.clone(), |(_, s)| s.name.clone());
+                    let name = name(key);
                     self.add_to_library([Stored { key: key.clone(), name }]);
                 }
                 Moved::Failed(key, e) => {
@@ -656,6 +700,12 @@ impl App {
             if let Some(error) = &self.sync.error {
                 ui.weak(format!("Couldn't sync: {error}"));
             }
+            if let Some((done, total)) = self.songs_moving() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.weak(format!("Moving songs between your devices: {done} of {total}"));
+                });
+            }
             self.sync_choices_ui(ui);
             self.blocked_songs_ui(ui);
             let mut debug = self.config.sync_debug;
@@ -701,7 +751,7 @@ impl App {
             return;
         }
         let Some(mut state) = State::load(settings_sync::NAME) else { return };
-        let config = serde_json::to_value(&self.config).unwrap_or_default();
+        let config = self.config.to_json().unwrap_or_default();
         let own = [settings_sync::PLAYLISTS.key, settings_sync::SONGS.key, settings_sync::EVERY_SONG.key];
         let any_on = chosen.iter().any(|(setting, on)| *on && !own.contains(&setting.key));
         let toggled = |of: &settings_sync::Setting| chosen.iter().find(|(setting, _)| setting.key == of.key).map(|(_, on)| *on);
@@ -762,7 +812,7 @@ impl App {
 
     fn turn_sync_on(&mut self) {
         let made = identity::ensure_sync_key().and_then(|sync_key| {
-            let json = serde_json::to_value(&self.config).map_err(|e| e.to_string())?;
+            let json = self.config.to_json().map_err(|e| e.to_string())?;
             State::new(&sync_key, &json).save(settings_sync::NAME)
         });
         match made {
@@ -780,6 +830,13 @@ impl App {
             }
             Err(e) => self.sync.error = Some(e),
         }
+    }
+
+    /// Songs being moved between this device and the others: how many are
+    /// done, of how many.
+    pub(super) fn songs_moving(&self) -> Option<(usize, usize)> {
+        let Progress { total, done, .. } = self.sync.progress;
+        (total > 0).then_some((done, total))
     }
 
     /// The debug toast: what the last sync changed.
@@ -806,6 +863,15 @@ impl App {
         if clicked {
             self.sync.toast = None;
         }
+    }
+}
+
+/// Songs being moved (`App::songs_moving`), as a spinner and a count.
+pub(super) fn songs_moving_ui(ui: &mut egui::Ui, moving: Option<(usize, usize)>) {
+    if let Some((done, total)) = moving {
+        let hover = "Moving songs between your devices: done, of how many";
+        ui.spinner().on_hover_text(hover);
+        ui.weak(format!("{done}/{total}")).on_hover_text(hover);
     }
 }
 

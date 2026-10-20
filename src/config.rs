@@ -365,13 +365,19 @@ impl Config {
         json.get("browse_dir")?.as_str().map(PathBuf::from)
     }
 
+    /// The config as JSON that reads back (`finite_positions`).
+    pub fn to_json(&self) -> Result<serde_json::Value> {
+        let mut json = serde_json::to_value(self)?;
+        finite_positions(&mut json);
+        Ok(json)
+    }
+
     pub fn save(&self) -> Result<()> {
         let path = Self::file_path()?;
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
-        let mut json = serde_json::to_value(self)?;
-        finite_positions(&mut json);
+        let json = self.to_json()?;
         crate::settings_sync::record(&json);
         let json = serde_json::to_string_pretty(&json)?;
         fs::write(&path, json).with_context(|| format!("writing {}", path.display()))?;
@@ -652,6 +658,8 @@ mod tests {
         assert!(serde_json::from_value::<Config>(json.clone()).is_err(), "null positions, as serde_json writes infinities");
         finite_positions(&mut json);
         let read: Config = serde_json::from_value(json).expect("reads back");
+        assert!(read.layout.is_some());
+        let read: Config = serde_json::from_value(config.to_json().unwrap()).expect("as the config gives it");
         assert!(read.layout.is_some());
     }
 }

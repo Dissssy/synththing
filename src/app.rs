@@ -1351,6 +1351,10 @@ impl App {
                 ui.label(view.soundfont_name.as_deref().unwrap_or("(none)"));
             }
             ui.separator();
+            if self.songs_moving().is_some() {
+                sync::songs_moving_ui(ui, self.songs_moving());
+                ui.separator();
+            }
             if status_line_ui(ui, &self.status, &mut self.unseen_failure, applog::elapsed, applog::entries) {
                 self.log_search = STATUS_TARGET.to_string();
                 self.log_open = true;
@@ -2587,6 +2591,7 @@ impl App {
         let selected = self.song_list.selected_one();
         let mut info_for: Option<PathBuf> = None;
         let mut info_clicked = false;
+        let moving = self.songs_moving();
         let mut tools = |ui: &mut egui::Ui| {
             // Every type it can play: audio files with audio files off
             // bring an offer to turn them on (`audio_import_ui`).
@@ -2610,6 +2615,7 @@ impl App {
             {
                 info_clicked = true;
             }
+            sync::songs_moving_ui(ui, moving);
         };
         // (Both the names and the trailing widgets read the song info, one
         // after the other.)
@@ -3572,6 +3578,9 @@ impl App {
         self.poll_pairing();
         self.poll_notifications(ctx);
         self.poll_sync();
+        if self.songs_moving().is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
         self.poll_copyright();
         if self.status != self.logged_status {
             log::info!(target: STATUS_TARGET, "{}", self.status);
@@ -4120,8 +4129,8 @@ fn status_color(ui: &egui::Ui, status: &str) -> Option<egui::Color32> {
 /// (`Some(true)`), or neither, by its wording.
 fn status_outcome(status: &str) -> Option<bool> {
     const FAILED: [&str; 6] = ["Couldn't", "Failed", "Can't", "Didn't", "Error", "Not "];
-    const DONE: [&str; 21] = [
-        "Saved", "Installed", "Downloaded", "Published", "Deleted", "Updated", "Restored", "Renamed", "Rendered",
+    const DONE: [&str; 22] = [
+        "Saved", "Sent", "Installed", "Downloaded", "Published", "Deleted", "Updated", "Restored", "Renamed", "Rendered",
         "Reported", "Replaced", "Reloaded", "Formatted", "Imported", "Exported", "Disputed", "Added", "Removed",
         "Recorded", "Soundfont loaded", "Script applied",
     ];
