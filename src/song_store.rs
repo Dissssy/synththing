@@ -3,7 +3,7 @@
 //! (`<sha256>.<ext>`, its key), so a song is the same song on every device
 //! and in every playlist however its original was named or moved.
 //! `library.json` beside them says what's known of each: its original file
-//! name, when it came in, and where from (a library server).
+//! name and when it came in.
 //!
 //! Getting a file in ([`copy_in`], [`move_in`], [`write_in`]) is plain file
 //! work, done off the main thread; [`SongStore::add`] then records it. The
@@ -19,8 +19,6 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::library::songs::SongSource;
-
 const INDEX: &str = "library.json";
 
 /// What's known of a stored song.
@@ -31,9 +29,6 @@ pub struct Song {
     /// When it came in (Unix seconds).
     #[serde(default)]
     pub imported: i64,
-    /// The library song it's a download of, or was published as.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<SongSource>,
 }
 
 /// A file now in the store, to [`SongStore::add`].
@@ -65,7 +60,7 @@ impl SongStore {
         for key in on_disk {
             songs.entry(key).or_insert_with_key(|key| {
                 changed = true;
-                Song { name: key.clone(), imported: now(), source: None }
+                Song { name: key.clone(), imported: now() }
             });
         }
         let store = Self { dir, songs };
@@ -87,24 +82,13 @@ impl SongStore {
 
     /// Record a file now in the store (keeping what's known of it if it
     /// was already there), and save.
-    pub fn add(&mut self, stored: Stored, source: Option<SongSource>) {
-        let song = self.songs.entry(stored.key.clone()).or_insert_with(|| Song { name: stored.name.clone(), imported: now(), source: None });
+    pub fn add(&mut self, stored: Stored) {
+        let song = self.songs.entry(stored.key.clone()).or_insert_with(|| Song { name: stored.name.clone(), imported: now() });
         // (Found on disk with nothing known of it: named after its key.)
         if song.name == stored.key {
             song.name = stored.name;
         }
-        if source.is_some() {
-            song.source = source;
-        }
         self.save();
-    }
-
-    /// Note where the song at `path` came from (or went: publishing).
-    pub fn set_source(&mut self, path: &Path, source: SongSource) {
-        if let Some(song) = self.key_of(path).and_then(|key| self.songs.get_mut(key)) {
-            song.source = Some(source);
-            self.save();
-        }
     }
 
     /// Delete the song at `path` from the store.
@@ -253,23 +237,19 @@ pub struct OldImport {
 /// folders left as they were.
 pub fn import_old(folders: &[PathBuf], dir: &Path, playlists: &Path, extensions: &[&str]) -> OldImport {
     let mut done = OldImport::default();
-    let mut songs: Vec<(Stored, Option<SongSource>)> = Vec::new();
+    let mut songs: Vec<Stored> = Vec::new();
     let mut keys: BTreeMap<PathBuf, String> = BTreeMap::new();
-    let mut bring_in = |file: &Path, done: &mut OldImport, songs: &mut Vec<(Stored, Option<SongSource>)>| -> Option<String> {
+    let mut bring_in = |file: &Path, done: &mut OldImport, songs: &mut Vec<Stored>| -> Option<String> {
         if let Some(key) = keys.get(file) {
             return Some(key.clone());
         }
-        let source = SongSource::read(file);
         let stored = if file.starts_with(dir) { move_in(file, dir) } else { copy_in(file, dir) };
         match stored {
             Ok(stored) => {
-                if file.starts_with(dir) {
-                    let _ = std::fs::remove_file(crate::library::songs::source_path(file));
-                }
                 keys.insert(file.to_path_buf(), stored.key.clone());
                 done.moved.push((file.to_path_buf(), dir.join(&stored.key)));
                 let key = stored.key.clone();
-                songs.push((stored, source));
+                songs.push(stored);
                 Some(key)
             }
             Err(e) => {
@@ -323,8 +303,8 @@ pub fn import_old(folders: &[PathBuf], dir: &Path, playlists: &Path, extensions:
         }
     }
     let mut store = SongStore::open(dir.to_path_buf());
-    for (stored, source) in songs {
-        store.add(stored, source);
+    for stored in songs {
+        store.add(stored);
     }
     store.save();
     done
@@ -389,8 +369,8 @@ mod tests {
         assert_eq!(write_in(b"song", "c.mid", &store_dir).unwrap().key, a.key);
 
         let mut store = SongStore::open(store_dir.clone());
-        store.add(a.clone(), None);
-        store.add(b, None);
+        store.add(a.clone());
+        store.add(b);
         assert_eq!(store.songs().count(), 1);
         let path = store_dir.join(&a.key);
         assert_eq!(store.get(&path).unwrap().name, "A.MID");
@@ -405,8 +385,8 @@ mod tests {
         let kept = write_in(b"kept", "kept.mid", &dir).unwrap();
         let gone = write_in(b"gone", "gone.mid", &dir).unwrap();
         let mut store = SongStore::open(dir.clone());
-        store.add(kept.clone(), None);
-        store.add(gone.clone(), None);
+        store.add(kept.clone());
+        store.add(gone.clone());
         std::fs::remove_file(dir.join(&gone.key)).unwrap();
         // Written as the app quit, never recorded.
         let unrecorded = write_in(b"new", "new.ogg", &dir).unwrap();
@@ -427,7 +407,7 @@ mod tests {
         let stored = move_in(&dir.join("Picked.mid"), &dir).unwrap();
         assert!(!dir.join("Picked.mid").exists());
         let mut store = SongStore::open(dir.clone());
-        store.add(stored.clone(), None);
+        store.add(stored.clone());
         let path = dir.join(&stored.key);
         assert_eq!(store.get(&path).unwrap().name, "Picked.mid");
         // Not one of its files.
@@ -447,12 +427,6 @@ mod tests {
         std::fs::write(songs.join("notes.txt"), b"").unwrap();
         let downloaded = songs.join("Library").join("b.mid");
         std::fs::write(&downloaded, b"b").unwrap();
-        let source: SongSource = serde_json::from_value(serde_json::json!({
-            "server": "s", "id": "x", "version": 2, "sha256": "", "name": "B", "author_name": "", "from": "",
-            "song": { "composer": "", "arranger": "", "rights": "", "length": 1.0, "notes": 1, "tracks": 1, "channels": 1, "preview_start": 0.0 }
-        }))
-        .unwrap();
-        std::fs::write(crate::library::songs::source_path(&downloaded), serde_json::to_string(&source).unwrap()).unwrap();
         let elsewhere = root.join("elsewhere.ogg");
         std::fs::write(&elsewhere, b"c").unwrap();
         let entries = serde_json::json!([
@@ -468,7 +442,6 @@ mod tests {
         assert_eq!(done.dropped, 1);
         let store = SongStore::open(store_dir.clone());
         let (_, b) = done.moved.iter().find(|(old, _)| *old == downloaded).unwrap();
-        assert_eq!(store.get(b).unwrap().source.as_ref(), Some(&source));
         assert_eq!(store.get(b).unwrap().name, "b.mid");
         assert!(downloaded.exists(), "the old folder is left as it was");
 

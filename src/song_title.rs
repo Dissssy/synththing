@@ -166,7 +166,7 @@ mod tests {
         let mut store = SongStore::open(dir.clone());
         let stored = crate::song_store::write_in(b"x", "03 shuffle.mp3", &dir).unwrap();
         let path = dir.join(&stored.key);
-        store.add(stored, None);
+        store.add(stored);
         let naming = Naming::new(&config, &store);
         assert_eq!(naming.name(&path, Some(&SongInfo::default())), "03 shuffle");
         assert_eq!(naming.name(Path::new("/elsewhere/song.mid"), None), "song");

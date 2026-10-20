@@ -28,7 +28,6 @@ mod previews;
 mod library;
 mod recording;
 mod script_windows;
-mod song_library;
 mod song_names;
 mod sprite_editor;
 mod themes;
@@ -51,7 +50,6 @@ use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_M
 use crate::config::{self, nice_name, Config};
 use crate::engine::{EngineView, MAX_SPEED, MIN_SPEED};
 use crate::song_list::{DraggedFiles, SongList};
-use crate::library::songs::SongSource;
 use crate::song_store::{self, SongStore, Stored};
 use crate::select_list::{self, Selection};
 use crate::layout::{self, Section};
@@ -339,7 +337,6 @@ pub struct App {
     notifications: notifications::NotificationsState,
     /// A copyright notice on one of the user's uploads, open.
     copyright: copyright::CopyrightState,
-    song_library: song_library::SongLibraryState,
     /// The changelog window: `Some(since)` lists only the versions newer
     /// than that (What's new, after an update), `None` all of them
     /// (Help > Changelog...).
@@ -462,7 +459,6 @@ impl App {
         config: Config,
         tap: SampleTap,
         sample_rate: u32,
-        preview_output: crate::song_preview::PreviewOutput,
     ) -> Self {
         let songs_dir = config::music_dir().unwrap_or_else(|_| PathBuf::from("music"));
         let old_import = (!SongStore::exists(&songs_dir)).then(|| start_old_import(songs_dir.clone()));
@@ -592,7 +588,6 @@ impl App {
             sync: Default::default(),
             notifications: Default::default(),
             copyright: Default::default(),
-            song_library: song_library::SongLibraryState::new(preview_output),
             changelog: None,
             welcome: welcome::Welcome::default(),
             preferences_tab: PrefTab::default(),
@@ -1551,7 +1546,6 @@ impl App {
                 section_checkbox(ui, Section::Reference);
                 section_checkbox(ui, Section::Sprites);
                 section_checkbox(ui, Section::Library);
-                section_checkbox(ui, Section::Downloads);
                 ui.separator();
                 ui.menu_button("Layout", |ui| self.layout_menu_ui(ui));
                 if ui.button("Mobile layout").on_hover_text("The Android app's layout, one page at a time, in a phone-sized window").clicked() {
@@ -2394,7 +2388,6 @@ impl App {
             || self.identity.open()
             || self.notifications.open()
             || self.copyright.open()
-            || self.song_library.open()
             || self.editor.history_open
             || self.layout_save.is_some()
             || self.heavy_prompt.is_some()
@@ -2579,7 +2572,6 @@ impl App {
         let cache = std::cell::RefCell::new(&mut self.song_info);
         let naming = naming(&self.config, &self.songs);
         let info_open = &mut self.song_info_open;
-        let mut publish = None;
         #[cfg(not(target_os = "android"))]
         let mut save_copy = None;
         let mut remove = Vec::new();
@@ -2601,17 +2593,11 @@ impl App {
                     }
                 });
             }
-            if let [path] = paths {
-                if library::PUBLISHING
-                    && is_midi_path(path)
-                    && ui.button("Publish song...").on_hover_text("Share it on a library server that takes songs").clicked()
-                {
-                    publish = Some(path.clone());
-                }
-                #[cfg(not(target_os = "android"))]
-                if ui.button("Save a copy as...").on_hover_text("Write the song to a file, under its own name").clicked() {
-                    save_copy = Some(path.clone());
-                }
+            #[cfg(not(target_os = "android"))]
+            if let [path] = paths
+                && ui.button("Save a copy as...").on_hover_text("Write the song to a file, under its own name").clicked()
+            {
+                save_copy = Some(path.clone());
             }
             if ui.button("Remove from library...").on_hover_text("Delete synththing's copy on this device").clicked() {
                 remove = paths.to_vec();
@@ -2631,9 +2617,6 @@ impl App {
         }
         if let Some(path) = output.play {
             self.play_path(path);
-        }
-        if let Some(path) = publish {
-            self.open_publish_song(path);
         }
         #[cfg(not(target_os = "android"))]
         if let Some(path) = save_copy {
@@ -2661,9 +2644,9 @@ impl App {
     /// Put songs now in the store into the library: every way a song comes
     /// in goes through here, so playlists waiting on one stop showing it
     /// missing.
-    pub(super) fn add_to_library(&mut self, songs: impl IntoIterator<Item = (Stored, Option<SongSource>)>) {
-        for (stored, source) in songs {
-            self.songs.add(stored, source);
+    pub(super) fn add_to_library(&mut self, songs: impl IntoIterator<Item = Stored>) {
+        for stored in songs {
+            self.songs.add(stored);
         }
         self.refresh_missing();
     }
@@ -2761,7 +2744,7 @@ impl App {
                     for song in imported.songs {
                         paths.push(self.songs.dir().join(&song.stored.key));
                         soundfonts.push(song.soundfont);
-                        stored.push((song.stored, None));
+                        stored.push(song.stored);
                     }
                     self.add_to_library(stored);
                     let plural = if n == 1 { "" } else { "s" };
@@ -2985,13 +2968,12 @@ impl App {
 
     /// Nothing was drawn last frame (hidden in the tray, minimized), so what
     /// only plays while it's on screen stops, as `ui` would have stopped it
-    /// on noticing it gone: a script's held notes and a song preview.
+    /// on noticing it gone: a script's held notes.
     fn nothing_drawn(&mut self) {
         if self.visualizer_was_drawn {
             self.send(AudioCommand::Live(crate::live::LiveCommand::StopAll));
             self.visualizer_was_drawn = false;
         }
-        self.stop_song_preview();
     }
 
     /// Hand the script the song the audio thread now reports as loaded.
@@ -3522,7 +3504,6 @@ impl App {
         self.poll_notifications(ctx);
         self.poll_sync();
         self.poll_copyright();
-        self.poll_song_library();
         if self.status != self.logged_status {
             log::info!(target: STATUS_TARGET, "{}", self.status);
             self.logged_status = self.status.clone();
@@ -3739,8 +3720,6 @@ impl eframe::App for App {
         self.sync_toast_ui(&ctx);
         self.notification_ui(&ctx);
         self.copyright_ui(&ctx);
-        self.publish_song_ui(&ctx);
-        self.song_preview_tick(&ctx);
         self.moderation_ui(&ctx);
         self.feedback_ui(&ctx);
         self.heavy_midi_ui(&ctx);
@@ -3824,12 +3803,11 @@ impl TabViewer for SectionTabs<'_> {
                 app.visualizer_preview_ui(ui, self.shared.notes.clone(), self.shared.view.clone());
             }
             Section::Editor => app.editor_section_ui(ui),
-            // (Removed: dropped from layouts as they load.)
-            Section::Settings => {}
+            // (Dropped from layouts as they load.)
+            Section::Removed => {}
             Section::Reference => app.docs_ui(ui),
             Section::Sprites => app.sprite_editor_ui(ui),
             Section::Library => app.library_ui(ui),
-            Section::Downloads => app.downloaded_songs_ui(ui),
         }
     }
 

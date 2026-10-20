@@ -4260,8 +4260,8 @@ fn register_globals(
 pub type ChannelColors = [Option<[u8; 3]>; 16];
 
 /// The channel toggles' colors where the script hasn't given one: the
-/// keyboard visualizer's (its CHANNEL_COLORS), which song previews show
-/// too, repeating every eight channels.
+/// keyboard visualizer's (its CHANNEL_COLORS), repeating every eight
+/// channels.
 const DEFAULT_CHANNEL_COLORS: [[u8; 3]; 8] = [
     [90, 170, 255],
     [255, 130, 90],

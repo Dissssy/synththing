@@ -71,14 +71,11 @@ Not simulated: mouse, keyboard and typed input (scripts see no pointer, no keys 
 
 ```
 synththing preview SCRIPT [--out DIR] [--soundfont FILE] [--check]
-synththing preview SONG.mid --song-start SECONDS [--out DIR] [--soundfont FILE]
 ```
 
 Makes the preview the Online Library and the script picker show: the script plays about 12 seconds from the middle of each starter song at 320 x 180, as a recording in Auto (a game that can play itself is seen playing), and each frame is scored for how much there is to see (contrast, colours, motion). The best-scoring 48 frames in a row become the animation, `preview-sheet.png` (a sprite sheet, 8 frames to a row, played at 12 a second), and the best single frame the still, `preview.png`, both in `--out` (the current folder by default). The first frame with anything on it is written as the still straight away, so a run stopped early still leaves one; a script that never draws anything (all one colour) gets no preview.
 
 With `--check`, it only checks that the script runs: it compiles and plays a few seconds of a song without an error. Library servers check every upload this way.
-
-With `--song-start`, it makes a song's preview instead (the MIDI file given): the bundled keyboard visualizer (falling notes) draws 12 seconds of it from that many seconds in, and all 144 frames make the sheet (8 to a row, 12 a second; if the song ends sooner, its last frame fills the rest), with the middle one as the still. (The app plays songs' previews live, with the same script; this is for anyone who wants one as images.)
 
 `--soundfont` defaults to the first one in the app's Soundfonts list. Exit codes: `0` made it (or it checked out), `1` the script has an error, `2` something couldn't be loaded.
 
@@ -108,7 +105,6 @@ Runs a script library server (the design is in docs/SERVER.md): the app's Online
 - `threads`: request workers (4).
 - `check_uploads`: refuse uploads that don't run on this server's version (`preview --check`): they don't compile, or error in their first seconds (true). One whose check takes over 12 seconds is taken: slow isn't broken.
 - `previews`: make a preview of each upload (true), one at a time, each by `synththing preview` in a process of its own; at startup, any script's newest version without one is queued. They play the starter songs with TimGM6mb, downloaded into `soundfonts/` the first time, unless `preview_soundfont` names another.
-- `songs`: take songs (MIDI files) as well as scripts (false). Each upload declares the poster's right to share it; copyright notices cover songs too, so a server that takes them should have a `contact` for notices.
 - `sync`: keep signed-in apps' synced settings, encrypted so only their devices can read them (false). Apps sync with their authority, so this is for an authority.
 - `preview_seconds`: how long making one may take before it's stopped (120); the first frame it drew stays as the still.
 - `authorities`: the identity authorities whose rotation records it takes (their keys, hex): the official server's by default.
