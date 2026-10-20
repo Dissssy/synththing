@@ -74,10 +74,15 @@ fn name_ui(ui: &mut egui::Ui, name: &str, labels: &ItemLabels) {
 }
 
 impl App {
-    /// The Settings, Controls and Debug buttons above the visualizer (a
-    /// cog, a gamepad and a bug); Settings and Controls greyed out when the
-    /// script has none, the bug red while the script is failing.
-    pub(super) fn script_window_buttons_ui(&mut self, ui: &mut egui::Ui) {
+    /// The Settings, Controls and Debug buttons (a cog, a gamepad and a
+    /// bug), each made by `button` from its icon and a color for it;
+    /// Settings and Controls greyed out when the script has none, the bug
+    /// red while the script is failing.
+    pub(super) fn script_window_buttons_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        button: impl Fn(&str, Option<egui::Color32>) -> egui::Button<'static>,
+    ) {
         let settings = self.script.settings().len();
         let controls = self.script.actions().len();
         let count = |n: usize, what: &str| match n {
@@ -87,7 +92,7 @@ impl App {
         };
         let settings_hover = format!("Settings: {}", count(settings, "settings"));
         if ui
-            .add_enabled(settings > 0, super::icon_button("gear"))
+            .add_enabled(settings > 0, button("gear", None))
             .on_hover_text(&settings_hover)
             .on_disabled_hover_text(&settings_hover)
             .clicked()
@@ -96,20 +101,20 @@ impl App {
         }
         let controls_hover = format!("Controls: {}", count(controls, "controls"));
         if ui
-            .add_enabled(controls > 0, super::icon_button("game-controller"))
+            .add_enabled(controls > 0, button("game-controller", None))
             .on_hover_text(&controls_hover)
             .on_disabled_hover_text(&controls_hover)
             .clicked()
         {
             self.script_window = Some(ScriptWindow::Controls);
         }
-        let (button, hover) = if self.script.error().is_some() {
-            (super::colored_icon_button("bug", ui.visuals().error_fg_color), "Debug (the script has an error)")
+        let (color, hover) = if self.script.error().is_some() {
+            (Some(ui.visuals().error_fg_color), "Debug (the script has an error)")
         } else {
-            (super::icon_button("bug"), "Debug")
+            (None, "Debug")
         };
         if ui
-            .add(button)
+            .add(button("bug", color))
             .on_hover_text(format!("{hover}: the script's variables, its debug_locals(), its log, and how long it takes to draw"))
             .clicked()
         {
