@@ -31,6 +31,7 @@ mod overflow;
 mod previews;
 mod library;
 mod recording;
+mod repair;
 mod script_windows;
 mod song_names;
 mod storage;
@@ -360,6 +361,7 @@ pub struct App {
     feedback: feedback::FeedbackState,
     /// Preferences > App > Storage.
     storage: storage::StorageState,
+    repair: repair::RepairState,
     /// The identity's recovery email, new keys and recovery.
     identity: identity::IdentityState,
     /// Signing in another device, or this one with a link.
@@ -626,6 +628,7 @@ impl App {
             moderation: Default::default(),
             feedback: Default::default(),
             storage: Default::default(),
+            repair: Default::default(),
             identity: Default::default(),
             pairing: Default::default(),
             sync: Default::default(),
@@ -1507,9 +1510,10 @@ impl App {
         });
 
         let active_sf = self.active_sf;
+        let touch = select_list::touch(ui.ctx());
         let mut remove = None;
         let mut use_idx = None;
-        let output = select_list::show(ui, "soundfonts", &self.config.soundfonts, &mut self.soundfont_selection, None, |ui, row, path| {
+        let output = select_list::show(ui, "soundfonts", &self.config.soundfonts, &mut self.soundfont_selection, active_sf, |ui, row, path| {
             if row.response.drag_started() {
                 row.response.dnd_set_drag_payload(DraggedSoundfont(path.clone()));
             }
@@ -1523,20 +1527,25 @@ impl App {
                     remove = Some(rows);
                 }
             });
-            if ui.small_button("x").on_hover_text("Remove from the list").clicked() {
-                remove = Some(vec![row.idx]);
-            }
-            ui.separator();
-            let mut label = nice_name(path);
-            if !path.exists() {
-                label.push_str("  (missing)");
-            }
-            let text = egui::RichText::new(label);
-            let hover = format!(
-                "{}\nDouble-click to use; drag onto a MIDI playlist entry to override its soundfont",
-                path.display()
-            );
-            select_list::label(ui, if Some(row.idx) == active_sf { text.strong() } else { text }, Some(hover));
+            let active = Some(row.idx) == active_sf;
+            let text = egui::RichText::new(nice_name(path));
+            let text = if active { text.strong() } else { text };
+            let scroll = select_list::scrolls(row, active);
+            // Its size, or that it's gone.
+            let size = std::fs::metadata(path).map_or_else(|_| "missing".to_string(), |m| crate::storage::size_text(m.len()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if touch {
+                    let detail = if active { format!("in use · {size}") } else { size };
+                    select_list::two_lines(ui, std::iter::empty(), text, Some(detail), scroll);
+                    return;
+                }
+                ui.weak(size);
+                let hover = format!(
+                    "{}\nDouble-click to use; drag onto a MIDI playlist entry to override its soundfont",
+                    path.display()
+                );
+                select_list::label(ui, text, Some(hover), scroll);
+            });
         });
         if output.delete {
             remove = Some(self.soundfont_selection.rows().to_vec());
@@ -2048,48 +2057,24 @@ impl App {
                     rows.push((channel.clone(), None));
                 }
             }
-            egui::Grid::new("branch_builds_grid").num_columns(3).spacing([12.0, 4.0]).show(ui, |ui| {
+            // A grid, or on a narrow screen (a phone's) each branch's name
+            // over its version and buttons.
+            let narrow = ui.available_width() < 480.0;
+            if narrow {
                 for (channel, build) in rows {
                     ui.strong(crate::channels::branch_name(&channel));
-                    match build {
-                        Some(b) => {
-                            let commit = b.commit.as_deref().map(|c| &c[..c.len().min(7)]).unwrap_or_default();
-                            ui.weak(format!("{} {commit}", b.version)).on_hover_text(b.notes.trim());
-                        }
-                        None => {
-                            ui.weak("its build is gone (merged?)");
-                        }
-                    }
-                    ui.horizontal(|ui| {
-                        if installed.contains(&channel) {
-                            if ui.add_enabled(!installing, egui::Button::new("Open")).clicked()
-                                && let Err(e) = crate::channels::launch(&channel)
-                            {
-                                self.updates_message = Some((format!("{e:#}"), true));
-                            }
-                            if ui
-                                .add_enabled(!installing, egui::Button::new("Remove"))
-                                .on_hover_text("Delete this branch build and its settings")
-                                .clicked()
-                            {
-                                let name = crate::channels::branch_name(&channel);
-                                self.updates_message = Some(match crate::channels::remove(&channel) {
-                                    Ok(()) if cfg!(target_os = "android") => {
-                                        (format!("Android asks you to uninstall the {name} build."), false)
-                                    }
-                                    Ok(()) => (format!("Removed the {name} build."), false),
-                                    Err(e) => (format!("{e:#}"), true),
-                                });
-                            }
-                        } else if let Some(b) = build
-                            && ui.add_enabled(!installing && can_install, egui::Button::new("Install")).clicked()
-                        {
-                            self.branches.install(b.clone());
-                        }
-                    });
-                    ui.end_row();
+                    ui.horizontal_wrapped(|ui| self.branch_build_row_ui(ui, &channel, build, &installed, installing, can_install));
+                    ui.add_space(4.0);
                 }
-            });
+            } else {
+                egui::Grid::new("branch_builds_grid").num_columns(3).spacing([12.0, 4.0]).show(ui, |ui| {
+                    for (channel, build) in rows {
+                        ui.strong(crate::channels::branch_name(&channel));
+                        self.branch_build_row_ui(ui, &channel, build, &installed, installing, can_install);
+                        ui.end_row();
+                    }
+                });
+            }
             match &install {
                 crate::channels::InstallState::Idle => {}
                 crate::channels::InstallState::Installing { channel, downloaded, size } => {
@@ -2120,6 +2105,55 @@ impl App {
         if response.body_returned.is_some() && matches!(self.branches.list(), crate::channels::ListState::Idle) {
             self.branches.refresh();
         }
+    }
+
+    /// A branch build's version and its buttons (Install, or Open and
+    /// Remove), side by side.
+    fn branch_build_row_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        channel: &str,
+        build: Option<&updater::Release>,
+        installed: &[String],
+        installing: bool,
+        can_install: bool,
+    ) {
+        match build {
+            Some(b) => {
+                let commit = b.commit.as_deref().map(|c| &c[..c.len().min(7)]).unwrap_or_default();
+                ui.weak(format!("{} {commit}", b.version)).on_hover_text(b.notes.trim());
+            }
+            None => {
+                ui.weak("its build is gone (merged?)");
+            }
+        }
+        ui.horizontal(|ui| {
+            if installed.iter().any(|c| c == channel) {
+                if ui.add_enabled(!installing, egui::Button::new("Open")).clicked()
+                    && let Err(e) = crate::channels::launch(channel)
+                {
+                    self.updates_message = Some((format!("{e:#}"), true));
+                }
+                if ui
+                    .add_enabled(!installing, egui::Button::new("Remove"))
+                    .on_hover_text("Delete this branch build and its settings")
+                    .clicked()
+                {
+                    let name = crate::channels::branch_name(channel);
+                    self.updates_message = Some(match crate::channels::remove(channel) {
+                        Ok(()) if cfg!(target_os = "android") => {
+                            (format!("Android asks you to uninstall the {name} build."), false)
+                        }
+                        Ok(()) => (format!("Removed the {name} build."), false),
+                        Err(e) => (format!("{e:#}"), true),
+                    });
+                }
+            } else if let Some(b) = build
+                && ui.add_enabled(!installing && can_install, egui::Button::new("Install")).clicked()
+            {
+                self.branches.install(b.clone());
+            }
+        });
     }
 
     /// Help > Credits & licenses: contributors (from GitHub), the font, Lua,
@@ -3634,6 +3668,10 @@ impl App {
         if frame_timing::time("song_info", || self.song_info.poll()) {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+        frame_timing::time("repair", || {
+            self.poll_repair();
+            self.suggest_repair();
+        });
         if !self.preferences_open {
             frame_timing::time("playlist_tick", || self.playlist_tick(&view));
         }
@@ -3850,6 +3888,7 @@ impl eframe::App for App {
         }
         let windows = frame_timing::scope("windows");
         self.remove_songs_ui(&ctx);
+        self.repair_ui(&ctx);
         self.tags_ui(&ctx);
         self.close_requested_ui(&ctx);
         self.close_prompt_ui(&ctx);
@@ -4093,6 +4132,15 @@ fn inline_code_job(ui: &egui::Ui, prefix: &str, text: &str) -> egui::text::Layou
     job
 }
 
+/// A song's length to read ("3:25"): "..." while it's being read, "--:--"
+/// for one without a length.
+fn length_text(info: Option<&crate::song_info::SongInfo>) -> String {
+    match info {
+        None => "...".to_string(),
+        Some(info) => info.length.map(format_length).unwrap_or_else(|| "--:--".to_string()),
+    }
+}
+
 /// A song's length and an info button (greyed out when the file has no
 /// details to show), for the end of a list row; laid out right to left.
 /// A song's length (`with_length`) and a warning for a very large MIDI
@@ -4100,11 +4148,7 @@ fn inline_code_job(ui: &egui::Ui, prefix: &str, text: &str) -> egui::text::Layou
 fn song_info_widgets(ui: &mut egui::Ui, cache: &mut SongInfoCache, path: &Path, with_length: bool) {
     let info = cache.get(path);
     if with_length {
-        let length = match &info {
-            None => "...".to_string(),
-            Some(info) => info.length.map(format_length).unwrap_or_else(|| "--:--".to_string()),
-        };
-        ui.weak(length);
+        ui.weak(length_text(info.as_deref()));
     }
     if let Some(info) = info.filter(|i| i.is_heavy()) {
         ui.colored_label(egui::Color32::from_rgb(230, 80, 80), "!").on_hover_text(format!(

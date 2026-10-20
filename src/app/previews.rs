@@ -397,7 +397,8 @@ impl super::App {
             });
             ui.separator();
             ui.vertical(|ui| {
-                ui.set_width(SIDEBAR);
+                // (Narrower on a phone, to fit beside the list.)
+                ui.set_width(SIDEBAR.min(ui.available_width()));
                 let shown = self.script_previews.borrow().shown.clone();
                 let shown = shown.or_else(|| self.active_script.and_then(|i| self.available_scripts.get(i).cloned()));
                 match shown {
@@ -460,12 +461,13 @@ impl super::App {
             return None;
         };
         let (sha256, description, installed) = (card.sha256.clone(), card.description.clone(), card.installed.clone());
+        let width = ui.available_width();
         match previews.preview(ui.ctx(), script, &sha256, source) {
             Shown::Ready(image) => {
-                image.ui(ui, SIDEBAR);
+                image.ui(ui, width);
             }
-            Shown::Making => placeholder_ui(ui, SIDEBAR, "Making its preview...", true),
-            Shown::Missing(why) => placeholder_ui(ui, SIDEBAR, &why, false),
+            Shown::Making => placeholder_ui(ui, width, "Making its preview...", true),
+            Shown::Missing(why) => placeholder_ui(ui, width, &why, false),
         }
         drop(previews);
 

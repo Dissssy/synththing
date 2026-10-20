@@ -89,6 +89,7 @@ pub(super) enum PrefJump {
     Welcome,
     Tour,
     Themes,
+    Repair,
 }
 
 impl App {
@@ -131,6 +132,7 @@ impl App {
             PrefJump::Tour => self.start_tour(),
             PrefJump::Themes if self.mobile() => self.open_mobile_themes(),
             PrefJump::Themes => self.themes.open = true,
+            PrefJump::Repair => self.open_repair(),
         }
     }
 
@@ -412,6 +414,13 @@ impl App {
                 });
                 ui.separator();
                 self.storage_ui(ui);
+                if ui
+                    .button("Repair library...")
+                    .on_hover_text("Check every song: damaged ones are fetched again, unplayable ones can be removed")
+                    .clicked()
+                {
+                    jump = Some(PrefJump::Repair);
+                }
             }
             PrefTab::Recording => self.recording_preferences_ui(ui),
         }
