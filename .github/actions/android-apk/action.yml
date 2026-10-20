@@ -3,7 +3,8 @@
 # (GitHub's Ubuntu images have both) do the rest. Signed with the release
 # key when it's given (the ANDROID_* secrets), with a throwaway debug key
 # otherwise: only a signed APK may be published, as Android installs an
-# update only with the same key. The APK ends up as
+# update only with the same key. A debug build is a separate app
+# (nl.p51.synththing.test), so it installs beside the published one. The APK ends up as
 # synththing-android-arm64.apk, the name the in-app updater looks for
 # (src/updater.rs, ASSET_NAME).
 #

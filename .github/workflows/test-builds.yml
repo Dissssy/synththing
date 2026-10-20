@@ -129,12 +129,12 @@ jobs:
           path: target/release/synththing
           retention-days: 1
 
-  # The Android app (docs/ANDROID.md), for the nightly only: a branch's
-  # testers try its changes in the desktop build's mobile layout (View >
-  # Mobile layout) instead. Published only with the release key.
+  # The Android app (docs/ANDROID.md). A branch's is an app of its own
+  # (src/android_id.rs), installed beside the usual one from its Updates >
+  # Branch builds. Published only with the release key, so each build
+  # installs over the last.
   android:
     needs: stamp
-    if: needs.stamp.outputs.channel == 'nightly'
     runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
     outputs:
       signed: ${{ steps.apk.outputs.signed }}

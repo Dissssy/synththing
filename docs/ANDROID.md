@@ -13,10 +13,11 @@ Status: it builds (CI's `android` job) and the Rust side cross-compiles cleanly,
 - **Playing in the background.** A foreground service with a media session, so playback keeps going with the screen off, the notification and lock screen have the controls, and Bluetooth buttons work. It pauses for calls and other apps' sound, and when headphones come out.
 - **The visualizer in a floating window.** Leaving the app while something's playing shrinks it into picture-in-picture, showing only the visualizer, with previous, play/pause and next. Preferences > Visualizers turns it off or picks its shape (square, wide, tall). Android pauses an activity in picture-in-picture, and winit draws nothing while paused, so `MainActivity.onPause` resumes it again when it's going into the floating window.
 - **Script previews from the server.** The app can't start a second process to make a preview, and every script on a phone is bundled (published on the official server) or downloaded from one, so previews are fetched by the source's SHA-256 (`/api/v1/previews/{sha256}/...`).
+- **Branch builds.** As on desktop, Updates > Branch builds lists the branches with a test build, and installs one. On Android each is an app of its own (`nl.p51.synththing.branch.b_<name>`, "synththing <name>" in the launcher, in the branch's accent; `src/android_id.rs`), beside the usual one with data of its own, so switching between branches never means uninstalling (Android won't install an older build over a newer one). Open and Remove (which uninstalls it) are there too. A branch app updates itself from its branch, without the setting below, once Android allows it to install apps.
 - **Updates.** The app checks for a new version as on desktop, and says once that one's out, to download from the release page. Preferences > Updates > "Install updates in the app" downloads and installs it instead, once Android's "Install unknown apps" setting allows synththing (the app offers to open it).
 - **Signs in with a link.** Without an identity it reads the library only: it browses, installs and updates scripts. Signing in (scan the code from Sign in another device... on a signed-in desktop, or Sign in with a link... with the link) gives it the same identity, so it encores, reports and deletes its own uploads, and gets notifications. It never makes an identity of its own (except recovering one by email), and publishing and moderation stay on the desktop (`PUBLISHING` in `src/app/library.rs`). The camera's link opens in the app through `MainActivity`'s intent filters: the official server's `https://.../pair` links once Android has checked its `assetlinks.json` (docs/DEPLOY.md), and `synththing:` links from the server's page. Feedback works without signing in.
 
-Left out: script editing (and the sprite editor), recording, the mini player and tray, branch builds, the tour (it shows desktop panels), m3u import and export, and dragging to reorder.
+Left out: script editing (and the sprite editor), recording, the mini player and tray, the tour (it shows desktop panels), m3u import and export, and dragging to reorder.
 
 ## 2. How it fits together
 
@@ -25,7 +26,7 @@ Left out: script editing (and the sprite editor), recording, the mini player and
 - `android/app/` is the Gradle project around it. `MainActivity` is a NativeActivity with what eframe can't do: the file picker, picture-in-picture, installing APKs, and the keyboard. NativeActivity gives the keyboard no input connection (only key presses, so no autocorrect or predictions), so `KeyboardView` is a view with one, holding a copy of the text field being edited, kept in step with egui's by `src/android/keyboard.rs`. `PlaybackService` is the foreground service and media session. `Native` is Java's way back into Rust.
 - `src/app/mobile.rs` is the mobile layout, reusing the desktop pages' UI.
 
-The launcher icon is in the build's accent, as on desktop: purple for a release, yellow for canary, a branch build's own color, off-white for a local build. `build.rs` works it out and leaves it beside the native library (`target/aarch64-linux-android/release/synththing-accent`, under `CARGO_TARGET_DIR` if that's set), where Gradle reads it.
+The launcher icon is in the build's accent, as on desktop: purple for a release, yellow for canary, a branch build's own color, off-white for a local build. `build.rs` works it out, with the app's id and launcher name for the channel (`src/android_id.rs`), and leaves them beside the native library (`target/aarch64-linux-android/release/synththing-android.properties`, under `CARGO_TARGET_DIR` if that's set), where Gradle reads them.
 
 Only arm64 is built (every Android phone from the last several years); minSdk 26 (Android 8), targetSdk 34.
 
@@ -41,9 +42,9 @@ gradle -p android assembleRelease
 adb install android/app/build/outputs/apk/release/app-release.apk
 ```
 
-Without the release key, that's signed with your debug key: fine to try, but it won't update (or be updated by) a published APK. The app's log is in the app (menu > Log); `adb logcat -s synththing` has the Java side's.
+Without the release key, that's signed with your debug key, and as it can never update (or be updated by) a published APK, it's a separate app: `nl.p51.synththing.test`, "synththing test" in the launcher, installed beside the published one with its own data. CI's APK for a pull request is the same. The app's log is in the app (menu > Log); `adb logcat -s synththing` has the Java side's.
 
-CI does the same in `.github/actions/android-apk`, which `ci.yml` (every pull request), `test-builds.yml` (the nightly) and `release.yml` share. It pins the SDK packages and NDK (27.2.12479018) with setup-android. The jobs run on the self-hosted runner when the `RUNNER` repository variable names one (not for pull requests from forks), and on GitHub's otherwise; the runner keeps the SDK, Gradle's caches, the JDK and cargo's builds on volumes, so the GitHub caches are skipped there.
+CI does the same in `.github/actions/android-apk`, which `ci.yml` (every pull request), `test-builds.yml` (the nightly and branch builds) and `release.yml` share. It pins the SDK packages and NDK (27.2.12479018) with setup-android. The jobs run on the self-hosted runner when the `RUNNER` repository variable names one (not for pull requests from forks), and on GitHub's otherwise; the runner keeps the SDK, Gradle's caches, the JDK and cargo's builds on volumes, so the GitHub caches are skipped there.
 
 ## 4. The release key (needs doing once)
 
@@ -64,7 +65,7 @@ The next push to master then puts an APK in the nightly, and the next release ha
 
 ## 5. Versions
 
-Android orders updates by `versionCode` (`android/app/build.gradle.kts`): a release's is its version times 1000 plus 999 (0.8.1 is 801999), and a test build's (0.8.2-nightly.12, or a branch's 0.8.2-branch.12) is its version's times 1000 plus its number (802012). So a test build installs over the release before it, and the next release installs over every test build leading up to it. Going back from a test build to the release before it means uninstalling first.
+Android orders updates by `versionCode` (`android/app/build.gradle.kts`): a release's is its version times 1000 plus 999 (0.8.1 is 801999), and a test build's (0.8.2-nightly.12) is its version's times 1000 plus its number (802012). So a nightly installs over the release before it, and the next release installs over every nightly leading up to it. Going back from a nightly to the release before it means uninstalling first. A branch build's app is its own, and follows its branch by commit, which a rebase can make fewer, so its code is the test builds workflow's run number, which only goes up.
 
 ## 6. To check on a phone
 

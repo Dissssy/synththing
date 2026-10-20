@@ -1802,6 +1802,13 @@ impl App {
                     }
                 });
             }
+            UpdateState::Gone if cfg!(target_os = "android") => {
+                let name = branch.unwrap_or_default();
+                ui.label(format!(
+                    "The {name} branch's build is gone: the branch was merged or deleted, so this app won't get \
+                     updates any more. Uninstall it when you're done with it."
+                ));
+            }
             UpdateState::Gone => {
                 let name = branch.unwrap_or_default();
                 ui.label(format!(
@@ -1827,10 +1834,10 @@ impl App {
                 }
             }
         }
-        if branch.is_none() && !cfg!(target_os = "android") {
+        if branch.is_none() {
             ui.add_space(8.0);
             self.branch_builds_ui(ui);
-        } else {
+        } else if !cfg!(target_os = "android") {
             ui.add_space(8.0);
             self.recopy_settings_ui(ui);
         }
@@ -1891,13 +1898,33 @@ impl App {
 
     /// The Updates window's Branch builds section: trying a feature before
     /// it's merged. Each installs into a folder of its own with a copy of
-    /// the settings (`channels.rs`), so this install isn't touched.
+    /// the settings, or on Android as an app of its own (`channels.rs`), so
+    /// this install isn't touched.
     fn branch_builds_ui(&mut self, ui: &mut egui::Ui) {
         let response = egui::CollapsingHeader::new("Branch builds").id_salt("branch_builds").show(ui, |ui| {
-            ui.label(
-                "Try a feature before it's merged. Each branch build installs separately, starting with a copy \
-                 of your settings, and its online features are off. This synththing isn't touched.",
-            );
+            if cfg!(target_os = "android") {
+                ui.label(
+                    "Try a feature before it's merged. Each branch build installs as an app of its own, with \
+                     settings of its own, and its online features are off. This synththing isn't touched.",
+                );
+            } else {
+                ui.label(
+                    "Try a feature before it's merged. Each branch build installs separately, starting with a \
+                     copy of your settings, and its online features are off. This synththing isn't touched.",
+                );
+            }
+            // Android has to let this app install others first.
+            #[cfg(target_os = "android")]
+            let can_install = crate::android::can_install_packages();
+            #[cfg(not(target_os = "android"))]
+            let can_install = true;
+            #[cfg(target_os = "android")]
+            if !can_install {
+                ui.label("Android doesn't allow synththing to install apps yet.");
+                if ui.button("Allow it...").on_hover_text("Settings > Install unknown apps, for synththing").clicked() {
+                    crate::android::open_install_settings();
+                }
+            }
             ui.add_space(4.0);
             let installed = crate::channels::installed();
             let list = self.branches.list();
@@ -1956,13 +1983,17 @@ impl App {
                                 .on_hover_text("Delete this branch build and its settings")
                                 .clicked()
                             {
+                                let name = crate::channels::branch_name(&channel);
                                 self.updates_message = Some(match crate::channels::remove(&channel) {
-                                    Ok(()) => (format!("Removed the {} build.", crate::channels::branch_name(&channel)), false),
+                                    Ok(()) if cfg!(target_os = "android") => {
+                                        (format!("Android asks you to uninstall the {name} build."), false)
+                                    }
+                                    Ok(()) => (format!("Removed the {name} build."), false),
                                     Err(e) => (format!("{e:#}"), true),
                                 });
                             }
                         } else if let Some(b) = build
-                            && ui.add_enabled(!installing, egui::Button::new("Install")).clicked()
+                            && ui.add_enabled(!installing && can_install, egui::Button::new("Install")).clicked()
                         {
                             self.branches.install(b.clone());
                         }
@@ -1978,6 +2009,12 @@ impl App {
                         egui::ProgressBar::new(*downloaded as f32 / (*size).max(1) as f32)
                             .text(format!("{:.1} / {:.1} MB", *downloaded as f64 / 1e6, *size as f64 / 1e6)),
                     );
+                }
+                crate::channels::InstallState::Done(channel) if cfg!(target_os = "android") => {
+                    ui.label(format!(
+                        "Android asks you to install the {} build. Once it's in, open it here or from your apps.",
+                        crate::channels::branch_name(channel)
+                    ));
                 }
                 crate::channels::InstallState::Done(channel) => {
                     ui.label(format!("The {} build is installed and starting.", crate::channels::branch_name(channel)));
