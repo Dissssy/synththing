@@ -105,8 +105,10 @@ pub struct SyncState {
     /// The songs here or the playlists changed: say so in the library, and
     /// see what to fetch or send.
     songs_dirty: bool,
-    /// This device's ID (`Device::id`), once it's needed.
-    device: Option<String>,
+    /// This device (its ID and name), once it's needed.
+    device: Option<Device>,
+    /// The devices syncing songs, as the transfers say.
+    devices: Vec<song_sync::SyncedDevice>,
     /// Songs being moved through the relay, by key.
     busy: BTreeSet<String>,
     moves: (Sender<Moving>, Receiver<Moving>),
@@ -166,6 +168,7 @@ impl Default for SyncState {
             toast: None,
             songs_dirty: false,
             device: None,
+            devices: Vec::new(),
             busy: BTreeSet::new(),
             moves: mpsc::channel(),
             moves_paused: None,
@@ -568,7 +571,7 @@ impl App {
     /// The songs as they are here, for the worker.
     fn songs_now(&mut self) -> Box<songs::Songs> {
         let _timing = crate::frame_timing::scope("songs for the sync worker");
-        let device = self.sync.device.get_or_insert_with(|| Device::load().id).clone();
+        let Device { id: device, name: device_name } = self.sync.device.get_or_insert_with(Device::load).clone();
         let every = settings_sync::syncs(&self.sync.choices, &settings_sync::EVERY_SONG);
         let wanted = song_sync::wanted(&self.songs, &self.playlists, every);
         if wanted != self.sync.wanted
@@ -585,6 +588,7 @@ impl App {
             store: self.songs.clone(),
             wanted,
             device,
+            device_name,
             given: self.sync.given.keys().cloned().collect(),
             busy: self.sync.busy.clone(),
             paused: self.sync.moves_paused.is_some_and(|t| Instant::now() < t),
@@ -627,6 +631,7 @@ impl App {
                 }
                 self.sync.songs_dirty = true;
             }
+            songs::Reply::Devices(devices) => self.sync.devices = devices,
             songs::Reply::Error(e) => self.sync.error = Some(e),
         }
     }
@@ -866,6 +871,7 @@ impl App {
                 });
             }
             self.sync_choices_ui(ui);
+            self.devices_ui(ui);
             self.blocked_songs_ui(ui);
             let mut debug = self.config.sync_debug;
             if ui.checkbox(&mut debug, "Show what each sync changed (for testing)").changed() {
@@ -943,6 +949,42 @@ impl App {
         }
     }
 
+    /// The devices syncing songs, each but this one removable.
+    fn devices_ui(&mut self, ui: &mut egui::Ui) {
+        if self.sync.devices.is_empty() || !self.syncing(Blob::Transfers) {
+            return;
+        }
+        let me = self.sync.device.as_ref().map(|d| d.id.clone()).unwrap_or_default();
+        let mut forget = None;
+        egui::CollapsingHeader::new(format!("Your devices ({})", self.sync.devices.len())).id_salt("sync_devices").show(ui, |ui| {
+            ui.weak(format!(
+                "The devices your songs move between. One that doesn't sync for {} days is removed by itself; one removed comes back if it syncs again.",
+                song_sync::FORGET_AFTER / (24 * 60 * 60)
+            ));
+            for device in &self.sync.devices {
+                ui.horizontal(|ui| {
+                    if device.id == me {
+                        ui.weak("This device");
+                    } else if ui.small_button("Remove").on_hover_text("Stop moving songs to it").clicked() {
+                        forget = Some(device.id.clone());
+                    }
+                    ui.label(match device.name.as_deref() {
+                        Some("") => "A device with no name",
+                        Some(name) => name,
+                        None => "A device on an older version",
+                    });
+                    if device.id != me {
+                        ui.weak(format!("synced {}", library::ago(device.seen)));
+                    }
+                });
+            }
+        });
+        if let Some(device) = forget {
+            self.sync.devices.retain(|d| d.id != device);
+            self.ask_worker(songs::Request::Forget(device));
+        }
+    }
+
     /// The songs removed here, which this device doesn't fetch from the
     /// others: each can be fetched again.
     fn blocked_songs_ui(&mut self, ui: &mut egui::Ui) {
@@ -1006,20 +1048,8 @@ impl App {
             return;
         }
         ctx.request_repaint_after(Duration::from_millis(250));
-        let width = (ctx.content_rect().width() - 32.0).min(480.0);
-        let clicked = egui::Area::new(egui::Id::new("sync_toast"))
-            .order(egui::Order::Tooltip)
-            .sense(egui::Sense::click())
-            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 48.0))
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_max_width(width);
-                    ui.add(egui::Label::new(text.as_str()).wrap());
-                });
-            })
-            .response
-            .clicked();
-        if clicked {
+        let text = egui::RichText::new(text.as_str());
+        if super::toast::draw(ctx, "sync_toast", egui::Align2::CENTER_TOP, egui::vec2(0.0, 48.0), text) {
             self.sync.toast = None;
         }
     }

@@ -351,6 +351,10 @@ public class MainActivity extends NativeActivity {
         runOnUiThread(this::updatePictureInPicture);
     }
 
+    public void setSyncProgress(int done, int total) {
+        SyncService.update(this, done, total);
+    }
+
     // ---- Picture-in-picture ----
 
     /**

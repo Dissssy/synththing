@@ -6,7 +6,11 @@
 //!   stays in the others'), and the tags themselves (`tag/<id>`). Each
 //!   device knows them all (`SongStore::learn`).
 //! - `transfers`: which songs each device wants (`want/<device>/<key>`)
-//!   and which are waiting on the relay (`ready/<key>`). A device wants a
+//!   and which are waiting on the relay (`ready/<key>`), and the devices
+//!   themselves (`device/<device>`: its name, and when it last said it's
+//!   there, once a day). A device that says nothing for `FORGET_AFTER` is
+//!   forgotten, wants and all, as is one removed by hand (`forget`); it
+//!   comes back if it syncs again. A device wants a
 //!   song it lacks and hasn't blocked that's in a playlist, or, taking
 //!   every song, in the library. A device that has a song another wants
 //!   sends it to the relay and marks it ready; the one that wanted it
@@ -383,6 +387,74 @@ pub fn after(mut leaves: BTreeMap<String, Value>, moved: &Moved) -> BTreeMap<Str
     leaves
 }
 
+/// How long a device can go without syncing before the others forget it.
+pub const FORGET_AFTER: i64 = 14 * 24 * 60 * 60;
+/// How often a device says it's still there (`note_device`).
+const SEEN_EVERY: i64 = 24 * 60 * 60;
+
+#[derive(Serialize, Deserialize)]
+struct DeviceLeaf {
+    name: String,
+    seen: i64,
+}
+
+/// A device in the transfers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SyncedDevice {
+    pub id: String,
+    /// What it calls itself (none for one from before devices said).
+    pub name: Option<String>,
+    /// When it last said anything (Unix seconds).
+    pub seen: i64,
+}
+
+/// The device a transfers leaf is about, if any.
+fn device_of(path: &str) -> Option<&str> {
+    path.strip_prefix("device/")
+        .or_else(|| path.strip_prefix("want/").and_then(|rest| rest.split_once('/')).map(|(device, _)| device))
+}
+
+/// The devices in the transfers (`fields`), the most recently seen first.
+pub fn devices(fields: &Fields) -> Vec<SyncedDevice> {
+    let mut found: BTreeMap<&str, SyncedDevice> = BTreeMap::new();
+    for (path, field) in fields {
+        let Some(id) = device_of(path) else { continue };
+        let device = found.entry(id).or_insert_with(|| SyncedDevice { id: id.to_string(), name: None, seen: 0 });
+        device.seen = device.seen.max(field.changed);
+        if path.starts_with("device/")
+            && let Ok(leaf) = serde_json::from_value::<DeviceLeaf>(field.value.clone())
+        {
+            device.name = Some(leaf.name);
+            device.seen = device.seen.max(leaf.seen);
+        }
+    }
+    let mut devices: Vec<SyncedDevice> = found.into_values().collect();
+    devices.sort_by_key(|d| std::cmp::Reverse(d.seen));
+    devices
+}
+
+/// The transfers' leaves without `device`'s: its wants, and it.
+pub fn forget(leaves: &BTreeMap<String, Value>, device: &str) -> BTreeMap<String, Value> {
+    leaves.iter().filter(|(path, _)| device_of(path) != Some(device)).map(|(p, v)| (p.clone(), v.clone())).collect()
+}
+
+/// The devices in `fields` other than `me` that haven't said anything for
+/// `FORGET_AFTER` as of `now`.
+pub fn gone_quiet(fields: &Fields, me: &str, now: i64) -> Vec<String> {
+    devices(fields).into_iter().filter(|d| d.id != me && now - d.seen > FORGET_AFTER).map(|d| d.id).collect()
+}
+
+/// Note in the transfers' `leaves` that `device` is there, as `name`
+/// (once a day: not to write the transfers over and over).
+pub fn note_device(leaves: &mut BTreeMap<String, Value>, device: &str, name: &str, now: i64) {
+    let path = format!("device/{device}");
+    let noted = leaves.get(&path).and_then(|v| serde_json::from_value::<DeviceLeaf>(v.clone()).ok());
+    if noted.is_some_and(|leaf| leaf.name == name && now - leaf.seen < SEEN_EVERY) {
+        return;
+    }
+    leaves.insert(path, serde_json::to_value(DeviceLeaf { name: name.to_string(), seen: now }).unwrap_or_default());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,6 +514,33 @@ mod tests {
         phone.remove(&phone_dir.join(&song.key)).unwrap();
         assert!(wanted(&phone, &playlists, true).is_empty());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn devices_say_they_are_there_and_go_quiet() {
+        let field = |value: Value, changed| crate::settings_sync::Field { value, changed };
+        let day = 24 * 60 * 60;
+        let mut leaves = BTreeMap::new();
+        note_device(&mut leaves, "desk", "Desktop", 10 * day);
+        let noted = leaves.clone();
+        note_device(&mut leaves, "desk", "Desktop", 10 * day + 60);
+        assert_eq!(leaves, noted, "once a day");
+        note_device(&mut leaves, "desk", "Desktop", 11 * day);
+        assert_ne!(leaves, noted);
+        let mut fields: Fields = leaves.iter().map(|(k, v)| (k.clone(), field(v.clone(), 11 * day))).collect();
+        // One from before devices said: known by its wants alone.
+        fields.insert(want("old", "a.mid"), field(Value::Bool(true), 2 * day));
+        fields.insert(want("old", "b.mid"), field(Value::Bool(true), 3 * day));
+        fields.insert(ready("a.mid"), field(Value::Bool(true), 3 * day));
+        let found = devices(&fields);
+        assert_eq!(found[0], SyncedDevice { id: "desk".into(), name: Some("Desktop".into()), seen: 11 * day });
+        assert_eq!(found[1], SyncedDevice { id: "old".into(), name: None, seen: 3 * day });
+        assert!(gone_quiet(&fields, "desk", 16 * day).is_empty());
+        assert_eq!(gone_quiet(&fields, "desk", 18 * day), ["old"]);
+        assert!(gone_quiet(&fields, "old", 18 * day).is_empty(), "never itself");
+        let applied: BTreeMap<String, Value> = fields.iter().map(|(k, f)| (k.clone(), f.value.clone())).collect();
+        let left = forget(&applied, "old");
+        assert_eq!(left.keys().collect::<Vec<_>>(), ["device/desk", "ready/a.mid"]);
     }
 
     #[test]

@@ -83,6 +83,23 @@ pub struct Palette {
     pub widget_outline: Hex,
     /// Separators, window and widget borders.
     pub border: Hex,
+    /// Outlining and tinting the song playing, in lists.
+    #[serde(default = "default_playing")]
+    pub playing: Hex,
+}
+
+fn default_playing() -> Hex {
+    hex(0x4caf50)
+}
+
+/// The theme's `Palette::playing`, kept where lists find it (`playing_color`).
+fn playing_id() -> egui::Id {
+    egui::Id::new("theme_playing_color")
+}
+
+/// The color the song playing is marked with in lists.
+pub fn playing_color(ctx: &egui::Context) -> Color32 {
+    ctx.data(|d| d.get_temp(playing_id())).unwrap_or(default_playing().0)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -136,6 +153,7 @@ fn dark() -> Theme {
             widget_pressed: hex(0x4a505d),
             widget_outline: hex(0x6d9eff),
             border: hex(0x3a3d46),
+            playing: default_playing(),
         },
         shape: Shape { widget_radius: 4, window_radius: 8, border_width: 1.0, shadow: 16 },
     }
@@ -165,6 +183,7 @@ fn light() -> Theme {
             widget_pressed: hex(0xc3c8d3),
             widget_outline: hex(0x2f6fde),
             border: hex(0xcdd0d7),
+            playing: default_playing(),
         },
         shape: Shape { widget_radius: 4, window_radius: 8, border_width: 1.0, shadow: 12 },
     }
@@ -195,6 +214,7 @@ fn frutiger_aero() -> Theme {
             widget_pressed: hex(0x52b8e6),
             widget_outline: hex(0x0a93d1),
             border: hex(0x66b7df),
+            playing: default_playing(),
         },
         shape: Shape { widget_radius: 10, window_radius: 14, border_width: 1.0, shadow: 22 },
     }
@@ -233,6 +253,7 @@ fn from_visuals(name: &str, visuals: &Visuals) -> Theme {
             widget_pressed: Hex(w.active.weak_bg_fill),
             widget_outline: Hex(w.hovered.bg_stroke.color),
             border: Hex(w.noninteractive.bg_stroke.color),
+            playing: default_playing(),
         },
         shape: Shape {
             widget_radius: w.inactive.corner_radius.nw,
@@ -307,6 +328,7 @@ impl Theme {
         let theme = if self.dark { egui::Theme::Dark } else { egui::Theme::Light };
         ctx.set_theme(theme);
         ctx.set_visuals_of(theme, self.visuals());
+        ctx.data_mut(|d| d.insert_temp(playing_id(), self.palette.playing.0));
     }
 }
 
