@@ -254,6 +254,7 @@ impl State {
     /// The saved state for the blob `name`, if it syncs here (for the sync
     /// key there is now).
     pub fn load(name: &str) -> Option<Self> {
+        let _timing = crate::frame_timing::scope("sync state load");
         let sync_key = crate::library::identity::sync_key()?;
         let state: Self = serde_json::from_str(&std::fs::read_to_string(path(name)?).ok()?).ok()?;
         (state.key == key_check(&sync_key)).then_some(state)
@@ -272,6 +273,7 @@ impl State {
     }
 
     pub fn save(&self, name: &str) -> Result<(), String> {
+        let _timing = crate::frame_timing::scope("sync state save");
         let path = path(name).ok_or("no config folder")?;
         std::fs::write(&path, serde_json::to_string(self).unwrap_or_default())
             .map_err(|e| format!("couldn't write {}: {e}", path.display()))

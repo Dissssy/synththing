@@ -2728,16 +2728,29 @@ impl App {
     /// in goes through here, so playlists waiting on one stop showing it
     /// missing.
     pub(super) fn add_to_library(&mut self, songs: impl IntoIterator<Item = Stored>) {
+        let mut added = std::collections::BTreeSet::new();
         for stored in songs {
-            self.song_info.forget(&self.songs.dir().join(&stored.key));
+            let path = self.songs.dir().join(&stored.key);
+            self.song_info.forget(&path);
+            added.insert(path);
             self.songs.add(stored);
         }
-        self.refresh_missing();
+        // (Only the entries for these songs can have come back: no need to
+        // look for every entry's file.)
+        for stored in &mut self.playlists.lists {
+            for entry in &mut stored.playlist.entries {
+                if added.contains(&entry.path) {
+                    entry.missing = false;
+                }
+            }
+        }
+        self.songs_changed();
     }
 
     /// Mark playlist entries missing, or not, as their songs leave or come
     /// into the library.
     fn refresh_missing(&mut self) {
+        let _timing = frame_timing::scope("refresh_missing");
         for stored in &mut self.playlists.lists {
             for entry in &mut stored.playlist.entries {
                 entry.missing = !entry.path.exists();
