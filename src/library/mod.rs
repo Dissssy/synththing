@@ -335,6 +335,10 @@ pub struct Info {
     /// It keeps signed-in apps' synced data (`sync.rs`).
     #[serde(default)]
     pub sync: bool,
+    /// The biggest song it relays between them (`/api/v1/relay`), in MB:
+    /// 0 when it doesn't.
+    #[serde(default)]
+    pub relay_song_mb: u64,
 }
 
 /// A notification (`/api/v1/notifications`): what happened, as a kind and

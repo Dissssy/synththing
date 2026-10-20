@@ -13,7 +13,7 @@
 //!   the relay.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -141,6 +141,12 @@ pub fn plan(applied: &BTreeMap<String, Value>, device: &str, store: &SongStore, 
     Plan { leaves, tasks }
 }
 
+/// Whether the song at `path`, sealed, is within a relay's `relay_song_mb`.
+pub fn fits(path: &Path, relay_song_mb: u64) -> bool {
+    // (Sealing adds a nonce and a tag.)
+    std::fs::metadata(path).map_or(true, |m| m.len() + 28 <= relay_song_mb * 1024 * 1024)
+}
+
 /// The relay, as a device signed in to it reaches it.
 #[derive(Clone)]
 pub struct Relay {
@@ -254,7 +260,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("synththing-relay-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("server.json"), r#"{ "previews": false, "check_uploads": false, "sync": true, "relay_song_mb": 1 }"#).unwrap();
+        std::fs::write(root.join("server.json"), r#"{ "previews": false, "check_uploads": false, "sync": true, "relay_song_mb": 1, "relay_mb_per_identity": 1 }"#).unwrap();
         let running = crate::library::server::start(&root, Some("127.0.0.1:0".into())).unwrap();
         let server = format!("http://{}", running.addr);
         let server_key = client::info(&server).unwrap().key;
@@ -274,7 +280,18 @@ mod tests {
         assert_eq!(run(&relay("phone"), &Task::Fetch(song.key.clone())), Moved::Gone(song.key.clone()));
         // Too big.
         let big = song_store::write_in(&vec![1; 2 * 1024 * 1024], "Big.wav", &root.join("desktop")).unwrap();
+        let info = client::info(&server).unwrap();
+        assert_eq!(info.relay_song_mb, 1);
+        assert!(fits(&root.join("desktop").join(&song.key), info.relay_song_mb));
+        assert!(!fits(&root.join("desktop").join(&big.key), info.relay_song_mb), "known too big before sending");
         assert!(matches!(run(&relay("desktop"), &Task::Send(big.key)), Moved::Failed(..)));
+        // Past the identity's room: the oldest go.
+        let first = song_store::write_in(&vec![2; 600 * 1024], "First.wav", &root.join("desktop")).unwrap();
+        let second = song_store::write_in(&vec![3; 600 * 1024], "Second.wav", &root.join("desktop")).unwrap();
+        assert_eq!(run(&relay("desktop"), &Task::Send(first.key.clone())), Moved::Sent(first.key.clone()));
+        assert_eq!(run(&relay("desktop"), &Task::Send(second.key.clone())), Moved::Sent(second.key.clone()));
+        assert_eq!(run(&relay("phone"), &Task::Fetch(first.key.clone())), Moved::Gone(first.key.clone()));
+        assert_eq!(run(&relay("phone"), &Task::Fetch(second.key.clone())), Moved::Fetched(second.key.clone()));
         running.stop();
         let _ = std::fs::remove_dir_all(&root);
     }

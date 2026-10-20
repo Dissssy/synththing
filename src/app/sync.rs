@@ -67,6 +67,9 @@ struct Channel {
     dirty_since: Option<Instant>,
     /// Sync as soon as it can (after this, for a retry).
     wanted: Option<Instant>,
+    /// Just started syncing here: the next sync takes the server's leaves
+    /// where it has them, until one works.
+    adopt: bool,
 }
 
 pub struct SyncState {
@@ -269,9 +272,14 @@ impl App {
             self.sync.on = state.is_some() && identity.is_some();
             self.sync.choices = state.map(|s| s.choices).unwrap_or_default();
             for blob in Blob::ALL {
-                let revision = State::load(blob.name()).map_or(0, |s| s.revision);
+                let state = State::load(blob.name());
                 let wanted = self.syncing(blob).then(Instant::now);
-                *self.channel(blob) = Channel { revision, wanted, ..Channel::default() };
+                *self.channel(blob) = Channel { revision: state.as_ref().map_or(0, |s| s.revision), wanted, ..Channel::default() };
+                // (One this app syncs that hasn't started here: sync was on
+                // before this app had it.)
+                if state.is_none() && self.syncing(blob) {
+                    self.start_blob(blob);
+                }
             }
             self.sync.for_identity = whose;
             self.sync.songs_dirty = true;
@@ -281,6 +289,9 @@ impl App {
         }
         while let Ok((blob, result)) = self.sync.events.1.try_recv() {
             self.channel(blob).running = false;
+            if result.is_ok() {
+                self.channel(blob).adopt = false;
+            }
             match result {
                 Ok(outcome) => match blob {
                     Blob::Settings => self.settings_synced(outcome),
@@ -307,7 +318,8 @@ impl App {
                 let channel = self.channel(blob);
                 channel.dirty_since = None;
                 channel.wanted = None;
-                self.start_sync(blob, false);
+                let adopt = channel.adopt;
+                self.start_sync(blob, adopt);
             }
         }
     }
@@ -455,10 +467,7 @@ impl App {
             Blob::Transfers => Default::default(),
         };
         match State::of(&sync_key, leaves).save(blob.name()) {
-            Ok(()) => {
-                *self.channel(blob) = Channel::default();
-                self.start_sync(blob, true);
-            }
+            Ok(()) => *self.channel(blob) = Channel { wanted: Some(Instant::now()), adopt: true, ..Channel::default() },
             Err(e) => self.sync.error = Some(e),
         }
     }
@@ -521,19 +530,43 @@ impl App {
         if plan.tasks.is_empty() || !self.sync.busy.is_empty() || paused {
             return;
         }
+        let (authority, _) = self.authority();
+        let limit = self.library_server_info(&authority).map(|i| i.relay_song_mb);
+        if limit == Some(0) {
+            // (Its "not found" would read as songs not sent yet.)
+            self.sync.error = Some(format!("{} can't move songs between your devices yet: it needs updating.", super::library::host(&authority)));
+            return;
+        }
+        // Songs the server won't take stay here, not holding up the rest.
+        let (tasks, too_big): (Vec<Task>, Vec<Task>) = plan.tasks.into_iter().partition(|task| match (task, limit) {
+            (Task::Send(key), Some(mb)) => song_sync::fits(&self.songs.dir().join(key), mb),
+            _ => true,
+        });
+        if !too_big.is_empty() {
+            let names: Vec<String> = too_big
+                .iter()
+                .map(|t| self.songs.known().find(|(k, _)| *k == t.key()).map_or_else(|| t.key().to_string(), |(_, s)| s.name.clone()))
+                .collect();
+            self.sync.error = Some(format!(
+                "{} is too big to move between your devices (the server takes songs up to {} MB).",
+                names.join(", "),
+                limit.unwrap_or_default()
+            ));
+        }
+        if tasks.is_empty() {
+            return;
+        }
         let Some((server, server_key, identity, sync_key)) = self.sync_with() else { return };
         let relay = Relay { server, server_key, identity, sync_key, dir: self.songs.dir().to_path_buf() };
-        self.sync.busy = plan.tasks.iter().map(|t| t.key().to_string()).collect();
+        self.sync.busy = tasks.iter().map(|t| t.key().to_string()).collect();
         let tx = self.sync.moves.0.clone();
-        let tasks: Vec<Task> = plan.tasks;
         std::thread::Builder::new()
             .name("song transfers".into())
             .spawn(move || {
+                // (One song failing doesn't stop the rest; the failed ones
+                // wait for the next try.)
                 for task in &tasks {
-                    let moved = song_sync::run(&relay, task);
-                    // (The rest wait for the next try.)
-                    let failed = matches!(moved, Moved::Failed(..));
-                    if tx.send(Moving::Moved(moved)).is_err() || failed {
+                    if tx.send(Moving::Moved(song_sync::run(&relay, task))).is_err() {
                         break;
                     }
                 }

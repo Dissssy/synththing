@@ -132,6 +132,9 @@ enum Slot {
     /// What an earlier launch read, not read again yet this session.
     Saved(Arc<SongInfo>),
     Ready(Arc<SongInfo>),
+    /// The file isn't there (a song not on this device yet): not read
+    /// again until it's forgotten (`forget`).
+    Missing,
 }
 
 type Queue = (Mutex<VecDeque<PathBuf>>, Condvar);
@@ -143,7 +146,7 @@ const SAVE_AFTER: Duration = Duration::from_secs(10);
 pub struct SongInfoCache {
     slots: HashMap<PathBuf, Slot>,
     queue: Arc<Queue>,
-    results: Receiver<(PathBuf, SongInfo)>,
+    results: Receiver<(PathBuf, Option<SongInfo>)>,
     /// Where it's kept between launches, if it is.
     file: Option<PathBuf>,
     /// When the first read not saved yet landed.
@@ -183,6 +186,7 @@ impl SongInfoCache {
             Some(Slot::Ready(info)) => return Some(Arc::clone(info)),
             Some(Slot::Pending(known)) => return known.clone(),
             Some(Slot::Saved(info)) => Some(Arc::clone(info)),
+            Some(Slot::Missing) => return None,
             None => None,
         };
         self.slots.insert(path.to_path_buf(), Slot::Pending(known.clone()));
@@ -199,8 +203,15 @@ impl SongInfoCache {
     /// repainting until they land).
     pub fn poll(&mut self) -> bool {
         while let Ok((path, info)) = self.results.try_recv() {
-            self.slots.insert(path, Slot::Ready(Arc::new(info)));
-            self.unsaved_since.get_or_insert_with(Instant::now);
+            match info {
+                Some(info) => {
+                    self.slots.insert(path, Slot::Ready(Arc::new(info)));
+                    self.unsaved_since.get_or_insert_with(Instant::now);
+                }
+                None => {
+                    self.slots.insert(path, Slot::Missing);
+                }
+            }
         }
         if self.unsaved_since.is_some_and(|since| since.elapsed() >= SAVE_AFTER) {
             self.unsaved_since = None;
@@ -218,7 +229,7 @@ impl SongInfoCache {
             .iter()
             .filter_map(|(path, slot)| match slot {
                 Slot::Ready(info) | Slot::Saved(info) | Slot::Pending(Some(info)) => Some((path.clone(), Arc::clone(info))),
-                Slot::Pending(None) => None,
+                Slot::Pending(None) | Slot::Missing => None,
             })
             .collect();
         let _ = thread::Builder::new().name("song-info-save".into()).spawn(move || {
@@ -236,6 +247,14 @@ impl SongInfoCache {
         });
     }
 
+    /// The file at `path` is there now (a song came into the library):
+    /// read it when it's next asked for.
+    pub fn forget(&mut self, path: &Path) {
+        if matches!(self.slots.get(path), Some(Slot::Missing)) {
+            self.slots.remove(path);
+        }
+    }
+
     /// The file at `from` is at `to` now (brought into the song library):
     /// what's known of it goes along.
     pub fn rename(&mut self, from: &Path, to: &Path) {
@@ -245,7 +264,7 @@ impl SongInfoCache {
     }
 }
 
-fn worker(queue: &Queue, results: &Sender<(PathBuf, SongInfo)>) {
+fn worker(queue: &Queue, results: &Sender<(PathBuf, Option<SongInfo>)>) {
     let (lock, cvar) = queue;
     loop {
         let path = {
@@ -260,7 +279,8 @@ fn worker(queue: &Queue, results: &Sender<(PathBuf, SongInfo)>) {
                 };
             }
         };
-        let info = read(&path);
+        // (Nothing to read, and nothing to say of it, for a file that isn't there.)
+        let info = path.exists().then(|| read(&path));
         if results.send((path, info)).is_err() {
             return;
         }

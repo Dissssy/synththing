@@ -2646,6 +2646,7 @@ impl App {
     /// missing.
     pub(super) fn add_to_library(&mut self, songs: impl IntoIterator<Item = Stored>) {
         for stored in songs {
+            self.song_info.forget(&self.songs.dir().join(&stored.key));
             self.songs.add(stored);
         }
         self.refresh_missing();

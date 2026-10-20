@@ -167,7 +167,7 @@ impl Default for ServerConfig {
             unverified_uploads_per_day: 3,
             documents: Vec::new(),
             sync: false,
-            relay_song_mb: 100,
+            relay_song_mb: 250,
             relay_mb_per_identity: 2048,
             intake: false,
             android_fingerprints: Vec::new(),
@@ -962,6 +962,7 @@ fn info(state: &State) -> Info {
         authority: state.config.authority,
         mail: state.config.authority && state.mailer.on(),
         sync: state.config.sync,
+        relay_song_mb: if state.config.sync { state.config.relay_song_mb } else { 0 },
     }
 }
 
