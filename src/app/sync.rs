@@ -28,6 +28,8 @@ pub struct SyncState {
     for_identity: Option<String>,
     /// The server's revision as of the last sync.
     revision: i64,
+    /// The kinds of settings this device syncs (`State::choices`).
+    choices: settings_sync::Choices,
     /// A sync is running.
     running: bool,
     events: (Sender<Synced>, Receiver<Synced>),
@@ -45,6 +47,7 @@ impl Default for SyncState {
             on: false,
             for_identity: None,
             revision: 0,
+            choices: Default::default(),
             running: false,
             events: mpsc::channel(),
             dirty_since: None,
@@ -68,6 +71,7 @@ struct Job {
     local: Fields,
     /// Just turned on: the server's settings win where it has them.
     adopt: bool,
+    choices: settings_sync::Choices,
 }
 
 /// What a sync did.
@@ -96,11 +100,12 @@ fn sync(job: Job) -> Synced {
                 let changes = merged
                     .iter()
                     .filter(|(path, field)| job.local.get(*path).map(|f| &f.value) != Some(&field.value))
+                    .filter(|(path, _)| settings_sync::syncs(&job.choices, settings_sync::setting_of(path)))
                     .map(|(path, _)| Change { path: path.clone(), conflict: None })
                     .collect();
                 (merged, changes)
             }
-            Some(server) => settings_sync::merge(&job.base, &job.local, server),
+            Some(server) => settings_sync::merge(&job.base, &job.local, server, &job.choices),
             None => (job.local.clone(), Vec::new()),
         };
         if server.as_ref() == Some(&merged) {
@@ -154,7 +159,8 @@ impl App {
             // for this sync key.)
             let state = State::load();
             self.sync.on = state.is_some() && identity.is_some();
-            self.sync.revision = state.map_or(0, |s| s.revision);
+            self.sync.revision = state.as_ref().map_or(0, |s| s.revision);
+            self.sync.choices = state.map(|s| s.choices).unwrap_or_default();
             self.sync.wanted = self.sync.on.then(Instant::now);
             self.sync.for_identity = whose;
         }
@@ -191,7 +197,7 @@ impl App {
             self.sync.on = false;
             return;
         };
-        let job = Job { server, server_key, identity, sync_key, base: state.base, local: state.fields, adopt };
+        let job = Job { server, server_key, identity, sync_key, base: state.base, local: state.fields, adopt, choices: state.choices };
         self.sync.running = true;
         let tx = self.sync.events.0.clone();
         std::thread::Builder::new()
@@ -208,23 +214,30 @@ impl App {
         self.sync.error = None;
         // (Turned off meanwhile.)
         let Some(mut state) = State::load() else { return };
-        let (result, _) = settings_sync::merge(&outcome.local, &state.fields, &outcome.merged);
+        let (result, _) = settings_sync::merge(&outcome.local, &state.fields, &outcome.merged, &state.choices);
         let mut json = match serde_json::to_value(&self.config) {
             Ok(json) => json,
             Err(e) => return log::warn!("settings sync: {e}"),
         };
-        settings_sync::apply::<Config>(&mut json, &result);
+        settings_sync::apply::<Config>(&mut json, &result, &state.choices);
         match serde_json::from_value::<Config>(json) {
             Ok(config) => {
                 let theme_changed = config.theme != self.config.theme;
+                let modes_changed = (config.loop_mode, config.shuffle) != (self.config.loop_mode, self.config.shuffle);
                 self.config = config;
                 if theme_changed {
                     self.reapply_theme();
                 }
+                // (Loop and Shuffle in use are the app's own, saved as they
+                // change: take the synced ones where they're remembered.)
+                if modes_changed && self.config.remember.modes {
+                    self.loop_mode = self.config.loop_mode;
+                    self.shuffle = self.config.shuffle;
+                }
             }
             Err(e) => return log::warn!("settings sync: {e}"),
         }
-        state.applied = settings_sync::synced_leaves(&serde_json::to_value(&self.config).unwrap_or_default());
+        state.applied = settings_sync::synced_leaves(&serde_json::to_value(&self.config).unwrap_or_default(), &state.choices);
         if result != outcome.merged {
             self.sync.dirty_since = Some(Instant::now());
         }
@@ -271,6 +284,7 @@ impl App {
             if let Some(error) = &self.sync.error {
                 ui.weak(format!("Couldn't sync: {error}"));
             }
+            self.sync_choices_ui(ui);
             let mut debug = self.config.sync_debug;
             if ui.checkbox(&mut debug, "Show what each sync changed (for testing)").changed() {
                 self.config.sync_debug = debug;
@@ -278,6 +292,54 @@ impl App {
                     log::warn!("saving the config: {e}");
                 }
             }
+        }
+    }
+
+    /// Which settings this device syncs: each category, opening to its
+    /// settings.
+    fn sync_choices_ui(&mut self, ui: &mut egui::Ui) {
+        let mut chosen: Vec<(&'static settings_sync::Setting, bool)> = Vec::new();
+        egui::CollapsingHeader::new("What this device syncs").id_salt("sync_choices").show(ui, |ui| {
+            ui.weak("Unticked: this device keeps its own, and doesn't change the others'.");
+            for category in settings_sync::CATEGORIES {
+                let choices = &self.sync.choices;
+                let on = category.settings.iter().filter(|s| settings_sync::syncs(choices, s)).count();
+                let id = ui.make_persistent_id(("sync_category", category.name));
+                egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+                    .show_header(ui, |ui| {
+                        let mut all = on == category.settings.len();
+                        let mixed = on > 0 && !all;
+                        let checkbox = egui::Checkbox::new(&mut all, category.name).indeterminate(mixed);
+                        if ui.add(checkbox).changed() {
+                            chosen.extend(category.settings.iter().map(|s| (s, all)));
+                        }
+                    })
+                    .body(|ui| {
+                        for setting in category.settings {
+                            let mut on = settings_sync::syncs(choices, setting);
+                            if ui.checkbox(&mut on, setting.name).changed() {
+                                chosen.push((setting, on));
+                            }
+                        }
+                    });
+            }
+        });
+        if chosen.is_empty() {
+            return;
+        }
+        let Some(mut state) = State::load() else { return };
+        let config = serde_json::to_value(&self.config).unwrap_or_default();
+        let any_on = chosen.iter().any(|(_, on)| *on);
+        for (setting, on) in chosen {
+            state.choose(setting, on, &config);
+        }
+        if let Err(e) = state.save() {
+            self.sync.error = Some(e);
+            return;
+        }
+        self.sync.choices = state.choices;
+        if any_on {
+            self.sync.wanted = Some(Instant::now());
         }
     }
 
@@ -290,6 +352,7 @@ impl App {
             Ok(()) => {
                 self.sync.on = true;
                 self.sync.revision = 0;
+                self.sync.choices = Default::default();
                 self.sync.error = None;
                 self.start_sync(true);
             }
@@ -347,6 +410,7 @@ mod tests {
             base: state.base.clone(),
             local: state.fields.clone(),
             adopt,
+            choices: state.choices.clone(),
         }
     }
 

@@ -13,6 +13,10 @@
 //! takes that side's value, and one both changed takes the newer change.
 //! Leaves this device doesn't have (a newer app's settings) are carried
 //! along untouched.
+//!
+//! Each leaf belongs to a setting (`CATEGORIES`), and each device chooses
+//! which settings it syncs: one it doesn't is neither sent nor taken
+//! there, only carried along for the devices that do.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -38,7 +42,9 @@ const LOCAL: &[&str] = &[
     "layout_overrides",
     "active_layout",
     "fullscreen_active_layout",
-    "session",
+    "library/official_publishers",
+    "session/soundfont",
+    "session/script",
     "buffer_ms",
     "last_version",
     "skipped_update",
@@ -50,6 +56,118 @@ const LOCAL: &[&str] = &[
     "ui_scale",
     "sync_debug",
 ];
+
+/// A setting a device can choose not to sync: one or more leaves.
+pub struct Setting {
+    pub key: &'static str,
+    pub name: &'static str,
+    /// Its leaves: these, and every leaf under them.
+    paths: &'static [&'static str],
+    /// Synced unless the device says otherwise.
+    pub on: bool,
+}
+
+/// Settings as Preferences groups them.
+pub struct Category {
+    pub name: &'static str,
+    pub settings: &'static [Setting],
+}
+
+const fn setting(key: &'static str, name: &'static str, paths: &'static [&'static str]) -> Setting {
+    Setting { key, name, paths, on: true }
+}
+
+/// Every setting that syncs, by category. A leaf in none of them (a newer
+/// app's) is in `OTHER`.
+pub const CATEGORIES: &[Category] = &[
+    Category {
+        name: "Appearance",
+        settings: &[
+            setting("theme", "Theme", &["theme"]),
+            setting("beat_pulse", "Beat pulse", &["beat_pulse", "beat_pulse_length"]),
+            setting("song_names", "Song names", &["title_patterns"]),
+        ],
+    },
+    Category {
+        name: "Playback",
+        settings: &[
+            setting("remember", "What's remembered between launches", &["remember"]),
+            setting("modes", "Loop and Shuffle", &["loop_mode", "shuffle"]),
+            setting("heavy_midi", "Warning before a very large MIDI file", &["warn_heavy_midi"]),
+            setting("channel_chips", "Channel chips", &["channel_chips"]),
+            Setting { key: "volume", name: "Last volume (taken at the next launch)", paths: &["session/volume"], on: false },
+            Setting { key: "speed", name: "Last speed (taken at the next launch)", paths: &["session/speed"], on: false },
+        ],
+    },
+    Category {
+        name: "Songs",
+        settings: &[
+            setting("audio_files", "Show audio files", &["show_audio_files"]),
+            setting("preload", "Preload songs on hover", &["preload_on_hover"]),
+            setting("unload", "Unload preloaded files after", &["preload_expiry_secs"]),
+        ],
+    },
+    Category {
+        name: "Visualizers",
+        settings: &[
+            setting("mini_player", "Mini player", &["mini_player"]),
+            setting("mini_player_shape", "Mini player shape", &["mini_player_shape"]),
+            setting("script_logs", "Copy script logs to the app log", &["script_log_to_app"]),
+        ],
+    },
+    Category {
+        name: "Script editor",
+        settings: &[
+            setting("editor_apply", "Apply", &["editor_apply"]),
+            setting("editor_font_size", "Text size", &["editor_font_size"]),
+            setting("editor_wrap", "Wrap", &["editor_wrap"]),
+        ],
+    },
+    Category {
+        name: "Recording",
+        settings: &[
+            setting("record_resolution", "Resolution", &["record_resolution"]),
+            setting("record_fps", "Frame rate", &["record_fps"]),
+            setting("record_quality", "Quality", &["record_quality"]),
+            setting("record_manual", "Scripts recorded in Manual", &["record_manual"]),
+        ],
+    },
+    Category {
+        name: "Online Library",
+        settings: &[
+            setting("servers", "Servers", &["library/official", "library/servers"]),
+            setting("server_keys", "Servers' keys", &["library/pinned"]),
+            setting("author_name", "Name to post under", &["library/author_name"]),
+            setting("notifications", "Notifications", &["library/notifications"]),
+        ],
+    },
+    Category { name: "App", settings: &[setting("tray", "Keep running in the tray", &["close_to_tray"]), OTHER] },
+];
+
+/// Leaves no setting lists: a newer app's, or ones not listed yet.
+const OTHER: Setting = setting("other", "Anything else", &[]);
+
+fn under(path: &str, prefix: &str) -> bool {
+    path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// The setting the leaf at `path` belongs to.
+pub fn setting_of(path: &str) -> &'static Setting {
+    CATEGORIES
+        .iter()
+        .flat_map(|c| c.settings)
+        .find(|s| s.paths.iter().any(|p| under(path, p)))
+        .unwrap_or(&OTHER)
+}
+
+/// Which settings a device has turned on or off, where it differs from
+/// their defaults.
+pub type Choices = BTreeMap<String, bool>;
+
+/// Whether `setting` syncs on a device with these choices.
+pub fn syncs(choices: &Choices, setting: &Setting) -> bool {
+    choices.get(setting.key).copied().unwrap_or(setting.on)
+}
 
 /// A leaf's value and when it last changed (Unix seconds).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -91,6 +209,10 @@ pub struct State {
     /// is compared with (not `fields`, which can hold values this app
     /// can't take).
     pub applied: BTreeMap<String, Value>,
+    /// The settings this device syncs, where they differ from their
+    /// defaults.
+    #[serde(default)]
+    pub choices: Choices,
 }
 
 /// A save changed a synced setting since this was last asked.
@@ -121,10 +243,11 @@ impl State {
 
     /// A new state (sync turned on), its leaves those of `config`.
     pub fn new(sync_key: &[u8; 32], config: &Value) -> Self {
-        let applied = synced_leaves(config);
+        let choices = Choices::new();
+        let applied = synced_leaves(config, &choices);
         let at = now();
         let fields = applied.iter().map(|(k, v)| (k.clone(), Field { value: v.clone(), changed: at })).collect();
-        Self { key: key_check(sync_key), revision: 0, base: Fields::new(), fields, applied }
+        Self { key: key_check(sync_key), revision: 0, base: Fields::new(), fields, applied, choices }
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -136,7 +259,7 @@ impl State {
     /// Stamp the leaves of `config` that changed since `applied`; whether
     /// any did.
     pub fn record(&mut self, config: &Value, at: i64) -> bool {
-        let leaves = synced_leaves(config);
+        let leaves = synced_leaves(config, &self.choices);
         let mut changed = false;
         for (path, value) in &leaves {
             if self.applied.get(path) != Some(value) {
@@ -151,6 +274,25 @@ impl State {
         }
         self.applied = leaves;
         changed
+    }
+
+    /// Sync `chosen` here or not. Turned on, it takes the server's (as of
+    /// the last sync) where there are any, as turning sync on does.
+    pub fn choose(&mut self, chosen: &Setting, on: bool, config: &Value) {
+        if on == chosen.on {
+            self.choices.remove(chosen.key);
+        } else {
+            self.choices.insert(chosen.key.to_string(), on);
+        }
+        if !on {
+            return;
+        }
+        let at = now();
+        for (path, value) in synced_leaves(config, &self.choices).into_iter().filter(|(p, _)| setting_of(p).key == chosen.key) {
+            let field = self.base.get(&path).cloned().unwrap_or(Field { value: value.clone(), changed: at });
+            self.fields.insert(path.clone(), field);
+            self.applied.insert(path, value);
+        }
     }
 }
 
@@ -178,41 +320,50 @@ pub fn take_dirty() -> bool {
     DIRTY.swap(false, Ordering::Relaxed)
 }
 
-fn is_local(path: &str) -> bool {
-    LOCAL.iter().any(|l| path == *l || path.strip_prefix(l).is_some_and(|rest| rest.starts_with('/')))
+/// Whether the leaf at `path` syncs on a device with these choices.
+fn synced(path: &str, choices: &Choices) -> bool {
+    !LOCAL.iter().any(|l| under(path, l)) && syncs(choices, setting_of(path))
 }
 
-/// `config`'s leaves that sync, by path (a JSON pointer without its first
-/// `/`): objects are walked into; everything else (arrays too) is a leaf.
-pub fn synced_leaves(config: &Value) -> BTreeMap<String, Value> {
-    fn walk(value: &Value, path: &str, out: &mut BTreeMap<String, Value>) {
+/// `config`'s leaves that sync here, by path (a JSON pointer without its
+/// first `/`): objects are walked into; everything else (arrays too) is a
+/// leaf.
+pub fn synced_leaves(config: &Value, choices: &Choices) -> BTreeMap<String, Value> {
+    fn walk(value: &Value, path: &str, choices: &Choices, out: &mut BTreeMap<String, Value>) {
         match value {
             Value::Object(map) if !map.is_empty() || path.is_empty() => {
                 for (key, value) in map {
                     let key = key.replace('~', "~0").replace('/', "~1");
                     let path = if path.is_empty() { key } else { format!("{path}/{key}") };
-                    walk(value, &path, out);
+                    walk(value, &path, choices, out);
                 }
             }
-            _ if !is_local(path) => {
+            _ if synced(path, choices) => {
                 out.insert(path.to_string(), value.clone());
             }
             _ => {}
         }
     }
     let mut out = BTreeMap::new();
-    walk(config, "", &mut out);
+    walk(config, "", choices, &mut out);
     out
 }
 
 /// `base`'s leaves merged with this device's (`local`) and the server's:
-/// the result, and what it changed of `local`'s.
-pub fn merge(base: &Fields, local: &Fields, server: &Fields) -> (Fields, Vec<Change>) {
+/// the result, and what it changed of `local`'s. A leaf this device doesn't
+/// sync (`choices`) keeps the server's.
+pub fn merge(base: &Fields, local: &Fields, server: &Fields, choices: &Choices) -> (Fields, Vec<Change>) {
     let mut merged = Fields::new();
     let mut changes = Vec::new();
     let paths: std::collections::BTreeSet<&String> = local.keys().chain(server.keys()).chain(base.keys()).collect();
     for path in paths {
         let (b, l, s) = (base.get(path).map(|f| &f.value), local.get(path), server.get(path));
+        if !syncs(choices, setting_of(path)) {
+            if let Some(field) = s {
+                merged.insert(path.clone(), field.clone());
+            }
+            continue;
+        }
         let local_changed = l.map(|f| &f.value) != b;
         let server_changed = s.map(|f| &f.value) != b;
         let (chosen, conflict) = match (local_changed, server_changed) {
@@ -238,9 +389,10 @@ pub fn merge(base: &Fields, local: &Fields, server: &Fields) -> (Fields, Vec<Cha
 /// doesn't have), each only if the config still reads with it: what's
 /// left out is a newer app's (or a value this one can't take), carried
 /// along in the sync state but not here.
-pub fn apply<T: serde::de::DeserializeOwned>(config: &mut Value, fields: &Fields) {
-    let current = synced_leaves(config);
-    let paths: std::collections::BTreeSet<&String> = current.keys().chain(fields.keys()).collect();
+pub fn apply<T: serde::de::DeserializeOwned>(config: &mut Value, fields: &Fields, choices: &Choices) {
+    let current = synced_leaves(config, choices);
+    let paths: std::collections::BTreeSet<&String> =
+        current.keys().chain(fields.keys().filter(|p| synced(p, choices))).collect();
     for path in paths {
         let wanted = fields.get(path).map(|f| &f.value);
         if current.get(path) == wanted {
@@ -291,8 +443,14 @@ mod tests {
     #[test]
     fn leaves_leave_out_the_devices_own() {
         let config = json!({ "theme": "dark", "layout": { "a": 1 }, "library": { "servers": [1], "pinned": { "x/y": "k" } } });
-        let leaves = synced_leaves(&config);
+        let leaves = synced_leaves(&config, &Choices::new());
         assert_eq!(leaves.keys().collect::<Vec<_>>(), ["library/pinned/x~1y", "library/servers", "theme"]);
+        let no_library = Choices::from([("servers".to_string(), false), ("server_keys".to_string(), false)]);
+        assert_eq!(synced_leaves(&config, &no_library).keys().collect::<Vec<_>>(), ["theme"]);
+        let session = json!({ "session": { "volume": 0.5, "script": "C:/x.lua" } });
+        assert!(synced_leaves(&session, &Choices::new()).is_empty(), "volume and speed are off by default");
+        let with_volume = Choices::from([("volume".to_string(), true)]);
+        assert_eq!(synced_leaves(&session, &with_volume).keys().collect::<Vec<_>>(), ["session/volume"]);
     }
 
     #[test]
@@ -310,7 +468,7 @@ mod tests {
         let base = fields(&[("a", json!(1), 1), ("b", json!(1), 1), ("c", json!(1), 1)]);
         let server = fields(&[("a", json!(2), 10), ("b", json!(2), 30), ("c", json!(1), 1)]);
         let phone = fields(&[("a", json!(3), 20), ("b", json!(1), 1), ("c", json!(1), 1), ("new", json!(true), 20)]);
-        let (merged, changes) = merge(&base, &phone, &server);
+        let (merged, changes) = merge(&base, &phone, &server, &Choices::new());
         assert_eq!(merged["a"].value, json!(3), "both changed it: the newer change wins");
         assert_eq!(merged["b"].value, json!(2), "only the server changed it");
         assert_eq!(merged["new"].value, json!(true), "only the phone has it");
@@ -322,8 +480,33 @@ mod tests {
             ]
         );
         // Removed on one side.
-        let (merged, _) = merge(&base, &fields(&[("a", json!(1), 1), ("b", json!(1), 1)]), &base);
+        let (merged, _) = merge(&base, &fields(&[("a", json!(1), 1), ("b", json!(1), 1)]), &base, &Choices::new());
         assert!(!merged.contains_key("c"));
+    }
+
+    #[test]
+    fn categories_turned_off_are_carried_along() {
+        let off = Choices::from([("theme".to_string(), false)]);
+        let base = fields(&[("theme", json!("dark"), 1), ("shuffle", json!(false), 1)]);
+        let server = fields(&[("theme", json!("light"), 5), ("shuffle", json!(false), 1)]);
+        // (Saving dropped the theme from what this device syncs.)
+        let local = fields(&[("shuffle", json!(true), 6)]);
+        let (merged, changes) = merge(&base, &local, &server, &off);
+        assert_eq!(merged["theme"].value, json!("light"), "the server's, carried along");
+        assert_eq!(merged["shuffle"].value, json!(true));
+        assert_eq!(changes, []);
+        let mut config = json!({ "theme": "dark", "shuffle": true });
+        apply::<serde_json::Value>(&mut config, &merged, &off);
+        assert_eq!(config["theme"], json!("dark"), "not taken here");
+
+        // Turned back on: the server's, as of the last sync.
+        let mut state = State::new(&[1; 32], &config);
+        state.choices = off;
+        state.base = merged.clone();
+        state.choose(setting_of("theme"), true, &config);
+        assert!(state.choices.is_empty());
+        assert_eq!(state.fields["theme"].value, json!("light"));
+        assert!(!state.record(&config, 100), "the config's theme isn't a change made here");
     }
 
     #[test]
@@ -342,7 +525,7 @@ mod tests {
         }
         let mut config = json!({ "shape": "Square", "theme": "dark" });
         let synced = fields(&[("shape", json!("Hexagon"), 5), ("theme", json!("light"), 5), ("from_newer", json!(1), 5)]);
-        apply::<Config>(&mut config, &synced);
+        apply::<Config>(&mut config, &synced, &Choices::new());
         assert_eq!(config, json!({ "shape": "Square", "theme": "light", "from_newer": 1 }));
     }
 }
