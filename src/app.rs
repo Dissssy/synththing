@@ -21,6 +21,7 @@ mod playlist_panel;
 mod identity;
 mod pairing;
 mod sync;
+mod tags;
 mod copyright;
 mod moderation;
 mod notifications;
@@ -49,7 +50,7 @@ use crate::credits::{self, Contributors, ContributorsState};
 use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, nice_name, Config};
 use crate::engine::{EngineView, MAX_SPEED, MIN_SPEED};
-use crate::song_list::{DraggedFiles, SongList};
+use crate::song_list::{self, DraggedFiles, SongList};
 use crate::song_store::{self, SongStore, Stored};
 use crate::select_list::{self, Selection};
 use crate::layout::{self, Section};
@@ -98,6 +99,25 @@ impl App {
 /// names the library knows them by.
 fn naming<'a>(config: &'a Config, songs: &'a SongStore) -> Naming<'a> {
     Naming::new(config, songs)
+}
+
+/// The song at `path` as the Songs list shows it: its name, file name, the
+/// columns `keys` and its tags.
+fn describe_song(cache: &mut SongInfoCache, naming: &Naming, store: &SongStore, path: &Path, keys: &[&str]) -> song_list::Described {
+    let info = cache.get(path);
+    let song = naming.song(path, info.as_deref());
+    let values = keys
+        .iter()
+        .map(|&key| match key {
+            "imported" => naming.imported(path).map(|secs| song_list::Value { text: song_list::date(secs), number: Some(secs as f64) }),
+            "file_name" => Some(song_list::Value { text: song.file_name.to_string(), number: None }),
+            // (One type whatever the case its files were named in.)
+            "file_extension" => song.field(key).map(|text| song_list::Value { text: text.to_lowercase(), number: None }),
+            key => song.field(key).map(|text| song_list::Value { text, number: song.number(key) }),
+        })
+        .collect();
+    let tags = store.tags_of(path).into_iter().map(|(_, tag)| (tag.name.clone(), tag.color)).collect();
+    song_list::Described { name: naming.name(path, info.as_deref()), file_name: song.file_name.to_string(), values, tags }
 }
 
 /// The song at `path`'s name, by `naming`.
@@ -302,6 +322,10 @@ pub struct App {
     song_info: SongInfoCache,
     /// The song whose info modal is open.
     song_info_open: Option<PathBuf>,
+    /// The Tags modal is open.
+    tags_open: bool,
+    /// The tag just made, to name in the Tags modal.
+    tag_to_name: Option<String>,
     /// Selected rows of the playlist on screen.
     playlist_selection: Selection,
     /// A Controls binding waiting for a key press: (action index, which of
@@ -571,6 +595,8 @@ impl App {
                 Err(_) => SongInfoCache::new(),
             },
             song_info_open: None,
+            tags_open: false,
+            tag_to_name: None,
             playlist_selection: Selection::default(),
             binding_capture: None,
             script_window: None,
@@ -2232,7 +2258,12 @@ impl App {
         let response = egui::Modal::new(egui::Id::new("song_info")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 460.0));
             ui.heading(self.song_title(&path));
-            ui.weak(path.display().to_string());
+            // (A library song by the file it came from; one played from
+            // elsewhere by where it is.)
+            match self.songs.get(&path) {
+                Some(song) => ui.weak(&song.name),
+                None => ui.weak(path.display().to_string()),
+            };
             ui.add_space(6.0);
             match &info {
                 None => {
@@ -2383,6 +2414,7 @@ impl App {
             || self.changelog.is_some()
             || self.welcome.open
             || self.song_info_open.is_some()
+            || self.tags_open
             || self.recording.prompt_open
             || self.recording.window.is_some()
             || self.script_window.is_some()
@@ -2556,6 +2588,9 @@ impl App {
         let extensions = listed_song_extensions(&self.config);
         let songs: Vec<PathBuf> =
             self.songs.songs().map(|(path, _)| path).filter(|p| song_store::has_extension(p, extensions)).collect();
+        let selected = self.song_list.selected_one();
+        let mut info_for: Option<PathBuf> = None;
+        let mut info_clicked = false;
         let moving = self.songs_moving();
         let mut tools = |ui: &mut egui::Ui| {
             // Every type it can play: audio files with audio files off
@@ -2571,16 +2606,27 @@ impl App {
             {
                 crate::import::start_folder(SONG_EXTENSIONS);
             }
+            #[cfg(not(target_os = "android"))]
+            if ui
+                .add_enabled(selected.is_some(), icon_button("info"))
+                .on_hover_text("Song info")
+                .on_disabled_hover_text("Song info: select a song")
+                .clicked()
+            {
+                info_clicked = true;
+            }
             sync::songs_moving_ui(ui, moving);
         };
         // (Both the names and the trailing widgets read the song info, one
         // after the other.)
         let cache = std::cell::RefCell::new(&mut self.song_info);
         let naming = naming(&self.config, &self.songs);
-        let info_open = &mut self.song_info_open;
+        let mut view = self.config.songs_view.clone();
         #[cfg(not(target_os = "android"))]
         let mut save_copy = None;
         let mut remove = Vec::new();
+        let mut tag = None;
+        let store = &self.songs;
         let mut add_to: Option<(Option<usize>, Vec<PathBuf>)> = None;
         // With no dragging (touch), songs go onto playlists from their menu.
         let touch = select_list::touch(ui.ctx());
@@ -2605,6 +2651,14 @@ impl App {
             {
                 save_copy = Some(path.clone());
             }
+            if let [path] = paths
+                && ui.button("Song info").clicked()
+            {
+                info_for = Some(path.clone());
+            }
+            if let Some(action) = tags::tags_menu(ui, store, paths) {
+                tag = Some((action, paths.to_vec()));
+            }
             if ui.button("Remove from library...").on_hover_text("Delete synththing's copy on this device").clicked() {
                 remove = paths.to_vec();
             }
@@ -2612,17 +2666,26 @@ impl App {
         let output = self.song_list.ui(
             ui,
             &songs,
+            &mut view,
             &mut tools,
-            &mut |path| title_of(&mut cache.borrow_mut(), &naming, path),
-            &|path| naming.file_name(path).to_string(),
-            &mut |ui, path| song_info_widgets(ui, &mut cache.borrow_mut(), path, info_open),
+            &mut |path, keys| describe_song(&mut cache.borrow_mut(), &naming, &self.songs, path, keys),
+            &mut |ui, path| song_info_widgets(ui, &mut cache.borrow_mut(), path, false),
             &mut menu,
         );
+        if output.view_changed {
+            self.config.songs_view = view;
+            if let Err(e) = self.config.save() {
+                log::warn!("saving the config: {e}");
+            }
+        }
         if !output.delete.is_empty() {
             remove = output.delete;
         }
         if let Some(path) = output.play {
             self.play_path(path);
+        }
+        if let Some(path) = info_for.or(selected.filter(|_| info_clicked)) {
+            self.song_info_open = Some(path);
         }
         #[cfg(not(target_os = "android"))]
         if let Some(path) = save_copy {
@@ -2633,6 +2696,9 @@ impl App {
         }
         if let Some((list, paths)) = add_to {
             self.add_to_playlist(list, paths);
+        }
+        if let Some((action, paths)) = tag {
+            self.tag_songs(action, &paths);
         }
     }
 
@@ -3712,6 +3778,7 @@ impl eframe::App for App {
             self.new_sprite_ui(&ctx);
         }
         self.remove_songs_ui(&ctx);
+        self.tags_ui(&ctx);
         self.close_requested_ui(&ctx);
         self.close_prompt_ui(&ctx);
         if self.tray.is_some() {
@@ -3950,21 +4017,17 @@ fn inline_code_job(ui: &egui::Ui, prefix: &str, text: &str) -> egui::text::Layou
 
 /// A song's length and an info button (greyed out when the file has no
 /// details to show), for the end of a list row; laid out right to left.
-fn song_info_widgets(ui: &mut egui::Ui, cache: &mut SongInfoCache, path: &Path, open: &mut Option<PathBuf>) {
+/// A song's length (`with_length`) and a warning for a very large MIDI
+/// file, right to left.
+fn song_info_widgets(ui: &mut egui::Ui, cache: &mut SongInfoCache, path: &Path, with_length: bool) {
     let info = cache.get(path);
-    let has_details = info.as_ref().is_some_and(|i| !i.details.is_empty());
-    let button = ui
-        .add_enabled(has_details, egui::Button::new("i").small())
-        .on_hover_text("Song info")
-        .on_disabled_hover_text(if info.is_none() { "Reading..." } else { "No details for this file" });
-    if button.clicked() {
-        *open = Some(path.to_path_buf());
+    if with_length {
+        let length = match &info {
+            None => "...".to_string(),
+            Some(info) => info.length.map(format_length).unwrap_or_else(|| "--:--".to_string()),
+        };
+        ui.weak(length);
     }
-    let length = match &info {
-        None => "...".to_string(),
-        Some(info) => info.length.map(format_length).unwrap_or_else(|| "--:--".to_string()),
-    };
-    ui.weak(length);
     if let Some(info) = info.filter(|i| i.is_heavy()) {
         ui.colored_label(egui::Color32::from_rgb(230, 80, 80), "!").on_hover_text(format!(
             "A very large MIDI file: {} notes. It plays fine, but a visualizer script going through every \

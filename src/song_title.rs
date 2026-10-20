@@ -51,9 +51,20 @@ impl<'a> Naming<'a> {
         }
     }
 
+    /// The song at `path`, with what's been read of it (`info`), for its
+    /// fields.
+    pub fn song<'p>(&'p self, path: &'p Path, info: Option<&'p SongInfo>) -> Song<'p> {
+        Song { file_name: self.file_name(path), info }
+    }
+
+    /// When the song at `path` came into the library (Unix seconds).
+    pub fn imported(&self, path: &Path) -> Option<i64> {
+        self.store.get(path).map(|song| song.imported)
+    }
+
     /// The song at `path`'s name, with what's been read of it (`info`).
     pub fn name(&self, path: &Path, info: Option<&SongInfo>) -> String {
-        let song = Song { file_name: self.file_name(path), info };
+        let song = self.song(path, info);
         match self.patterns {
             Some(patterns) => first_match(patterns, &song),
             None => first_match(&DEFAULT_PATTERNS, &song),
@@ -79,7 +90,7 @@ pub struct Song<'a> {
 
 impl Song<'_> {
     /// The field `name` (as a pattern writes it), if the song has it.
-    fn field(&self, name: &str) -> Option<String> {
+    pub fn field(&self, name: &str) -> Option<String> {
         let info = self.info;
         let value = match name {
             "file_name" => stem(self.file_name).to_string(),
@@ -93,6 +104,24 @@ impl Song<'_> {
             tag => info?.tags.get(tag)?.to_string(),
         };
         (!value.is_empty()).then_some(value)
+    }
+}
+
+impl Song<'_> {
+    /// The field `name` as a number, for the ones that are (to sort by).
+    pub fn number(&self, name: &str) -> Option<f64> {
+        let info = self.info?;
+        match name {
+            "length" => info.length,
+            "bpm" => info.bpm,
+            "notes" => info.notes.map(|n| n as f64),
+            "track" | "year" => {
+                let tag = info.tags.get(name)?;
+                let digits: String = tag.trim().chars().take_while(char::is_ascii_digit).collect();
+                digits.parse().ok()
+            }
+            _ => None,
+        }
     }
 }
 

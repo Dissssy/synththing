@@ -12,6 +12,9 @@
 //! keeps songs that aren't (removed here, or in a playlist synced from
 //! another device: [`SongStore::know`]), so they keep their names.
 //!
+//! Songs can carry tags of the user's own (a name and a color, defined
+//! once in `tags.json`), by the tags' IDs.
+//!
 //! A song removed here is blocked (`blocked.json`): this device doesn't
 //! fetch it from the others again (`song_sync.rs`), until it's unblocked
 //! or imported again.
@@ -26,6 +29,7 @@ use sha2::{Digest, Sha256};
 
 const INDEX: &str = "library.json";
 const BLOCKED: &str = "blocked.json";
+const TAGS: &str = "tags.json";
 
 /// What's known of a stored song.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -35,6 +39,17 @@ pub struct Song {
     /// When it came in (Unix seconds).
     #[serde(default)]
     pub imported: i64,
+    /// Its tags, by ID (`SongStore::tags`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+/// A tag of the user's own.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Tag {
+    pub name: String,
+    /// sRGB.
+    pub color: [u8; 3],
 }
 
 /// A file now in the store, to [`SongStore::add`].
@@ -52,6 +67,8 @@ pub struct SongStore {
     present: BTreeSet<String>,
     /// The keys removed here, not to be fetched again.
     blocked: BTreeSet<String>,
+    /// The tags, by ID.
+    tags: BTreeMap<String, Tag>,
 }
 
 impl SongStore {
@@ -68,14 +85,18 @@ impl SongStore {
         for key in &present {
             songs.entry(key.clone()).or_insert_with_key(|key| {
                 changed = true;
-                Song { name: key.clone(), imported: now() }
+                Song { name: key.clone(), imported: now(), tags: Vec::new() }
             });
         }
         let blocked = std::fs::read_to_string(dir.join(BLOCKED))
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{BLOCKED}: {e}")).ok())
             .unwrap_or_default();
-        let store = Self { dir, songs, present, blocked };
+        let tags = std::fs::read_to_string(dir.join(TAGS))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{TAGS}: {e}")).ok())
+            .unwrap_or_default();
+        let store = Self { dir, songs, present, blocked, tags };
         if changed {
             store.save();
         }
@@ -95,7 +116,7 @@ impl SongStore {
     /// Record a file now in the store (keeping what's known of it if it
     /// was already there), and save.
     pub fn add(&mut self, stored: Stored) {
-        let song = self.songs.entry(stored.key.clone()).or_insert_with(|| Song { name: stored.name.clone(), imported: now() });
+        let song = self.songs.entry(stored.key.clone()).or_insert_with(|| Song { name: stored.name.clone(), imported: now(), tags: Vec::new() });
         // (Found on disk with nothing known of it: named after its key.)
         if song.name == stored.key {
             song.name = stored.name;
@@ -113,8 +134,22 @@ impl SongStore {
         if !is_key(key) || self.songs.contains_key(key) {
             return;
         }
-        self.songs.insert(key.to_string(), Song { name: name.to_string(), imported: now() });
+        self.songs.insert(key.to_string(), Song { name: name.to_string(), imported: now(), tags: Vec::new() });
         self.save();
+    }
+
+    /// Take what the synced library says of the song `key`: its name and
+    /// tags (knowing it, if it wasn't).
+    pub fn learn(&mut self, key: &str, name: &str, tags: Vec<String>) {
+        if !is_key(key) {
+            return;
+        }
+        let song = self.songs.entry(key.to_string()).or_insert_with(|| Song { name: name.to_string(), imported: now(), tags: Vec::new() });
+        if song.name != name || song.tags != tags {
+            song.name = name.to_string();
+            song.tags = tags;
+            self.save();
+        }
     }
 
     /// Delete the song at `path` from the store, and block it (it stays
@@ -153,6 +188,60 @@ impl SongStore {
         self.present.contains(key)
     }
 
+    /// The tags, by ID.
+    pub fn tags(&self) -> &BTreeMap<String, Tag> {
+        &self.tags
+    }
+
+    /// The song at `path`'s tags (by ID, those defined), by name.
+    pub fn tags_of(&self, path: &Path) -> Vec<(&str, &Tag)> {
+        let Some(song) = self.get(path) else { return Vec::new() };
+        let mut tags: Vec<(&str, &Tag)> = song.tags.iter().filter_map(|id| self.tags.get_key_value(id)).map(|(id, tag)| (id.as_str(), tag)).collect();
+        tags.sort_by_key(|(_, tag)| tag.name.to_lowercase());
+        tags
+    }
+
+    /// Add or change the tag `id`.
+    pub fn set_tag(&mut self, id: &str, tag: Tag) {
+        if self.tags.get(id) != Some(&tag) {
+            self.tags.insert(id.to_string(), tag);
+            self.save_tags();
+        }
+    }
+
+    /// Delete the tag `id`, from every song too.
+    pub fn remove_tag(&mut self, id: &str) {
+        if self.tags.remove(id).is_some() {
+            self.save_tags();
+        }
+        let mut changed = false;
+        for song in self.songs.values_mut() {
+            let before = song.tags.len();
+            song.tags.retain(|t| t != id);
+            changed |= song.tags.len() != before;
+        }
+        if changed {
+            self.save();
+        }
+    }
+
+    /// Give the song `key` these tags (by ID), if it's known.
+    pub fn set_song_tags(&mut self, key: &str, mut tags: Vec<String>) {
+        tags.sort();
+        tags.dedup();
+        if let Some(song) = self.songs.get_mut(key)
+            && song.tags != tags
+        {
+            song.tags = tags;
+            self.save();
+        }
+    }
+
+    /// The key of the song at `path`, if it's in this store.
+    pub fn key(&self, path: &Path) -> Option<String> {
+        self.key_of(path).map(str::to_string)
+    }
+
     /// Every song known, here or not: its key and what's known of it.
     pub fn known(&self) -> impl Iterator<Item = (&str, &Song)> {
         self.songs.iter().map(|(key, song)| (key.as_str(), song))
@@ -182,6 +271,14 @@ impl SongStore {
             .and_then(|()| write_atomically(&self.dir.join(INDEX), serde_json::to_string_pretty(&self.songs).unwrap_or_default().as_bytes()));
         if let Err(e) = written {
             log::warn!("couldn't save {}: {e}", self.dir.join(INDEX).display());
+        }
+    }
+
+    fn save_tags(&self) {
+        let path = self.dir.join(TAGS);
+        let written = std::fs::create_dir_all(&self.dir).and_then(|()| write_atomically(&path, serde_json::to_string_pretty(&self.tags).unwrap_or_default().as_bytes()));
+        if let Err(e) = written {
+            log::warn!("couldn't save {}: {e}", path.display());
         }
     }
 
@@ -509,6 +606,24 @@ mod tests {
         std::fs::write(dir.join("Picked.mid"), b"picked").unwrap();
         store.add(move_in(&dir.join("Picked.mid"), &dir).unwrap());
         assert!(!store.is_blocked(&stored.key), "imported again");
+    }
+
+    #[test]
+    fn tags() {
+        let dir = temp_dir("tags");
+        let mut store = SongStore::open(dir.clone());
+        let stored = write_in(b"tagged", "Tagged.mid", &dir).unwrap();
+        store.add(stored.clone());
+        let path = dir.join(&stored.key);
+        store.set_tag("b", Tag { name: "Chill".into(), color: [1, 2, 3] });
+        store.set_tag("a", Tag { name: "party".into(), color: [4, 5, 6] });
+        store.set_song_tags(&stored.key, vec!["a".into(), "b".into(), "a".into(), "gone".into()]);
+        let names = |store: &SongStore| store.tags_of(&path).iter().map(|(_, t)| t.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&store), ["Chill", "party"], "by name, without case; an unknown ID left out");
+        let mut store = SongStore::open(dir.clone());
+        assert_eq!(names(&store), ["Chill", "party"], "kept");
+        store.remove_tag("b");
+        assert_eq!(names(&SongStore::open(dir.clone())), ["party"], "deleted from the song too");
     }
 
     #[test]

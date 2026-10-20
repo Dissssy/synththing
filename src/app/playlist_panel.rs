@@ -49,6 +49,7 @@ enum RowAction {
     Remove(Vec<usize>),
     ClearSoundfont(Vec<usize>),
     UseCurrentSoundfont(Vec<usize>),
+    Tag(super::tags::TagAction, Vec<PathBuf>),
 }
 
 impl App {
@@ -516,6 +517,7 @@ impl App {
         match action {
             Some(RowAction::Play(idx)) => self.play_entry(list, idx),
             Some(RowAction::Remove(rows)) => self.remove_entries(list, &rows),
+            Some(RowAction::Tag(tag, paths)) => self.tag_songs(tag, &paths),
             Some(RowAction::ClearSoundfont(rows)) => self.set_entries_soundfont(list, &rows, None),
             Some(RowAction::UseCurrentSoundfont(rows)) => {
                 let selected = self.active_sf.and_then(|i| self.config.soundfonts.get(i)).cloned();
@@ -652,6 +654,7 @@ impl App {
         let cache = &mut self.song_info;
         let naming = super::naming(&self.config, &self.songs);
         let info_open = &mut self.song_info_open;
+        let store = &self.songs;
 
         // Total time from what's been read so far.
         let (mut total, mut unknown) = (0.0, 0usize);
@@ -687,6 +690,9 @@ impl App {
                 if ui.button("Play").clicked() {
                     action = Some(RowAction::Play(idx));
                 }
+                if rows.len() == 1 && !entry.missing && ui.button("Song info").clicked() {
+                    *info_open = Some(entry.path.clone());
+                }
                 if is_midi_path(&entry.path) || rows.len() > 1 {
                     if ui
                         .add_enabled(selected_sf, egui::Button::new(format!("Use current soundfont{count}")))
@@ -697,6 +703,12 @@ impl App {
                     if ui.button(format!("Clear soundfont override{count}")).clicked() {
                         action = Some(RowAction::ClearSoundfont(rows.clone()));
                     }
+                }
+                let paths: Vec<PathBuf> = rows.iter().filter_map(|&i| entries.get(i)).filter(|e| !e.missing).map(|e| e.path.clone()).collect();
+                if !paths.is_empty()
+                    && let Some(tag) = super::tags::tags_menu(ui, store, &paths)
+                {
+                    action = Some(RowAction::Tag(tag, paths));
                 }
                 if ui.button(format!("Remove from playlist{count}")).clicked() {
                     action = Some(RowAction::Remove(rows));
@@ -714,7 +726,7 @@ impl App {
                 if ui.small_button("x").on_hover_text("Remove from playlist").clicked() {
                     action = Some(RowAction::Remove(vec![idx]));
                 }
-                song_info_widgets(ui, cache, &entry.path, info_open);
+                song_info_widgets(ui, cache, &entry.path, true);
                 if let Some(sf) = &entry.soundfont
                     && ui
                         .small_button(format!("SF: {}", nice_name(sf)))
@@ -726,6 +738,7 @@ impl App {
                 {
                     action = Some(RowAction::ClearSoundfont(vec![idx]));
                 }
+                select_list::chips(ui, store.tags_of(&entry.path).into_iter().map(|(_, tag)| (tag.name.as_str(), tag.color)));
                 let mut label = super::title_of(cache, &naming, &entry.path);
                 if entry.missing {
                     label.push_str("  (missing)");

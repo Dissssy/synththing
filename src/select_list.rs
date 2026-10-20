@@ -177,6 +177,9 @@ pub fn show<T>(
                         visuals.bg_stroke,
                         egui::StrokeKind::Inside,
                     );
+                } else if idx % 2 == 1 {
+                    // Striped, to tell the rows apart.
+                    ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
                 }
 
                 let row = Row { idx, response, selection };
@@ -223,6 +226,37 @@ pub fn label(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, hover: Option
         }
     })
     .inner
+}
+
+/// A tag's chip: its name on its color (`song_store::Tag`), in text that
+/// reads on it.
+pub fn chip(ui: &mut egui::Ui, name: &str, color: [u8; 3]) -> egui::Response {
+    let [r, g, b] = color;
+    let light = 0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b) > 150.0;
+    let text = if light { egui::Color32::BLACK } else { egui::Color32::WHITE };
+    let font = egui::FontId::proportional(egui::TextStyle::Body.resolve(ui.style()).size * 0.85);
+    let galley = ui.painter().layout_no_wrap(name.to_string(), font, text);
+    let padding = egui::vec2(6.0, 1.0);
+    let (rect, response) = ui.allocate_exact_size(galley.size() + 2.0 * padding, egui::Sense::hover());
+    ui.painter().rect_filled(rect, rect.height() / 2.0, egui::Color32::from_rgb(r, g, b));
+    ui.painter().galley(rect.min + padding, galley, text);
+    response
+}
+
+/// Tags' chips, in a row (right to left in a right-to-left layout).
+pub fn chips<'a>(ui: &mut egui::Ui, tags: impl DoubleEndedIterator<Item = (&'a str, [u8; 3])>) {
+    let spacing = ui.spacing().item_spacing.x;
+    ui.spacing_mut().item_spacing.x = 4.0;
+    if ui.layout().prefer_right_to_left() {
+        for (name, color) in tags.rev() {
+            chip(ui, name, color);
+        }
+    } else {
+        for (name, color) in tags {
+            chip(ui, name, color);
+        }
+    }
+    ui.spacing_mut().item_spacing.x = spacing;
 }
 
 #[cfg(test)]

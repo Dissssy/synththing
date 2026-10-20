@@ -489,6 +489,11 @@ impl App {
     /// was changed here while it ran, and see what that means for the songs.
     fn songs_synced(&mut self, blob: Blob, outcome: Outcome) {
         self.sync.error = None;
+        if blob == Blob::Library {
+            // (What changed here meanwhile goes in first, not to be taken
+            // for something another device removed.)
+            self.record_library();
+        }
         let Some(mut state) = State::load(blob.name()) else { return };
         let (result, _) = settings_sync::merge_where(&outcome.local, &state.fields, &outcome.merged, |_| true);
         if blob == Blob::Library {

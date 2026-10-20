@@ -2,8 +2,9 @@
 //! of their own; `library/sync.rs` the files):
 //!
 //! - `library`: every song in any device's library, by key, with its name
-//!   (leaves are only ever added: a song removed on one device stays in
-//!   the others'). Each device knows them all (`SongStore::know`).
+//!   and tags (songs are only ever added: a song removed on one device
+//!   stays in the others'), and the tags themselves (`tag/<id>`). Each
+//!   device knows them all (`SongStore::learn`).
 //! - `transfers`: which songs each device wants (`want/<device>/<key>`)
 //!   and which are waiting on the relay (`ready/<key>`). A device wants a
 //!   song it lacks and hasn't blocked that's in a playlist, or, taking
@@ -15,36 +16,62 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::library::client;
 use crate::library::identity::Identity;
 use crate::playlist::Library;
 use crate::settings_sync::Fields;
-use crate::song_store::{self, SongStore};
+use crate::song_store::{self, SongStore, Tag};
 
 /// The synced data's names on the server.
 pub const LIBRARY: &str = "library";
 pub const TRANSFERS: &str = "transfers";
 
-/// The library's leaves: those synced so far (`applied`), with every song
-/// here added.
+/// A song in the synced library.
+#[derive(Serialize, Deserialize)]
+struct SyncedSong {
+    name: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+const TAG: &str = "tag/";
+
+/// The library's leaves: those synced so far (`applied`), with what this
+/// device has of them, every song here, and the tags. (A song only known
+/// here, not here nor synced yet, waits for the synced library: its tags
+/// are there.)
 pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
-    let mut leaves = applied.clone();
-    for (path, song) in store.songs() {
-        if let Some(key) = path.file_name().and_then(|n| n.to_str()) {
-            leaves.entry(key.to_string()).or_insert_with(|| Value::String(song.name.clone()));
+    let mut leaves: BTreeMap<String, Value> = applied.iter().filter(|(k, _)| !k.starts_with(TAG)).map(|(k, v)| (k.clone(), v.clone())).collect();
+    for (key, song) in store.known() {
+        if applied.contains_key(key) || store.has(key) {
+            let synced = SyncedSong { name: song.name.clone(), tags: song.tags.clone() };
+            leaves.insert(key.to_string(), serde_json::to_value(synced).unwrap_or_default());
         }
+    }
+    for (id, tag) in store.tags() {
+        leaves.insert(format!("{TAG}{id}"), serde_json::to_value(tag).unwrap_or_default());
     }
     leaves
 }
 
-/// Know every song in the synced library.
+/// Take the synced library: every song's name and tags, and the tags
+/// (those gone from it deleted here).
 pub fn apply_library(store: &mut SongStore, fields: &Fields) {
     for (key, field) in fields {
-        if let Some(name) = field.value.as_str() {
-            store.know(key, name);
+        if let Some(id) = key.strip_prefix(TAG) {
+            if let Ok(tag) = serde_json::from_value::<Tag>(field.value.clone()) {
+                store.set_tag(id, tag);
+            }
+        } else if let Ok(song) = serde_json::from_value::<SyncedSong>(field.value.clone()) {
+            store.learn(key, &song.name, song.tags);
         }
+    }
+    let gone: Vec<String> = store.tags().keys().filter(|id| !fields.contains_key(&format!("{TAG}{id}"))).cloned().collect();
+    for id in gone {
+        store.remove_tag(&id);
     }
 }
 
@@ -221,10 +248,15 @@ mod tests {
         let mut phone = SongStore::open(phone_dir.clone());
 
         // The library goes around: the phone knows the song, and wants it.
+        desktop.set_tag("t1", Tag { name: "Chill".into(), color: [1, 2, 3] });
+        desktop.set_song_tags(&song.key, vec!["t1".into()]);
         let library = library_leaves(&desktop, &BTreeMap::new());
-        assert_eq!(library[&song.key], "Song.mid");
+        assert_eq!(library[&song.key]["name"], "Song.mid");
         let fields = library.iter().map(|(k, v)| (k.clone(), crate::settings_sync::Field { value: v.clone(), changed: 1 })).collect();
         apply_library(&mut phone, &fields);
+        assert_eq!(phone.tags()["t1"].name, "Chill");
+        assert_eq!(phone.known().find(|(k, _)| *k == song.key).unwrap().1.tags, ["t1"]);
+        assert_eq!(library_leaves(&phone, &library), library, "nothing new to say");
         let (playlists, _) = Library::load(root.join("playlists"), phone_dir.clone());
         assert!(wanted(&phone, &playlists, false).is_empty(), "in no playlist");
         let wants = wanted(&phone, &playlists, true);

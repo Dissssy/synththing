@@ -106,6 +106,7 @@ pub const CATEGORIES: &[Category] = &[
         name: "Songs",
         settings: &[
             setting("audio_files", "Show audio files", &["show_audio_files"]),
+            setting("songs_view", "Columns, sorting and grouping", &["songs_view"]),
             setting("preload", "Preload songs on hover", &["preload_on_hover"]),
             setting("unload", "Unload preloaded files after", &["preload_expiry_secs"]),
             PLAYLISTS,

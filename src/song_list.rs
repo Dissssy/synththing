@@ -1,25 +1,134 @@
 //! The Songs tab: the song library's songs (`song_store.rs`), by their
-//! names (`song_title`), sorted by them or by their original files' names,
-//! with a fuzzy search over both. Double-clicking a song plays it (and
-//! marks it as playing); rows can be selected several at a time and
-//! dragged out together (onto a playlist).
+//! names (`song_title`), in columns of what's known of them (`View`,
+//! synced like the other settings): sorted by any of them, and grouped by
+//! one on the fly, with a fuzzy search over the names, file names and tags.
+//! Double-clicking a song plays it (and marks it as playing); rows can be
+//! selected several at a time and dragged out together (onto a playlist).
+//! For touch, the column sorted by goes on a second line, and sorting and
+//! grouping are in a menu.
 
+use std::cmp::Ordering;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
+use serde::{Deserialize, Serialize};
 
 use crate::select_list::{self, Selection};
 
 /// How many ranked matches are shown for a query.
 const MAX_SEARCH_RESULTS: usize = 200;
+/// Room at the end of each row for its own widgets (`trailing`).
+const TRAILING_WIDTH: f32 = 36.0;
+/// The least the name keeps: columns that don't fit beside it are left out.
+const MIN_NAME_WIDTH: f32 = 120.0;
 
 /// Draws a row's right-click menu, given the songs it applies to (the
 /// selection, if the row's in it).
 pub type RowMenu<'a> = &'a mut dyn FnMut(&mut egui::Ui, &[PathBuf]);
 
+/// The list's columns, sorting and grouping (`Config::songs_view`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct View {
+    /// Shown after the name, in order (`COLUMNS`' keys).
+    pub columns: Vec<String>,
+    /// `"name"`, or a column's key.
+    pub sort: String,
+    pub descending: bool,
+    /// A groupable column's key, or empty for no groups.
+    pub group: String,
+}
+
+impl Default for View {
+    fn default() -> Self {
+        Self { columns: vec!["artist".into(), "album".into(), "length".into()], sort: "name".into(), descending: false, group: String::new() }
+    }
+}
+
+/// A column the list can show: a song title field (`song_title::FIELDS`)
+/// or when the song was imported.
+pub struct Column {
+    pub key: &'static str,
+    pub title: &'static str,
+    width: f32,
+    /// Songs share its values often enough to group by them.
+    groups: bool,
+}
+
+const fn col(key: &'static str, title: &'static str, width: f32, groups: bool) -> Column {
+    Column { key, title, width, groups }
+}
+
+pub const COLUMNS: &[Column] = &[
+    col("artist", "Artist", 140.0, true),
+    col("album", "Album", 140.0, true),
+    col("album_artist", "Album artist", 140.0, true),
+    col("composer", "Composer", 140.0, true),
+    col("genre", "Genre", 100.0, true),
+    col("track", "Track", 48.0, false),
+    col("year", "Year", 52.0, true),
+    col("length", "Length", 60.0, false),
+    col("bpm", "BPM", 52.0, false),
+    col("notes", "Notes", 72.0, false),
+    col("file_extension", "Type", 52.0, true),
+    col("imported", "Imported", 96.0, true),
+    col("file_name", "File", 160.0, false),
+];
+
+fn column(key: &str) -> Option<&'static Column> {
+    COLUMNS.iter().find(|c| c.key == key)
+}
+
+/// A column's value for a song: its text, and its number for those that
+/// sort as numbers.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Value {
+    pub text: String,
+    pub number: Option<f64>,
+}
+
+/// `secs` (Unix seconds) as a date, `2026-10-20` (UTC).
+pub fn date(secs: i64) -> String {
+    // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// A song as the list shows it: its name, its original file's name, the
+/// values of the columns asked for, in order, and its tags (names and
+/// colors).
+pub struct Described {
+    pub name: String,
+    pub file_name: String,
+    pub values: Vec<Option<Value>>,
+    pub tags: Vec<(String, [u8; 3])>,
+}
+
 struct Entry {
-    label: String,
     path: PathBuf,
+    song: Described,
+}
+
+impl Entry {
+    fn tags(&self) -> impl DoubleEndedIterator<Item = (&str, [u8; 3])> {
+        self.song.tags.iter().map(|(name, color)| (name.as_str(), *color))
+    }
+}
+
+enum Item {
+    /// A group's header: its value (and that in lowercase, which tells
+    /// groups apart), how many songs it has, and whether they're hidden.
+    Group { label: String, key: String, count: usize, collapsed: bool },
+    Song(Entry),
 }
 
 #[derive(Default)]
@@ -32,8 +141,10 @@ pub struct SongList {
     hovered: Option<PathBuf>,
     /// Selected rows of what's listed (every song, or the search results).
     selection: Selection,
-    /// Sorted by the original files' names, not the names shown.
-    sort_by_file_name: bool,
+    /// The groups closed, by their headers' text (lowercase).
+    collapsed: BTreeSet<String>,
+    /// Each row's song as of the last `ui` call (`None` for a group).
+    listed: Vec<Option<PathBuf>>,
 }
 
 /// What [`SongList::ui`] reports.
@@ -43,6 +154,83 @@ pub struct Output {
     pub play: Option<PathBuf>,
     /// Delete was pressed with these selected.
     pub delete: Vec<PathBuf>,
+    /// The view changed (to save).
+    pub view_changed: bool,
+}
+
+/// How two values compare for sorting: numbers as numbers, text without
+/// case, a song without one last.
+fn compare(a: Option<&Value>, b: Option<&Value>) -> Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => match (a.number, b.number) {
+            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+            _ => a.text.to_lowercase().cmp(&b.text.to_lowercase()),
+        },
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+/// The group a song with `value` in column `key` is in: the value, or the
+/// month for the import date.
+fn group_label(key: &str, value: Option<&Value>) -> String {
+    match value {
+        Some(value) if key == "imported" => value.text.get(..7).unwrap_or(&value.text).to_string(),
+        Some(value) => value.text.clone(),
+        None => "Unknown".to_string(),
+    }
+}
+
+/// The menu of the view: what to sort and group by, and (not for touch)
+/// which columns.
+fn view_menu(ui: &mut egui::Ui, view: &mut View, touch: bool) -> bool {
+    let before = view.clone();
+    ui.menu_button("Sort by", |ui| {
+        ui.radio_value(&mut view.sort, "name".to_string(), "Name");
+        for c in COLUMNS {
+            ui.radio_value(&mut view.sort, c.key.to_string(), c.title);
+        }
+        ui.separator();
+        ui.checkbox(&mut view.descending, "Descending");
+    });
+    ui.menu_button("Group by", |ui| {
+        ui.radio_value(&mut view.group, String::new(), "Nothing");
+        ui.separator();
+        for c in COLUMNS.iter().filter(|c| c.groups) {
+            ui.radio_value(&mut view.group, c.key.to_string(), c.title);
+        }
+    });
+    if !touch {
+        ui.menu_button("Columns", |ui| {
+            for c in COLUMNS {
+                let mut shown = view.columns.iter().any(|k| k == c.key);
+                if ui.checkbox(&mut shown, c.title).changed() {
+                    if shown {
+                        view.columns.push(c.key.to_string());
+                    } else {
+                        view.columns.retain(|k| k != c.key);
+                    }
+                }
+            }
+        });
+    }
+    *view != before
+}
+
+/// A column's cell `width` wide (in a right-to-left layout), its text cut
+/// short to fit, with a line before it.
+fn cell(ui: &mut egui::Ui, width: f32, text: impl Into<egui::WidgetText>) -> egui::Response {
+    let size = egui::vec2(width, ui.available_height());
+    let response = ui
+        .allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_width(width);
+            ui.add(egui::Label::new(text).truncate().selectable(false))
+        })
+        .inner;
+    let x = response.rect.left() - ui.spacing().item_spacing.x / 2.0;
+    ui.painter().vline(x, ui.max_rect().y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
+    response
 }
 
 impl SongList {
@@ -61,41 +249,47 @@ impl SongList {
         self.hovered = None;
     }
 
+    /// The one song selected, if just one is.
+    pub fn selected_one(&self) -> Option<PathBuf> {
+        match self.selection.rows() {
+            [one] => self.listed.get(*one).cloned().flatten(),
+            _ => None,
+        }
+    }
+
     /// The library changed: what was selected may be gone.
     pub fn clear_selection(&mut self) {
         self.selection.clear();
     }
 
-    /// Draw the list (toolbar, search box, rows) into `ui`. `songs` are
-    /// the songs to list; `title` names one, `file_name` gives its
-    /// original file's name. `tools` draws buttons at the start of the
-    /// toolbar, `trailing` extra widgets at the right end of each row
-    /// (right to left), and `menu` a row's right-click menu.
+    /// Draw the list (toolbar, search box, column headers, rows) into
+    /// `ui`, as `view` says. `songs` are the songs to list; `describe`
+    /// gives one's name, file name and the values of the columns asked
+    /// for. `tools` draws buttons at the start of the toolbar, `trailing`
+    /// extra widgets at the right end of each row (right to left, in
+    /// `TRAILING_WIDTH`), and `menu` a row's right-click menu.
     #[allow(clippy::too_many_arguments)]
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
         songs: &[PathBuf],
+        view: &mut View,
         tools: &mut dyn FnMut(&mut egui::Ui),
-        title: &mut dyn FnMut(&Path) -> String,
-        file_name: &dyn Fn(&Path) -> String,
+        describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
         trailing: &mut dyn FnMut(&mut egui::Ui, &Path),
         menu: RowMenu,
     ) -> Output {
+        let touch = select_list::touch(ui.ctx());
+        let mut view_changed = false;
         ui.horizontal(|ui| {
             // Fixed-size widgets first, then the text edit last with
             // `desired_width(INFINITY)` to soak up whatever's left, sizing it
             // from `ui.available_width()` instead fed back into the layout
             // and made the row (and its containing panel) grow every frame.
             tools(ui);
-            let (sort, hint) = if self.sort_by_file_name {
-                ("Sort: file", "Sorted by the files' names. Click to sort by the songs' names.")
-            } else {
-                ("Sort: name", "Sorted by the songs' names. Click to sort by the files' names.")
-            };
-            if ui.button(sort).on_hover_text(hint).clicked() {
-                self.sort_by_file_name = !self.sort_by_file_name;
-                self.selection.clear();
+            if touch {
+                let button = crate::app::icon_button("sort-ascending");
+                egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| view_changed |= view_menu(ui, view, true));
             }
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
@@ -107,50 +301,242 @@ impl SongList {
             }
         });
 
-        let query = self.search_query.trim();
-        let entries: Vec<Entry> = if query.is_empty() {
-            let mut entries: Vec<Entry> = songs.iter().map(|p| Entry { label: title(p), path: p.clone() }).collect();
-            if self.sort_by_file_name {
-                entries.sort_by_cached_key(|e| file_name(&e.path).to_lowercase());
-            } else {
-                entries.sort_by_cached_key(|e| e.label.to_lowercase());
-            }
-            entries
+        // The columns that fit beside the name, and the one sorted by
+        // (for touch, just that, on the second line).
+        let room = ui.available_width() - TRAILING_WIDTH - MIN_NAME_WIDTH;
+        let mut used = 0.0;
+        let sorted = column(&view.sort);
+        let shown: Vec<&Column> = if touch {
+            sorted.into_iter().collect()
         } else {
-            ranked_matches(songs, query, title, file_name)
+            let hidden = sorted.filter(|c| !view.columns.iter().any(|k| k == c.key));
+            // (One that isn't a column of the user's goes first, to fit.)
+            hidden
+                .into_iter()
+                .chain(view.columns.iter().filter_map(|k| column(k)))
+                .take_while(|c| {
+                    used += c.width + ui.spacing().item_spacing.x;
+                    used <= room
+                })
+                .collect()
         };
-        let entries = entries.as_slice();
+        let mut keys: Vec<&str> = shown.iter().map(|c| c.key).collect();
+        let sort_at = column(&view.sort).map(|c| {
+            keys.push(c.key);
+            keys.len() - 1
+        });
+        let group_at = column(&view.group).map(|c| {
+            keys.push(c.key);
+            keys.len() - 1
+        });
+
+        if !touch {
+            view_changed |= self.header_ui(ui, view, &shown);
+        }
+
+        let query = self.search_query.trim();
+        let items: Vec<Item> = if query.is_empty() {
+            let mut entries: Vec<Entry> = songs.iter().map(|p| Entry { song: describe(p, &keys), path: p.clone() }).collect();
+            let by_sort = |a: &Entry, b: &Entry| {
+                let order = match sort_at {
+                    Some(i) => compare(a.song.values[i].as_ref(), b.song.values[i].as_ref()),
+                    None => a.song.name.to_lowercase().cmp(&b.song.name.to_lowercase()),
+                };
+                if view.descending { order.reverse() } else { order }
+            };
+            match group_at {
+                None => {
+                    entries.sort_by(by_sort);
+                    entries.into_iter().map(Item::Song).collect()
+                }
+                Some(g) => {
+                    let label = |e: &Entry| group_label(&view.group, e.song.values[g].as_ref());
+                    entries.sort_by(|a, b| {
+                        let (la, lb) = (label(a).to_lowercase(), label(b).to_lowercase());
+                        let group = match (la == "Unknown", lb == "Unknown") {
+                            (true, false) => Ordering::Greater,
+                            (false, true) => Ordering::Less,
+                            _ => compare(a.song.values[g].as_ref(), b.song.values[g].as_ref()).then_with(|| la.cmp(&lb)),
+                        };
+                        if la == lb { by_sort(a, b) } else { group }
+                    });
+                    self.grouped(entries, label)
+                }
+            }
+        } else {
+            ranked_matches(songs, query, &keys, describe).into_iter().map(Item::Song).collect()
+        };
+        let items = items.as_slice();
         if songs.is_empty() {
             ui.weak("No songs yet: import some, or download them from the Library.");
         }
         let active = self.active.as_deref();
-        let output = select_list::show(ui, "songs", entries, &mut self.selection, |ui, row, entry| {
-            let rows = || row.rows().into_iter().filter_map(|i| entries.get(i)).map(|e| e.path.clone()).collect::<Vec<_>>();
+        let mut toggle = None;
+        let path_of = |i: usize| match items.get(i) {
+            Some(Item::Song(entry)) => Some(entry.path.clone()),
+            _ => None,
+        };
+        let grouped_by = column(&view.group);
+        let output = select_list::show(ui, "songs", items, &mut self.selection, |ui, row, item| {
+            if touch {
+                // (Clear of the selection's edge.)
+                ui.add_space(4.0);
+            }
+            let entry = match item {
+                Item::Group { label, key, count, collapsed } => {
+                    let arrow = crate::app::icon(if *collapsed { "caret-right" } else { "caret-down" });
+                    let rect = ui.max_rect();
+                    ui.painter().rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
+                    ui.painter().hline(rect.x_range(), rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
+                    ui.label(egui::RichText::new(arrow).strong());
+                    if let Some(c) = grouped_by {
+                        ui.label(egui::RichText::new(format!("{}:", c.title)).weak());
+                    }
+                    ui.label(egui::RichText::new(label).strong());
+                    ui.label(egui::RichText::new(format!("({count})")).weak());
+                    if row.response.clicked() {
+                        toggle = Some(key.clone());
+                    }
+                    return;
+                }
+                Item::Song(entry) => entry,
+            };
+            let rows = || row.rows().into_iter().filter_map(path_of).collect::<Vec<_>>();
             if row.response.drag_started() {
                 let paths = rows();
                 let label = match paths.len() {
-                    1 => entry.label.clone(),
-                    n => format!("{} and {} more", entry.label, n - 1),
+                    1 => entry.song.name.clone(),
+                    n => format!("{} and {} more", entry.song.name, n - 1),
                 };
                 row.response.dnd_set_drag_payload(DraggedFiles { paths, label });
             }
             row.response.context_menu(|ui| menu(ui, &rows()));
+            let text = egui::RichText::new(&entry.song.name);
+            let text = if active == Some(entry.path.as_path()) { text.strong() } else { text };
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                trailing(ui, &entry.path);
-                let text = egui::RichText::new(&entry.label);
-                select_list::label(ui, if active == Some(entry.path.as_path()) { text.strong() } else { text }, None)
+                let size = egui::vec2(TRAILING_WIDTH, ui.available_height());
+                ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.set_width(TRAILING_WIDTH);
+                    trailing(ui, &entry.path);
+                });
+                if touch {
+                    // The name and the tags, and under them the value
+                    // sorted by.
+                    let second = shown.first().and(entry.song.values.first()).cloned().flatten();
+                    let Some(second) = second else {
+                        select_list::chips(ui, entry.tags());
+                        select_list::label(ui, text, None);
+                        return;
+                    };
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.add_space(3.0);
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        let line = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+                        ui.allocate_ui_with_layout(line, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            select_list::chips(ui, entry.tags());
+                            select_list::label(ui, text, None);
+                        });
+                        select_list::label(ui, egui::RichText::new(second.text).small().weak(), None);
+                    });
+                    return;
+                }
+                for (c, value) in shown.iter().zip(&entry.song.values).rev() {
+                    cell(ui, c.width, egui::RichText::new(value.as_ref().map_or("", |v| v.text.as_str())).weak());
+                }
+                select_list::chips(ui, entry.tags());
+                select_list::label(ui, text, None);
             });
         });
-
-        self.hovered = output.hovered.and_then(|i| entries.get(i)).map(|e| e.path.clone());
-        Output {
-            play: output.activated.and_then(|i| entries.get(i)).map(|e| e.path.clone()),
-            delete: if output.delete {
-                self.selection.rows().iter().filter_map(|&i| entries.get(i)).map(|e| e.path.clone()).collect()
-            } else {
-                Vec::new()
-            },
+        if let Some(key) = toggle {
+            if !self.collapsed.remove(&key) {
+                self.collapsed.insert(key);
+            }
+            self.selection.clear();
         }
+        if view_changed {
+            self.selection.clear();
+        }
+
+        self.hovered = output.hovered.and_then(path_of);
+        self.listed = (0..items.len()).map(path_of).collect();
+        Output {
+            play: output.activated.and_then(path_of),
+            delete: if output.delete { self.selection.rows().iter().filter_map(|&i| path_of(i)).collect() } else { Vec::new() },
+            view_changed,
+        }
+    }
+
+    /// The column headers: click one to sort by it (again to turn it
+    /// around), right-click for the view's menu.
+    fn header_ui(&mut self, ui: &mut egui::Ui, view: &mut View, shown: &[&Column]) -> bool {
+        let height = ui.spacing().interact_size.y;
+        // The whole row first, under the headers, for right-clicks between them.
+        let (rect, background) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
+        ui.painter().rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
+        ui.painter().hline(rect.x_range(), rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
+        let arrow = format!(" {}", crate::app::icon(if view.descending { "caret-down" } else { "caret-up" }));
+        let title = |key: &str, title: &str| {
+            let text = if view.sort == key { format!("{title}{arrow}") } else { title.to_string() };
+            egui::RichText::new(text).strong()
+        };
+        let hint = "Click to sort by it (again to turn it around); right-click for columns and groups";
+        let mut headers: Vec<(&str, egui::Response)> = Vec::new();
+        let builder = egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center));
+        ui.scope_builder(builder, |ui| {
+            ui.add_space(TRAILING_WIDTH + ui.spacing().item_spacing.x);
+            for c in shown.iter().rev() {
+                let response = cell(ui, c.width, title(c.key, c.title)).interact(egui::Sense::click());
+                headers.push((c.key, response));
+            }
+            let name = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(title("name", "Name")).truncate().selectable(false).sense(egui::Sense::click()))
+            });
+            headers.push(("name", name.inner));
+        });
+        let mut changed = false;
+        let mut sort_by = None;
+        for (key, response) in &headers {
+            let response = response.clone().on_hover_text(hint);
+            if response.clicked() {
+                sort_by = Some(*key);
+            }
+            response.context_menu(|ui| changed |= view_menu(ui, view, false));
+        }
+        background.context_menu(|ui| changed |= view_menu(ui, view, false));
+        if let Some(key) = sort_by {
+            if view.sort == key {
+                view.descending = !view.descending;
+            } else {
+                view.sort = key.to_string();
+                view.descending = false;
+            }
+            changed = true;
+        }
+        changed
+    }
+
+    /// `entries`, sorted by group, with each group's header before them
+    /// (and them left out if it's closed).
+    fn grouped(&self, entries: Vec<Entry>, label: impl Fn(&Entry) -> String) -> Vec<Item> {
+        let mut items = Vec::new();
+        let mut current: Option<(usize, String)> = None;
+        for entry in entries {
+            let label = label(&entry);
+            let group = label.to_lowercase();
+            if current.as_ref().is_none_or(|(_, key)| *key != group) {
+                let collapsed = self.collapsed.contains(&group);
+                items.push(Item::Group { label, key: group.clone(), count: 0, collapsed });
+                current = Some((items.len() - 1, group));
+            }
+            let (at, group) = current.as_ref().expect("a group was just started");
+            if let Some(Item::Group { count, .. }) = items.get_mut(*at) {
+                *count += 1;
+            }
+            if !self.collapsed.contains(group) {
+                items.push(Item::Song(entry));
+            }
+        }
+        items
     }
 }
 
@@ -163,23 +549,19 @@ pub struct DraggedFiles {
     pub label: String,
 }
 
-/// `songs` ranked against `query`, by their names (`title`) or their
-/// original files' names, whichever matches better: the top matches.
-fn ranked_matches(
-    songs: &[PathBuf],
-    query: &str,
-    title: &mut dyn FnMut(&Path) -> String,
-    file_name: &dyn Fn(&Path) -> String,
-) -> Vec<Entry> {
+/// `songs` ranked against `query`, by their names, their original files'
+/// names or their tags, whichever matches best: the top matches.
+fn ranked_matches(songs: &[PathBuf], query: &str, keys: &[&str], describe: &mut dyn FnMut(&Path, &[&str]) -> Described) -> Vec<Entry> {
     let mut scored: Vec<(i32, Entry)> = songs
         .iter()
         .filter_map(|path| {
-            let label = title(path);
-            let score = fuzzy_score(&label, query).max(fuzzy_score(&file_name(path), query))?;
-            Some((score, Entry { label, path: path.clone() }))
+            let song = describe(path, keys);
+            let tagged = song.tags.iter().filter_map(|(name, _)| fuzzy_score(name, query)).max();
+            let score = fuzzy_score(&song.name, query).max(fuzzy_score(&song.file_name, query)).max(tagged)?;
+            Some((score, Entry { song, path: path.clone() }))
         })
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.label.to_lowercase().cmp(&b.1.label.to_lowercase())));
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.song.name.to_lowercase().cmp(&b.1.song.name.to_lowercase())));
     scored.truncate(MAX_SEARCH_RESULTS);
     scored.into_iter().map(|(_, entry)| entry).collect()
 }
