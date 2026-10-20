@@ -4,6 +4,12 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Fixed
+- Syncing a big library to a slower device no longer loses songs on the way: a device sends songs only while the server has room for them, then waits for your other devices to download what's there. Before, it kept sending, and the server dropped songs nobody had downloaded yet to make room, only for them to be sent again.
+
+### Changed
+- Server: `POST /api/v1/relay/room` says how much more of an identity's songs the relay holds. Apps need it to send songs, so update the server first.
+
 ## 1.0.0 (2026-10-20)
 
 ### Added

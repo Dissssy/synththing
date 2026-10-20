@@ -396,6 +396,12 @@ pub fn relay_put(base: &str, server_key: &str, identity: &Identity, sync_key: &[
     relay_post(base, server_key, identity, id, "", &sealed).map(|_| ())
 }
 
+/// How much more of `identity`'s songs the relay takes now (bytes, sealed).
+pub fn relay_room(base: &str, server_key: &str, identity: &Identity) -> Result<u64, String> {
+    let reply: serde_json::Value = signed_post(base, server_key, identity, "/api/v1/relay/room", &serde_json::json!({}))?;
+    reply["room"].as_u64().ok_or_else(|| "the server didn't say how much room it has for your songs".to_string())
+}
+
 /// The song waiting on the relay as `id`, opened with the sync key (`None`
 /// if it isn't there).
 pub fn relay_get(base: &str, server_key: &str, identity: &Identity, sync_key: &[u8; 32], id: &str) -> Result<Option<Vec<u8>>, String> {

@@ -11,7 +11,9 @@
 //!   every song, in the library. A device that has a song another wants
 //!   sends it to the relay and marks it ready; the one that wanted it
 //!   fetches it and stops wanting it; once no one does, it's deleted from
-//!   the relay.
+//!   the relay. A device sends only while the relay has room for its
+//!   songs (`run_all`), so it never gets further ahead of the others than
+//!   that.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -168,10 +170,14 @@ pub fn plan(applied: &BTreeMap<String, Value>, device: &str, store: &SongStore, 
     Plan { leaves, tasks }
 }
 
+/// The size of the song at `path`, sealed (which adds a nonce and a tag).
+fn sealed_len(path: &Path) -> Option<u64> {
+    std::fs::metadata(path).ok().map(|m| m.len() + 28)
+}
+
 /// Whether the song at `path`, sealed, is within a relay's `relay_song_mb`.
 pub fn fits(path: &Path, relay_song_mb: u64) -> bool {
-    // (Sealing adds a nonce and a tag.)
-    std::fs::metadata(path).map_or(true, |m| m.len() + 28 <= relay_song_mb * 1024 * 1024)
+    sealed_len(path).is_none_or(|len| len <= relay_song_mb * 1024 * 1024)
 }
 
 /// The relay, as a device signed in to it reaches it.
@@ -197,6 +203,9 @@ pub enum Moved {
     Gone(String),
     Deleted,
     Failed(String, String),
+    /// The relay has no room for more of this identity's songs until the
+    /// others take some: this many weren't sent.
+    Full(usize),
 }
 
 /// Do `task` (off the main thread: songs are big).
@@ -219,6 +228,50 @@ pub fn run(relay: &Relay, task: &Task) -> Moved {
     done.unwrap_or_else(|e| Moved::Failed(key, e))
 }
 
+/// Do `tasks` in order, telling `done` what came of each (it says whether
+/// to go on). Songs go only while the relay has room for them: the rest
+/// wait (`Moved::Full`), rather than pushing out songs not fetched yet.
+pub fn run_all(relay: &Relay, tasks: &[Task], mut done: impl FnMut(Moved) -> bool) {
+    // (Asked before the first song sent, after this device's deletes.)
+    let mut room = None;
+    let mut held_back = false;
+    for (i, task) in tasks.iter().enumerate() {
+        let moved = match task {
+            Task::Send(_) if held_back => continue,
+            Task::Send(key) => {
+                let left = match room {
+                    Some(left) => left,
+                    None => match client::relay_room(&relay.server, &relay.server_key, &relay.identity) {
+                        Ok(left) => *room.insert(left),
+                        Err(e) => {
+                            held_back = true;
+                            if !done(Moved::Failed(key.clone(), e)) {
+                                return;
+                            }
+                            continue;
+                        }
+                    },
+                };
+                let len = sealed_len(&relay.dir.join(key)).unwrap_or_default();
+                if len > left {
+                    held_back = true;
+                    Moved::Full(tasks[i..].iter().filter(|t| matches!(t, Task::Send(_))).count())
+                } else {
+                    let moved = run(relay, task);
+                    if matches!(moved, Moved::Sent(_)) {
+                        room = Some(left - len);
+                    }
+                    moved
+                }
+            }
+            _ => run(relay, task),
+        };
+        if !done(moved) {
+            return;
+        }
+    }
+}
+
 /// The transfers' leaves after `moved`.
 pub fn after(mut leaves: BTreeMap<String, Value>, moved: &Moved) -> BTreeMap<String, Value> {
     match moved {
@@ -228,7 +281,7 @@ pub fn after(mut leaves: BTreeMap<String, Value>, moved: &Moved) -> BTreeMap<Str
         Moved::Gone(key) => {
             leaves.remove(&ready(key));
         }
-        Moved::Fetched(_) | Moved::Deleted | Moved::Failed(..) => {}
+        Moved::Fetched(_) | Moved::Deleted | Moved::Failed(..) | Moved::Full(_) => {}
     }
     leaves
 }
@@ -324,6 +377,25 @@ mod tests {
         assert_eq!(run(&relay("desktop"), &Task::Send(second.key.clone())), Moved::Sent(second.key.clone()));
         assert_eq!(run(&relay("phone"), &Task::Fetch(first.key.clone())), Moved::Gone(first.key.clone()));
         assert_eq!(run(&relay("phone"), &Task::Fetch(second.key.clone())), Moved::Fetched(second.key.clone()));
+        // Sent only while there's room, so none go unfetched: the rest wait,
+        // and fetching goes on.
+        let mb = 1024 * 1024;
+        assert_eq!(client::relay_room(&server, &server_key, &identity).unwrap(), mb - (600 * 1024 + 28));
+        let third = song_store::write_in(&vec![4; 600 * 1024], "Third.wav", &root.join("desktop")).unwrap();
+        let fourth = song_store::write_in(&vec![5; 500 * 1024], "Fourth.wav", &root.join("desktop")).unwrap();
+        let run_all = |dir: &str, tasks: &[Task]| {
+            let mut moved = Vec::new();
+            super::run_all(&relay(dir), tasks, |m| {
+                moved.push(m);
+                true
+            });
+            moved
+        };
+        let tasks = [Task::Send(third.key.clone()), Task::Fetch(second.key.clone()), Task::Send(fourth.key.clone())];
+        assert_eq!(run_all("desktop", &tasks), [Moved::Full(2), Moved::Fetched(second.key.clone())]);
+        let tasks = [Task::Delete(second.key.clone()), Task::Send(third.key.clone()), Task::Send(fourth.key.clone())];
+        assert_eq!(run_all("desktop", &tasks), [Moved::Deleted, Moved::Sent(third.key.clone()), Moved::Full(1)]);
+        assert_eq!(run(&relay("phone"), &Task::Fetch(third.key.clone())), Moved::Fetched(third.key.clone()), "not pushed out");
         running.stop();
         let _ = std::fs::remove_dir_all(&root);
     }

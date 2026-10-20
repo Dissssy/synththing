@@ -92,6 +92,8 @@ pub struct SyncState {
     moves: (Sender<Moving>, Receiver<Moving>),
     /// A move failed: no more until then.
     moves_paused: Option<Instant>,
+    /// The relay was full: no sending until then (fetching goes on).
+    sends_paused: Option<Instant>,
     /// How the songs being moved are going.
     progress: Progress,
 }
@@ -127,6 +129,7 @@ impl Default for SyncState {
             busy: BTreeSet::new(),
             moves: mpsc::channel(),
             moves_paused: None,
+            sends_paused: None,
             progress: Progress::default(),
         }
     }
@@ -556,7 +559,9 @@ impl App {
             return;
         }
         // Songs the server won't take stay here, not holding up the rest.
-        let (tasks, too_big): (Vec<Task>, Vec<Task>) = plan.tasks.into_iter().partition(|task| match (task, limit) {
+        let sending = self.sync.sends_paused.is_none_or(|t| Instant::now() >= t);
+        let tasks = plan.tasks.into_iter().filter(|task| sending || !matches!(task, Task::Send(_)));
+        let (tasks, too_big): (Vec<Task>, Vec<Task>) = tasks.partition(|task| match (task, limit) {
             (Task::Send(key), Some(mb)) => song_sync::fits(&self.songs.dir().join(key), mb),
             _ => true,
         });
@@ -584,11 +589,7 @@ impl App {
             .spawn(move || {
                 // (One song failing doesn't stop the rest; the failed ones
                 // wait for the next try.)
-                for task in &tasks {
-                    if tx.send(Moving::Moved(song_sync::run(&relay, task))).is_err() {
-                        break;
-                    }
-                }
+                song_sync::run_all(&relay, &tasks, |moved| tx.send(Moving::Moved(moved)).is_ok());
                 let _ = tx.send(Moving::Finished);
             })
             .ok();
@@ -614,6 +615,12 @@ impl App {
                 }
             };
             let progress = &mut self.sync.progress;
+            if let Moved::Full(unsent) = moved {
+                // The others take what's waiting first.
+                progress.total = progress.total.saturating_sub(unsent).max(progress.done);
+                self.sync.sends_paused = Some(Instant::now() + RETRY);
+                continue;
+            }
             if !matches!(moved, Moved::Deleted) {
                 progress.done = (progress.done + 1).min(progress.total);
             }
@@ -656,11 +663,15 @@ impl App {
                         }
                     }
                 }
-                Moved::Deleted => {}
+                Moved::Deleted | Moved::Full(_) => {}
             }
         }
         if self.sync.moves_paused.is_some_and(|t| Instant::now() >= t) {
             self.sync.moves_paused = None;
+            self.sync.songs_dirty = true;
+        }
+        if self.sync.sends_paused.is_some_and(|t| Instant::now() >= t) {
+            self.sync.sends_paused = None;
             self.sync.songs_dirty = true;
         }
     }

@@ -881,6 +881,7 @@ fn handle(state: &Arc<State>, mut request: Request) {
             let name = name.to_string();
             sync::get(state, &mut request, &name)
         }
+        (Method::Post, ["api", "v1", "relay", "room"]) => relay::room(state, &mut request),
         (Method::Post, ["api", "v1", "relay", id]) => {
             let id = id.to_string();
             relay::put(state, &mut request, &id)

@@ -2,7 +2,8 @@
 //! leaves for another signed in as the same identity, each by an ID only
 //! those devices can tie to a song. On with sync. A file stays until a
 //! device deletes it or `RELAY_DAYS` pass, within `relay_song_mb` each and
-//! `relay_mb_per_identity` in all (past which the oldest go). The files are
+//! `relay_mb_per_identity` in all (past which the oldest go; devices ask how
+//! much room is left first, so they wait instead). The files are
 //! in the data folder's `relay`; a rotation moves them to the new key, and
 //! deleting the identity's data deletes them.
 
@@ -36,18 +37,23 @@ fn dir(state: &State) -> PathBuf {
     state.data.join("relay")
 }
 
-/// The signer of a request about relayed file `id`, once sync is on here,
-/// and its body (up to `limit`).
-fn signed(state: &State, request: &mut Request, path: &str, id: &str, limit: usize) -> Result<(String, Vec<u8>), Reply> {
+/// The signer of a request to the relay, once sync is on here, and its
+/// body (up to `limit`).
+fn signed(state: &State, request: &mut Request, path: &str, limit: usize) -> Result<(String, Vec<u8>), Reply> {
     if !state.config.sync {
         return Err(error(404, "this server doesn't sync"));
-    }
-    if !valid_relay_id(id) {
-        return Err(error(404, "no such file"));
     }
     let body = read_body_or(request, limit, "that song is too big to send")?;
     let key = signer(state, request, "POST", path, &body)?.ok_or_else(|| error(401, "that needs your signature"))?;
     Ok((key, body))
+}
+
+/// `signed`, about relayed file `id`.
+fn signed_about(state: &State, request: &mut Request, path: &str, id: &str, limit: usize) -> Result<(String, Vec<u8>), Reply> {
+    if !valid_relay_id(id) {
+        return Err(error(404, "no such file"));
+    }
+    signed(state, request, path, limit)
 }
 
 /// Forget files that waited too long, and delete files nothing names (a
@@ -67,11 +73,29 @@ fn sweep(state: &State) {
     }
 }
 
+/// `POST /api/v1/relay/room`, signed: how much more of the signer's files
+/// fit (bytes), so a device sends no faster than the others take them.
+pub(super) fn room(state: &State, request: &mut Request) -> Reply {
+    let key = match signed(state, request, "/api/v1/relay/room", 1024) {
+        Ok((key, _)) => key,
+        Err(reply) => return reply,
+    };
+    let held: Result<i64, _> = state.db().query_row(
+        "SELECT COALESCE(SUM(size), 0) FROM relay WHERE key = ? AND created >= ?",
+        params![key, now() - RELAY_DAYS * 24 * 3600],
+        |r| r.get(0),
+    );
+    match held {
+        Ok(held) => json(200, &serde_json::json!({ "room": (state.config.relay_mb_per_identity * MB).saturating_sub(held as u64) })),
+        Err(e) => error(500, format!("database: {e}")),
+    }
+}
+
 /// `POST /api/v1/relay/{id}`, signed, the sealed file as the body: leave
 /// it (replacing one by that ID).
 pub(super) fn put(state: &State, request: &mut Request, id: &str) -> Reply {
     let limit = (state.config.relay_song_mb * MB) as usize;
-    let (key, body) = match signed(state, request, &format!("/api/v1/relay/{id}"), id, limit) {
+    let (key, body) = match signed_about(state, request, &format!("/api/v1/relay/{id}"), id, limit) {
         Ok(found) => found,
         Err(reply) => return reply,
     };
@@ -121,7 +145,7 @@ pub(super) fn put(state: &State, request: &mut Request, id: &str) -> Reply {
 
 /// `POST /api/v1/relay/{id}/get`, signed: the sealed file.
 pub(super) fn get(state: &State, request: &mut Request, id: &str) -> Reply {
-    let key = match signed(state, request, &format!("/api/v1/relay/{id}/get"), id, 1024) {
+    let key = match signed_about(state, request, &format!("/api/v1/relay/{id}/get"), id, 1024) {
         Ok((key, _)) => key,
         Err(reply) => return reply,
     };
@@ -138,7 +162,7 @@ pub(super) fn get(state: &State, request: &mut Request, id: &str) -> Reply {
 
 /// `POST /api/v1/relay/{id}/delete`, signed: it's been taken.
 pub(super) fn delete(state: &State, request: &mut Request, id: &str) -> Reply {
-    let key = match signed(state, request, &format!("/api/v1/relay/{id}/delete"), id, 1024) {
+    let key = match signed_about(state, request, &format!("/api/v1/relay/{id}/delete"), id, 1024) {
         Ok((key, _)) => key,
         Err(reply) => return reply,
     };
