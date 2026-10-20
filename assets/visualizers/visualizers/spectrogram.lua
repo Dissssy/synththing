@@ -209,7 +209,7 @@ function render(width, height, left, right)
         -- Row 1 is the top (highest frequency): a frequency's height is how
         -- far up the log scale it sits.
         local span = math.log(MAX_FREQUENCY_HZ / MIN_FREQUENCY_HZ)
-        for _, f in ipairs(mode == "mini" and MINI_LABEL_FREQS or LABEL_FREQS) do
+        for _, f in ipairs((mode == "mini" or mode == "pip") and MINI_LABEL_FREQS or LABEL_FREQS) do
             local y = math.floor((1 - math.log(f / MIN_FREQUENCY_HZ) / span) * height + 0.5)
             local label = (f >= 1000) and ((f // 1000) .. "k") or tostring(f)
             line(0, y, 6, y, { r = 255, g = 255, b = 255, a = 0.5 })

@@ -1253,6 +1253,8 @@ pub const API_SINCE: &[(&str, &str)] = &[
     ("sequence_stop", "0.1.8"),
     ("has_focus", "0.1.1"),
     ("display_mode", "0.1.1"),
+    ("is_mobile", "1.1.0"),
+    ("touches", "1.1.0"),
     ("set_cursor_visible", "0.1.1"),
     ("set_cursor_locked", "0.1.1"),
     ("SAMPLE_RATE", "0.1.1"),

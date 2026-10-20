@@ -41,8 +41,8 @@
 //! * `DT`, seconds since the previous `render` call (0.0 on the first,
 //!   capped at 0.25).
 //! * Input: `mouse()`, `mouse_delta()`, `scroll()`,
-//!   `mouse_down/pressed/released([button])`, `has_focus()`,
-//!   `display_mode()`; keys through rebindable actions (`input_register`,
+//!   `mouse_down/pressed/released([button])`, `touches()`, `has_focus()`,
+//!   `display_mode()`, `is_mobile()`; keys through rebindable actions (`input_register`,
 //!   `input`, `input_down`) and typing (`text_typed`, `typing_*`). Mouse
 //!   while the pointer is over the visualizer, keys while it has focus;
 //!   Escape is never reported.
@@ -3517,7 +3517,8 @@ fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> mlua::Result<Value> {
 
 /// The input and cursor functions: `mouse`, `mouse_delta`, `scroll`,
 /// `mouse_down/pressed/released`, `key_down/pressed/released`, `has_focus`,
-/// `display_mode`, `set_cursor_visible`, `set_cursor_locked`.
+/// `display_mode`, `is_mobile`, `touches`, `set_cursor_visible`,
+/// `set_cursor_locked`.
 fn register_input(
     lua: &Lua,
     input: &Rc<RefCell<VisualizerInput>>,
@@ -3752,6 +3753,28 @@ fn register_input(
     globals.set("has_focus", lua.create_function(move |_, ()| Ok(state.borrow().focused))?)?;
     let state = Rc::clone(input);
     globals.set("display_mode", lua.create_function(move |_, ()| Ok(state.borrow().mode.name()))?)?;
+    let state = Rc::clone(input);
+    globals.set("is_mobile", lua.create_function(move |_, ()| Ok(state.borrow().mobile))?)?;
+    let state = Rc::clone(input);
+    globals.set(
+        "touches",
+        lua.create_function(move |lua, ()| {
+            let list = lua.create_table()?;
+            for touch in &state.borrow().touches {
+                let t = lua.create_table()?;
+                t.set("id", touch.id as i64)?;
+                t.set("x", touch.x)?;
+                t.set("y", touch.y)?;
+                t.set("dx", touch.dx)?;
+                t.set("dy", touch.dy)?;
+                t.set("force", touch.force)?;
+                t.set("pressed", touch.pressed)?;
+                t.set("released", touch.released)?;
+                list.push(t)?;
+            }
+            Ok(list)
+        })?,
+    )?;
 
     let request = Rc::clone(cursor);
     globals.set(
@@ -5194,6 +5217,38 @@ end
         }
     }
 
+    /// Every bundled script on a phone, in picture-in-picture and out,
+    /// with a finger that touches down on the bottom of the picture (where
+    /// the keyboard's keys are), slides right and lifts.
+    #[test]
+    fn bundled_scripts_take_touch_on_mobile() {
+        for &(_, name, source) in BUNDLED_SCRIPTS {
+            let mut visualizer = LuaVisualizer::new(source.to_string(), None, 44_100);
+            let mut buffer = vec![0u32; 64 * 32];
+            for frame in 0..8 {
+                let touch = crate::visualizer::Touch {
+                    id: 5,
+                    x: 4.0 + 8.0 * frame as f32,
+                    y: 30.0,
+                    dx: if frame == 0 { 0.0 } else { 8.0 },
+                    dy: 0.0,
+                    force: None,
+                    pressed: frame == 0,
+                    released: frame == 6,
+                };
+                let input = VisualizerInput {
+                    mode: if frame < 4 { crate::visualizer::DisplayMode::Window } else { crate::visualizer::DisplayMode::Pip },
+                    mobile: true,
+                    focused: true,
+                    touches: if frame < 7 { vec![touch] } else { Vec::new() },
+                    ..Default::default()
+                };
+                visualizer.render(&mut buffer, 64, 32, &[], &sample_notes(), &sample_playback(), &input);
+                assert!(visualizer.error().is_none(), "{name}: runtime error: {:?}", visualizer.error());
+            }
+        }
+    }
+
     #[test]
     fn blank_script_template_runs_cleanly() {
         assert_script_runs_cleanly("blank template", BLANK_SCRIPT_TEMPLATE, &NotesSnapshot::default());
@@ -5254,6 +5309,42 @@ end"#;
             ]
         );
         assert_eq!(visualizer.cursor_request(), CursorRequest { hidden: true, confined: true });
+    }
+
+    #[test]
+    fn touch_and_mobile_reach_the_script() {
+        let script = r#"
+function render()
+    log("mobile " .. tostring(is_mobile()) .. " mode " .. display_mode() .. " fingers " .. #touches())
+    for _, t in ipairs(touches()) do
+        log(t.id .. " " .. t.x .. "," .. t.y .. " " .. t.dx .. " " .. tostring(t.force)
+            .. " " .. tostring(t.pressed) .. " " .. tostring(t.released))
+    end
+end"#;
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let touch = |id, x, pressed, released| crate::visualizer::Touch {
+            id,
+            x,
+            y: 2.0,
+            dx: 1.5,
+            dy: 0.0,
+            force: None,
+            pressed,
+            released,
+        };
+        let input = VisualizerInput {
+            mode: crate::visualizer::DisplayMode::Pip,
+            mobile: true,
+            touches: vec![touch(3, 4.0, true, false), touch(7, 1.0, false, true)],
+            ..Default::default()
+        };
+        render_with(&mut visualizer, &input);
+        assert_eq!(visualizer.error(), None);
+        let messages: Vec<String> = visualizer.log_entries().into_iter().map(|e| e.message).collect();
+        assert_eq!(
+            messages,
+            ["mobile true mode pip fingers 2", "3 4.0,2.0 1.5 nil true false", "7 1.0,2.0 1.5 nil false true"]
+        );
     }
 
     #[test]

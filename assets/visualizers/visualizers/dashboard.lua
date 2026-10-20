@@ -119,7 +119,7 @@ local function roll(w, h)
         rect(x0, y, math.max(x1, x0 + 2), y + math.max(1, row_h - 1), color)
     end
     -- (Not in the mini player, where it would cover too much of the roll.)
-    if display_mode() ~= "mini" then
+    if display_mode() ~= "mini" and display_mode() ~= "pip" then
         legend()
     end
 end
@@ -132,7 +132,7 @@ local function panel(x, y, w, h, title, colors, draw)
     translate(x, y)
     rect(0, 0, w, h, colors.panel)
     local title_h = TITLE_H
-    if display_mode() == "mini" then
+    if display_mode() == "mini" or display_mode() == "pip" then
         title_h = 6
     else
         text(6, 2, title, colors.title)

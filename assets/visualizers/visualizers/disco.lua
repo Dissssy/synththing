@@ -27,6 +27,8 @@
 --
 -- Time is the audio clock (samples / SAMPLE_RATE), so everything freezes on
 -- pause. Beam layers drop away automatically when there are lots of beams.
+-- On a phone (is_mobile()) it all goes lighter: a third of the beams and
+-- sparks at most, and glow layers drop away at half as many beams.
 
 local floor, max, min, sqrt, exp, abs = math.floor, math.max, math.min, math.sqrt, math.exp, math.abs
 local sin, cos, random, pi = math.sin, math.cos, math.random, math.pi
@@ -276,7 +278,7 @@ local function spawn_sparks(b)
     local px, py = cx + R * b.nx, cy - R * b.ny
     local c = b.cc.mid
     for _ = 1, 3 do
-        if #parts >= MAX_PARTS then return end
+        if #parts >= (is_mobile() and MAX_PARTS // 3 or MAX_PARTS) then return end
         local sp = (0.35 + random() * 0.6) * H
         local jx, jy = (random() - 0.5) * 0.9, (random() - 0.5) * 0.9
         local dx, dy = b.nx + jx, -b.ny + jy
@@ -645,7 +647,7 @@ function render(width, height, left, right)
             row[key] = true
             local p = prev_held[ch]
             if not (p and p[key]) then
-                if #beams >= MAX_BEAMS then drop_oldest() end
+                if #beams >= (is_mobile() and MAX_BEAMS // 3 or MAX_BEAMS) then drop_oldest() end
                 local tid = emitter_tile(ch, key)
                 local b = {
                     ch = ch, key = key, tid = tid, cc = chan_col[ch],
@@ -764,8 +766,8 @@ function render(width, height, left, right)
         amb_b = amb_b + (255 - amb_b) * ka
     end
 
-    -- Fewer glow layers when there are lots of beams
-    local nb = #beams
+    -- Fewer glow layers when there are lots of beams (sooner on a phone)
+    local nb = is_mobile() and #beams * 2 or #beams
     local lod = 4
     if nb > 80 then lod = 2 elseif nb > 40 then lod = 3 end
 

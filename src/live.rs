@@ -105,6 +105,9 @@ impl Schedule {
                 }
             }
             LiveCommand::Release { channel, key } => {
+                // A held note released before the clock reached it never
+                // starts (or nothing would ever release it).
+                self.pending.retain(|p| !(p.length.is_none() && p.channel == channel && p.key == key));
                 self.end_where(|s| s.off_at.is_none() && s.channel == channel && s.key == key, ops);
             }
             LiveCommand::Stop(tag) => {
@@ -314,6 +317,18 @@ mod tests {
         schedule.apply(LiveCommand::StopAll, &mut ops);
         assert_eq!(ops, [SynthOp::AllOff]);
         assert!(schedule.idle(), "the pending note is cancelled too");
+    }
+
+    #[test]
+    fn a_held_note_released_before_it_starts_never_sounds() {
+        // A finger sliding across the keys: on and off again within one
+        // audio block.
+        let mut schedule = Schedule::new(1000);
+        let mut ops = Vec::new();
+        schedule.apply(LiveCommand::Play(vec![note(0.0, None, 60, 0)]), &mut ops);
+        schedule.apply(LiveCommand::Release { channel: 0, key: 60 }, &mut ops);
+        assert_eq!(step(&mut schedule, 10), []);
+        assert!(schedule.idle());
     }
 
     /// End to end with a real soundfont (the first in the app's list):
