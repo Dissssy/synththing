@@ -30,6 +30,7 @@ mod notifications;
 mod overflow;
 mod previews;
 mod library;
+mod library_views;
 mod recording;
 mod repair;
 mod script_windows;
@@ -212,6 +213,8 @@ pub struct App {
     old_import: Option<std::sync::mpsc::Receiver<song_store::OldImport>>,
     /// The Songs tab: the library's songs. Double-clicking one plays it.
     song_list: SongList,
+    /// The Songs, Artists and Albums views' state, for the session.
+    library_views: library_views::LibraryViews,
     /// The store's and the song info's revisions when the songs' files were
     /// last looked at for what they say (`note_song_meta`).
     meta_seen: Option<(u64, u64)>,
@@ -408,6 +411,9 @@ pub struct App {
     /// The playlist shown in the Playlists panel (not necessarily the one
     /// playing).
     viewed_playlist: Option<usize>,
+    /// The entry each playlist (by ID) last played, to continue from, for
+    /// the session.
+    playlist_positions: std::collections::HashMap<String, usize>,
     /// Set while playing from a playlist; `None` for a song picked straight
     /// from the browser.
     now_playing: Option<NowPlaying>,
@@ -569,6 +575,7 @@ impl App {
             songs,
             old_import,
             song_list: SongList::default(),
+            library_views: library_views::LibraryViews::default(),
             meta_seen: None,
             smart_seen: None,
             rules_editor: None,
@@ -661,6 +668,7 @@ impl App {
             credits_search: String::new(),
             playlists,
             viewed_playlist,
+            playlist_positions: std::collections::HashMap::new(),
             now_playing: None,
             listed: None,
             advance_armed: false,
@@ -2676,12 +2684,7 @@ impl App {
         }
         let extensions = listed_song_extensions(&self.config);
         // What the list's made from: it's made again when this changes.
-        let revision = {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            (self.songs.revision(), self.song_info.revision(), &self.config.title_patterns, extensions).hash(&mut hasher);
-            hasher.finish()
-        };
+        let revision = self.songs_revision();
         let selected = self.song_list.selected_one();
         let mut info_for: Option<PathBuf> = None;
         let mut info_clicked = false;
@@ -4027,7 +4030,7 @@ impl TabViewer for SectionTabs<'_> {
         let _timing = frame_timing::scope(tab.title());
         app.tour.mark(tour::Target::Tab(*tab), ui.max_rect());
         match tab {
-            Section::Songs => app.songs_ui(ui),
+            Section::Songs => app.library_section_ui(ui),
             Section::Soundfonts => app.soundfont_ui(ui),
             Section::Playlists => app.playlist_panel_ui(ui),
             Section::Visualizer => {

@@ -7,6 +7,11 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### Added
 - Smart playlists: + > Smart playlist... in Playlists makes a playlist of the songs that match your rules (artist contains, year in a range, added in the last 30 days, has a tag, starred...), all of them or any, optionally limited to some songs, minutes, hours, MB or GB picked at random, by title, by album, newest... It keeps up as songs come in, the same on all your devices (random picks too: Re-seed picks again, everywhere). Edit its rules from the playlist's sliders button, or keep a copy that stays as it is. On a phone the rules can be looked at, not edited yet.
 - Rulesets (Preferences > Songs): rules that make a playlist for each artist, album, genre, year, composer or tag of the songs they match. By Artist and By Album are built in, and you can make your own. They sync like your other settings. For now Preferences lists the playlists each makes: the Artists and Albums views come next, on top of them.
+- Artists and Albums, beside Songs: pick them in the sidebar of the Songs tab (on a phone, from the menu). Artists lists everyone in your library (by album artist, else artist) with a search; an artist shows their albums, each a section you can fold away with its art, year and tracks, and their songs on no album. Albums is a grid of album art with a search and sort; an album opens on its own page with its artist, year, tracks by disc and number, and find in album.
+- Play and shuffle an artist or an album: it plays through to its end, whatever Autoplay is set to. Star all of an artist's songs at once.
+- Album art from the picture in the songs' files, read in the background; an album without one gets a tile in a color of its own with its initials.
+- Each view remembers where you were (its search, what's open, what's folded, how far you scrolled) until you close synththing.
+- A playlist remembers the song it was on: the fast-forward button beside Play continues from there.
 
 ## 1.1.0 (2026-10-20)
 

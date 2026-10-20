@@ -2550,6 +2550,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -5311,6 +5313,7 @@ dependencies = [
  "gethostname",
  "getrandom 0.4.3",
  "gilrs",
+ "image",
  "jni 0.21.1",
  "log",
  "mlua",

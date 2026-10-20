@@ -110,6 +110,9 @@ impl App {
         else {
             return;
         };
+        if let Some(stored) = self.playlists.lists.get(np.list) {
+            self.playlist_positions.insert(stored.id.clone(), np.entry);
+        }
         self.now_playing = Some(np.clone());
         self.listed = None;
         self.plan_upcoming();
@@ -610,6 +613,17 @@ impl App {
                         0
                     };
                     self.play_entry(list, start);
+                }
+                // Where it was left, unless that's playing now.
+                let stored = &self.playlists.lists[list];
+                let playing = self.now_playing.as_ref().is_some_and(|np| np.list == list);
+                let left_at = self.playlist_positions.get(&stored.id).copied().filter(|&e| e < stored.playlist.entries.len() && !playing);
+                if let Some(entry) = left_at {
+                    let path = stored.playlist.entries[entry].path.clone();
+                    let name = self.song_title(&path);
+                    if ui.add(super::icon_button("fast-forward")).on_hover_text(format!("Continue from {name}")).clicked() {
+                        self.play_entry(list, entry);
+                    }
                 }
             }
 

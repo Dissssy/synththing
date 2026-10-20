@@ -16,6 +16,7 @@
 // not dead.
 #![cfg_attr(target_os = "android", allow(dead_code))]
 
+mod album_art;
 mod app;
 #[cfg(any(target_os = "android", test))]
 mod android_id;
@@ -39,6 +40,7 @@ mod import;
 mod instance;
 mod layout;
 mod library;
+mod library_index;
 mod live;
 mod loader;
 mod lua_analysis;

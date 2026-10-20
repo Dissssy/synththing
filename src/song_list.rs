@@ -13,6 +13,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -59,13 +60,16 @@ pub struct Position {
     at: usize,
 }
 
-/// Playing on down the list (`Autoplay`): the song playing, the songs
-/// that have had their turn this pass through (oldest first, the one
-/// playing last), so none plays twice, and the one picked to come next
-/// (so it can be preloaded, and a shuffle's pick holds).
+/// Playing on down the list (`Autoplay`), or through an album's or
+/// artist's songs: the song playing, the songs that have had their turn
+/// this pass through (oldest first, the one playing last), so none plays
+/// twice, and the one picked to come next (so it can be preloaded, and a
+/// shuffle's pick holds).
 #[derive(Clone, Debug)]
 pub struct Playing {
     pub at: Position,
+    /// The songs played through, when they aren't the list's.
+    tracks: Option<Arc<[Queued]>>,
     pub history: Vec<PathBuf>,
     /// With whether it starts a new pass (see [`SongList::next`]).
     pub upcoming: Option<(Position, bool)>,
@@ -75,7 +79,29 @@ pub struct Playing {
 
 impl Playing {
     pub fn new(at: Position) -> Self {
-        Self { history: vec![at.path.clone()], at, upcoming: None, planned: 0 }
+        Self { history: vec![at.path.clone()], at, tracks: None, upcoming: None, planned: 0 }
+    }
+
+    /// Playing through `tracks` (each with whether it's starred) from the
+    /// one at `start`, whatever Autoplay is set to.
+    pub fn tracks(tracks: impl IntoIterator<Item = (PathBuf, bool)>, start: usize) -> Option<Self> {
+        let tracks: Arc<[Queued]> = tracks.into_iter().map(|(path, starred)| Queued { path, group: None, collapsed: false, starred }).collect();
+        let at = position(&tracks, start.min(tracks.len().checked_sub(1)?));
+        Some(Self { tracks: Some(tracks), ..Self::new(at) })
+    }
+
+    /// Whether it plays through songs of its own rather than the list.
+    pub fn has_tracks(&self) -> bool {
+        self.tracks.is_some()
+    }
+
+    /// The songs it goes through and the rules it goes by: its own (to
+    /// their end, whatever Autoplay says), else the list's.
+    fn source<'a>(&'a self, list: Option<&'a [Queued]>, rules: Rules) -> Option<(&'a [Queued], Rules)> {
+        match &self.tracks {
+            Some(tracks) => Some((tracks, Rules { autoplay: Autoplay::All, skip_collapsed: false, ..rules })),
+            None => Some((list?, rules)),
+        }
     }
 }
 
@@ -420,12 +446,14 @@ impl SongList {
     /// The song to play after `playing`'s, in the list as it is now, and
     /// whether it starts a new pass through (the history starts again).
     pub fn next(&self, playing: &Playing, rules: Rules, random: u64) -> Option<(Position, bool)> {
-        next_in(&self.built.as_ref()?.queue, playing, rules, random)
+        let (queue, rules) = playing.source(self.built.as_ref().map(|b| &b.queue[..]), rules)?;
+        next_in(queue, playing, rules, random)
     }
 
     /// The song "Previous" goes to from `playing`'s.
     pub fn previous(&self, playing: &Playing, rules: Rules) -> Option<Position> {
-        previous_in(&self.built.as_ref()?.queue, playing, rules)
+        let (queue, rules) = playing.source(self.built.as_ref().map(|b| &b.queue[..]), rules)?;
+        previous_in(queue, playing, rules)
     }
 
     /// Draw the list (toolbar, search box, column headers, rows) into
@@ -1113,6 +1141,20 @@ mod tests {
         assert_eq!(next_path(&q, &playing("a", None, 0, &[]), only), Some(("c".into(), false)));
         assert_eq!(next_path(&q, &playing("c", None, 2, &["a"]), only), Some(("c".into(), true)), "round again");
         assert_eq!(next_path(&q, &playing("a", None, 0, &[]), Rules { shuffle: true, ..only }), Some(("c".into(), false)));
+    }
+
+    #[test]
+    fn an_album_plays_through_whatever_autoplay_says() {
+        let tracks = ["a", "b", "c"].map(|p| (PathBuf::from(p), p != "b"));
+        let playing = Playing::tracks(tracks.clone(), 0).expect("there are tracks");
+        let list = SongList::default();
+        let next = list.next(&playing, rules(Autoplay::Off, false), 0).map(|(at, _)| at.path);
+        assert_eq!(next, Some(PathBuf::from("b")), "past autoplay being off, and not in the list");
+        let starred = Rules { only_starred: true, ..rules(Autoplay::Off, false) };
+        assert_eq!(list.next(&playing, starred, 0).map(|(at, _)| at.path), Some(PathBuf::from("c")));
+        let last = Playing::tracks(tracks, 2).expect("there are tracks");
+        assert!(list.next(&last, rules(Autoplay::Off, false), 0).is_none(), "it ends with the album");
+        assert!(Playing::tracks([], 0).is_none());
     }
 
     #[test]

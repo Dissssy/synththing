@@ -49,12 +49,25 @@ impl App {
         self.request_play(&at.path, None, None, false);
     }
 
+    /// Play through `tracks` (each with whether it's starred) from the one
+    /// at `start`: an album's or artist's songs, to their end, leaving any
+    /// playlist.
+    pub(super) fn play_tracks(&mut self, tracks: Vec<(std::path::PathBuf, bool)>, start: usize) {
+        let Some(playing) = Playing::tracks(tracks, start) else { return };
+        let path = playing.at.path.clone();
+        self.now_playing = None;
+        self.listed = Some(playing);
+        self.plan_listed();
+        self.request_play(&path, None, None, false);
+    }
+
     /// Turn Autoplay to `mode`. Turned on with a song from the list
     /// playing, the list plays on from it.
     pub(super) fn set_autoplay(&mut self, mode: Autoplay) {
         self.autoplay = mode;
         if mode == Autoplay::Off {
-            self.listed = None;
+            // (An album playing through goes on.)
+            self.listed.take_if(|p| !p.has_tracks());
         } else if self.listed.is_none()
             && self.now_playing.is_none()
             && let Some(at) = self.current_song.as_deref().and_then(|p| self.song_list.position_of(p))
