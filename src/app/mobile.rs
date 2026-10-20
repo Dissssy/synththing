@@ -106,6 +106,9 @@ pub(super) struct Mobile {
     /// What the media session was last told, and when.
     #[cfg(target_os = "android")]
     told: Option<(crate::android::Playback, std::time::Instant)>,
+    /// The songs moving between devices the sync service was last told of.
+    #[cfg(target_os = "android")]
+    sync_told: Option<(usize, usize)>,
     /// What picture-in-picture was last set to: whether leaving goes into
     /// it, and its shape.
     #[cfg(target_os = "android")]
@@ -789,7 +792,8 @@ impl App {
 
     /// The Android side of `tick`: open a sign-in link the app was opened
     /// with, carry out the media buttons pressed outside the app, and keep the media session (the notification, the
-    /// lock screen) up to date with what's playing.
+    /// lock screen) up to date with what's playing, and the sync service
+    /// with the songs moving between devices.
     pub(super) fn android_tick(&mut self, view: &EngineView) {
         use crate::android::{self, MediaCommand, Playback};
 
@@ -841,6 +845,12 @@ impl App {
         if stale && (has_song || self.mobile_state.told.is_some()) {
             android::set_playback(&playback);
             self.mobile_state.told = Some((playback, std::time::Instant::now()));
+        }
+        let moving = self.songs_moving();
+        if moving != self.mobile_state.sync_told {
+            let (done, total) = moving.unwrap_or_default();
+            android::set_sync_progress(done, total);
+            self.mobile_state.sync_told = moving;
         }
     }
 }
