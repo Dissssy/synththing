@@ -74,10 +74,15 @@ fn name_ui(ui: &mut egui::Ui, name: &str, labels: &ItemLabels) {
 }
 
 impl App {
-    /// The Settings, Controls and Debug buttons above the visualizer (a
-    /// cog, a gamepad and a bug); Settings and Controls greyed out when the
-    /// script has none, the bug red while the script is failing.
-    pub(super) fn script_window_buttons_ui(&mut self, ui: &mut egui::Ui) {
+    /// The Settings, Controls and Debug buttons (a cog, a gamepad and a
+    /// bug), each made by `button` from its icon and a color for it;
+    /// Settings and Controls greyed out when the script has none, the bug
+    /// red while the script is failing.
+    pub(super) fn script_window_buttons_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        button: impl Fn(&str, Option<egui::Color32>) -> egui::Button<'static>,
+    ) {
         let settings = self.script.settings().len();
         let controls = self.script.actions().len();
         let count = |n: usize, what: &str| match n {
@@ -87,7 +92,7 @@ impl App {
         };
         let settings_hover = format!("Settings: {}", count(settings, "settings"));
         if ui
-            .add_enabled(settings > 0, super::icon_button("gear"))
+            .add_enabled(settings > 0, button("gear", None))
             .on_hover_text(&settings_hover)
             .on_disabled_hover_text(&settings_hover)
             .clicked()
@@ -96,20 +101,20 @@ impl App {
         }
         let controls_hover = format!("Controls: {}", count(controls, "controls"));
         if ui
-            .add_enabled(controls > 0, super::icon_button("game-controller"))
+            .add_enabled(controls > 0, button("game-controller", None))
             .on_hover_text(&controls_hover)
             .on_disabled_hover_text(&controls_hover)
             .clicked()
         {
             self.script_window = Some(ScriptWindow::Controls);
         }
-        let (button, hover) = if self.script.error().is_some() {
-            (super::colored_icon_button("bug", ui.visuals().error_fg_color), "Debug (the script has an error)")
+        let (color, hover) = if self.script.error().is_some() {
+            (Some(ui.visuals().error_fg_color), "Debug (the script has an error)")
         } else {
-            (super::icon_button("bug"), "Debug")
+            (None, "Debug")
         };
         if ui
-            .add(button)
+            .add(button("bug", color))
             .on_hover_text(format!("{hover}: the script's variables, its debug_locals(), its log, and how long it takes to draw"))
             .clicked()
         {
@@ -320,7 +325,6 @@ impl App {
     fn script_debug_body_ui(&mut self, ui: &mut egui::Ui) {
         let mut index = self.script_window_tab[ScriptWindow::Debug.slot()];
         let mut clear_log = false;
-        let mut retry = false;
         categories_body(ui, "script_debug", &DEBUG_TABS, &mut index, |ui, index| match index {
             VARIABLES => {
                 ui.weak(
@@ -360,7 +364,7 @@ impl App {
                 }
             }
             PERFORMANCE => {
-                self.performance_ui(ui, &mut retry);
+                self.performance_ui(ui);
             }
             _ => {
                 if ui.small_button("Clear").clicked() {
@@ -397,13 +401,10 @@ impl App {
         if clear_log {
             self.script.clear_log();
         }
-        if retry {
-            self.script.retry_full_frame_rate();
-        }
     }
 
     /// Debug > Performance: how long `render()` takes, against 60 fps.
-    fn performance_ui(&self, ui: &mut egui::Ui, retry: &mut bool) {
+    fn performance_ui(&self, ui: &mut egui::Ui) {
         let perf = self.script.perf_summary();
         if perf.frames == 0 {
             ui.weak("(not drawn yet)");
@@ -419,15 +420,9 @@ impl App {
         };
         ui.colored_label(color, format!("render() {:.1} ms on average, {:.1} ms at worst", perf.avg_ms, perf.max_ms));
         ui.weak(format!(
-            "Over the last second. A 60 fps frame allows {budget:.1} ms; a script averaging more than that \
-             for 3 seconds runs at 30 fps until its code changes."
+            "Over the last second. A 60 fps frame allows {budget:.1} ms; a script taking longer draws fewer \
+             frames, while the rest of the app keeps its pace."
         ));
-        if perf.half_rate {
-            ui.colored_label(ui.visuals().warn_fg_color, "Running at 30 fps.");
-            *retry = ui.button("Try 60 fps again").clicked();
-        } else {
-            ui.label("Running at 60 fps.");
-        }
     }
 
     /// The actions `shown` and their bindings, each a button: click one to

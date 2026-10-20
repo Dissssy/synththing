@@ -254,6 +254,7 @@ impl State {
     /// The saved state for the blob `name`, if it syncs here (for the sync
     /// key there is now).
     pub fn load(name: &str) -> Option<Self> {
+        let _timing = crate::frame_timing::scope("sync state load");
         let sync_key = crate::library::identity::sync_key()?;
         let state: Self = serde_json::from_str(&std::fs::read_to_string(path(name)?).ok()?).ok()?;
         (state.key == key_check(&sync_key)).then_some(state)
@@ -272,6 +273,7 @@ impl State {
     }
 
     pub fn save(&self, name: &str) -> Result<(), String> {
+        let _timing = crate::frame_timing::scope("sync state save");
         let path = path(name).ok_or("no config folder")?;
         std::fs::write(&path, serde_json::to_string(self).unwrap_or_default())
             .map_err(|e| format!("couldn't write {}: {e}", path.display()))
@@ -411,6 +413,10 @@ pub fn merge_where(base: &Fields, local: &Fields, server: &Fields, syncs: impl F
         if chosen.map(|f| &f.value) != l.map(|f| &f.value) || conflict.is_some() {
             changes.push(Change { path: path.clone(), conflict });
         }
+        // The same value as the server's is the server's leaf, stamp and
+        // all: two devices that set it apart would otherwise write their
+        // own stamps over each other's forever.
+        let chosen = if chosen.map(|f| &f.value) == s.map(|f| &f.value) { s } else { chosen };
         if let Some(field) = chosen {
             merged.insert(path.clone(), field.clone());
         }
@@ -545,6 +551,21 @@ mod tests {
         // Removed on one side.
         let (merged, _) = merge(&base, &fields(&[("a", json!(1), 1), ("b", json!(1), 1)]), &base, &Choices::new());
         assert!(!merged.contains_key("c"));
+    }
+
+    #[test]
+    fn same_values_settle_on_the_servers_stamps() {
+        // Both devices set a to 2, at different times: nothing to write.
+        let base = fields(&[("a", json!(1), 1)]);
+        let server = fields(&[("a", json!(2), 10)]);
+        let phone = fields(&[("a", json!(2), 20)]);
+        let (merged, changes) = merge(&base, &phone, &server, &Choices::new());
+        assert_eq!(merged, server);
+        assert!(changes.is_empty());
+        // Neither changed it since the last sync, but their stamps differ.
+        let (merged, changes) = merge(&server, &phone, &server, &Choices::new());
+        assert_eq!(merged, server);
+        assert!(changes.is_empty());
     }
 
     #[test]

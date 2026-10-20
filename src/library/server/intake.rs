@@ -40,6 +40,7 @@ struct Waiting {
     os: String,
     text: String,
     log: Option<String>,
+    performance: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -72,7 +73,7 @@ pub(super) fn waiting(state: &State, request: &Request) -> Reply {
     let db = state.db();
     let notes = db
         .prepare(
-            "SELECT id, created, channel, app_version, os, text, log FROM feedback
+            "SELECT id, created, channel, app_version, os, text, log, performance FROM feedback
              WHERE taken IS NULL AND handled IS NULL ORDER BY id LIMIT ?",
         )
         .and_then(|mut s| {
@@ -85,6 +86,7 @@ pub(super) fn waiting(state: &State, request: &Request) -> Reply {
                     os: r.get(4)?,
                     text: r.get(5)?,
                     log: r.get::<_, Option<String>>(6)?.map(|log| tail(&log)),
+                    performance: r.get(7)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()

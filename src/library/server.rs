@@ -689,6 +689,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 17 {
         db.execute_batch(relay::SCHEMA_V17)?;
     }
+    if version < 18 {
+        db.execute_batch(feedback::SCHEMA_V18)?;
+    }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
 }

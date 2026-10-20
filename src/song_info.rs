@@ -27,7 +27,7 @@ use crate::midi_notes::NoteList;
 
 /// A song's length (when it can be known without decoding it) and its
 /// details as label/value pairs, empty when the file has nothing to say.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SongInfo {
     pub length: Option<f64>,
     pub details: Vec<(String, String)>,
@@ -151,6 +151,8 @@ pub struct SongInfoCache {
     file: Option<PathBuf>,
     /// When the first read not saved yet landed.
     unsaved_since: Option<Instant>,
+    /// Counts the reads landed that changed what's known (`revision`).
+    revision: u64,
 }
 
 impl SongInfoCache {
@@ -159,7 +161,7 @@ impl SongInfoCache {
         let (tx, results) = mpsc::channel();
         let worker_queue = Arc::clone(&queue);
         let _ = thread::Builder::new().name("song-info".into()).spawn(move || worker(&worker_queue, &tx));
-        Self { slots: HashMap::new(), queue, results, file: None, unsaved_since: None }
+        Self { slots: HashMap::new(), queue, results, file: None, unsaved_since: None, revision: 0 }
     }
 
     /// A cache kept in `file`: what it holds is shown until each song is
@@ -203,6 +205,15 @@ impl SongInfoCache {
     /// repainting until they land).
     pub fn poll(&mut self) -> bool {
         while let Ok((path, info)) = self.results.try_recv() {
+            // (A read again that says what an earlier launch did changes nothing.)
+            let shown = match self.slots.get(&path) {
+                Some(Slot::Pending(known)) => known.as_deref(),
+                Some(Slot::Saved(info) | Slot::Ready(info)) => Some(&**info),
+                Some(Slot::Missing) | None => None,
+            };
+            if shown != info.as_ref() {
+                self.revision += 1;
+            }
             match info {
                 Some(info) => {
                     self.slots.insert(path, Slot::Ready(Arc::new(info)));
@@ -218,6 +229,12 @@ impl SongInfoCache {
             self.save();
         }
         self.slots.values().any(|s| matches!(s, Slot::Pending(_)))
+    }
+
+    /// A number that changes whenever a read changes what's known, so
+    /// what's made from the info (the Songs list) knows to be made again.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Write what's known to the file, on a thread of its own, leaving out

@@ -23,7 +23,7 @@ use eframe::egui;
 use crate::engine::EngineView;
 use crate::live::LiveCommand;
 use crate::lua_visualizer::{
-    self, Action, Binding, DebugSnapshot, HALF_RATE_INTERVAL, LogEntry, LuaVisualizer, PerfSummary,
+    self, Action, Binding, DebugSnapshot, LogEntry, LuaVisualizer, PerfSummary,
     PlaybackRequest, RecordingTake, ScriptOptions, StateRequest, StateSnapshot, SettingDescriptor, SettingValue, SettingsPreset, Transport,
 };
 use crate::midi_notes::NoteList;
@@ -63,10 +63,22 @@ pub struct FrameRequest {
 pub struct FrameDone {
     pub width: usize,
     pub height: usize,
+    /// `0x00RRGGBB` (for recording).
     pub pixels: Vec<u32>,
+    /// The same, ready for a texture: converted here, on the script
+    /// thread, not on the app's.
+    pub image: egui::ColorImage,
     /// The audio it was given, handed back (for recording).
     pub samples: Vec<StereoFrame>,
     pub effects: Effects,
+}
+
+impl FrameDone {
+    fn new(width: usize, height: usize, pixels: Vec<u32>, samples: Vec<StereoFrame>, effects: Effects) -> Self {
+        let colors = pixels.iter().map(|&p| egui::Color32::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8)).collect();
+        let image = egui::ColorImage::new([width, height], colors);
+        Self { width, height, pixels, image, samples, effects }
+    }
 }
 
 /// What the script asked the app to do while drawing a frame.
@@ -113,7 +125,6 @@ enum Message {
     SetSetting { key: String, value: SettingValue },
     SetActionBindings { index: usize, bindings: Vec<Binding> },
     ClearLog,
-    RetryFullFrameRate,
     Frame(Box<FrameRequest>),
 }
 
@@ -206,7 +217,6 @@ impl ScriptHost {
             shared: Arc::clone(&shared),
             repaint: Arc::clone(&repaint),
             in_flight: false,
-            last_request: None,
         };
         Self {
             messages,
@@ -401,10 +411,6 @@ impl ScriptHost {
         self.send(Message::ClearLog);
     }
 
-    pub fn retry_full_frame_rate(&self) {
-        self.send(Message::RetryFullFrameRate);
-    }
-
     /// Stop the script thread, saving the script's data, and wait for it.
     pub fn shutdown(&mut self) {
         self.quit.store(true, Ordering::Relaxed);
@@ -436,7 +442,6 @@ pub struct FramePipe {
     repaint: Arc<OnceLock<egui::Context>>,
     /// A frame was asked for and hasn't come back yet.
     in_flight: bool,
-    last_request: Option<Instant>,
 }
 
 impl FramePipe {
@@ -445,17 +450,13 @@ impl FramePipe {
         let _ = self.repaint.set(ctx.clone());
     }
 
-    /// Whether a frame can be asked for now: none is being drawn, and a
-    /// script running at the 30 fps fallback is due another.
+    /// Whether a frame can be asked for now: none is being drawn.
     pub fn ready_for_frame(&self) -> bool {
         !self.in_flight
-            && (!lock(&self.shared).status.perf.half_rate
-                || self.last_request.is_none_or(|last| last.elapsed() >= HALF_RATE_INTERVAL))
     }
 
     pub fn request_frame(&mut self, request: FrameRequest) {
         self.in_flight = true;
-        self.last_request = Some(Instant::now());
         send(&self.messages, Message::Frame(Box::new(request)));
     }
 
@@ -537,12 +538,8 @@ impl Worker {
                         .or_else(|| cause.downcast_ref::<String>().cloned())
                         .unwrap_or_default();
                     log::error!(target: "synththing::script", "the script thread hit a bug: {what}");
-                    frame_size.map(|(width, height)| FrameDone {
-                        width,
-                        height,
-                        pixels: vec![0; width * height],
-                        samples: Vec::new(),
-                        effects: Effects::default(),
+                    frame_size.map(|(width, height)| {
+                        FrameDone::new(width, height, vec![0; width * height], Vec::new(), Effects::default())
                     })
                 }
             };
@@ -631,7 +628,6 @@ fn handle(visualizer: &mut LuaVisualizer, message: Message) -> Option<FrameDone>
         Message::SetSetting { key, value } => visualizer.set_setting(&key, value),
         Message::SetActionBindings { index, bindings } => visualizer.set_action_bindings(index, bindings),
         Message::ClearLog => visualizer.clear_log(),
-        Message::RetryFullFrameRate => visualizer.retry_full_frame_rate(),
         Message::Frame(request) => {
             let FrameRequest { width, height, mut pixels, samples, notes, playback, input, transport, timestep } =
                 *request;
@@ -644,7 +640,7 @@ fn handle(visualizer: &mut LuaVisualizer, message: Message) -> Option<FrameDone>
                 live_commands: visualizer.take_live_commands(),
                 playback_requests: visualizer.take_playback_requests(),
             };
-            return Some(FrameDone { width, height, pixels, samples, effects });
+            return Some(FrameDone::new(width, height, pixels, samples, effects));
         }
     }
     None

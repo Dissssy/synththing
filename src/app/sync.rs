@@ -5,7 +5,8 @@
 //! moment after it changes here, and when the notification stream says
 //! another device wrote. Songs move through the relay on a thread of their
 //! own too, one after another, and another listens for songs streamed
-//! here.
+//! here. The library's and transfers' states live on a thread of their
+//! own as well (`songs`): they cover every song.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,10 +21,13 @@ use crate::config::Config;
 use crate::library::identity::{self, Identity};
 use crate::library::{self, client};
 use crate::device::Device;
+use crate::frame_timing;
 use crate::playlist_sync;
 use crate::settings_sync::{self, Change, Fields, State, Winner};
 use crate::song_store::Stored;
 use crate::song_sync::{self, Moved, Relay, Task};
+
+mod songs;
 
 /// How long after a change before it's sent (a slider being dragged
 /// saves over and over).
@@ -59,6 +63,16 @@ impl Blob {
 
     fn index(self) -> usize {
         self as usize
+    }
+
+    /// Its section in the slow-frame log, taking in a sync.
+    fn synced_section(self) -> &'static str {
+        match self {
+            Blob::Settings => "settings synced",
+            Blob::Playlists => "playlists synced",
+            Blob::Library => "library synced",
+            Blob::Transfers => "transfers synced",
+        }
     }
 }
 
@@ -109,6 +123,10 @@ pub struct SyncState {
     wanted_ids: Arc<Mutex<HashMap<String, String>>>,
     /// How the songs being moved are going.
     progress: Progress,
+    /// Keeps the library's and transfers' states.
+    worker: (Sender<songs::Request>, Receiver<songs::Reply>),
+    /// The songs went to the worker; the next change waits for its plan.
+    songs_pending: bool,
 }
 
 /// How a round of songs being moved is going: those to fetch or send, how
@@ -136,12 +154,14 @@ enum Moving {
 
 impl Default for SyncState {
     fn default() -> Self {
+        let events = mpsc::channel();
+        let worker = songs::spawn(events.0.clone());
         Self {
             on: false,
             for_identity: None,
             choices: Default::default(),
             channels: Default::default(),
-            events: mpsc::channel(),
+            events,
             error: None,
             toast: None,
             songs_dirty: false,
@@ -155,6 +175,8 @@ impl Default for SyncState {
             wanted: BTreeSet::new(),
             wanted_ids: Arc::default(),
             progress: Progress::default(),
+            worker,
+            songs_pending: false,
         }
     }
 }
@@ -311,7 +333,7 @@ impl App {
             let state = State::load(settings_sync::NAME);
             self.sync.on = state.is_some() && identity.is_some();
             self.sync.choices = state.map(|s| s.choices).unwrap_or_default();
-            for blob in Blob::ALL {
+            for blob in [Blob::Settings, Blob::Playlists] {
                 let state = State::load(blob.name());
                 let wanted = self.syncing(blob).then(Instant::now);
                 *self.channel(blob) = Channel { revision: state.as_ref().map_or(0, |s| s.revision), wanted, ..Channel::default() };
@@ -321,6 +343,11 @@ impl App {
                     self.start_blob(blob);
                 }
             }
+            // (The songs' once the worker has read them: `Reply::Loaded`.)
+            for blob in [Blob::Library, Blob::Transfers] {
+                *self.channel(blob) = Channel::default();
+            }
+            self.ask_worker(songs::Request::Reload);
             self.sync.for_identity = whose;
             self.sync.songs_dirty = true;
             self.stop_listening();
@@ -332,6 +359,10 @@ impl App {
             self.channel(Blob::Settings).dirty_since = Some(Instant::now());
         }
         while let Ok((blob, result)) = self.sync.events.1.try_recv() {
+            let _timing = frame_timing::scope(blob.synced_section());
+            if let Ok(outcome) = &result {
+                log::info!("{} synced: revision {}, {} changed", blob.name(), outcome.revision, outcome.changes.len());
+            }
             self.channel(blob).running = false;
             if result.is_ok() {
                 self.channel(blob).adopt = false;
@@ -340,7 +371,11 @@ impl App {
                 Ok(outcome) => match blob {
                     Blob::Settings => self.settings_synced(outcome),
                     Blob::Playlists => self.playlists_synced(outcome),
-                    Blob::Library | Blob::Transfers => self.songs_synced(blob, outcome),
+                    Blob::Library | Blob::Transfers => {
+                        self.sync.error = None;
+                        let songs = self.songs_now();
+                        self.ask_worker(songs::Request::Synced(blob, outcome, songs));
+                    }
                 },
                 Err(e) => {
                     log::info!("{} sync: {e}", blob.name());
@@ -349,10 +384,15 @@ impl App {
                 }
             }
         }
-        self.poll_moves();
-        if std::mem::take(&mut self.sync.songs_dirty) && self.sync.on {
-            self.record_library();
-            self.plan_transfers();
+        while let Ok(reply) = self.sync.worker.1.try_recv() {
+            frame_timing::time("sync worker replies", || self.take_reply(reply));
+        }
+        frame_timing::time("poll_moves", || self.poll_moves());
+        if self.sync.songs_dirty && self.sync.on && !self.sync.songs_pending {
+            self.sync.songs_dirty = false;
+            self.sync.songs_pending = true;
+            let songs = self.songs_now();
+            self.ask_worker(songs::Request::Songs(songs));
         }
         for blob in Blob::ALL {
             let channel = &self.sync.channels[blob.index()];
@@ -363,7 +403,7 @@ impl App {
                 channel.dirty_since = None;
                 channel.wanted = None;
                 let adopt = channel.adopt;
-                self.start_sync(blob, adopt);
+                frame_timing::time("start_sync", || self.start_sync(blob, adopt));
             }
         }
     }
@@ -383,6 +423,13 @@ impl App {
     }
 
     fn start_sync(&mut self, blob: Blob, adopt: bool) {
+        if matches!(blob, Blob::Library | Blob::Transfers) {
+            let Some((server, server_key, identity, sync_key)) = self.sync_with() else { return };
+            let choices = self.sync.choices.clone();
+            let job = Job { server, server_key, identity, sync_key, blob, base: Fields::new(), local: Fields::new(), adopt, choices };
+            self.channel(blob).running = true;
+            return self.ask_worker(songs::Request::Sync(Box::new(job)));
+        }
         let Some(state) = State::load(blob.name()) else { return };
         let Some((server, server_key, identity, sync_key)) = self.sync_with() else { return };
         let choices = self.sync.choices.clone();
@@ -503,68 +550,24 @@ impl App {
     /// Start syncing `blob` here: the server's leaves, if it has any, with
     /// this device's added.
     fn start_blob(&mut self, blob: Blob) {
-        let Some(sync_key) = identity::sync_key() else { return };
         let leaves = match blob {
             Blob::Settings => return,
             Blob::Playlists => playlist_sync::leaves(&self.playlists, &self.songs),
-            Blob::Library => song_sync::library_leaves(&self.songs, &Default::default()),
-            Blob::Transfers => Default::default(),
+            Blob::Library | Blob::Transfers => {
+                let songs = self.songs_now();
+                return self.ask_worker(songs::Request::Start(blob, songs));
+            }
         };
+        let Some(sync_key) = identity::sync_key() else { return };
         match State::of(&sync_key, leaves).save(blob.name()) {
             Ok(()) => *self.channel(blob) = Channel { wanted: Some(Instant::now()), adopt: true, ..Channel::default() },
             Err(e) => self.sync.error = Some(e),
         }
     }
 
-    /// A library or transfers sync is done: take its leaves, with whatever
-    /// was changed here while it ran, and see what that means for the songs.
-    fn songs_synced(&mut self, blob: Blob, outcome: Outcome) {
-        self.sync.error = None;
-        if blob == Blob::Library {
-            // (What changed here meanwhile goes in first, not to be taken
-            // for something another device removed.)
-            self.record_library();
-        }
-        let Some(mut state) = State::load(blob.name()) else { return };
-        let (result, _) = settings_sync::merge_where(&outcome.local, &state.fields, &outcome.merged, |_| true);
-        if blob == Blob::Library {
-            song_sync::apply_library(&mut self.songs, &result);
-        }
-        if result != outcome.merged {
-            self.channel(blob).dirty_since = Some(Instant::now());
-        }
-        state.applied = result.iter().map(|(k, f)| (k.clone(), f.value.clone())).collect();
-        state.revision = outcome.revision;
-        state.base = outcome.merged;
-        state.fields = result;
-        self.channel(blob).revision = state.revision;
-        if let Err(e) = state.save(blob.name()) {
-            log::warn!("{} sync: {e}", blob.name());
-        }
-        self.sync.songs_dirty = true;
-    }
-
-    /// Note the songs here in the synced library.
-    fn record_library(&mut self) {
-        if !self.syncing(Blob::Library) {
-            return;
-        }
-        let Some(mut state) = State::load(song_sync::LIBRARY) else { return };
-        let leaves = song_sync::library_leaves(&self.songs, &state.applied);
-        if state.record_leaves(leaves, settings_sync::now()) {
-            if let Err(e) = state.save(song_sync::LIBRARY) {
-                log::warn!("library sync: {e}");
-            }
-            self.channel(Blob::Library).dirty_since = Some(Instant::now());
-        }
-    }
-
-    /// Say which songs this device wants, and start moving those it can.
-    fn plan_transfers(&mut self) {
-        if !self.syncing(Blob::Transfers) {
-            return;
-        }
-        let Some(mut state) = State::load(song_sync::TRANSFERS) else { return };
+    /// The songs as they are here, for the worker.
+    fn songs_now(&mut self) -> Box<songs::Songs> {
+        let _timing = crate::frame_timing::scope("songs for the sync worker");
         let device = self.sync.device.get_or_insert_with(|| Device::load().id).clone();
         let every = settings_sync::syncs(&self.sync.choices, &settings_sync::EVERY_SONG);
         let wanted = song_sync::wanted(&self.songs, &self.playlists, every);
@@ -574,18 +577,71 @@ impl App {
             *self.sync.wanted_ids.lock().unwrap_or_else(|p| p.into_inner()) = song_sync::wanted_ids(&sync_key, &wanted);
             self.sync.wanted = wanted.clone();
         }
-        self.listen_for_songs(&device);
-        self.sync.given.retain(|path, at| at.elapsed() < GIVEN_FOR && state.applied.contains_key(path));
-        let given = self.sync.given.keys().cloned().collect();
-        let plan = song_sync::plan(&state.applied, &device, &self.songs, &wanted, &self.sync.busy, &given);
-        if state.record_leaves(plan.leaves, settings_sync::now()) {
-            if let Err(e) = state.save(song_sync::TRANSFERS) {
-                log::warn!("transfers sync: {e}");
-            }
-            self.channel(Blob::Transfers).dirty_since = Some(Instant::now());
+        if self.syncing(Blob::Transfers) {
+            self.listen_for_songs(&device);
         }
-        let paused = self.sync.moves_paused.is_some_and(|t| Instant::now() < t);
-        if plan.tasks.is_empty() || !self.sync.busy.is_empty() || paused {
+        self.sync.given.retain(|_, at| at.elapsed() < GIVEN_FOR);
+        Box::new(songs::Songs {
+            store: self.songs.clone(),
+            wanted,
+            device,
+            given: self.sync.given.keys().cloned().collect(),
+            busy: self.sync.busy.clone(),
+            paused: self.sync.moves_paused.is_some_and(|t| Instant::now() < t),
+            library: self.syncing(Blob::Library),
+            transfers: self.syncing(Blob::Transfers),
+        })
+    }
+
+    fn ask_worker(&self, request: songs::Request) {
+        let _ = self.sync.worker.0.send(request);
+    }
+
+    fn take_reply(&mut self, reply: songs::Reply) {
+        match reply {
+            songs::Reply::Loaded { library, transfers } => {
+                for (blob, revision) in [(Blob::Library, library), (Blob::Transfers, transfers)] {
+                    match revision {
+                        Some(revision) => {
+                            let wanted = self.syncing(blob).then(Instant::now);
+                            *self.channel(blob) = Channel { revision, wanted, ..Channel::default() };
+                        }
+                        // (One this app syncs that hasn't started here: sync
+                        // was on before this app had it.)
+                        None if self.syncing(blob) => self.start_blob(blob),
+                        None => {}
+                    }
+                }
+            }
+            songs::Reply::Started(blob) => *self.channel(blob) = Channel { wanted: Some(Instant::now()), adopt: true, ..Channel::default() },
+            songs::Reply::Changed(blob) => self.channel(blob).dirty_since = Some(Instant::now()),
+            songs::Reply::Planned(tasks) => {
+                self.sync.songs_pending = false;
+                self.start_moves(tasks);
+            }
+            songs::Reply::Skipped(blob) => self.channel(blob).running = false,
+            songs::Reply::Taken { blob, revision, library } => {
+                self.channel(blob).revision = revision;
+                if let Some(library) = library {
+                    song_sync::apply_library(&mut self.songs, &library);
+                }
+                self.sync.songs_dirty = true;
+            }
+            songs::Reply::Error(e) => self.sync.error = Some(e),
+        }
+    }
+
+    /// Stop syncing `blob` here.
+    fn stop_blob(&mut self, blob: Blob) {
+        match blob {
+            Blob::Library | Blob::Transfers => self.ask_worker(songs::Request::Stop(blob)),
+            _ => settings_sync::stop(blob.name()),
+        }
+    }
+
+    /// Start moving the songs the worker planned to.
+    fn start_moves(&mut self, tasks: Vec<Task>) {
+        if tasks.is_empty() {
             return;
         }
         let (authority, _) = self.authority();
@@ -593,10 +649,6 @@ impl App {
         if limit == Some(0) {
             // (Its "not found" would read as songs not sent yet.)
             self.sync.error = Some(format!("{} can't move songs between your devices yet: it needs updating.", super::library::host(&authority)));
-            return;
-        }
-        let tasks = plan.tasks;
-        if tasks.is_empty() {
             return;
         }
         // (Not sent to the relay while it was full a moment ago, but still
@@ -688,17 +740,7 @@ impl App {
                     self.sync.error = Some(format!("couldn't move a song between your devices: {e}"));
                     self.sync.moves_paused = Some(Instant::now() + RETRY);
                 }
-                Moved::Sent(_) | Moved::Gone(_) => {
-                    if let Some(mut state) = State::load(song_sync::TRANSFERS) {
-                        let leaves = song_sync::after(state.applied.clone(), &moved);
-                        if state.record_leaves(leaves, settings_sync::now()) {
-                            if let Err(e) = state.save(song_sync::TRANSFERS) {
-                                log::warn!("transfers sync: {e}");
-                            }
-                            self.channel(Blob::Transfers).dirty_since = Some(Instant::now());
-                        }
-                    }
-                }
+                Moved::Sent(_) | Moved::Gone(_) => self.ask_worker(songs::Request::Moved(moved.clone())),
                 Moved::Streamed { key, to } => {
                     self.sync.given.insert(song_sync::want(to, key), Instant::now());
                 }
@@ -807,7 +849,7 @@ impl App {
                 self.turn_sync_on();
             } else {
                 for blob in Blob::ALL {
-                    settings_sync::stop(blob.name());
+                    self.stop_blob(blob);
                 }
                 self.sync.on = false;
                 self.sync.error = None;
@@ -889,13 +931,13 @@ impl App {
         }
         match playlists {
             Some(true) => self.start_blob(Blob::Playlists),
-            Some(false) => settings_sync::stop(playlist_sync::NAME),
+            Some(false) => self.stop_blob(Blob::Playlists),
             None => {}
         }
         for blob in [Blob::Library, Blob::Transfers] {
             match songs {
                 Some(true) => self.start_blob(blob),
-                Some(false) => settings_sync::stop(blob.name()),
+                Some(false) => self.stop_blob(blob),
                 None => {}
             }
         }

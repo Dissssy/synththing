@@ -13,7 +13,7 @@ use tiny_http::Request;
 
 use super::moderation::{limit, refuse_banned};
 use super::{error, json, notifications, now, read_body, Reply, State};
-use crate::library::{Feedback, FeedbackRequest, MAX_FEEDBACK_LOG, MAX_FEEDBACK_TEXT};
+use crate::library::{Feedback, FeedbackRequest, MAX_FEEDBACK_LOG, MAX_FEEDBACK_PERFORMANCE, MAX_FEEDBACK_TEXT};
 
 pub(super) const SCHEMA_V13: &str = "
 BEGIN;
@@ -33,6 +33,14 @@ PRAGMA user_version = 13;
 COMMIT;
 ";
 
+/// The app's performance stats, sent along like the log.
+pub(super) const SCHEMA_V18: &str = "
+BEGIN;
+ALTER TABLE feedback ADD COLUMN performance TEXT;
+PRAGMA user_version = 18;
+COMMIT;
+";
+
 /// Feedback one address may send in a day.
 const FEEDBACK_PER_DAY: usize = 10;
 /// How long addresses are kept, and feedback once it's dealt with.
@@ -46,7 +54,7 @@ pub(super) fn send(state: &State, request: &mut Request, ip: &str) -> Reply {
     {
         return reply;
     }
-    let body = match read_body(request, MAX_FEEDBACK_TEXT * 4 + MAX_FEEDBACK_LOG + 4096) {
+    let body = match read_body(request, MAX_FEEDBACK_TEXT * 4 + MAX_FEEDBACK_LOG + MAX_FEEDBACK_PERFORMANCE + 4096) {
         Ok(body) => body,
         Err(reply) => return reply,
     };
@@ -64,12 +72,24 @@ pub(super) fn send(state: &State, request: &mut Request, ip: &str) -> Reply {
     if feedback.log.as_ref().is_some_and(|log| log.len() > MAX_FEEDBACK_LOG) {
         return error(400, "the log is too long");
     }
+    if feedback.performance.as_ref().is_some_and(|stats| stats.len() > MAX_FEEDBACK_PERFORMANCE) {
+        return error(400, "the performance stats are too long");
+    }
     // (Short fields, trimmed to a sane length rather than refused.)
     let short = |s: &str| s.trim().chars().take(100).collect::<String>();
     let db = state.db();
     let stored = db.execute(
-        "INSERT INTO feedback (text, app_version, channel, os, log, ip, created) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        params![text, short(&feedback.app_version), short(&feedback.channel), short(&feedback.os), feedback.log, ip, now()],
+        "INSERT INTO feedback (text, app_version, channel, os, log, performance, ip, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        params![
+            text,
+            short(&feedback.app_version),
+            short(&feedback.channel),
+            short(&feedback.os),
+            feedback.log,
+            feedback.performance,
+            ip,
+            now()
+        ],
     );
     match stored {
         Ok(_) => {
@@ -91,7 +111,7 @@ pub(super) fn send(state: &State, request: &mut Request, ip: &str) -> Reply {
 /// Feedback, newest first: not dealt with yet (or all).
 pub(super) fn list(db: &Connection, all: bool) -> rusqlite::Result<Vec<Feedback>> {
     db.prepare(
-        "SELECT id, text, app_version, channel, os, log, created, handled, note FROM feedback
+        "SELECT id, text, app_version, channel, os, log, created, handled, note, performance FROM feedback
          WHERE ?1 OR handled IS NULL ORDER BY id DESC LIMIT 500",
     )?
     .query_map([all], |r| {
@@ -103,6 +123,7 @@ pub(super) fn list(db: &Connection, all: bool) -> rusqlite::Result<Vec<Feedback>
                 channel: r.get(3)?,
                 os: r.get(4)?,
                 log: r.get(5)?,
+                performance: r.get(9)?,
             },
             created: r.get(6)?,
             handled: r.get(7)?,

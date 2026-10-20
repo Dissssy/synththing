@@ -50,6 +50,10 @@ base64 = "0.23"                                           # sealed sync blobs (l
 resvg = { version = "0.45", default-features = false }      # the wordmark in the menu bar (app/branding.rs)                                    # icons (the Phosphor set, as a font)
 fontdb = "0.24"                                           # finding installed fonts to fall back on (app/fonts.rs)
 skrifa = "0.44"                                           # reading which characters a font has; the same copy egui renders with
+# The profiler overlay (app/profiler.rs). Pinned to a commit: the release on
+# crates.io is still on egui 0.33.
+puffin = { git = "https://github.com/EmbarkStudios/puffin", rev = "c81e9bb5e3839f516f3e56fe2d9e9649b5bdea86" }
+puffin_egui = { git = "https://github.com/EmbarkStudios/puffin", rev = "c81e9bb5e3839f516f3e56fe2d9e9649b5bdea86" }
 
 # The GUI framework (re-exports egui): on the desktop with its defaults, on
 # Android with the native-activity backend and what that allows (not

@@ -183,14 +183,7 @@ impl Recording {
 
 /// How big a saved video is, to say so ("160 MB").
 fn file_size(path: &std::path::Path) -> String {
-    let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) as f64;
-    if bytes >= 1024.0 * 1024.0 * 1024.0 {
-        format!("{:.1} GB", bytes / (1024.0 * 1024.0 * 1024.0))
-    } else if bytes >= 1024.0 * 1024.0 {
-        format!("{:.0} MB", bytes / (1024.0 * 1024.0))
-    } else {
-        format!("{:.0} KB", (bytes / 1024.0).max(1.0))
-    }
+    crate::storage::size_text(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0))
 }
 
 fn fmt_clock(seconds: f64) -> String {

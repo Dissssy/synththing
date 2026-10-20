@@ -177,6 +177,12 @@ fn print_feedback(feedback: &Feedback) {
     for line in f.text.lines() {
         println!("    {line}");
     }
+    if let Some(stats) = &f.performance {
+        println!("    with performance stats:");
+        for line in stats.lines() {
+            println!("      {line}");
+        }
+    }
     if let Some(log) = &f.log {
         println!("    with the log ({} lines):", log.lines().count());
         for line in log.lines() {
