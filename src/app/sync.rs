@@ -1043,13 +1043,7 @@ impl App {
     /// The debug toast: what the last sync changed.
     pub(super) fn sync_toast_ui(&mut self, ctx: &egui::Context) {
         let Some((text, since)) = &self.sync.toast else { return };
-        if since.elapsed() > TOAST {
-            self.sync.toast = None;
-            return;
-        }
-        ctx.request_repaint_after(Duration::from_millis(250));
-        let text = egui::RichText::new(text.as_str());
-        if super::toast::draw(ctx, "sync_toast", egui::Align2::CENTER_TOP, egui::vec2(0.0, 48.0), text) {
+        if super::toast::draw(ctx, "sync_toast", egui::Align2::CENTER_TOP, egui::vec2(0.0, 48.0), text, None, *since, TOAST) {
             self.sync.toast = None;
         }
     }

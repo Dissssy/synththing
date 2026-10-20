@@ -333,13 +333,13 @@ fn view_menu(ui: &mut egui::Ui, view: &mut View, touch: bool) -> bool {
 }
 
 /// A column's cell `width` wide (in a right-to-left layout), its text cut
-/// short to fit, with a line before it.
-fn cell(ui: &mut egui::Ui, width: f32, text: impl Into<egui::WidgetText>) -> egui::Response {
+/// short to fit (or scrolling, while `scroll` is on), with a line before it.
+fn cell(ui: &mut egui::Ui, width: f32, text: impl Into<egui::WidgetText>, scroll: bool) -> egui::Response {
     let size = egui::vec2(width, ui.available_height());
     let response = ui
         .allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_width(width);
-            ui.add(egui::Label::new(text).truncate().selectable(false))
+            crate::marquee::show(ui, text, scroll)
         })
         .inner;
     let x = response.rect.left() - ui.spacing().item_spacing.x / 2.0;
@@ -562,6 +562,9 @@ impl SongList {
             }
             row.response.context_menu(|ui| menu(ui, &rows()));
             let text = egui::RichText::new(&entry.song.name);
+            // Only the playing row and the one under the pointer (or
+            // finger) scroll what's cut short, to keep the list calm.
+            let scroll = active == Some(row.idx) || row.response.contains_pointer();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let size = egui::vec2(TRAILING_WIDTH, ui.available_height());
                 ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -574,7 +577,7 @@ impl SongList {
                     let second = shown.first().and(entry.song.values.first()).cloned().flatten();
                     let Some(second) = second else {
                         select_list::chips(ui, entry.tags());
-                        select_list::label(ui, text, None);
+                        select_list::marquee(ui, text, scroll);
                         return;
                     };
                     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -583,17 +586,17 @@ impl SongList {
                         let line = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
                         ui.allocate_ui_with_layout(line, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             select_list::chips(ui, entry.tags());
-                            select_list::label(ui, text, None);
+                            select_list::marquee(ui, text, scroll);
                         });
-                        select_list::label(ui, egui::RichText::new(second.text).small().weak(), None);
+                        select_list::marquee(ui, egui::RichText::new(second.text).small().weak(), scroll);
                     });
                     return;
                 }
                 for (c, value) in shown.iter().zip(&entry.song.values).rev() {
-                    cell(ui, c.width, egui::RichText::new(value.as_ref().map_or("", |v| v.text.as_str())).weak());
+                    cell(ui, c.width, egui::RichText::new(value.as_ref().map_or("", |v| v.text.as_str())).weak(), scroll);
                 }
                 select_list::chips(ui, entry.tags());
-                select_list::label(ui, text, None);
+                select_list::marquee(ui, text, scroll);
             });
         });
         self.hovered = output.hovered.and_then(path_of);
@@ -634,7 +637,7 @@ impl SongList {
         ui.scope_builder(builder, |ui| {
             ui.add_space(TRAILING_WIDTH + ui.spacing().item_spacing.x);
             for c in shown.iter().rev() {
-                let response = cell(ui, c.width, title(c.key, c.title)).interact(egui::Sense::click());
+                let response = cell(ui, c.width, title(c.key, c.title), false).interact(egui::Sense::click());
                 headers.push((c.key, response));
             }
             let name = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
