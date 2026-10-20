@@ -558,23 +558,6 @@ impl App {
             }
         });
         ui.add_space(6.0);
-
-        // Its Settings, Controls and Debug, centered under it.
-        let (size, gap) = (40.0, 12.0);
-        let width = size * 3.0 + gap * 2.0;
-        let row = egui::vec2(ui.available_width(), size);
-        ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
-            self.script_window_buttons_ui(ui, |name, color| {
-                let mut text = egui::RichText::new(icon(name)).size(size * 0.5);
-                if let Some(color) = color {
-                    text = text.color(color);
-                }
-                egui::Button::new(text.atom_grow(true)).min_size(egui::Vec2::splat(size))
-            });
-        });
-        ui.add_space(6.0);
     }
 
     /// On the other pages: what's playing, with play/pause; tapping the
@@ -618,6 +601,21 @@ impl App {
                 self.load_script(idx);
                 self.mobile_state.page = Page::NowPlaying;
             }
+        });
+    }
+
+    /// On the Visualizers page, in the running script's card: its
+    /// Settings, Controls and Debug, finger-sized.
+    pub(super) fn mobile_script_window_buttons_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 12.0;
+            self.script_window_buttons_ui(ui, |name, color| {
+                let mut text = egui::RichText::new(icon(name)).size(20.0);
+                if let Some(color) = color {
+                    text = text.color(color);
+                }
+                egui::Button::new(text.atom_grow(true)).min_size(egui::Vec2::splat(40.0))
+            });
         });
     }
 
