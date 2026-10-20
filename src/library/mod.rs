@@ -567,9 +567,11 @@ pub struct ReportRequest {
     pub sprites: Vec<u32>,
 }
 
-/// Feedback text a note may hold, and log it may carry along.
+/// Feedback text a note may hold, and log and performance stats it may
+/// carry along.
 pub const MAX_FEEDBACK_TEXT: usize = 4000;
 pub const MAX_FEEDBACK_LOG: usize = 64 * 1024;
+pub const MAX_FEEDBACK_PERFORMANCE: usize = 8 * 1024;
 
 /// `POST /api/v1/feedback`, unsigned: what someone thinks of the app, for
 /// the server's admins, with the build it came from (a branch build's is
@@ -584,6 +586,10 @@ pub struct FeedbackRequest {
     /// The end of the app's log, if they chose to send it.
     #[serde(default)]
     pub log: Option<String>,
+    /// How long the app's frames took over the last minute
+    /// (`frame_timing::summary`), if they chose to send it.
+    #[serde(default)]
+    pub performance: Option<String>,
 }
 
 /// Feedback, as admins see it.

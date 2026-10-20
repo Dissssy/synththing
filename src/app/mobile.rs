@@ -727,6 +727,11 @@ impl App {
             self.mobile_state.page = Page::Log;
             close = true;
         }
+        let profiler = super::profiler::is_open();
+        if ui.add(drawer_item(ui, profiler, "gauge", "Profiler")).clicked() {
+            super::profiler::set_open(!profiler);
+            close = true;
+        }
         if item(ui, Page::Credits) {
             self.mobile_state.page = Page::Credits;
             close = true;

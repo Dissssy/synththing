@@ -16,6 +16,7 @@ pub use editor::ApplyMode;
 mod loading;
 mod mobile;
 mod preferences;
+mod profiler;
 use preferences::PrefTab;
 mod playlist_panel;
 mod identity;
@@ -1614,6 +1615,14 @@ impl App {
                 }
                 if ui.button("Log...").clicked() {
                     self.log_open = true;
+                }
+                let mut profiler = profiler::is_open();
+                if ui
+                    .checkbox(&mut profiler, "Profiler")
+                    .on_hover_text("How long each part of every frame takes, live, as a flame graph")
+                    .changed()
+                {
+                    profiler::set_open(profiler);
                 }
                 if ui.button("Credits & licenses...").clicked() {
                     self.credits_open = true;
@@ -3841,6 +3850,7 @@ impl eframe::App for App {
         self.script_busy_ui(&ctx);
         self.tour_ui(&ctx, &shared);
         self.themes_window(&ctx);
+        profiler::window(&ctx);
         drop(windows);
 
         drag_ghost_ui(&ctx);
