@@ -27,7 +27,10 @@ pub(super) fn window(ctx: &egui::Context) {
         .default_size([(screen.width() - 32.0).min(1024.0), (screen.height() * 0.6).min(600.0)])
         .max_size(screen.size() - egui::vec2(16.0, 16.0))
         .constrain(true)
-        .show(ctx, puffin_egui::profiler_ui);
+        // (Scrolling sideways inside it: its toolbar is wider than a phone.)
+        .show(ctx, |ui| {
+            egui::ScrollArea::horizontal().show(ui, puffin_egui::profiler_ui);
+        });
     if !open {
         set_open(false);
     }

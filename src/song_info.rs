@@ -167,6 +167,14 @@ enum Slot {
 
 type Queue = (Mutex<VecDeque<PathBuf>>, Condvar);
 
+/// A read done: the file's info (`None`: it isn't there), and whether it
+/// couldn't be read (its info is then empty).
+struct Read {
+    path: PathBuf,
+    info: Option<SongInfo>,
+    unreadable: bool,
+}
+
 /// How long after a read the cache is saved (so a folder being read is
 /// saved a few times, not once per song).
 const SAVE_AFTER: Duration = Duration::from_secs(10);
@@ -174,7 +182,10 @@ const SAVE_AFTER: Duration = Duration::from_secs(10);
 pub struct SongInfoCache {
     slots: HashMap<PathBuf, Slot>,
     queue: Arc<Queue>,
-    results: Receiver<(PathBuf, Option<SongInfo>)>,
+    results: Receiver<Read>,
+    /// A file that couldn't be read, since it was last taken
+    /// ([`take_unreadable`](Self::take_unreadable)).
+    unreadable: Option<PathBuf>,
     /// Where it's kept between launches, if it is.
     file: Option<PathBuf>,
     /// When the first read not saved yet landed.
@@ -189,7 +200,7 @@ impl SongInfoCache {
         let (tx, results) = mpsc::channel();
         let worker_queue = Arc::clone(&queue);
         let _ = thread::Builder::new().name("song-info".into()).spawn(move || worker(&worker_queue, &tx));
-        Self { slots: HashMap::new(), queue, results, file: None, unsaved_since: None, revision: 0 }
+        Self { slots: HashMap::new(), queue, results, unreadable: None, file: None, unsaved_since: None, revision: 0 }
     }
 
     /// A cache kept in `file`: what it holds is shown until each song is
@@ -239,7 +250,10 @@ impl SongInfoCache {
     /// whether any requests are still outstanding (so the caller can keep
     /// repainting until they land).
     pub fn poll(&mut self) -> bool {
-        while let Ok((path, info)) = self.results.try_recv() {
+        while let Ok(Read { path, info, unreadable }) = self.results.try_recv() {
+            if unreadable {
+                self.unreadable.get_or_insert_with(|| path.clone());
+            }
             // (A read again that says what an earlier launch did changes nothing.)
             let shown = match self.slots.get(&path) {
                 Some(Slot::Pending(known)) => known.as_deref(),
@@ -264,6 +278,11 @@ impl SongInfoCache {
             self.save();
         }
         self.slots.values().any(|s| matches!(s, Slot::Pending(_)))
+    }
+
+    /// A file found unreadable since this was last asked, if any.
+    pub fn take_unreadable(&mut self) -> Option<PathBuf> {
+        self.unreadable.take()
     }
 
     /// A number that changes whenever a read changes what's known, so
@@ -316,7 +335,7 @@ impl SongInfoCache {
     }
 }
 
-fn worker(queue: &Queue, results: &Sender<(PathBuf, Option<SongInfo>)>) {
+fn worker(queue: &Queue, results: &Sender<Read>) {
     let (lock, cvar) = queue;
     loop {
         let path = {
@@ -333,22 +352,27 @@ fn worker(queue: &Queue, results: &Sender<(PathBuf, Option<SongInfo>)>) {
         };
         // (Nothing to read, and nothing to say of it, for a file that isn't there.)
         let info = path.exists().then(|| read(&path));
-        if results.send((path, info)).is_err() {
+        let unreadable = matches!(&info, Some(Err(_)));
+        let info = info.map(|info| {
+            info.unwrap_or_else(|e| {
+                log::warn!("couldn't read song info for {}: {e}", path.display());
+                SongInfo::default()
+            })
+        });
+        if results.send(Read { path, info, unreadable }).is_err() {
             return;
         }
     }
 }
 
-fn read(path: &Path) -> SongInfo {
+/// The song at `path`'s info, or why it can't be read (then it likely
+/// can't be played either).
+pub fn read(path: &Path) -> Result<SongInfo, String> {
     let is_midi = path
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"));
-    let result = if is_midi { read_midi(path) } else { read_audio(path) };
-    result.unwrap_or_else(|e| {
-        log::warn!("couldn't read song info for {}: {e}", path.display());
-        SongInfo::default()
-    })
+    if is_midi { read_midi(path) } else { read_audio(path) }
 }
 
 fn read_midi(path: &Path) -> Result<SongInfo, String> {
@@ -706,7 +730,10 @@ At least one output file must be specified
         let mut paths: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
         paths.sort();
         for path in paths.iter().take(40) {
-            let info = read(path);
+            let info = read(path).unwrap_or_else(|e| {
+                println!("{} -> {e}", path.display());
+                SongInfo::default()
+            });
             println!("{} -> {:?}", path.display(), info.length.map(format_length));
             for (key, value) in &info.details {
                 println!("    {key}: {value}");

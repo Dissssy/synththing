@@ -17,8 +17,7 @@ const FRAME: Duration = Duration::from_millis(33);
 /// `text` on one line, in the width left in `ui`. Text that fits is drawn
 /// as a label is; text that doesn't scrolls sideways while `scroll` is on
 /// (from its start, after a rest, each time it's turned on or the text
-/// changes) and is cut
-/// short with "..." otherwise. A scrolling text asks for a redraw only
+/// changes) and is cut short with "..." otherwise. A scrolling text asks for a redraw only
 /// when it next moves, not every frame.
 pub fn show(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, scroll: bool) -> egui::Response {
     if !scroll {
