@@ -1106,6 +1106,7 @@ mod tests {
             channel: channel.into(),
             os: "windows x86_64".into(),
             log: None,
+            performance: None,
         };
         assert!(feedback(&base, &note("   ", "stable")).is_err());
         let stable = feedback(&base, &note(" The seek bar is tiny ", "stable")).unwrap();
@@ -1150,6 +1151,7 @@ mod tests {
             channel: "stable".into(),
             os: "linux x86_64".into(),
             log,
+            performance: None,
         };
         let agent: Agent = Agent::config_builder().http_status_as_error(false).build().into();
         let waiting = |token: &str| {
@@ -1162,7 +1164,9 @@ mod tests {
             body["feedback"].as_array().unwrap().iter().map(|f| f["id"].as_i64().unwrap()).collect()
         };
 
-        let first = feedback(&base, &note("Lanes stutter", Some(format!("é{}the end", "x".repeat(20_000))))).unwrap();
+        let stats = "3412 frames drawn in the last 60 s, 12 over 16.7 ms\n".to_string();
+        let stutter = FeedbackRequest { performance: Some(stats.clone()), ..note("Lanes stutter", Some(format!("é{}the end", "x".repeat(20_000)))) };
+        let first = feedback(&base, &stutter).unwrap();
         let second = feedback(&base, &note("Lanes are great", None)).unwrap();
         let done = feedback(&base, &note("Old news", None)).unwrap();
         admin::<serde_json::Value>(&base, &key, &server_id, &AdminAction::FeedbackDone { feedback: done, note: "#3".into() })
@@ -1173,6 +1177,8 @@ mod tests {
         let log = body["feedback"][0]["log"].as_str().unwrap();
         assert!(log.ends_with("the end") && !log.contains('é') && log.len() <= 8 * 1024);
         assert_eq!(body["feedback"][0]["text"], "Lanes stutter");
+        assert_eq!(body["feedback"][0]["performance"], stats.as_str());
+        assert!(body["feedback"][1]["performance"].is_null());
         assert!(body["feedback"][0].get("ip").is_none());
 
         let mut response = agent

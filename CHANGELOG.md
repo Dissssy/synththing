@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Send feedback can include how smoothly the app ran over the last minute (on unless you untick it): how many frames took too long, and how long each part of the app took on average and at worst. It helps track down stutters.
 - Frames that take too long to draw (over 16 ms, or one part over 8 ms) are noted in the log (Help > Log), with how long each part of the app took, to track down stutters.
 - Songs can be grouped by tag: right-click a column header (or use the sort button on a phone) > Group by > Tag. A song with several tags shows in each of their groups, and songs without tags get an Untagged group at the bottom.
 

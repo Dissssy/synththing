@@ -1098,6 +1098,11 @@ fn feedback_tab_ui(ui: &mut egui::Ui, window: &mut Window, actions: &mut Vec<(St
                 ui.weak(format!("{}, {} ({}), {}", ago(f.created), f.request.app_version, f.request.channel, f.request.os));
             });
             ui.label(&f.request.text);
+            if let Some(stats) = &f.request.performance {
+                egui::CollapsingHeader::new("How smoothly it ran").id_salt(("feedback_performance", f.id)).show(ui, |ui| {
+                    ui.label(egui::RichText::new(stats).monospace().size(11.0));
+                });
+            }
             if let Some(log) = &f.request.log {
                 egui::CollapsingHeader::new(format!("The log ({} lines)", log.lines().count())).id_salt(("feedback_log", f.id)).show(
                     ui,
