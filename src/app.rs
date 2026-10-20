@@ -1507,7 +1507,7 @@ impl App {
         let active_sf = self.active_sf;
         let mut remove = None;
         let mut use_idx = None;
-        let output = select_list::show(ui, "soundfonts", &self.config.soundfonts, &mut self.soundfont_selection, |ui, row, path| {
+        let output = select_list::show(ui, "soundfonts", &self.config.soundfonts, &mut self.soundfont_selection, None, |ui, row, path| {
             if row.response.drag_started() {
                 row.response.dnd_set_drag_payload(DraggedSoundfont(path.clone()));
             }
@@ -4180,13 +4180,13 @@ fn washed_out(color: egui::Color32, dark: bool) -> egui::Color32 {
 /// The status line's color, by what it says: red for something that
 /// failed ("Couldn't ...", "Failed to ..."), green for something done
 /// ("Saved ...", "Installed ..."), none (grey) for anything else.
-fn status_color(ui: &egui::Ui, status: &str) -> Option<egui::Color32> {
+fn status_color(visuals: &egui::Visuals, status: &str) -> Option<egui::Color32> {
     match status_outcome(status)? {
-        false => Some(ui.visuals().error_fg_color),
+        false => Some(visuals.error_fg_color),
         true => {
             // (The palette's green, darker on a light theme so it reads.)
             let green = palette_color(2);
-            Some(if ui.visuals().dark_mode { green } else { green.gamma_multiply(0.55).to_opaque() })
+            Some(if visuals.dark_mode { green } else { green.gamma_multiply(0.55).to_opaque() })
         }
     }
 }
@@ -4248,7 +4248,7 @@ fn status_line_ui(
             egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                 for entry in &recent {
                     ui.horizontal_wrapped(|ui| {
-                        match status_color(ui, &entry.message) {
+                        match status_color(ui.visuals(), &entry.message) {
                             Some(color) => ui.colored_label(color, &entry.message),
                             None => ui.label(&entry.message),
                         };
@@ -4266,7 +4266,7 @@ fn status_line_ui(
     if shown {
         *unseen_failure = false;
     }
-    match status_color(ui, status) {
+    match status_color(ui.visuals(), status) {
         Some(color) => ui.colored_label(color, status),
         None => ui.weak(status),
     };

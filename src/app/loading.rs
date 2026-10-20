@@ -233,7 +233,8 @@ impl App {
                 return;
             }
         }
-        self.song_list.set_active(Some(path.clone()));
+        let group = self.listed.as_ref().filter(|p| p.at.path == path).and_then(|p| p.at.group.clone());
+        self.song_list.set_active(Some((path.clone(), group)));
         self.current_song = Some(path);
         self.advance_armed = false;
         self.skips_in_a_row = 0;

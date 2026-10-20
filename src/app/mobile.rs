@@ -445,24 +445,11 @@ impl App {
             return;
         }
         ctx.request_repaint_after(Duration::from_millis(250));
-        let screen = ctx.content_rect();
-        let width = (screen.width() - 32.0).min(480.0);
-        let response = egui::Area::new(egui::Id::new("status_toast"))
-            .order(egui::Order::Tooltip)
-            .sense(egui::Sense::click())
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_max_width(width);
-                    let mut label = egui::RichText::new(text.as_str());
-                    if let Some(color) = status_color(ui, text) {
-                        label = label.color(color);
-                    }
-                    ui.add(egui::Label::new(label).wrap());
-                });
-            })
-            .response;
-        if response.clicked() {
+        let mut label = egui::RichText::new(text.as_str());
+        if let Some(color) = status_color(&ctx.global_style().visuals, text) {
+            label = label.color(color);
+        }
+        if super::toast::draw(ctx, "status_toast", egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0), label) {
             self.mobile_state.toast = None;
         }
     }

@@ -693,7 +693,7 @@ impl App {
         ui.weak(summary);
         ui.separator();
 
-        let output = select_list::show(ui, "playlist_rows", entries, selection, |ui, row, entry| {
+        let output = select_list::show(ui, "playlist_rows", entries, selection, playing, |ui, row, entry| {
             let idx = row.idx;
             if row.response.drag_started() {
                 let label = super::title_of(cache, &naming, &entry.path);
@@ -730,8 +730,7 @@ impl App {
                 }
             });
 
-            // The playing entry is marked in the number column; the
-            // highlight is the selection.
+            // The playing entry is marked in the number column too.
             if playing == Some(idx) {
                 ui.strong(" > ").on_hover_text("Playing");
             } else {

@@ -232,8 +232,11 @@ enum Item {
 
 #[derive(Default)]
 pub struct SongList {
-    /// The song marked as playing, if any.
-    active: Option<PathBuf>,
+    /// The song marked as playing, if any, and the group it's playing in
+    /// (when autoplay knows it; else its first).
+    active: Option<(PathBuf, Option<String>)>,
+    /// The row of `active` in the rows as made (worked out once a time).
+    active_row: Option<Option<usize>>,
     /// Live text in the search box; empty means every song.
     search_query: String,
     /// The row under the pointer as of the last `ui` call.
@@ -345,8 +348,9 @@ fn cell(ui: &mut egui::Ui, width: f32, text: impl Into<egui::WidgetText>) -> egu
 }
 
 impl SongList {
-    pub fn set_active(&mut self, path: Option<PathBuf>) {
-        self.active = path;
+    pub fn set_active(&mut self, active: Option<(PathBuf, Option<String>)>) {
+        self.active = active;
+        self.active_row = None;
     }
 
     /// The song row the pointer is over, if any.
@@ -509,20 +513,21 @@ impl SongList {
             let query = query.to_string();
             self.generation += 1;
             self.built = Some(Built { revision, view: view.clone(), keys: keys.clone(), query, empty: songs.is_empty(), items, queue });
+            self.active_row = None;
         }
         let built = self.built.as_ref().expect("the rows were just made");
         let items = built.items.as_slice();
         if built.empty {
             ui.weak("No songs yet: import some, or download them from the Library.");
         }
-        let active = self.active.as_deref();
+        let active = *self.active_row.get_or_insert_with(|| self.active.as_ref().and_then(|(path, group)| active_row(items, path, group.as_deref())));
         let mut toggle = None;
         let path_of = |i: usize| match items.get(i) {
             Some(Item::Song(entry)) => Some(entry.path.clone()),
             _ => None,
         };
         let grouped_by = group_title(&view.group);
-        let output = select_list::show(ui, "songs", items, &mut self.selection, |ui, row, item| {
+        let output = select_list::show(ui, "songs", items, &mut self.selection, active, |ui, row, item| {
             if touch {
                 // (Clear of the selection's edge.)
                 ui.add_space(4.0);
@@ -557,7 +562,6 @@ impl SongList {
             }
             row.response.context_menu(|ui| menu(ui, &rows()));
             let text = egui::RichText::new(&entry.song.name);
-            let text = if active == Some(entry.path.as_path()) { text.strong() } else { text };
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let size = egui::vec2(TRAILING_WIDTH, ui.available_height());
                 ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -744,6 +748,26 @@ impl SongList {
         }
         (items, queue)
     }
+}
+
+/// The row of `path` in `items`: under the header of `group` if it's
+/// listed there, else its first.
+fn active_row(items: &[Item], path: &Path, group: Option<&str>) -> Option<usize> {
+    let mut header: Option<&str> = None;
+    let mut first = None;
+    for (i, item) in items.iter().enumerate() {
+        match item {
+            Item::Group { key, .. } => header = Some(key),
+            Item::Song(entry) if entry.path == path => {
+                if group.is_none() || header == group {
+                    return Some(i);
+                }
+                first = first.or(Some(i));
+            }
+            Item::Song(_) => {}
+        }
+    }
+    first
 }
 
 /// Where `at` is in `queue` now, and the group it's in there: its own
@@ -1098,6 +1122,23 @@ mod tests {
             let (at, new_pass) = next_in(&q, &playing("c", None, 2, &["a", "b"]), shuffle, random).unwrap();
             assert!(new_pass && at.path != Path::new("c"), "a new pass, not the same song twice in a row");
         }
+    }
+
+    #[test]
+    fn the_playing_row_is_in_the_group_it_plays_in() {
+        let songs: &[(&str, Option<&str>, &[&str])] = &[("a", None, &["rock", "chill"]), ("b", None, &["rock"])];
+        let paths: Vec<PathBuf> = songs.iter().map(|(name, ..)| PathBuf::from(name)).collect();
+        let mut describe = |path: &Path, _: &[&str]| {
+            let (name, _, tags) = songs.iter().find(|(name, ..)| Path::new(name) == path).unwrap();
+            Described { name: name.to_string(), file_name: name.to_string(), values: vec![None], tags: tags.iter().map(|t| (t.to_string(), [0; 3])).collect() }
+        };
+        let view = View { group: TAG.into(), ..View::default() };
+        let (items, _) = SongList::default().sorted(&paths, &view, &["album"], None, None, &mut describe);
+        assert_eq!(shape(&items), ["chill (1)", "a", "rock (2)", "a", "b"]);
+        assert_eq!(active_row(&items, Path::new("a"), Some("rock")), Some(3));
+        assert_eq!(active_row(&items, Path::new("a"), None), Some(1), "its first, with no group known");
+        assert_eq!(active_row(&items, Path::new("a"), Some("jazz")), Some(1));
+        assert_eq!(active_row(&items, Path::new("c"), None), None);
     }
 
     #[test]
