@@ -228,6 +228,13 @@ pub fn label(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, hover: Option
     .inner
 }
 
+/// Like [`label`], but text that's cut short scrolls sideways instead while
+/// `scroll` is on (see [`crate::marquee::show`]).
+pub fn marquee(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, scroll: bool) -> egui::Response {
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| crate::marquee::show(ui, text, scroll))
+        .inner
+}
+
 /// A tag's chip: its name on its color (`song_store::Tag`), in text that
 /// reads on it.
 pub fn chip(ui: &mut egui::Ui, name: &str, color: [u8; 3]) -> egui::Response {

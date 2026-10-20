@@ -29,11 +29,6 @@ const PHONE_SIZE: egui::Vec2 = egui::vec2(420.0, 880.0);
 /// And back to, without it (the size the app starts at).
 const DESKTOP_SIZE: egui::Vec2 = egui::vec2(1100.0, 750.0);
 
-/// The marquee's speed, in points a second, and the gap between the end of
-/// the name and its next start.
-const MARQUEE_SPEED: f32 = 40.0;
-const MARQUEE_GAP: f32 = 48.0;
-
 /// What the mobile layout shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Page {
@@ -494,7 +489,8 @@ impl App {
         });
 
         let title = self.current_title().or_else(|| view.track_name.clone());
-        marquee(ui, title.as_deref().unwrap_or("Nothing playing"), egui::TextStyle::Heading);
+        let title = egui::RichText::new(title.as_deref().unwrap_or("Nothing playing")).heading().strong();
+        ui.vertical_centered(|ui| crate::marquee::show(ui, title, true));
         let mut detail = Vec::new();
         if let Some(np) = &self.now_playing
             && let Some(list) = self.playlists.lists.get(np.list)
@@ -883,25 +879,4 @@ fn section_row(ui: &mut egui::Ui, section: PrefTab) -> egui::Response {
 fn big_icon_button(name: &str, size: f32) -> egui::Button<'static> {
     // (Growing, the icon is centered in the button.)
     egui::Button::new(egui::RichText::new(icon(name)).size(size * 0.5).atom_grow(true)).min_size(egui::Vec2::splat(size))
-}
-
-/// `text` on one line the width of `ui`, scrolling sideways (round and
-/// round) when it's too long to fit.
-fn marquee(ui: &mut egui::Ui, text: &str, style: egui::TextStyle) {
-    let font = style.resolve(ui.style());
-    let color = ui.visuals().strong_text_color();
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, galley.size().y), egui::Sense::hover());
-    let painter = ui.painter_at(rect);
-    if galley.size().x <= width {
-        painter.galley(egui::pos2(rect.center().x - galley.size().x / 2.0, rect.top()), galley, color);
-        return;
-    }
-    let period = galley.size().x + MARQUEE_GAP;
-    let time = ui.input(|i| i.time) as f32;
-    let offset = (time * MARQUEE_SPEED) % period;
-    painter.galley(egui::pos2(rect.left() - offset, rect.top()), galley.clone(), color);
-    painter.galley(egui::pos2(rect.left() - offset + period, rect.top()), galley, color);
-    ui.ctx().request_repaint();
 }

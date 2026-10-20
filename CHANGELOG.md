@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- Song names (and column values) too long for the Songs list scroll sideways instead of staying cut off, on the playing song and the one under the pointer or your finger.
+
 ## 1.0.1 (2026-10-20)
 
 ### Added
