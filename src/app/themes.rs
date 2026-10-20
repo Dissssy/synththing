@@ -15,10 +15,9 @@ use eframe::egui::color_picker::{Alpha, color_edit_button_srgba};
 use super::App;
 use crate::theme::{self, Theme};
 
+#[derive(Default)]
 pub(super) struct ThemesState {
     pub open: bool,
-    /// Your themes (the built-in ones are `theme::builtins()`).
-    custom: Vec<Theme>,
     /// The theme and UI scale have been put into effect (first frame).
     applied: bool,
     /// A theme edit not saved yet (saved once nothing's being dragged).
@@ -31,20 +30,6 @@ pub(super) struct ThemesState {
     /// The UI scale while its slider is being dragged (applied on release,
     /// or the slider would rescale under the pointer).
     scale_drag: Option<f32>,
-}
-
-impl Default for ThemesState {
-    fn default() -> Self {
-        Self {
-            open: false,
-            custom: theme::load_custom(),
-            applied: false,
-            unsaved: None,
-            renaming: None,
-            confirm_delete: false,
-            scale_drag: None,
-        }
-    }
 }
 
 /// What was clicked in the themes' list or buttons.
@@ -66,7 +51,7 @@ impl App {
         let name = self.config.theme.as_deref().unwrap_or(theme::DEFAULT_THEME);
         theme::builtins()
             .into_iter()
-            .chain(self.themes.custom.iter().cloned())
+            .chain(self.config.custom_themes.values().cloned())
             .find(|t| t.name == name)
             .unwrap_or_else(|| theme::builtins().into_iter().find(|t| t.name == theme::DEFAULT_THEME).unwrap())
     }
@@ -77,7 +62,7 @@ impl App {
     }
 
     pub(super) fn theme_names(&self) -> Vec<String> {
-        theme::builtins().into_iter().map(|t| t.name).chain(self.themes.custom.iter().map(|t| t.name.clone())).collect()
+        theme::builtins().into_iter().map(|t| t.name).chain(self.config.custom_themes.keys().cloned()).collect()
     }
 
     pub(super) fn pick_theme(&mut self, ctx: &egui::Context, name: String) {
@@ -103,7 +88,7 @@ impl App {
         let dragging = ctx.input(|i| i.pointer.any_down());
         if self.themes.unsaved.is_some() && !dragging {
             self.themes.unsaved = None;
-            if let Err(e) = theme::save_custom(&self.current_theme()) {
+            if let Err(e) = self.config.save() {
                 self.status = format!("Couldn't save the theme: {e:#}");
             }
         }
@@ -161,10 +146,10 @@ impl App {
                             }
                             ui.add_space(6.0);
                             ui.weak("Yours");
-                            if self.themes.custom.is_empty() {
+                            if self.config.custom_themes.is_empty() {
                                 ui.weak("(none yet: duplicate one to make your own)");
                             }
-                            for t in &self.themes.custom {
+                            for t in self.config.custom_themes.values() {
                                 if ui.selectable_label(t.name == current.name, &t.name).clicked() {
                                     action = Some(ThemeAction::Pick(t.name.clone()));
                                 }
@@ -215,10 +200,10 @@ impl App {
                             action = Some(ThemeAction::Pick(t.name));
                         }
                     }
-                    if !self.themes.custom.is_empty() {
+                    if !self.config.custom_themes.is_empty() {
                         ui.separator();
                     }
-                    for t in &self.themes.custom {
+                    for t in self.config.custom_themes.values() {
                         if ui.selectable_label(t.name == current.name, &t.name).clicked() {
                             action = Some(ThemeAction::Pick(t.name.clone()));
                         }
@@ -312,27 +297,19 @@ impl App {
             Some(ThemeAction::Duplicate) => {
                 let taken = self.theme_names();
                 let copy = Theme { name: theme::copy_name(&current.name, &taken), ..current.clone() };
-                match theme::save_custom(&copy) {
-                    Ok(()) => {
-                        let name = copy.name.clone();
-                        self.themes.custom.push(copy);
-                        self.themes.custom.sort_by_key(|t| t.name.to_lowercase());
-                        self.pick_theme(ctx, name);
-                    }
-                    Err(e) => self.status = format!("Couldn't save the theme: {e:#}"),
-                }
+                let name = copy.name.clone();
+                self.config.custom_themes.insert(name.clone(), copy);
+                // (Saved with the choice.)
+                self.pick_theme(ctx, name);
             }
-            Some(ThemeAction::Delete) => match theme::delete_custom(&current.name) {
-                Ok(()) => {
-                    self.themes.custom.retain(|t| t.name != current.name);
-                    self.pick_theme(ctx, theme::DEFAULT_THEME.to_string());
-                    self.status = format!("Deleted the theme {}.", current.name);
-                }
-                Err(e) => self.status = format!("Couldn't delete the theme: {e:#}"),
-            },
+            Some(ThemeAction::Delete) => {
+                self.config.custom_themes.remove(&current.name);
+                self.pick_theme(ctx, theme::DEFAULT_THEME.to_string());
+                self.status = format!("Deleted the theme {}.", current.name);
+            }
             None if edited != *current && !builtin => {
                 edited.apply(ctx);
-                if let Some(slot) = self.themes.custom.iter_mut().find(|t| t.name == current.name) {
+                if let Some(slot) = self.config.custom_themes.get_mut(&current.name) {
                     *slot = edited;
                 }
                 self.themes.unsaved = Some(Instant::now());
@@ -374,15 +351,10 @@ impl App {
         }
         let taken: Vec<String> = self.theme_names().into_iter().filter(|n| *n != current.name).collect();
         let renamed = Theme { name: new_name.clone(), ..current.clone() };
-        let result = theme::check_name(&new_name, &taken)
-            .and_then(|()| theme::save_custom(&renamed))
-            .and_then(|()| theme::delete_custom(&current.name));
-        match result {
+        match theme::check_name(&new_name, &taken) {
             Ok(()) => {
-                if let Some(slot) = self.themes.custom.iter_mut().find(|t| t.name == current.name) {
-                    *slot = renamed;
-                }
-                self.themes.custom.sort_by_key(|t| t.name.to_lowercase());
+                self.config.custom_themes.remove(&current.name);
+                self.config.custom_themes.insert(new_name.clone(), renamed);
                 self.themes.renaming = None;
                 self.config.theme = Some(new_name);
                 if let Err(e) = self.config.save() {

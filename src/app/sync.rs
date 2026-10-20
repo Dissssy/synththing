@@ -222,10 +222,10 @@ impl App {
         settings_sync::apply::<Config>(&mut json, &result, &state.choices);
         match serde_json::from_value::<Config>(json) {
             Ok(config) => {
-                let theme_changed = config.theme != self.config.theme;
+                let before = self.current_theme();
                 let modes_changed = (config.loop_mode, config.shuffle) != (self.config.loop_mode, self.config.shuffle);
                 self.config = config;
-                if theme_changed {
+                if self.current_theme() != before {
                     self.reapply_theme();
                 }
                 // (Loop and Shuffle in use are the app's own, saved as they

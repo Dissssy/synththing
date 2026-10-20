@@ -5,10 +5,11 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
-- Sync settings between your devices: Preferences > Online Library > Sync settings between my devices, on each device signed in as you. A setting changed on one changes on the others, even if one was offline at the time (if both changed it, the newer change wins). What belongs to one device stays on it: folders, layouts, the audio buffer, the mobile layout, the UI scale and updates. Settings are encrypted on your device before they're sent, with a key only your devices have. Turning it on takes the settings your other devices synced. What this device syncs, under it, chooses which settings each device takes part in, by category or one by one; last volume and speed can sync too, but are off by default. Show what each sync changed, under it, is for testing. Server: `"sync": true` in `server.json`, and `POST /api/v1/sync/{name}`.
+- Sync settings between your devices: Preferences > Online Library > Sync settings between my devices, on each device signed in as you. A setting changed on one changes on the others, even if one was offline at the time (if both changed it, the newer change wins). What belongs to one device stays on it: folders, layouts, the audio buffer, the mobile layout, the UI scale and updates. Settings are encrypted on your device before they're sent, with a key only your devices have. Turning it on takes the settings your other devices synced. Your own themes go along with the theme setting. What this device syncs, under it, chooses which settings each device takes part in, by category or one by one; last volume and speed can sync too, but are off by default. Show what each sync changed, under it, is for testing. Server: `"sync": true` in `server.json`, and `POST /api/v1/sync/{name}`.
 
 ### Changed
 - Exported identities and sign-in codes carry the key settings sync uses, so a device signed in either way can sync.
+- Your own themes are kept with the rest of the settings (`config.json`) instead of in a `themes` folder, so settings sync carries them. Themes in the old folder aren't brought over.
 
 ## 0.10.0 (2026-10-20)
 
