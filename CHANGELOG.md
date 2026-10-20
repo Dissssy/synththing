@@ -4,6 +4,15 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Fixed
+- Songs move between your devices again when one of them is too big for the server: it's named in the sync error and stays where it is, and the rest still move (before, every other song waited behind it). A failed song no longer stops the others either.
+- Sync turned on before updating starts syncing playlists and songs, without turning it off and on again.
+- A song fetched from another device shows its details straight away, not as unreadable until a restart.
+- A server too old to move songs says so, instead of the songs just never arriving.
+
+### Changed
+- Server: `relay_song_mb` is 250 by default (was 100); raise nginx's `client_max_body_size` to match. Past `relay_mb_per_identity`, the oldest songs waiting go to make room (they're sent again when wanted) instead of new ones being refused. `/api/v1/info` says it as `relay_song_mb` (0 without sync).
+
 ## 0.11.0 (2026-10-20)
 
 ### Added

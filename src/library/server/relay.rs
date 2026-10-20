@@ -2,9 +2,9 @@
 //! leaves for another signed in as the same identity, each by an ID only
 //! those devices can tie to a song. On with sync. A file stays until a
 //! device deletes it or `RELAY_DAYS` pass, within `relay_song_mb` each and
-//! `relay_mb_per_identity` in all. The files are in the data folder's
-//! `relay`; a rotation moves them to the new key, and deleting the
-//! identity's data deletes them.
+//! `relay_mb_per_identity` in all (past which the oldest go). The files are
+//! in the data folder's `relay`; a rotation moves them to the new key, and
+//! deleting the identity's data deletes them.
 
 use std::path::PathBuf;
 
@@ -78,17 +78,26 @@ pub(super) fn put(state: &State, request: &mut Request, id: &str) -> Reply {
     if body.is_empty() {
         return error(400, "that's an empty file");
     }
-    sweep(state);
-    let held: i64 = state
-        .db()
-        .query_row("SELECT COALESCE(SUM(size), 0) FROM relay WHERE key = ? AND id != ?", params![key, id], |r| r.get(0))
-        .unwrap_or(0);
-    if held as u64 + body.len() as u64 > state.config.relay_mb_per_identity * MB {
-        return error(
-            413,
-            format!("there are {} MB of your songs waiting here already: they go once your devices take them", held as u64 / MB),
-        );
+    if body.len() as u64 > state.config.relay_mb_per_identity * MB {
+        return error(413, "that song is too big to send");
     }
+    // Make room by forgetting the oldest waiting: a device that wanted one
+    // finds it gone, and it's sent again.
+    {
+        let db = state.db();
+        let waiting: Vec<(String, i64)> = db
+            .prepare("SELECT id, size FROM relay WHERE key = ? AND id != ? ORDER BY created DESC")
+            .and_then(|mut s| s.query_map(params![key, id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect())
+            .unwrap_or_default();
+        let mut held = body.len() as u64;
+        for (old, size) in waiting {
+            held += size as u64;
+            if held > state.config.relay_mb_per_identity * MB {
+                let _ = db.execute("DELETE FROM relay WHERE key = ? AND id = ?", params![key, old]);
+            }
+        }
+    }
+    sweep(state);
     let file = format!("{}.bin", crate::library::new_nonce());
     let written = std::fs::create_dir_all(dir(state)).and_then(|()| std::fs::write(dir(state).join(&file), &body));
     if let Err(e) = written {
