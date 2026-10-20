@@ -2590,8 +2590,13 @@ impl App {
             return;
         }
         let extensions = listed_song_extensions(&self.config);
-        let songs: Vec<PathBuf> =
-            self.songs.songs().map(|(path, _)| path).filter(|p| song_store::has_extension(p, extensions)).collect();
+        // What the list's made from: it's made again when this changes.
+        let revision = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (self.songs.revision(), self.song_info.revision(), &self.config.title_patterns, extensions).hash(&mut hasher);
+            hasher.finish()
+        };
         let selected = self.song_list.selected_one();
         let mut info_for: Option<PathBuf> = None;
         let mut info_clicked = false;
@@ -2669,7 +2674,8 @@ impl App {
         };
         let output = self.song_list.ui(
             ui,
-            &songs,
+            &mut || store.songs().map(|(path, _)| path).filter(|p| song_store::has_extension(p, extensions)).collect(),
+            revision,
             &mut view,
             &mut tools,
             &mut |path, keys| describe_song(&mut cache.borrow_mut(), &naming, &self.songs, path, keys),

@@ -69,6 +69,8 @@ pub struct SongStore {
     blocked: BTreeSet<String>,
     /// The tags, by ID.
     tags: BTreeMap<String, Tag>,
+    /// Counts the changes made (`revision`).
+    revision: u64,
 }
 
 impl SongStore {
@@ -96,7 +98,7 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{TAGS}: {e}")).ok())
             .unwrap_or_default();
-        let store = Self { dir, songs, present, blocked, tags };
+        let mut store = Self { dir, songs, present, blocked, tags, revision: 0 };
         if changed {
             store.save();
         }
@@ -237,6 +239,12 @@ impl SongStore {
         }
     }
 
+    /// A number that changes whenever anything in the store does, so
+    /// what's made from it (the Songs list) knows to be made again.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// The key of the song at `path`, if it's in this store.
     pub fn key(&self, path: &Path) -> Option<String> {
         self.key_of(path).map(str::to_string)
@@ -266,7 +274,8 @@ impl SongStore {
 
     /// Write `library.json` (even with nothing in it: the one-time import
     /// has run).
-    fn save(&self) {
+    fn save(&mut self) {
+        self.revision += 1;
         let written = std::fs::create_dir_all(&self.dir)
             .and_then(|()| write_atomically(&self.dir.join(INDEX), serde_json::to_string_pretty(&self.songs).unwrap_or_default().as_bytes()));
         if let Err(e) = written {
@@ -274,7 +283,8 @@ impl SongStore {
         }
     }
 
-    fn save_tags(&self) {
+    fn save_tags(&mut self) {
+        self.revision += 1;
         let path = self.dir.join(TAGS);
         let written = std::fs::create_dir_all(&self.dir).and_then(|()| write_atomically(&path, serde_json::to_string_pretty(&self.tags).unwrap_or_default().as_bytes()));
         if let Err(e) = written {
@@ -282,7 +292,8 @@ impl SongStore {
         }
     }
 
-    fn save_blocked(&self) {
+    fn save_blocked(&mut self) {
+        self.revision += 1;
         let path = self.dir.join(BLOCKED);
         if let Err(e) = write_atomically(&path, serde_json::to_string(&self.blocked).unwrap_or_default().as_bytes()) {
             log::warn!("couldn't save {}: {e}", path.display());
