@@ -6,6 +6,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Changed
 - Song names (and column values) too long for the Songs list scroll sideways instead of staying cut off, on the playing song and the one under the pointer or your finger.
+- Toasts too long for the window scroll sideways instead of running off its edges, and stay up until they have scrolled through.
 
 ## 1.0.2 (2026-10-20)
 

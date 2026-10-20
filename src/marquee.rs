@@ -1,5 +1,6 @@
 //! Text that scrolls sideways when it's too long for its room.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::Duration;
 
 use eframe::egui;
@@ -15,7 +16,8 @@ const FRAME: Duration = Duration::from_millis(33);
 
 /// `text` on one line, in the width left in `ui`. Text that fits is drawn
 /// as a label is; text that doesn't scrolls sideways while `scroll` is on
-/// (from its start, after a rest, each time it's turned on) and is cut
+/// (from its start, after a rest, each time it's turned on or the text
+/// changes) and is cut
 /// short with "..." otherwise. A scrolling text asks for a redraw only
 /// when it next moves, not every frame.
 pub fn show(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, scroll: bool) -> egui::Response {
@@ -32,7 +34,18 @@ pub fn show(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, scroll: bool) 
 
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, galley.size().y), egui::Sense::hover());
     let now = ui.input(|i| i.time);
-    let start = ui.data_mut(|d| *d.get_temp_mut_or_insert_with(response.id, || now));
+    let text = {
+        let mut hasher = DefaultHasher::new();
+        galley.text().hash(&mut hasher);
+        hasher.finish()
+    };
+    let start = ui.data_mut(|d| {
+        let (shown, start) = d.get_temp_mut_or_insert_with(response.id, || (text, now));
+        if *shown != text {
+            (*shown, *start) = (text, now);
+        }
+        *start
+    });
     let period = galley.size().x + GAP;
     let cycle = PAUSE + f64::from(period / SPEED);
     let into_cycle = (now - start) % cycle;
@@ -46,9 +59,15 @@ pub fn show(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, scroll: bool) 
     response
 }
 
+/// How long a text `overflow` points wider than its room takes, scrolling,
+/// to show its end (and rest there a moment).
+pub fn read_time(overflow: f32) -> Duration {
+    Duration::from_secs_f64(2.0 * PAUSE) + Duration::from_secs_f32(overflow.max(0.0) / SPEED)
+}
+
 /// A label that isn't scrolling, which starts the next scroll over.
 fn still(ui: &mut egui::Ui, label: egui::Label) -> egui::Response {
     let response = ui.add(label.selectable(false));
-    ui.data_mut(|d| d.remove::<f64>(response.id));
+    ui.data_mut(|d| d.remove::<(u64, f64)>(response.id));
     response
 }

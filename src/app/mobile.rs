@@ -438,16 +438,10 @@ impl App {
         let Some((text, since)) = &state.toast else { return };
         let failed = status_outcome(text) == Some(false);
         let least = if failed { FAILURE_TOAST } else { TOAST };
-        if since.elapsed() > least.max(Duration::from_secs_f32(text.len() as f32 / READING_SPEED)) {
-            state.toast = None;
-            return;
-        }
-        ctx.request_repaint_after(Duration::from_millis(250));
-        let mut label = egui::RichText::new(text.as_str());
-        if let Some(color) = status_color(&ctx.global_style().visuals, text) {
-            label = label.color(color);
-        }
-        if super::toast::draw(ctx, "status_toast", egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0), label) {
+        let least = least.max(Duration::from_secs_f32(text.len() as f32 / READING_SPEED));
+        let color = status_color(&ctx.global_style().visuals, text);
+        let (anchor, offset) = (egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0));
+        if super::toast::draw(ctx, "status_toast", anchor, offset, text, color, *since, least) {
             self.mobile_state.toast = None;
         }
     }
