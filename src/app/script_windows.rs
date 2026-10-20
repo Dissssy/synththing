@@ -325,7 +325,6 @@ impl App {
     fn script_debug_body_ui(&mut self, ui: &mut egui::Ui) {
         let mut index = self.script_window_tab[ScriptWindow::Debug.slot()];
         let mut clear_log = false;
-        let mut retry = false;
         categories_body(ui, "script_debug", &DEBUG_TABS, &mut index, |ui, index| match index {
             VARIABLES => {
                 ui.weak(
@@ -365,7 +364,7 @@ impl App {
                 }
             }
             PERFORMANCE => {
-                self.performance_ui(ui, &mut retry);
+                self.performance_ui(ui);
             }
             _ => {
                 if ui.small_button("Clear").clicked() {
@@ -402,13 +401,10 @@ impl App {
         if clear_log {
             self.script.clear_log();
         }
-        if retry {
-            self.script.retry_full_frame_rate();
-        }
     }
 
     /// Debug > Performance: how long `render()` takes, against 60 fps.
-    fn performance_ui(&self, ui: &mut egui::Ui, retry: &mut bool) {
+    fn performance_ui(&self, ui: &mut egui::Ui) {
         let perf = self.script.perf_summary();
         if perf.frames == 0 {
             ui.weak("(not drawn yet)");
@@ -424,15 +420,9 @@ impl App {
         };
         ui.colored_label(color, format!("render() {:.1} ms on average, {:.1} ms at worst", perf.avg_ms, perf.max_ms));
         ui.weak(format!(
-            "Over the last second. A 60 fps frame allows {budget:.1} ms; a script averaging more than that \
-             for 3 seconds runs at 30 fps until its code changes."
+            "Over the last second. A 60 fps frame allows {budget:.1} ms; a script taking longer draws fewer \
+             frames, while the rest of the app keeps its pace."
         ));
-        if perf.half_rate {
-            ui.colored_label(ui.visuals().warn_fg_color, "Running at 30 fps.");
-            *retry = ui.button("Try 60 fps again").clicked();
-        } else {
-            ui.label("Running at 60 fps.");
-        }
     }
 
     /// The actions `shown` and their bindings, each a button: click one to

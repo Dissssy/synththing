@@ -48,7 +48,7 @@ It uses the same engine and script code as the app. Each frame it plays `1/fps` 
 | `--auto` | off | With `--video`: the script plays itself, if it can (`script_options({ record_auto = true })`; `recording().mode` is `"auto"`). |
 | `--video-quality` | standard | How it's encoded: `standard` (H.264 4:2:0, plays everywhere; single-pixel colored details soften slightly), `sharp` (H.264 4:4:4, exact pixel edges; plays in desktop players, not reliably in browsers or Discord) or `lossless` (every pixel exactly; big files, for editing). |
 
-Output: each distinct error once, with the frame and song position it happened at; then the script's log (each line prefixed `log: `, repeats shown as `(xN)`), unless `--quiet`; then how long `render()` took (average and worst, real time on this machine, and whether the app would drop the script to 30 fps for averaging over 16.7 ms); then a summary line:
+Output: each distinct error once, with the frame and song position it happened at; then the script's log (each line prefixed `log: `, repeats shown as `(xN)`), unless `--quiet`; then how long `render()` took (average and worst, real time on this machine); then a summary line:
 
 ```
 frame 30 (0.50s): error: runtime error: [string "visualizer"]:2: attempt to call a nil value (global 'nope')

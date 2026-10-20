@@ -925,25 +925,12 @@ pub struct LogEntry {
     pub count: u32,
 }
 
-/// A 60 fps frame, in milliseconds: the render-time budget.
-const FRAME_BUDGET_MS: f32 = 1000.0 / 60.0;
-/// How long a script's render time has to average over budget, without a
-/// break, before it's dropped to 30 fps.
-const SLOW_FOR: Duration = Duration::from_secs(3);
-/// Minimum time between renders at the reduced rate: a 30 fps frame, less
-/// a little slack so a repaint arriving slightly early still renders.
-pub const HALF_RATE_INTERVAL: Duration = Duration::from_micros(29_300);
-
-/// A script's render times: the last second's for the readout and the
-/// 30 fps fallback, and the whole run's for `run-script`'s summary.
+/// A script's render times: the last second's for the readout, and the
+/// whole run's for `run-script`'s summary.
 #[derive(Default)]
 struct Perf {
     /// (when, milliseconds) for renders in the last second.
     recent: VecDeque<(Instant, f32)>,
-    /// When the last-second average went over budget (cleared when it
-    /// comes back under).
-    slow_since: Option<Instant>,
-    half_rate: bool,
     frames: u64,
     total_ms: f64,
     worst_ms: f32,
@@ -955,8 +942,6 @@ pub struct PerfSummary {
     /// Average and worst render time over the last second, milliseconds.
     pub avg_ms: f32,
     pub max_ms: f32,
-    /// Running at 30 fps because it was too slow for 60.
-    pub half_rate: bool,
     /// Average and worst over everything rendered since the script loaded.
     pub overall_avg_ms: f32,
     pub overall_max_ms: f32,
@@ -964,9 +949,8 @@ pub struct PerfSummary {
 }
 
 impl Perf {
-    /// Record one render. Returns a message the first time this pushes the
-    /// script down to 30 fps.
-    fn record(&mut self, now: Instant, ms: f32) -> Option<String> {
+    /// Record one render.
+    fn record(&mut self, now: Instant, ms: f32) {
         self.frames += 1;
         self.total_ms += f64::from(ms);
         self.worst_ms = self.worst_ms.max(ms);
@@ -974,20 +958,6 @@ impl Perf {
         while self.recent.front().is_some_and(|&(t, _)| now.duration_since(t) > Duration::from_secs(1)) {
             self.recent.pop_front();
         }
-        let avg = self.recent.iter().map(|&(_, ms)| ms).sum::<f32>() / self.recent.len() as f32;
-        if avg <= FRAME_BUDGET_MS {
-            self.slow_since = None;
-            return None;
-        }
-        let since = *self.slow_since.get_or_insert(now);
-        if !self.half_rate && now.duration_since(since) >= SLOW_FOR {
-            self.half_rate = true;
-            return Some(format!(
-                "render() has averaged {avg:.1} ms for {} s, over the {FRAME_BUDGET_MS:.1} ms a 60 fps frame allows: running this script at 30 fps",
-                SLOW_FOR.as_secs()
-            ));
-        }
-        None
     }
 
     fn summary(&self) -> PerfSummary {
@@ -995,7 +965,6 @@ impl Perf {
         PerfSummary {
             avg_ms: self.recent.iter().map(|&(_, ms)| ms).sum::<f32>() / n,
             max_ms: self.recent.iter().map(|&(_, ms)| ms).fold(0.0, f32::max),
-            half_rate: self.half_rate,
             overall_avg_ms: if self.frames == 0 { 0.0 } else { (self.total_ms / self.frames as f64) as f32 },
             overall_max_ms: self.worst_ms,
             frames: self.frames,
@@ -1900,7 +1869,7 @@ pub struct LuaVisualizer {
     /// Seconds per frame for DT and TIME instead of the wall clock: set
     /// for headless runs, which render frames much faster than real time.
     fixed_timestep: Option<f64>,
-    /// Render times, and the 30 fps fallback. Kept through Restart and song
+    /// Render times. Kept through Restart and song
     /// changes; reset when the code changes or another script loads.
     perf: Perf,
     /// Set from anywhere (another thread) to stop the script's code running
@@ -2202,14 +2171,6 @@ impl LuaVisualizer {
         self.perf.summary()
     }
 
-    /// Back to 60 fps after the fallback kicked in ("Try 60 fps again"). If
-    /// it's still too slow it drops again after another few seconds.
-    pub fn retry_full_frame_rate(&mut self) {
-        self.perf.half_rate = false;
-        self.perf.slow_since = None;
-        self.perf.recent.clear();
-    }
-
     /// Start the running script over from scratch: a fresh Lua VM running
     /// the same source, settings re-read from its sidecar, all of its own
     /// state (history, scores, ...) gone. Restarts what's actually running,
@@ -2376,10 +2337,7 @@ impl Visualizer for LuaVisualizer {
         compiled.store.borrow_mut().save(false);
 
         let ms = render_began.elapsed().as_secs_f32() * 1000.0;
-        if let Some(message) = self.perf.record(Instant::now(), ms) {
-            compiled.log.borrow_mut().push(LogLevel::Info, message.clone());
-            log::info!(target: "synththing::script", "{message}");
-        }
+        self.perf.record(Instant::now(), ms);
     }
 
     fn cursor_request(&self) -> CursorRequest {
@@ -6651,51 +6609,15 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
     }
 
     #[test]
-    fn slow_scripts_drop_to_30_fps_after_three_seconds() {
+    fn perf_summary_covers_the_last_second() {
         let mut perf = Perf::default();
         let t0 = Instant::now();
-        // Fast frames: never drops.
-        for i in 0..300 {
-            assert!(perf.record(t0 + Duration::from_millis(i * 16), 5.0).is_none());
-        }
-        // Slow for a while, then fast for long enough that the last-second
-        // average is back under budget: the run is broken, still 60.
-        let slow_start = t0 + Duration::from_secs(10);
-        let mut t = slow_start;
-        while t < slow_start + Duration::from_millis(1500) {
-            assert!(perf.record(t, 25.0).is_none());
-            t += Duration::from_millis(25);
-        }
-        for _ in 0..120 {
-            assert!(perf.record(t, 2.0).is_none());
-            t += Duration::from_millis(16);
-        }
-        assert!(!perf.half_rate);
-        assert!(perf.slow_since.is_none());
-        // Slow for 3 s straight: drops, once.
-        let mut messages = 0;
-        let start = t;
-        while t < start + Duration::from_millis(4200) {
-            messages += usize::from(perf.record(t, 25.0).is_some());
-            t += Duration::from_millis(25);
-        }
-        assert!(perf.half_rate);
-        assert_eq!(messages, 1);
+        perf.record(t0, 25.0);
+        perf.record(t0 + Duration::from_millis(1500), 5.0);
+        perf.record(t0 + Duration::from_millis(1516), 3.0);
         let summary = perf.summary();
-        assert!(summary.half_rate && (summary.avg_ms - 25.0).abs() < 0.01 && summary.overall_max_ms == 25.0);
-    }
-
-    #[test]
-    fn frame_rate_fallback_survives_restart_but_not_new_code() {
-        let mut visualizer = LuaVisualizer::new("function render() end".to_string(), None, 44_100);
-        visualizer.perf.half_rate = true;
-        visualizer.restart();
-        assert!(visualizer.perf_summary().half_rate, "Restart keeps the fallback");
-        visualizer.set_source("function render() end -- edited".to_string());
-        assert!(!visualizer.perf_summary().half_rate, "new code is judged afresh");
-        visualizer.perf.half_rate = true;
-        visualizer.retry_full_frame_rate();
-        assert!(!visualizer.perf_summary().half_rate);
+        assert!((summary.avg_ms - 4.0).abs() < 0.01 && summary.max_ms == 5.0, "{summary:?}");
+        assert!(summary.overall_max_ms == 25.0 && summary.frames == 3);
     }
 
     #[test]

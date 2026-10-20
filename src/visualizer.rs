@@ -375,10 +375,9 @@ impl VisualizerInput {
 /// render cost that stays flat regardless of window or monitor size.
 const MAX_VISUALIZER_PIXELS: f32 = 1280.0 * 720.0;
 
-/// How long the app waits for a frame it just asked the script for. Most
-/// take a few milliseconds and are shown at once, as if drawn right here;
-/// one that takes longer is shown when it's done, and the last frame stays
-/// up meanwhile, so a slow script never holds up the window.
+/// How long a recording waits for a frame it just asked the script for,
+/// to stay in step with the video. (Otherwise the window never waits: the
+/// frame asked for shows once it's done.)
 const FRAME_WAIT: Duration = Duration::from_millis(50);
 
 /// Shows the frames the script (on its own thread, `ScriptHost`) draws,
@@ -393,7 +392,6 @@ pub struct VisualizerPanel {
     pixels: Vec<u32>,
     /// An old frame's buffer, for the next frame to draw into.
     spare: Vec<u32>,
-    rgba: Vec<u8>,
     width: usize,
     height: usize,
     texture: Option<egui::TextureHandle>,
@@ -417,7 +415,6 @@ impl VisualizerPanel {
             frames,
             pixels: vec![0; width * height],
             spare: Vec::new(),
-            rgba: vec![0; width * height * 4],
             width,
             height,
             texture: None,
@@ -530,12 +527,16 @@ impl VisualizerPanel {
         }
         self.frames.set_repaint_context(&ctx);
 
-        // A frame the script finished in the background since last time;
-        // else, unless it's still busy, held for a recording or running at
-        // a reduced frame rate, ask for the next one (the audio waits in
-        // the tap meanwhile).
+        // The frame the script finished since last time, if it did; then,
+        // unless it's still busy or held for a recording, ask for the next
+        // one (the audio waits in the tap meanwhile). It shows when it's
+        // done, the last one staying up till then, so the window never
+        // waits on the script and a slow script only draws fewer frames.
+        // A recording asks for its next frame only after taking the last
+        // one, and waits for it.
+        let lockstep = timestep.is_some();
         let mut done = self.frames.take_frame(Duration::ZERO);
-        if done.is_none() && !hold && self.frames.ready_for_frame() {
+        if (done.is_none() || !lockstep) && !hold && self.frames.ready_for_frame() {
             self.frames.request_frame(FrameRequest {
                 width: buf_w,
                 height: buf_h,
@@ -547,7 +548,9 @@ impl VisualizerPanel {
                 transport,
                 timestep,
             });
-            done = self.frames.take_frame(FRAME_WAIT);
+            if lockstep {
+                done = self.frames.take_frame(FRAME_WAIT);
+            }
         }
         let rendered = done.is_some();
         if let Some(done) = done {
@@ -572,7 +575,6 @@ impl VisualizerPanel {
         if (done.width, done.height) != (self.width, self.height) {
             self.width = done.width;
             self.height = done.height;
-            self.rgba = vec![0; done.width * done.height * 4];
             // Dropped rather than resized in place: simplest way to be sure
             // the next `load_texture` call picks up the new dimensions.
             self.texture = None;
@@ -584,17 +586,7 @@ impl VisualizerPanel {
         self.effects.live_commands.extend(effects.live_commands);
         self.effects.playback_requests.extend(effects.playback_requests);
 
-        // chunks_exact_mut(4) rather than as_chunks_mut::<4>() to stay on stable Rust.
-        #[allow(clippy::chunks_exact_to_as_chunks)]
-        let rgba_pixels = self.rgba.chunks_exact_mut(4);
-        for (pixel, rgba) in self.pixels.iter().zip(rgba_pixels) {
-            rgba[0] = (pixel >> 16) as u8; // R
-            rgba[1] = (pixel >> 8) as u8; // G
-            rgba[2] = *pixel as u8; // B
-            rgba[3] = 255; // A
-        }
-
-        let image = egui::ColorImage::from_rgba_unmultiplied([self.width, self.height], &self.rgba);
+        let image = done.image;
         // Nearest, not linear: when the buffer is downscaled from the panel
         // size, this is what keeps the upscale crisp/pixel-art rather than
         // blurry, and it's a no-op cost-wise when buffer == panel size. A
