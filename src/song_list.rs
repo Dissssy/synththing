@@ -528,10 +528,6 @@ impl SongList {
         };
         let grouped_by = group_title(&view.group);
         let output = select_list::show(ui, "songs", items, &mut self.selection, active, |ui, row, item| {
-            if touch {
-                // (Clear of the selection's edge.)
-                ui.add_space(4.0);
-            }
             let entry = match item {
                 Item::Group { label, key, count, collapsed } => {
                     let arrow = crate::app::icon(if *collapsed { "caret-right" } else { "caret-down" });
@@ -577,21 +573,7 @@ impl SongList {
                     // The name and the tags, and under them the value
                     // sorted by.
                     let second = shown.first().and(entry.song.values.first()).cloned().flatten();
-                    let Some(second) = second else {
-                        select_list::chips(ui, entry.tags());
-                        select_list::label(ui, text, None, scroll);
-                        return;
-                    };
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                        ui.add_space(3.0);
-                        ui.spacing_mut().item_spacing.y = 1.0;
-                        let line = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
-                        ui.allocate_ui_with_layout(line, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            select_list::chips(ui, entry.tags());
-                            select_list::label(ui, text, None, scroll);
-                        });
-                        select_list::label(ui, egui::RichText::new(second.text).small().weak(), None, scroll);
-                    });
+                    select_list::two_lines(ui, entry.tags(), text, second.map(|v| v.text), scroll);
                     return;
                 }
                 for (c, value) in shown.iter().zip(&entry.song.values).rev() {
