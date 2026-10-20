@@ -48,6 +48,7 @@ mod midi_notes;
 mod offline;
 mod pixel_font;
 mod playlist;
+mod playlist_sync;
 mod preview;
 mod recorder;
 mod script_host;
