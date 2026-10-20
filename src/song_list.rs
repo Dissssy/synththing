@@ -124,6 +124,18 @@ impl Entry {
     }
 }
 
+/// The rows as last made, and what they were made from: made again only
+/// when that changes, not every frame.
+struct Built {
+    revision: u64,
+    view: View,
+    keys: Vec<&'static str>,
+    query: String,
+    /// There are no songs at all.
+    empty: bool,
+    items: Vec<Item>,
+}
+
 enum Item {
     /// A group's header: its value (and that in lowercase, which tells
     /// groups apart), how many songs it has, and whether they're hidden.
@@ -143,8 +155,7 @@ pub struct SongList {
     selection: Selection,
     /// The groups closed, by their headers' text (lowercase).
     collapsed: BTreeSet<String>,
-    /// Each row's song as of the last `ui` call (`None` for a group).
-    listed: Vec<Option<PathBuf>>,
+    built: Option<Built>,
 }
 
 /// What [`SongList::ui`] reports.
@@ -158,13 +169,19 @@ pub struct Output {
     pub view_changed: bool,
 }
 
-/// How two values compare for sorting: numbers as numbers, text without
-/// case, a song without one last.
+/// What a song sorts by for `value`: it with its text in lowercase, made
+/// once for [`compare`] rather than each time two songs are.
+fn sort_value(value: Option<&Value>) -> Option<Value> {
+    value.map(|v| Value { text: v.text.to_lowercase(), number: v.number })
+}
+
+/// How two values ([`sort_value`]s) compare for sorting: numbers as
+/// numbers, text without case, a song without one last.
 fn compare(a: Option<&Value>, b: Option<&Value>) -> Ordering {
     match (a, b) {
         (Some(a), Some(b)) => match (a.number, b.number) {
             (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
-            _ => a.text.to_lowercase().cmp(&b.text.to_lowercase()),
+            _ => a.text.cmp(&b.text),
         },
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
@@ -251,8 +268,11 @@ impl SongList {
 
     /// The one song selected, if just one is.
     pub fn selected_one(&self) -> Option<PathBuf> {
-        match self.selection.rows() {
-            [one] => self.listed.get(*one).cloned().flatten(),
+        match (self.selection.rows(), &self.built) {
+            ([one], Some(built)) => match built.items.get(*one) {
+                Some(Item::Song(entry)) => Some(entry.path.clone()),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -263,16 +283,19 @@ impl SongList {
     }
 
     /// Draw the list (toolbar, search box, column headers, rows) into
-    /// `ui`, as `view` says. `songs` are the songs to list; `describe`
-    /// gives one's name, file name and the values of the columns asked
-    /// for. `tools` draws buttons at the start of the toolbar, `trailing`
+    /// `ui`, as `view` says. `songs` gives the songs to list, and
+    /// `describe` one's name, file name and the values of the columns
+    /// asked for; they're asked only when the rows are made again: when
+    /// `revision` (which changes whenever the songs or what's said of them
+    /// do), the view, the search or the groups closed change. `tools` draws buttons at the start of the toolbar, `trailing`
     /// extra widgets at the right end of each row (right to left, in
     /// `TRAILING_WIDTH`), and `menu` a row's right-click menu.
     #[allow(clippy::too_many_arguments)]
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        songs: &[PathBuf],
+        songs: &mut dyn FnMut() -> Vec<PathBuf>,
+        revision: u64,
         view: &mut View,
         tools: &mut dyn FnMut(&mut egui::Ui),
         describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
@@ -306,7 +329,7 @@ impl SongList {
         let room = ui.available_width() - TRAILING_WIDTH - MIN_NAME_WIDTH;
         let mut used = 0.0;
         let sorted = column(&view.sort);
-        let shown: Vec<&Column> = if touch {
+        let shown: Vec<&'static Column> = if touch {
             sorted.into_iter().collect()
         } else {
             let hidden = sorted.filter(|c| !view.columns.iter().any(|k| k == c.key));
@@ -320,7 +343,7 @@ impl SongList {
                 })
                 .collect()
         };
-        let mut keys: Vec<&str> = shown.iter().map(|c| c.key).collect();
+        let mut keys: Vec<&'static str> = shown.iter().map(|c| c.key).collect();
         let sort_at = column(&view.sort).map(|c| {
             keys.push(c.key);
             keys.len() - 1
@@ -335,39 +358,23 @@ impl SongList {
         }
 
         let query = self.search_query.trim();
-        let items: Vec<Item> = if query.is_empty() {
-            let mut entries: Vec<Entry> = songs.iter().map(|p| Entry { song: describe(p, &keys), path: p.clone() }).collect();
-            let by_sort = |a: &Entry, b: &Entry| {
-                let order = match sort_at {
-                    Some(i) => compare(a.song.values[i].as_ref(), b.song.values[i].as_ref()),
-                    None => a.song.name.to_lowercase().cmp(&b.song.name.to_lowercase()),
-                };
-                if view.descending { order.reverse() } else { order }
+        let stale = self
+            .built
+            .as_ref()
+            .is_none_or(|b| b.revision != revision || b.view != *view || b.keys != keys || b.query != query);
+        if stale {
+            let songs = songs();
+            let items = if query.is_empty() {
+                self.sorted(&songs, view, &keys, sort_at, group_at, describe)
+            } else {
+                ranked_matches(&songs, query, &keys, describe).into_iter().map(Item::Song).collect()
             };
-            match group_at {
-                None => {
-                    entries.sort_by(by_sort);
-                    entries.into_iter().map(Item::Song).collect()
-                }
-                Some(g) => {
-                    let label = |e: &Entry| group_label(&view.group, e.song.values[g].as_ref());
-                    entries.sort_by(|a, b| {
-                        let (la, lb) = (label(a).to_lowercase(), label(b).to_lowercase());
-                        let group = match (la == "Unknown", lb == "Unknown") {
-                            (true, false) => Ordering::Greater,
-                            (false, true) => Ordering::Less,
-                            _ => compare(a.song.values[g].as_ref(), b.song.values[g].as_ref()).then_with(|| la.cmp(&lb)),
-                        };
-                        if la == lb { by_sort(a, b) } else { group }
-                    });
-                    self.grouped(entries, label)
-                }
-            }
-        } else {
-            ranked_matches(songs, query, &keys, describe).into_iter().map(Item::Song).collect()
-        };
-        let items = items.as_slice();
-        if songs.is_empty() {
+            let query = query.to_string();
+            self.built = Some(Built { revision, view: view.clone(), keys: keys.clone(), query, empty: songs.is_empty(), items });
+        }
+        let built = self.built.as_ref().expect("the rows were just made");
+        let items = built.items.as_slice();
+        if built.empty {
             ui.weak("No songs yet: import some, or download them from the Library.");
         }
         let active = self.active.as_deref();
@@ -447,23 +454,23 @@ impl SongList {
                 select_list::label(ui, text, None);
             });
         });
+        self.hovered = output.hovered.and_then(path_of);
+        let output = Output {
+            play: output.activated.and_then(path_of),
+            delete: if output.delete { self.selection.rows().iter().filter_map(|&i| path_of(i)).collect() } else { Vec::new() },
+            view_changed,
+        };
         if let Some(key) = toggle {
             if !self.collapsed.remove(&key) {
                 self.collapsed.insert(key);
             }
+            self.built = None;
             self.selection.clear();
         }
         if view_changed {
             self.selection.clear();
         }
-
-        self.hovered = output.hovered.and_then(path_of);
-        self.listed = (0..items.len()).map(path_of).collect();
-        Output {
-            play: output.activated.and_then(path_of),
-            delete: if output.delete { self.selection.rows().iter().filter_map(|&i| path_of(i)).collect() } else { Vec::new() },
-            view_changed,
-        }
+        output
     }
 
     /// The column headers: click one to sort by it (again to turn it
@@ -515,24 +522,68 @@ impl SongList {
         changed
     }
 
-    /// `entries`, sorted by group, with each group's header before them
-    /// (and them left out if it's closed).
-    fn grouped(&self, entries: Vec<Entry>, label: impl Fn(&Entry) -> String) -> Vec<Item> {
+    /// Every song in `songs`, sorted as `view` says, by the value at
+    /// `sort_at` (or the name), and grouped by the one at `group_at`, each
+    /// group's header before its songs (left out if it's closed).
+    fn sorted(
+        &self,
+        songs: &[PathBuf],
+        view: &View,
+        keys: &[&str],
+        sort_at: Option<usize>,
+        group_at: Option<usize>,
+        describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
+    ) -> Vec<Item> {
+        /// A song, and what it sorts by: its group (its header's text, that
+        /// in lowercase, and the value) and its place in it.
+        struct Sorting {
+            label: String,
+            group: String,
+            value: Option<Value>,
+            order: Option<Value>,
+            entry: Entry,
+        }
+        let mut sorting: Vec<Sorting> = songs
+            .iter()
+            .map(|path| {
+                let entry = Entry { song: describe(path, keys), path: path.clone() };
+                let order = match sort_at {
+                    Some(i) => sort_value(entry.song.values[i].as_ref()),
+                    None => Some(Value { text: entry.song.name.to_lowercase(), number: None }),
+                };
+                let (label, value) = match group_at {
+                    Some(g) => (group_label(&view.group, entry.song.values[g].as_ref()), sort_value(entry.song.values[g].as_ref())),
+                    None => (String::new(), None),
+                };
+                Sorting { group: label.to_lowercase(), label, value, order, entry }
+            })
+            .collect();
+        sorting.sort_by(|a, b| {
+            if a.group == b.group {
+                let order = compare(a.order.as_ref(), b.order.as_ref());
+                if view.descending { order.reverse() } else { order }
+            } else {
+                compare(a.value.as_ref(), b.value.as_ref()).then_with(|| a.group.cmp(&b.group))
+            }
+        });
+        if group_at.is_none() {
+            return sorting.into_iter().map(|s| Item::Song(s.entry)).collect();
+        }
         let mut items = Vec::new();
-        let mut current: Option<(usize, String)> = None;
-        for entry in entries {
-            let label = label(&entry);
-            let group = label.to_lowercase();
-            if current.as_ref().is_none_or(|(_, key)| *key != group) {
-                let collapsed = self.collapsed.contains(&group);
-                items.push(Item::Group { label, key: group.clone(), count: 0, collapsed });
-                current = Some((items.len() - 1, group));
-            }
-            let (at, group) = current.as_ref().expect("a group was just started");
-            if let Some(Item::Group { count, .. }) = items.get_mut(*at) {
-                *count += 1;
-            }
-            if !self.collapsed.contains(group) {
+        let mut current: Option<usize> = None;
+        for Sorting { label, group, entry, .. } in sorting {
+            let at = match current {
+                Some(at) if matches!(&items[at], Item::Group { key, .. } if *key == group) => at,
+                _ => {
+                    let collapsed = self.collapsed.contains(&group);
+                    items.push(Item::Group { label, key: group, count: 0, collapsed });
+                    current = Some(items.len() - 1);
+                    items.len() - 1
+                }
+            };
+            let Item::Group { count, collapsed, .. } = &mut items[at] else { unreachable!("`current` is a group's header") };
+            *count += 1;
+            if !*collapsed {
                 items.push(Item::Song(entry));
             }
         }
@@ -617,4 +668,71 @@ fn fuzzy_score_term(haystack: &str, needle: &str) -> Option<i32> {
     // Mild penalty for longer haystacks, so tighter matches sort first.
     score -= (hay.len() as i32) / 20;
     Some(score)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Draws `list` for one frame of `songs`, grouped by artist, counting
+    /// the songs described into `described`.
+    fn frame(ctx: &egui::Context, list: &mut SongList, songs: &[PathBuf], revision: u64, described: &mut usize) {
+        let mut view = View { group: "artist".into(), ..View::default() };
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            let mut describe = |path: &Path, keys: &[&str]| {
+                *described += 1;
+                let n: usize = path.to_str().unwrap().parse().unwrap();
+                let values = keys.iter().map(|&k| (k == "artist").then(|| Value { text: format!("Artist {}", n % 3), number: None })).collect();
+                Described { name: format!("Song {n}"), file_name: String::new(), values, tags: Vec::new() }
+            };
+            list.ui(ui, &mut || songs.to_vec(), revision, &mut view, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn rows_are_made_again_only_when_something_changes() {
+        let ctx = egui::Context::default();
+        let songs: Vec<PathBuf> = (0..30).map(|n| PathBuf::from(n.to_string())).collect();
+        let mut list = SongList::default();
+        let mut described = 0;
+        frame(&ctx, &mut list, &songs, 1, &mut described);
+        assert_eq!(described, 30);
+        for _ in 0..5 {
+            frame(&ctx, &mut list, &songs, 1, &mut described);
+        }
+        assert_eq!(described, 30, "nothing changed, so nothing was described again");
+        frame(&ctx, &mut list, &songs, 2, &mut described);
+        assert_eq!(described, 60, "a new revision makes the rows again");
+    }
+
+    #[test]
+    fn groups_sort_and_collapse() {
+        let ctx = egui::Context::default();
+        let songs: Vec<PathBuf> = (0..6).map(|n| PathBuf::from(n.to_string())).collect();
+        let mut list = SongList::default();
+        let mut described = 0;
+        frame(&ctx, &mut list, &songs, 1, &mut described);
+        let rows = |list: &SongList| -> Vec<String> {
+            list.built
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .map(|item| match item {
+                    Item::Group { label, count, .. } => format!("{label} ({count})"),
+                    Item::Song(entry) => entry.song.name.clone(),
+                })
+                .collect()
+        };
+        assert_eq!(rows(&list), ["Artist 0 (2)", "Song 0", "Song 3", "Artist 1 (2)", "Song 1", "Song 4", "Artist 2 (2)", "Song 2", "Song 5"]);
+        list.collapsed.insert("artist 1".into());
+        list.built = None;
+        frame(&ctx, &mut list, &songs, 1, &mut described);
+        assert_eq!(rows(&list), ["Artist 0 (2)", "Song 0", "Song 3", "Artist 1 (2)", "Artist 2 (2)", "Song 2", "Song 5"]);
+    }
 }
