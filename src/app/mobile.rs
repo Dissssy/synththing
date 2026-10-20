@@ -604,6 +604,21 @@ impl App {
         });
     }
 
+    /// On the Visualizers page, in the running script's card: its
+    /// Settings, Controls and Debug, finger-sized.
+    pub(super) fn mobile_script_window_buttons_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 12.0;
+            self.script_window_buttons_ui(ui, |name, color| {
+                let mut text = egui::RichText::new(icon(name)).size(20.0);
+                if let Some(color) = color {
+                    text = text.color(color);
+                }
+                egui::Button::new(text.atom_grow(true)).min_size(egui::Vec2::splat(40.0))
+            });
+        });
+    }
+
     /// The menu: the pages, then what the desktop's menus open, over
     /// everything else (a tap outside it closes it).
     fn mobile_drawer_ui(&mut self, ctx: &egui::Context) {

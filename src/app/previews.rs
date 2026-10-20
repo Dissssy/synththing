@@ -334,7 +334,9 @@ impl super::App {
     /// and examples), then new ones to start, beside a sidebar about the one
     /// under the mouse (its preview, where it's from, its description, Make
     /// a copy; for the running one, its file and what can be done to it). Without
-    /// `manage`, just the scripts to pick from and their cards.
+    /// `manage` (the mobile layout's Visualizers page), just the scripts to
+    /// pick from and their cards, the running one's with its Settings,
+    /// Controls and Debug.
     pub(super) fn script_list_ui(&mut self, ui: &mut egui::Ui, manage: bool) -> Option<Picked> {
         let mut picked = None;
         let pass = ui.ctx().cumulative_pass_nr();
@@ -401,6 +403,10 @@ impl super::App {
                 match shown {
                     Some(path) => {
                         let description = self.script_card_ui(ui, &path);
+                        if !manage && description.is_some() && self.script.path() == Some(path.as_path()) {
+                            ui.add_space(6.0);
+                            self.mobile_script_window_buttons_ui(ui);
+                        }
                         if manage && description.is_some() {
                             let running = self.script.path() == Some(path.as_path());
                             ui.add_space(6.0);

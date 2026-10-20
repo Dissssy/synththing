@@ -3272,7 +3272,10 @@ impl App {
                 }
             }
             ui.separator();
-            self.script_window_buttons_ui(ui);
+            self.script_window_buttons_ui(ui, |name, color| match color {
+                Some(color) => colored_icon_button(name, color),
+                None => icon_button(name),
+            });
             if visualizer {
                 self.recording_buttons_ui(ui);
             }
