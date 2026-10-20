@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- On a phone, anything drawn past the side of the screen is noted in the log (Help > Log): on which page, what (text or a control) and where, so a report with its log shows what didn't fit.
+
 ### Fixed
 - On a phone, more fits the screen: long group names in Songs, playlist entries, soundfonts and the song name at the bottom scroll instead of running off or being cut short (in lists, on the playing row and the one you touch); the Visualizers page, the Branch builds list, notifications and a notification's window fit the screen's width.
 

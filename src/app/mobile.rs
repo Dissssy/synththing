@@ -95,6 +95,8 @@ impl Page {
 #[derive(Default)]
 pub(super) struct Mobile {
     page: Page,
+    /// What ran off the screen, noted in the log (`overflow.rs`).
+    overflow: super::overflow::Overflow,
     drawer_open: bool,
     /// The Now playing page's controls folded away.
     collapsed: bool,
@@ -162,6 +164,7 @@ impl App {
 
     pub(super) fn mobile_ui(&mut self, ui: &mut egui::Ui, shared: &PlaybackShared) {
         let ctx = ui.ctx().clone();
+        self.mobile_state.overflow.check(&ctx, self.mobile_state.page.title());
         self.mobile_back(&ctx);
         let view = &shared.view;
         let page = self.mobile_state.page;
