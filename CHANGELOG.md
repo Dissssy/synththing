@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- Songs that aren't MIDI start playing almost at once: playback begins as soon as the first moment is decoded, and the rest decodes while it plays. Before, the whole file was decoded first, which took a noticeable moment on a phone.
+
 ## 1.0.1 (2026-10-20)
 
 ### Added

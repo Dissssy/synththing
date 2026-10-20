@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 
 use rustysynth::{MidiFile, SoundFont};
 
-use crate::engine::{DecodedAudio, Engine, EngineView, Snapshot};
+use crate::decoded_audio::DecodedAudio;
+use crate::engine::{Engine, EngineView, Snapshot};
 use crate::live::LiveCommand;
 use crate::visualizer::{NotesSnapshot, SampleTap};
 

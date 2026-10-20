@@ -8,8 +8,9 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use rustysynth::{MidiFile, MidiFileSequencer, SoundFont, Synthesizer, SynthesizerSettings};
 
+use crate::decoded_audio::{DecodedAudio, FrameReader};
 use crate::live::{LiveCommand, LiveSynth};
-use crate::visualizer::{ActiveNote, NoteChange, NotesSnapshot, StereoFrame};
+use crate::visualizer::{ActiveNote, NoteChange, NotesSnapshot};
 
 pub const MIN_SPEED: f64 = 0.10;
 pub const MAX_SPEED: f64 = 4.00;
@@ -17,20 +18,10 @@ pub const MAX_SPEED: f64 = 4.00;
 /// How far ahead `notes_snapshot` reports upcoming note changes.
 pub const NOTE_LOOKAHEAD_SECS: f64 = 4.0;
 
-/// A whole plain audio file (wav/mp3/ogg/flac/...), decoded up front. Seeking
-/// and speed are then just arithmetic on an index into `samples`, no
-/// re-decoding needed.
-pub struct DecodedAudio {
-    pub samples: Vec<StereoFrame>,
-    pub sample_rate: u32,
-    /// See `loader::song_id`.
-    pub song_id: String,
-}
-
 /// Playback head into a [`DecodedAudio`].
 struct AudioFilePlayback {
-    data: Arc<DecodedAudio>,
-    /// Fractional index into `data.samples`, in source-sample units.
+    frames: FrameReader,
+    /// Fractional index into the frames, in source-sample units.
     position: f64,
 }
 
@@ -142,7 +133,7 @@ impl Engine {
 
     fn position(&self) -> f64 {
         if let Some(audio) = &self.audio_file {
-            return audio.position / audio.data.sample_rate as f64;
+            return audio.position / audio.frames.data.sample_rate as f64;
         }
         self.seq.as_ref().map(|s| s.get_position()).unwrap_or(0.0)
     }
@@ -250,21 +241,29 @@ impl Engine {
         self.midi = Some(midi);
     }
 
-    /// Load a plain audio file (already decoded) and start playing it from the
-    /// top, or wait there when `paused`. No soundfont needed, there's
-    /// nothing to synthesize.
+    /// Load a plain audio file (decoded, or still decoding) and start playing
+    /// it from the top, or wait there when `paused`. No soundfont needed,
+    /// there's nothing to synthesize.
     pub fn load_audio_file(&mut self, data: Arc<DecodedAudio>, name: String, paused: bool) {
         self.generation += 1;
         self.loads += 1;
         self.midi = None;
-        self.length = data.samples.len() as f64 / data.sample_rate as f64;
         self.track_name = Some(name);
         self.finished = false;
         self.paused = paused;
         self.detected_channels.clear();
         self.channels_enabled = [true; 16];
         self.live_command(LiveCommand::StopAll);
-        self.audio_file = Some(AudioFilePlayback { data, position: 0.0 });
+        self.audio_file = Some(AudioFilePlayback { frames: FrameReader::new(data), position: 0.0 });
+        self.refresh_audio_file();
+    }
+
+    /// Pick up more of a still-decoding audio file, and its length.
+    fn refresh_audio_file(&mut self) {
+        if let Some(audio) = &mut self.audio_file {
+            audio.frames.refresh();
+            self.length = audio.frames.total_frames() as f64 / audio.frames.data.sample_rate as f64;
+        }
     }
 
     /// Notes from a script, whenever a soundfont's loaded: the live synth
@@ -389,11 +388,13 @@ impl Engine {
     /// for a decoded audio file it's just moving the read head.
     pub fn seek(&mut self, target: f64) {
         self.generation += 1;
+        self.refresh_audio_file();
         let target = target.clamp(0.0, self.length.max(0.0));
 
         if let Some(audio) = &mut self.audio_file {
-            audio.position = target * audio.data.sample_rate as f64;
-            self.finished = !self.loop_enabled && audio.position >= audio.data.samples.len() as f64;
+            let frames = &audio.frames;
+            audio.position = target * frames.data.sample_rate as f64;
+            self.finished = !self.loop_enabled && frames.complete() && audio.position >= frames.len() as f64;
             return;
         }
 
@@ -416,6 +417,7 @@ impl Engine {
     /// Fill an interleaved stereo buffer. Called on the render thread (see
     /// `audio.rs`), never on the audio callback itself.
     pub fn render_into(&mut self, out: &mut [f32]) {
+        self.refresh_audio_file();
         if self.paused || self.finished {
             out.fill(0.0);
             return;
@@ -471,7 +473,8 @@ impl Engine {
 /// When `looped`, the read head wraps back to the start as soon as it passes
 /// the end, mid-block if needed, so the loop is sample-accurate with no gap
 /// of silence at the seam. Returns whether the read head reached (or passed)
-/// the end of the data during this call.
+/// the end of the data during this call. Catching up with a file that's
+/// still decoding plays silence and holds the read head where it is.
 fn render_audio_file(
     audio: &mut AudioFilePlayback,
     speed: f64,
@@ -479,29 +482,34 @@ fn render_audio_file(
     looped: bool,
     out: &mut [f32],
 ) -> bool {
-    let samples = &audio.data.samples;
-    let step = (audio.data.sample_rate as f64 / output_rate as f64) * speed;
-    let frames = out.len() / 2;
+    let frames = &audio.frames;
+    let len = frames.len();
+    let step = (frames.data.sample_rate as f64 / output_rate as f64) * speed;
     let mut reached_end = false;
 
-    for i in 0..frames {
+    for frame in out.chunks_exact_mut(2) {
         let index = audio.position;
         let base = index.floor() as usize;
-        if base >= samples.len() {
-            out[2 * i] = 0.0;
-            out[2 * i + 1] = 0.0;
+        let Some((l0, r0)) = frames.get(base) else {
+            frame.fill(0.0);
+            if !frames.complete() {
+                continue;
+            }
             reached_end = true;
-        } else {
-            let frac = (index - base as f64) as f32;
-            let (l0, r0) = samples[base];
-            let (l1, r1) = samples.get(base + 1).copied().unwrap_or((l0, r0));
-            out[2 * i] = l0 + (l1 - l0) * frac;
-            out[2 * i + 1] = r0 + (r1 - r0) * frac;
-        }
+            audio.position += step;
+            if looped && len > 0 {
+                audio.position = audio.position.rem_euclid(len as f64);
+            }
+            continue;
+        };
+        let frac = (index - base as f64) as f32;
+        let (l1, r1) = frames.get(base + 1).unwrap_or((l0, r0));
+        frame[0] = l0 + (l1 - l0) * frac;
+        frame[1] = r0 + (r1 - r0) * frac;
 
         audio.position += step;
-        if looped && !samples.is_empty() {
-            audio.position = audio.position.rem_euclid(samples.len() as f64);
+        if looped && frames.complete() && len > 0 {
+            audio.position = audio.position.rem_euclid(len as f64);
         }
     }
 

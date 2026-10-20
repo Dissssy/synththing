@@ -137,6 +137,7 @@ impl Stage {
         if !is_midi {
             let audio =
                 loader::load_audio_file(song).map_err(|e| format!("couldn't read {}: {e}", song.display()))?;
+            audio.wait_complete();
             self.visualizer.set_song(Some(song), Some(audio.song_id.clone()));
             self.engine.load_audio_file(audio, name, paused);
             return Ok(());
