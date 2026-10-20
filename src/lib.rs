@@ -29,6 +29,7 @@ mod code_edit;
 mod config;
 mod device;
 mod credits;
+mod decoded_audio;
 mod engine;
 mod frame_timing;
 mod ffmpeg;

@@ -2,9 +2,10 @@
 //!
 //! `AssetCache` is a store keyed by file path: each entry is a file that's
 //! loading, loaded, or failed, plus when it was last needed. Loading
-//! (MIDI parsing, decoding a whole audio file, parsing a soundfont) happens
-//! on a couple of worker threads, never the UI thread; results are picked
-//! up by `poll` once a frame.
+//! (MIDI parsing, decoding the start of an audio file, parsing a soundfont)
+//! happens on a couple of worker threads, never the UI thread; results are
+//! picked up by `poll` once a frame. An audio file counts as loaded once its
+//! first chunk is decoded, so it can start playing while the rest decodes.
 //!
 //! The app says what it currently needs each frame (`touch`/`request`): the
 //! playing track, the next one up, the soundfonts in use, whatever's being
@@ -18,7 +19,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -27,7 +28,7 @@ use rodio::Source as _;
 use rustysynth::{MidiFile, SoundFont};
 use sha2::{Digest, Sha256};
 
-use crate::engine::DecodedAudio;
+use crate::decoded_audio::{DecodedAudio, CHUNK_FRAMES};
 use crate::midi_notes::NoteList;
 use crate::visualizer::StereoFrame;
 
@@ -341,45 +342,89 @@ pub fn load_midi(path: &Path) -> Result<LoadedMidi> {
     Ok(LoadedMidi { file: Arc::new(file), notes: Arc::new(notes), song_id: song_id(&bytes) })
 }
 
-/// Decode a plain audio file (wav/mp3/ogg/flac/...) fully into memory up
-/// front, seeking and speed then just become arithmetic on an index, no
-/// re-decoding needed. Mono is duplicated to stereo; anything beyond stereo
-/// keeps only its first two channels. Codecs symphonia doesn't have (Opus,
-/// WMA, AC3, ...) go through ffmpeg instead, when there is one.
+/// Decode a plain audio file (wav/mp3/ogg/flac/...) into memory, so
+/// seeking and speed are just arithmetic on an index. Returns as soon as
+/// the first chunk is decoded; the rest follows on a thread of its own,
+/// which stops early if the song is dropped. Mono is duplicated to stereo;
+/// anything beyond stereo keeps only its first two channels. Codecs
+/// symphonia doesn't have (Opus, WMA, AC3, ...) go through ffmpeg instead,
+/// when there is one, decoded whole.
 pub fn load_audio_file(path: &Path) -> Result<Arc<DecodedAudio>> {
     let bytes = std::fs::read(path)?;
     let id = song_id(&bytes);
-    let (samples, sample_rate) = match decode_with_symphonia(path, bytes) {
-        Ok(decoded) => decoded,
+    match decode_with_symphonia(path, bytes, id.clone()) {
+        Ok(audio) => Ok(audio),
         Err(err) => match crate::ffmpeg::find() {
-            Some(ffmpeg) => decode_with_ffmpeg(&ffmpeg, path).map_err(|ffmpeg_err| anyhow!("{err}; ffmpeg couldn't either: {ffmpeg_err}"))?,
-            None => return Err(anyhow!("{err} (with ffmpeg, which Record can download, this file might still play)")),
+            Some(ffmpeg) => {
+                let (samples, sample_rate) = decode_with_ffmpeg(&ffmpeg, path)
+                    .map_err(|ffmpeg_err| anyhow!("{err}; ffmpeg couldn't either: {ffmpeg_err}"))?;
+                if samples.is_empty() {
+                    return Err(anyhow!("no audio data decoded"));
+                }
+                Ok(Arc::new(DecodedAudio::complete(samples, sample_rate, id)))
+            }
+            None => Err(anyhow!("{err} (with ffmpeg, which Record can download, this file might still play)")),
         },
-    };
-    if samples.is_empty() {
-        return Err(anyhow!("no audio data decoded"));
     }
-    Ok(Arc::new(DecodedAudio { samples, sample_rate, song_id: id }))
 }
 
-fn decode_with_symphonia(path: &Path, bytes: Vec<u8>) -> Result<(Vec<StereoFrame>, u32)> {
+type FileDecoder = rodio::Decoder<Cursor<Vec<u8>>>;
+
+fn decode_with_symphonia(path: &Path, bytes: Vec<u8>, id: String) -> Result<Arc<DecodedAudio>> {
     // The length and extension matter: the MP4 demuxer won't take an .m4a without them.
     let len = bytes.len() as u64;
     let mut builder = rodio::Decoder::builder().with_data(Cursor::new(bytes)).with_byte_len(len).with_seekable(true);
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         builder = builder.with_hint(ext);
     }
-    let decoder = builder.build().map_err(|e| anyhow!("{e}"))?;
+    let mut decoder = builder.build().map_err(|e| anyhow!("{e}"))?;
     let channels = decoder.channels().get() as usize;
     let sample_rate = decoder.sample_rate().get();
+    let expected = decoder.total_duration().map(|d| (d.as_secs_f64() * f64::from(sample_rate)).round() as usize);
 
-    let raw: Vec<f32> = decoder.collect();
-    let samples = if channels <= 1 {
+    let first = next_chunk(&mut decoder, channels);
+    if first.is_empty() {
+        return Err(anyhow!("no audio data decoded"));
+    }
+    let audio = Arc::new(DecodedAudio::new(sample_rate, id, expected));
+    let more = first.len() == CHUNK_FRAMES;
+    audio.push(first);
+    if !more {
+        audio.finish();
+        return Ok(audio);
+    }
+    let weak = Arc::downgrade(&audio);
+    thread::Builder::new()
+        .name("decode".into())
+        .spawn(move || decode_rest(decoder, channels, &weak))
+        .map_err(|e| anyhow!("couldn't start decoding ({e})"))?;
+    Ok(audio)
+}
+
+fn decode_rest(mut decoder: FileDecoder, channels: usize, audio: &Weak<DecodedAudio>) {
+    loop {
+        let chunk = next_chunk(&mut decoder, channels);
+        // Nothing holds the song any more: no one will hear the rest.
+        let Some(audio) = audio.upgrade() else { return };
+        let more = chunk.len() == CHUNK_FRAMES;
+        if !chunk.is_empty() {
+            audio.push(chunk);
+        }
+        if !more {
+            audio.finish();
+            return;
+        }
+    }
+}
+
+/// Up to `CHUNK_FRAMES` more frames; fewer only at the end.
+fn next_chunk(decoder: &mut FileDecoder, channels: usize) -> Arc<[StereoFrame]> {
+    let raw: Vec<f32> = decoder.by_ref().take(CHUNK_FRAMES * channels.max(1)).collect();
+    if channels <= 1 {
         raw.into_iter().map(|s| (s, s)).collect()
     } else {
         raw.chunks_exact(channels).map(|f| (f[0], f[1])).collect()
-    };
-    Ok((samples, sample_rate))
+    }
 }
 
 /// Have ffmpeg decode the first audio stream to raw stereo f32 on stdout, at
@@ -499,6 +544,40 @@ mod tests {
         let mut cache = AssetCache::new();
         cache.request(&path, AssetKind::Midi, Priority::Background, Instant::now());
         assert!(matches!(wait_for(&mut cache, &path), LoadState::Ready(Asset::Midi(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audio_starts_before_the_rest_is_decoded() {
+        let dir = std::env::temp_dir().join(format!("synththing-loader-wav-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("long.wav");
+        // 16-bit mono at 8 kHz, a few chunks long.
+        let frames = CHUNK_FRAMES * 3 + 123;
+        let data_len = (frames * 2) as u32;
+        let mut bytes = b"RIFF".to_vec();
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // mono
+        bytes.extend_from_slice(&8000u32.to_le_bytes());
+        bytes.extend_from_slice(&16000u32.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        bytes.extend(std::iter::repeat_n(0x10u8, frames * 2));
+        std::fs::write(&path, bytes).unwrap();
+
+        let audio = load_audio_file(&path).unwrap();
+        let mut reader = crate::decoded_audio::FrameReader::new(Arc::clone(&audio));
+        assert!(reader.len() >= CHUNK_FRAMES);
+        assert_eq!(reader.total_frames(), frames);
+        audio.wait_complete();
+        reader.refresh();
+        assert!(reader.complete());
+        assert_eq!(reader.len(), frames);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
