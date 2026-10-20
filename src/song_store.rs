@@ -397,18 +397,58 @@ pub fn write_in(bytes: &[u8], name: &str, dir: &Path) -> Result<Stored> {
     Ok(Stored { key, name: name.to_string() })
 }
 
-/// Write `bytes`, fetched as the song `key`, into the store in `dir`, if
-/// they are that song.
-pub fn write_as(bytes: &[u8], key: &str, dir: &Path) -> Result<()> {
-    let (hash, _) = key.split_once('.').filter(|_| is_key(key)).context("that's not a song's key")?;
-    let hex: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
-    anyhow::ensure!(hex == hash, "the song didn't arrive whole");
-    let to = dir.join(key);
-    if !to.exists() {
+/// A song fetched as `key`, written into the store in `dir` as it comes,
+/// and kept (`finish`) only if it's that song.
+pub struct Incoming {
+    key: String,
+    dir: PathBuf,
+    temp: PathBuf,
+    /// (Closed before it's renamed: Windows won't rename an open file.)
+    file: Option<std::fs::File>,
+    hasher: Sha256,
+}
+
+impl Incoming {
+    pub fn new(key: &str, dir: &Path) -> Result<Self> {
+        anyhow::ensure!(is_key(key), "that's not a song's key");
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        write_atomically(&to, bytes).with_context(|| format!("writing {}", to.display()))?;
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temp = dir.join(format!(".fetching-{}-{n}-{key}", std::process::id()));
+        let file = std::fs::File::create(&temp).with_context(|| format!("writing {}", temp.display()))?;
+        Ok(Self { key: key.to_string(), dir: dir.to_path_buf(), temp, file: Some(file), hasher: Sha256::new() })
     }
-    Ok(())
+
+    /// Keep it, if it's the song.
+    pub fn finish(mut self) -> Result<()> {
+        let hex: String = self.hasher.clone().finalize().iter().map(|b| format!("{b:02x}")).collect();
+        anyhow::ensure!(self.key.starts_with(&format!("{hex}.")), "the song didn't arrive whole");
+        if let Some(file) = self.file.take() {
+            file.sync_all().with_context(|| format!("writing {}", self.temp.display()))?;
+        }
+        let to = self.dir.join(&self.key);
+        std::fs::rename(&self.temp, &to).with_context(|| format!("writing {}", to.display()))
+    }
+}
+
+impl Write for Incoming {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.file.as_mut().map_or(Ok(0), |f| f.write(buf))?;
+        self.hasher.update(&buf[..n]);
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.as_mut().map_or(Ok(()), |f| f.flush())
+    }
+}
+
+impl Drop for Incoming {
+    // (Gone after `finish`.)
+    fn drop(&mut self) {
+        drop(self.file.take());
+        let _ = std::fs::remove_file(&self.temp);
+    }
 }
 
 /// What the one-time import ([`import_old`]) did.

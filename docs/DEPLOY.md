@@ -128,7 +128,17 @@ server {
     location / {
         proxy_pass http://127.0.0.1:7381;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        client_max_body_size 251m;   # songs through the relay: relay_song_mb, and a little
+    }
+    # Songs between devices: streamed straight through as they come (of
+    # any size: the server limits those it keeps to relay_song_mb).
+    location /api/v1/relay/ {
+        proxy_pass http://127.0.0.1:7381;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        client_max_body_size 0;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
     }
 }
 ```

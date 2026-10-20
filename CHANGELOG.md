@@ -5,13 +5,19 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Songs go straight to your other devices that are open: streamed through the server as they're sent, kept nowhere, and of any size. Only for a device that isn't open do they wait on the server.
 - Send feedback can include how smoothly the app ran over the last minute (on unless you untick it): how many frames took too long, and how long each part of the app took on average and at worst. It helps track down stutters.
 - A profiler overlay: Help > Profiler (Profiler in the menu on a phone) shows how long each part of every frame takes, live, as a flame graph. It only measures while it's open.
 - Frames that take too long to draw (over 16 ms, or one part over 8 ms) are noted in the log (Help > Log), with how long each part of the app took, to track down stutters.
 - Songs can be grouped by tag: right-click a column header (or use the sort button on a phone) > Group by > Tag. A song with several tags shows in each of their groups, and songs without tags get an Untagged group at the bottom.
 
+### Fixed
+- Syncing a big library to a slower device no longer loses songs on the way: a device leaves songs on the server only while it has room for them, then waits for your other devices to download what's there. Before, it kept sending, and the server dropped songs nobody had downloaded yet to make room, only for them to be sent again.
+- A song too big for the server waits until the device that wants it is open, instead of never moving.
+
 ### Changed
 - The visualizer never holds up the rest of the app: the app no longer waits for each picture, and turns it into an image off the main thread. A slow script just draws fewer frames, so the 30 fps fallback and "Try 60 fps again" are gone. Each picture shows about a frame after the audio it was drawn from.
+- Server: songs stream between devices (`/api/v1/relay/inbox/{inbox}`, `/api/v1/relay/{id}/send/{inbox}`, `/api/v1/relay/listening`), and `/api/v1/relay/room` says how much more of an identity's songs the relay holds. Relay requests are signed without their body (songs are sealed in chunks now). Apps and server need to be updated together, server first. Behind nginx, `/api/v1/relay/` needs `client_max_body_size 0`, `proxy_request_buffering off` and `proxy_buffering off` (docs/DEPLOY.md); Caddy needs nothing.
 
 ## 1.0.0 (2026-10-20)
 

@@ -20,12 +20,13 @@ pub(super) struct Songs {
     pub wanted: BTreeSet<String>,
     /// This device's ID (`Device::id`).
     pub device: String,
+    /// Wants (their paths) a song was just streamed for: the device it
+    /// went to says it has it next.
+    pub given: BTreeSet<String>,
     /// Songs being moved now: left alone.
     pub busy: BTreeSet<String>,
     /// A move failed a moment ago: plan, but move nothing yet.
     pub paused: bool,
-    /// The relay's limit on a song, in MB, once known.
-    pub relay_song_mb: Option<u64>,
     pub library: bool,
     pub transfers: bool,
 }
@@ -55,9 +56,8 @@ pub(super) enum Reply {
     Started(Blob),
     /// The blob changed here: send it once it's settled.
     Changed(Blob),
-    /// What to move now (nothing while moves are going or paused), and the
-    /// names of the songs too big for the relay.
-    Planned { tasks: Vec<Task>, too_big: Vec<String> },
+    /// What to move now (nothing while moves are going or paused).
+    Planned(Vec<Task>),
     /// The blob's sync didn't start: it has no state (turned off meanwhile).
     Skipped(Blob),
     /// A sync was taken in: the server's revision now, and for the library,
@@ -191,12 +191,12 @@ impl Worker {
 
     /// Say which songs this device wants, and what to move.
     fn plan(&mut self, songs: &Songs) -> Reply {
-        let nothing = Reply::Planned { tasks: Vec::new(), too_big: Vec::new() };
+        let nothing = Reply::Planned(Vec::new());
         if !songs.transfers {
             return nothing;
         }
         let Some(state) = &mut self.transfers else { return nothing };
-        let plan = song_sync::plan(&state.applied, &songs.device, &songs.store, &songs.wanted, &songs.busy);
+        let plan = song_sync::plan(&state.applied, &songs.device, &songs.store, &songs.wanted, &songs.busy, &songs.given);
         if state.record_leaves(plan.leaves, settings_sync::now()) {
             self.save(Blob::Transfers);
             self.reply(Reply::Changed(Blob::Transfers));
@@ -204,15 +204,7 @@ impl Worker {
         if plan.tasks.is_empty() || !songs.busy.is_empty() || songs.paused {
             return nothing;
         }
-        // Songs the server won't take stay here, not holding up the rest.
-        // (A limit of 0 is a server that can't move songs at all: the app
-        // says so.)
-        let (tasks, too_big): (Vec<Task>, Vec<Task>) = plan.tasks.into_iter().partition(|task| match (task, songs.relay_song_mb) {
-            (Task::Send(key), Some(mb)) if mb > 0 => song_sync::fits(&songs.store.dir().join(key), mb),
-            _ => true,
-        });
-        let name = |key: &str| songs.store.known().find(|(k, _)| *k == key).map_or_else(|| key.to_string(), |(_, s)| s.name.clone());
-        Reply::Planned { tasks, too_big: too_big.iter().map(|t| name(t.key())).collect() }
+        Reply::Planned(plan.tasks)
     }
 
     /// A library or transfers sync is done: take its leaves, with whatever

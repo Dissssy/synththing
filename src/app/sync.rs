@@ -4,11 +4,14 @@
 //! its transfers) with the authority on a thread of its own: at launch, a
 //! moment after it changes here, and when the notification stream says
 //! another device wrote. Songs move through the relay on a thread of their
-//! own too, one after another. The library's and transfers' states live
-//! on a thread of their own as well (`songs`): they cover every song.
+//! own too, one after another, and another listens for songs streamed
+//! here. The library's and transfers' states live on a thread of their
+//! own as well (`songs`): they cover every song.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -33,6 +36,9 @@ const SETTLE: Duration = Duration::from_secs(2);
 const RETRY: Duration = Duration::from_secs(60);
 /// How long the debug toast shows.
 const TOAST: Duration = Duration::from_secs(6);
+/// How long a song streamed to a device isn't sent to it again, waiting
+/// for it to say it has it.
+const GIVEN_FOR: Duration = Duration::from_secs(5 * 60);
 
 /// What's synced, each its own blob on the server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +112,15 @@ pub struct SyncState {
     moves: (Sender<Moving>, Receiver<Moving>),
     /// A move failed: no more until then.
     moves_paused: Option<Instant>,
+    /// The relay was full: no sending until then (fetching goes on).
+    sends_paused: Option<Instant>,
+    /// Wants (their paths) a song was streamed for, and when.
+    given: BTreeMap<String, Instant>,
+    /// Listening for songs streamed here: set to stop.
+    listener: Option<Arc<AtomicBool>>,
+    /// The songs this device wants, and by relay ID, for the listener.
+    wanted: BTreeSet<String>,
+    wanted_ids: Arc<Mutex<HashMap<String, String>>>,
     /// How the songs being moved are going.
     progress: Progress,
     /// Keeps the library's and transfers' states.
@@ -122,12 +137,19 @@ struct Progress {
     done: usize,
     fetched: usize,
     sent: usize,
+    /// Songs moved (or found gone, or deleted): see what's next once done.
+    changed: bool,
+    /// Songs too big for the relay (named), and how big it takes (MB).
+    too_big: Vec<String>,
+    song_mb: u64,
 }
 
 /// How the songs being moved are going.
 enum Moving {
     Moved(Moved),
     Finished,
+    /// A song streamed here (or one that failed to).
+    Received(Moved),
 }
 
 impl Default for SyncState {
@@ -147,6 +169,11 @@ impl Default for SyncState {
             busy: BTreeSet::new(),
             moves: mpsc::channel(),
             moves_paused: None,
+            sends_paused: None,
+            given: BTreeMap::new(),
+            listener: None,
+            wanted: BTreeSet::new(),
+            wanted_ids: Arc::default(),
             progress: Progress::default(),
             worker,
             songs_pending: false,
@@ -323,6 +350,10 @@ impl App {
             self.ask_worker(songs::Request::Reload);
             self.sync.for_identity = whose;
             self.sync.songs_dirty = true;
+            self.stop_listening();
+        }
+        if !self.syncing(Blob::Transfers) {
+            self.stop_listening();
         }
         if settings_sync::take_dirty() && self.sync.on {
             self.channel(Blob::Settings).dirty_since = Some(Instant::now());
@@ -539,14 +570,24 @@ impl App {
         let _timing = crate::frame_timing::scope("songs for the sync worker");
         let device = self.sync.device.get_or_insert_with(|| Device::load().id).clone();
         let every = settings_sync::syncs(&self.sync.choices, &settings_sync::EVERY_SONG);
-        let (authority, _) = self.authority();
+        let wanted = song_sync::wanted(&self.songs, &self.playlists, every);
+        if wanted != self.sync.wanted
+            && let Some(sync_key) = identity::sync_key()
+        {
+            *self.sync.wanted_ids.lock().unwrap_or_else(|p| p.into_inner()) = song_sync::wanted_ids(&sync_key, &wanted);
+            self.sync.wanted = wanted.clone();
+        }
+        if self.syncing(Blob::Transfers) {
+            self.listen_for_songs(&device);
+        }
+        self.sync.given.retain(|_, at| at.elapsed() < GIVEN_FOR);
         Box::new(songs::Songs {
             store: self.songs.clone(),
-            wanted: song_sync::wanted(&self.songs, &self.playlists, every),
+            wanted,
             device,
+            given: self.sync.given.keys().cloned().collect(),
             busy: self.sync.busy.clone(),
             paused: self.sync.moves_paused.is_some_and(|t| Instant::now() < t),
-            relay_song_mb: self.library_server_info(&authority).map(|i| i.relay_song_mb),
             library: self.syncing(Blob::Library),
             transfers: self.syncing(Blob::Transfers),
         })
@@ -574,9 +615,9 @@ impl App {
             }
             songs::Reply::Started(blob) => *self.channel(blob) = Channel { wanted: Some(Instant::now()), adopt: true, ..Channel::default() },
             songs::Reply::Changed(blob) => self.channel(blob).dirty_since = Some(Instant::now()),
-            songs::Reply::Planned { tasks, too_big } => {
+            songs::Reply::Planned(tasks) => {
                 self.sync.songs_pending = false;
-                self.start_moves(tasks, too_big);
+                self.start_moves(tasks);
             }
             songs::Reply::Skipped(blob) => self.channel(blob).running = false,
             songs::Reply::Taken { blob, revision, library } => {
@@ -598,10 +639,9 @@ impl App {
         }
     }
 
-    /// Start moving the songs the worker planned to (`too_big`, the names
-    /// of those the relay won't take).
-    fn start_moves(&mut self, tasks: Vec<Task>, too_big: Vec<String>) {
-        if tasks.is_empty() && too_big.is_empty() {
+    /// Start moving the songs the worker planned to.
+    fn start_moves(&mut self, tasks: Vec<Task>) {
+        if tasks.is_empty() {
             return;
         }
         let (authority, _) = self.authority();
@@ -611,31 +651,20 @@ impl App {
             self.sync.error = Some(format!("{} can't move songs between your devices yet: it needs updating.", super::library::host(&authority)));
             return;
         }
-        if !too_big.is_empty() {
-            self.sync.error = Some(format!(
-                "{} is too big to move between your devices (the server takes songs up to {} MB).",
-                too_big.join(", "),
-                limit.unwrap_or_default()
-            ));
-        }
-        if tasks.is_empty() {
-            return;
-        }
+        // (Not sent to the relay while it was full a moment ago, but still
+        // streamed to a device listening.)
+        let room = song_sync::Room { song_mb: limit.unwrap_or(u64::MAX), full: self.sync.sends_paused.is_some() };
         let Some((server, server_key, identity, sync_key)) = self.sync_with() else { return };
         let relay = Relay { server, server_key, identity, sync_key, dir: self.songs.dir().to_path_buf() };
         self.sync.busy = tasks.iter().map(|t| t.key().to_string()).collect();
-        self.sync.progress = Progress { total: tasks.iter().filter(|t| !matches!(t, Task::Delete(_))).count(), ..Progress::default() };
+        self.sync.progress = Progress { total: tasks.iter().filter(|t| !matches!(t, Task::Delete(_))).count(), song_mb: room.song_mb, ..Progress::default() };
         let tx = self.sync.moves.0.clone();
         std::thread::Builder::new()
             .name("song transfers".into())
             .spawn(move || {
                 // (One song failing doesn't stop the rest; the failed ones
                 // wait for the next try.)
-                for task in &tasks {
-                    if tx.send(Moving::Moved(song_sync::run(&relay, task))).is_err() {
-                        break;
-                    }
-                }
+                song_sync::run_all(&relay, &tasks, room, |moved| tx.send(Moving::Moved(moved)).is_ok());
                 let _ = tx.send(Moving::Finished);
             })
             .ok();
@@ -648,8 +677,16 @@ impl App {
                 Moving::Moved(moved) => moved,
                 Moving::Finished => {
                     self.sync.busy.clear();
-                    self.sync.songs_dirty = true;
-                    let Progress { fetched, sent, .. } = std::mem::take(&mut self.sync.progress);
+                    let Progress { fetched, sent, changed, too_big, song_mb, .. } = std::mem::take(&mut self.sync.progress);
+                    // (With nothing moved, the next try waits for something
+                    // to change, or a pause to end.)
+                    self.sync.songs_dirty |= changed;
+                    if !too_big.is_empty() {
+                        self.sync.error = Some(format!(
+                            "{} is too big to move between your devices while they aren't both open (the server keeps songs up to {song_mb} MB).",
+                            too_big.join(", ")
+                        ));
+                    }
                     let songs = |n: usize| if n == 1 { "1 song".to_string() } else { format!("{n} songs") };
                     match (fetched, sent) {
                         (0, 0) => {}
@@ -659,18 +696,29 @@ impl App {
                     }
                     continue;
                 }
+                Moving::Received(moved) => {
+                    self.song_received(moved);
+                    continue;
+                }
             };
             let progress = &mut self.sync.progress;
+            if let Moved::Full(unsent) = moved {
+                // The others take what's waiting first.
+                progress.total = progress.total.saturating_sub(unsent).max(progress.done);
+                self.sync.sends_paused = Some(Instant::now() + RETRY);
+                continue;
+            }
             if !matches!(moved, Moved::Deleted) {
                 progress.done = (progress.done + 1).min(progress.total);
             }
+            progress.changed |= matches!(moved, Moved::Sent(_) | Moved::Streamed { .. } | Moved::Fetched(_) | Moved::Gone(_) | Moved::Deleted);
             let name = |key: &str| self.songs.known().find(|(k, _)| *k == key).map_or_else(|| key.to_string(), |(_, s)| s.name.clone());
             let shown = match &moved {
                 Moved::Fetched(key) => {
                     progress.fetched += 1;
                     Some(format!("Downloaded {}", name(key)))
                 }
-                Moved::Sent(key) => {
+                Moved::Sent(key) | Moved::Streamed { key, .. } => {
                     progress.sent += 1;
                     Some(format!("Sent {}", name(key)))
                 }
@@ -693,12 +741,86 @@ impl App {
                     self.sync.moves_paused = Some(Instant::now() + RETRY);
                 }
                 Moved::Sent(_) | Moved::Gone(_) => self.ask_worker(songs::Request::Moved(moved.clone())),
-                Moved::Deleted => {}
+                Moved::Streamed { key, to } => {
+                    self.sync.given.insert(song_sync::want(to, key), Instant::now());
+                }
+                Moved::TooBig(key) => {
+                    let name = name(key);
+                    self.sync.progress.too_big.push(name);
+                }
+                Moved::Deleted | Moved::Full(_) => {}
             }
         }
         if self.sync.moves_paused.is_some_and(|t| Instant::now() >= t) {
             self.sync.moves_paused = None;
             self.sync.songs_dirty = true;
+        }
+        if self.sync.sends_paused.is_some_and(|t| Instant::now() >= t) {
+            self.sync.sends_paused = None;
+            self.sync.songs_dirty = true;
+        }
+    }
+
+    /// A song streamed here (or one that failed to).
+    fn song_received(&mut self, moved: Moved) {
+        match moved {
+            Moved::Fetched(key) => {
+                let name = self.songs.known().find(|(k, _)| *k == key).map_or_else(|| key.clone(), |(_, s)| s.name.clone());
+                self.status = format!("Downloaded {name} from your other devices.");
+                if self.config.sync_debug {
+                    self.sync.toast = Some((format!("Downloaded {name}"), Instant::now()));
+                }
+                self.add_to_library([Stored { key, name }]);
+                self.sync.songs_dirty = true;
+            }
+            Moved::Failed(key, e) => log::info!("a song streamed here ({key}): {e}"),
+            _ => {}
+        }
+    }
+
+    /// Listen for songs streamed here, on a thread of its own, from now
+    /// until songs stop syncing (`stop_listening`).
+    fn listen_for_songs(&mut self, device: &str) {
+        // (Not before the authority's been reached: that's for the sync
+        // to say.)
+        if self.sync.listener.is_some() || self.authority().1.is_none() {
+            return;
+        }
+        let Some((server, server_key, identity, sync_key)) = self.sync_with() else { return };
+        let relay = Relay { server, server_key, identity, sync_key, dir: self.songs.dir().to_path_buf() };
+        let stop = Arc::new(AtomicBool::new(false));
+        let (device, wanted, tx, stopped) = (device.to_string(), Arc::clone(&self.sync.wanted_ids), self.sync.moves.0.clone(), Arc::clone(&stop));
+        let spawned = std::thread::Builder::new().name("song inbox".into()).spawn(move || {
+            while !stopped.load(Ordering::Relaxed) {
+                let wanted = wanted.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                match song_sync::listen(&relay, &device, &wanted) {
+                    Ok(None) => {}
+                    Ok(Some(moved)) => {
+                        if tx.send(Moving::Received(moved)).is_err() {
+                            return;
+                        }
+                    }
+                    // (Half a minute before the next try.)
+                    Err(e) => {
+                        log::info!("listening for songs: {e}");
+                        for _ in 0..30 {
+                            if stopped.load(Ordering::Relaxed) {
+                                return;
+                            }
+                            std::thread::sleep(Duration::from_secs(1));
+                        }
+                    }
+                }
+            }
+        });
+        if spawned.is_ok() {
+            self.sync.listener = Some(stop);
+        }
+    }
+
+    fn stop_listening(&mut self) {
+        if let Some(stop) = self.sync.listener.take() {
+            stop.store(true, Ordering::Relaxed);
         }
     }
 
@@ -1020,7 +1142,7 @@ mod tests {
         let relay = Relay { server: base.into(), server_key: key.into(), identity: me.clone(), sync_key: [4; 32], dir: store.dir().to_path_buf() };
         let synced = sync(Job { blob: Blob::Transfers, ..job(base, key, me, &state, false) }).unwrap();
         let mut state = after(state, &synced);
-        let plan = song_sync::plan(&state.applied, device, store, wanted, &BTreeSet::new());
+        let plan = song_sync::plan(&state.applied, device, store, wanted, &BTreeSet::new(), &BTreeSet::new());
         let mut leaves = plan.leaves;
         for task in &plan.tasks {
             let moved = song_sync::run(&relay, task);

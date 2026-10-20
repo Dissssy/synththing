@@ -357,6 +357,7 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
         mailer,
         intake_token,
         pairings: Mutex::default(),
+        inboxes: Mutex::default(),
     });
     moderation::forget_old_addresses(&state);
     feedback::forget_old(&state);
@@ -426,6 +427,8 @@ struct State {
     intake_token: Option<String>,
     /// Sign-in handoffs waiting to be taken, by ID.
     pairings: Mutex<pairing::Pairings>,
+    /// Devices listening for songs streamed to them.
+    inboxes: Mutex<relay::Inboxes>,
 }
 
 impl State {
@@ -809,6 +812,22 @@ fn handle(state: &Arc<State>, mut request: Request) {
         notifications::stream(state, request);
         return;
     }
+    // (So does a song streamed between devices.)
+    if method == Method::Post {
+        match parts.as_slice() {
+            ["api", "v1", "relay", "inbox", inbox] => {
+                let inbox = inbox.to_string();
+                relay::listen(state, request, &inbox);
+                return;
+            }
+            ["api", "v1", "relay", id, "send", inbox] => {
+                let (id, inbox) = (id.to_string(), inbox.to_string());
+                relay::send(state, request, &id, &inbox);
+                return;
+            }
+            _ => {}
+        }
+    }
     let reply = match (&method, parts.as_slice()) {
         (Method::Post, ["api", "v1", "notifications"]) => notifications::list(state, &mut request),
         (Method::Post, ["api", "v1", "notices"]) => {
@@ -884,17 +903,19 @@ fn handle(state: &Arc<State>, mut request: Request) {
             let name = name.to_string();
             sync::get(state, &mut request, &name)
         }
+        (Method::Post, ["api", "v1", "relay", "room"]) => relay::room(state, &request),
+        (Method::Post, ["api", "v1", "relay", "listening"]) => relay::listening(state, &mut request),
         (Method::Post, ["api", "v1", "relay", id]) => {
             let id = id.to_string();
             relay::put(state, &mut request, &id)
         }
         (Method::Post, ["api", "v1", "relay", id, "get"]) => {
             let id = id.to_string();
-            relay::get(state, &mut request, &id)
+            relay::get(state, &request, &id)
         }
         (Method::Post, ["api", "v1", "relay", id, "delete"]) => {
             let id = id.to_string();
-            relay::delete(state, &mut request, &id)
+            relay::delete(state, &request, &id)
         }
         (Method::Post, ["api", "v1", "identity", "rotate"]) => authority::rotate(state, &mut request),
         (Method::Post, ["api", "v1", "identity", "apply"]) => {
