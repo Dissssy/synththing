@@ -180,6 +180,9 @@ pub struct Config {
     /// under.
     #[serde(default)]
     pub library: LibrarySettings,
+    /// Show what each settings sync changed (a debug toast).
+    #[serde(default)]
+    pub sync_debug: bool,
 }
 
 /// Which of the last session's settings the app starts with (Preferences >
@@ -378,6 +381,7 @@ impl Config {
         }
         let mut json = serde_json::to_value(self)?;
         finite_positions(&mut json);
+        crate::settings_sync::record(&json);
         let json = serde_json::to_string_pretty(&json)?;
         fs::write(&path, json).with_context(|| format!("writing {}", path.display()))?;
         Ok(())

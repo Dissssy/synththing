@@ -27,6 +27,8 @@ enum Event {
     /// What a server has (replacing what was known from it).
     List(String, Vec<Notification>),
     New(String, Notification),
+    /// Synced data changed on a server (`sync.rs`).
+    Synced(String, library::sync::Changed),
 }
 
 pub struct NotificationsState {
@@ -186,9 +188,9 @@ pub fn text(notification: &Notification) -> String {
 
 impl App {
     /// Keep a listener running for each server in use (with an identity,
-    /// and the preference on); stop the others.
+    /// and notifications or settings sync on); stop the others.
     pub(super) fn keep_listening(&mut self, ctx: &egui::Context) {
-        let identity = self.library_identity().filter(|_| self.config.library.notifications);
+        let identity = self.library_identity().filter(|_| self.config.library.notifications || self.sync_on());
         let whose = identity.as_ref().map(Identity::public);
         if whose != self.notifications.listening_as {
             for (_, stop) in self.notifications.listening.values() {
@@ -232,19 +234,27 @@ impl App {
 
     pub(super) fn poll_notifications(&mut self, ctx: &egui::Context) {
         self.keep_listening(ctx);
+        let wanted = self.config.library.notifications;
         while let Ok(event) = self.notifications.events.1.try_recv() {
-            let items = &mut self.notifications.items;
             match event {
+                // (Listened to again: synced data may have changed meanwhile.)
                 Event::List(server, list) => {
+                    self.sync_server_seen(&server, None);
+                    let items = &mut self.notifications.items;
                     items.retain(|(s, _)| *s != server);
-                    items.extend(list.into_iter().map(|n| (server.clone(), n)));
+                    if wanted {
+                        items.extend(list.into_iter().map(|n| (server.clone(), n)));
+                    }
                 }
                 Event::New(server, notification) => {
-                    if !items.iter().any(|(s, n)| *s == server && n.id == notification.id) {
+                    let items = &mut self.notifications.items;
+                    if wanted && !items.iter().any(|(s, n)| *s == server && n.id == notification.id) {
                         items.push((server, notification));
                     }
                 }
+                Event::Synced(server, changed) => self.sync_server_seen(&server, Some(changed)),
             }
+            let items = &mut self.notifications.items;
             items.sort_by(|a, b| b.1.created.cmp(&a.1.created).then(b.1.id.cmp(&a.1.id)));
         }
     }
@@ -512,11 +522,14 @@ fn listen(server: &str, key: &str, identity: &Identity, stop: &AtomicBool, tx: &
             Err(e) => log::info!("notifications from {server}: {e}"),
         }
         let started = std::time::Instant::now();
-        let streamed = client::notification_stream(server, key, identity, |n| {
+        let streamed = client::notification_stream(server, key, identity, |event| {
             if stop.load(Ordering::Relaxed) {
                 return false;
             }
-            let _ = tx.send(Event::New(server.to_string(), n));
+            let _ = tx.send(match event {
+                client::StreamEvent::Notification(n) => Event::New(server.to_string(), n),
+                client::StreamEvent::Sync(changed) => Event::Synced(server.to_string(), changed),
+            });
             ctx.request_repaint();
             true
         });

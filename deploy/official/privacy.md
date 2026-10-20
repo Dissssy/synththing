@@ -10,7 +10,7 @@ The official library server is run by the makers of synththing. Questions, reque
 
 ## What the server keeps
 
-**When you only browse** (search, read, install), the server keeps nothing about you, apart from counting how often each script is installed and each song downloaded (fetching a song to play its preview isn't counted). The app talks to the server while the Online Library is open, when you publish, when you check a script for updates, and, while its Notifications preference is on and you have an identity, to fetch your notifications when it starts and to keep a connection open for new ones while it runs.
+**When you only browse** (search, read, install), the server keeps nothing about you, apart from counting how often each script is installed and each song downloaded (fetching a song to play its preview isn't counted). The app talks to the server while the Online Library is open, when you publish, when you check a script for updates, and, while its Notifications preference is on and you have an identity, to fetch your notifications when it starts and to keep a connection open for new ones while it runs (also while settings sync is on).
 
 **Notifications** the server keeps for you (encores, installs and downloads adding up, your scripts and songs hidden or back, remixes of your scripts, your reports dealt with) are deleted 90 days after you've read them.
 
@@ -26,6 +26,8 @@ The official library server is run by the makers of synththing. Questions, reque
 
 **Your email, if you attach one** for recovering your identity: the server keeps only a one-way hash of it (salted with a secret of the server's), never the address itself, so it can recognise the address when you type it again but can't read or show it, and can't write to you unasked. When you ask for a code (to attach an address, change it, recover your identity or delete your data), the address you type is handed to our email provider to send it, and not kept.
 
+**Synced settings**, if you turn on Sync settings between my devices: your settings, encrypted on your device with a key only your devices have, so the server stores them but can't read them. They're kept until you delete your data.
+
 **Identity changes**: when your identity moves to a new key (New key..., or a recovery), the record of which key became which is kept, and shown to other servers so your scripts follow you.
 
 ## Who else sees it
@@ -36,7 +38,7 @@ The official library server is run by the makers of synththing. Questions, reque
 
 ## Deleting your data
 
-In the app, Preferences > Library > **Delete my data...** has the server delete what it has of yours: your scripts and songs, the encores you gave, your admin rights and your email hash. It's hidden at once and deleted for good after **30 days**; until then, **Restore my data...** puts it all back. If your identity has an email attached, a code sent to it confirms the deletion. Reports you made are kept, without your identity on them, and bans are kept until they end.
+In the app, Preferences > Library > **Delete my data...** has the server delete what it has of yours: your scripts and songs, the encores you gave, your admin rights, your email hash and your synced settings. It's hidden at once and deleted for good after **30 days**; until then, **Restore my data...** puts it all back. If your identity has an email attached, a code sent to it confirms the deletion. Reports you made are kept, without your identity on them, and bans are kept until they end.
 
 Lost your key? Recover your identity by email first (Preferences > Library > Recover...), then delete. If you can't, write to contact@p51.nl.
 

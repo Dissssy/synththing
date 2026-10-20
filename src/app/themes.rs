@@ -71,6 +71,11 @@ impl App {
             .unwrap_or_else(|| theme::builtins().into_iter().find(|t| t.name == theme::DEFAULT_THEME).unwrap())
     }
 
+    /// Put the theme into effect again next frame (settings sync changed it).
+    pub(super) fn reapply_theme(&mut self) {
+        self.themes.applied = false;
+    }
+
     pub(super) fn theme_names(&self) -> Vec<String> {
         theme::builtins().into_iter().map(|t| t.name).chain(self.themes.custom.iter().map(|t| t.name.clone())).collect()
     }
