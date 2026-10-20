@@ -117,9 +117,11 @@ impl App {
     }
 
     fn pick_next(&mut self, np: &NowPlaying) -> Option<usize> {
-        let len = self.playlists.lists.get(np.list).map_or(0, |l| l.playlist.entries.len());
+        let entries = self.playlists.lists.get(np.list).map_or(&[][..], |l| &l.playlist.entries[..]);
+        let only_starred = self.config.only_starred;
+        let playable: Vec<bool> = entries.iter().map(|e| !only_starred || self.songs.is_starred(&e.path)).collect();
         let random = self.rng.next();
-        playlist::next_entry(len, np.entry, self.loop_mode, self.shuffle, &np.history, random)
+        playlist::next_entry(&playable, np.entry, self.loop_mode, self.shuffle, &np.history, random)
     }
 
     /// Decide now which entry follows the current one (randomly, if
@@ -730,6 +732,9 @@ impl App {
                 }
             });
 
+            if select_list::star(ui, store.is_starred(&entry.path)) && !entry.missing {
+                action = Some(RowAction::Tag(super::tags::TagAction::Set(crate::song_store::STARRED.into(), !store.is_starred(&entry.path)), vec![entry.path.clone()]));
+            }
             // The playing entry is marked in the number column too.
             if playing == Some(idx) {
                 ui.strong(" > ").on_hover_text("Playing");

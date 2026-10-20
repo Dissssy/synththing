@@ -31,6 +31,7 @@ mod previews;
 mod library;
 mod recording;
 mod script_windows;
+mod song_meta;
 mod song_names;
 mod storage;
 mod sprite_editor;
@@ -122,7 +123,8 @@ fn describe_song(cache: &mut SongInfoCache, naming: &Naming, store: &SongStore, 
         })
         .collect();
     let tags = store.tags_of(path).into_iter().map(|(_, tag)| (tag.name.clone(), tag.color)).collect();
-    song_list::Described { name: naming.name(path, info.as_deref()), file_name: song.file_name.to_string(), values, tags }
+    let starred = store.is_starred(path);
+    song_list::Described { name: naming.name(path, info.as_deref()), file_name: song.file_name.to_string(), values, tags, starred }
 }
 
 /// The song at `path`'s name, by `naming`.
@@ -207,6 +209,9 @@ pub struct App {
     old_import: Option<std::sync::mpsc::Receiver<song_store::OldImport>>,
     /// The Songs tab: the library's songs. Double-clicking one plays it.
     song_list: SongList,
+    /// The store's and the song info's revisions when the songs' files were
+    /// last looked at for what they say (`note_song_meta`).
+    meta_seen: Option<(u64, u64)>,
     /// Songs asked to be removed from the library, waiting on Remove.
     remove_songs: Vec<PathBuf>,
     active_sf: Option<usize>,
@@ -553,6 +558,7 @@ impl App {
             songs,
             old_import,
             song_list: SongList::default(),
+            meta_seen: None,
             remove_songs: Vec::new(),
             active_sf: None,
             soundfont_selection: Selection::default(),
@@ -2719,6 +2725,9 @@ impl App {
         if !output.delete.is_empty() {
             remove = output.delete;
         }
+        if let Some((path, on)) = output.star {
+            tag = Some((tags::TagAction::Set(song_store::STARRED.into(), on), vec![path]));
+        }
         if let Some(at) = output.play {
             self.play_listed(at);
         }
@@ -3633,6 +3642,7 @@ impl App {
         if frame_timing::time("song_info", || self.song_info.poll()) {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+        frame_timing::time("note_song_meta", || self.note_song_meta());
         if !self.preferences_open {
             frame_timing::time("playlist_tick", || self.playlist_tick(&view));
         }

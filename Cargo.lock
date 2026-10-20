@@ -5305,6 +5305,7 @@ dependencies = [
  "egui-phosphor",
  "egui_commonmark",
  "egui_dock",
+ "flate2",
  "fontdb",
  "full_moon",
  "gethostname",

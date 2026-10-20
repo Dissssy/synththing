@@ -80,6 +80,8 @@ impl App {
             self.songs.set_song_tags(&key, tags);
         }
         self.songs_changed();
+        // (What a playlist plays next can hang on what's starred.)
+        self.plan_upcoming();
     }
 
     /// Make a tag, named and colored to tell it apart, and open the Tags

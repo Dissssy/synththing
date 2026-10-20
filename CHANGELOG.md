@@ -4,7 +4,14 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Starred songs: click the note at the left of a song, in Songs or a playlist, to star it (again to unstar it). Its color is part of the theme.
+- Only play starred songs (Preferences > Playback): shuffle, autoplay and playlists playing on go only to starred songs. A song you pick yourself still plays.
+- Starred songs as a sync choice, beside songs in playlists and every song: a device can fetch your starred songs from your others too.
+- Every song's details (title, artist, album, album artist, composer, genre, track, disc, year, length and size, and when it was first imported) sync with the library, so a device knows them for songs it doesn't have yet: a playlist shows their names, for one.
+
 ### Changed
+- Synced data is compressed before it's sealed, so a library of several thousand songs fits.
 - Songs that aren't MIDI start playing almost at once: playback begins as soon as the first moment is decoded, and the rest decodes while it plays. Before, the whole file was decoded first, which took a noticeable moment on a phone.
 - Song names (and column values) too long for the Songs list scroll sideways instead of staying cut off, on the playing song and the one under the pointer or your finger.
 - Toasts too long for the window scroll sideways instead of running off its edges, and stay up until they have scrolled through.

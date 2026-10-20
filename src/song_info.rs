@@ -53,6 +53,7 @@ pub struct Tags {
     pub composer: Option<String>,
     pub genre: Option<String>,
     pub track: Option<String>,
+    pub disc: Option<String>,
     pub year: Option<String>,
 }
 
@@ -67,6 +68,7 @@ impl Tags {
             "composer" => &self.composer,
             "genre" => &self.genre,
             "track" => &self.track,
+            "disc" => &self.disc,
             "year" => &self.year,
             _ => return None,
         };
@@ -85,6 +87,7 @@ impl Tags {
             "composer" => &mut self.composer,
             "genre" => &mut self.genre,
             "tracknumber" | "track" => &mut self.track,
+            "discnumber" | "disc" => &mut self.disc,
             "date" | "year" | "releasedate" | "originaldate" => &mut self.year,
             _ => return,
         };
@@ -93,8 +96,8 @@ impl Tags {
             return;
         }
         let value = match key.as_str() {
-            // "3/12" is track 3.
-            "tracknumber" | "track" => value.split('/').next().unwrap_or(value).trim(),
+            // "3/12" is track 3 (or disc 3).
+            "tracknumber" | "track" | "discnumber" | "disc" => value.split('/').next().unwrap_or(value).trim(),
             // "2003-05-01" is 2003.
             "title" | "tracktitle" | "artist" | "album" | "albumartist" | "composer" | "genre" => value,
             _ => value.get(..4).filter(|y| y.bytes().all(|b| b.is_ascii_digit())).unwrap_or(value),
@@ -111,6 +114,31 @@ impl SongInfo {
     pub fn is_heavy(&self) -> bool {
         self.notes.is_some_and(|n| n > HEAVY_MIDI_NOTES)
     }
+
+    /// What the library keeps of it (`song_store::Meta`), for a file of
+    /// `size` bytes.
+    pub fn meta(&self, size: u64) -> crate::song_store::Meta {
+        let t = &self.tags;
+        crate::song_store::Meta {
+            title: t.title.clone(),
+            artist: t.artist.clone(),
+            album: t.album.clone(),
+            album_artist: t.album_artist.clone(),
+            composer: t.composer.clone(),
+            genre: t.genre.clone(),
+            track: t.track.as_deref().and_then(leading_number),
+            disc: t.disc.as_deref().and_then(leading_number),
+            year: t.year.as_deref().and_then(leading_number),
+            length: self.length,
+            size,
+        }
+    }
+}
+
+/// The number `text` starts with (`"03"`, `"2003-05-01"`), if it does.
+pub fn leading_number(text: &str) -> Option<u32> {
+    let digits: String = text.trim().chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 /// `1234567` as `1,234,567`.
@@ -198,6 +226,13 @@ impl SongInfoCache {
             cvar.notify_one();
         }
         known
+    }
+
+    /// The info for `path` as read this session, if it has been (else
+    /// `None`, and it's asked for, as `get` does).
+    pub fn fresh(&mut self, path: &Path) -> Option<Arc<SongInfo>> {
+        let info = self.get(path);
+        info.filter(|_| matches!(self.slots.get(path), Some(Slot::Ready(_))))
     }
 
     /// Collect finished reads (and save them, now and then). Returns

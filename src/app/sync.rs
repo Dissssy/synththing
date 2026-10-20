@@ -572,8 +572,11 @@ impl App {
     fn songs_now(&mut self) -> Box<songs::Songs> {
         let _timing = crate::frame_timing::scope("songs for the sync worker");
         let Device { id: device, name: device_name } = self.sync.device.get_or_insert_with(Device::load).clone();
-        let every = settings_sync::syncs(&self.sync.choices, &settings_sync::EVERY_SONG);
-        let wanted = song_sync::wanted(&self.songs, &self.playlists, every);
+        let wants = song_sync::Wants {
+            starred: settings_sync::syncs(&self.sync.choices, &settings_sync::STARRED_SONGS),
+            every: settings_sync::syncs(&self.sync.choices, &settings_sync::EVERY_SONG),
+        };
+        let wanted = song_sync::wanted(&self.songs, &self.playlists, wants);
         if wanted != self.sync.wanted
             && let Some(sync_key) = identity::sync_key()
         {
@@ -917,11 +920,11 @@ impl App {
         }
         let Some(mut state) = State::load(settings_sync::NAME) else { return };
         let config = self.config.to_json().unwrap_or_default();
-        let own = [settings_sync::PLAYLISTS.key, settings_sync::SONGS.key, settings_sync::EVERY_SONG.key];
+        let own = [settings_sync::PLAYLISTS.key, settings_sync::SONGS.key, settings_sync::STARRED_SONGS.key, settings_sync::EVERY_SONG.key];
         let any_on = chosen.iter().any(|(setting, on)| *on && !own.contains(&setting.key));
         let toggled = |of: &settings_sync::Setting| chosen.iter().find(|(setting, _)| setting.key == of.key).map(|(_, on)| *on);
         let (playlists, songs) = (toggled(&settings_sync::PLAYLISTS), toggled(&settings_sync::SONGS));
-        if toggled(&settings_sync::EVERY_SONG).is_some() {
+        if toggled(&settings_sync::EVERY_SONG).is_some() || toggled(&settings_sync::STARRED_SONGS).is_some() {
             self.sync.songs_dirty = true;
         }
         for (setting, on) in chosen {

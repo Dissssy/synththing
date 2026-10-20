@@ -5,6 +5,7 @@
 //! fuzzy search over the names, file names and tags.
 //! Double-clicking a song plays it (and marks it as playing); rows can be
 //! selected several at a time and dragged out together (onto a playlist).
+//! The note at the left of each row stars it, or unstars it.
 //! For touch, the column sorted by goes on a second line, and sorting and
 //! grouping are in a menu.
 //! Autoplay plays on down the list as it is when each song ends (`next`).
@@ -79,13 +80,15 @@ impl Playing {
 }
 
 /// How the next song's picked: how far autoplay goes, whether it goes
-/// round again at the end, shuffles, and skips the closed groups.
+/// round again at the end, shuffles, skips the closed groups, and plays
+/// only starred songs.
 #[derive(Clone, Copy, Debug)]
 pub struct Rules {
     pub autoplay: Autoplay,
     pub loop_all: bool,
     pub shuffle: bool,
     pub skip_collapsed: bool,
+    pub only_starred: bool,
 }
 
 /// A song in the list's play order: every song listed, the closed groups'
@@ -95,6 +98,7 @@ struct Queued {
     path: PathBuf,
     group: Option<String>,
     collapsed: bool,
+    starred: bool,
 }
 
 /// Draws a row's right-click menu, given the songs it applies to (the
@@ -187,14 +191,15 @@ pub fn date(secs: i64) -> String {
 }
 
 /// A song as the list shows it: its name, its original file's name, the
-/// values of the columns asked for, in order, and its tags (names and
-/// colors).
+/// values of the columns asked for, in order, its tags (names and
+/// colors), and whether it's starred.
 #[derive(Clone)]
 pub struct Described {
     pub name: String,
     pub file_name: String,
     pub values: Vec<Option<Value>>,
     pub tags: Vec<(String, [u8; 3])>,
+    pub starred: bool,
 }
 
 #[derive(Clone)]
@@ -260,6 +265,8 @@ pub struct Output {
     pub delete: Vec<PathBuf>,
     /// The view changed (to save).
     pub view_changed: bool,
+    /// The song's note was clicked: star it (`true`) or unstar it.
+    pub star: Option<(PathBuf, bool)>,
 }
 
 /// What a song sorts by for `value`: it with its text in lowercase, made
@@ -507,7 +514,7 @@ impl SongList {
                 self.sorted(&songs, view, &keys, sort_at, group_at, describe)
             } else {
                 let found = ranked_matches(&songs, query, &keys, describe);
-                let queue = found.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false }).collect();
+                let queue = found.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false, starred: e.song.starred }).collect();
                 (found.into_iter().map(Item::Song).collect(), queue)
             };
             let query = query.to_string();
@@ -522,6 +529,7 @@ impl SongList {
         }
         let active = *self.active_row.get_or_insert_with(|| self.active.as_ref().and_then(|(path, group)| active_row(items, path, group.as_deref())));
         let mut toggle = None;
+        let mut star = None;
         let path_of = |i: usize| match items.get(i) {
             Some(Item::Song(entry)) => Some(entry.path.clone()),
             _ => None,
@@ -561,6 +569,9 @@ impl SongList {
                 row.response.dnd_set_drag_payload(DraggedFiles { paths, label });
             }
             row.response.context_menu(|ui| menu(ui, &rows()));
+            if select_list::star(ui, entry.song.starred) {
+                star = Some((entry.path.clone(), !entry.song.starred));
+            }
             let text = egui::RichText::new(&entry.song.name);
             // Only the playing row and the one under the pointer (or
             // finger) scroll what's cut short, to keep the list calm.
@@ -604,6 +615,7 @@ impl SongList {
             play: output.activated.and_then(|i| self.position_of_row(i)),
             delete: if output.delete { unique(self.selection.rows().iter().filter_map(|&i| path_of(i))) } else { Vec::new() },
             view_changed,
+            star,
         };
         if let Some(key) = toggle {
             if !self.collapsed.remove(&key) {
@@ -641,6 +653,8 @@ impl SongList {
                 headers.push((c.key, response));
             }
             let name = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                // (Over the rows' notes.)
+                ui.add_space(select_list::STAR_WIDTH + ui.spacing().item_spacing.x);
                 ui.add(egui::Label::new(title("name", "Name")).truncate().selectable(false).sense(egui::Sense::click()))
             });
             headers.push(("name", name.inner));
@@ -724,7 +738,7 @@ impl SongList {
             }
         });
         if group_at.is_none() && !by_tag {
-            let queue = sorting.iter().map(|s| Queued { path: s.entry.path.clone(), group: None, collapsed: false }).collect();
+            let queue = sorting.iter().map(|s| Queued { path: s.entry.path.clone(), group: None, collapsed: false, starred: s.entry.song.starred }).collect();
             return (sorting.into_iter().map(|s| Item::Song(s.entry)).collect(), queue);
         }
         let missing = if by_tag { "Untagged" } else { "Unknown" };
@@ -744,7 +758,7 @@ impl SongList {
             };
             let Item::Group { key, count, collapsed, .. } = &mut items[at] else { unreachable!("`current` is a group's header") };
             *count += 1;
-            queue.push(Queued { path: entry.path.clone(), group: Some(key.clone()), collapsed: *collapsed });
+            queue.push(Queued { path: entry.path.clone(), group: Some(key.clone()), collapsed: *collapsed, starred: entry.song.starred });
             if !*collapsed {
                 items.push(Item::Song(entry));
             }
@@ -792,6 +806,7 @@ fn scope(queue: &[Queued], group: &Option<String>, rules: Rules) -> Vec<usize> {
     (0..queue.len())
         .filter(|&i| rules.autoplay == Autoplay::All || queue[i].group == *group)
         .filter(|&i| !(rules.skip_collapsed && queue[i].collapsed))
+        .filter(|&i| !rules.only_starred || queue[i].starred)
         .collect()
 }
 
@@ -950,7 +965,7 @@ mod tests {
                 *described += 1;
                 let n: usize = path.to_str().unwrap().parse().unwrap();
                 let values = keys.iter().map(|&k| (k == "artist").then(|| Value { text: format!("Artist {}", n % 3), number: None })).collect();
-                Described { name: format!("Song {n}"), file_name: String::new(), values, tags: Vec::new() }
+                Described { name: format!("Song {n}"), file_name: String::new(), values, tags: Vec::new(), starred: false }
             };
             list.ui(ui, &mut || songs.to_vec(), revision, &mut view, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
         });
@@ -1017,7 +1032,7 @@ mod tests {
             let (name, album, tags) = songs.iter().find(|(name, ..)| Path::new(name) == path).unwrap();
             let values = vec![album.map(|a| Value { text: a.to_string(), number: None })];
             let tags = tags.iter().map(|t| (t.to_string(), [0; 3])).collect();
-            Described { name: name.to_string(), file_name: name.to_string(), values, tags }
+            Described { name: name.to_string(), file_name: name.to_string(), values, tags, starred: false }
         };
         let view = View { group: group.into(), ..View::default() };
         let group_at = (group == "album").then_some(0);
@@ -1048,7 +1063,7 @@ mod tests {
 
     /// A play order of (song, group, closed).
     fn queue(rows: &[(&str, Option<&str>, bool)]) -> Vec<Queued> {
-        rows.iter().map(|(p, g, c)| Queued { path: PathBuf::from(p), group: g.map(str::to_string), collapsed: *c }).collect()
+        rows.iter().map(|(p, g, c)| Queued { path: PathBuf::from(p), group: g.map(str::to_string), collapsed: *c, starred: false }).collect()
     }
 
     /// Playing `path` (in `group`, at row `at`), with `history` played before it this pass.
@@ -1059,7 +1074,7 @@ mod tests {
     }
 
     fn rules(autoplay: Autoplay, loop_all: bool) -> Rules {
-        Rules { autoplay, loop_all, shuffle: false, skip_collapsed: false }
+        Rules { autoplay, loop_all, shuffle: false, skip_collapsed: false, only_starred: false }
     }
 
     fn next_path(queue: &[Queued], playing: &Playing, rules: Rules) -> Option<(String, bool)> {
@@ -1106,6 +1121,17 @@ mod tests {
     }
 
     #[test]
+    fn autoplay_can_play_only_starred_songs() {
+        let mut q = queue(&[("a", None, false), ("b", None, false), ("c", None, false), ("d", None, false)]);
+        q[2].starred = true;
+        let only = Rules { only_starred: true, ..rules(Autoplay::All, true) };
+        // Picked by hand, "a" played; after it, only the starred ones.
+        assert_eq!(next_path(&q, &playing("a", None, 0, &[]), only), Some(("c".into(), false)));
+        assert_eq!(next_path(&q, &playing("c", None, 2, &["a"]), only), Some(("c".into(), true)), "round again");
+        assert_eq!(next_path(&q, &playing("a", None, 0, &[]), Rules { shuffle: true, ..only }), Some(("c".into(), false)));
+    }
+
+    #[test]
     fn autoplay_previous_is_the_row_above() {
         let q = queue(&[("a", Some("x"), false), ("b", Some("x"), false), ("c", Some("y"), false)]);
         let path = |at: Option<Position>| at.map(|at| at.path.to_string_lossy().into_owned());
@@ -1133,7 +1159,7 @@ mod tests {
         let paths: Vec<PathBuf> = songs.iter().map(|(name, ..)| PathBuf::from(name)).collect();
         let mut describe = |path: &Path, _: &[&str]| {
             let (name, _, tags) = songs.iter().find(|(name, ..)| Path::new(name) == path).unwrap();
-            Described { name: name.to_string(), file_name: name.to_string(), values: vec![None], tags: tags.iter().map(|t| (t.to_string(), [0; 3])).collect() }
+            Described { name: name.to_string(), file_name: name.to_string(), values: vec![None], tags: tags.iter().map(|t| (t.to_string(), [0; 3])).collect(), starred: false }
         };
         let view = View { group: TAG.into(), ..View::default() };
         let (items, _) = SongList::default().sorted(&paths, &view, &["album"], None, None, &mut describe);

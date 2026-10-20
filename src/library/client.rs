@@ -356,7 +356,10 @@ pub fn sync_get(
 ) -> Result<(i64, Option<Vec<u8>>), String> {
     let blob: super::sync::Blob = signed_post(base, server_key, identity, &format!("/api/v1/sync/{name}/get"), &serde_json::json!({}))?;
     let plain = blob.data.and_then(|data| {
-        super::sync::open(sync_key, &data).map_err(|e| log::warn!("synced {name} from {base}: {e}")).ok()
+        super::sync::open(sync_key, &data)
+            .and_then(|packed| super::sync::unpack(&packed))
+            .map_err(|e| log::warn!("synced {name} from {base}: {e}"))
+            .ok()
     });
     Ok((blob.revision, plain))
 }
@@ -374,7 +377,11 @@ pub fn sync_write(
     revision: i64,
     plain: &[u8],
 ) -> Result<super::sync::Written, String> {
-    let write = super::sync::Write { base: revision, data: super::sync::seal(sync_key, plain)? };
+    let data = super::sync::seal(sync_key, &super::sync::pack(plain))?;
+    if data.len() > super::sync::MAX_DATA {
+        return Err(format!("{name} is too big to sync ({} KB sealed; the most is {} KB)", data.len() / 1024, super::sync::MAX_DATA / 1024));
+    }
+    let write = super::sync::Write { base: revision, data };
     let body = serde_json::to_value(&write).map_err(|e| e.to_string())?;
     signed_post(base, server_key, identity, &format!("/api/v1/sync/{name}"), &body)
 }
@@ -1315,6 +1322,9 @@ mod tests {
         assert_eq!(sync_get(&base, &key, &alice, &[6; 32], "settings").unwrap(), (2, None), "another sync key's");
         assert!(sync_get(&base, &key, &Identity::generate().unwrap(), &sync_key, "settings").unwrap().1.is_none(), "only hers");
         assert!(sync_write(&base, &key, &alice, &sync_key, "../x", 0, b"x").is_err());
+        let mut noise = vec![0; crate::library::sync::MAX_DATA];
+        getrandom::fill(&mut noise).unwrap();
+        assert!(sync_write(&base, &key, &alice, &sync_key, "settings", 2, &noise).unwrap_err().contains("too big"), "known before sending");
 
         // A new key: the synced data comes along.
         let alice2 = Identity::generate().unwrap();
