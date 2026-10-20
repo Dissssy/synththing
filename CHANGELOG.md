@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Your devices, under the sync switch in Preferences > Online Library: the devices your songs move between, when each last synced, and Remove for one you don't use any more (a test install, a lost phone), so songs stop being sent for it. One that doesn't sync for 14 days is removed by itself; one removed comes back if it syncs again.
+
 ## 1.0.1 (2026-10-20)
 
 ### Added

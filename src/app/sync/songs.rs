@@ -11,15 +11,16 @@ use super::{sync, Blob, Done, Job, Outcome};
 use crate::library::identity;
 use crate::settings_sync::{self, Fields, State};
 use crate::song_store::SongStore;
-use crate::song_sync::{self, Moved, Task};
+use crate::song_sync::{self, Moved, SyncedDevice, Task};
 
 /// The songs as the app has them, for the worker to go by.
 pub(super) struct Songs {
     pub store: SongStore,
     /// The songs this device wants (`song_sync::wanted`).
     pub wanted: BTreeSet<String>,
-    /// This device's ID (`Device::id`).
+    /// This device's ID and name (`Device`).
     pub device: String,
+    pub device_name: String,
     /// Wants (their paths) a song was just streamed for: the device it
     /// went to says it has it next.
     pub given: BTreeSet<String>,
@@ -42,6 +43,8 @@ pub(super) enum Request {
     Songs(Box<Songs>),
     /// A song was moved.
     Moved(Moved),
+    /// Forget a device (by ID): its wants, and it in the list.
+    Forget(String),
     /// Sync, with this device's leaves (the job's `base` and `local`) put in.
     Sync(Box<Job>),
     /// A sync is done: take it in, with the songs as they are now noted
@@ -58,6 +61,8 @@ pub(super) enum Reply {
     Changed(Blob),
     /// What to move now (nothing while moves are going or paused).
     Planned(Vec<Task>),
+    /// The devices in the transfers, as of now.
+    Devices(Vec<SyncedDevice>),
     /// The blob's sync didn't start: it has no state (turned off meanwhile).
     Skipped(Blob),
     /// A sync was taken in: the server's revision now, and for the library,
@@ -117,6 +122,16 @@ impl Worker {
                 if state.record_leaves(leaves, settings_sync::now()) {
                     self.save(Blob::Transfers);
                     self.reply(Reply::Changed(Blob::Transfers));
+                }
+            }
+            Request::Forget(device) => {
+                let Some(state) = &mut self.transfers else { return };
+                let leaves = song_sync::forget(&state.applied, &device);
+                let devices = state.record_leaves(leaves, settings_sync::now()).then(|| song_sync::devices(&state.fields));
+                if let Some(devices) = devices {
+                    self.save(Blob::Transfers);
+                    self.reply(Reply::Changed(Blob::Transfers));
+                    self.reply(Reply::Devices(devices));
                 }
             }
             Request::Sync(mut job) => {
@@ -196,11 +211,21 @@ impl Worker {
             return nothing;
         }
         let Some(state) = &mut self.transfers else { return nothing };
-        let plan = song_sync::plan(&state.applied, &songs.device, &songs.store, &songs.wanted, &songs.busy, &songs.given);
-        if state.record_leaves(plan.leaves, settings_sync::now()) {
+        // (Devices gone quiet are forgotten.)
+        let now = settings_sync::now();
+        let mut applied = state.applied.clone();
+        for device in song_sync::gone_quiet(&state.fields, &songs.device, now) {
+            applied = song_sync::forget(&applied, &device);
+        }
+        let mut plan = song_sync::plan(&applied, &songs.device, &songs.store, &songs.wanted, &songs.busy, &songs.given);
+        song_sync::note_device(&mut plan.leaves, &songs.device, &songs.device_name, now);
+        let changed = state.record_leaves(plan.leaves, now);
+        let devices = song_sync::devices(&state.fields);
+        if changed {
             self.save(Blob::Transfers);
             self.reply(Reply::Changed(Blob::Transfers));
         }
+        self.reply(Reply::Devices(devices));
         if plan.tasks.is_empty() || !songs.busy.is_empty() || songs.paused {
             return nothing;
         }
