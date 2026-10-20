@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Songs can be grouped by tag: right-click a column header (or use the sort button on a phone) > Group by > Tag. A song with several tags shows in each of their groups, and songs without tags get an Untagged group at the bottom.
+
 ## 1.0.0 (2026-10-20)
 
 ### Added
