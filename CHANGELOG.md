@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.0.0 (2026-10-20)
+
 ### Added
 - Tags for songs: your own labels, each with a color, shown on songs in Songs and in playlists. Right-click songs > Tags to tag them or make a new one; Tags > Edit tags... renames, recolors and deletes them. The search box finds songs by their tags too. With sync on, tags sync with your songs.
 - You can see songs moving between your devices: a spinner and a count (done, of how many) above Songs, in the status bar and under the sync switch, then "Downloaded 12 songs from your other devices." once they're in. With "Show what each sync changed" on, each song shows as it arrives or goes.
