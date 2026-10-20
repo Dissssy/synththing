@@ -1,9 +1,12 @@
-//! Sync in the app (`settings_sync.rs`, `playlist_sync.rs`): the switch in
-//! Preferences > Online Library, and syncing each blob (the settings, the
-//! playlists) with the authority on a thread of its own: at launch, a
+//! Sync in the app (`settings_sync.rs`, `playlist_sync.rs`,
+//! `song_sync.rs`): the switch in Preferences > Online Library, and
+//! syncing each blob (the settings, the playlists, the song library and
+//! its transfers) with the authority on a thread of its own: at launch, a
 //! moment after it changes here, and when the notification stream says
-//! another device wrote.
+//! another device wrote. Songs move through the relay on a thread of their
+//! own too, one after another.
 
+use std::collections::BTreeSet;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -13,8 +16,11 @@ use super::App;
 use crate::config::Config;
 use crate::library::identity::{self, Identity};
 use crate::library::{self, client};
+use crate::device::Device;
 use crate::playlist_sync;
 use crate::settings_sync::{self, Change, Fields, State, Winner};
+use crate::song_store::Stored;
+use crate::song_sync::{self, Moved, Relay, Task};
 
 /// How long after a change before it's sent (a slider being dragged
 /// saves over and over).
@@ -29,15 +35,19 @@ const TOAST: Duration = Duration::from_secs(6);
 enum Blob {
     Settings,
     Playlists,
+    Library,
+    Transfers,
 }
 
 impl Blob {
-    const ALL: [Blob; 2] = [Blob::Settings, Blob::Playlists];
+    const ALL: [Blob; 4] = [Blob::Settings, Blob::Playlists, Blob::Library, Blob::Transfers];
 
     fn name(self) -> &'static str {
         match self {
             Blob::Settings => settings_sync::NAME,
             Blob::Playlists => playlist_sync::NAME,
+            Blob::Library => song_sync::LIBRARY,
+            Blob::Transfers => song_sync::TRANSFERS,
         }
     }
 
@@ -65,10 +75,26 @@ pub struct SyncState {
     for_identity: Option<String>,
     /// The kinds of settings this device syncs (`State::choices`).
     choices: settings_sync::Choices,
-    channels: [Channel; 2],
+    channels: [Channel; 4],
     events: (Sender<Done>, Receiver<Done>),
     error: Option<String>,
     toast: Option<(String, Instant)>,
+    /// The songs here or the playlists changed: say so in the library, and
+    /// see what to fetch or send.
+    songs_dirty: bool,
+    /// This device's ID (`Device::id`), once it's needed.
+    device: Option<String>,
+    /// Songs being moved through the relay, by key.
+    busy: BTreeSet<String>,
+    moves: (Sender<Moving>, Receiver<Moving>),
+    /// A move failed: no more until then.
+    moves_paused: Option<Instant>,
+}
+
+/// How the songs being moved are going.
+enum Moving {
+    Moved(Moved),
+    Finished,
 }
 
 impl Default for SyncState {
@@ -81,6 +107,11 @@ impl Default for SyncState {
             events: mpsc::channel(),
             error: None,
             toast: None,
+            songs_dirty: false,
+            device: None,
+            busy: BTreeSet::new(),
+            moves: mpsc::channel(),
+            moves_paused: None,
         }
     }
 }
@@ -107,7 +138,7 @@ struct Job {
 impl Job {
     /// Whether the leaf at `path` syncs on this device.
     fn syncs(&self, path: &str) -> bool {
-        self.blob == Blob::Playlists || settings_sync::syncs(&self.choices, settings_sync::setting_of(path))
+        self.blob != Blob::Settings || settings_sync::syncs(&self.choices, settings_sync::setting_of(path))
     }
 }
 
@@ -177,7 +208,17 @@ impl App {
 
     /// Whether `blob` syncs here.
     fn syncing(&self, blob: Blob) -> bool {
-        self.sync.on && (blob == Blob::Settings || settings_sync::syncs(&self.sync.choices, &settings_sync::PLAYLISTS))
+        self.sync.on
+            && match blob {
+                Blob::Settings => true,
+                Blob::Playlists => settings_sync::syncs(&self.sync.choices, &settings_sync::PLAYLISTS),
+                Blob::Library | Blob::Transfers => settings_sync::syncs(&self.sync.choices, &settings_sync::SONGS),
+            }
+    }
+
+    /// The songs here changed (`refresh_missing`).
+    pub(super) fn songs_changed(&mut self) {
+        self.sync.songs_dirty = true;
     }
 
     fn channel(&mut self, blob: Blob) -> &mut Channel {
@@ -204,6 +245,7 @@ impl App {
     /// The playlists changed here: with them syncing, note what changed,
     /// to send once it's settled.
     pub(super) fn playlists_changed(&mut self) {
+        self.sync.songs_dirty = true;
         if !self.syncing(Blob::Playlists) {
             return;
         }
@@ -232,6 +274,7 @@ impl App {
                 *self.channel(blob) = Channel { revision, wanted, ..Channel::default() };
             }
             self.sync.for_identity = whose;
+            self.sync.songs_dirty = true;
         }
         if settings_sync::take_dirty() && self.sync.on {
             self.channel(Blob::Settings).dirty_since = Some(Instant::now());
@@ -242,6 +285,7 @@ impl App {
                 Ok(outcome) => match blob {
                     Blob::Settings => self.settings_synced(outcome),
                     Blob::Playlists => self.playlists_synced(outcome),
+                    Blob::Library | Blob::Transfers => self.songs_synced(blob, outcome),
                 },
                 Err(e) => {
                     log::info!("{} sync: {e}", blob.name());
@@ -249,6 +293,11 @@ impl App {
                     self.channel(blob).wanted = Some(Instant::now() + RETRY);
                 }
             }
+        }
+        self.poll_moves();
+        if std::mem::take(&mut self.sync.songs_dirty) && self.sync.on {
+            self.record_library();
+            self.plan_transfers();
         }
         for blob in Blob::ALL {
             let channel = &self.sync.channels[blob.index()];
@@ -263,17 +312,23 @@ impl App {
         }
     }
 
-    fn start_sync(&mut self, blob: Blob, adopt: bool) {
+    /// The authority, its key, the identity and the sync key, to sync with.
+    fn sync_with(&mut self) -> Option<(String, String, Identity, [u8; 32])> {
         let (server, server_key) = self.authority();
         let (Some(identity), Some(server_key)) = (self.library_identity(), server_key) else {
             self.sync.error = Some(format!("{} hasn't been reached yet: open the Online Library first.", super::library::host(&server)));
-            return;
+            return None;
         };
         let Some(sync_key) = identity::sync_key() else {
             self.sync.on = false;
-            return;
+            return None;
         };
+        Some((server, server_key, identity, sync_key))
+    }
+
+    fn start_sync(&mut self, blob: Blob, adopt: bool) {
         let Some(state) = State::load(blob.name()) else { return };
+        let Some((server, server_key, identity, sync_key)) = self.sync_with() else { return };
         let choices = self.sync.choices.clone();
         let job = Job { server, server_key, identity, sync_key, blob, base: state.base, local: state.fields, adopt, choices };
         self.channel(blob).running = true;
@@ -389,17 +444,142 @@ impl App {
         self.plan_upcoming();
     }
 
-    /// Start syncing the playlists here: the server's, if it has any, with
+    /// Start syncing `blob` here: the server's leaves, if it has any, with
     /// this device's added.
-    fn start_playlist_sync(&mut self) {
+    fn start_blob(&mut self, blob: Blob) {
         let Some(sync_key) = identity::sync_key() else { return };
-        let state = State::of(&sync_key, playlist_sync::leaves(&self.playlists, &self.songs));
-        match state.save(playlist_sync::NAME) {
+        let leaves = match blob {
+            Blob::Settings => return,
+            Blob::Playlists => playlist_sync::leaves(&self.playlists, &self.songs),
+            Blob::Library => song_sync::library_leaves(&self.songs, &Default::default()),
+            Blob::Transfers => Default::default(),
+        };
+        match State::of(&sync_key, leaves).save(blob.name()) {
             Ok(()) => {
-                *self.channel(Blob::Playlists) = Channel::default();
-                self.start_sync(Blob::Playlists, true);
+                *self.channel(blob) = Channel::default();
+                self.start_sync(blob, true);
             }
             Err(e) => self.sync.error = Some(e),
+        }
+    }
+
+    /// A library or transfers sync is done: take its leaves, with whatever
+    /// was changed here while it ran, and see what that means for the songs.
+    fn songs_synced(&mut self, blob: Blob, outcome: Outcome) {
+        self.sync.error = None;
+        let Some(mut state) = State::load(blob.name()) else { return };
+        let (result, _) = settings_sync::merge_where(&outcome.local, &state.fields, &outcome.merged, |_| true);
+        if blob == Blob::Library {
+            song_sync::apply_library(&mut self.songs, &result);
+        }
+        if result != outcome.merged {
+            self.channel(blob).dirty_since = Some(Instant::now());
+        }
+        state.applied = result.iter().map(|(k, f)| (k.clone(), f.value.clone())).collect();
+        state.revision = outcome.revision;
+        state.base = outcome.merged;
+        state.fields = result;
+        self.channel(blob).revision = state.revision;
+        if let Err(e) = state.save(blob.name()) {
+            log::warn!("{} sync: {e}", blob.name());
+        }
+        self.sync.songs_dirty = true;
+    }
+
+    /// Note the songs here in the synced library.
+    fn record_library(&mut self) {
+        if !self.syncing(Blob::Library) {
+            return;
+        }
+        let Some(mut state) = State::load(song_sync::LIBRARY) else { return };
+        let leaves = song_sync::library_leaves(&self.songs, &state.applied);
+        if state.record_leaves(leaves, settings_sync::now()) {
+            if let Err(e) = state.save(song_sync::LIBRARY) {
+                log::warn!("library sync: {e}");
+            }
+            self.channel(Blob::Library).dirty_since = Some(Instant::now());
+        }
+    }
+
+    /// Say which songs this device wants, and start moving those it can.
+    fn plan_transfers(&mut self) {
+        if !self.syncing(Blob::Transfers) {
+            return;
+        }
+        let Some(mut state) = State::load(song_sync::TRANSFERS) else { return };
+        let device = self.sync.device.get_or_insert_with(|| Device::load().id).clone();
+        let every = settings_sync::syncs(&self.sync.choices, &settings_sync::EVERY_SONG);
+        let wanted = song_sync::wanted(&self.songs, &self.playlists, every);
+        let plan = song_sync::plan(&state.applied, &device, &self.songs, &wanted, &self.sync.busy);
+        if state.record_leaves(plan.leaves, settings_sync::now()) {
+            if let Err(e) = state.save(song_sync::TRANSFERS) {
+                log::warn!("transfers sync: {e}");
+            }
+            self.channel(Blob::Transfers).dirty_since = Some(Instant::now());
+        }
+        let paused = self.sync.moves_paused.is_some_and(|t| Instant::now() < t);
+        if plan.tasks.is_empty() || !self.sync.busy.is_empty() || paused {
+            return;
+        }
+        let Some((server, server_key, identity, sync_key)) = self.sync_with() else { return };
+        let relay = Relay { server, server_key, identity, sync_key, dir: self.songs.dir().to_path_buf() };
+        self.sync.busy = plan.tasks.iter().map(|t| t.key().to_string()).collect();
+        let tx = self.sync.moves.0.clone();
+        let tasks: Vec<Task> = plan.tasks;
+        std::thread::Builder::new()
+            .name("song transfers".into())
+            .spawn(move || {
+                for task in &tasks {
+                    let moved = song_sync::run(&relay, task);
+                    // (The rest wait for the next try.)
+                    let failed = matches!(moved, Moved::Failed(..));
+                    if tx.send(Moving::Moved(moved)).is_err() || failed {
+                        break;
+                    }
+                }
+                let _ = tx.send(Moving::Finished);
+            })
+            .ok();
+    }
+
+    /// Take the songs moved since the last frame.
+    fn poll_moves(&mut self) {
+        while let Ok(moving) = self.sync.moves.1.try_recv() {
+            let moved = match moving {
+                Moving::Moved(moved) => moved,
+                Moving::Finished => {
+                    self.sync.busy.clear();
+                    self.sync.songs_dirty = true;
+                    continue;
+                }
+            };
+            match &moved {
+                Moved::Fetched(key) => {
+                    let name = self.songs.known().find(|(k, _)| k == key).map_or_else(|| key.clone(), |(_, s)| s.name.clone());
+                    self.add_to_library([Stored { key: key.clone(), name }]);
+                }
+                Moved::Failed(key, e) => {
+                    log::info!("moving song {key}: {e}");
+                    self.sync.error = Some(format!("couldn't move a song between your devices: {e}"));
+                    self.sync.moves_paused = Some(Instant::now() + RETRY);
+                }
+                Moved::Sent(_) | Moved::Gone(_) => {
+                    if let Some(mut state) = State::load(song_sync::TRANSFERS) {
+                        let leaves = song_sync::after(state.applied.clone(), &moved);
+                        if state.record_leaves(leaves, settings_sync::now()) {
+                            if let Err(e) = state.save(song_sync::TRANSFERS) {
+                                log::warn!("transfers sync: {e}");
+                            }
+                            self.channel(Blob::Transfers).dirty_since = Some(Instant::now());
+                        }
+                    }
+                }
+                Moved::Deleted => {}
+            }
+        }
+        if self.sync.moves_paused.is_some_and(|t| Instant::now() >= t) {
+            self.sync.moves_paused = None;
+            self.sync.songs_dirty = true;
         }
     }
 
@@ -412,11 +592,12 @@ impl App {
         super::with_info(
             ui,
             "Keeps your settings and playlists the same on every device signed in as you that has \
-             this on. What belongs to one device stays on it: folders, layouts, the audio buffer, the \
+             this on, and brings the songs in your playlists (or every song) over from your other \
+             devices. What belongs to one device stays on it: folders, layouts, the audio buffer, the \
              mobile layout, the interface scale, updates, and the soundfont a playlist entry uses. \
-             They're encrypted on this device first, with a key only your devices have, so the server \
-             can't read them. Turning it on here takes what your other devices synced, if there's \
-             anything; a song in a playlist that isn't on this device shows as unavailable.",
+             Everything is encrypted on this device first, with a key only your devices have, so the \
+             server can't read it. Turning it on here takes what your other devices synced, if there's \
+             anything; a song shows as unavailable until it's here.",
             |ui| ui.add_enabled(signed_in && offered, egui::Checkbox::new(&mut on, "Sync settings and playlists between my devices")),
         );
         if !offered {
@@ -438,6 +619,7 @@ impl App {
                 ui.weak(format!("Couldn't sync: {error}"));
             }
             self.sync_choices_ui(ui);
+            self.blocked_songs_ui(ui);
             let mut debug = self.config.sync_debug;
             if ui.checkbox(&mut debug, "Show what each sync changed (for testing)").changed() {
                 self.config.sync_debug = debug;
@@ -482,8 +664,13 @@ impl App {
         }
         let Some(mut state) = State::load(settings_sync::NAME) else { return };
         let config = serde_json::to_value(&self.config).unwrap_or_default();
-        let any_on = chosen.iter().any(|(setting, on)| *on && setting.key != settings_sync::PLAYLISTS.key);
-        let playlists = chosen.iter().find(|(setting, _)| setting.key == settings_sync::PLAYLISTS.key).map(|(_, on)| *on);
+        let own = [settings_sync::PLAYLISTS.key, settings_sync::SONGS.key, settings_sync::EVERY_SONG.key];
+        let any_on = chosen.iter().any(|(setting, on)| *on && !own.contains(&setting.key));
+        let toggled = |of: &settings_sync::Setting| chosen.iter().find(|(setting, _)| setting.key == of.key).map(|(_, on)| *on);
+        let (playlists, songs) = (toggled(&settings_sync::PLAYLISTS), toggled(&settings_sync::SONGS));
+        if toggled(&settings_sync::EVERY_SONG).is_some() {
+            self.sync.songs_dirty = true;
+        }
         for (setting, on) in chosen {
             state.choose(setting, on, &config);
         }
@@ -496,9 +683,42 @@ impl App {
             self.channel(Blob::Settings).wanted = Some(Instant::now());
         }
         match playlists {
-            Some(true) => self.start_playlist_sync(),
+            Some(true) => self.start_blob(Blob::Playlists),
             Some(false) => settings_sync::stop(playlist_sync::NAME),
             None => {}
+        }
+        for blob in [Blob::Library, Blob::Transfers] {
+            match songs {
+                Some(true) => self.start_blob(blob),
+                Some(false) => settings_sync::stop(blob.name()),
+                None => {}
+            }
+        }
+    }
+
+    /// The songs removed here, which this device doesn't fetch from the
+    /// others: each can be fetched again.
+    fn blocked_songs_ui(&mut self, ui: &mut egui::Ui) {
+        let blocked: Vec<(String, String)> =
+            self.songs.blocked().map(|(key, song)| (key.to_string(), song.map_or_else(|| key.to_string(), |s| s.name.clone()))).collect();
+        if blocked.is_empty() || !self.syncing(Blob::Transfers) {
+            return;
+        }
+        let mut unblock = None;
+        egui::CollapsingHeader::new(format!("Songs removed from this device ({})", blocked.len())).id_salt("sync_blocked").show(ui, |ui| {
+            ui.weak("This device doesn't fetch these from your other devices.");
+            for (key, name) in &blocked {
+                ui.horizontal(|ui| {
+                    if ui.small_button("Fetch again").clicked() {
+                        unblock = Some(key.clone());
+                    }
+                    ui.label(name);
+                });
+            }
+        });
+        if let Some(key) = unblock {
+            self.songs.unblock(&key);
+            self.sync.songs_dirty = true;
         }
     }
 
@@ -514,8 +734,10 @@ impl App {
                 self.sync.error = None;
                 *self.channel(Blob::Settings) = Channel::default();
                 self.start_sync(Blob::Settings, true);
-                if self.syncing(Blob::Playlists) {
-                    self.start_playlist_sync();
+                for blob in [Blob::Playlists, Blob::Library, Blob::Transfers] {
+                    if self.syncing(blob) {
+                        self.start_blob(blob);
+                    }
                 }
             }
             Err(e) => self.sync.error = Some(e),
@@ -647,6 +869,56 @@ mod tests {
         // (The settings are untouched by all that.)
         let (_, plain) = client::sync_get(&base, &key, &me, &[4; 32], settings_sync::NAME).unwrap();
         assert_eq!(serde_json::from_slice::<Fields>(&plain.unwrap()).unwrap(), second.merged);
+        running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One round on a device: sync the transfers, plan, do the tasks, and
+    /// sync what they changed. Its state after.
+    fn round(base: &str, key: &str, me: &Identity, state: State, device: &str, store: &mut crate::song_store::SongStore, wanted: &BTreeSet<String>) -> State {
+        let relay = Relay { server: base.into(), server_key: key.into(), identity: me.clone(), sync_key: [4; 32], dir: store.dir().to_path_buf() };
+        let synced = sync(Job { blob: Blob::Transfers, ..job(base, key, me, &state, false) }).unwrap();
+        let mut state = after(state, &synced);
+        let plan = song_sync::plan(&state.applied, device, store, wanted, &BTreeSet::new());
+        let mut leaves = plan.leaves;
+        for task in &plan.tasks {
+            let moved = song_sync::run(&relay, task);
+            if let Moved::Fetched(key) = &moved {
+                store.add(Stored { key: key.clone(), name: "Song.mid".into() });
+            }
+            leaves = song_sync::after(leaves, &moved);
+        }
+        state.record_leaves(leaves, settings_sync::now());
+        let synced = sync(Job { blob: Blob::Transfers, ..job(base, key, me, &state, false) }).unwrap();
+        after(state, &synced)
+    }
+
+    #[test]
+    fn a_song_moves_between_devices() {
+        let dir = std::env::temp_dir().join(format!("synththing-song-transfer-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false, "check_uploads": false, "sync": true }"#).unwrap();
+        let running = library::server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = client::info(&base).unwrap().key;
+        let me = Identity::generate().unwrap();
+        let mut desktop = crate::song_store::SongStore::open(dir.join("desktop"));
+        let song = crate::song_store::write_in(b"song", "Song.mid", &dir.join("desktop")).unwrap();
+        desktop.add(song.clone());
+        let mut phone = crate::song_store::SongStore::open(dir.join("phone"));
+        let wants = BTreeSet::from([song.key.clone()]);
+
+        let none = BTreeSet::new();
+        let phone_state = round(&base, &key, &me, State::of(&[4; 32], Default::default()), "phone", &mut phone, &wants);
+        let desktop_state = round(&base, &key, &me, State::of(&[4; 32], Default::default()), "desktop", &mut desktop, &none);
+        assert!(desktop_state.applied.contains_key(&format!("ready/{}", song.key)), "sent");
+        let phone_state = round(&base, &key, &me, phone_state, "phone", &mut phone, &wants);
+        assert!(phone.has(&song.key), "fetched");
+        let phone_state = round(&base, &key, &me, phone_state, "phone", &mut phone, &none);
+        assert!(phone_state.applied.is_empty(), "no one wants it now: gone from the relay");
+        let desktop_state = round(&base, &key, &me, desktop_state, "desktop", &mut desktop, &none);
+        assert!(desktop_state.applied.is_empty());
         running.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }

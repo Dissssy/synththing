@@ -7,6 +7,12 @@
 //! the server's is refused, for the device to merge and write again.
 //! Every write is announced on the notification stream, so the other
 //! devices fetch it.
+//!
+//! Songs go between the devices through the relay: one device seals a
+//! song's file and leaves it on the authority (`POST /api/v1/relay/{id}`)
+//! for another to take (`.../get`), by an ID the server can't tell the
+//! song from (`relay_id`). The synced data says which songs are wanted and
+//! which are waiting there (`song_sync.rs`).
 
 use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit};
@@ -63,28 +69,53 @@ pub struct ChangedEvent {
     pub sync: Changed,
 }
 
-/// `plain` sealed with the sync key: the nonce and the sealed bytes, in
-/// base64.
-pub fn seal(sync_key: &[u8; 32], plain: &[u8]) -> Result<String, String> {
+/// `plain` sealed with the sync key: the nonce, then the sealed bytes.
+pub fn seal_bytes(sync_key: &[u8; 32], plain: &[u8]) -> Result<Vec<u8>, String> {
     let mut nonce = [0u8; 12];
     getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
     let sealed = ChaCha20Poly1305::new(sync_key.into())
         .encrypt(&Nonce::from(nonce), plain)
         .map_err(|e| e.to_string())?;
-    Ok(base64::engine::general_purpose::STANDARD.encode([nonce.as_slice(), &sealed].concat()))
+    Ok([nonce.as_slice(), &sealed].concat())
+}
+
+/// What `seal_bytes` sealed, opened with the same sync key.
+pub fn open_bytes(sync_key: &[u8; 32], sealed: &[u8]) -> Result<Vec<u8>, String> {
+    let damaged = "the synced data is damaged";
+    if sealed.len() <= 12 {
+        return Err(damaged.into());
+    }
+    let (nonce, sealed) = sealed.split_at(12);
+    let nonce = <[u8; 12]>::try_from(nonce).map_err(|_| damaged)?;
+    ChaCha20Poly1305::new(sync_key.into())
+        .decrypt(&Nonce::from(nonce), sealed)
+        .map_err(|_| "the synced data doesn't open with this device's sync key".to_string())
+}
+
+/// `plain` sealed with the sync key (`seal_bytes`), in base64.
+pub fn seal(sync_key: &[u8; 32], plain: &[u8]) -> Result<String, String> {
+    Ok(base64::engine::general_purpose::STANDARD.encode(seal_bytes(sync_key, plain)?))
 }
 
 /// What `seal` sealed, opened with the same sync key. An error for one
 /// sealed with another key: the synced data from before a recovery, or a
 /// damaged blob.
 pub fn open(sync_key: &[u8; 32], sealed: &str) -> Result<Vec<u8>, String> {
-    let damaged = "the synced data is damaged";
-    let bytes = base64::engine::general_purpose::STANDARD.decode(sealed.trim()).ok().filter(|b| b.len() > 12).ok_or(damaged)?;
-    let (nonce, sealed) = bytes.split_at(12);
-    let nonce = <[u8; 12]>::try_from(nonce).map_err(|_| damaged)?;
-    ChaCha20Poly1305::new(sync_key.into())
-        .decrypt(&Nonce::from(nonce), sealed)
-        .map_err(|_| "the synced data doesn't open with this device's sync key".to_string())
+    let bytes = base64::engine::general_purpose::STANDARD.decode(sealed.trim()).map_err(|_| "the synced data is damaged")?;
+    open_bytes(sync_key, &bytes)
+}
+
+/// Whether `id` is a relayed file's ID: 32 of `0-9a-f`.
+pub fn valid_relay_id(id: &str) -> bool {
+    id.len() == 32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The ID a song goes by on the relay (`POST /api/v1/relay/{id}`): its key
+/// hashed with the sync key, so the server can't tell which song it is.
+pub fn relay_id(sync_key: &[u8; 32], song: &str) -> String {
+    use sha2::Digest;
+    let hash = sha2::Sha256::new().chain_update(sync_key).chain_update(song.as_bytes()).finalize();
+    super::hex(&hash[..16])
 }
 
 #[cfg(test)]
@@ -107,5 +138,15 @@ mod tests {
         assert_eq!(open(&[1; 32], &sealed).unwrap(), b"{\"theme\":\"dark\"}");
         assert!(open(&[2; 32], &sealed).is_err());
         assert!(open(&[1; 32], "AAAA").is_err());
+        let song = seal_bytes(&[1; 32], b"MThd").unwrap();
+        assert_eq!(open_bytes(&[1; 32], &song).unwrap(), b"MThd");
+    }
+
+    #[test]
+    fn relay_ids() {
+        let id = relay_id(&[1; 32], "ab.mid");
+        assert!(valid_relay_id(&id));
+        assert_ne!(id, relay_id(&[2; 32], "ab.mid"), "another identity's");
+        assert!(!valid_relay_id("../../etc/passwd000000000000000000"));
     }
 }

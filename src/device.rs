@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 pub struct Device {
     /// Shown on the device that signed this one in ("Signed in on ...").
     pub name: String,
+    /// Tells this device apart from the others in synced data (16 hex
+    /// digits, made the first time).
+    pub id: String,
 }
 
 impl Device {
@@ -19,8 +22,20 @@ impl Device {
         Ok(crate::config::config_dir()?.join("device.json"))
     }
 
-    /// The saved one, or (the first time) one named after the computer.
+    /// The saved one, or (the first time) one named after the computer,
+    /// with an ID made and saved if it has none.
     pub fn load() -> Self {
+        let mut device = Self::load_saved();
+        if device.id.is_empty() {
+            device.id = crate::library::new_nonce()[..16].to_string();
+            if let Err(e) = device.save() {
+                log::warn!("saving device.json: {e:#}");
+            }
+        }
+        device
+    }
+
+    fn load_saved() -> Self {
         let saved = Self::path().and_then(|p| crate::config::read_json_or_set_aside::<Self>(&p)).unwrap_or_else(|e| {
             log::warn!("{e:#}");
             None
@@ -30,7 +45,7 @@ impl Device {
             let name = crate::android::device_model().unwrap_or_else(|| "Android phone".into());
             #[cfg(not(target_os = "android"))]
             let name = gethostname::gethostname().to_string_lossy().into_owned();
-            Self { name }
+            Self { name, id: String::new() }
         })
     }
 

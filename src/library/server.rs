@@ -37,6 +37,7 @@ mod moderation;
 mod notifications;
 mod pairing;
 mod remixes;
+mod relay;
 mod sync;
 mod update;
 
@@ -123,8 +124,12 @@ pub struct ServerConfig {
     /// their first seconds (`synththing preview --check`).
     pub check_uploads: bool,
     /// Keep signed-in apps' synced data (settings, ...), sealed so only
-    /// their devices can read it.
+    /// their devices can read it, and relay songs between them.
     pub sync: bool,
+    /// The biggest song the relay takes (MB).
+    pub relay_song_mb: u64,
+    /// How much of one identity's songs the relay holds at once (MB).
+    pub relay_mb_per_identity: u64,
     /// Hand feedback out to be filed as GitHub issues, with the intake
     /// token (`intake.token`, made on first run).
     pub intake: bool,
@@ -162,6 +167,8 @@ impl Default for ServerConfig {
             unverified_uploads_per_day: 3,
             documents: Vec::new(),
             sync: false,
+            relay_song_mb: 100,
+            relay_mb_per_identity: 2048,
             intake: false,
             android_fingerprints: Vec::new(),
         }
@@ -676,6 +683,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 16 {
         db.execute_batch(sync::SCHEMA_V16)?;
     }
+    if version < 17 {
+        db.execute_batch(relay::SCHEMA_V17)?;
+    }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
 }
@@ -870,6 +880,18 @@ fn handle(state: &Arc<State>, mut request: Request) {
         (Method::Post, ["api", "v1", "sync", name, "get"]) => {
             let name = name.to_string();
             sync::get(state, &mut request, &name)
+        }
+        (Method::Post, ["api", "v1", "relay", id]) => {
+            let id = id.to_string();
+            relay::put(state, &mut request, &id)
+        }
+        (Method::Post, ["api", "v1", "relay", id, "get"]) => {
+            let id = id.to_string();
+            relay::get(state, &mut request, &id)
+        }
+        (Method::Post, ["api", "v1", "relay", id, "delete"]) => {
+            let id = id.to_string();
+            relay::delete(state, &mut request, &id)
         }
         (Method::Post, ["api", "v1", "identity", "rotate"]) => authority::rotate(state, &mut request),
         (Method::Post, ["api", "v1", "identity", "apply"]) => {

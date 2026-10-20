@@ -379,6 +379,47 @@ pub fn sync_write(
     signed_post(base, server_key, identity, &format!("/api/v1/sync/{name}"), &body)
 }
 
+/// How long sending or fetching a song through the relay may take.
+const RELAY_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// A signed request about relayed file `id` (`path` after it), with `body`.
+fn relay_post(base: &str, server_key: &str, identity: &Identity, id: &str, path: &str, body: &[u8]) -> Result<Reply, String> {
+    let path = format!("/api/v1/relay/{id}{path}");
+    let request = agent().post(format!("{base}{path}")).config().timeout_global(Some(RELAY_TIMEOUT)).build();
+    let request = request.header("Content-Type", "application/octet-stream");
+    check(signed(request, server_key, identity, "POST", &path, body).send(body))
+}
+
+/// Leave the song `plain` on the relay as `id`, sealed with the sync key.
+pub fn relay_put(base: &str, server_key: &str, identity: &Identity, sync_key: &[u8; 32], id: &str, plain: &[u8]) -> Result<(), String> {
+    let sealed = super::sync::seal_bytes(sync_key, plain)?;
+    relay_post(base, server_key, identity, id, "", &sealed).map(|_| ())
+}
+
+/// The song waiting on the relay as `id`, opened with the sync key (`None`
+/// if it isn't there).
+pub fn relay_get(base: &str, server_key: &str, identity: &Identity, sync_key: &[u8; 32], id: &str) -> Result<Option<Vec<u8>>, String> {
+    let path = format!("/api/v1/relay/{id}/get");
+    let request = agent().post(format!("{base}{path}")).config().timeout_global(Some(RELAY_TIMEOUT)).build();
+    let response = signed(request, server_key, identity, "POST", &path, &[]).send(&[][..]).map_err(|e| format!("couldn't reach the server ({e})"))?;
+    if response.status().as_u16() == 404 {
+        return Ok(None);
+    }
+    let mut response = check(Ok(response))?;
+    let sealed = response
+        .body_mut()
+        .with_config()
+        .limit(u64::MAX)
+        .read_to_vec()
+        .map_err(|e| format!("couldn't fetch the song ({e})"))?;
+    super::sync::open_bytes(sync_key, &sealed).map(Some)
+}
+
+/// Delete the song waiting on the relay as `id`.
+pub fn relay_delete(base: &str, server_key: &str, identity: &Identity, id: &str) -> Result<(), String> {
+    relay_post(base, server_key, identity, id, "/delete", &[]).map(|_| ())
+}
+
 /// Park a sealed sign-in handoff on a server, for another device to take.
 pub fn pair_park(base: &str, server_key: &str, identity: &Identity, sealed: &str) -> Result<super::pairing::Parked, String> {
     signed_post(base, server_key, identity, "/api/v1/pair", &serde_json::json!({ "sealed": sealed }))

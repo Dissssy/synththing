@@ -11,6 +11,10 @@
 //! index lacks (a copy that finished as the app quit). The index also
 //! keeps songs that aren't (removed here, or in a playlist synced from
 //! another device: [`SongStore::know`]), so they keep their names.
+//!
+//! A song removed here is blocked (`blocked.json`): this device doesn't
+//! fetch it from the others again (`song_sync.rs`), until it's unblocked
+//! or imported again.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -21,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const INDEX: &str = "library.json";
+const BLOCKED: &str = "blocked.json";
 
 /// What's known of a stored song.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -45,6 +50,8 @@ pub struct SongStore {
     songs: BTreeMap<String, Song>,
     /// The keys whose files are here.
     present: BTreeSet<String>,
+    /// The keys removed here, not to be fetched again.
+    blocked: BTreeSet<String>,
 }
 
 impl SongStore {
@@ -64,7 +71,11 @@ impl SongStore {
                 Song { name: key.clone(), imported: now() }
             });
         }
-        let store = Self { dir, songs, present };
+        let blocked = std::fs::read_to_string(dir.join(BLOCKED))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{BLOCKED}: {e}")).ok())
+            .unwrap_or_default();
+        let store = Self { dir, songs, present, blocked };
         if changed {
             store.save();
         }
@@ -89,6 +100,9 @@ impl SongStore {
         if song.name == stored.key {
             song.name = stored.name;
         }
+        if self.blocked.remove(&stored.key) {
+            self.save_blocked();
+        }
         self.present.insert(stored.key);
         self.save();
     }
@@ -103,7 +117,8 @@ impl SongStore {
         self.save();
     }
 
-    /// Delete the song at `path` from the store (it stays known).
+    /// Delete the song at `path` from the store, and block it (it stays
+    /// known).
     pub fn remove(&mut self, path: &Path) -> Result<()> {
         let Some(key) = self.key_of(path).map(str::to_string) else { return Ok(()) };
         match std::fs::remove_file(path) {
@@ -112,7 +127,35 @@ impl SongStore {
             Err(e) => return Err(e).with_context(|| format!("deleting {}", path.display())),
         }
         self.present.remove(&key);
+        self.blocked.insert(key);
+        self.save_blocked();
         Ok(())
+    }
+
+    /// Fetch the song `key` from the other devices again.
+    pub fn unblock(&mut self, key: &str) {
+        if self.blocked.remove(key) {
+            self.save_blocked();
+        }
+    }
+
+    /// The songs removed here, by key, with what's known of them.
+    pub fn blocked(&self) -> impl Iterator<Item = (&str, Option<&Song>)> {
+        self.blocked.iter().map(|key| (key.as_str(), self.songs.get(key)))
+    }
+
+    pub fn is_blocked(&self, key: &str) -> bool {
+        self.blocked.contains(key)
+    }
+
+    /// Whether the song `key`'s file is here.
+    pub fn has(&self, key: &str) -> bool {
+        self.present.contains(key)
+    }
+
+    /// Every song known, here or not: its key and what's known of it.
+    pub fn known(&self) -> impl Iterator<Item = (&str, &Song)> {
+        self.songs.iter().map(|(key, song)| (key.as_str(), song))
     }
 
     /// What's known of the song at `path` (here or not), if it's one of
@@ -139,6 +182,13 @@ impl SongStore {
             .and_then(|()| write_atomically(&self.dir.join(INDEX), serde_json::to_string_pretty(&self.songs).unwrap_or_default().as_bytes()));
         if let Err(e) = written {
             log::warn!("couldn't save {}: {e}", self.dir.join(INDEX).display());
+        }
+    }
+
+    fn save_blocked(&self) {
+        let path = self.dir.join(BLOCKED);
+        if let Err(e) = write_atomically(&path, serde_json::to_string(&self.blocked).unwrap_or_default().as_bytes()) {
+            log::warn!("couldn't save {}: {e}", path.display());
         }
     }
 }
@@ -227,6 +277,20 @@ pub fn write_in(bytes: &[u8], name: &str, dir: &Path) -> Result<Stored> {
         write_atomically(&to, bytes).with_context(|| format!("writing {}", to.display()))?;
     }
     Ok(Stored { key, name: name.to_string() })
+}
+
+/// Write `bytes`, fetched as the song `key`, into the store in `dir`, if
+/// they are that song.
+pub fn write_as(bytes: &[u8], key: &str, dir: &Path) -> Result<()> {
+    let (hash, _) = key.split_once('.').filter(|_| is_key(key)).context("that's not a song's key")?;
+    let hex: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+    anyhow::ensure!(hex == hash, "the song didn't arrive whole");
+    let to = dir.join(key);
+    if !to.exists() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        write_atomically(&to, bytes).with_context(|| format!("writing {}", to.display()))?;
+    }
+    Ok(())
 }
 
 /// What the one-time import ([`import_old`]) did.
@@ -436,7 +500,15 @@ mod tests {
         assert!(store.get(&dir.join("elsewhere").join(&stored.key)).is_none());
         store.remove(&path).unwrap();
         assert!(!path.exists());
-        assert_eq!(SongStore::open(dir).songs().count(), 0);
+        let mut store = SongStore::open(dir.clone());
+        assert_eq!(store.songs().count(), 0);
+        assert!(store.is_blocked(&stored.key), "removed here: not fetched again");
+        store.unblock(&stored.key);
+        assert!(!SongStore::open(dir.clone()).is_blocked(&stored.key));
+        store.remove(&path).unwrap();
+        std::fs::write(dir.join("Picked.mid"), b"picked").unwrap();
+        store.add(move_in(&dir.join("Picked.mid"), &dir).unwrap());
+        assert!(!store.is_blocked(&stored.key), "imported again");
     }
 
     #[test]
