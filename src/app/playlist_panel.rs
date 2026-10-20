@@ -757,7 +757,8 @@ impl App {
                 if entry.missing {
                     label.push_str("  (missing)");
                 }
-                select_list::label(ui, label, Some(format!("{}\nDouble-click to play", entry.path.display())));
+                let scroll = select_list::scrolls(row, playing == Some(idx));
+                select_list::label(ui, label, Some(format!("{}\nDouble-click to play", entry.path.display())), scroll);
             });
 
             if let Some(drop) = row_drop_ui(ui, &row.response, list, idx, is_midi_path(&entry.path)) {

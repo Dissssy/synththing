@@ -542,8 +542,12 @@ impl SongList {
                     if let Some(title) = grouped_by {
                         ui.label(egui::RichText::new(format!("{title}:")).weak());
                     }
-                    ui.label(egui::RichText::new(label).strong());
-                    ui.label(egui::RichText::new(format!("({count})")).weak());
+                    // (The count at the end, so a long name can't push it
+                    // off the row.)
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new(format!("({count})")).weak());
+                        select_list::label(ui, egui::RichText::new(label).strong(), None, select_list::scrolls(row, false));
+                    });
                     if row.response.clicked() {
                         toggle = Some(key.clone());
                     }
@@ -562,9 +566,7 @@ impl SongList {
             }
             row.response.context_menu(|ui| menu(ui, &rows()));
             let text = egui::RichText::new(&entry.song.name);
-            // Only the playing row and the one under the pointer (or
-            // finger) scroll what's cut short, to keep the list calm.
-            let scroll = active == Some(row.idx) || row.response.contains_pointer();
+            let scroll = select_list::scrolls(row, active == Some(row.idx));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let size = egui::vec2(TRAILING_WIDTH, ui.available_height());
                 ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -577,7 +579,7 @@ impl SongList {
                     let second = shown.first().and(entry.song.values.first()).cloned().flatten();
                     let Some(second) = second else {
                         select_list::chips(ui, entry.tags());
-                        select_list::marquee(ui, text, scroll);
+                        select_list::label(ui, text, None, scroll);
                         return;
                     };
                     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -586,9 +588,9 @@ impl SongList {
                         let line = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
                         ui.allocate_ui_with_layout(line, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             select_list::chips(ui, entry.tags());
-                            select_list::marquee(ui, text, scroll);
+                            select_list::label(ui, text, None, scroll);
                         });
-                        select_list::marquee(ui, egui::RichText::new(second.text).small().weak(), scroll);
+                        select_list::label(ui, egui::RichText::new(second.text).small().weak(), None, scroll);
                     });
                     return;
                 }
@@ -596,7 +598,7 @@ impl SongList {
                     cell(ui, c.width, egui::RichText::new(value.as_ref().map_or("", |v| v.text.as_str())).weak(), scroll);
                 }
                 select_list::chips(ui, entry.tags());
-                select_list::marquee(ui, text, scroll);
+                select_list::label(ui, text, None, scroll);
             });
         });
         self.hovered = output.hovered.and_then(path_of);

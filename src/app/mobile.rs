@@ -554,8 +554,9 @@ impl App {
                     self.send(AudioCommand::TogglePause);
                 }
                 let title = title.as_deref().unwrap_or("Nothing playing");
-                let name = egui::Label::new(egui::RichText::new(title).strong()).truncate().sense(egui::Sense::click());
-                if ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(name)).inner.clicked() {
+                let name = egui::RichText::new(title).strong();
+                let name = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| crate::marquee::show(ui, name, true));
+                if name.inner.interact(egui::Sense::click()).clicked() {
                     self.mobile_state.page = Page::NowPlaying;
                 }
             });

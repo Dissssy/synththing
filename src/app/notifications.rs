@@ -327,7 +327,8 @@ impl App {
         let mut open: Option<(String, i64)> = None;
         let mut all_read = false;
         egui::Popup::menu(&button).show(|ui| {
-            ui.set_min_width(super::fit_width(ui, 340.0));
+            // (Its lines wrap to that, so it fits a phone's screen.)
+            ui.set_width(super::fit_width(ui, 340.0));
             ui.horizontal(|ui| {
                 ui.strong("Notifications");
                 if unread > 0 && ui.small_button("Mark all read").clicked() {
@@ -361,7 +362,7 @@ impl App {
                     let frame = egui::Frame::new().fill(fill).corner_radius(4.0).inner_margin(egui::Margin::symmetric(6, 3));
                     let shown = frame.show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        let clicked = ui.selectable_label(false, line).clicked();
+                        let clicked = ui.add(egui::Button::selectable(false, line).wrap_mode(egui::TextWrapMode::Wrap)).clicked();
                         ui.weak(egui::RichText::new(when).small());
                         clicked
                     });
@@ -409,7 +410,7 @@ impl App {
             ui.set_width(super::fit_width(ui, 440.0));
             ui.horizontal(|ui| {
                 ui.heading(egui::RichText::new(icon_of(&n.kind)).color(color_of(ui, &n)));
-                ui.label(egui::RichText::new(text(&n)).size(15.0));
+                ui.add(egui::Label::new(egui::RichText::new(text(&n)).size(15.0)).wrap());
             });
             ui.weak(format!("{} on {}", library::ago(n.created), host(&server)));
             // (The counter-notice's contact details, sent on to the claimant.)

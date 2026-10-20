@@ -1535,7 +1535,9 @@ impl App {
                 "{}\nDouble-click to use; drag onto a MIDI playlist entry to override its soundfont",
                 path.display()
             );
-            select_list::label(ui, if Some(row.idx) == active_sf { text.strong() } else { text }, Some(hover));
+            let active = Some(row.idx) == active_sf;
+            let scroll = select_list::scrolls(row, active);
+            select_list::label(ui, if active { text.strong() } else { text }, Some(hover), scroll);
         });
         if output.delete {
             remove = Some(self.soundfont_selection.rows().to_vec());
@@ -2047,48 +2049,24 @@ impl App {
                     rows.push((channel.clone(), None));
                 }
             }
-            egui::Grid::new("branch_builds_grid").num_columns(3).spacing([12.0, 4.0]).show(ui, |ui| {
+            // A grid, or on a narrow screen (a phone's) each branch's name
+            // over its version and buttons.
+            let narrow = ui.available_width() < 480.0;
+            if narrow {
                 for (channel, build) in rows {
                     ui.strong(crate::channels::branch_name(&channel));
-                    match build {
-                        Some(b) => {
-                            let commit = b.commit.as_deref().map(|c| &c[..c.len().min(7)]).unwrap_or_default();
-                            ui.weak(format!("{} {commit}", b.version)).on_hover_text(b.notes.trim());
-                        }
-                        None => {
-                            ui.weak("its build is gone (merged?)");
-                        }
-                    }
-                    ui.horizontal(|ui| {
-                        if installed.contains(&channel) {
-                            if ui.add_enabled(!installing, egui::Button::new("Open")).clicked()
-                                && let Err(e) = crate::channels::launch(&channel)
-                            {
-                                self.updates_message = Some((format!("{e:#}"), true));
-                            }
-                            if ui
-                                .add_enabled(!installing, egui::Button::new("Remove"))
-                                .on_hover_text("Delete this branch build and its settings")
-                                .clicked()
-                            {
-                                let name = crate::channels::branch_name(&channel);
-                                self.updates_message = Some(match crate::channels::remove(&channel) {
-                                    Ok(()) if cfg!(target_os = "android") => {
-                                        (format!("Android asks you to uninstall the {name} build."), false)
-                                    }
-                                    Ok(()) => (format!("Removed the {name} build."), false),
-                                    Err(e) => (format!("{e:#}"), true),
-                                });
-                            }
-                        } else if let Some(b) = build
-                            && ui.add_enabled(!installing && can_install, egui::Button::new("Install")).clicked()
-                        {
-                            self.branches.install(b.clone());
-                        }
-                    });
-                    ui.end_row();
+                    ui.horizontal_wrapped(|ui| self.branch_build_row_ui(ui, &channel, build, &installed, installing, can_install));
+                    ui.add_space(4.0);
                 }
-            });
+            } else {
+                egui::Grid::new("branch_builds_grid").num_columns(3).spacing([12.0, 4.0]).show(ui, |ui| {
+                    for (channel, build) in rows {
+                        ui.strong(crate::channels::branch_name(&channel));
+                        self.branch_build_row_ui(ui, &channel, build, &installed, installing, can_install);
+                        ui.end_row();
+                    }
+                });
+            }
             match &install {
                 crate::channels::InstallState::Idle => {}
                 crate::channels::InstallState::Installing { channel, downloaded, size } => {
@@ -2119,6 +2097,55 @@ impl App {
         if response.body_returned.is_some() && matches!(self.branches.list(), crate::channels::ListState::Idle) {
             self.branches.refresh();
         }
+    }
+
+    /// A branch build's version and its buttons (Install, or Open and
+    /// Remove), side by side.
+    fn branch_build_row_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        channel: &str,
+        build: Option<&updater::Release>,
+        installed: &[String],
+        installing: bool,
+        can_install: bool,
+    ) {
+        match build {
+            Some(b) => {
+                let commit = b.commit.as_deref().map(|c| &c[..c.len().min(7)]).unwrap_or_default();
+                ui.weak(format!("{} {commit}", b.version)).on_hover_text(b.notes.trim());
+            }
+            None => {
+                ui.weak("its build is gone (merged?)");
+            }
+        }
+        ui.horizontal(|ui| {
+            if installed.iter().any(|c| c == channel) {
+                if ui.add_enabled(!installing, egui::Button::new("Open")).clicked()
+                    && let Err(e) = crate::channels::launch(channel)
+                {
+                    self.updates_message = Some((format!("{e:#}"), true));
+                }
+                if ui
+                    .add_enabled(!installing, egui::Button::new("Remove"))
+                    .on_hover_text("Delete this branch build and its settings")
+                    .clicked()
+                {
+                    let name = crate::channels::branch_name(channel);
+                    self.updates_message = Some(match crate::channels::remove(channel) {
+                        Ok(()) if cfg!(target_os = "android") => {
+                            (format!("Android asks you to uninstall the {name} build."), false)
+                        }
+                        Ok(()) => (format!("Removed the {name} build."), false),
+                        Err(e) => (format!("{e:#}"), true),
+                    });
+                }
+            } else if let Some(b) = build
+                && ui.add_enabled(!installing && can_install, egui::Button::new("Install")).clicked()
+            {
+                self.branches.install(b.clone());
+            }
+        });
     }
 
     /// Help > Credits & licenses: contributors (from GitHub), the font, Lua,

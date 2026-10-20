@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Fixed
+- On a phone, more fits the screen: long group names in Songs, playlist entries, soundfonts and the song name at the bottom scroll instead of running off or being cut short (in lists, on the playing row and the one you touch); the Visualizers page, the Branch builds list, notifications and a notification's window fit the screen's width.
+
 ### Changed
 - Songs that aren't MIDI start playing almost at once: playback begins as soon as the first moment is decoded, and the rest decodes while it plays. Before, the whole file was decoded first, which took a noticeable moment on a phone.
 - Song names (and column values) too long for the Songs list scroll sideways instead of staying cut off, on the playing song and the one under the pointer or your finger.

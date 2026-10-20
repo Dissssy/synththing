@@ -227,27 +227,25 @@ pub fn show<T>(
     output
 }
 
-/// An entry's text, filling the width left in the row and cut short with
-/// "..." where it doesn't fit; hovering a cut one shows all of it, or
-/// `hover` instead whenever it's given (so that should hold the full text
-/// too). Draw a row's right-hand widgets first (in a right-to-left layout),
-/// then this.
-pub fn label(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, hover: Option<String>) -> egui::Response {
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        let label = egui::Label::new(text).truncate().selectable(false);
-        match hover {
-            Some(hover) => ui.add(label.show_tooltip_when_elided(false)).on_hover_text(hover),
-            None => ui.add(label),
-        }
-    })
-    .inner
+/// An entry's text, filling the width left in the row: while `scroll` is
+/// on, text that doesn't fit scrolls sideways (see [`crate::marquee`]),
+/// else it's cut short with "...". Hovering it shows `hover`, when given
+/// (so that should hold the full text too). Draw a row's right-hand
+/// widgets first (in a right-to-left layout), then this.
+pub fn label(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, hover: Option<String>, scroll: bool) -> egui::Response {
+    let response = ui
+        .with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| crate::marquee::show(ui, text, scroll))
+        .inner;
+    match hover {
+        Some(hover) => response.on_hover_text(hover),
+        None => response,
+    }
 }
 
-/// Like [`label`], but text that's cut short scrolls sideways instead while
-/// `scroll` is on (see [`crate::marquee::show`]).
-pub fn marquee(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, scroll: bool) -> egui::Response {
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| crate::marquee::show(ui, text, scroll))
-        .inner
+/// Whether a row's text scrolls when it's cut short: on the `playing` row
+/// and the one under the pointer (or finger), to keep the list calm.
+pub fn scrolls(row: &Row, playing: bool) -> bool {
+    playing || row.response.contains_pointer()
 }
 
 /// A tag's chip: its name on its color (`song_store::Tag`), in text that
