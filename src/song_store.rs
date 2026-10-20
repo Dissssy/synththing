@@ -1,7 +1,11 @@
-//! The song library: synththing's own copy of every song, in one flat
-//! folder (`config::music_dir`), each file named by a hash of its contents
+//! The song library: synththing's own copy of every song, in one folder
+//! (`config::music_dir`), each file named by a hash of its contents
 //! (`<sha256>.<ext>`, its key), so a song is the same song on every device
-//! and in every playlist however its original was named or moved.
+//! and in every playlist however its original was named or moved. Files
+//! sit in a subfolder named by their key's first two characters
+//! (`0b/0b14…cb7.mp3`, [`path_of`]): one flat folder of a whole library
+//! outgrows what some filesystems hold well (FAT32, on SD cards, fits
+//! about 9,000 names this long in a folder).
 //! `library.json` beside them says what's known of each: its original file
 //! name and when it came in.
 //!
@@ -81,9 +85,8 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{INDEX}: {e}")).ok())
             .unwrap_or_default();
-        let present: BTreeSet<String> = std::fs::read_dir(&dir)
-            .map(|entries| entries.flatten().filter_map(|e| e.file_name().to_str().filter(|n| is_key(n)).map(str::to_string)).collect())
-            .unwrap_or_default();
+        bucket_flat_files(&dir);
+        let present = present_in(&dir);
         let mut changed = false;
         for key in &present {
             songs.entry(key.clone()).or_insert_with_key(|key| {
@@ -270,13 +273,17 @@ impl SongStore {
 
     /// Every song here: its file and what's known of it.
     pub fn songs(&self) -> impl Iterator<Item = (PathBuf, &Song)> {
-        self.present.iter().filter_map(|key| Some((self.dir.join(key), self.songs.get(key)?)))
+        self.present.iter().filter_map(|key| Some((path_of(&self.dir, key), self.songs.get(key)?)))
+    }
+
+    /// Where the song `key`'s file is (or would be).
+    pub fn path(&self, key: &str) -> PathBuf {
+        path_of(&self.dir, key)
     }
 
     /// The key of the song at `path`, if it's in this store.
     fn key_of<'a>(&self, path: &'a Path) -> Option<&'a str> {
-        (path.parent() == Some(self.dir.as_path())).then_some(())?;
-        path.file_name()?.to_str().filter(|n| is_key(n))
+        key_in(&self.dir, path)
     }
 
     /// Write `library.json` (even with nothing in it: the one-time import
@@ -317,6 +324,52 @@ pub fn is_key(name: &str) -> bool {
     name.split_once('.').is_some_and(|(hash, ext)| {
         hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) && !ext.is_empty()
     })
+}
+
+/// Where the song `key`'s file is in the store in `dir`: in the subfolder
+/// named by its first two characters.
+pub fn path_of(dir: &Path, key: &str) -> PathBuf {
+    dir.join(key.get(..2).unwrap_or_default()).join(key)
+}
+
+/// The key of the song at `path`, if it's a file of the store in `dir`.
+pub fn key_in<'a>(dir: &Path, path: &'a Path) -> Option<&'a str> {
+    let key = path.file_name()?.to_str().filter(|n| is_key(n))?;
+    (path.parent()? == path_of(dir, key).parent()?).then_some(key)
+}
+
+/// The keys of the songs whose files are in the store in `dir`.
+fn present_in(dir: &Path) -> BTreeSet<String> {
+    let Ok(buckets) = std::fs::read_dir(dir) else { return BTreeSet::new() };
+    let mut present = BTreeSet::new();
+    for bucket in buckets.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())) {
+        let bucket_name = bucket.file_name();
+        let Some(prefix) = bucket_name.to_str().filter(|n| n.len() == 2) else { continue };
+        let Ok(entries) = std::fs::read_dir(bucket.path()) else { continue };
+        present.extend(entries.flatten().filter_map(|e| e.file_name().to_str().filter(|n| is_key(n) && n.starts_with(prefix)).map(str::to_string)));
+    }
+    present
+}
+
+/// Move songs stored before the subfolders, straight in `dir`, into theirs.
+fn bucket_flat_files(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file())) {
+        let Some(key) = entry.file_name().to_str().filter(|n| is_key(n)).map(str::to_string) else { continue };
+        let to = path_of(dir, &key);
+        let moved = std::fs::create_dir_all(to.parent().unwrap_or(dir)).and_then(|()| {
+            if to.exists() { std::fs::remove_file(entry.path()) } else { std::fs::rename(entry.path(), &to) }
+        });
+        if let Err(e) = moved {
+            log::warn!("couldn't move {} into its subfolder: {e}", entry.path().display());
+        }
+    }
+}
+
+/// Make the folder for `to`, a song's file, if need be.
+fn make_parent(to: &Path) -> Result<()> {
+    let parent = to.parent().unwrap_or(to);
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))
 }
 
 /// The key for contents hashed to `hash`, from a file called `name`.
@@ -362,10 +415,11 @@ pub fn copy_in(file: &Path, dir: &Path) -> Result<Stored> {
         }
     };
     let key = key_for(&hash, &name);
-    let to = dir.join(&key);
+    let to = path_of(dir, &key);
     if to.exists() {
         let _ = std::fs::remove_file(&temp);
     } else {
+        make_parent(&to)?;
         std::fs::rename(&temp, &to).with_context(|| format!("writing {}", to.display()))?;
     }
     Ok(Stored { key, name })
@@ -377,10 +431,11 @@ pub fn move_in(file: &Path, dir: &Path) -> Result<Stored> {
     let name = file_name(file);
     let bytes = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
     let key = key_for(&Sha256::digest(&bytes), &name);
-    let to = dir.join(&key);
+    let to = path_of(dir, &key);
     if to.exists() {
         std::fs::remove_file(file).with_context(|| format!("removing {}", file.display()))?;
     } else {
+        make_parent(&to)?;
         std::fs::rename(file, &to).with_context(|| format!("writing {}", to.display()))?;
     }
     Ok(Stored { key, name })
@@ -389,9 +444,9 @@ pub fn move_in(file: &Path, dir: &Path) -> Result<Stored> {
 /// Write `bytes`, a song called `name`, into the store in `dir`.
 pub fn write_in(bytes: &[u8], name: &str, dir: &Path) -> Result<Stored> {
     let key = key_for(&Sha256::digest(bytes), name);
-    let to = dir.join(&key);
+    let to = path_of(dir, &key);
     if !to.exists() {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        make_parent(&to)?;
         write_atomically(&to, bytes).with_context(|| format!("writing {}", to.display()))?;
     }
     Ok(Stored { key, name: name.to_string() })
@@ -426,7 +481,8 @@ impl Incoming {
         if let Some(file) = self.file.take() {
             file.sync_all().with_context(|| format!("writing {}", self.temp.display()))?;
         }
-        let to = self.dir.join(&self.key);
+        let to = path_of(&self.dir, &self.key);
+        make_parent(&to)?;
         std::fs::rename(&self.temp, &to).with_context(|| format!("writing {}", to.display()))
     }
 }
@@ -481,7 +537,7 @@ pub fn import_old(folders: &[PathBuf], dir: &Path, playlists: &Path, extensions:
         match stored {
             Ok(stored) => {
                 keys.insert(file.to_path_buf(), stored.key.clone());
-                done.moved.push((file.to_path_buf(), dir.join(&stored.key)));
+                done.moved.push((file.to_path_buf(), path_of(dir, &stored.key)));
                 let key = stored.key.clone();
                 songs.push(stored);
                 Some(key)
@@ -495,7 +551,7 @@ pub fn import_old(folders: &[PathBuf], dir: &Path, playlists: &Path, extensions:
     for folder in folders {
         for file in songs_under(folder, extensions) {
             // (Already the store's.)
-            if file.parent() == Some(dir) && file.file_name().and_then(|n| n.to_str()).is_some_and(is_key) {
+            if key_in(dir, &file).is_some() {
                 continue;
             }
             bring_in(&file, &mut done, &mut songs);
@@ -606,7 +662,7 @@ mod tests {
         store.add(a.clone());
         store.add(b);
         assert_eq!(store.songs().count(), 1);
-        let path = store_dir.join(&a.key);
+        let path = path_of(&store_dir, &a.key);
         assert_eq!(store.get(&path).unwrap().name, "A.MID");
         assert_eq!(std::fs::read(&path).unwrap(), b"song");
         // No leftovers.
@@ -621,7 +677,7 @@ mod tests {
         let mut store = SongStore::open(dir.clone());
         store.add(kept.clone());
         store.add(gone.clone());
-        std::fs::remove_file(dir.join(&gone.key)).unwrap();
+        std::fs::remove_file(path_of(&dir, &gone.key)).unwrap();
         // Written as the app quit, never recorded.
         let unrecorded = write_in(b"new", "new.ogg", &dir).unwrap();
         std::fs::write(dir.join("not a song.txt"), b"").unwrap();
@@ -631,15 +687,15 @@ mod tests {
         let mut expected = vec![kept.key.clone(), unrecorded.key.clone()];
         expected.sort();
         assert_eq!(keys, expected);
-        assert_eq!(store.get(&dir.join(&kept.key)).unwrap().name, "kept.mid");
+        assert_eq!(store.get(&path_of(&dir, &kept.key)).unwrap().name, "kept.mid");
         // Gone from here, still known by name.
-        assert_eq!(store.get(&dir.join(&gone.key)).unwrap().name, "gone.mid");
+        assert_eq!(store.get(&path_of(&dir, &gone.key)).unwrap().name, "gone.mid");
         // Known from elsewhere: named, not here.
         let elsewhere = format!("{}.mid", "a".repeat(64));
         store.know(&elsewhere, "Elsewhere.mid");
         store.know("../escape", "nope");
         let store = SongStore::open(dir.clone());
-        assert_eq!(store.get(&dir.join(&elsewhere)).unwrap().name, "Elsewhere.mid");
+        assert_eq!(store.get(&path_of(&dir, &elsewhere)).unwrap().name, "Elsewhere.mid");
         assert!(store.get(&dir.join("../escape")).is_none());
         assert_eq!(store.songs().count(), 2);
     }
@@ -652,10 +708,10 @@ mod tests {
         assert!(!dir.join("Picked.mid").exists());
         let mut store = SongStore::open(dir.clone());
         store.add(stored.clone());
-        let path = dir.join(&stored.key);
+        let path = path_of(&dir, &stored.key);
         assert_eq!(store.get(&path).unwrap().name, "Picked.mid");
         // Not one of its files.
-        assert!(store.get(&dir.join("elsewhere").join(&stored.key)).is_none());
+        assert!(store.get(&path_of(&dir.join("elsewhere"), &stored.key)).is_none());
         store.remove(&path).unwrap();
         assert!(!path.exists());
         let mut store = SongStore::open(dir.clone());
@@ -670,12 +726,28 @@ mod tests {
     }
 
     #[test]
+    fn flat_stores_move_into_subfolders() {
+        let dir = temp_dir("flat");
+        let key = key_for(&Sha256::digest(b"flat"), "Flat.mid");
+        std::fs::write(dir.join(&key), b"flat").unwrap();
+        // Already in its subfolder too: the flat copy goes.
+        let both = write_in(b"both", "Both.mid", &dir).unwrap();
+        std::fs::write(dir.join(&both.key), b"both").unwrap();
+        let store = SongStore::open(dir.clone());
+        assert_eq!(store.songs().count(), 2);
+        assert_eq!(std::fs::read(path_of(&dir, &key)).unwrap(), b"flat");
+        assert!(!dir.join(&key).exists() && !dir.join(&both.key).exists());
+        assert_eq!(path_of(&dir, &key).parent().unwrap().file_name().unwrap(), &key[..2]);
+        assert!(store.get(&dir.join(&key)).is_none(), "not where its files are");
+    }
+
+    #[test]
     fn tags() {
         let dir = temp_dir("tags");
         let mut store = SongStore::open(dir.clone());
         let stored = write_in(b"tagged", "Tagged.mid", &dir).unwrap();
         store.add(stored.clone());
-        let path = dir.join(&stored.key);
+        let path = path_of(&dir, &stored.key);
         store.set_tag("b", Tag { name: "Chill".into(), color: [1, 2, 3] });
         store.set_tag("a", Tag { name: "party".into(), color: [4, 5, 6] });
         store.set_song_tags(&stored.key, vec!["a".into(), "b".into(), "a".into(), "gone".into()]);

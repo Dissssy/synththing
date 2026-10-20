@@ -2761,7 +2761,7 @@ impl App {
     pub(super) fn add_to_library(&mut self, songs: impl IntoIterator<Item = Stored>) {
         let mut added = std::collections::BTreeSet::new();
         for stored in songs {
-            let path = self.songs.dir().join(&stored.key);
+            let path = self.songs.path(&stored.key);
             self.song_info.forget(&path);
             added.insert(path);
             self.songs.add(stored);
@@ -2872,7 +2872,7 @@ impl App {
                     let mut soundfonts = Vec::new();
                     let mut stored = Vec::new();
                     for song in imported.songs {
-                        paths.push(self.songs.dir().join(&song.stored.key));
+                        paths.push(self.songs.path(&song.stored.key));
                         soundfonts.push(song.soundfont);
                         stored.push(song.stored);
                     }

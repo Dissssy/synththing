@@ -194,7 +194,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let mut store = SongStore::open(dir.clone());
         let stored = crate::song_store::write_in(b"x", "03 shuffle.mp3", &dir).unwrap();
-        let path = dir.join(&stored.key);
+        let path = crate::song_store::path_of(&dir, &stored.key);
         store.add(stored);
         let naming = Naming::new(&config, &store);
         assert_eq!(naming.name(&path, Some(&SongInfo::default())), "03 shuffle");

@@ -101,7 +101,7 @@ impl Library {
                         let entries = saved
                             .entries
                             .into_iter()
-                            .map(|e| PlaylistEntry { soundfont: e.soundfont, ..PlaylistEntry::new(songs.join(e.song)) })
+                            .map(|e| PlaylistEntry { soundfont: e.soundfont, ..PlaylistEntry::new(crate::song_store::path_of(&songs, &e.song)) })
                             .collect();
                         lists.push(StoredPlaylist { id, playlist: Playlist { name: saved.name, entries } });
                     }
@@ -163,8 +163,7 @@ impl Library {
                 .playlist
                 .entries
                 .iter()
-                .filter(|e| e.path.parent() == Some(self.songs.as_path()))
-                .filter_map(|e| Some(EntryFile { song: e.path.file_name()?.to_str()?.to_string(), soundfont: e.soundfont.clone() }))
+                .filter_map(|e| Some(EntryFile { song: crate::song_store::key_in(&self.songs, &e.path)?.to_string(), soundfont: e.soundfont.clone() }))
                 .collect(),
         };
         let json = serde_json::to_string_pretty(&saved)?;
