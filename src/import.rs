@@ -168,12 +168,13 @@ pub fn songs(files: Vec<(PathBuf, Option<PathBuf>)>, extensions: &'static [&'sta
     });
 }
 
-/// Copy those of `files` with one of `extensions` into the library.
+/// Copy those of `files` synththing takes (`song_store::takes`, by
+/// `extensions`) into the library.
 fn import_songs(files: Vec<(PathBuf, Option<PathBuf>)>, extensions: &[&str]) -> Result<Imported, String> {
     let dir = crate::config::music_dir().map_err(|e| format!("{e:#}"))?;
     let mut imported = Imported::default();
     for (file, soundfont) in files {
-        if !song_store::has_extension(&file, extensions) {
+        if !song_store::takes(&file, extensions) {
             imported.skipped.push(display_name(&file));
             continue;
         }
@@ -185,13 +186,13 @@ fn import_songs(files: Vec<(PathBuf, Option<PathBuf>)>, extensions: &[&str]) -> 
     Ok(imported)
 }
 
-/// Copy those of `files` with one of `extensions` into `dir`
+/// Copy those of `files` synththing takes (by `extensions`) into `dir`
 /// ([`copy_into`]); the rest are skipped.
 #[cfg(not(target_os = "android"))]
 fn import_soundfonts(files: &[PathBuf], extensions: &[&str], dir: &Path) -> Result<Imported, String> {
     let mut imported = Imported::default();
     for file in files {
-        if !song_store::has_extension(file, extensions) {
+        if !song_store::takes(file, extensions) {
             imported.skipped.push(display_name(file));
             continue;
         }

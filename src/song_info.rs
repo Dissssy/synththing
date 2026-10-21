@@ -47,7 +47,7 @@ pub struct SongInfo {
 /// names in `meta` with `value`, unless it's set already.
 fn set_tag(meta: &mut Meta, key: &str, value: &str) {
     let key = key.to_ascii_lowercase().replace([' ', '_'], "");
-    let value = value.trim();
+    let value = tag_text(value);
     if value.is_empty() {
         return;
     }
@@ -82,6 +82,12 @@ fn set_tag(meta: &mut Meta, key: &str, value: &str) {
         "compilation" | "itunescompilation" => meta.compilation |= value == "1" || value.eq_ignore_ascii_case("true"),
         _ => {}
     }
+}
+
+/// A tag's text without the spacing, or the NULs some taggers leave, at
+/// its ends ("KPM 155 Solo Instruments - Vol. 2\0" is "... Vol. 2").
+fn tag_text(value: &str) -> &str {
+    value.trim_matches(|c: char| c.is_whitespace() || c == '\0')
 }
 
 /// A MIDI file with more notes than this is "very large": playing it is
@@ -427,8 +433,9 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
             if key.eq_ignore_ascii_case("duration") {
                 continue;
             }
-            if !value.trim().is_empty() && !details.iter().any(|(k, _)| *k == key) {
-                details.push((key, value.trim().to_string()));
+            let value = tag_text(&value);
+            if !value.is_empty() && !details.iter().any(|(k, _)| *k == key) {
+                details.push((key, value.to_string()));
             }
         }
     };
@@ -513,7 +520,7 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
             while let Some(tag) = lines.next_if(|l| indent(l) > 2) {
                 if let Some((key, value)) = tag.split_once(':') {
                     set_tag(&mut meta, key.trim(), value);
-                    let (key, value) = (ffmpeg_tag_name(key.trim()), value.trim());
+                    let (key, value) = (ffmpeg_tag_name(key.trim()), tag_text(value));
                     if !value.is_empty() && !key.eq_ignore_ascii_case("duration") && !details.iter().any(|(k, _)| *k == key) {
                         details.push((key, value.to_string()));
                     }
@@ -641,6 +648,15 @@ mod tests {
         assert_eq!(format_length(3725.0), "1:02:05");
         assert_eq!(tag_name("TrackTitle"), "Track title");
         assert_eq!(tag_name("Artist"), "Artist");
+    }
+
+    #[test]
+    fn tags_lose_trailing_nuls() {
+        let mut meta = Meta::default();
+        set_tag(&mut meta, "Album", "KPM 155 Solo Instruments - Vol. 2\0");
+        set_tag(&mut meta, "Artist", " A\0B\0\0 ");
+        assert_eq!(meta.album.as_deref(), Some("KPM 155 Solo Instruments - Vol. 2"));
+        assert_eq!(meta.artist.as_deref(), Some("A\0B"), "NULs between values stay, to split at");
     }
 
     #[test]

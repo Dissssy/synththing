@@ -58,6 +58,7 @@ use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{DockArea, DockState, TabViewer};
 
 use crate::applog;
+use crate::commands::{self, Command};
 use crate::frame_timing;
 use crate::credits::{self, Contributors, ContributorsState};
 use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
@@ -1502,12 +1503,16 @@ impl App {
             } else {
                 ("pause", palette_color(1), "Pause")
             };
+            let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::TogglePause));
             if ui.add(colored_icon_button(glyph, color)).on_hover_text(hover).clicked() {
                 self.send(AudioCommand::TogglePause);
             }
             if ui
                 .add(icon_button("skip-back"))
-                .on_hover_text("Previous: the previous playlist track, or this one from the start if it's been playing a few seconds")
+                .on_hover_text(format!(
+                    "Previous: the previous playlist track, or this one from the start if it's been playing a few seconds{}",
+                    commands::hint(ui.ctx(), Command::PreviousTrack)
+                ))
                 .clicked()
             {
                 self.previous_track(view.position);
@@ -1520,7 +1525,10 @@ impl App {
             }
             if ui
                 .add_enabled(self.has_next(), icon_button("skip-forward"))
-                .on_hover_text("Next: the next playlist track, or the next song autoplay plays")
+                .on_hover_text(format!(
+                    "Next: the next playlist track, or the next song autoplay plays{}",
+                    commands::hint(ui.ctx(), Command::NextTrack)
+                ))
                 .on_disabled_hover_text("Play something from a playlist, or from Songs with Autoplay on, to queue up a next track")
                 .clicked()
             {
@@ -1530,12 +1538,13 @@ impl App {
             ui.separator();
 
             let (glyph, hover) = if self.fullscreen { ("corners-in", "Exit fullscreen") } else { ("corners-out", "Fullscreen") };
+            let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::ToggleFullscreen));
             if ui.add(icon_button(glyph)).on_hover_text(hover).clicked() {
                 let ctx = ui.ctx().clone();
                 self.set_fullscreen(&ctx, !self.fullscreen);
             }
             let visualizer = self.is_open(Section::Visualizer);
-            if ui.add(icon_button("monitor-play").selected(visualizer)).on_hover_text("Visualizer").clicked() {
+            if ui.add(icon_button("monitor-play").selected(visualizer)).on_hover_text(format!("Visualizer{}", commands::hint(ui.ctx(), Command::ToggleVisualizer))).clicked() {
                 self.set_open(Section::Visualizer, !visualizer);
             }
             let playlists = self.is_open(Section::Groupings) && self.groupings.shown_id() == groupings::PLAYLISTS;
@@ -3347,6 +3356,39 @@ impl App {
         }
     }
 
+    /// Carries out a command, whichever source it came from.
+    fn run_command(&mut self, ctx: &egui::Context, command: Command, view: &EngineView) {
+        match command {
+            Command::TogglePause => self.send(AudioCommand::TogglePause),
+            Command::SeekBack => self.send(AudioCommand::SeekRelative(-5.0)),
+            Command::SeekForward => self.send(AudioCommand::SeekRelative(5.0)),
+            Command::RestartSong => self.send(AudioCommand::Seek(0.0)),
+            Command::NextTrack => {
+                if self.has_next() {
+                    self.next_track();
+                }
+            }
+            Command::PreviousTrack => self.previous_track(view.position),
+            Command::ToggleVisualizer => self.set_open(Section::Visualizer, !self.is_open(Section::Visualizer)),
+            Command::ToggleFullscreen => self.set_fullscreen(ctx, !self.fullscreen),
+            Command::ExitFullscreen => {
+                self.dedicated = None;
+                self.set_fullscreen(ctx, false);
+            }
+            Command::DedicatedVisualizer => {
+                if self.dedicated.is_some() {
+                    self.exit_dedicated(ctx);
+                } else {
+                    self.enter_dedicated(ctx);
+                }
+            }
+            Command::RestartScript => self.restart_script(),
+            Command::ToggleRecording => self.toggle_recording(view),
+            Command::PauseRecording => self.toggle_recording_pause(),
+            Command::Quit => self.close_with(ctx, close::CloseAction::Quit),
+        }
+    }
+
     /// Enter the dedicated visualizer fullscreen: OS fullscreen with only
     /// the visualizer, which gets keyboard focus.
     fn enter_dedicated(&mut self, ctx: &egui::Context) {
@@ -3482,7 +3524,10 @@ impl App {
                 .on_hover_text("The script drawing the visualizer; open it for more scripts, a new one, and this one's file");
             if ui
                 .add(icon_button("arrow-clockwise"))
-                .on_hover_text("Restart: start the script over from scratch; its state resets, its settings stay (F5)")
+                .on_hover_text(format!(
+                    "Restart: start the script over from scratch; its state resets, its settings stay{}",
+                    commands::hint(ui.ctx(), Command::RestartScript)
+                ))
                 .clicked()
             {
                 self.restart_script();
@@ -3839,6 +3884,7 @@ impl App {
         // the window in the background, minimized or hidden.
         if !view.paused && (view.has_midi || view.has_audio_file) {
             ctx.request_repaint_after(Duration::from_millis(200));
+            frame_timing::expect_next_within(Duration::from_millis(200));
         }
     }
 }
@@ -3876,101 +3922,34 @@ impl eframe::App for App {
             self.fullscreen = actual;
         }
 
-        // App-wide keys, honored from anywhere: while typing, with the
-        // visualizer focused, in either fullscreen (scripts never see them,
-        // see visualizer::RESERVED_KEYS). Esc goes all the way back to
-        // windowed, F11 toggles the dedicated visualizer fullscreen, F5
-        // restarts the running script. Escape is only taken when there's a
-        // fullscreen to leave, so it still does its usual job elsewhere.
-        // Not while a modal is up: Escape closes the modal instead.
-        if !self.any_modal_open() {
+        // The keymap (commands.rs). Keys with a modifier and the function
+        // keys work from anywhere: while typing, with the visualizer
+        // focused, in either fullscreen (scripts never see the unmodified
+        // ones). Single keys pause while some widget (namely the Songs
+        // search box) has keyboard focus, so typing "v" there types a "v".
+        // Escape is only taken when there's a fullscreen to leave, so it
+        // still does its usual job elsewhere. All of it pauses while a
+        // modal is up (Escape closes the modal instead) or a binding is
+        // being captured.
+        if !self.any_modal_open() && self.binding_capture.is_none() {
+            let typing = ctx.memory(|m| m.focused().is_some());
             let in_fullscreen = self.fullscreen || self.dedicated.is_some();
-            let (escape, f11, f5, f9, f10) = ctx.input_mut(|i| {
-                (
-                    in_fullscreen && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::F11),
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::F5),
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::F9),
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::F10),
-                )
+            let has_next = self.has_next();
+            // Run outside `ctx.input_mut`: `send_viewport_cmd` (inside
+            // `set_fullscreen`) takes the lock that closure holds, and
+            // calling it from in there deadlocks.
+            let pressed = ctx.input_mut(|i| {
+                commands::pressed(i, typing, |command| match command {
+                    Command::ExitFullscreen => in_fullscreen,
+                    Command::NextTrack => has_next,
+                    _ => true,
+                })
             });
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)) {
-                self.close_with(&ctx, close::CloseAction::Quit);
-            }
-            if f9 {
-                self.toggle_recording(view);
-            }
-            if f10 {
-                self.toggle_recording_pause();
-            }
-            if escape {
-                self.dedicated = None;
-                self.set_fullscreen(&ctx, false);
-            }
-            if f11 {
-                if self.dedicated.is_some() {
-                    self.exit_dedicated(&ctx);
-                } else {
-                    self.enter_dedicated(&ctx);
-                }
-            }
-            if f5 {
-                self.restart_script();
+            for command in pressed {
+                self.run_command(&ctx, command, view);
             }
         }
         self.visualizer_output = ShowOutput::default();
-
-        // Single-key shortcuts are suspended whenever some widget (namely the
-        // Songs search box) has keyboard focus, so typing "v" there
-        // types a "v" instead of toggling the visualizer.
-        let typing = ctx.memory(|m| m.focused().is_some()) || self.any_modal_open() || self.binding_capture.is_some();
-        let mut toggle_fullscreen = false;
-        let mut toggle_visualizer = false;
-        let mut next = false;
-        let mut previous = false;
-        if !typing {
-            ctx.input(|input| {
-                if input.key_pressed(egui::Key::Space) {
-                    self.send(AudioCommand::TogglePause);
-                }
-                if input.key_pressed(egui::Key::ArrowLeft) {
-                    self.send(AudioCommand::SeekRelative(-5.0));
-                }
-                if input.key_pressed(egui::Key::ArrowRight) {
-                    self.send(AudioCommand::SeekRelative(5.0));
-                }
-                if input.key_pressed(egui::Key::R) {
-                    self.send(AudioCommand::Seek(0.0));
-                }
-                if input.key_pressed(egui::Key::V) {
-                    toggle_visualizer = true;
-                }
-                if input.key_pressed(egui::Key::N) {
-                    next = true;
-                }
-                if input.key_pressed(egui::Key::P) {
-                    previous = true;
-                }
-                if input.key_pressed(egui::Key::F) {
-                    toggle_fullscreen = true;
-                }
-            });
-        }
-        // `send_viewport_cmd` (inside `set_fullscreen`) takes the same lock
-        // `ctx.input` holds for the duration of its closure above, calling
-        // it from in there deadlocks, so it has to happen out here instead.
-        if toggle_fullscreen {
-            self.set_fullscreen(&ctx, !self.fullscreen);
-        }
-        if toggle_visualizer {
-            self.set_open(Section::Visualizer, !self.is_open(Section::Visualizer));
-        }
-        if next && self.has_next() {
-            self.next_track();
-        }
-        if previous {
-            self.previous_track(view.position);
-        }
 
         self.pause_for_preferences(view);
         self.handle_os_file_drops(&ctx);
@@ -4083,7 +4062,7 @@ impl eframe::App for App {
     /// playlist goes on to its next track, loads finish and the library
     /// keeps polling either way.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
-        frame_timing::begin();
+        frame_timing::begin(ctx.input(|i| i.viewport().inner_rect).map(|r| r.size()));
         frame_timing::time("tick", || self.tick(ctx));
     }
 

@@ -5322,6 +5322,7 @@ dependencies = [
  "puffin",
  "puffin_egui",
  "qrcode",
+ "regex",
  "resvg",
  "rfd",
  "rodio",

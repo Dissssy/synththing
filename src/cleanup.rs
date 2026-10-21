@@ -6,7 +6,11 @@
 //! Gao"), and an album by several artists with no album artist marked
 //! a compilation. Each is made as songs' edits (`song_store::Song::edits`), so
 //! the files are never written, and one that's wrong can be dismissed
-//! (`Config::cleanup_dismissed`).
+//! (`Config::cleanup_dismissed`). Songs that aren't songs at all (macOS's
+//! "._" files, imported before they were skipped) are suggested removed.
+//! Tags a song's file name, numbered title or video title say
+//! (`file_tags`) are suggested for those that lack them, grouped by who
+//! and what album they'd be.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,8 +18,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::fields::{self, Facts, Field};
+use crate::file_tags::{self, Known};
 use crate::smart::VARIOUS_ARTISTS;
-use crate::song_store::SongStore;
+use crate::song_store::{self, SongStore};
 
 /// The fields that hold people's names.
 const NAME_FIELDS: [Field; 3] = [Field::Artist, Field::AlbumArtist, Field::Composer];
@@ -25,6 +30,14 @@ const TIDIED: [Field; 6] = [Field::Title, Field::Artist, Field::AlbumArtist, Fie
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
+    /// Not songs at all: remove them from the library.
+    Junk,
+    /// Tags from a song's file name, for one with no title.
+    FileName,
+    /// A title starting with its track number.
+    NumberInTitle,
+    /// A video's title and channel ("(Official Video)", "...VEVO").
+    VideoTitle,
     /// Several artists (or genres) in one: split them.
     Split,
     /// One name spelled several ways: write it one way.
@@ -38,6 +51,10 @@ pub enum Kind {
 impl Kind {
     pub fn label(self) -> &'static str {
         match self {
+            Kind::Junk => "Not songs",
+            Kind::FileName => "From file name",
+            Kind::NumberInTitle => "Number in title",
+            Kind::VideoTitle => "Video title",
             Kind::Split => "Split",
             Kind::Same => "Same name",
             Kind::Compilation => "Compilation",
@@ -55,6 +72,12 @@ pub enum What {
     Name { spellings: Vec<String> },
     /// An album (as its songs spell it) to mark a compilation.
     Album { name: String },
+    /// macOS's AppleDouble files ("._Song.flac"), to remove.
+    AppleDouble,
+    /// Fields to set on each of its songs (`Suggestion::keys`, in their
+    /// order): what one of them said (`from`), and what the group's
+    /// known by (who and what album they'd be).
+    Fields { from: String, group: String, set: Vec<Vec<(Field, String)>> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -78,19 +101,40 @@ impl Suggestion {
                 format!("name:{}", keys.into_iter().collect::<Vec<_>>().join("|"))
             }
             What::Album { name } => format!("compilation:{}", fields::group_key(name, ignore)),
+            What::AppleDouble => "apple-double".to_string(),
+            What::Fields { group, .. } => format!("{:?}:{group}", self.kind),
         }
     }
 }
 
 /// Every suggestion for `store`'s songs (names grouped as by
-/// `fields::group_key`, past `ignore`), splits first.
+/// `fields::group_key`, past `ignore`), junk first, then splits.
 pub fn suggest(store: &SongStore, ignore: &str) -> Vec<Suggestion> {
+    let junk: Vec<String> = store.known().filter(|(key, song)| !store.is_blocked(key) && song_store::is_apple_double(&song.name)).map(|(key, _)| key.to_string()).collect();
     let mut texts: BTreeMap<(Field, String), Suggestion> = BTreeMap::new();
     // Each name's spellings (by group key), and how many songs each is on.
     let mut names: BTreeMap<String, (BTreeMap<String, usize>, BTreeSet<&str>)> = BTreeMap::new();
     let mut albums: BTreeMap<String, Album> = BTreeMap::new();
-    for (key, song) in store.known() {
+    let known = Known::of(store, ignore);
+    let mut guessed: BTreeMap<(Kind, String), Suggestion> = BTreeMap::new();
+    for (key, song) in store.known().filter(|(_, song)| !song_store::is_apple_double(&song.name)) {
         let facts = Facts::of(song);
+        if let Some((kind, from, set)) = guess(&facts, &known) {
+            let named = |field| set.iter().find(|(f, _)| *f == field).map(|(_, t)| Cow::Borrowed(t.as_str())).or_else(|| facts.text(field));
+            let shape: Vec<&str> = set.iter().map(|(f, _)| f.def().key).collect();
+            let group = [named(Field::Artist), named(Field::Album)].map(|n| n.map(|n| fields::group_key(&n, ignore)).unwrap_or_default());
+            let group = format!("{}|{}|{}", shape.join(","), group[0], group[1]);
+            let suggestion = guessed.entry((kind, group.clone())).or_insert_with(|| Suggestion {
+                kind,
+                what: What::Fields { from, group, set: Vec::new() },
+                to: describe_set(&set),
+                keys: Vec::new(),
+            });
+            if let What::Fields { set: sets, .. } = &mut suggestion.what {
+                sets.push(set);
+            }
+            suggestion.keys.push(key.to_string());
+        }
         if let Some(name) = facts.text(Field::Album) {
             let album = albums.entry(fields::group_key(&name, ignore)).or_default();
             album.artists.extend(facts.first(Field::Artist).map(|a| fields::group_key(&a, ignore)));
@@ -126,7 +170,10 @@ pub fn suggest(store: &SongStore, ignore: &str) -> Vec<Suggestion> {
             }
         }
     }
-    let mut suggestions: Vec<Suggestion> = texts.into_values().collect();
+    let mut suggestions: Vec<Suggestion> = texts.into_values().chain(guessed.into_values()).collect();
+    if !junk.is_empty() {
+        suggestions.push(Suggestion { kind: Kind::Junk, what: What::AppleDouble, to: String::new(), keys: junk });
+    }
     suggestions.extend(same_names(&names));
     suggestions.extend(albums.into_values().filter(|a| a.artists.len() > 1 && !a.album_artist && !a.unmarked.is_empty()).map(|album| Suggestion {
         kind: Kind::Compilation,
@@ -136,6 +183,45 @@ pub fn suggest(store: &SongStore, ignore: &str) -> Vec<Suggestion> {
     }));
     suggestions.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| b.keys.len().cmp(&a.keys.len())));
     suggestions
+}
+
+/// The tags `facts`' song lacks that its file name, title or video title
+/// say: of which kind, what said it, and the fields to set.
+fn guess(facts: &Facts, known: &Known) -> Option<(Kind, String, Vec<(Field, String)>)> {
+    let lacks = |field| match field {
+        Field::Track => facts.number(field).is_none(),
+        _ => facts.text(field).is_none(),
+    };
+    let Some(title) = facts.text(Field::Title) else {
+        let stem = std::path::Path::new(facts.file_name).file_stem()?.to_str()?;
+        let set: Vec<(Field, String)> = file_tags::from_file_name(stem, known).into_iter().filter(|(f, _)| lacks(*f)).collect();
+        return set.iter().any(|(f, _)| *f == Field::Title).then(|| (Kind::FileName, facts.file_name.to_string(), set));
+    };
+    if let Some((track, rest)) = file_tags::number_in_title(&title) {
+        let mut set = vec![(Field::Title, rest)];
+        if lacks(Field::Track) {
+            set.insert(0, (Field::Track, track.to_string()));
+        }
+        return Some((Kind::NumberInTitle, title.into_owned(), set));
+    }
+    let (artist, rest) = file_tags::from_video(facts.text(Field::Artist).as_deref(), &title, known)?;
+    let mut set: Vec<(Field, String)> = artist.map(|a| (Field::Artist, a)).into_iter().collect();
+    if rest != title {
+        set.push((Field::Title, rest));
+    }
+    Some((Kind::VideoTitle, title.into_owned(), set))
+}
+
+/// What a song's fields will be set to, as one line: "Track 34, Title
+/// “Days”, Artist “Kan Gao”".
+fn describe_set(set: &[(Field, String)]) -> String {
+    set.iter()
+        .map(|(field, text)| match field.kind() {
+            fields::Kind::Number => format!("{} {text}", field.label()),
+            _ => format!("{} “{text}”", field.label()),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// What's known of an album, for whether it's a compilation.
@@ -301,8 +387,16 @@ pub fn edits(store: &SongStore, chosen: &[(&Suggestion, &str)], ignore: &str) ->
                 written.get(&(key.clone(), field)).cloned().or_else(|| facts.text(field).map(Cow::into_owned))
             };
             match &suggestion.what {
+                // (Removed, not edited: `App::remove_songs`.)
+                What::AppleDouble => {}
                 What::Album { .. } => {
                     written.insert((key.clone(), Field::Compilation), "1".to_string());
+                }
+                What::Fields { set, .. } => {
+                    let at = suggestion.keys.iter().position(|k| k == key);
+                    for (field, text) in at.map(|i| set[i].as_slice()).unwrap_or_default() {
+                        written.insert((key.clone(), *field), text.clone());
+                    }
                 }
                 What::Text { field, text } => {
                     if now(&written, *field).as_deref() == Some(text) {
@@ -391,6 +485,48 @@ mod tests {
         assert_eq!(facts[0].items(Field::Artist), ["Perry Porter", "Nujabes"]);
         assert!(facts.iter().all(|f| f.flag(Field::Compilation)));
         assert!(suggest(&store, "").is_empty(), "nothing more"); 
+    }
+
+    #[test]
+    fn file_names_numbers_and_videos_fill_in_tags() {
+        let mut store = store("guessed", &[]);
+        let song = |i: usize, name: &str, meta: Meta| (format!("{i:064x}.mp3"), Song { name: name.into(), meta: Some(meta), ..Song::default() });
+        let video = Meta { artist: Some("georgemichaelVEVO".into()), title: Some("George Michael - Careless Whisper (Official Video)".into()), ..Meta::default() };
+        store.learn([
+            song(1, "34. Days - Kan Gao.mp3", Meta::default()),
+            song(2, "35. Back Home - Kan Gao.mp3", Meta { track: Some(35), ..Meta::default() }),
+            song(3, "x.mp3", Meta { title: Some("27. Luke".into()), track: Some(27), ..Meta::default() }),
+            song(4, "y.mp3", video),
+            song(5, "Overworld.mp3", Meta::default()),
+            song(6, "z.mp3", Meta { title: Some("Lullaby".into()), artist: Some("Kan Gao".into()), ..Meta::default() }),
+        ]);
+        let suggestions = suggest(&store, "");
+        let kinds: Vec<(Kind, usize)> = suggestions.iter().map(|s| (s.kind, s.keys.len())).collect();
+        // (Song 2 has its track, so it's another group: what's set differs.)
+        assert_eq!(kinds, [(Kind::FileName, 1), (Kind::FileName, 1), (Kind::NumberInTitle, 1), (Kind::VideoTitle, 1)], "{suggestions:?}");
+        let chosen: Vec<(&Suggestion, &str)> = suggestions.iter().map(|s| (s, s.to.as_str())).collect();
+        store.edit(edits(&store, &chosen, ""));
+        let facts = |i: usize| Facts::of(store.get_by_key(&format!("{i:064x}.mp3")).unwrap()).value(Field::Title).map(|v| v.text);
+        assert_eq!([facts(1), facts(2), facts(3), facts(4)], ["Days", "Back Home", "Luke", "Careless Whisper"].map(|t| Some(t.to_string())));
+        let days = Facts::of(store.get_by_key(&format!("{:064x}.mp3", 1)).unwrap());
+        assert_eq!((days.number(Field::Track), days.text(Field::Artist).as_deref()), (Some(34.0), Some("Kan Gao")));
+        assert!(suggest(&store, "").is_empty(), "nothing more: {:?}", suggest(&store, ""));
+    }
+
+    #[test]
+    fn apple_double_files_are_junk() {
+        let mut store = store("junk", &[]);
+        let junk = format!("{:064x}.flac", 1);
+        let meta = Some(Meta { title: Some("\"Song\"".into()), ..Meta::default() });
+        store.learn([
+            (junk.clone(), Song { name: "._Song.flac".into(), meta: meta.clone(), ..Song::default() }),
+            (format!("{:064x}.flac", 2), Song { name: "Song.flac".into(), ..Song::default() }),
+        ]);
+        let suggestions = suggest(&store, "");
+        assert_eq!(suggestions.len(), 1, "only the junk, not its details: {suggestions:?}");
+        assert_eq!((suggestions[0].kind, &suggestions[0].keys), (Kind::Junk, &vec![junk.clone()]));
+        store.remove(&store.path(&junk)).unwrap();
+        assert!(suggest(&store, "").is_empty(), "gone once removed");
     }
 
     #[test]

@@ -251,7 +251,8 @@ public class MainActivity extends NativeActivity {
                 String name = displayName(uri);
                 int dot = name.lastIndexOf('.');
                 String ext = dot < 0 ? "" : name.substring(dot + 1).toLowerCase(Locale.ROOT);
-                if (!extensions.contains(ext)) {
+                // ("._Song.flac" is macOS's AppleDouble file, not a song.)
+                if (!extensions.contains(ext) || name.startsWith("._")) {
                     skipped.add(name);
                     continue;
                 }
