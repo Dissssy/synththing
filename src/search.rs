@@ -15,7 +15,7 @@ use std::ops::Range;
 
 use crate::fields::{Field, Kind};
 use crate::matching::{Mode, Term};
-use crate::smart::{Op, Rule, Rules};
+use crate::smart::{self, Op, Rule, Rules};
 use crate::song_store::Tag;
 
 /// The filters, for the search box's hover text.
@@ -24,8 +24,9 @@ pub const HELP: &str = "Search for words (fuzzy), \"a phrase\" (past case and pu
     type:mid  (also filetype:, ext:)\n\
     title: artist: album: albumartist: composer: genre: file:\n\
     \u{2003}artist:bonno or artist:'daft pk' (fuzzy), artist:\"daft punk\" (the whole name), artist:^\"Daft Punk\" (exactly)\n\
-    year: track: disc: length: size:  (5, >5, <5, 1..9; length as m:ss, size in MB)\n\
-    added:30d  added:>2026-01-01  added:<2026-01-01\n\
+    year: track: disc: length: size:  (5, >5, <5, >=5, <=5, 1..9, 5.., ..9)\n\
+    \u{2003}length:>6m or >6:00 (a bare number is minutes), size:>1.2gb (bare: MB), year:90s\n\
+    added:30d (12h, 2w, 6mo, 1y), added:2026-10 (that month), added:>=2026-01-01\n\
     tag:name  is:starred  has:album  (has: any text or number key)\n\
     Tab completes, Alt switches it between fuzzy, close and exact.";
 
@@ -205,9 +206,9 @@ fn filter(term: &str, tags: &BTreeMap<String, Tag>) -> Result<Rule, Option<Strin
                     rule(field, op, value)
                 }
                 Kind::Number => number(field, not, value).ok_or_else(|| {
-                    Some(if not { format!("{key}: can only leave out one number, like -{key}:5") } else { format!("{key}: takes 5, >5, <5 or 1..9") })
+                    Some(if not { format!("{key}: can only leave out one value, like -{key}:5") } else { format!("{key}: takes {}", number_help(field)) })
                 }),
-                Kind::Date => date(not, value).ok_or_else(|| Some("added: takes 30d, >2026-01-01 or <2026-01-01".to_string())),
+                Kind::Date => date(not, value).ok_or_else(|| Some("added: takes 30d, 2w, 6mo, 1y, 2026, 2026-10, 2026-10-20, >2026-10, <=2026...".to_string())),
                 Kind::Tag => match tags.iter().find(|(_, t)| t.name.eq_ignore_ascii_case(value)) {
                     Some((id, _)) => rule(field, if not { Op::HasNot } else { Op::Has }, id),
                     None => bad(&format!("There's no tag named {value}")),
@@ -271,38 +272,75 @@ pub fn complete(query: &str, cursor: usize, mode: Mode, values: &mut dyn FnMut(F
     (!options.is_empty()).then_some(Completion { at, options })
 }
 
-/// A number filter: `5`, `>5`, `<5` or `1..9` (only `5` can be excluded).
-fn number(field: Field, not: bool, value: &str) -> Option<Rule> {
-    let parses = |v: &str| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ':');
-    let (op, value, to) = if let Some(v) = value.strip_prefix('>') {
-        (Op::Greater, v, "")
-    } else if let Some(v) = value.strip_prefix('<') {
-        (Op::Less, v, "")
-    } else if let Some((a, b)) = value.split_once("..") {
-        if !parses(b) {
-            return None;
-        }
-        (Op::InRange, a, b)
-    } else {
-        (if not { Op::IsNot } else { Op::Is }, value, "")
-    };
-    if !parses(value) || (not && op != Op::IsNot) {
-        return None;
+/// What a number filter takes, to say when it doesn't.
+fn number_help(field: Field) -> &'static str {
+    match field {
+        Field::Length => "6:00, 6m, 90s, 1h2m (a bare number is minutes), with >, <, >=, <= or a range (3m..5m)",
+        Field::Size => "MB, or 800kb, 1.2gb, with >, <, >=, <= or a range (5..10)",
+        Field::Year => "1999, the 1990s or 90s, >2000, <=1999 or a range (1990..1999, 2000..)",
+        _ => "5, >5, <5, >=5, <=5 or a range (1..9, 5.., ..9)",
     }
-    Some(Rule { field, op, value: value.to_string(), to: to.to_string() })
 }
 
-/// A date filter: `30d` (added in the last 30 days; excluded, not), or
-/// `>2026-01-01` and `<2026-01-01` (after or before that day).
-fn date(not: bool, value: &str) -> Option<Rule> {
-    let rule = |op, value: &str| Some(Rule { field: Field::Imported, op, value: value.to_string(), to: String::new() });
-    if let Some(days) = value.strip_suffix('d').filter(|d| d.parse::<f64>().is_ok()) {
-        return rule(if not { Op::NotInLast } else { Op::InLast }, days);
+/// A comparison: `>=5`, `<=5`, `>5`, `<5`, `5..9`, `5..`, `..9`, or just
+/// `5` (`None`), and its value (and the range's other end).
+fn comparison(value: &str) -> (Option<Op>, &str, &str) {
+    for (prefix, op) in [(">=", Op::AtLeast), ("<=", Op::AtMost), (">", Op::Greater), ("<", Op::Less)] {
+        if let Some(v) = value.strip_prefix(prefix) {
+            return (Some(op), v.trim(), "");
+        }
     }
-    let is_date = |v: &str| v.len() >= 7 && v.chars().all(|c| c.is_ascii_digit() || c == '-');
-    match (not, value.split_at_checked(1)) {
-        (false, Some((">", day))) if is_date(day) => rule(Op::After, day),
-        (false, Some(("<", day))) if is_date(day) => rule(Op::Before, day),
+    match value.split_once("..") {
+        Some((a, "")) => (Some(Op::AtLeast), a.trim(), ""),
+        Some(("", b)) => (Some(Op::AtMost), b.trim(), ""),
+        Some((a, b)) => (Some(Op::InRange), a.trim(), b.trim()),
+        None => (None, value, ""),
+    }
+}
+
+/// A number filter (`comparison`, in the field's units, `smart::parse`),
+/// or a decade for the year (`1990s`, `90s`). Only a plain value can be
+/// excluded.
+fn number(field: Field, not: bool, value: &str) -> Option<Rule> {
+    let rule = |op, value: &str, to: &str| Some(Rule { field, op, value: value.to_string(), to: to.to_string() });
+    if field == Field::Year
+        && let Some(decade) = value.strip_suffix('s').and_then(|d| d.parse::<u32>().ok())
+        && !not
+    {
+        let start = match decade {
+            0..=29 if value.len() == 3 => 2000 + decade,
+            30..=99 if value.len() == 3 => 1900 + decade,
+            _ if decade % 10 == 0 => decade,
+            _ => return None,
+        };
+        return rule(Op::InRange, &start.to_string(), &(start + 9).to_string());
+    }
+    let parses = |v: &str| smart::parse(field, v).is_some();
+    match comparison(value) {
+        (None, v, _) if parses(v) => rule(if not { Op::IsNot } else { Op::Is }, v, ""),
+        (Some(op), v, to) if !not && parses(v) && (op != Op::InRange || parses(to)) => rule(op, v, to),
+        _ => None,
+    }
+}
+
+/// A date filter: how long ago (`30d`, `12h`, `2w`, `6mo`, `1y`: added
+/// since; excluded, not), a year, month or day (`2026`, `2026-10`,
+/// `2026-10-20`: added in it), or a `comparison` with one (`>2026-10` is
+/// after October, `>=2026-10` from its start).
+fn date(not: bool, value: &str) -> Option<Rule> {
+    let rule = |op, value: &str, to: &str| Some(Rule { field: Field::Imported, op, value: value.to_string(), to: to.to_string() });
+    let period = |v: &str| smart::parse_period(v).is_some();
+    match comparison(value) {
+        (None, v, _) if period(v) => rule(if not { Op::NotOn } else { Op::On }, v, ""),
+        (None, v, _) if smart::parse_age(v).is_some() => rule(if not { Op::NotInLast } else { Op::InLast }, v, ""),
+        (Some(op), v, to) if !not && period(v) && (op != Op::InRange || period(to)) => {
+            let op = match op {
+                Op::Greater => Op::After,
+                Op::Less => Op::Before,
+                op => op,
+            };
+            rule(op, v, to)
+        }
         _ => None,
     }
 }
@@ -359,8 +397,16 @@ mod tests {
         let rules = |q| parse(q, &tags()).rules.rules;
         assert_eq!(rules("length:>3:30"), [rule(Field::Length, Op::Greater, "3:30", "")]);
         assert_eq!(rules("-track:1"), [rule(Field::Track, Op::IsNot, "1", "")]);
-        assert_eq!(rules("added:30d"), [rule(Field::Imported, Op::InLast, "30", "")]);
-        assert_eq!(rules("-added:7d"), [rule(Field::Imported, Op::NotInLast, "7", "")]);
+        assert_eq!(rules("added:30d"), [rule(Field::Imported, Op::InLast, "30d", "")]);
+        assert_eq!(rules("-added:2w"), [rule(Field::Imported, Op::NotInLast, "2w", "")]);
+        assert_eq!(rules("added:2026-10"), [rule(Field::Imported, Op::On, "2026-10", "")]);
+        assert_eq!(rules("added:>=2026"), [rule(Field::Imported, Op::AtLeast, "2026", "")]);
+        assert_eq!(rules("added:2025..2026-03"), [rule(Field::Imported, Op::InRange, "2025", "2026-03")]);
+        assert_eq!(rules("length:3m..5:30"), [rule(Field::Length, Op::InRange, "3m", "5:30")]);
+        assert_eq!(rules("size:>=1.2gb"), [rule(Field::Size, Op::AtLeast, "1.2gb", "")]);
+        assert_eq!(rules("track:..3"), [rule(Field::Track, Op::AtMost, "3", "")]);
+        assert_eq!(rules("year:90s"), [rule(Field::Year, Op::InRange, "1990", "1999")]);
+        assert_eq!(rules("year:2010s"), [rule(Field::Year, Op::InRange, "2010", "2019")]);
         assert_eq!(rules("added:<2026-01-01"), [rule(Field::Imported, Op::Before, "2026-01-01", "")]);
         assert_eq!(rules("-has:album"), [rule(Field::Album, Op::IsEmpty, "", "")]);
         assert_eq!(rules("type:.MID"), [rule(Field::FileExtension, Op::Is, "MID", "")]);
