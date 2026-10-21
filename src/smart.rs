@@ -512,13 +512,16 @@ fn sorted<'a>(mut songs: Vec<(&'a str, &'a Song)>, order: Order, seed: u64, arti
 }
 
 impl Rules {
-    fn matching<'a>(&self, songs: impl Iterator<Item = (&'a str, &'a Song)>, now: i64) -> Vec<(&'a str, &'a Song)> {
+    /// Whether a song matches the rules (their values parsed once, here),
+    /// `now` (Unix seconds) saying when "the last N days" are.
+    pub fn matcher(&self, now: i64) -> impl Fn(&Song) -> bool + '_ {
         let tests: Vec<Test> = self.rules.iter().map(|r| Test::new(r, now)).collect();
-        songs
-            .filter(|(_, song)| {
-                tests.is_empty() || if self.any { tests.iter().any(|t| t.matches(song)) } else { tests.iter().all(|t| t.matches(song)) }
-            })
-            .collect()
+        move |song| tests.is_empty() || if self.any { tests.iter().any(|t| t.matches(song)) } else { tests.iter().all(|t| t.matches(song)) }
+    }
+
+    fn matching<'a>(&self, songs: impl Iterator<Item = (&'a str, &'a Song)>, now: i64) -> Vec<(&'a str, &'a Song)> {
+        let matches = self.matcher(now);
+        songs.filter(|(_, song)| matches(song)).collect()
     }
 
     /// `songs` cut to the limit (filling greedily in its order: a song

@@ -2,7 +2,9 @@
 //! names (`song_title`), in columns of what's known of them (`View`,
 //! synced like the other settings): sorted by any of them, and grouped by
 //! one on the fly (or by tag, a song in each of its tags' groups), with a
-//! fuzzy search over the names, file names and tags.
+//! fuzzy search over the names, file names and tags, and filters
+//! (`type:mid`, `search.rs`): with only filters, the list stays sorted and
+//! grouped.
 //! Double-clicking a song plays it (and marks it as playing); rows can be
 //! selected several at a time and dragged out together (onto a playlist).
 //! The alien at the left of each row stars it, or unstars it.
@@ -432,7 +434,8 @@ impl SongList {
     }
 
     /// Draw the list (toolbar, search box, column headers, rows) into
-    /// `ui`, as `view` says. `songs` gives the songs to list, and
+    /// `ui`, as `view` says. `songs` gives the songs a query's filters
+    /// keep and the text left to search for, and
     /// `describe` one's name, file name and the values of the columns
     /// asked for; they're asked only when the rows are made again: when
     /// `revision` (which changes whenever the songs or what's said of them
@@ -446,7 +449,7 @@ impl SongList {
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        songs: &mut dyn FnMut() -> Vec<PathBuf>,
+        songs: &mut dyn FnMut(&str) -> (Vec<PathBuf>, String),
         revision: u64,
         view: &mut View,
         ignore: &str,
@@ -470,9 +473,10 @@ impl SongList {
             }
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
-                    .hint_text("fuzzy search...")
+                    .hint_text("search, or filter: type:mid...")
                     .desired_width(f32::INFINITY),
-            );
+            )
+            .on_hover_text(crate::search::HELP);
             if response.changed() {
                 self.selection.clear();
             }
@@ -517,17 +521,18 @@ impl SongList {
             .as_ref()
             .is_none_or(|b| b.revision != revision || b.view != *view || b.keys != keys || b.query != query);
         if stale {
-            let songs = songs();
-            let (items, queue) = if query.is_empty() {
+            let (songs, text) = songs(query);
+            let (items, queue) = if text.is_empty() {
                 self.sorted(&songs, view, &keys, sort_at, group_at, ignore, articles, describe)
             } else {
-                let found = ranked_matches(&songs, query, &keys, describe);
+                let found = ranked_matches(&songs, &text, &keys, describe);
                 let queue = found.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false, plays: e.song.plays.clone() }).collect();
                 (found.into_iter().map(Item::Song).collect(), queue)
             };
+            let empty = songs.is_empty() && query.is_empty();
             let query = query.to_string();
             self.generation += 1;
-            self.built = Some(Built { revision, view: view.clone(), keys: keys.clone(), query, empty: songs.is_empty(), items, queue });
+            self.built = Some(Built { revision, view: view.clone(), keys: keys.clone(), query, empty, items, queue });
             self.active_row = None;
         }
         let built = self.built.as_ref().expect("the rows were just made");
@@ -1003,7 +1008,7 @@ mod tests {
                 let values = keys.iter().map(|&k| (k == "artist").then(|| Value { text: format!("Artist {}", n % 3), ..Value::default() })).collect();
                 Described { name: format!("Song {n}"), file_name: String::new(), values, tags: Vec::new(), plays: Plays::default() }
             };
-            list.ui(ui, &mut || songs.to_vec(), revision, &mut view, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
+            list.ui(ui, &mut |query| (songs.to_vec(), query.to_string()), revision, &mut view, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
         });
         output.textures_delta.clear();
     }

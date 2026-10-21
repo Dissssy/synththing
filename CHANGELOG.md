@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Search filters in Songs: type key:value terms beside (or instead of) your search, like `type:mid`, `artist:"daft punk"`, `year:1990..1999`, `length:>3:00`, `added:30d`, `tag:chill`, `is:starred` or `has:album`, and put - in front of one to leave those songs out (`-type:mid`). With only filters, the list stays sorted and grouped. Hover the search box for all of them.
+
 ## 1.3.0 (2026-10-21)
 
 ### Added

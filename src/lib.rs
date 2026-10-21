@@ -58,6 +58,7 @@ mod playlist_sync;
 mod preview;
 mod recorder;
 mod script_host;
+mod search;
 mod select_list;
 mod settings_sync;
 mod smart;

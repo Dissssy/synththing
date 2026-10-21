@@ -2802,13 +2802,16 @@ impl App {
         };
         let output = self.song_list.ui(
             ui,
-            &mut || {
-                store
+            &mut |query| {
+                let search = crate::search::parse(query, store.tags());
+                let matches = search.rules.matcher(crate::settings_sync::now());
+                let songs = store
                     .songs()
+                    .filter(|(path, song)| song_store::has_extension(path, extensions) && matches(song))
                     .map(|(path, _)| path)
-                    .filter(|p| song_store::has_extension(p, extensions))
                     .filter(|p| only.as_ref().is_none_or(|only| song_store::key_in(store.dir(), p).is_some_and(|k| only.contains(k))))
-                    .collect()
+                    .collect();
+                (songs, search.text)
             },
             revision,
             &mut view,
