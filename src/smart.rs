@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::fields::{self, Facts, Field, Kind};
+use crate::matching;
 use crate::song_store::{Song, SongStore, Tag};
 
 /// A smart playlist's (or ruleset's) definition.
@@ -75,34 +76,78 @@ fn text<'a>(song: &Facts<'a>, field: Field) -> Option<Cow<'a, str>> {
 }
 
 /// Parse a value typed for `field`.
-fn parse(field: Field, text: &str) -> Option<f64> {
-    let text = text.trim();
-    if field == Field::Length
-        && let Some((m, s)) = text.split_once(':')
-    {
-        return Some(m.trim().parse::<f64>().ok()? * 60.0 + s.trim().parse::<f64>().ok()?);
+/// A length as `6:00` or `1:02:30`, or in units (`6m`, `90s`, `1h2m`,
+/// `6m30s`), a bare number being minutes; a size in MB, or with a unit
+/// (`800kb`, `1.2gb`); else a plain number.
+pub fn parse(field: Field, text: &str) -> Option<f64> {
+    let text = text.trim().to_lowercase();
+    match field {
+        Field::Length if text.contains(':') => {
+            let parts = text.split(':').map(|p| p.trim().parse::<f64>().ok()).collect::<Option<Vec<f64>>>()?;
+            (2..=3).contains(&parts.len()).then(|| parts.iter().fold(0.0, |total, p| total * 60.0 + p))
+        }
+        Field::Length => units(&text, &[("h", 3600.0), ("m", 60.0), ("s", 1.0)], 60.0),
+        Field::Size => units(&text, &[("kb", 1e-3), ("mb", 1.0), ("gb", 1e3)], 1.0),
+        _ => text.parse().ok(),
     }
-    text.parse().ok()
+}
+
+/// `text` as numbers with units (`1h2m`), in what `units` (each with
+/// what one is worth) count; a bare number is worth `bare`.
+fn units(text: &str, units: &[(&str, f64)], bare: f64) -> Option<f64> {
+    if let Ok(n) = text.parse::<f64>() {
+        return Some(n * bare);
+    }
+    let mut total = 0.0;
+    let mut rest = text;
+    while !rest.is_empty() {
+        let digits = rest.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(rest.len());
+        let n: f64 = rest[..digits].parse().ok()?;
+        rest = rest[digits..].trim_start();
+        let (unit, worth) = units.iter().find(|(u, _)| rest.starts_with(u))?;
+        total += n * worth;
+        rest = rest[unit.len()..].trim_start();
+    }
+    (!text.is_empty()).then_some(total)
+}
+
+/// How long ago `text` says, in seconds: `30d`, `12h`, `2w`, `6mo` or
+/// `1y` (a bare number is days).
+pub fn parse_age(text: &str) -> Option<f64> {
+    const DAY: f64 = 86_400.0;
+    units(&text.trim().to_lowercase(), &[("h", 3600.0), ("d", DAY), ("w", 7.0 * DAY), ("mo", 30.0 * DAY), ("y", 365.0 * DAY)], DAY)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Op {
+    /// The same past case, spacing and punctuation (`matching::close`).
     Is,
     IsNot,
     Contains,
     NotContains,
+    /// Fuzzily (`matching::fuzzy`).
+    Like,
+    NotLike,
+    /// Case and all.
+    Exactly,
+    NotExactly,
     StartsWith,
     EndsWith,
     IsEmpty,
     IsNotEmpty,
     Greater,
     Less,
+    AtLeast,
+    AtMost,
     InRange,
-    /// Days.
+    /// How long ago (`parse_age`).
     InLast,
     NotInLast,
-    /// A date, `2026-10-20`.
+    /// In a year, month or day: `2026`, `2026-10`, `2026-10-20`
+    /// (`parse_period`).
+    On,
+    NotOn,
     Before,
     After,
     Has,
@@ -115,9 +160,9 @@ pub enum Op {
 pub fn ops(kind: Kind) -> &'static [Op] {
     use Op::*;
     match kind {
-        Kind::Text => &[Contains, NotContains, Is, IsNot, StartsWith, EndsWith, IsEmpty, IsNotEmpty],
-        Kind::Number => &[Is, IsNot, Greater, Less, InRange, IsEmpty, IsNotEmpty],
-        Kind::Date => &[InLast, NotInLast, Before, After],
+        Kind::Text => &[Contains, NotContains, Is, IsNot, Like, NotLike, Exactly, NotExactly, StartsWith, EndsWith, IsEmpty, IsNotEmpty],
+        Kind::Number => &[Is, IsNot, Greater, Less, AtLeast, AtMost, InRange, IsEmpty, IsNotEmpty],
+        Kind::Date => &[InLast, NotInLast, On, NotOn, Before, After, AtLeast, AtMost, InRange],
         Kind::Tag => &[Has, HasNot],
         Kind::Flag => &[IsTrue, IsFalse],
     }
@@ -130,15 +175,23 @@ impl Op {
             Self::IsNot => "is not",
             Self::Contains => "contains",
             Self::NotContains => "does not contain",
+            Self::Like => "is like (fuzzy)",
+            Self::NotLike => "is not like (fuzzy)",
+            Self::Exactly => "is exactly (case too)",
+            Self::NotExactly => "is not exactly (case too)",
             Self::StartsWith => "starts with",
             Self::EndsWith => "ends with",
             Self::IsEmpty => "is empty",
             Self::IsNotEmpty => "is not empty",
             Self::Greater => "is greater than",
             Self::Less => "is less than",
+            Self::AtLeast => "is at least",
+            Self::AtMost => "is at most",
             Self::InRange => "is in the range",
-            Self::InLast => "is in the last (days)",
-            Self::NotInLast => "is not in the last (days)",
+            Self::InLast => "is in the last",
+            Self::NotInLast => "is not in the last",
+            Self::On => "is in",
+            Self::NotOn => "is not in",
             Self::Before => "is before",
             Self::After => "is after",
             Self::Has => "has",
@@ -340,18 +393,26 @@ struct Test<'a> {
     rule: &'a Rule,
     text: String,
     numbers: [Option<f64>; 2],
+    /// A date rule's value and `to`, as the periods they name (an age,
+    /// the moment it reaches back to).
+    periods: [Option<(f64, f64)>; 2],
 }
 
 impl<'a> Test<'a> {
     fn new(rule: &'a Rule, now: i64) -> Self {
-        let parse = |text: &str| match rule.field.kind() {
-            Kind::Date => match rule.op {
-                Op::InLast | Op::NotInLast => text.trim().parse::<f64>().ok().map(|days| now as f64 - days * 86_400.0),
-                _ => parse_date(text).map(|secs| secs as f64),
-            },
-            _ => parse(rule.field, text),
+        let date = rule.field.kind() == Kind::Date;
+        let period = |text: &str| match rule.op {
+            _ if !date => None,
+            Op::InLast | Op::NotInLast => parse_age(text).map(|age| (now as f64 - age, f64::INFINITY)),
+            _ => parse_period(text).map(|(start, end)| (start as f64, end as f64)),
         };
-        Self { rule, text: rule.value.trim().to_lowercase(), numbers: [parse(&rule.value), parse(&rule.to)] }
+        let number = |text: &str| if date { None } else { parse(rule.field, text) };
+        Self {
+            rule,
+            text: rule.value.trim().to_lowercase(),
+            numbers: [number(&rule.value), number(&rule.to)],
+            periods: [period(&rule.value), period(&rule.to)],
+        }
     }
 
     fn matches(&self, song: &Song) -> bool {
@@ -361,17 +422,23 @@ impl<'a> Test<'a> {
             Kind::Text => {
                 // (Each of a list field's items: a song's genre "is" each
                 // of its genres.)
-                let have: Vec<String> = match field {
-                    Field::Title => text(&song, *field).into_iter().map(|t| t.to_lowercase()).collect(),
-                    _ => song.items(*field).iter().map(|t| t.to_lowercase()).collect(),
+                let raw: Vec<Cow<str>> = match field {
+                    Field::Title => text(&song, *field).into_iter().collect(),
+                    _ => song.items(*field),
                 };
+                let have: Vec<String> = raw.iter().map(|t| t.to_lowercase()).collect();
                 let want = self.text.as_str();
                 let any = |test: &dyn Fn(&str) -> bool| have.iter().any(|h| test(h));
+                let any_raw = |test: &dyn Fn(&str) -> bool| raw.iter().any(|h| test(h));
                 match op {
                     Op::IsEmpty => have.is_empty(),
                     Op::IsNotEmpty => !have.is_empty(),
-                    Op::Is => any(&|h| h == want),
-                    Op::IsNot => !any(&|h| h == want),
+                    Op::Is => any(&|h| matching::close(h, want)),
+                    Op::IsNot => !any(&|h| matching::close(h, want)),
+                    Op::Like => any(&|h| matching::fuzzy(h, want).is_some()),
+                    Op::NotLike => !any(&|h| matching::fuzzy(h, want).is_some()),
+                    Op::Exactly => any_raw(&|h| h == value.trim()),
+                    Op::NotExactly => !any_raw(&|h| h == value.trim()),
                     Op::Contains => any(&|h| h.contains(want)),
                     Op::NotContains => !any(&|h| h.contains(want)),
                     Op::StartsWith => any(&|h| h.starts_with(want)),
@@ -389,17 +456,24 @@ impl<'a> Test<'a> {
                     (Op::Is, Some(h), [Some(w), _]) => (h - w).abs() <= 1e-9,
                     (Op::Greater, Some(h), [Some(w), _]) => h > w,
                     (Op::Less, Some(h), [Some(w), _]) => h < w,
-                    (Op::InRange, Some(h), [Some(a), Some(b)]) => (a.min(b)..=a.max(b)).contains(&h),
+                    (Op::AtLeast, Some(h), [Some(w), _]) => h >= w - 1e-9,
+                    (Op::AtMost, Some(h), [Some(w), _]) => h <= w + 1e-9,
+                    (Op::InRange, Some(h), [Some(a), Some(b)]) => (a.min(b) - 1e-9..=a.max(b) + 1e-9).contains(&h),
                     _ => false,
                 }
             }
             Kind::Date => {
                 let Some(have) = song.number(*field) else { return false };
-                match (op, self.numbers[0]) {
-                    (Op::InLast, Some(since)) => have >= since,
-                    (Op::NotInLast, Some(since)) => have < since,
-                    (Op::Before, Some(day)) => have < day,
-                    (Op::After, Some(day)) => have >= day + 86_400.0,
+                match (op, self.periods) {
+                    (Op::InLast, [Some((since, _)), _]) => have >= since,
+                    (Op::NotInLast, [Some((since, _)), _]) => have < since,
+                    (Op::On, [Some((start, end)), _]) => (start..end).contains(&have),
+                    (Op::NotOn, [Some((start, end)), _]) => !(start..end).contains(&have),
+                    (Op::Before, [Some((start, _)), _]) => have < start,
+                    (Op::After, [Some((_, end)), _]) => have >= end,
+                    (Op::AtLeast, [Some((start, _)), _]) => have >= start,
+                    (Op::AtMost, [Some((_, end)), _]) => have < end,
+                    (Op::InRange, [Some(a), Some(b)]) => (a.0.min(b.0)..a.1.max(b.1)).contains(&have),
                     _ => false,
                 }
             }
@@ -415,10 +489,20 @@ impl<'a> Test<'a> {
     }
 }
 
-/// `2026-10-20` (UTC) as Unix seconds.
-fn parse_date(text: &str) -> Option<i64> {
-    let mut parts = text.trim().splitn(3, '-').map(|p| p.parse::<i64>().ok());
-    let (y, m, d) = (parts.next()??, parts.next()??, parts.next().flatten().unwrap_or(1));
+/// The year, month or day `text` names (`2026`, `2026-10`, `2026-10-20`,
+/// UTC): when it starts and ends, in Unix seconds.
+pub fn parse_period(text: &str) -> Option<(i64, i64)> {
+    let parts = text.trim().split('-').map(|p| p.parse::<i64>().ok()).collect::<Option<Vec<i64>>>()?;
+    match parts[..] {
+        [y] if (1000..=9999).contains(&y) => Some((day(y, 1, 1)?, day(y + 1, 1, 1)?)),
+        [y, m] => Some((day(y, m, 1)?, if m == 12 { day(y + 1, 1, 1)? } else { day(y, m + 1, 1)? })),
+        [y, m, d] => day(y, m, d).map(|start| (start, start + 86_400)),
+        _ => None,
+    }
+}
+
+/// The day `y-m-d` (UTC) starts, in Unix seconds.
+fn day(y: i64, m: i64, d: i64) -> Option<i64> {
     if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
         return None;
     }
@@ -512,13 +596,16 @@ fn sorted<'a>(mut songs: Vec<(&'a str, &'a Song)>, order: Order, seed: u64, arti
 }
 
 impl Rules {
-    fn matching<'a>(&self, songs: impl Iterator<Item = (&'a str, &'a Song)>, now: i64) -> Vec<(&'a str, &'a Song)> {
+    /// Whether a song matches the rules (their values parsed once, here),
+    /// `now` (Unix seconds) saying when "the last N days" are.
+    pub fn matcher(&self, now: i64) -> impl Fn(&Song) -> bool + '_ {
         let tests: Vec<Test> = self.rules.iter().map(|r| Test::new(r, now)).collect();
-        songs
-            .filter(|(_, song)| {
-                tests.is_empty() || if self.any { tests.iter().any(|t| t.matches(song)) } else { tests.iter().all(|t| t.matches(song)) }
-            })
-            .collect()
+        move |song| tests.is_empty() || if self.any { tests.iter().any(|t| t.matches(song)) } else { tests.iter().all(|t| t.matches(song)) }
+    }
+
+    fn matching<'a>(&self, songs: impl Iterator<Item = (&'a str, &'a Song)>, now: i64) -> Vec<(&'a str, &'a Song)> {
+        let matches = self.matcher(now);
+        songs.filter(|(_, song)| matches(song)).collect()
     }
 
     /// `songs` cut to the limit (filling greedily in its order: a song
@@ -729,12 +816,31 @@ mod tests {
         assert_eq!(names(&lib, &rules.songs(&lib, 0, false)), ["a.ogg", "b.ogg", "c.ogg", "d.ogg"]);
         let rules = Rules { rules: vec![rule(Field::Album, Op::IsEmpty, "")], ..Rules::default() };
         assert_eq!(names(&lib, &rules.songs(&lib, 0, false)), ["d.ogg", "e.ogg"]);
-        let rules = Rules { rules: vec![Rule { field: Field::Length, op: Op::InRange, value: "3:00".into(), to: "250".into() }], ..Rules::default() };
+        let rules = Rules { rules: vec![Rule { field: Field::Length, op: Op::InRange, value: "3:00".into(), to: "4:10".into() }], ..Rules::default() };
         assert_eq!(names(&lib, &rules.songs(&lib, 0, false)), ["a.ogg", "c.ogg"]);
         let rules = Rules { rules: vec![rule(Field::Imported, Op::InLast, "1")], ..Rules::default() };
         assert_eq!(names(&lib, &rules.songs(&lib, 86_400 + 300, false)), ["c.ogg", "d.ogg", "e.ogg"]);
-        assert_eq!(parse_date("1970-01-02"), Some(86_400));
-        assert_eq!(parse_date("2026-10-20").map(fields::date).as_deref(), Some("2026-10-20"));
+        assert_eq!(parse_period("1970-01-02"), Some((86_400, 2 * 86_400)));
+        assert_eq!(parse_period("2026-10-20").map(|(start, _)| fields::date(start)).as_deref(), Some("2026-10-20"));
+        assert_eq!(parse_period("2026-12").map(|(a, b)| (fields::date(a), fields::date(b))), Some(("2026-12-01".into(), "2027-01-01".into())));
+        assert_eq!(parse_period("2026").map(|(_, b)| fields::date(b)).as_deref(), Some("2027-01-01"));
+    }
+
+    #[test]
+    fn values_with_units() {
+        assert_eq!(parse(Field::Length, "6:00"), Some(360.0));
+        assert_eq!(parse(Field::Length, "1:02:30"), Some(3750.0));
+        assert_eq!(parse(Field::Length, "6"), Some(360.0), "minutes");
+        assert_eq!(parse(Field::Length, "6m30s"), Some(390.0));
+        assert_eq!(parse(Field::Length, "1h 2m"), Some(3720.0));
+        assert_eq!(parse(Field::Length, "90s"), Some(90.0));
+        assert_eq!(parse(Field::Length, "6x"), None);
+        assert_eq!(parse(Field::Size, "1.5GB"), Some(1500.0));
+        assert_eq!(parse(Field::Size, "800kb"), Some(0.8));
+        assert_eq!(parse(Field::Size, "5"), Some(5.0));
+        assert_eq!(parse_age("2w"), Some(14.0 * 86_400.0));
+        assert_eq!(parse_age("6mo"), Some(180.0 * 86_400.0));
+        assert_eq!(parse_age("30"), Some(30.0 * 86_400.0));
     }
 
     #[test]
