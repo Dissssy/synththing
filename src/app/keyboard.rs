@@ -71,7 +71,10 @@ impl App {
         egui::Grid::new("keyboard_preferences").num_columns(3).spacing([12.0, 6.0]).striped(true).show(ui, |ui| {
             for command in Command::ALL {
                 ui.label(command.name());
-                ui.horizontal_wrapped(|ui| {
+                ui.horizontal(|ui| {
+                    // One line: wrapped, the grid's column stays as narrow as
+                    // it started, splitting "Space" and pushing + under it.
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     let keys: Vec<_> = keymap.keys(command).copied().collect();
                     for (slot, shortcut) in keys.iter().enumerate() {
                         let capture = Capture { command, slot: Some(slot) };
