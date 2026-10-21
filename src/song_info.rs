@@ -67,6 +67,12 @@ fn set_tag(meta: &mut Meta, key: &str, value: &str) {
         "albumartist" => text(&mut meta.album_artist),
         "composer" => text(&mut meta.composer),
         "genre" => text(&mut meta.genre),
+        // (Symphonia's names, then ffmpeg's.)
+        "sorttracktitle" | "titlesort" | "sortname" => text(&mut meta.sort_title),
+        "sortalbum" | "albumsort" => text(&mut meta.sort_album),
+        "sortartist" | "artistsort" => text(&mut meta.sort_artist),
+        "sortalbumartist" | "albumartistsort" => text(&mut meta.sort_album_artist),
+        "sortcomposer" | "composersort" => text(&mut meta.sort_composer),
         "tracknumber" | "track" => number(&mut meta.track),
         "discnumber" | "disc" => number(&mut meta.disc),
         "date" | "year" | "releasedate" | "originaldate" => number(&mut meta.year),

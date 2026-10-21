@@ -292,6 +292,8 @@ impl SplitBy {
 pub struct Group {
     pub key: String,
     pub title: String,
+    /// What it sorts by (`fields::sort_text`).
+    pub sort: String,
     pub subtitle: Option<String>,
     /// The artists its subtitle names (an album's), each a link to theirs.
     pub artists: Vec<String>,
@@ -437,12 +439,14 @@ struct SortKey {
     numbers: [u64; 3],
 }
 
-fn sort_key(order: Order, seed: u64, key: &str, song: &Song) -> SortKey {
+/// What a song sorts by in `order`, names by what they sort as
+/// (`Facts::sort_text`, past a leading article unless `articles`).
+fn sort_key(order: Order, seed: u64, key: &str, song: &Song, articles: bool) -> SortKey {
     let facts = Facts::of(song);
     let lower = |field: Field| text(&facts, field).map(|t| t.to_lowercase()).unwrap_or_else(|| "\u{10ffff}".into());
     // (Spellings of one name together, as they're grouped.)
-    let name = |field: Field| text(&facts, field).map(|t| fields::group_key(&t, "")).unwrap_or_else(|| "\u{10ffff}".into());
-    let title = lower(Field::Title);
+    let name = |field: Field| facts.sort_text(field, articles).map(|t| fields::group_key(&t, "")).unwrap_or_else(|| "\u{10ffff}".into());
+    let title = facts.sort_text(Field::Title, articles).unwrap_or_else(|| lower(Field::FileName));
     match order {
         Order::Random => SortKey { numbers: [shuffled(seed, key), 0, 0], ..SortKey::default() },
         Order::Title => SortKey { text: [title, String::new(), String::new()], ..SortKey::default() },
@@ -486,8 +490,8 @@ fn filed_under<'a>(song: &Facts<'a>) -> Vec<Cow<'a, str>> {
 }
 
 /// `songs` (by key) in `order`, ties going by key.
-fn sorted<'a>(mut songs: Vec<(&'a str, &'a Song)>, order: Order, seed: u64) -> Vec<(&'a str, &'a Song)> {
-    let mut keyed: Vec<(SortKey, (&str, &Song))> = songs.drain(..).map(|(k, s)| (sort_key(order, seed, k, s), (k, s))).collect();
+fn sorted<'a>(mut songs: Vec<(&'a str, &'a Song)>, order: Order, seed: u64, articles: bool) -> Vec<(&'a str, &'a Song)> {
+    let mut keyed: Vec<(SortKey, (&str, &Song))> = songs.drain(..).map(|(k, s)| (sort_key(order, seed, k, s, articles), (k, s))).collect();
     keyed.sort_by(|(a, x), (b, y)| compare(order, a, b).then_with(|| x.0.cmp(y.0)));
     keyed.into_iter().map(|(_, song)| song).collect()
 }
@@ -505,12 +509,12 @@ impl Rules {
     /// `songs` cut to the limit (filling greedily in its order: a song
     /// that would go over is left out, one after it may still fit), in
     /// the playlist's order.
-    fn limited<'a>(&self, songs: Vec<(&'a str, &'a Song)>) -> Vec<(&'a str, &'a Song)> {
+    fn limited<'a>(&self, songs: Vec<(&'a str, &'a Song)>, articles: bool) -> Vec<(&'a str, &'a Song)> {
         let songs = match &self.limit {
             Some(limit) => {
                 let cap = limit.unit.scale(limit.amount);
                 let mut total = 0.0;
-                sorted(songs, limit.by, self.seed)
+                sorted(songs, limit.by, self.seed, articles)
                     .into_iter()
                     .filter(|(_, song)| {
                         let size = limit.unit.of(song);
@@ -524,24 +528,26 @@ impl Rules {
             }
             None => songs,
         };
-        sorted(songs, self.order, self.seed)
+        sorted(songs, self.order, self.seed, articles)
     }
 
     /// The songs (keys) of a smart playlist with this definition, from
     /// the library in `store` (those removed here left out), `now`
-    /// (Unix seconds) saying when "the last N days" are.
-    pub fn songs(&self, store: &SongStore, now: i64) -> Vec<String> {
+    /// (Unix seconds) saying when "the last N days" are, names sorted
+    /// past a leading article unless `articles`.
+    pub fn songs(&self, store: &SongStore, now: i64, articles: bool) -> Vec<String> {
         let candidates = store.known().filter(|(key, _)| !store.is_blocked(key));
-        self.limited(self.matching(candidates, now)).into_iter().map(|(key, _)| key.to_string()).collect()
+        self.limited(self.matching(candidates, now), articles).into_iter().map(|(key, _)| key.to_string()).collect()
     }
 
     /// The playlists of a ruleset with this definition (none if it isn't
-    /// one), by title: the songs that match, each in its value's
+    /// one), in the order their titles sort (as their songs say they
+    /// sort, else past a leading article unless `articles`): the songs that match, each in its value's
     /// playlist (a song without one is in none), limited and ordered in
     /// each. Values are told apart by `fields::group_key` (past the
     /// characters in `ignore`), each playlist titled with the best of its
     /// songs' spellings.
-    pub fn groups(&self, store: &SongStore, now: i64, ignore: &str) -> Vec<Group> {
+    pub fn groups(&self, store: &SongStore, now: i64, ignore: &str, articles: bool) -> Vec<Group> {
         /// A playlist being made: its songs' spellings of its title and
         /// subtitle (an album's: its album artists', else its artists'),
         /// and its songs.
@@ -550,6 +556,8 @@ impl Rules {
             titles: Vec<Cow<'a, str>>,
             subtitles: Vec<Cow<'a, str>>,
             artists: Vec<Cow<'a, str>>,
+            /// What its songs say its title sorts as.
+            sorts: Vec<Cow<'a, str>>,
             /// A song says it's on a compilation.
             compilation: bool,
             songs: Vec<(&'a str, &'a Song)>,
@@ -581,11 +589,21 @@ impl Rules {
                 SplitBy::Year => facts.value(Field::Year).map(|y| (Cow::Owned(y.text), None)).into_iter().collect(),
                 SplitBy::Tag => song.tags.iter().filter_map(|id| tags.get(id)).map(|t| (Cow::Borrowed(t.name.as_str()), None)).collect(),
             };
+            // (What a name sorts as is for a song with one.)
+            let sort_as = match split.by {
+                SplitBy::Artist => Some(Field::SortArtist),
+                SplitBy::AlbumArtist if facts.text(Field::AlbumArtist).is_some() => Some(Field::SortAlbumArtist),
+                SplitBy::AlbumArtist => Some(Field::SortArtist),
+                SplitBy::Composer => Some(Field::SortComposer),
+                _ => None,
+            };
+            let sort_as = sort_as.filter(|_| values.len() == 1).and_then(|f| facts.text(f));
             for (title, subtitle) in values {
                 let group_of = format!("{}\u{0}{}", fields::group_key(&title, ignore), subtitle.as_deref().map(|s| fields::group_key(s, ignore)).unwrap_or_default());
                 let making = groups.entry(group_of).or_default();
                 making.titles.push(title);
                 making.subtitles.extend(subtitle);
+                making.sorts.extend(sort_as.clone());
                 making.songs.push((key, song));
             }
         }
@@ -599,10 +617,11 @@ impl Rules {
                 making.subtitles.extend(album_artist);
                 making.artists.extend(artist);
                 making.compilation |= Facts::of(song).flag(Field::Compilation);
+                making.sorts.extend(Facts::of(song).text(Field::SortAlbum));
                 making.songs.push((key, song));
             }
         }
-        groups
+        let mut groups: Vec<Group> = groups
             .into_iter()
             .filter(|(_, making)| making.songs.len() >= split.min.max(1))
             .map(|(key, making)| {
@@ -619,15 +638,23 @@ impl Rules {
                     (true, true) if making.compilation => Some(VARIOUS_ARTISTS.to_string()),
                     (true, true) => None,
                 };
+                let title = fields::best_spelling(making.titles.iter().map(|t| t.as_ref())).unwrap_or_default().to_string();
+                let sort = match fields::best_spelling(making.sorts.iter().map(|t| t.as_ref())) {
+                    Some(sort) => sort.to_lowercase(),
+                    None => fields::sort_text(&title, articles),
+                };
                 Group {
                     key,
-                    title: fields::best_spelling(making.titles.iter().map(|t| t.as_ref())).unwrap_or_default().to_string(),
+                    title,
+                    sort,
                     subtitle,
                     artists,
-                    songs: self.limited(making.songs).into_iter().map(|(key, _)| key.to_string()).collect(),
+                    songs: self.limited(making.songs, articles).into_iter().map(|(key, _)| key.to_string()).collect(),
                 }
             })
-            .collect()
+            .collect();
+        groups.sort_by(|a, b| a.sort.cmp(&b.sort).then_with(|| a.key.cmp(&b.key)));
+        groups
     }
 }
 
@@ -678,15 +705,15 @@ mod tests {
         let lib = library();
         let rule = |field, op, value: &str| Rule { field, op, value: value.into(), to: String::new() };
         let mut rules = Rules { rules: vec![rule(Field::Artist, Op::Is, "NUJABES"), rule(Field::Starred, Op::IsTrue, "")], ..Rules::default() };
-        assert_eq!(names(&lib, &rules.songs(&lib, 0)), ["a.ogg"]);
+        assert_eq!(names(&lib, &rules.songs(&lib, 0, false)), ["a.ogg"]);
         rules.any = true;
-        assert_eq!(names(&lib, &rules.songs(&lib, 0)), ["a.ogg", "b.ogg", "c.ogg", "d.ogg"]);
+        assert_eq!(names(&lib, &rules.songs(&lib, 0, false)), ["a.ogg", "b.ogg", "c.ogg", "d.ogg"]);
         let rules = Rules { rules: vec![rule(Field::Album, Op::IsEmpty, "")], ..Rules::default() };
-        assert_eq!(names(&lib, &rules.songs(&lib, 0)), ["d.ogg", "e.ogg"]);
+        assert_eq!(names(&lib, &rules.songs(&lib, 0, false)), ["d.ogg", "e.ogg"]);
         let rules = Rules { rules: vec![Rule { field: Field::Length, op: Op::InRange, value: "3:00".into(), to: "250".into() }], ..Rules::default() };
-        assert_eq!(names(&lib, &rules.songs(&lib, 0)), ["a.ogg", "c.ogg"]);
+        assert_eq!(names(&lib, &rules.songs(&lib, 0, false)), ["a.ogg", "c.ogg"]);
         let rules = Rules { rules: vec![rule(Field::Imported, Op::InLast, "1")], ..Rules::default() };
-        assert_eq!(names(&lib, &rules.songs(&lib, 86_400 + 300)), ["c.ogg", "d.ogg", "e.ogg"]);
+        assert_eq!(names(&lib, &rules.songs(&lib, 86_400 + 300, false)), ["c.ogg", "d.ogg", "e.ogg"]);
         assert_eq!(parse_date("1970-01-02"), Some(86_400));
         assert_eq!(parse_date("2026-10-20").map(fields::date).as_deref(), Some("2026-10-20"));
     }
@@ -695,22 +722,22 @@ mod tests {
     fn limits_fill_in_their_order() {
         let lib = library();
         let rules = Rules { limit: Some(Limit { amount: 2.0, unit: Unit::Items, by: Order::NewestAdded }), ..Rules::default() };
-        assert_eq!(names(&lib, &rules.songs(&lib, 0)), ["d.ogg", "e.ogg"], "newest two, by title");
+        assert_eq!(names(&lib, &rules.songs(&lib, 0, false)), ["d.ogg", "e.ogg"], "newest two, by title");
         // 9 minutes, by album: 240 and 300 fit, 200 doesn't, the one of
         // unknown length does, 100 doesn't.
         let rules = Rules { limit: Some(Limit { amount: 9.0, unit: Unit::Minutes, by: Order::Album }), order: Order::Album, ..Rules::default() };
-        assert_eq!(names(&lib, &rules.songs(&lib, 0)), ["c.ogg", "b.ogg", "e.ogg"]);
+        assert_eq!(names(&lib, &rules.songs(&lib, 0, false)), ["c.ogg", "b.ogg", "e.ogg"]);
     }
 
     #[test]
     fn random_is_seeded_and_stable() {
         let lib = library();
         let rules = Rules { order: Order::Random, seed: 7, ..Rules::default() };
-        let first = rules.songs(&lib, 0);
-        assert_eq!(first, rules.songs(&lib, 0), "the same every time");
+        let first = rules.songs(&lib, 0, false);
+        assert_eq!(first, rules.songs(&lib, 0, false), "the same every time");
         let reseeded = Rules { seed: 8, ..rules.clone() };
         let mut a = first.clone();
-        let mut b = reseeded.songs(&lib, 0);
+        let mut b = reseeded.songs(&lib, 0, false);
         a.sort();
         b.sort();
         assert_eq!(a, b, "the same songs");
@@ -723,7 +750,7 @@ mod tests {
             ("e.ogg", Meta::default(), &[], 0),
             ("f.ogg", Meta::default(), &[], 0),
         ]);
-        let mut more = rules.songs(&all, 0);
+        let mut more = rules.songs(&all, 0, false);
         let new = format!("{:064x}.ogg", 6);
         more.retain(|k| *k != new);
         assert_eq!(more, first);
@@ -733,16 +760,16 @@ mod tests {
     fn rulesets_split_into_playlists() {
         let lib = library();
         let [(_, artists), (_, albums)] = builtin();
-        let groups = artists.rules.groups(&lib, 0, "");
+        let groups = artists.rules.groups(&lib, 0, "", false);
         let titles: Vec<&str> = groups.iter().map(|g| g.title.as_str()).collect();
         assert_eq!(titles, ["Basil Poledouris", "Nujabes"], "case-insensitive, songs without an artist in none");
         assert_eq!(names(&lib, &groups[1].songs), ["c.ogg", "b.ogg", "a.ogg"], "by album, then track");
-        let groups = albums.rules.groups(&lib, 0, "");
+        let groups = albums.rules.groups(&lib, 0, "", false);
         let titles: Vec<(&str, Option<&str>)> = groups.iter().map(|g| (g.title.as_str(), g.subtitle.as_deref())).collect();
         assert_eq!(titles, [("Metaphorical Music", Some("nujabes")), ("Modal Soul", Some("Nujabes"))]);
         assert_eq!(names(&lib, &groups[1].songs), ["b.ogg", "a.ogg"]);
         let at_least_two = Rules { split: Some(Split { by: SplitBy::AlbumArtist, min: 2 }), ..artists.rules.clone() };
-        assert_eq!(at_least_two.groups(&lib, 0, "").len(), 1);
+        assert_eq!(at_least_two.groups(&lib, 0, "", false).len(), 1);
         // "<OST>" and "OST" are one album, under the spelling most of its
         // songs have.
         let ost = store(&[
@@ -750,7 +777,7 @@ mod tests {
             ("b.ogg", meta("COMPOSER", "OST", 2, 1.0), &[], 0),
             ("c.ogg", meta("composer", "<OST>", 3, 1.0), &[], 0),
         ]);
-        let groups = albums.rules.groups(&ost, 0, "");
+        let groups = albums.rules.groups(&ost, 0, "", false);
         let titles: Vec<(&str, Option<&str>)> = groups.iter().map(|g| (g.title.as_str(), g.subtitle.as_deref())).collect();
         assert_eq!(titles, [("<OST>", Some("Composer"))]);
         assert_eq!(names(&ost, &groups[0].songs), ["a.ogg", "b.ogg", "c.ogg"]);
@@ -762,7 +789,7 @@ mod tests {
             ("c.ogg", Meta { album_artist: Some("Kan R. Gao".into()), ..meta("Kan Gao", "A Bird Story", 2, 1.0) }, &[], 0),
             ("d.ogg", Meta { album_artist: Some("Kan (Reives) Gao".into()), ..meta("Kan Gao", "A Bird Story", 1, 1.0) }, &[], 0),
         ]);
-        let groups = albums.rules.groups(&various, 0, "");
+        let groups = albums.rules.groups(&various, 0, "", false);
         let titles: Vec<(&str, Option<&str>)> = groups.iter().map(|g| (g.title.as_str(), g.subtitle.as_deref())).collect();
         assert_eq!(titles, [("A Bird Story", Some("Kan (Reives) Gao")), ("Finding Paradise <OST>", Some(VARIOUS_ARTISTS))]);
         assert_eq!(names(&various, &groups[0].songs), ["d.ogg", "c.ogg"]);
@@ -770,9 +797,9 @@ mod tests {
         // An album by two album artists names both, and is in each one's
         // playlist of By Artist.
         let duo = store(&[("a.ogg", Meta { album_artist: Some("Uyama Hiroto; Nujabes".into()), ..meta("Nujabes", "Modal Soul", 1, 1.0) }, &[], 0)]);
-        let groups = albums.rules.groups(&duo, 0, "");
+        let groups = albums.rules.groups(&duo, 0, "", false);
         assert_eq!((groups[0].subtitle.as_deref(), groups[0].artists.as_slice()), (Some("Uyama Hiroto & Nujabes"), &["Uyama Hiroto".to_string(), "Nujabes".to_string()][..]));
-        let titles: Vec<String> = artists.rules.groups(&duo, 0, "").into_iter().map(|g| g.title).collect();
+        let titles: Vec<String> = artists.rules.groups(&duo, 0, "", false).into_iter().map(|g| g.title).collect();
         assert_eq!(titles, ["Nujabes", "Uyama Hiroto"]);
         // A compilation (with no album artist) is by Various Artists, and
         // filed whole under them.
@@ -780,8 +807,8 @@ mod tests {
             ("a.ogg", Meta { compilation: true, ..meta("Nujabes", "Hydeout Productions", 1, 1.0) }, &[], 0),
             ("b.ogg", meta("Nujabes", "Hydeout Productions", 2, 1.0), &[], 0),
         ]);
-        assert_eq!(albums.rules.groups(&compilation, 0, "")[0].subtitle.as_deref(), Some(VARIOUS_ARTISTS));
-        let titles: Vec<String> = artists.rules.groups(&compilation, 0, "").into_iter().map(|g| g.title).collect();
+        assert_eq!(albums.rules.groups(&compilation, 0, "", false)[0].subtitle.as_deref(), Some(VARIOUS_ARTISTS));
+        let titles: Vec<String> = artists.rules.groups(&compilation, 0, "", false).into_iter().map(|g| g.title).collect();
         assert_eq!(titles, ["Nujabes", VARIOUS_ARTISTS], "only the song that says so");
         // A song is in each of its genres.
         let genres = store(&[
@@ -789,10 +816,10 @@ mod tests {
             ("b.ogg", Meta { genre: Some("rock; Classical".into()), ..Meta::default() }, &[], 0),
         ]);
         let by_genre = Rules { split: Some(Split { by: SplitBy::Genre, min: 1 }), ..Rules::default() };
-        let groups = by_genre.groups(&genres, 0, "");
+        let groups = by_genre.groups(&genres, 0, "", false);
         let found: Vec<(&str, usize)> = groups.iter().map(|g| (g.title.as_str(), g.songs.len())).collect();
         assert_eq!(found, [("Avant-Garde", 1), ("Classical", 1), ("Rock", 2)]);
         let rock = Rules { rules: vec![Rule { field: Field::Genre, op: Op::Is, value: "rock".into(), to: String::new() }], ..Rules::default() };
-        assert_eq!(names(&genres, &rock.songs(&genres, 0)), ["a.ogg", "b.ogg"]);
+        assert_eq!(names(&genres, &rock.songs(&genres, 0, false)), ["a.ogg", "b.ogg"]);
     }
 }

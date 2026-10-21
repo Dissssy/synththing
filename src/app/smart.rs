@@ -57,7 +57,7 @@ impl App {
     /// the song it's at (or letting go of the playlist, if that song's no
     /// longer on it).
     pub(super) fn refresh_smart(&mut self, force: bool) {
-        let revision = self.songs.revision();
+        let revision = self.groups_revision();
         if !force && self.smart_seen == Some(revision) {
             return;
         }
@@ -67,7 +67,7 @@ impl App {
         for (i, stored) in self.playlists.lists.iter_mut().enumerate() {
             let Some(rules) = &stored.playlist.smart else { continue };
             let entries: Vec<PlaylistEntry> = rules
-                .songs(&self.songs, now)
+                .songs(&self.songs, now, self.config.sort_with_articles)
                 .into_iter()
                 .map(|key| PlaylistEntry { path: self.songs.path(&key), soundfont: None, missing: !self.songs.has(&key) })
                 .collect();
@@ -125,7 +125,7 @@ impl App {
         let revision = self.groups_revision();
         let Some(editor) = &mut self.rules_editor else { return };
         if editor.preview.as_ref().is_none_or(|(seen, rules, _)| *seen != revision || *rules != editor.rules) {
-            editor.preview = Some((revision, editor.rules.clone(), summary(&editor.rules, &self.songs, &self.config.group_ignore)));
+            editor.preview = Some((revision, editor.rules.clone(), summary(&editor.rules, &self.songs, &self.config.group_ignore, self.config.sort_with_articles)));
         }
         let ruleset = matches!(editor.editing, Editing::Ruleset(_));
         let new = matches!(editor.editing, Editing::Playlist(None) | Editing::Ruleset(None));
@@ -224,12 +224,13 @@ impl App {
         }
     }
 
-    /// What rulesets' playlists are worked out from changes: the library,
-    /// or the characters grouping ignores.
+    /// What smart playlists and rulesets' playlists are worked out from
+    /// changes: the library, the characters grouping ignores, or how names
+    /// sort.
     fn groups_revision(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (self.songs.revision(), &self.config.group_ignore).hash(&mut hasher);
+        (self.songs.revision(), &self.config.group_ignore, self.config.sort_with_articles).hash(&mut hasher);
         hasher.finish()
     }
 
@@ -243,7 +244,7 @@ impl App {
         {
             return groups.clone();
         }
-        let groups = Arc::new(rules.groups(&self.songs, settings_sync::now(), &self.config.group_ignore));
+        let groups = Arc::new(rules.groups(&self.songs, settings_sync::now(), &self.config.group_ignore, self.config.sort_with_articles));
         self.ruleset_groups.insert(id.to_string(), (revision, rules.clone(), groups.clone()));
         groups
     }
@@ -305,14 +306,14 @@ impl App {
 pub(super) type RulesetGroups = BTreeMap<String, (u64, Rules, Arc<Vec<Group>>)>;
 
 /// What `rules` come to in `store` now, in a line.
-fn summary(rules: &Rules, store: &crate::song_store::SongStore, ignore: &str) -> String {
+fn summary(rules: &Rules, store: &crate::song_store::SongStore, ignore: &str, articles: bool) -> String {
     let now = settings_sync::now();
     if rules.split.is_some() {
-        let groups = rules.groups(store, now, ignore);
+        let groups = rules.groups(store, now, ignore, articles);
         let songs: usize = groups.iter().map(|g| g.songs.len()).sum();
         format!("{} playlist{}, {songs} songs in all", groups.len(), if groups.len() == 1 { "" } else { "s" })
     } else {
-        let songs = rules.songs(store, now).len();
+        let songs = rules.songs(store, now, articles).len();
         format!("{songs} song{} now", if songs == 1 { "" } else { "s" })
     }
 }

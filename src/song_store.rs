@@ -101,6 +101,17 @@ pub struct Meta {
     /// Bytes.
     #[serde(rename = "s")]
     pub size: u64,
+    /// What its title, album, artist, album artist and composer sort as.
+    #[serde(rename = "st", skip_serializing_if = "Option::is_none")]
+    pub sort_title: Option<String>,
+    #[serde(rename = "sal", skip_serializing_if = "Option::is_none")]
+    pub sort_album: Option<String>,
+    #[serde(rename = "sar", skip_serializing_if = "Option::is_none")]
+    pub sort_artist: Option<String>,
+    #[serde(rename = "saa", skip_serializing_if = "Option::is_none")]
+    pub sort_album_artist: Option<String>,
+    #[serde(rename = "sc", skip_serializing_if = "Option::is_none")]
+    pub sort_composer: Option<String>,
     /// Its album's a compilation (by various artists).
     #[serde(rename = "cp", default, skip_serializing_if = "std::ops::Not::not")]
     pub compilation: bool,

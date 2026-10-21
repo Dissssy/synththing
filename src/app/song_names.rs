@@ -136,6 +136,7 @@ fn example_info() -> SongInfo {
         length: Some(203.0),
         size: 48_213,
         compilation: true,
+        ..Meta::default()
     };
     SongInfo { meta, bpm: Some(92.0), notes: Some(4210), ..SongInfo::default() }
 }

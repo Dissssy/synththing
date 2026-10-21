@@ -329,12 +329,13 @@ impl App {
             .map(|stored| Group {
                 key: stored.id.clone(),
                 title: stored.playlist.name.clone(),
+                sort: fields::sort_text(&stored.playlist.name, self.config.sort_with_articles),
                 subtitle: None,
                 artists: Vec::new(),
                 songs: stored.playlist.entries.iter().filter_map(|e| crate::song_store::key_in(dir, &e.path).map(str::to_string)).collect(),
             })
             .collect();
-        groups.sort_by_cached_key(|g| g.title.to_lowercase());
+        groups.sort_by(|a, b| a.sort.cmp(&b.sort));
         let groups = Arc::new(groups);
         self.groupings.playlists = Some((fingerprint, groups.clone()));
         (fingerprint, groups)
