@@ -323,36 +323,47 @@ impl App {
 }
 
 /// Two handles over `0..length` seconds, `start` and `stop`, each dragged
-/// (the nearer one to where the drag begins), at least a second apart:
-/// whether either moved.
+/// by a press right on it, at least a second apart: whether either moved.
 fn time_range(ui: &mut egui::Ui, start: &mut f64, stop: &mut f64, length: f64) -> bool {
     let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
     let track = rect.shrink2(egui::vec2(8.0, 0.0));
     let x_of = |t: f64| track.left() + (t / length) as f32 * track.width();
     let t_of = |x: f32| f64::from(((x - track.left()) / track.width()).clamp(0.0, 1.0)) * length;
+    const GRAB: f32 = 8.0;
+    // The handle under `x`, if one is (`true`: the stop's), the nearer of
+    // the two where they meet.
+    let (start_x, stop_x) = (x_of(*start), x_of(*stop));
+    let under = move |x: f32| {
+        let (to_start, to_stop) = ((x - start_x).abs(), (x - stop_x).abs());
+        (to_start.min(to_stop) <= GRAB).then_some(to_stop < to_start)
+    };
+    let id = response.id;
     let mut changed = false;
     if let Some(pointer) = response.interact_pointer_pos() {
-        // (Which handle's kept for the drag, so they can't swap halfway.)
-        let id = response.id;
-        if response.drag_started() || response.clicked() {
-            let stop_nearer = (pointer.x - x_of(*stop)).abs() < (pointer.x - x_of(*start)).abs();
-            ui.data_mut(|d| d.insert_temp(id, stop_nearer));
+        // (The handle pressed is kept for the drag, so they can't swap
+        // halfway; a press beside them grabs nothing.)
+        if ui.input(|i| i.pointer.any_pressed()) {
+            ui.data_mut(|d| d.insert_temp(id, under(pointer.x)));
         }
         let t = t_of(pointer.x);
-        if ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false) {
-            *stop = t.max(*start + 1.0).min(length);
-        } else {
-            *start = t.min(*stop - 1.0).max(0.0);
+        match ui.data(|d| d.get_temp::<Option<bool>>(id)).flatten() {
+            Some(true) => *stop = t.max(*start + 1.0).min(length),
+            Some(false) => *start = t.min(*stop - 1.0).max(0.0),
+            None => {}
         }
-        changed = true;
+        changed = ui.data(|d| d.get_temp::<Option<bool>>(id)).flatten().is_some();
+    }
+    let over = response.hover_pos().and_then(|p| under(p.x)).is_some();
+    if over || response.dragged() {
+        ui.ctx().set_cursor_icon(if response.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
     }
     let visuals = ui.visuals();
     let y = rect.center().y;
     let painter = ui.painter();
     painter.line_segment([egui::pos2(track.left(), y), egui::pos2(track.right(), y)], egui::Stroke::new(4.0, visuals.widgets.inactive.bg_fill));
     painter.line_segment([egui::pos2(x_of(*start), y), egui::pos2(x_of(*stop), y)], egui::Stroke::new(4.0, visuals.selection.bg_fill));
-    let handle = if response.hovered() || response.dragged() { visuals.widgets.hovered.fg_stroke.color } else { visuals.widgets.inactive.fg_stroke.color };
+    let handle = if over || response.dragged() { visuals.widgets.hovered.fg_stroke.color } else { visuals.widgets.inactive.fg_stroke.color };
     for t in [*start, *stop] {
         painter.circle_filled(egui::pos2(x_of(t), y), 6.0, handle);
     }
