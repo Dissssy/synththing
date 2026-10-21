@@ -11,6 +11,7 @@ use std::time::Duration;
 use ureq::Agent;
 
 use super::identity::Identity;
+use crate::build_info::Online;
 use super::{
     receipt_message, request_message, source_message, verify_hex, AdminAction, ApiError, EncoreState, FeedbackRequest, Info, Listing,
     Receipt, ReportRequest, ScriptDetails, Upload, UserInfo, KEY_HEADER, NONCE_HEADER, SHA256_HEADER,
@@ -24,18 +25,32 @@ fn now() -> i64 {
         .unwrap_or_default()
 }
 
-/// Every request to a library server goes through here: in a branch build
-/// (`build_info::online_features`), it fails before it's sent, except
-/// feedback, which is what a branch build is for. (Tests talk to a server
-/// of their own, in a branch build's CI run too.)
+/// The kinds of online feature a request to a library server is part of
+/// (`build_info::Online`): any of them being on lets it through. None for
+/// feedback, which is always sent, a branch build's above all.
+fn kinds(path: &str) -> Option<&'static [Online]> {
+    let section = path.strip_prefix("/api/v1/").unwrap_or(path).split('/').next().unwrap_or_default();
+    match section {
+        _ if path == FEEDBACK_PATH => None,
+        "identity" | "sync" | "relay" | "pair" => Some(&[Online::Sync]),
+        "info" | "documents" => Some(&[Online::Scripts, Online::Sync]),
+        _ => Some(&[Online::Scripts]),
+    }
+}
+
+/// Every request to a library server goes through here: one for an online
+/// feature that's off (in a branch build, `build_info::online`) fails
+/// before it's sent. (Tests talk to a server of their own, in a branch
+/// build's CI run too.)
 fn online_only(
     request: ureq::http::Request<ureq::SendBody>,
     next: ureq::middleware::MiddlewareNext,
 ) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
-    if cfg!(test) || crate::build_info::online_features() || request.uri().path() == FEEDBACK_PATH {
+    let allowed = kinds(request.uri().path()).is_none_or(|kinds| kinds.iter().any(|&kind| crate::build_info::online(kind)));
+    if cfg!(test) || allowed {
         next.handle(request)
     } else {
-        Err(ureq::Error::Io(std::io::Error::other("online features are off in branch builds")))
+        Err(ureq::Error::Io(std::io::Error::other("this online feature is off in branch builds")))
     }
 }
 
@@ -801,6 +816,18 @@ mod tests {
             min_app_version: None,
             remix_of: None,
         }
+    }
+
+    #[test]
+    fn requests_are_sorted_into_online_kinds() {
+        assert_eq!(kinds(FEEDBACK_PATH), None);
+        assert_eq!(kinds("/api/v1/sync/settings/get"), Some(&[Online::Sync][..]));
+        assert_eq!(kinds("/api/v1/relay/inbox/abc"), Some(&[Online::Sync][..]));
+        assert_eq!(kinds("/api/v1/identity/status"), Some(&[Online::Sync][..]));
+        assert_eq!(kinds("/api/v1/pair/abc/take"), Some(&[Online::Sync][..]));
+        assert_eq!(kinds("/api/v1/info"), Some(&[Online::Scripts, Online::Sync][..]));
+        assert_eq!(kinds("/api/v1/scripts/abc/source"), Some(&[Online::Scripts][..]));
+        assert_eq!(kinds("/api/v1/notifications/stream"), Some(&[Online::Scripts][..]));
     }
 
     fn search(query: &str, category: Option<&'static str>, sort: &'static str) -> Search {

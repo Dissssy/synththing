@@ -74,6 +74,13 @@ pub struct Config {
     /// or quits (`Some(false)`); `None` until the first close asks.
     #[serde(default)]
     pub close_to_tray: Option<bool>,
+    /// Keys given to commands in place of their defaults, by command id
+    /// (`commands::Keymap`), synced.
+    #[serde(default)]
+    pub keymap: crate::commands::Bindings,
+    /// This device's own keys for commands, over `keymap`'s.
+    #[serde(default)]
+    pub local_keymap: crate::commands::Bindings,
     /// Preference: which of the last session's settings to start with.
     #[serde(default)]
     pub remember: Remember,
@@ -322,10 +329,10 @@ pub struct LibraryServer {
 }
 
 impl LibrarySettings {
-    /// The servers in use, the official one first. None in a branch build
-    /// (`build_info::online_features`).
+    /// The servers in use, the official one first. None while the Online
+    /// Library is off (a branch build's, `build_info::online`).
     pub fn enabled_servers(&self) -> Vec<String> {
-        if !crate::build_info::online_features() {
+        if !crate::build_info::online(crate::build_info::Online::Scripts) {
             return Vec::new();
         }
         let official = self.official.then(crate::library::official_url);

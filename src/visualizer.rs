@@ -250,7 +250,7 @@ pub struct Touch {
 /// One frame of pointer and keyboard input, as a visualizer script sees it.
 /// Mouse state only while the pointer is over the visualizer (or it has
 /// focus, so a drag that leaves it still ends); keys only while it has
-/// focus (clicked into, or in the dedicated fullscreen). The app's reserved keys (`commands::reserved`)
+/// focus (clicked into, or in the dedicated fullscreen). The app's reserved keys (`Keymap::reserved`)
 /// are never reported.
 #[derive(Clone, Debug, Default)]
 pub struct VisualizerInput {
@@ -698,6 +698,7 @@ fn gather_input(
     let scale_y = buffer.1 as f32 / rect.height().max(1.0);
     // Over the picture itself, not the black bars around a letterboxed one.
     let hovered = response.contains_pointer() && ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| rect.contains(p));
+    let keymap = crate::commands::Keymap::of(ctx);
     ctx.input(|i| {
         let mut input = VisualizerInput { mode, focused, ..Default::default() };
         if hovered && let Some(pos) = i.pointer.hover_pos() {
@@ -714,10 +715,10 @@ fn gather_input(
             }
         }
         if focused {
-            input.keys_down = i.keys_down.iter().copied().filter(|k| !crate::commands::reserved(*k)).collect();
+            input.keys_down = i.keys_down.iter().copied().filter(|k| !keymap.reserved(*k)).collect();
             for event in &i.events {
                 match event {
-                    egui::Event::Key { key, pressed, repeat, modifiers, .. } if !crate::commands::reserved(*key) => {
+                    egui::Event::Key { key, pressed, repeat, modifiers, .. } if !keymap.reserved(*key) => {
                         if *pressed && !*repeat {
                             input.keys_pressed.push(*key);
                         } else if !*pressed {

@@ -35,6 +35,12 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "DIR")]
     pub config_dir: Option<PathBuf>,
 
+    /// In a branch build, turn on these online features for this run
+    /// (they start off there): scripts, sync, lookup, comma-separated.
+    /// The same as their switches in Preferences > Online Library.
+    #[arg(long, value_enum, value_delimiter = ',', value_name = "KINDS")]
+    pub online: Vec<crate::build_info::Online>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }

@@ -10,6 +10,7 @@ use eframe::egui;
 
 use super::App;
 use crate::album_art::Source;
+use crate::build_info;
 use crate::lookup::art::{self, Choice};
 use crate::song_store::{Art, Online};
 
@@ -54,8 +55,7 @@ impl App {
     /// Open Choose art for the album `title` (by `artist`) of the songs
     /// `keys`, whose art comes from `from`.
     pub(super) fn open_choose_art(&mut self, title: &str, artist: Option<String>, keys: Vec<String>, from: Source) {
-        let archive = from.release.clone().map(|(release, group)| Asked::start(move || art::cover_art_archive(&release, group.as_deref())));
-        self.choose_art = Some(ChooseArt { title: title.to_string(), artist, keys, file: from.file, release: from.release, archive, itunes: None });
+        self.choose_art = Some(ChooseArt { title: title.to_string(), artist, keys, file: from.file, release: from.release, archive: None, itunes: None });
     }
 
     /// The art chosen for the open album (`None`: as it'd be by itself).
@@ -83,6 +83,14 @@ impl App {
     /// The Choose art window, while it's open.
     pub(super) fn choose_art_ui(&mut self, ctx: &egui::Context) {
         let Some(mut choose) = self.choose_art.take() else { return };
+        let online = build_info::online(build_info::Online::Lookup);
+        // (Its release's pictures are asked for once it's open, and online.)
+        if online
+            && choose.archive.is_none()
+            && let Some((release, group)) = choose.release.clone()
+        {
+            choose.archive = Some(Asked::start(move || art::cover_art_archive(&release, group.as_deref())));
+        }
         for asked in [&mut choose.archive, &mut choose.itunes].into_iter().flatten() {
             asked.poll();
         }
@@ -90,6 +98,7 @@ impl App {
         let mut pick: Option<Option<Art>> = None;
         let mut open = true;
         let mut search_itunes = false;
+        let mut turn_on = false;
         let art = &mut self.groupings.art;
         egui::Window::new(format!("Art for {}", choose.title))
             .id(egui::Id::new("choose_art"))
@@ -108,6 +117,14 @@ impl App {
                     ui.weak("Automatic: its files' art, else its release's front cover once it's matched at MusicBrainz.");
                     choices_ui(ui, art, &tiles, &chosen, &mut pick, &choose.title);
 
+                    if !online {
+                        ui.separator();
+                        ui.horizontal_wrapped(|ui| {
+                            ui.weak(build_info::Online::Lookup.off_note());
+                            turn_on = ui.button("Turn on for this run").clicked();
+                        });
+                        return;
+                    }
                     ui.separator();
                     ui.strong("Cover Art Archive");
                     match &choose.archive {
@@ -129,6 +146,9 @@ impl App {
                     }
                 });
             });
+        if turn_on {
+            self.set_online(build_info::Online::Lookup, true);
+        }
         if search_itunes {
             let term = match &choose.artist {
                 Some(artist) => format!("{} {artist}", crate::lookup::matching::search_name(&choose.title)),

@@ -21,11 +21,12 @@ pub(super) enum PrefTab {
     Library,
     Updates,
     App,
+    Keyboard,
     Recording,
 }
 
 impl PrefTab {
-    const ALL: [PrefTab; 8] = [
+    const ALL: [PrefTab; 9] = [
         Self::Appearance,
         Self::Playback,
         Self::Songs,
@@ -33,12 +34,16 @@ impl PrefTab {
         Self::Library,
         Self::Updates,
         Self::App,
+        Self::Keyboard,
         Self::Recording,
     ];
 
     /// The sections there are on this platform.
     pub(super) fn available() -> Vec<PrefTab> {
-        Self::ALL.into_iter().filter(|tab| !(cfg!(target_os = "android") && *tab == Self::Recording)).collect()
+        Self::ALL
+            .into_iter()
+            .filter(|tab| !(cfg!(target_os = "android") && matches!(tab, Self::Recording | Self::Keyboard)))
+            .collect()
     }
 
     pub(super) fn title(self) -> &'static str {
@@ -50,6 +55,7 @@ impl PrefTab {
             Self::Library => "Online Library",
             Self::Updates => "Updates",
             Self::App => "App",
+            Self::Keyboard => "Keyboard",
             Self::Recording => "Recording",
         }
     }
@@ -63,6 +69,7 @@ impl PrefTab {
             Self::Library => "storefront",
             Self::Updates => "arrows-clockwise",
             Self::App => "app-window",
+            Self::Keyboard => "keyboard",
             Self::Recording => "record",
         }
     }
@@ -77,6 +84,7 @@ impl PrefTab {
             Self::Library => "Servers and identity",
             Self::Updates => "Checking for updates, canary builds",
             Self::App => "Tray, welcome and starter pack",
+            Self::Keyboard => "Keyboard shortcuts",
             Self::Recording => "Video size, quality, ffmpeg",
         }
     }
@@ -120,6 +128,7 @@ impl App {
         });
         if close || jump.is_some() || response.should_close() {
             self.preferences_open = false;
+            self.keymap_capture = None;
         }
         if let Some(jump) = jump {
             self.preference_jump(jump);
@@ -492,6 +501,7 @@ impl App {
                     jump = Some(PrefJump::Repair);
                 }
             }
+            PrefTab::Keyboard => self.keyboard_preferences_ui(ui),
             PrefTab::Recording => self.recording_preferences_ui(ui),
         }
 

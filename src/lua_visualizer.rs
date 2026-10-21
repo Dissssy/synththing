@@ -3809,8 +3809,9 @@ fn parse_mouse_button(name: Option<&str>) -> mlua::Result<usize> {
 }
 
 /// A key by name, case-insensitively ("a", "space", "up", "enter", "f5",
-/// ...). `Ok(None)` for the app's reserved keys (`commands::reserved`), which
-/// scripts never see.
+/// ...). `Ok(None)` for Escape (`commands::ESCAPE`), which scripts never
+/// see. (Nor do the keys the app's keymap keeps for itself, but those are
+/// left out of the input instead, since the user can rebind them.)
 fn parse_key(name: &str) -> mlua::Result<Option<egui::Key>> {
     let key = egui::Key::ALL
         .iter()
@@ -3822,7 +3823,7 @@ fn parse_key(name: &str) -> mlua::Result<Option<egui::Key>> {
                 "unknown key '{name}' (try e.g. \"a\", \"space\", \"up\", \"enter\")"
             ))
         })?;
-    Ok((!crate::commands::reserved(key)).then_some(key))
+    Ok((key != crate::commands::ESCAPE).then_some(key))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5371,16 +5372,16 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
 
     #[test]
     fn reserved_keys_never_reach_scripts() {
-        let script = "function render(w, h, l, r) log(tostring(key_down('escape')) .. tostring(key_down('f5')) .. tostring(key_down('F11')) .. tostring(key_down('f6'))) end";
+        let script = "function render(w, h, l, r) log(tostring(key_down('escape')) .. tostring(key_down('f6'))) end";
         let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
         let input = VisualizerInput {
             focused: true,
-            keys_down: vec![egui::Key::Escape, egui::Key::F5, egui::Key::F11, egui::Key::F6],
+            keys_down: vec![egui::Key::Escape, egui::Key::F6],
             ..Default::default()
         };
         let mut buffer = vec![0u32; 4];
         visualizer.render(&mut buffer, 2, 2, &[], &NotesSnapshot::default(), &sample_playback(), &input);
-        assert_eq!(visualizer.log_entries().last().unwrap().message, "falsefalsefalsetrue");
+        assert_eq!(visualizer.log_entries().last().unwrap().message, "falsetrue");
     }
 
     #[test]

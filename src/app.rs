@@ -21,12 +21,14 @@ mod profiler;
 use preferences::PrefTab;
 mod playlist_panel;
 mod identity;
+mod keyboard;
 mod pairing;
 mod sync;
 mod tags;
 mod copyright;
 mod moderation;
 mod notifications;
+mod online;
 mod overflow;
 mod palette;
 mod previews;
@@ -61,7 +63,7 @@ use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{DockArea, DockState, TabViewer};
 
 use crate::applog;
-use crate::commands::{self, Command};
+use crate::commands::{self, Command, Keymap};
 use crate::frame_timing;
 use crate::credits::{self, Contributors, ContributorsState};
 use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
@@ -282,6 +284,8 @@ pub struct App {
     songs_missing_only: bool,
     /// Songs asked to be removed from the library, waiting on Remove.
     remove_songs: Vec<PathBuf>,
+    /// Remove them from every device, not only this one.
+    remove_everywhere: bool,
     active_sf: Option<usize>,
     /// Selected rows of the Soundfonts list.
     soundfont_selection: Selection,
@@ -418,6 +422,10 @@ pub struct App {
     binding_capture: Option<(usize, Option<usize>)>,
     /// The command palette, while it's open.
     palette: Option<palette::Palette>,
+    /// The keys for commands, from the config's keymaps (`sync_keymap`).
+    keymap: Arc<Keymap>,
+    /// Preferences > Keyboard waiting for a key.
+    keymap_capture: Option<keyboard::Capture>,
     /// The script's Settings or Controls window, if open.
     script_window: Option<script_windows::ScriptWindow>,
     /// The category picked in each (Settings, Controls, Debug).
@@ -659,6 +667,7 @@ impl App {
             missing_info: None,
             songs_missing_only: false,
             remove_songs: Vec::new(),
+            remove_everywhere: false,
             active_sf: None,
             soundfont_selection: Selection::default(),
             tap,
@@ -723,6 +732,8 @@ impl App {
             playlist_selection: Selection::default(),
             binding_capture: None,
             palette: None,
+            keymap: Arc::default(),
+            keymap_capture: None,
             script_window: None,
             script_window_tab: [0; 3],
             user_presets: None,
@@ -2990,13 +3001,25 @@ impl App {
         };
         let mut close = false;
         let mut remove = false;
+        let synced = self.syncs_library();
+        let everywhere = &mut self.remove_everywhere;
         let modal = egui::Modal::new(egui::Id::new("remove_songs")).show(ctx, |ui| {
             ui.set_max_width(360.0);
             ui.heading("Remove from library?");
-            ui.label(format!(
-                "This deletes synththing's copy of {what} on this device. Playlists keep them, shown as unavailable here. \
-                 Your other devices keep theirs, and this one won't fetch them from them again."
-            ));
+            if synced {
+                ui.checkbox(everywhere, "Remove from all my devices");
+            }
+            if synced && *everywhere {
+                ui.label(format!(
+                    "This deletes synththing's copy of {what} on this device and on all your other devices. \
+                     Playlists keep them, shown as unavailable. Importing one again brings it back everywhere."
+                ));
+            } else {
+                ui.label(format!(
+                    "This deletes synththing's copy of {what} on this device. Playlists keep them, shown as unavailable here. \
+                     Your other devices keep theirs, and this one won't fetch them from them again."
+                ));
+            }
             ui.horizontal(|ui| {
                 remove = ui.button("Remove").clicked();
                 close = ui.button("Cancel").clicked();
@@ -3004,15 +3027,21 @@ impl App {
         });
         if remove {
             let paths = std::mem::take(&mut self.remove_songs);
+            let everywhere = synced && self.remove_everywhere;
             for path in &paths {
-                if let Err(e) = self.songs.remove(path) {
+                let removed = match self.songs.key(path) {
+                    Some(key) if everywhere => self.songs.remove_everywhere(&key),
+                    _ => self.songs.remove(path),
+                };
+                if let Err(e) = removed {
                     self.status = format!("Couldn't remove a song: {e:#}");
                 }
             }
             self.refresh_missing();
             self.song_list.clear_selection();
             if self.status.is_empty() || !self.status.starts_with("Couldn't") {
-                self.status = format!("Removed {what} from the library.");
+                let from = if everywhere { "all your devices" } else { "the library" };
+                self.status = format!("Removed {what} from {from}.");
             }
         } else if close || modal.should_close() {
             self.remove_songs.clear();
@@ -3398,6 +3427,16 @@ impl App {
             Command::PauseRecording => self.toggle_recording_pause(),
             Command::Quit => self.close_with(ctx, close::CloseAction::Quit),
             Command::CommandPalette => self.palette = Some(palette::Palette::default()),
+        }
+    }
+
+    /// Rebuild the keymap when the config's keymaps changed (in
+    /// Preferences, or by a sync), and put it in use.
+    fn sync_keymap(&mut self, ctx: &egui::Context) {
+        let keymap = Keymap::new(&self.config.keymap, &self.config.local_keymap);
+        if *self.keymap != keymap {
+            self.keymap = Arc::new(keymap);
+            self.keymap.install(ctx);
         }
     }
 
@@ -3954,14 +3993,16 @@ impl eframe::App for App {
         // still does its usual job elsewhere. All of it pauses while a
         // modal is up (Escape closes the modal instead) or a binding is
         // being captured.
+        self.sync_keymap(&ctx);
         if !self.any_modal_open() && self.binding_capture.is_none() {
             let typing = ctx.memory(|m| m.focused().is_some());
             let available: Vec<Command> = Command::ALL.into_iter().filter(|&c| self.command_available(c)).collect();
+            let keymap = self.keymap.clone();
             // Run outside `ctx.input_mut`: `send_viewport_cmd` (inside
             // `set_fullscreen`) takes the lock that closure holds, and
             // calling it from in there deadlocks.
             let pressed = ctx.input_mut(|i| {
-                commands::pressed(i, typing, |command| available.contains(&command))
+                keymap.pressed(i, typing, |command| available.contains(&command))
             });
             for command in pressed {
                 self.run_command(&ctx, command, view);

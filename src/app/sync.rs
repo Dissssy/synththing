@@ -284,6 +284,12 @@ impl App {
             }
     }
 
+    /// Whether the song library syncs here (so a song can be removed from
+    /// every device).
+    pub(super) fn syncs_library(&self) -> bool {
+        self.syncing(Blob::Library)
+    }
+
     /// The songs here changed (`refresh_missing`).
     pub(super) fn songs_changed(&mut self) {
         self.sync.songs_dirty = true;
@@ -630,8 +636,10 @@ impl App {
             songs::Reply::Skipped(blob) => self.channel(blob).running = false,
             songs::Reply::Taken { blob, revision, library } => {
                 self.channel(blob).revision = revision;
-                if let Some(library) = library {
-                    song_sync::apply_library(&mut self.songs, &library);
+                if let Some(library) = library
+                    && song_sync::apply_library(&mut self.songs, &library)
+                {
+                    self.refresh_missing();
                 }
                 self.sync.songs_dirty = true;
             }
@@ -740,10 +748,7 @@ impl App {
                 self.sync.toast = Some((format!("{text} ({done} of {total})"), Instant::now()));
             }
             match &moved {
-                Moved::Fetched(key) => {
-                    let name = name(key);
-                    self.add_to_library([Stored { key: key.clone(), name }]);
-                }
+                Moved::Fetched(key) => self.take_fetched(key.clone()),
                 Moved::Failed(key, e) => {
                     log::info!("moving song {key}: {e}");
                     self.sync.error = Some(format!("couldn't move a song between your devices: {e}"));
@@ -770,13 +775,28 @@ impl App {
         }
     }
 
+    /// A song fetched from the other devices joins the library, unless it
+    /// was removed from every device as it came (it's deleted again).
+    fn take_fetched(&mut self, key: String) {
+        if self.songs.is_removed(&key) {
+            if let Err(e) = self.songs.discard(&key) {
+                log::warn!("{e:#}");
+            }
+            return;
+        }
+        let name = self.songs.known().find(|(k, _)| *k == key).map_or_else(|| key.clone(), |(_, s)| s.name.clone());
+        self.add_to_library([Stored { key, name }]);
+    }
+
     /// A song streamed here (or one that failed to).
     fn song_received(&mut self, moved: Moved) {
         match moved {
             Moved::Fetched(key) => {
                 let name = self.songs.known().find(|(k, _)| *k == key).map_or_else(|| key.clone(), |(_, s)| s.name.clone());
-                self.status = format!("Downloaded {name} from your other devices.");
-                self.add_to_library([Stored { key, name }]);
+                if !self.songs.is_removed(&key) {
+                    self.status = format!("Downloaded {name} from your other devices.");
+                }
+                self.take_fetched(key);
                 self.sync.songs_dirty = true;
             }
             Moved::Failed(key, e) => log::info!("a song streamed here ({key}): {e}"),
@@ -995,12 +1015,17 @@ impl App {
             return;
         }
         let mut unblock = None;
+        let mut everywhere = None;
+        let library = self.syncing(Blob::Library);
         egui::CollapsingHeader::new(format!("Songs removed from this device ({})", blocked.len())).id_salt("sync_blocked").show(ui, |ui| {
             ui.weak("This device doesn't fetch these from your other devices.");
             for (key, name) in &blocked {
                 ui.horizontal(|ui| {
                     if ui.small_button("Fetch again").clicked() {
                         unblock = Some(key.clone());
+                    }
+                    if library && ui.small_button("Remove from all devices").on_hover_text("Your other devices delete it too, until one imports it again").clicked() {
+                        everywhere = Some(key.clone());
                     }
                     ui.label(name);
                 });
@@ -1009,6 +1034,12 @@ impl App {
         if let Some(key) = unblock {
             self.songs.unblock(&key);
             self.sync.songs_dirty = true;
+        }
+        if let Some(key) = everywhere {
+            if let Err(e) = self.songs.remove_everywhere(&key) {
+                self.status = format!("Couldn't remove a song: {e:#}");
+            }
+            self.refresh_missing();
         }
     }
 
