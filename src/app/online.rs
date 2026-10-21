@@ -39,7 +39,7 @@ impl App {
         ui.separator();
     }
 
-    fn set_online(&mut self, kind: Online, on: bool) {
+    pub(super) fn set_online(&mut self, kind: Online, on: bool) {
         build_info::set_online(kind, on);
         log::info!("{} turned {} for this run", kind.name(), if on { "on" } else { "off" });
         if kind == Online::Scripts {

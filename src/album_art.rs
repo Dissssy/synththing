@@ -15,6 +15,8 @@ use std::time::{Duration, SystemTime};
 
 use eframe::egui;
 
+use crate::song_store::Art;
+
 /// The pixel sizes art is scaled to: a tile takes the next one up.
 const SIZES: [u32; 4] = [64, 128, 256, 512];
 /// How many textures are kept, the ones drawn longest ago dropped first.
@@ -34,11 +36,18 @@ pub struct Source {
     pub file: Option<PathBuf>,
     /// The release (and its group) at MusicBrainz.
     pub release: Option<(String, Option<String>)>,
+    /// The art chosen for it, over all that (Choose art).
+    pub chosen: Option<Art>,
 }
 
 impl Source {
     fn is_empty(&self) -> bool {
-        self.file.is_none() && self.release.is_none()
+        self.file.is_none() && self.release.is_none() && self.chosen.is_none()
+    }
+
+    /// Only the picture at `url` (Choose art's choices).
+    pub fn url(url: &str) -> Self {
+        Self { chosen: Some(Art::Url(url.to_string())), ..Self::default() }
     }
 }
 
@@ -177,8 +186,17 @@ fn read_art_forever(queue: &Queue, send: &mpsc::Sender<(Request, Option<egui::Co
         };
         let (source, size) = &request;
         let online = queue.online.load(Ordering::Relaxed);
-        let bytes = source.file.as_deref().and_then(embedded_picture);
-        let bytes = bytes.or_else(|| source.release.as_ref().and_then(|(release, group)| cover(release, group.as_deref(), online)));
+        let bytes = match &source.chosen {
+            // (Asked for by the user: downloaded whatever `online` says, if
+            // online lookups are on in this build.)
+            Some(Art::Url(url)) => picture_at(url),
+            Some(Art::Files) => source.file.as_deref().and_then(embedded_picture),
+            None => source
+                .file
+                .as_deref()
+                .and_then(embedded_picture)
+                .or_else(|| source.release.as_ref().and_then(|(release, group)| cover(release, group.as_deref(), online))),
+        };
         let image = bytes.and_then(|bytes| scaled(&bytes, *size));
         if send.send((request, image)).is_err() {
             return;
@@ -257,6 +275,32 @@ fn cover(release: &str, group: Option<&str>, online: bool) -> Option<Box<[u8]>> 
         log::warn!("couldn't note {release} has no cover: {e}");
     }
     None
+}
+
+/// The picture at `url`: kept (by a hash of it), or downloaded and kept.
+fn picture_at(url: &str) -> Option<Box<[u8]>> {
+    use sha2::Digest;
+    let dir = covers_dir()?;
+    let kept = dir.join(format!("{}.img", crate::library::hex(&sha2::Sha256::digest(url.as_bytes())[..16])));
+    if let Ok(bytes) = std::fs::read(&kept) {
+        return Some(bytes.into());
+    }
+    if !crate::build_info::online(crate::build_info::Online::Lookup) {
+        return None;
+    }
+    match download(url) {
+        Ok(Some(bytes)) => {
+            if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&kept, &bytes)) {
+                log::warn!("couldn't keep {url}: {e}");
+            }
+            Some(bytes.into())
+        }
+        Ok(None) => None,
+        Err(e) => {
+            log::warn!("couldn't download {url}: {e}");
+            None
+        }
+    }
 }
 
 /// The image at `url` (`None`: there's none, a 404).

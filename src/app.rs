@@ -40,6 +40,7 @@ mod repair;
 mod script_windows;
 mod smart;
 mod song_details;
+mod choose_art;
 mod cleanup;
 mod song_meta;
 mod song_options;
@@ -453,6 +454,7 @@ pub struct App {
     /// Signing in another device, or this one with a link.
     pairing: pairing::PairingState,
     lookup: lookup::LookupState,
+    choose_art: Option<choose_art::ChooseArt>,
     /// Settings sync between the identity's devices.
     sync: sync::SyncState,
     /// Notifications from library servers.
@@ -747,6 +749,7 @@ impl App {
             identity: Default::default(),
             pairing: Default::default(),
             lookup: Default::default(),
+            choose_art: None,
             sync: Default::default(),
             notifications: Default::default(),
             copyright: Default::default(),
@@ -4030,6 +4033,7 @@ impl eframe::App for App {
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
             self.cleanup_ui(&ctx);
+            self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);
             self.history_ui(&ctx);
             self.audio_import_ui(&ctx);
@@ -4053,6 +4057,7 @@ impl eframe::App for App {
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
             self.cleanup_ui(&ctx);
+            self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);
             self.history_ui(&ctx);
             self.layout_save_ui(&ctx);

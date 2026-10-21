@@ -1,7 +1,8 @@
 //! The online lookup (`crate::lookup`) in the app: run on the one device
 //! chosen for it, an album at a time while the app's open, its matches
 //! saved to the songs (and so synced); its preference and status in
-//! Preferences > Songs; a song's match in Song info, with Wrong match.
+//! Preferences > Songs; a song's match in Song info, with Wrong match; the
+//! albums it wasn't sure of, for Clean up's Needs a look rows.
 
 use std::time::{Duration, Instant};
 
@@ -9,7 +10,7 @@ use eframe::egui;
 
 use super::App;
 use crate::build_info;
-use crate::lookup::matching::Album;
+use crate::lookup::matching::{self, Album, Release};
 use crate::lookup::{self, Answer, Outcome, State, Tried, Worker};
 use crate::song_store::Online;
 
@@ -33,9 +34,7 @@ pub(super) struct LookupState {
 impl App {
     /// This device looks albums up.
     fn looks_up(&self) -> bool {
-        build_info::online(build_info::Online::Lookup)
-            && self.config.online_lookup
-            && self.config.lookup_device.as_deref() == Some(self.device_id())
+        build_info::online(build_info::Online::Lookup) && self.config.online_lookup && self.config.lookup_device.as_deref() == Some(self.device_id())
     }
 
     /// Work out the library's albums again, if its songs changed.
@@ -95,7 +94,7 @@ impl App {
         let tried = match outcome {
             Outcome::Matched(release, tracks) => {
                 log::info!("{:?} is release {} ({:?})", album.name, release.id, release.title);
-                let matches = lookup::matches(album, &release, &tracks, &self.songs);
+                let matches = lookup::matches(album, &release, &tracks, false, &self.songs);
                 self.songs.set_online(matches);
                 self.songs_changed();
                 self.lookup.error = None;
@@ -179,13 +178,20 @@ impl App {
                 _ => waiting += 1,
             }
         }
-        ui.label(format!("{matched} of {} albums matched, {unsure} unsure, {not_found} not found, {waiting} to look up.", albums.len()));
-        if let Some(id) = busy
-            && let Some(album) = albums.iter().find(|a| a.id == id)
-        {
+        let total = albums.len();
+        let busy = busy.and_then(|id| albums.iter().find(|a| a.id == id)).map(|a| a.name.clone());
+        let mut review = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("{matched} of {total} albums matched, {unsure} unsure, {not_found} not found, {waiting} to look up."));
+            review = unsure > 0 && ui.button("Needs a look").on_hover_text("Pick the release each unsure album is, in Clean up").clicked();
+        });
+        if review {
+            self.cleanup = Some(Default::default());
+        }
+        if let Some(name) = busy {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.weak(format!("Looking up {}...", album.name));
+                ui.weak(format!("Looking up {name}..."));
             });
         }
         if let Some(error) = &self.lookup.error {
@@ -222,7 +228,7 @@ impl App {
         let Some(release) = online.release.clone() else {
             if online.by_user {
                 ui.add_space(4.0);
-                ui.weak("Its MusicBrainz match was wrong: it'll be looked up again.");
+                ui.weak("Not matched: it'll be looked up again, leaving out the releases you've said it isn't.");
             }
             return;
         };
@@ -260,12 +266,93 @@ impl App {
                 let online = song.online.as_ref().filter(|o| o.release.as_deref() == Some(release))?;
                 let mut rejected = online.rejected.clone();
                 rejected.push(release.to_string());
-                Some((key.to_string(), Some(Online { rejected, by_user: true, at, ..Online::default() })))
+                Some((key.to_string(), Some(Online { rejected, by_user: true, at, art: online.art.clone(), ..Online::default() })))
             })
             .collect();
         log::info!("{} songs aren't on release {release}", changes.len());
         self.songs.set_online(changes);
         self.songs_changed();
         self.lookup.idle_until = None;
+    }
+
+    /// The albums the lookup wasn't sure of (and still has to match),
+    /// with the releases kept for each: Clean up's Needs a look rows. None
+    /// on a device that doesn't look up.
+    pub(super) fn unsure_albums(&mut self) -> Vec<Unsure> {
+        if !self.looks_up() {
+            return Vec::new();
+        }
+        self.lookup_albums();
+        let albums = self.lookup.albums.as_ref().map(|(_, a)| a.as_slice()).unwrap_or_default();
+        let tried = &self.lookup.state.get_or_insert_with(State::load).tried;
+        albums
+            .iter()
+            .filter(|album| lookup::wanted(&self.songs, album))
+            .filter_map(|album| match &tried.get(&album.id)?.found {
+                Answer::Unsure(ids) => {
+                    let releases: Vec<Release> = ids.iter().filter_map(|r| lookup::kept_release(r)).collect();
+                    (!releases.is_empty()).then(|| Unsure { album: album.clone(), releases })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Take what was picked for an unsure album.
+    pub(super) fn reviewed(&mut self, reviewed: Reviewed) {
+        match reviewed {
+            Reviewed::This(album, release) => {
+                let fit = matching::fit(&album, &release);
+                log::info!("{:?} is release {} ({:?}), as picked", album.name, release.id, release.title);
+                let matches = lookup::matches(&album, &release, &fit.tracks, true, &self.songs);
+                self.songs.set_online(matches);
+                self.songs_changed();
+                self.lookup.state.get_or_insert_with(State::load).note(&album.id, None);
+            }
+            Reviewed::NoneOf(album, rejected) => {
+                let at = crate::settings_sync::now();
+                let changes = album
+                    .songs
+                    .iter()
+                    .map(|song| {
+                        let mut online = self.songs.get_by_key(&song.key).and_then(|s| s.online.clone()).unwrap_or(Online { at, ..Online::default() });
+                        online.rejected.extend(rejected.iter().filter(|r| !online.rejected.contains(r)).cloned().collect::<Vec<_>>());
+                        online.by_user = true;
+                        (song.key.clone(), Some(online))
+                    })
+                    .collect();
+                self.songs.set_online(changes);
+                self.songs_changed();
+                self.lookup.state.get_or_insert_with(State::load).note(&album.id, Some(Tried { at, found: Answer::NotFound }));
+            }
+        }
+    }
+}
+
+/// An album the lookup wasn't sure of, and the releases it might be.
+pub(super) struct Unsure {
+    pub album: Album,
+    pub releases: Vec<Release>,
+}
+
+/// What was picked for an unsure album: a release, or none of them.
+pub(super) enum Reviewed {
+    This(Album, Release),
+    NoneOf(Album, Vec<String>),
+}
+
+impl Unsure {
+    /// A release it might be, as one line: its name, date and how many
+    /// of the album's songs are on it.
+    pub fn describe(&self, release: &Release) -> String {
+        let fit = matching::fit(&self.album, release);
+        format!(
+            "{} by {} ({}, {} of {} songs on it)",
+            release.title,
+            release.artist,
+            release.date.as_deref().unwrap_or("no date"),
+            fit.tracks.iter().flatten().count(),
+            self.album.songs.len()
+        )
     }
 }
