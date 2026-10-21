@@ -187,8 +187,7 @@ fn read_art_forever(queue: &Queue, send: &mpsc::Sender<(Request, Option<egui::Co
         let (source, size) = &request;
         let online = queue.online.load(Ordering::Relaxed);
         let bytes = match &source.chosen {
-            // (Asked for by the user: downloaded whatever `online` says, but
-            // not in a branch build.)
+            // (Asked for by the user: downloaded whatever `online` says.)
             Some(Art::Url(url)) => picture_at(url),
             Some(Art::Files) => source.file.as_deref().and_then(embedded_picture),
             None => source
@@ -284,9 +283,6 @@ fn picture_at(url: &str) -> Option<Box<[u8]>> {
     let kept = dir.join(format!("{}.img", crate::library::hex(&sha2::Sha256::digest(url.as_bytes())[..16])));
     if let Ok(bytes) = std::fs::read(&kept) {
         return Some(bytes.into());
-    }
-    if !crate::build_info::online_features() {
-        return None;
     }
     match download(url) {
         Ok(Some(bytes)) => {

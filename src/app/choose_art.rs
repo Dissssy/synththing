@@ -54,8 +54,7 @@ impl App {
     /// Open Choose art for the album `title` (by `artist`) of the songs
     /// `keys`, whose art comes from `from`.
     pub(super) fn open_choose_art(&mut self, title: &str, artist: Option<String>, keys: Vec<String>, from: Source) {
-        let online = crate::build_info::online_features();
-        let archive = from.release.clone().filter(|_| online).map(|(release, group)| Asked::start(move || art::cover_art_archive(&release, group.as_deref())));
+        let archive = from.release.clone().map(|(release, group)| Asked::start(move || art::cover_art_archive(&release, group.as_deref())));
         self.choose_art = Some(ChooseArt { title: title.to_string(), artist, keys, file: from.file, release: from.release, archive, itunes: None });
     }
 
@@ -109,11 +108,6 @@ impl App {
                     ui.weak("Automatic: its files' art, else its release's front cover once it's matched at MusicBrainz.");
                     choices_ui(ui, art, &tiles, &chosen, &mut pick, &choose.title);
 
-                    if !crate::build_info::online_features() {
-                        ui.separator();
-                        ui.weak(crate::build_info::OFFLINE_NOTE);
-                        return;
-                    }
                     ui.separator();
                     ui.strong("Cover Art Archive");
                     match &choose.archive {
