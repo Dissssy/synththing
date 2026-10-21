@@ -60,6 +60,7 @@ mod preview;
 mod recorder;
 mod script_host;
 mod search;
+mod search_box;
 mod select_list;
 mod settings_sync;
 mod smart;

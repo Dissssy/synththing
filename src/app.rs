@@ -136,6 +136,44 @@ fn plays(store: &SongStore, path: &Path) -> song_list::Plays {
     }
 }
 
+/// The Songs list's songs: the library's (with `extensions`, and only
+/// those in `only` when given), as a query's filters keep them.
+struct Listed<'a> {
+    store: &'a SongStore,
+    extensions: &'a [&'a str],
+    only: Option<&'a std::collections::HashSet<&'a str>>,
+}
+
+impl song_list::Source for Listed<'_> {
+    fn songs(&mut self, query: &str) -> (Vec<PathBuf>, crate::search::Search) {
+        let search = crate::search::parse(query, self.store.tags());
+        let songs = {
+            let matches = search.rules.matcher(crate::settings_sync::now());
+            self.store
+                .songs()
+                .filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song))
+                .map(|(path, _)| path)
+                .filter(|p| self.only.is_none_or(|only| song_store::key_in(self.store.dir(), p).is_some_and(|k| only.contains(k))))
+                .collect()
+        };
+        (songs, search)
+    }
+
+    fn values(&mut self, field: crate::fields::Field) -> Vec<String> {
+        if field == crate::fields::Field::Tag {
+            return self.store.tags().values().map(|t| t.name.clone()).collect();
+        }
+        // (Each once, however it's spelled: as most songs spell it.)
+        let mut spellings: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+        for (_, song) in self.store.known() {
+            for value in crate::fields::Facts::of(song).items(field) {
+                spellings.entry(crate::fields::group_key(&value, "")).or_default().push(value.into_owned());
+            }
+        }
+        spellings.values().filter_map(|s| crate::fields::best_spelling(s.iter().map(String::as_str)).map(str::to_string)).collect()
+    }
+}
+
 /// The song at `path`'s name, by `naming`.
 fn title_of(cache: &mut SongInfoCache, naming: &Naming, path: &Path) -> String {
     naming.name(path, cache.get(path).as_deref())
@@ -2802,19 +2840,7 @@ impl App {
         };
         let output = self.song_list.ui(
             ui,
-            &mut |query| {
-                let search = crate::search::parse(query, store.tags());
-                let songs = {
-                    let matches = search.rules.matcher(crate::settings_sync::now());
-                    store
-                        .songs()
-                        .filter(|(path, song)| song_store::has_extension(path, extensions) && matches(song))
-                        .map(|(path, _)| path)
-                        .filter(|p| only.as_ref().is_none_or(|only| song_store::key_in(store.dir(), p).is_some_and(|k| only.contains(k))))
-                        .collect()
-                };
-                (songs, search)
-            },
+            &mut Listed { store, extensions, only: only.as_ref() },
             revision,
             &mut view,
             &self.config.group_ignore,
@@ -2838,6 +2864,9 @@ impl App {
         }
         if let Some(at) = output.play {
             self.play_listed(at);
+        }
+        if let Some(query) = output.save_search {
+            self.smart_playlist_from_search(ui.ctx(), &query);
         }
         if autoplay_clicked {
             self.set_autoplay(self.autoplay.cycle());

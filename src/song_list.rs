@@ -22,7 +22,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::fields::{self, Def, Field, Value};
 use crate::matching::Term;
-use crate::search::Search;
+use crate::search::{Problem, Search};
+use crate::search_box::SearchBox;
 use crate::select_list::{self, Selection};
 use crate::together::{self, Member};
 
@@ -237,6 +238,10 @@ struct Built {
     items: Vec<Item>,
     /// What autoplay goes through, in order.
     queue: Vec<Queued>,
+    /// What's wrong with the query's filters.
+    problems: Vec<Problem>,
+    /// How many songs the query found.
+    found: usize,
 }
 
 enum Item {
@@ -253,8 +258,8 @@ pub struct SongList {
     active: Option<(PathBuf, Option<String>)>,
     /// The row of `active` in the rows as made (worked out once a time).
     active_row: Option<Option<usize>>,
-    /// Live text in the search box; empty means every song.
-    search_query: String,
+    /// The search box; empty means every song.
+    search: SearchBox,
     /// The row under the pointer as of the last `ui` call.
     hovered: Option<PathBuf>,
     /// Selected rows of what's listed (every song, or the search results).
@@ -278,6 +283,18 @@ pub struct Output {
     pub view_changed: bool,
     /// The song's note was clicked: star it (`true`) or unstar it.
     pub star: Option<(PathBuf, bool)>,
+    /// Save the search as a smart playlist (the query).
+    pub save_search: Option<String>,
+}
+
+/// Where the list's songs come from.
+pub trait Source {
+    /// The songs a query's filters keep, and the query parsed
+    /// (`search::parse`).
+    fn songs(&mut self, query: &str) -> (Vec<PathBuf>, Search);
+    /// A field's values (the tags' names for `Field::Tag`), to complete a
+    /// filter with.
+    fn values(&mut self, field: Field) -> Vec<String>;
 }
 
 /// What a song sorts by for `value`: what it sorts as, else its text
@@ -448,7 +465,7 @@ impl SongList {
     }
 
     /// Draw the list (toolbar, search box, column headers, rows) into
-    /// `ui`, as `view` says. `songs` gives the songs a query's filters
+    /// `ui`, as `view` says. `source` gives the songs a query's filters
     /// keep, and the query parsed (`search.rs`), and `describe` one's name, file name and the values of the columns
     /// asked for; they're asked only when the rows are made again: when
     /// `revision` (which changes whenever the songs or what's said of them
@@ -462,7 +479,7 @@ impl SongList {
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        songs: &mut dyn FnMut(&str) -> (Vec<PathBuf>, Search),
+        source: &mut dyn Source,
         revision: u64,
         view: &mut View,
         ignore: &str,
@@ -474,6 +491,7 @@ impl SongList {
     ) -> Output {
         let touch = select_list::touch(ui.ctx());
         let mut view_changed = false;
+        let mut save_search = false;
         ui.horizontal(|ui| {
             // Fixed-size widgets first, then the text edit last with
             // `desired_width(INFINITY)` to soak up whatever's left, sizing it
@@ -484,15 +502,15 @@ impl SongList {
                 let button = crate::app::icon_button("sort-ascending");
                 egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| view_changed |= view_menu(ui, view, true));
             }
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.search_query)
-                    .hint_text("search, or filter: type:mid...")
-                    .desired_width(f32::INFINITY),
-            )
-            .on_hover_text(crate::search::HELP);
-            if response.changed() {
+            let built = self.built.as_ref();
+            let problems = built.map_or(&[][..], |b| b.problems.as_slice());
+            let found = built.filter(|b| !b.query.trim().is_empty()).map(|b| b.found);
+            let output = self.search.ui(ui, problems, found, revision, &mut |field| source.values(field));
+            if output.changed {
                 self.selection.clear();
+                ui.ctx().request_repaint();
             }
+            save_search = output.save;
         });
 
         // The columns that fit beside the name, and the one sorted by
@@ -524,7 +542,7 @@ impl SongList {
             keys.len() - 1
         });
         // (A search goes by the user's columns that don't fit too.)
-        if !self.search_query.trim().is_empty() {
+        if !self.search.query.trim().is_empty() {
             for c in view.columns.iter().filter_map(|k| column(k)) {
                 if !keys.contains(&c.key) {
                     keys.push(c.key);
@@ -536,14 +554,15 @@ impl SongList {
             view_changed |= self.header_ui(ui, view, &shown);
         }
 
-        let query = self.search_query.trim();
+        let query = self.search.query.as_str();
         let stale = self
             .built
             .as_ref()
             .is_none_or(|b| b.revision != revision || b.view != *view || b.keys != keys || b.query != query);
         if stale {
-            let (songs, search) = songs(query);
+            let (songs, search) = source.songs(query);
             let text = search.text;
+            let mut found = songs.len();
             let (items, queue) = if text.is_empty() {
                 self.sorted(&songs, view, &keys, sort_at, group_at, ignore, articles, describe)
             } else {
@@ -551,14 +570,15 @@ impl SongList {
                     .filter(|&i| shown.iter().any(|c| c.key == keys[i]) || view.columns.iter().any(|k| k == keys[i]))
                     .filter(|&i| !view.unsearched.iter().any(|k| k == keys[i]))
                     .collect();
-                let found = ranked_matches(&songs, &text, &keys, &searched, &view.unsearched, describe);
-                let queue = found.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false, plays: e.song.plays.clone() }).collect();
-                (found.into_iter().map(Item::Song).collect(), queue)
+                let (matches, total) = ranked_matches(&songs, &text, &keys, &searched, &view.unsearched, describe);
+                found = total;
+                let queue = matches.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false, plays: e.song.plays.clone() }).collect();
+                (matches.into_iter().map(Item::Song).collect(), queue)
             };
-            let empty = songs.is_empty() && query.is_empty();
+            let empty = songs.is_empty() && query.trim().is_empty();
             let query = query.to_string();
             self.generation += 1;
-            self.built = Some(Built { revision, view: view.clone(), keys: keys.clone(), query, empty, items, queue });
+            self.built = Some(Built { revision, view: view.clone(), keys: keys.clone(), query, empty, items, queue, problems: search.problems, found });
             self.active_row = None;
         }
         let built = self.built.as_ref().expect("the rows were just made");
@@ -649,6 +669,7 @@ impl SongList {
             delete: if output.delete { unique(self.selection.rows().iter().filter_map(|&i| path_of(i))) } else { Vec::new() },
             view_changed,
             star,
+            save_search: save_search.then(|| self.search.query.clone()),
         };
         if let Some(key) = toggle {
             if !self.collapsed.remove(&key) {
@@ -949,7 +970,7 @@ pub struct DraggedFiles {
 /// `songs` ranked against the search's `terms`, each matched in the
 /// song's name, its original file's name, its tags or its values at
 /// `searched` (but not the file name or the tags when `unsearched` says),
-/// wherever it matches best: the top matches.
+/// wherever it matches best: the top matches, and how many matched.
 fn ranked_matches(
     songs: &[PathBuf],
     terms: &[Term],
@@ -957,7 +978,7 @@ fn ranked_matches(
     searched: &[usize],
     unsearched: &[String],
     describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
-) -> Vec<Entry> {
+) -> (Vec<Entry>, usize) {
     let skips = |key: &str| unsearched.iter().any(|k| k == key);
     let (file_name, tags) = (!skips("file_name"), !skips("tag"));
     let mut scored: Vec<(i32, Entry)> = songs
@@ -991,8 +1012,9 @@ fn ranked_matches(
         })
         .collect();
     scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.song.name.to_lowercase().cmp(&b.1.song.name.to_lowercase())));
+    let total = scored.len();
     scored.truncate(MAX_SEARCH_RESULTS);
-    scored.into_iter().map(|(_, entry)| entry).collect()
+    (scored.into_iter().map(|(_, entry)| entry).collect(), total)
 }
 
 /// `text` with the characters at `hits` (indices) picked out.
@@ -1018,6 +1040,19 @@ fn highlighted(ui: &egui::Ui, text: &str, hits: &[usize], weak: bool) -> egui::W
 mod tests {
     use super::*;
 
+    /// The same songs whatever the query.
+    struct Fixed(Vec<PathBuf>);
+
+    impl Source for Fixed {
+        fn songs(&mut self, query: &str) -> (Vec<PathBuf>, Search) {
+            (self.0.clone(), crate::search::parse(query, &Default::default()))
+        }
+
+        fn values(&mut self, _: Field) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
     /// Draws `list` for one frame of `songs`, grouped by artist, counting
     /// the songs described into `described`.
     fn frame(ctx: &egui::Context, list: &mut SongList, songs: &[PathBuf], revision: u64, described: &mut usize) {
@@ -1033,7 +1068,7 @@ mod tests {
                 let values = keys.iter().map(|&k| (k == "artist").then(|| Value { text: format!("Artist {}", n % 3), ..Value::default() })).collect();
                 Described { name: format!("Song {n}"), file_name: String::new(), values, tags: Vec::new(), plays: Plays::default() }
             };
-            list.ui(ui, &mut |query| (songs.to_vec(), crate::search::parse(query, &Default::default())), revision, &mut view, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
+            list.ui(ui, &mut Fixed(songs.to_vec()), revision, &mut view, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
         });
         output.textures_delta.clear();
     }

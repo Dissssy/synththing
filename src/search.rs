@@ -90,6 +90,18 @@ pub fn parse(query: &str, tags: &BTreeMap<String, Tag>) -> Search {
     search
 }
 
+/// The terms of `query` that aren't filters (and so can't be rules), as
+/// typed.
+pub fn left_out<'q>(query: &'q str, tags: &BTreeMap<String, Tag>) -> Vec<&'q str> {
+    let left = |term: &str| match filter(term, tags) {
+        Ok(_) => false,
+        // (`artist:`, nothing yet: not left out.)
+        Err(Some(why)) => !why.is_empty(),
+        Err(None) => true,
+    };
+    terms(query).into_iter().map(|(_, term)| term).filter(|term| left(term)).collect()
+}
+
 /// `query`'s terms and where each starts, split at spaces outside quotes
 /// (a quote opens only at the start of a term or a value, so "don't"
 /// isn't one).
@@ -206,6 +218,59 @@ fn filter(term: &str, tags: &BTreeMap<String, Tag>) -> Result<Rule, Option<Strin
     }
 }
 
+/// What the term being typed can be completed with: the part of the query
+/// it replaces, and the options (what's shown, and what goes in).
+#[derive(Debug, PartialEq)]
+pub struct Completion {
+    pub at: Range<usize>,
+    pub options: Vec<(String, String)>,
+}
+
+/// How many options a completion offers.
+const MAX_OPTIONS: usize = 8;
+
+/// The completion for the term of `query` that ends at `cursor` (a byte
+/// index): a filter's key, or its value, written as `mode` says
+/// (`quoted`). `values` gives a field's values (the tags' names for
+/// `Field::Tag`).
+pub fn complete(query: &str, cursor: usize, mode: Mode, values: &mut dyn FnMut(Field) -> Vec<String>) -> Option<Completion> {
+    let (start, term) = terms(query).into_iter().find(|(at, term)| *at < cursor && cursor == at + term.len())?;
+    let at = start..cursor;
+    let (neg, term) = term.strip_prefix('-').map_or(("", term), |t| ("-", t));
+    let ranked = |options: Vec<String>, typed: &str| -> Vec<String> {
+        let mut scored: Vec<(i32, String)> =
+            options.into_iter().filter_map(|o| Some((if typed.is_empty() { 0 } else { crate::matching::fuzzy(&o, typed)?.0 }, o))).collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
+        scored.into_iter().take(MAX_OPTIONS).map(|(_, o)| o).collect()
+    };
+    let options: Vec<(String, String)> = match term.split_once(':') {
+        None => {
+            let typed = term.to_lowercase();
+            let keys = KEYS.iter().map(|(k, _)| format!("{k}:")).chain(["is:starred".to_string(), "has:".to_string()]);
+            keys.filter(|k| k.starts_with(&typed) && *k != typed).take(MAX_OPTIONS).map(|k| (k.clone(), format!("{neg}{k}"))).collect()
+        }
+        Some((key, raw)) => {
+            let key = key.to_lowercase();
+            let (_, typed) = value(raw);
+            let keyed = |v: &str| format!("{neg}{key}:{v}");
+            match key.as_str() {
+                "has" => {
+                    let keys = KEYS.iter().filter(|(_, f)| matches!(f.kind(), Kind::Text | Kind::Number)).map(|(k, _)| k.to_string()).collect();
+                    ranked(keys, typed).into_iter().map(|k| (k.clone(), keyed(&k))).collect()
+                }
+                "is" => vec![("starred".to_string(), keyed("starred"))],
+                key => {
+                    let field = field(key).filter(|f| matches!(f.kind(), Kind::Text | Kind::Tag))?;
+                    let mode = if field == Field::Tag { Mode::Fuzzy } else { mode };
+                    ranked(values(field), typed).into_iter().map(|v| (v.clone(), keyed(&quoted(&v, mode)))).collect()
+                }
+            }
+        }
+    };
+    let options: Vec<(String, String)> = options.into_iter().filter(|(_, insert)| query[at.clone()] != *insert).collect();
+    (!options.is_empty()).then_some(Completion { at, options })
+}
+
 /// A number filter: `5`, `>5`, `<5` or `1..9` (only `5` can be excluded).
 fn number(field: Field, not: bool, value: &str) -> Option<Rule> {
     let parses = |v: &str| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ':');
@@ -310,6 +375,26 @@ mod tests {
         }
         let problems = |q| parse(q, &tags()).problems.into_iter().map(|p| p.at).collect::<Vec<_>>();
         assert!(problems("re:zero 12:30 artist:").is_empty());
-        assert_eq!(problems("zelda year:soon colour:red"), [6..15]);
+        let found = problems("zelda year:soon colour:red");
+        assert_eq!((found.len(), found[0].clone()), (1, 6..15));
+        assert_eq!(left_out("zelda year:soon type:mid artist:", &tags()), ["zelda", "year:soon"]);
+    }
+
+    #[test]
+    fn completing_keys_and_values() {
+        let mut values = |field: Field| match field {
+            Field::Artist => vec!["Daft Punk".to_string(), "Nujabes".to_string()],
+            _ => Vec::new(),
+        };
+        let options = |q: &str, mode, values: &mut dyn FnMut(Field) -> Vec<String>| {
+            complete(q, q.len(), mode, values).map(|c| (c.at, c.options.into_iter().map(|(_, i)| i).collect::<Vec<_>>()))
+        };
+        assert_eq!(options("zelda ar", Mode::Fuzzy, &mut values), Some((6..8, vec!["artist:".to_string()])));
+        assert_eq!(options("-artist:dp", Mode::Fuzzy, &mut values), Some((0..10, vec!["-artist:'Daft Punk'".to_string()])));
+        assert_eq!(options("artist:dp", Mode::Close, &mut values).unwrap().1, ["artist:\"Daft Punk\""]);
+        assert_eq!(options("artist:dp", Mode::Exact, &mut values).unwrap().1, ["artist:^\"Daft Punk\""]);
+        assert_eq!(options("artist:", Mode::Fuzzy, &mut values).unwrap().1.len(), 2);
+        assert_eq!(options("zelda ", Mode::Fuzzy, &mut values), None, "nothing typed");
+        assert_eq!(options("artist:Nujabes", Mode::Fuzzy, &mut values), None, "done");
     }
 }

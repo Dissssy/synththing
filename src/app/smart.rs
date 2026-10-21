@@ -49,6 +49,8 @@ pub(super) struct RulesEditor {
     rules: Rules,
     read_only: bool,
     preview: Option<(u64, Rules, String)>,
+    /// What of the search it was made from couldn't be a rule.
+    left_out: Vec<String>,
 }
 
 impl App {
@@ -107,7 +109,19 @@ impl App {
 
     fn open_rules_editor(&mut self, ctx: &egui::Context, editing: Editing, name: String, rules: Rules, builtin: bool) {
         let read_only = builtin || !rules_editable(ctx);
-        self.rules_editor = Some(RulesEditor { editing, name, rules, read_only, preview: None });
+        self.rules_editor = Some(RulesEditor { editing, name, rules, read_only, preview: None, left_out: Vec::new() });
+    }
+
+    /// Open a new smart playlist's rules made from the Songs search
+    /// `query`: its filters, saying what else it had (words to search for,
+    /// filters that didn't parse) that couldn't be a rule.
+    pub(super) fn smart_playlist_from_search(&mut self, ctx: &egui::Context, query: &str) {
+        let rules = Rules { seed: smart::new_seed(), ..crate::search::parse(query, self.songs.tags()).rules };
+        let name = self.unique_playlist_name("Smart playlist");
+        self.open_rules_editor(ctx, Editing::Playlist(None), name, rules, false);
+        if let Some(editor) = &mut self.rules_editor {
+            editor.left_out = crate::search::left_out(query, self.songs.tags()).into_iter().map(str::to_string).collect();
+        }
     }
 
     /// A playlist of the songs smart playlist `list` has now, which stays
@@ -138,6 +152,13 @@ impl App {
                 (true, true) => "New ruleset",
                 (true, false) => "Ruleset",
             });
+            if !editor.left_out.is_empty() {
+                let words = editor.left_out.join("  ");
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    format!("Not in the rules: {words}. Only filters (artist:..., type:..., year:...) can be rules: a word searched for has to say which field it's in."),
+                );
+            }
             ui.add_space(4.0);
             egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.6).show(ui, |ui| {
                 ui.add_enabled_ui(!editor.read_only, |ui| {
