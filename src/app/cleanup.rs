@@ -221,14 +221,11 @@ fn unsure_row_ui(
             if ui.add(icon_button("arrow-square-out")).on_hover_text("Open the release picked on MusicBrainz").clicked() {
                 ui.ctx().open_url(egui::OpenUrl::new_tab(format!("https://musicbrainz.org/release/{}", release.id)));
             }
-            egui::ComboBox::from_id_salt(("unsure", &album.id)).width(ui.available_width()).truncate().selected_text(unsure.describe(release)).show_ui(
-                ui,
-                |ui| {
-                    for (i, release) in unsure.releases.iter().enumerate() {
-                        ui.selectable_value(pick, i, unsure.describe(release));
-                    }
-                },
-            );
+            egui::ComboBox::from_id_salt(("unsure", &album.id)).width(ui.available_width()).truncate().selected_text(&unsure.lines[*pick]).show_ui(ui, |ui| {
+                for (i, line) in unsure.lines.iter().enumerate() {
+                    ui.selectable_value(pick, i, line);
+                }
+            });
         });
     });
     reviewed

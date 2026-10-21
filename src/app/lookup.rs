@@ -307,45 +307,52 @@ impl App {
         self.lookup_albums();
         let albums = self.lookup.albums.as_ref().map(|(_, a)| a.as_slice()).unwrap_or_default();
         let tried = &self.lookup.state.get_or_insert_with(State::load).tried;
-        albums
+        let unsure: Vec<(&Album, &Vec<String>)> = albums
             .iter()
             .filter(|album| lookup::wanted(&self.songs, album))
             .filter_map(|album| match &tried.get(&album.id)?.found {
-                Answer::Unsure(ids) => {
-                    let releases: Vec<Release> = ids.iter().filter_map(|r| lookup::kept_release(r)).collect();
-                    (!releases.is_empty()).then(|| Unsure { album: album.clone(), releases })
-                }
+                Answer::Unsure(ids) => Some((album, ids)),
                 _ => None,
+            })
+            .collect();
+        keep_releases(&mut self.lookup.kept, unsure.iter().flat_map(|(_, ids)| ids.iter().map(String::as_str)));
+        unsure
+            .into_iter()
+            .filter_map(|(album, ids)| {
+                let releases: Vec<Release> = ids.iter().filter_map(|id| self.lookup.kept.get(id)?.clone()).collect();
+                (!releases.is_empty()).then(|| Unsure::new(album.clone(), releases))
             })
             .collect()
     }
 
-    /// The release `id`, as the lookup kept it.
-    fn kept_release(&mut self, id: &str) -> Option<&Release> {
-        self.lookup.kept.entry(id.to_string()).or_insert_with(|| lookup::kept_release(id)).as_ref()
+    /// Matched songs (by key), with their releases (read into `kept`)
+    /// and recordings: those `wanted`.
+    fn matched_with(&mut self, wanted: impl Fn(&Online) -> bool) -> Vec<(String, String, Option<String>)> {
+        let matched: Vec<(String, String, Option<String>)> = self
+            .songs
+            .known()
+            .filter_map(|(key, song)| {
+                let online = song.online.as_ref().filter(|o| wanted(o))?;
+                Some((key.to_string(), online.release.clone()?, online.recording.clone()))
+            })
+            .collect();
+        keep_releases(&mut self.lookup.kept, matched.iter().map(|(_, r, _)| r.as_str()));
+        matched
     }
 
     /// Fill in matched songs' blank fields from their releases (as kept),
     /// once for each match.
     fn fill_blanks(&mut self) {
         let ignore = self.config.group_ignore.clone();
-        let waiting: Vec<(String, String, Option<String>)> = self
-            .songs
-            .known()
-            .filter_map(|(key, song)| {
-                let online = song.online.as_ref().filter(|o| o.filled.is_none())?;
-                Some((key.to_string(), online.release.clone()?, online.recording.clone()))
-            })
-            .collect();
-        if waiting.is_empty() {
+        if !self.songs.known().any(|(_, s)| s.online.as_ref().is_some_and(|o| o.release.is_some() && o.filled.is_none())) {
             return;
         }
         let genres = details::Genres::of(&self.songs, &ignore);
         let mut fills = Vec::new();
-        for (key, release, recording) in waiting {
-            let Some(release) = self.kept_release(&release).cloned() else { continue };
+        for (key, release, recording) in self.matched_with(|o| o.filled.is_none()) {
+            let Some(release) = self.lookup.kept.get(&release).and_then(Option::as_ref) else { continue };
             let Some(song) = self.songs.get_by_key(&key) else { continue };
-            let said = details::said(&release, details::track(&release, recording.as_deref()), &genres, &ignore);
+            let said = details::said(release, details::track(release, recording.as_deref()), &genres, &ignore);
             fills.push((key, details::compare(&Facts::of(song), &said, &ignore).blank));
         }
         if !fills.is_empty() {
@@ -359,22 +366,14 @@ impl App {
     /// kept on this device), for Clean up.
     pub(super) fn musicbrainz_suggestions(&mut self) -> Vec<cleanup::Suggestion> {
         let ignore = self.config.group_ignore.clone();
-        let matched: Vec<(String, String, Option<String>)> = self
-            .songs
-            .known()
-            .filter_map(|(key, song)| {
-                let online = song.online.as_ref()?;
-                Some((key.to_string(), online.release.clone()?, online.recording.clone()))
-            })
-            .collect();
         let genres = details::Genres::of(&self.songs, &ignore);
         let mut offers = Vec::new();
-        for (key, release, recording) in matched {
-            let Some(release) = self.kept_release(&release).cloned() else { continue };
+        for (key, release, recording) in self.matched_with(|_| true) {
+            let Some(release) = self.lookup.kept.get(&release).and_then(Option::as_ref) else { continue };
             let Some(song) = self.songs.get_by_key(&key) else { continue };
             let facts = Facts::of(song);
-            let track = details::track(&release, recording.as_deref());
-            let said = details::said(&release, track, &genres, &ignore);
+            let track = details::track(release, recording.as_deref());
+            let said = details::said(release, track, &genres, &ignore);
             let compared = details::compare(&facts, &said, &ignore);
             let title = facts.text(Field::Title).map_or_else(|| song.name.clone(), |t| t.into_owned());
             let length = track.and_then(|t| Some((facts.number(Field::Length)?, t.length?)));
@@ -414,10 +413,21 @@ impl App {
     }
 }
 
+/// Read the releases `ids` into `kept`, those not read yet.
+fn keep_releases<'i>(kept: &mut HashMap<String, Option<Release>>, ids: impl Iterator<Item = &'i str>) {
+    for id in ids {
+        if !kept.contains_key(id) {
+            kept.insert(id.to_string(), lookup::kept_release(id));
+        }
+    }
+}
+
 /// An album the lookup wasn't sure of, and the releases it might be.
 pub(super) struct Unsure {
     pub album: Album,
     pub releases: Vec<Release>,
+    /// Each release as one line (`Unsure::describe`).
+    pub lines: Vec<String>,
 }
 
 /// What was picked for an unsure album: a release, or none of them.
@@ -427,17 +437,24 @@ pub(super) enum Reviewed {
 }
 
 impl Unsure {
-    /// A release it might be, as one line: its name, date and how many
-    /// of the album's songs are on it.
-    pub fn describe(&self, release: &Release) -> String {
-        let fit = matching::fit(&self.album, release);
+    fn new(album: Album, releases: Vec<Release>) -> Self {
+        let lines = releases.iter().map(|r| describe(&album, r)).collect();
+        Self { album, releases, lines }
+    }
+}
+
+/// A release `album` might be, as one line: its name, date and how many
+/// of the album's songs are on it.
+fn describe(album: &Album, release: &Release) -> String {
+    let fit = matching::fit(album, release);
+    {
         format!(
             "{} by {} ({}, {} of {} songs on it)",
             release.title,
             release.artist,
             release.date.as_deref().unwrap_or("no date"),
             fit.tracks.iter().flatten().count(),
-            self.album.songs.len()
+            album.songs.len()
         )
     }
 }
