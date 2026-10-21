@@ -24,6 +24,10 @@
 //! and size), read on the device that has it (`App::note_song_meta`) and
 //! synced, so every device can list and sort the songs it doesn't have.
 //!
+//! Songs can play together (`together.json`): an ordered set of them,
+//! by key, that shuffling treats as one and plays in order. A song is in
+//! at most one.
+//!
 //! A song removed here is blocked (`blocked.json`): this device doesn't
 //! fetch it from the others again (`song_sync.rs`), until it's unblocked
 //! or imported again.
@@ -41,6 +45,7 @@ use crate::fields::{Edits, Field};
 const INDEX: &str = "library.json";
 const BLOCKED: &str = "blocked.json";
 const TAGS: &str = "tags.json";
+const TOGETHER: &str = "together.json";
 
 /// The built-in tag starred songs have: hidden from the tag editor and
 /// the chips, it syncs like any other.
@@ -147,6 +152,8 @@ pub struct SongStore {
     blocked: BTreeSet<String>,
     /// The tags, by ID.
     tags: BTreeMap<String, Tag>,
+    /// The songs that play together, by the set's ID: their keys, in order.
+    together: BTreeMap<String, Vec<String>>,
     /// Counts the changes made (`revision`).
     revision: u64,
 }
@@ -175,7 +182,11 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{TAGS}: {e}")).ok())
             .unwrap_or_default();
-        let mut store = Self { dir, songs, present, blocked, tags, revision: 0 };
+        let together = std::fs::read_to_string(dir.join(TOGETHER))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{TOGETHER}: {e}")).ok())
+            .unwrap_or_default();
+        let mut store = Self { dir, songs, present, blocked, tags, together, revision: 0 };
         if changed {
             store.save();
         }
@@ -364,6 +375,54 @@ impl SongStore {
         }
     }
 
+    /// The songs that play together, by the set's ID: their keys, in
+    /// order.
+    pub fn together(&self) -> &BTreeMap<String, Vec<String>> {
+        &self.together
+    }
+
+    /// The set the song at `path` plays together with, if it's in one:
+    /// its ID, and where in it the song is.
+    pub fn together_of(&self, path: &Path) -> Option<(&str, usize)> {
+        let key = self.key_of(path)?;
+        self.together.iter().find_map(|(id, keys)| Some((id.as_str(), keys.iter().position(|k| k == key)?)))
+    }
+
+    /// Make the songs `keys` (in order) play together as the set `id`,
+    /// taking them out of any other (a set left with fewer than two songs
+    /// is no more): fewer than two, and `id` is no more.
+    pub fn set_together(&mut self, id: &str, mut keys: Vec<String>) {
+        let mut seen = BTreeSet::new();
+        keys.retain(|k| seen.insert(k.clone()));
+        let mut changed = false;
+        for (_, songs) in self.together.iter_mut().filter(|(other, _)| other.as_str() != id) {
+            let before = songs.len();
+            songs.retain(|k| !seen.contains(k));
+            changed |= songs.len() != before;
+        }
+        let was = if keys.len() < 2 { self.together.remove(id) } else { self.together.insert(id.to_string(), keys.clone()) };
+        changed |= was.as_ref() != (keys.len() >= 2).then_some(&keys);
+        let before = self.together.len();
+        self.together.retain(|_, songs| songs.len() >= 2);
+        changed |= self.together.len() != before;
+        if changed {
+            self.save_together();
+        }
+    }
+
+    /// Take the songs at `keys` out of the sets they play together in.
+    pub fn leave_together(&mut self, keys: &[String]) {
+        let changes: Vec<(String, Vec<String>)> = self
+            .together
+            .iter()
+            .filter(|(_, songs)| songs.iter().any(|k| keys.contains(k)))
+            .map(|(id, songs)| (id.clone(), songs.iter().filter(|k| !keys.contains(k)).cloned().collect()))
+            .collect();
+        for (id, songs) in changes {
+            self.set_together(&id, songs);
+        }
+    }
+
     /// Set (`Some`) or drop (`None`) edits of songs' fields, by key; saved
     /// once. What each was before, to undo them with.
     pub fn edit(&mut self, changes: Vec<(String, Field, Option<String>)>) -> Vec<(String, Field, Option<String>)> {
@@ -454,6 +513,17 @@ impl SongStore {
         self.revision += 1;
         let path = self.dir.join(TAGS);
         let written = std::fs::create_dir_all(&self.dir).and_then(|()| write_atomically(&path, serde_json::to_string_pretty(&self.tags).unwrap_or_default().as_bytes()));
+        if let Err(e) = written {
+            log::warn!("couldn't save {}: {e}", path.display());
+        }
+    }
+
+    fn save_together(&mut self) {
+        let _timing = crate::frame_timing::scope("song store save");
+        self.revision += 1;
+        let path = self.dir.join(TOGETHER);
+        let written =
+            std::fs::create_dir_all(&self.dir).and_then(|()| write_atomically(&path, serde_json::to_string_pretty(&self.together).unwrap_or_default().as_bytes()));
         if let Err(e) = written {
             log::warn!("couldn't save {}: {e}", path.display());
         }
@@ -958,6 +1028,28 @@ mod tests {
         assert_eq!(names(&store), ["Chill", "party"], "kept");
         store.remove_tag("b");
         assert_eq!(names(&SongStore::open(dir.clone())), ["party"], "deleted from the song too");
+    }
+
+    #[test]
+    fn together() {
+        let dir = temp_dir("together");
+        let mut store = SongStore::open(dir.clone());
+        let mut keys = Vec::new();
+        for name in ["a", "b", "c", "d"] {
+            let stored = write_in(name.as_bytes(), &format!("{name}.mid"), &dir).unwrap();
+            keys.push(stored.key.clone());
+            store.add(stored);
+        }
+        store.set_together("one", vec![keys[1].clone(), keys[0].clone(), keys[1].clone()]);
+        assert_eq!(store.together_of(&path_of(&dir, &keys[0])), Some(("one", 1)), "in order, each once");
+        store.set_together("two", vec![keys[0].clone(), keys[2].clone()]);
+        assert!(!store.together().contains_key("one"), "left with one song, it's no more");
+        assert_eq!(store.together_of(&path_of(&dir, &keys[2])), Some(("two", 1)));
+        let mut store = SongStore::open(dir.clone());
+        assert_eq!(store.together()["two"], [keys[0].clone(), keys[2].clone()], "kept");
+        store.leave_together(&keys[2..3]);
+        assert!(store.together().is_empty());
+        assert_eq!(store.together_of(&path_of(&dir, &keys[3])), None);
     }
 
     #[test]

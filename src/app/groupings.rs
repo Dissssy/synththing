@@ -34,6 +34,9 @@ use crate::song_store::STARRED;
 const ARTISTS: &str = "artists";
 /// The user's playlists, the first of the Groupings (not a ruleset).
 pub(super) const PLAYLISTS: &str = "playlists";
+/// The songs that play together (`SongStore::together`), each set a group
+/// in its order, after the playlists while there are any (not a ruleset).
+pub(super) const TOGETHER: &str = "together";
 /// The ruleset shown first.
 const FIRST: &str = PLAYLISTS;
 
@@ -125,22 +128,29 @@ impl Groupings {
 
 /// What the views asked for this frame, done once they're drawn.
 enum Act {
-    /// Play these songs (each with whether it's starred) from the one at
-    /// the index.
-    Play(Vec<(PathBuf, bool)>, usize),
+    /// Play these songs from the one at the index.
+    Play(Vec<PathBuf>, usize),
     /// Play the playlist with this ID.
     PlayPlaylist(String),
-    Shuffle(Vec<(PathBuf, bool)>),
+    Shuffle(Vec<PathBuf>),
     Star(Vec<PathBuf>, bool),
     Info(PathBuf),
     /// Open group `key` of ruleset `id` (a playlist, by its ID, for
     /// `PLAYLISTS`).
     Open(String, String),
+    /// Make the set of songs that play together with this ID these, in
+    /// order.
+    Together(String, Vec<String>),
 }
 
 /// "3 songs": how many of `what` (singular) there are.
 fn count(n: usize, what: &str) -> String {
     format!("{} {what}{}", thousands(n), if n == 1 { "" } else { "s" })
+}
+
+/// The songs that play together, shown like a ruleset's playlists.
+fn together_ruleset() -> Ruleset {
+    Ruleset { name: "Play together".into(), rules: Default::default() }
 }
 
 /// What a ruleset's playlists are of, one of them.
@@ -214,6 +224,12 @@ impl App {
                             if ui.add(chip).clicked() {
                                 pick = Some(PLAYLISTS.to_string());
                             }
+                            if !self.songs.together().is_empty() {
+                                let chip = egui::Button::selectable(self.groupings.shown() == TOGETHER, "Play together").corner_radius(12.0);
+                                if ui.add(chip).clicked() {
+                                    pick = Some(TOGETHER.to_string());
+                                }
+                            }
                             for (id, ruleset) in &rulesets {
                                 let chip = egui::Button::selectable(self.groupings.shown() == id, &ruleset.name).corner_radius(12.0);
                                 if ui.add(chip).clicked() {
@@ -262,21 +278,62 @@ impl App {
                 view.find.clear();
                 view.picked = None;
             }
+            Some(Act::Together(id, keys)) => {
+                self.songs.set_together(&id, keys);
+                self.songs_changed();
+            }
             Some(Act::Shuffle(_)) | None => {}
         }
     }
 
     /// The ruleset shown: its groups, or the one open.
     fn ruleset_ui(&mut self, ui: &mut egui::Ui) -> Option<Act> {
-        let rulesets = self.all_rulesets();
-        let (id, ruleset) = rulesets.iter().find(|(id, _)| id == self.groupings.shown()).or(rulesets.first()).cloned()?;
+        let (id, ruleset, what, groups) = if self.groupings.shown() == TOGETHER && !self.songs.together().is_empty() {
+            (TOGETHER.to_string(), together_ruleset(), "set", self.together_groups())
+        } else {
+            let rulesets = self.all_rulesets();
+            let (id, ruleset) = rulesets.iter().find(|(id, _)| id == self.groupings.shown()).or(rulesets.first()).cloned()?;
+            let groups = self.groups_of(&id, &ruleset.rules);
+            (id, ruleset.clone(), what(&ruleset), groups)
+        };
         self.groupings.shown = Some(id.clone());
-        let groups = self.groups_of(&id, &ruleset.rules);
         let open = self.groupings.view().open.clone().and_then(|key| groups.iter().find(|g| g.key == key).cloned());
         match open {
             Some(group) => self.group_page_ui(ui, &id, &ruleset, &group),
-            None => self.groups_ui(ui, &id, what(&ruleset), albums(&ruleset), self.songs.revision(), &groups),
+            None => self.groups_ui(ui, &id, what, albums(&ruleset), self.songs.revision(), &groups),
         }
+    }
+
+    /// The songs that play together as groups: each set titled by its
+    /// first song, the rest of it beneath.
+    fn together_groups(&mut self) -> Arc<Vec<Group>> {
+        let naming = naming(&self.config, &self.songs);
+        let cache = &mut self.song_info;
+        let mut groups: Vec<Group> = self
+            .songs
+            .together()
+            .iter()
+            .map(|(id, keys)| {
+                let names: Vec<String> = keys
+                    .iter()
+                    .map(|key| {
+                        let path = self.songs.path(key);
+                        let info = if self.songs.has(key) { cache.get(&path) } else { None };
+                        naming.name(&path, info.as_deref())
+                    })
+                    .collect();
+                Group {
+                    key: id.clone(),
+                    sort: fields::sort_text(&names[0], self.config.sort_with_articles),
+                    title: names[0].clone(),
+                    subtitle: Some(format!("then {}", names[1..].join(", "))),
+                    artists: Vec::new(),
+                    songs: keys.clone(),
+                }
+            })
+            .collect();
+        groups.sort_by(|a, b| a.sort.cmp(&b.sort));
+        Arc::new(groups)
     }
 
     /// The playlists: as tiles or rows (dropping songs there makes a new
@@ -376,6 +433,9 @@ impl App {
                 None => ("Playlists".into(), false),
             };
         }
+        if id == TOGETHER {
+            return ("Play together".into(), self.groupings.views.get(id).is_some_and(|v| v.open.is_some()));
+        }
         let open = self.groupings.views.get(id).and_then(|v| v.open.as_ref());
         let group = open.and_then(|key| self.ruleset_groups.get(id)?.2.iter().find(|g| &g.key == key));
         match group {
@@ -384,10 +444,10 @@ impl App {
         }
     }
 
-    /// The song files of `group` that are here (with whether each is
-    /// starred), in its order: what playing it plays.
-    fn playable(&self, group: &Group) -> Vec<(PathBuf, bool)> {
-        group.songs.iter().filter(|key| self.songs.has(key)).map(|key| (self.songs.path(key), self.songs.get_by_key(key).is_some_and(|s| s.tags.iter().any(|t| t == STARRED)))).collect()
+    /// The song files of `group` that are here, in its order: what
+    /// playing it plays.
+    fn playable(&self, group: &Group) -> Vec<PathBuf> {
+        group.songs.iter().filter(|key| self.songs.has(key)).map(|key| self.songs.path(key)).collect()
     }
 
     /// Where `group`'s art comes from: the first song of it here that
@@ -468,7 +528,7 @@ impl App {
         }
         let shown = self.groupings.view().shown.as_ref().map(|(_, s)| s.clone()).unwrap_or_default();
         if play_all {
-            let all: Vec<(PathBuf, bool)> = shown.iter().flat_map(|&i| self.playable(&groups[i])).collect();
+            let all: Vec<PathBuf> = shown.iter().flat_map(|&i| self.playable(&groups[i])).collect();
             act = Some(Act::Play(all, 0));
         }
 
@@ -590,7 +650,8 @@ impl App {
         let tracks: Vec<Track> = group
             .songs
             .iter()
-            .map(|key| {
+            .enumerate()
+            .map(|(i, key)| {
                 let path = self.songs.path(key);
                 let here = self.songs.has(key);
                 let info = if here { cache.get(&path) } else { None };
@@ -601,7 +662,8 @@ impl App {
                     artists: facts.items(Field::Artist).into_iter().map(|a| a.into_owned()).collect(),
                     album: text(Field::Album),
                     disc: facts.number(Field::Disc).map(|n| n as u32),
-                    number: facts.number(Field::Track).map(|n| n as u32),
+                    // (A set's songs by their place in it.)
+                    number: if id == TOGETHER { Some(i as u32 + 1) } else { facts.number(Field::Track).map(|n| n as u32) },
                     length: facts.number(Field::Length),
                     starred: facts.starred(),
                     here,
@@ -663,8 +725,11 @@ impl App {
             if !words.iter().all(|w| name.contains(w.as_str())) {
                 continue;
             }
-            // Albums under their discs, the rest under their albums.
-            let this = if albums {
+            // Albums under their discs, the rest under their albums (a set
+            // of songs that play together as it is).
+            let this = if id == TOGETHER {
+                None
+            } else if albums {
                 discs.then(|| format!("Disc {}", track.disc.unwrap_or(1)))
             } else {
                 Some(album_key(track).and_then(|k| best.get(&k).map(|b| b.to_string())).unwrap_or_else(|| "No album".into()))
@@ -678,7 +743,7 @@ impl App {
             heights.push(row);
         }
 
-        let playable: Vec<(PathBuf, bool)> = tracks.iter().filter(|t| t.here).map(|t| (t.path.clone(), t.starred)).collect();
+        let playable: Vec<PathBuf> = tracks.iter().filter(|t| t.here).map(|t| t.path.clone()).collect();
         let all_starred = tracks.iter().all(|t| t.starred);
         let length: f64 = tracks.iter().filter_map(|t| t.length).sum();
         let art_cache = &mut self.groupings.art;
@@ -743,12 +808,25 @@ impl App {
                 let guest = guest.as_deref();
                 let playing = current.as_deref() == Some(track.path.as_path());
                 let picked = view.picked.as_deref() == Some(track.path.as_path());
-                let output = track_row(ui, rect, track, guest, playing, picked, *t % 2 == 1);
+                // (A set's songs move and come out of it here.)
+                let moves = (id == TOGETHER).then(|| (*t > 0, *t + 1 < tracks.len()));
+                let output = track_row(ui, rect, track, guest, playing, picked, *t % 2 == 1, moves);
+                if let Some(change) = output.change {
+                    let mut keys = group.songs.clone();
+                    match change {
+                        Change::Sooner => keys.swap(*t - 1, *t),
+                        Change::Later => keys.swap(*t, *t + 1),
+                        Change::Out => {
+                            keys.remove(*t);
+                        }
+                    }
+                    act = Some(Act::Together(group.key.clone(), keys));
+                }
                 if output.picked {
                     view.picked = Some(track.path.clone());
                 }
                 if output.play && track.here {
-                    let at = playable.iter().position(|(p, _)| *p == track.path).unwrap_or(0);
+                    let at = playable.iter().position(|p| *p == track.path).unwrap_or(0);
                     act = Some(Act::Play(playable.clone(), at));
                 }
                 if output.star {
@@ -770,13 +848,25 @@ struct RowOutput {
     play: bool,
     star: bool,
     info: bool,
+    change: Option<Change>,
+}
+
+/// A change to where a song is in the set it plays together with.
+#[derive(Clone, Copy)]
+enum Change {
+    Sooner,
+    Later,
+    Out,
 }
 
 /// One song's row in `rect`: its star, number, name, guest artist and
 /// length, marked when it's `playing` or `picked`, weak when its file
 /// isn't here. A click picks it and a double-click plays it (a tap, on a
-/// phone); on the desktop it drags onto a playlist.
-fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<&str>, playing: bool, picked: bool, striped: bool) -> RowOutput {
+/// phone); on the desktop it drags onto a playlist. With `moves` (whether
+/// it can go sooner, and later), it has buttons to move it in its set, or
+/// take it out.
+#[allow(clippy::too_many_arguments)]
+fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<&str>, playing: bool, picked: bool, striped: bool, moves: Option<(bool, bool)>) -> RowOutput {
     let touch = select_list::touch(ui.ctx());
     let sense = if touch { egui::Sense::click() } else { egui::Sense::click_and_drag() };
     let response = ui.interact(rect, ui.id().with(("track", &track.path)), sense - egui::Sense::FOCUSABLE);
@@ -814,6 +904,17 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
         let scroll = playing || response.contains_pointer();
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(4.0);
+            if let Some((sooner, later)) = moves {
+                if ui.button(super::icon("x")).on_hover_text("Take it out").clicked() {
+                    output.change = Some(Change::Out);
+                }
+                if ui.add_enabled(later, egui::Button::new(super::icon("arrow-down"))).on_hover_text("Play it later").clicked() {
+                    output.change = Some(Change::Later);
+                }
+                if ui.add_enabled(sooner, egui::Button::new(super::icon("arrow-up"))).on_hover_text("Play it sooner").clicked() {
+                    output.change = Some(Change::Sooner);
+                }
+            }
             if let Some(length) = track.length {
                 ui.label(egui::RichText::new(format_length(length)).weak());
             }

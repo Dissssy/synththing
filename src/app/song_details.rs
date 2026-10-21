@@ -109,6 +109,8 @@ impl App {
                     ui.weak("How it plays: times as 1:23, the volume from -100 to 100%. Remember position starts it again where you left it.");
                     preview = self.options_range_ui(ui, &mut details);
                     self.details_tab_ui(ui, &mut details, Section::Options);
+                    ui.separator();
+                    self.together_ui(ui, &details);
                 }
                 Tab::File => self.file_tab_ui(ui, &details.paths[0]),
             }
@@ -247,6 +249,53 @@ impl App {
             });
         });
         play
+    }
+
+    /// The songs one song plays together with (`SongStore::together`), in
+    /// order, each to move or take out: changed at once, not on saving.
+    fn together_ui(&mut self, ui: &mut egui::Ui, details: &SongDetails) {
+        let [key] = details.keys.as_slice() else { return };
+        let Some(id) = self.songs.together_of(&self.songs.path(key)).map(|(id, _)| id.to_string()) else {
+            ui.weak("To play songs together, in order and as one when shuffling, select them in Songs and pick Play together from their menu.");
+            return;
+        };
+        let mut keys = self.songs.together()[&id].clone();
+        ui.label("Plays together with, in order (as one when shuffling):");
+        let mut remove = None;
+        let mut raise = None;
+        let last = keys.len() - 1;
+        for (i, k) in keys.iter().enumerate() {
+            let path = self.songs.path(k);
+            let title = egui::RichText::new(self.song_title(&path));
+            ui.horizontal(|ui| {
+                ui.weak(format!("{}.", i + 1));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(super::icon("x")).on_hover_text("Take it out").clicked() {
+                        remove = Some(i);
+                    }
+                    if ui.add_enabled(i < last, egui::Button::new(super::icon("arrow-down"))).on_hover_text("Play it later").clicked() {
+                        raise = Some(i + 1);
+                    }
+                    if ui.add_enabled(i > 0, egui::Button::new(super::icon("arrow-up"))).on_hover_text("Play it sooner").clicked() {
+                        raise = Some(i);
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(egui::Label::new(if k == key { title.strong() } else { title }).truncate());
+                    });
+                });
+            });
+        }
+        if raise.is_none() && remove.is_none() {
+            return;
+        }
+        if let Some(i) = raise {
+            keys.swap(i - 1, i);
+        }
+        if let Some(i) = remove {
+            keys.remove(i);
+        }
+        self.songs.set_together(&id, keys);
+        self.songs_changed();
     }
 
     /// Play the song at `path` from `at` seconds, to hear its options.

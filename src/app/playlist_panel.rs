@@ -126,8 +126,9 @@ impl App {
         // (Shuffling passes over the songs that say to.)
         let skips = |path: &std::path::Path| self.shuffle && self.songs.get(path).is_some_and(|s| crate::fields::Facts::of(s).flag(crate::fields::Field::SkipShuffle));
         let playable: Vec<bool> = entries.iter().map(|e| (!only_starred || self.songs.is_starred(&e.path)) && !skips(&e.path)).collect();
+        let members: Vec<_> = entries.iter().map(|e| self.songs.together_of(&e.path)).collect();
         let random = self.rng.next();
-        playlist::next_entry(&playable, np.entry, self.loop_mode, self.shuffle, &np.history, random)
+        playlist::next_entry(&playable, &members, np.entry, self.loop_mode, self.shuffle, &np.history, random)
     }
 
     /// Decide now which entry follows the current one (randomly, if
