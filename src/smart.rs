@@ -18,7 +18,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -296,6 +296,10 @@ pub struct Group {
     pub songs: Vec<String>,
 }
 
+/// The subtitle of an album whose songs are by several artists, and no
+/// album artist says who it's by.
+pub const VARIOUS_ARTISTS: &str = "Various Artists";
+
 /// A ruleset as kept: its name and definition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Ruleset {
@@ -437,7 +441,9 @@ fn sort_key(order: Order, seed: u64, key: &str, song: &Song) -> SortKey {
         Order::Random => SortKey { numbers: [shuffled(seed, key), 0, 0], ..SortKey::default() },
         Order::Title => SortKey { text: [title, String::new(), String::new()], ..SortKey::default() },
         Order::Artist => SortKey { text: [name(Field::Artist), name(Field::Album), title], ..track_numbers(meta) },
-        Order::Album => SortKey { text: [name(Field::Album), filed_under(&facts).map(|t| fields::group_key(&t, "")).unwrap_or_default(), title], ..track_numbers(meta) },
+        // (An album's songs in track order whoever each is by: an album is
+        // its name's songs, `Rules::groups`.)
+        Order::Album => SortKey { text: [name(Field::Album), String::new(), title], ..track_numbers(meta) },
         Order::Genre => SortKey { text: [lower(Field::Genre), title, String::new()], ..SortKey::default() },
         Order::Year => SortKey { text: [title, String::new(), String::new()], numbers: [meta.and_then(|m| m.year).map_or(u64::MAX, u64::from), 0, 0] },
         Order::NewestAdded => SortKey { numbers: [u64::MAX - song.imported.max(0) as u64, 0, 0], text: [title, String::new(), String::new()] },
@@ -525,24 +531,37 @@ impl Rules {
     /// songs' spellings.
     pub fn groups(&self, store: &SongStore, now: i64, ignore: &str) -> Vec<Group> {
         /// A playlist being made: its songs' spellings of its title and
-        /// subtitle, and its songs.
+        /// subtitle (an album's: its album artists', else its artists'),
+        /// and its songs.
         #[derive(Default)]
         struct Making<'a> {
             titles: Vec<Cow<'a, str>>,
             subtitles: Vec<Cow<'a, str>>,
+            artists: Vec<Cow<'a, str>>,
             songs: Vec<(&'a str, &'a Song)>,
         }
+        /// A song on an album: its key, it, and the album's name, album
+        /// artist and artist as it says them (by the name's group key).
+        type OnAlbum<'a> = (&'a str, &'a Song, Cow<'a, str>, Option<Cow<'a, str>>, Option<Cow<'a, str>>);
         let Some(split) = &self.split else { return Vec::new() };
         let tags = store.tags();
         let candidates = store.known().filter(|(key, _)| !store.is_blocked(key));
         let mut groups: BTreeMap<String, Making> = BTreeMap::new();
+        let mut albums: BTreeMap<String, Vec<OnAlbum>> = BTreeMap::new();
         for (key, song) in self.matching(candidates, now) {
             let facts = Facts::of(song);
+            if split.by == SplitBy::Album {
+                if let Some(album) = facts.text(Field::Album) {
+                    let on = (key, song, album, facts.text(Field::AlbumArtist), facts.text(Field::Artist));
+                    albums.entry(fields::group_key(&on.2, ignore)).or_default().push(on);
+                }
+                continue;
+            }
             let one = |field: Field| facts.text(field).map(|t| (t, None)).into_iter().collect();
             let values: Vec<(Cow<str>, Option<Cow<str>>)> = match split.by {
                 SplitBy::Artist => one(Field::Artist),
                 SplitBy::AlbumArtist => filed_under(&facts).map(|a| (a, None)).into_iter().collect(),
-                SplitBy::Album => facts.text(Field::Album).map(|album| (album, filed_under(&facts))).into_iter().collect(),
+                SplitBy::Album => unreachable!("albums are made below"),
                 SplitBy::Composer => one(Field::Composer),
                 SplitBy::Genre => one(Field::Genre),
                 SplitBy::Year => song.meta.as_ref().and_then(|m| m.year).map(|y| (Cow::Owned(y.to_string()), None)).into_iter().collect(),
@@ -556,13 +575,31 @@ impl Rules {
                 making.songs.push((key, song));
             }
         }
+        // An album is its name's songs, whoever each is by: a soundtrack's
+        // songs by several artists, or with its album artist spelled
+        // several ways, are one album.
+        for (name, songs) in albums {
+            let making = groups.entry(format!("{name}\u{0}")).or_default();
+            for (key, song, album, album_artist, artist) in songs {
+                making.titles.push(album);
+                making.subtitles.extend(album_artist);
+                making.artists.extend(artist);
+                making.songs.push((key, song));
+            }
+        }
         groups
             .into_iter()
             .filter(|(_, making)| making.songs.len() >= split.min.max(1))
             .map(|(key, making)| Group {
                 key,
                 title: fields::best_spelling(making.titles.iter().map(|t| t.as_ref())).unwrap_or_default().to_string(),
-                subtitle: fields::best_spelling(making.subtitles.iter().map(|t| t.as_ref())).map(str::to_string),
+                subtitle: fields::best_spelling(making.subtitles.iter().map(|t| t.as_ref()))
+                    .map(str::to_string)
+                    .or_else(|| match making.artists.iter().map(|a| fields::group_key(a, ignore)).collect::<BTreeSet<_>>().len() {
+                        0 => None,
+                        1 => fields::best_spelling(making.artists.iter().map(|a| a.as_ref())).map(str::to_string),
+                        _ => Some(VARIOUS_ARTISTS.to_string()),
+                    }),
                 songs: self.limited(making.songs).into_iter().map(|(key, _)| key.to_string()).collect(),
             })
             .collect()
@@ -692,5 +729,18 @@ mod tests {
         let titles: Vec<(&str, Option<&str>)> = groups.iter().map(|g| (g.title.as_str(), g.subtitle.as_deref())).collect();
         assert_eq!(titles, [("<OST>", Some("Composer"))]);
         assert_eq!(names(&ost, &groups[0].songs), ["a.ogg", "b.ogg", "c.ogg"]);
+        // A soundtrack by several artists is one album, in track order;
+        // so is one with its album artist spelled two ways.
+        let various = store(&[
+            ("a.ogg", meta("Kan Gao", "Finding Paradise <OST>", 2, 1.0), &[], 0),
+            ("b.ogg", meta("Laura Shigihara", "Finding Paradise OST", 1, 1.0), &[], 0),
+            ("c.ogg", Meta { album_artist: Some("Kan R. Gao".into()), ..meta("Kan Gao", "A Bird Story", 2, 1.0) }, &[], 0),
+            ("d.ogg", Meta { album_artist: Some("Kan (Reives) Gao".into()), ..meta("Kan Gao", "A Bird Story", 1, 1.0) }, &[], 0),
+        ]);
+        let groups = albums.rules.groups(&various, 0, "");
+        let titles: Vec<(&str, Option<&str>)> = groups.iter().map(|g| (g.title.as_str(), g.subtitle.as_deref())).collect();
+        assert_eq!(titles, [("A Bird Story", Some("Kan (Reives) Gao")), ("Finding Paradise <OST>", Some(VARIOUS_ARTISTS))]);
+        assert_eq!(names(&various, &groups[0].songs), ["d.ogg", "c.ogg"]);
+        assert_eq!(names(&various, &groups[1].songs), ["b.ogg", "a.ogg"]);
     }
 }

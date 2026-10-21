@@ -25,7 +25,7 @@ use super::{icon_button, is_midi_path, naming, App, PrefTab};
 use crate::album_art::AlbumArt;
 use crate::fields;
 use crate::select_list;
-use crate::smart::{Group, Ruleset, SplitBy};
+use crate::smart::{Group, Ruleset, SplitBy, VARIOUS_ARTISTS};
 use crate::song_info::{format_length, thousands};
 use crate::song_list::DraggedFiles;
 use crate::song_store::STARRED;
@@ -693,7 +693,7 @@ impl App {
                         ui.add(egui::Label::new(egui::RichText::new(&group.title).heading()).truncate());
                     }
                     if let Some(subtitle) = &group.subtitle {
-                        if links_to_artist {
+                        if links_to_artist && subtitle != VARIOUS_ARTISTS {
                             if ui.link(subtitle).on_hover_text("Show the artist").clicked() {
                                 act = Some(Act::Open(ARTISTS.into(), format!("{}\u{0}", fields::group_key(subtitle, &ignore))));
                             }

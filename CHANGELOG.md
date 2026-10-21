@@ -11,6 +11,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Album art from the picture in the songs' files, read in the background. Anything without art gets a tile in a color of its own with its first letters: one to four of them (Preferences > Songs; four make a square).
 - A playlist remembers the song it was on: the fast-forward button beside Play continues from there.
 - Spellings of a name are one group: albums, artists and the Songs list's groups see past case, spacing, punctuation and symbols (and full-width letters), so "<OST>" and "OST", or "Justcore Extravaganza" and "JUSTCORE EXTRAVAGANZA", are one, shown as the spelling with mixed case (else the one most of its songs have). Preferences > Songs can name more characters to pass over.
+- An album is its name's songs, whoever each is by: a soundtrack with songs by several artists, or with its album artist spelled two ways, is one album (its artist line says Various Artists when its songs' artists differ and no album artist is set), its songs in track order.
 - More Songs list columns: Disc and Size. Song names can use every field ({disc}, {size}, {imported}...), and smart playlist rules can go by file type.
 
 ### Changed
