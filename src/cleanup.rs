@@ -188,8 +188,8 @@ fn same_words(a: &[String], b: &[String]) -> bool {
         && a != b
 }
 
-/// What a field's item could be split into: an artist's or composer's
-/// at "&", ",", " x " and "feat." (and "ft.", "featuring", bracketed or
+/// What a field's item could be split into: a name's (artist, album
+/// artist or composer) at "&", ",", " x " and "feat." (and "ft.", "featuring", bracketed or
 /// not), a genre's at "/" and " & ".
 fn split(field: Field, item: &str) -> Vec<String> {
     const NAMES: &[&str] = &[
@@ -198,7 +198,7 @@ fn split(field: Field, item: &str) -> Vec<String> {
     ];
     const GENRES: &[&str] = &["/", " & "];
     let at = match field {
-        Field::Artist | Field::Composer => NAMES,
+        Field::Artist | Field::AlbumArtist | Field::Composer => NAMES,
         Field::Genre => GENRES,
         _ => return vec![item.to_string()],
     };
@@ -327,6 +327,7 @@ mod tests {
         assert_eq!(split(Field::Genre, "Hip-Hop/Rap"), ["Hip-Hop", "Rap"]);
         assert_eq!(split(Field::Genre, "R&B"), ["R&B"]);
         assert_eq!(split(Field::Title, "A & B"), ["A & B"]);
+        assert_eq!(split(Field::AlbumArtist, "Uyama Hiroto & Nujabes"), ["Uyama Hiroto ", " Nujabes"]);
         for (text, tidied) in [("\"Perry Porter\"", "Perry Porter"), (" Nujabes", "Nujabes"), ("B)", "B"), ("Perry  Porter\"", "Perry Porter"), ("“Song”", "Song"), ("Guns N' Roses", "Guns N' Roses"), ("Song (Live)", "Song (Live)")] {
             assert_eq!(tidy(text), tidied, "{text}");
         }

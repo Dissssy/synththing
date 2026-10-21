@@ -105,7 +105,7 @@ const NAME_LIST: &[char] = &[';', '\0'];
 pub const FIELDS: &[Def] = &[
     def(Field::Title, "title", "Title", Kind::Text, true, 0.0, false, &[], true),
     def(Field::Artist, "artist", "Artist", Kind::Text, true, 140.0, true, NAME_LIST, true),
-    def(Field::AlbumArtist, "album_artist", "Album artist", Kind::Text, true, 140.0, true, &[], true),
+    def(Field::AlbumArtist, "album_artist", "Album artist", Kind::Text, true, 140.0, true, NAME_LIST, true),
     def(Field::Album, "album", "Album", Kind::Text, true, 140.0, true, &[], true),
     def(Field::Composer, "composer", "Composer", Kind::Text, true, 140.0, true, NAME_LIST, true),
     def(Field::Genre, "genre", "Genre", Kind::Text, true, 100.0, true, GENRE_LIST, true),
@@ -132,6 +132,11 @@ impl Def {
     /// (a field that isn't a list is its one item).
     pub fn split<'t>(&self, text: &'t str) -> impl Iterator<Item = &'t str> {
         text.split(self.list).map(str::trim).filter(|t| !t.is_empty())
+    }
+
+    /// Names written to be read: "Uyama Hiroto & Nujabes".
+    pub fn names<S: AsRef<str>>(names: &[S]) -> String {
+        names.iter().map(AsRef::as_ref).collect::<Vec<_>>().join(" & ")
     }
 
     /// Items written as a list field's text, by its first separator.

@@ -25,7 +25,7 @@ use super::{icon_button, is_midi_path, naming, App, PrefTab};
 use crate::album_art::AlbumArt;
 use crate::fields::{self, Facts, Field};
 use crate::select_list;
-use crate::smart::{Group, Ruleset, SplitBy, VARIOUS_ARTISTS};
+use crate::smart::{Group, Ruleset, SplitBy};
 use crate::song_info::{format_length, thousands};
 use crate::song_list::DraggedFiles;
 use crate::song_store::STARRED;
@@ -77,7 +77,7 @@ struct RulesetView {
 struct Track {
     path: PathBuf,
     name: String,
-    artist: Option<String>,
+    artists: Vec<String>,
     album: Option<String>,
     disc: Option<u32>,
     number: Option<u32>,
@@ -330,6 +330,7 @@ impl App {
                 key: stored.id.clone(),
                 title: stored.playlist.name.clone(),
                 subtitle: None,
+                artists: Vec::new(),
                 songs: stored.playlist.entries.iter().filter_map(|e| crate::song_store::key_in(dir, &e.path).map(str::to_string)).collect(),
             })
             .collect();
@@ -596,7 +597,7 @@ impl App {
                 let text = |field| facts.text(field).map(|t| t.into_owned());
                 Track {
                     name: naming.name(&path, info.as_deref()),
-                    artist: text(Field::Artist),
+                    artists: facts.items(Field::Artist).into_iter().map(|a| a.into_owned()).collect(),
                     album: text(Field::Album),
                     disc: facts.number(Field::Disc).map(|n| n as u32),
                     number: facts.number(Field::Track).map(|n| n as u32),
@@ -693,10 +694,18 @@ impl App {
                         ui.add(egui::Label::new(egui::RichText::new(&group.title).heading()).truncate());
                     }
                     if let Some(subtitle) = &group.subtitle {
-                        if links_to_artist && subtitle != VARIOUS_ARTISTS {
-                            if ui.link(subtitle).on_hover_text("Show the artist").clicked() {
-                                act = Some(Act::Open(ARTISTS.into(), format!("{}\u{0}", fields::group_key(subtitle, &ignore))));
-                            }
+                        if links_to_artist && !group.artists.is_empty() {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                for (i, artist) in group.artists.iter().enumerate() {
+                                    if i > 0 {
+                                        ui.label(" & ");
+                                    }
+                                    if ui.link(artist).on_hover_text("Show the artist").clicked() {
+                                        act = Some(Act::Open(ARTISTS.into(), format!("{}\u{0}", fields::group_key(artist, &ignore))));
+                                    }
+                                }
+                            });
                         } else {
                             ui.label(subtitle);
                         }
@@ -723,7 +732,14 @@ impl App {
             Row::Track(t) => {
                 let track = &tracks[*t];
                 // (A guest's name beside their track.)
-                let guest = track.artist.as_deref().filter(|a| group.subtitle.as_deref().is_none_or(|s| !a.eq_ignore_ascii_case(s)) && !a.eq_ignore_ascii_case(&group.title));
+                let named = |a: &str| fields::group_key(a, &ignore);
+                let guests: Vec<&String> = track
+                    .artists
+                    .iter()
+                    .filter(|a| named(a) != named(&group.title) && !group.artists.iter().any(|g| named(g) == named(a)))
+                    .collect();
+                let guest = (!guests.is_empty()).then(|| fields::Def::names(&guests));
+                let guest = guest.as_deref();
                 let playing = current.as_deref() == Some(track.path.as_path());
                 let picked = view.picked.as_deref() == Some(track.path.as_path());
                 let output = track_row(ui, rect, track, guest, playing, picked, *t % 2 == 1);
