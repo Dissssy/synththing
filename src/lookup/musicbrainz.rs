@@ -1,14 +1,21 @@
 //! Asking MusicBrainz for an album's releases: a search by its name and
 //! artist, then the track lists of the few that might be it. Requests are
-//! paced to one a second, as MusicBrainz asks.
+//! paced to one a second, as MusicBrainz asks. What it answers is kept as
+//! it came (`Cache`, in the config folder's `musicbrainz`) for six months,
+//! so looking an album up again, or its details later, needn't ask again.
 
-use std::time::{Duration, Instant};
+use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use musicbrainz_rs::MusicBrainzClient;
 use musicbrainz_rs::entity::artist_credit::ArtistCredit;
 use musicbrainz_rs::entity::release::{Release as Entity, ReleaseStatus};
+use musicbrainz_rs::entity::search::SearchResult;
 use musicbrainz_rs::prelude::*;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use sha2::Digest;
 
 use super::matching::{self, Album, Release, Track};
 
@@ -18,16 +25,52 @@ const HITS: u8 = 10;
 const FETCHED: usize = 3;
 /// The least time between two requests.
 const PACE: Duration = Duration::from_millis(1100);
+/// How long an answer is kept before it's asked for again.
+const KEPT: Duration = Duration::from_secs(182 * 24 * 60 * 60);
+
+/// MusicBrainz's answers, each in a file of its own: releases by id,
+/// searches by a hash of the query.
+struct Cache {
+    dir: Option<PathBuf>,
+}
+
+impl Cache {
+    fn path(&self, kind: &str, name: &str) -> Option<PathBuf> {
+        Some(self.dir.as_ref()?.join(kind).join(format!("{name}.json")))
+    }
+
+    /// What's kept under `name`, if it's younger than `KEPT`.
+    fn get<T: DeserializeOwned>(&self, kind: &str, name: &str) -> Option<T> {
+        let path = self.path(kind, name)?;
+        let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+        if SystemTime::now().duration_since(modified).unwrap_or_default() > KEPT {
+            return None;
+        }
+        serde_json::from_slice(&std::fs::read(&path).ok()?).ok()
+    }
+
+    fn put<T: Serialize>(&self, kind: &str, name: &str, value: &T) {
+        let Some(path) = self.path(kind, name) else { return };
+        let written = serde_json::to_vec(value)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| std::fs::create_dir_all(path.parent().expect("in a folder")).and_then(|()| std::fs::write(&path, bytes)));
+        if let Err(e) = written {
+            log::warn!("couldn't keep {}: {e}", path.display());
+        }
+    }
+}
 
 pub struct MusicBrainz {
     client: MusicBrainzClient,
     last: Option<Instant>,
+    cache: Cache,
 }
 
 impl MusicBrainz {
     pub fn new() -> Self {
         let agent = format!("synththing/{} ( https://github.com/Dissssy/synththing )", crate::build_info::VERSION);
-        Self { client: MusicBrainzClient::new(&agent), last: None }
+        let dir = crate::config::config_dir().ok().map(|d| d.join("musicbrainz"));
+        Self { client: MusicBrainzClient::new(&agent), last: None, cache: Cache { dir } }
     }
 
     fn wait_turn(&mut self) {
@@ -37,30 +80,53 @@ impl MusicBrainz {
         self.last = Some(Instant::now());
     }
 
+    /// The hits of a search for `query`: kept, unless `fresh`.
+    fn search(&mut self, query: String, fresh: bool) -> Result<Vec<Entity>> {
+        let name = crate::library::hex(&sha2::Sha256::digest(query.as_bytes())[..16]);
+        if !fresh && let Some(hits) = self.cache.get::<Vec<Entity>>("search", &name) {
+            return Ok(hits);
+        }
+        self.wait_turn();
+        let found: SearchResult<Entity> = Entity::search(query).limit(HITS).execute_with_client(&self.client).context("searching MusicBrainz")?;
+        self.cache.put("search", &name, &found.entities);
+        Ok(found.entities)
+    }
+
+    /// The release `id`, with its tracks and genres: kept, unless `fresh`.
+    fn release(&mut self, id: &str, fresh: bool) -> Result<Entity> {
+        if !fresh && let Some(release) = self.cache.get::<Entity>("release", id) {
+            return Ok(release);
+        }
+        self.wait_turn();
+        let release = Entity::fetch()
+            .id(id)
+            .with_recordings()
+            .with_artist_credits()
+            .with_release_groups()
+            .with_genres()
+            .execute_with_client(&self.client)
+            .with_context(|| format!("fetching release {id}"))?;
+        self.cache.put("release", id, &release);
+        Ok(release)
+    }
+
     /// The releases that might be `album`, with their tracks: the search's
-    /// hits that are named like it, those most like it first.
-    pub fn releases(&mut self, album: &Album) -> Result<Vec<Release>> {
+    /// hits that are named like it, those most like it first. Asked for
+    /// again if `fresh`, else from what's kept where it can be.
+    pub fn releases(&mut self, album: &Album, fresh: bool) -> Result<Vec<Release>> {
         let mut query = format!("release:{}", quoted(matching::search_name(&album.name)));
         if let Some(artist) = &album.artist {
             query += &format!(" AND artist:{}", quoted(artist));
         }
-        self.wait_turn();
-        let hits = Entity::search(query).limit(HITS).execute_with_client(&self.client).context("searching MusicBrainz")?.entities;
-        let mut hits: Vec<Release> = hits.iter().map(release).filter(|r| matching::similar(&album.name, &r.title) >= 0.85).collect();
+        let hits = self.search(query, fresh)?;
+        let mut hits: Vec<Release> = hits.iter().map(converted).filter(|r| matching::similar(&album.name, &r.title) >= 0.85).collect();
         // The ones with as many tracks as there are songs or more first.
         let songs = album.songs.len();
         hits.sort_by_key(|r| r.tracks.len() < songs);
         let mut fetched = Vec::new();
         for hit in hits.into_iter().filter(|r| !album.rejected.contains(&r.id)).take(FETCHED) {
-            self.wait_turn();
-            let full = Entity::fetch()
-                .id(&hit.id)
-                .with_recordings()
-                .with_artist_credits()
-                .with_release_groups()
-                .execute_with_client(&self.client)
-                .with_context(|| format!("fetching release {}", hit.id))?;
-            let full = release(&full);
+            let full = self.release(&hit.id, fresh)?;
+            let full = converted(&full);
             let fits = matching::fit(album, &full).complete();
             fetched.push(full);
             // One that fits every song: editions of other albums are only
@@ -85,7 +151,7 @@ fn credit(credits: &[ArtistCredit]) -> String {
 
 /// A release as matching sees it (its tracks only if they were asked
 /// for; a search hit's are left out, but counted as untitled ones).
-fn release(entity: &Entity) -> Release {
+fn converted(entity: &Entity) -> Release {
     let mut tracks = Vec::new();
     for (i, medium) in entity.media.iter().flatten().enumerate() {
         let disc = medium.position.unwrap_or(i as u32 + 1);
@@ -115,6 +181,26 @@ fn release(entity: &Entity) -> Release {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kept_releases_read_back_as_they_came() {
+        let json = r#"{"id":"r1","title":"Modal Soul","status":"Official","date":"2005-11-11",
+            "artist-credit":[{"name":"Nujabes","joinphrase":"","artist":{"id":"a1","name":"Nujabes","sort-name":"Nujabes"}}],
+            "release-group":{"id":"g1","title":"Modal Soul"},
+            "cover-art-archive":{"artwork":true,"back":false,"count":1,"darkened":false,"front":true},
+            "media":[{"id":"m1","position":1,"track-count":1,"tracks":[{"id":"t1","title":"Feather","number":"1","length":175000,"position":1,
+                "recording":{"id":"c1","title":"Feather"}}]}]}"#;
+        let entity: Entity = serde_json::from_str(json).expect("a release");
+        let dir = std::env::temp_dir().join(format!("synththing-mb-cache-{}", std::process::id()));
+        let cache = Cache { dir: Some(dir.clone()) };
+        cache.put("release", "r1", &entity);
+        let kept: Entity = cache.get("release", "r1").expect("kept");
+        std::fs::remove_dir_all(&dir).ok();
+        let release = converted(&kept);
+        assert_eq!((release.group.as_deref(), release.artist.as_str(), release.official, release.front), (Some("g1"), "Nujabes", true, true));
+        assert_eq!(release.tracks[0].recording.as_deref(), Some("c1"));
+        assert_eq!(release.tracks[0].length, Some(175.0));
+    }
 
     #[test]
     fn phrases_escape_quotes() {

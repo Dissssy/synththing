@@ -46,6 +46,12 @@ pub fn album_id(album: &str, album_artist: Option<&str>, ignore: &str) -> String
     id
 }
 
+/// The id of the album `song` is on, if it's on one.
+pub fn album_of(song: &song_store::Song, ignore: &str) -> Option<String> {
+    let facts = Facts::of(song);
+    Some(album_id(&facts.text(Field::Album)?, facts.text(Field::AlbumArtist).as_deref(), ignore))
+}
+
 fn is_midi(name: &str) -> bool {
     Path::new(name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
 }
@@ -202,7 +208,8 @@ impl State {
 
 /// The lookup thread: an album at a time, asked for and answered.
 pub struct Worker {
-    ask: mpsc::Sender<Album>,
+    /// An album, and whether to ask MusicBrainz again (not what's kept).
+    ask: mpsc::Sender<(Album, bool)>,
     answers: mpsc::Receiver<(Album, Outcome)>,
     /// The album being looked up.
     pub busy: Option<String>,
@@ -210,12 +217,12 @@ pub struct Worker {
 
 impl Worker {
     pub fn start() -> std::io::Result<Self> {
-        let (ask, asked) = mpsc::channel::<Album>();
+        let (ask, asked) = mpsc::channel::<(Album, bool)>();
         let (answer, answers) = mpsc::channel();
         std::thread::Builder::new().name("online lookup".into()).spawn(move || {
             let mut musicbrainz = musicbrainz::MusicBrainz::new();
-            for album in asked {
-                let outcome = match musicbrainz.releases(&album) {
+            for (album, fresh) in asked {
+                let outcome = match musicbrainz.releases(&album, fresh) {
                     Ok(releases) => match matching::decide(&album, &releases) {
                         Verdict::Match(i, tracks) => Outcome::Matched(releases[i].clone(), tracks),
                         Verdict::Unsure(found) => Outcome::Unsure(found.into_iter().map(|i| releases[i].clone()).collect()),
@@ -231,9 +238,10 @@ impl Worker {
         Ok(Self { ask, answers, busy: None })
     }
 
-    pub fn ask(&mut self, album: Album) {
+    /// Look `album` up: from what's kept, unless `fresh`.
+    pub fn ask(&mut self, album: Album, fresh: bool) {
         self.busy = Some(album.id.clone());
-        if self.ask.send(album).is_err() {
+        if self.ask.send((album, fresh)).is_err() {
             self.busy = None;
         }
     }

@@ -25,6 +25,8 @@ pub(super) struct LookupState {
     idle_until: Option<(u64, Instant)>,
     /// Why the last lookup failed.
     error: Option<String>,
+    /// Albums (by id) to look up again first, asking MusicBrainz anew.
+    refresh: Vec<String>,
 }
 
 impl App {
@@ -71,12 +73,14 @@ impl App {
         self.lookup_albums();
         let tried = &self.lookup.state.get_or_insert_with(State::load).tried;
         let albums = self.lookup.albums.as_ref().map(|(_, a)| a.as_slice()).unwrap_or_default();
-        let next = albums.iter().find(|a| tried.get(&a.id).is_none_or(|t| t.due(now)) && lookup::wanted(&self.songs, a)).cloned();
+        let refresh = self.lookup.refresh.pop().and_then(|id| albums.iter().find(|a| a.id == id)).cloned();
+        let fresh = refresh.is_some();
+        let next = refresh.or_else(|| albums.iter().find(|a| tried.get(&a.id).is_none_or(|t| t.due(now)) && lookup::wanted(&self.songs, a)).cloned());
         match next {
             Some(album) => {
-                log::info!("looking up {:?} by {:?} ({} songs)", album.name, album.artist, album.songs.len());
+                log::info!("looking up {:?} by {:?} ({} songs{})", album.name, album.artist, album.songs.len(), if fresh { ", anew" } else { "" });
                 if let Some(worker) = &mut self.lookup.worker {
-                    worker.ask(album);
+                    worker.ask(album, fresh);
                 }
             }
             None => self.lookup.idle_until = Some((revision, Instant::now() + IDLE)),
@@ -187,12 +191,29 @@ impl App {
     }
 
     /// Song info > File: what the song at `path` was matched to, with a
-    /// way to say it's wrong (for every song of its album matched so).
+    /// way to say it's wrong (for every song of its album matched so),
+    /// and, on the device that looks albums up, to look its album up
+    /// again, asking MusicBrainz anew.
     pub(super) fn online_match_ui(&mut self, ui: &mut egui::Ui, path: &std::path::Path) {
-        let Some(key) = self.songs.key(path) else {
+        let Some(song) = self.songs.get(path) else {
             return;
         };
-        let Some(online) = self.songs.get_by_key(&key).and_then(|s| s.online.clone()) else {
+        let album = lookup::album_of(song, &self.config.group_ignore);
+        let online = song.online.clone();
+        if self.looks_up()
+            && let Some(album) = album
+        {
+            ui.add_space(4.0);
+            let asked = self.lookup.refresh.contains(&album) || self.lookup.worker.as_ref().is_some_and(|w| w.busy.as_ref() == Some(&album));
+            let refresh = ui
+                .add_enabled(!asked, egui::Button::new(if asked { "Looking up..." } else { "Look up its album again" }))
+                .on_hover_text("Ask MusicBrainz about its album again, rather than going by what was kept from last time");
+            if refresh.clicked() {
+                self.lookup.refresh.push(album);
+                self.lookup.idle_until = None;
+            }
+        }
+        let Some(online) = online else {
             return;
         };
         let Some(release) = online.release.clone() else {
