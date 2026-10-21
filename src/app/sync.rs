@@ -776,9 +776,6 @@ impl App {
             Moved::Fetched(key) => {
                 let name = self.songs.known().find(|(k, _)| *k == key).map_or_else(|| key.clone(), |(_, s)| s.name.clone());
                 self.status = format!("Downloaded {name} from your other devices.");
-                if self.config.sync_debug {
-                    self.sync.toast = Some((format!("Downloaded {name}"), Instant::now()));
-                }
                 self.add_to_library([Stored { key, name }]);
                 self.sync.songs_dirty = true;
             }
