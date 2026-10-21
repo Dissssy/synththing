@@ -249,6 +249,63 @@ impl App {
         groups
     }
 
+    /// What each ruleset leaves out of its playlists for want of what it
+    /// splits by (`Rules::missing`), for those leaving any out, and the
+    /// revision it was worked out for: worked out again when the library
+    /// or the rulesets change.
+    pub(super) fn missing_info(&mut self) -> (u64, Arc<Vec<Missing>>) {
+        let revision = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (self.groups_revision(), serde_json::to_string(&self.config.rulesets).unwrap_or_default()).hash(&mut hasher);
+            hasher.finish()
+        };
+        if let Some((seen, missing)) = &self.missing_info
+            && *seen == revision
+        {
+            return (revision, missing.clone());
+        }
+        let now = settings_sync::now();
+        let missing: Vec<Missing> = self
+            .all_rulesets()
+            .into_iter()
+            .filter_map(|(_, ruleset)| {
+                let by = ruleset.rules.split.as_ref()?.by;
+                let keys = ruleset.rules.missing(&self.songs, now);
+                (!keys.is_empty()).then_some(Missing { name: ruleset.name, by, keys })
+            })
+            .collect();
+        let missing = Arc::new(missing);
+        self.missing_info = Some((revision, missing.clone()));
+        (revision, missing)
+    }
+
+    /// Preferences' Missing info: the songs each ruleset leaves out, to
+    /// fill in what they lack in Song info.
+    fn missing_ui(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
+        ui.strong("Missing info");
+        let (_, missing) = self.missing_info();
+        if missing.is_empty() {
+            ui.weak("Every song has what your rulesets split by.");
+            return;
+        }
+        ui.weak("Songs a ruleset leaves out, as they don't say what it splits by. The filter button in Songs shows only them.");
+        let mut edit = None;
+        for each in missing.iter() {
+            ui.horizontal(|ui| {
+                let n = each.keys.len();
+                ui.label(format!("{}: {n} song{} without {}", each.name, if n == 1 { "" } else { "s" }, lacking(each.by)));
+                if ui.button("Edit them").on_hover_text("Open them in Song info, to fill it in for them all at once").clicked() {
+                    edit = Some(each.keys.iter().map(|k| self.songs.path(k)).collect());
+                }
+            });
+        }
+        if edit.is_some() {
+            self.details_for = edit;
+        }
+    }
+
     /// Every ruleset: the built-in ones, then the user's, by ID.
     pub(super) fn all_rulesets(&self) -> Vec<(String, Ruleset)> {
         let builtin = smart::builtin().map(|(id, ruleset)| (id.to_string(), ruleset));
@@ -298,6 +355,28 @@ impl App {
             self.ruleset_groups.remove(&id);
             self.save_config();
         }
+        self.missing_ui(ui);
+    }
+}
+
+/// What a ruleset leaves out for want of what it splits by: its name, what
+/// it splits by, and the songs (keys).
+pub(super) struct Missing {
+    pub name: String,
+    pub by: SplitBy,
+    pub keys: Vec<String>,
+}
+
+/// What a song a ruleset split `by` leaves out lacks: "an album".
+fn lacking(by: SplitBy) -> &'static str {
+    match by {
+        SplitBy::Artist => "an artist",
+        SplitBy::AlbumArtist => "an album artist or artist",
+        SplitBy::Album => "an album",
+        SplitBy::Composer => "a composer",
+        SplitBy::Genre => "a genre",
+        SplitBy::Year => "a year",
+        SplitBy::Tag => "a tag",
     }
 }
 

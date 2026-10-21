@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::fields::{self, Facts, Field, Kind};
-use crate::song_store::{Song, SongStore};
+use crate::song_store::{Song, SongStore, Tag};
 
 /// A smart playlist's (or ruleset's) definition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -489,6 +489,21 @@ fn filed_under<'a>(song: &Facts<'a>) -> Vec<Cow<'a, str>> {
     }
 }
 
+/// What `song` (with these `facts`) is split by in a ruleset split `by`
+/// anything but albums (made of its album, artist and album artist): a
+/// playlist's worth of each.
+fn split_values<'a>(by: SplitBy, facts: &Facts<'a>, song: &'a Song, tags: &'a BTreeMap<String, Tag>) -> Vec<Cow<'a, str>> {
+    match by {
+        SplitBy::Artist => facts.items(Field::Artist),
+        SplitBy::AlbumArtist => filed_under(facts),
+        SplitBy::Album => unreachable!("albums are made of more than their names"),
+        SplitBy::Composer => facts.items(Field::Composer),
+        SplitBy::Genre => facts.items(Field::Genre),
+        SplitBy::Year => facts.value(Field::Year).map(|y| Cow::Owned(y.text)).into_iter().collect(),
+        SplitBy::Tag => song.tags.iter().filter_map(|id| tags.get(id)).map(|t| Cow::Borrowed(t.name.as_str())).collect(),
+    }
+}
+
 /// `songs` (by key) in `order`, ties going by key.
 fn sorted<'a>(mut songs: Vec<(&'a str, &'a Song)>, order: Order, seed: u64, articles: bool) -> Vec<(&'a str, &'a Song)> {
     let mut keyed: Vec<(SortKey, (&str, &Song))> = songs.drain(..).map(|(k, s)| (sort_key(order, seed, k, s, articles), (k, s))).collect();
@@ -547,6 +562,21 @@ impl Rules {
     /// each. Values are told apart by `fields::group_key` (past the
     /// characters in `ignore`), each playlist titled with the best of its
     /// songs' spellings.
+    /// The songs (keys) a ruleset with this definition leaves out of its
+    /// playlists for want of what it splits by (none for a ruleset of
+    /// tags, or not a ruleset): those its rules match that say no album,
+    /// artist, year...
+    pub fn missing(&self, store: &SongStore, now: i64) -> Vec<String> {
+        let Some(split) = self.split.as_ref().filter(|s| s.by != SplitBy::Tag) else { return Vec::new() };
+        let tags = store.tags();
+        let candidates = store.known().filter(|(key, _)| !store.is_blocked(key));
+        let lacks = |song: &Song| {
+            let facts = Facts::of(song);
+            if split.by == SplitBy::Album { facts.text(Field::Album).is_none() } else { split_values(split.by, &facts, song, tags).is_empty() }
+        };
+        self.matching(candidates, now).into_iter().filter(|(_, song)| lacks(song)).map(|(key, _)| key.to_string()).collect()
+    }
+
     pub fn groups(&self, store: &SongStore, now: i64, ignore: &str, articles: bool) -> Vec<Group> {
         /// A playlist being made: its songs' spellings of its title and
         /// subtitle (an album's: its album artists', else its artists'),
@@ -579,16 +609,7 @@ impl Rules {
                 }
                 continue;
             }
-            let each = |field: Field| facts.items(field).into_iter().map(|t| (t, None)).collect();
-            let values: Vec<(Cow<str>, Option<Cow<str>>)> = match split.by {
-                SplitBy::Artist => each(Field::Artist),
-                SplitBy::AlbumArtist => filed_under(&facts).into_iter().map(|a| (a, None)).collect(),
-                SplitBy::Album => unreachable!("albums are made below"),
-                SplitBy::Composer => each(Field::Composer),
-                SplitBy::Genre => each(Field::Genre),
-                SplitBy::Year => facts.value(Field::Year).map(|y| (Cow::Owned(y.text), None)).into_iter().collect(),
-                SplitBy::Tag => song.tags.iter().filter_map(|id| tags.get(id)).map(|t| (Cow::Borrowed(t.name.as_str()), None)).collect(),
-            };
+            let values = split_values(split.by, &facts, song, tags);
             // (What a name sorts as is for a song with one.)
             let sort_as = match split.by {
                 SplitBy::Artist => Some(Field::SortArtist),
@@ -598,11 +619,9 @@ impl Rules {
                 _ => None,
             };
             let sort_as = sort_as.filter(|_| values.len() == 1).and_then(|f| facts.text(f));
-            for (title, subtitle) in values {
-                let group_of = format!("{}\u{0}{}", fields::group_key(&title, ignore), subtitle.as_deref().map(|s| fields::group_key(s, ignore)).unwrap_or_default());
-                let making = groups.entry(group_of).or_default();
+            for title in values {
+                let making = groups.entry(format!("{}\u{0}", fields::group_key(&title, ignore))).or_default();
                 making.titles.push(title);
-                making.subtitles.extend(subtitle);
                 making.sorts.extend(sort_as.clone());
                 making.songs.push((key, song));
             }
@@ -821,5 +840,20 @@ mod tests {
         assert_eq!(found, [("Avant-Garde", 1), ("Classical", 1), ("Rock", 2)]);
         let rock = Rules { rules: vec![Rule { field: Field::Genre, op: Op::Is, value: "rock".into(), to: String::new() }], ..Rules::default() };
         assert_eq!(names(&genres, &rock.songs(&genres, 0, false)), ["a.ogg", "b.ogg"]);
+    }
+
+    #[test]
+    fn missing_what_a_ruleset_splits_by() {
+        let songs = store(&[
+            ("a.ogg", meta("Nujabes", "Modal Soul", 1, 1.0), &[], 0),
+            ("b.ogg", meta("Nujabes", "", 2, 1.0), &[], 0),
+            ("c.ogg", Meta { album: Some("Hydeout".into()), ..Meta::default() }, &[], 0),
+        ]);
+        let [(_, artists), (_, albums)] = builtin();
+        assert_eq!(names(&songs, &albums.rules.missing(&songs, 0)), ["b.ogg"]);
+        assert_eq!(names(&songs, &artists.rules.missing(&songs, 0)), ["c.ogg"]);
+        let by_tag = Rules { split: Some(Split { by: SplitBy::Tag, min: 1 }), ..Rules::default() };
+        assert!(by_tag.missing(&songs, 0).is_empty(), "no tag isn't missing anything");
+        assert!(Rules::default().missing(&songs, 0).is_empty(), "not a ruleset");
     }
 }

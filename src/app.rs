@@ -230,6 +230,10 @@ pub struct App {
     rules_editor: Option<smart::RulesEditor>,
     /// The rulesets' playlists, as Preferences last showed them.
     ruleset_groups: smart::RulesetGroups,
+    /// What the rulesets leave out (`App::missing_info`), as last worked out.
+    missing_info: Option<(u64, Arc<Vec<smart::Missing>>)>,
+    /// The Songs list shows only the songs a ruleset leaves out.
+    songs_missing_only: bool,
     /// Songs asked to be removed from the library, waiting on Remove.
     remove_songs: Vec<PathBuf>,
     active_sf: Option<usize>,
@@ -602,6 +606,8 @@ impl App {
             smart_seen: None,
             rules_editor: None,
             ruleset_groups: Default::default(),
+            missing_info: None,
+            songs_missing_only: false,
             remove_songs: Vec::new(),
             active_sf: None,
             soundfont_selection: Selection::default(),
@@ -2676,8 +2682,19 @@ impl App {
             return;
         }
         let extensions = listed_song_extensions(&self.config);
+        // Only the songs a ruleset leaves out, when asked.
+        let missing_only = self.songs_missing_only;
+        let (missing_revision, missing) = self.missing_info();
+        let any_missing = !missing.is_empty();
+        let only: Option<std::collections::HashSet<&str>> = missing_only.then(|| missing.iter().flat_map(|m| m.keys.iter().map(String::as_str)).collect());
+        let mut missing_clicked = false;
         // What the list's made from: it's made again when this changes.
-        let revision = self.songs_revision();
+        let revision = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (self.songs_revision(), missing_only.then_some(missing_revision)).hash(&mut hasher);
+            hasher.finish()
+        };
         let selected = self.song_list.selected();
         let mut info_for: Option<Vec<PathBuf>> = None;
         let mut info_clicked = false;
@@ -2716,6 +2733,14 @@ impl App {
             }
             if can_undo && ui.add(icon_button("arrow-u-up-left")).on_hover_text("Undo the last edit of songs' details").clicked() {
                 undo_clicked = true;
+            }
+            if (any_missing || missing_only)
+                && ui
+                    .add(icon_button("warning-circle").selected(missing_only))
+                    .on_hover_text("Missing info: show only the songs a ruleset leaves out, as they don't say what it splits by (Preferences > Songs lists them)")
+                    .clicked()
+            {
+                missing_clicked = true;
             }
             sync::songs_moving_ui(ui, moving);
             autoplay_clicked |= autoplay::button_ui(ui, autoplay);
@@ -2777,7 +2802,14 @@ impl App {
         };
         let output = self.song_list.ui(
             ui,
-            &mut || store.songs().map(|(path, _)| path).filter(|p| song_store::has_extension(p, extensions)).collect(),
+            &mut || {
+                store
+                    .songs()
+                    .map(|(path, _)| path)
+                    .filter(|p| song_store::has_extension(p, extensions))
+                    .filter(|p| only.as_ref().is_none_or(|only| song_store::key_in(store.dir(), p).is_some_and(|k| only.contains(k))))
+                    .collect()
+            },
             revision,
             &mut view,
             &self.config.group_ignore,
@@ -2811,6 +2843,10 @@ impl App {
         }
         if cleanup_clicked {
             self.cleanup = Some(Default::default());
+        }
+        if missing_clicked {
+            self.songs_missing_only = !missing_only;
+            toast::show(ui.ctx(), if missing_only { "Missing info: off" } else { "Missing info: only songs missing it" });
         }
         if let Some(paths) = info_for.or(info_clicked.then_some(selected)) {
             self.details_for = Some(paths);
