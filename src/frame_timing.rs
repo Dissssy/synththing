@@ -21,6 +21,8 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+use eframe::egui;
+
 /// A frame at 60 fps.
 const FRAME_BUDGET: Duration = Duration::from_micros(16_667);
 /// One section taking this long is logged even in a frame within budget.
@@ -35,6 +37,8 @@ const STATS_WINDOW: Duration = Duration::from_secs(60);
 /// The stats are kept a second at a time, the oldest second going as a
 /// new one starts.
 const STATS_BUCKET: Duration = Duration::from_secs(1);
+/// How late past its due time a frame has to come to be logged as stalled.
+const STALL: Duration = Duration::from_secs(1);
 
 thread_local! {
     static FRAME: RefCell<Frames> = RefCell::new(Frames::default());
@@ -52,6 +56,10 @@ struct Frames {
     ended: Option<Finished>,
     /// The frame before this one, waiting on `report`.
     previous: Option<Finished>,
+    /// When the last frame drawn ended, and how soon the next frame was
+    /// due then (`expect_next_within`), if the app asked for one.
+    last_end: Option<Instant>,
+    due: Option<Duration>,
     last_line: Option<Instant>,
     skipped: u32,
     /// The stats, a second (`STATS_BUCKET`) per entry, by when it began.
@@ -111,19 +119,42 @@ struct Finished {
 }
 
 /// Starts a frame. A frame that never got to `end` (nothing was drawn) is
-/// dropped unreported.
-pub fn begin() {
+/// dropped unreported. One that comes well after it was due (the app
+/// asked for it, `expect_next_within`) is logged as stalled: that time
+/// went outside the app's code, to egui's painting, the GPU or the window
+/// system, which the slow-frame line doesn't see. `window` is the window's
+/// size, for the line.
+pub fn begin(window: Option<egui::Vec2>) {
     puffin::GlobalProfiler::lock().new_frame();
     FRAME.with_borrow_mut(|f| {
+        let now = Instant::now();
+        if let (Some(end), Some(due)) = (f.last_end.take(), f.due.take()) {
+            let gap = now - end;
+            if gap > due + STALL {
+                let window = window.map_or("unknown".to_string(), |w| format!("{:.0}x{:.0} pt", w.x, w.y));
+                log::warn!(
+                    "stalled frame: {} ms after the last one, due within {} ms; window {window}",
+                    ms(gap),
+                    ms(due)
+                );
+            }
+        }
         f.previous = f.ended.take();
-        f.start = Some(Instant::now());
+        f.start = Some(now);
         f.sections.clear();
     });
+}
+
+/// The app wants the next frame within `time` (it asked egui for a
+/// repaint by then), so a frame much later than that is a stall.
+pub fn expect_next_within(time: Duration) {
+    FRAME.with_borrow_mut(|f| f.due = Some(f.due.map_or(time, |due| due.min(time))));
 }
 
 /// Closes the frame `begin` started.
 pub fn end() {
     FRAME.with_borrow_mut(|f| {
+        f.last_end = Some(Instant::now());
         if let Some(start) = f.start.take() {
             f.ended = Some(Finished {
                 app: start.elapsed(),
@@ -301,11 +332,11 @@ mod tests {
     fn summary_covers_each_section() {
         assert!(summary().is_none());
         for _ in 0..3 {
-            begin();
+            begin(None);
             time("songs", || std::thread::sleep(Duration::from_millis(2)));
             end();
             // (The next frame reports this one.)
-            begin();
+            begin(None);
             report(Some(0.020));
             end();
         }

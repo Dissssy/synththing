@@ -3754,6 +3754,7 @@ impl App {
         // the window in the background, minimized or hidden.
         if !view.paused && (view.has_midi || view.has_audio_file) {
             ctx.request_repaint_after(Duration::from_millis(200));
+            frame_timing::expect_next_within(Duration::from_millis(200));
         }
     }
 }
@@ -3996,7 +3997,7 @@ impl eframe::App for App {
     /// playlist goes on to its next track, loads finish and the library
     /// keeps polling either way.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
-        frame_timing::begin();
+        frame_timing::begin(ctx.input(|i| i.viewport().inner_rect).map(|r| r.size()));
         frame_timing::time("tick", || self.tick(ctx));
     }
 
