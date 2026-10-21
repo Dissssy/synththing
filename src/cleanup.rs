@@ -6,7 +6,8 @@
 //! Gao"), and an album by several artists with no album artist marked
 //! a compilation. Each is made as songs' edits (`song_store::Song::edits`), so
 //! the files are never written, and one that's wrong can be dismissed
-//! (`Config::cleanup_dismissed`).
+//! (`Config::cleanup_dismissed`). Songs that aren't songs at all (macOS's
+//! "._" files, imported before they were skipped) are suggested removed.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,7 +16,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::fields::{self, Facts, Field};
 use crate::smart::VARIOUS_ARTISTS;
-use crate::song_store::SongStore;
+use crate::song_store::{self, SongStore};
 
 /// The fields that hold people's names.
 const NAME_FIELDS: [Field; 3] = [Field::Artist, Field::AlbumArtist, Field::Composer];
@@ -25,6 +26,8 @@ const TIDIED: [Field; 6] = [Field::Title, Field::Artist, Field::AlbumArtist, Fie
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
+    /// Not songs at all: remove them from the library.
+    Junk,
     /// Several artists (or genres) in one: split them.
     Split,
     /// One name spelled several ways: write it one way.
@@ -38,6 +41,7 @@ pub enum Kind {
 impl Kind {
     pub fn label(self) -> &'static str {
         match self {
+            Kind::Junk => "Not songs",
             Kind::Split => "Split",
             Kind::Same => "Same name",
             Kind::Compilation => "Compilation",
@@ -55,6 +59,8 @@ pub enum What {
     Name { spellings: Vec<String> },
     /// An album (as its songs spell it) to mark a compilation.
     Album { name: String },
+    /// macOS's AppleDouble files ("._Song.flac"), to remove.
+    AppleDouble,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -78,18 +84,20 @@ impl Suggestion {
                 format!("name:{}", keys.into_iter().collect::<Vec<_>>().join("|"))
             }
             What::Album { name } => format!("compilation:{}", fields::group_key(name, ignore)),
+            What::AppleDouble => "apple-double".to_string(),
         }
     }
 }
 
 /// Every suggestion for `store`'s songs (names grouped as by
-/// `fields::group_key`, past `ignore`), splits first.
+/// `fields::group_key`, past `ignore`), junk first, then splits.
 pub fn suggest(store: &SongStore, ignore: &str) -> Vec<Suggestion> {
+    let junk: Vec<String> = store.known().filter(|(_, song)| song_store::is_apple_double(&song.name)).map(|(key, _)| key.to_string()).collect();
     let mut texts: BTreeMap<(Field, String), Suggestion> = BTreeMap::new();
     // Each name's spellings (by group key), and how many songs each is on.
     let mut names: BTreeMap<String, (BTreeMap<String, usize>, BTreeSet<&str>)> = BTreeMap::new();
     let mut albums: BTreeMap<String, Album> = BTreeMap::new();
-    for (key, song) in store.known() {
+    for (key, song) in store.known().filter(|(_, song)| !song_store::is_apple_double(&song.name)) {
         let facts = Facts::of(song);
         if let Some(name) = facts.text(Field::Album) {
             let album = albums.entry(fields::group_key(&name, ignore)).or_default();
@@ -127,6 +135,9 @@ pub fn suggest(store: &SongStore, ignore: &str) -> Vec<Suggestion> {
         }
     }
     let mut suggestions: Vec<Suggestion> = texts.into_values().collect();
+    if !junk.is_empty() {
+        suggestions.push(Suggestion { kind: Kind::Junk, what: What::AppleDouble, to: String::new(), keys: junk });
+    }
     suggestions.extend(same_names(&names));
     suggestions.extend(albums.into_values().filter(|a| a.artists.len() > 1 && !a.album_artist && !a.unmarked.is_empty()).map(|album| Suggestion {
         kind: Kind::Compilation,
@@ -301,6 +312,8 @@ pub fn edits(store: &SongStore, chosen: &[(&Suggestion, &str)], ignore: &str) ->
                 written.get(&(key.clone(), field)).cloned().or_else(|| facts.text(field).map(Cow::into_owned))
             };
             match &suggestion.what {
+                // (Removed, not edited: `App::remove_songs`.)
+                What::AppleDouble => {}
                 What::Album { .. } => {
                     written.insert((key.clone(), Field::Compilation), "1".to_string());
                 }
@@ -391,6 +404,20 @@ mod tests {
         assert_eq!(facts[0].items(Field::Artist), ["Perry Porter", "Nujabes"]);
         assert!(facts.iter().all(|f| f.flag(Field::Compilation)));
         assert!(suggest(&store, "").is_empty(), "nothing more"); 
+    }
+
+    #[test]
+    fn apple_double_files_are_junk() {
+        let mut store = store("junk", &[]);
+        let junk = format!("{:064x}.flac", 1);
+        let meta = Some(Meta { title: Some("\"Song\"".into()), ..Meta::default() });
+        store.learn([
+            (junk.clone(), Song { name: "._Song.flac".into(), meta: meta.clone(), ..Song::default() }),
+            (format!("{:064x}.flac", 2), Song { name: "Song.flac".into(), ..Song::default() }),
+        ]);
+        let suggestions = suggest(&store, "");
+        assert_eq!(suggestions.len(), 1, "only the junk, not its details: {suggestions:?}");
+        assert_eq!((suggestions[0].kind, &suggestions[0].keys), (Kind::Junk, &vec![junk]));
     }
 
     #[test]
