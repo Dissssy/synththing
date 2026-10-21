@@ -115,6 +115,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("unload", "Unload preloaded files after", &["preload_expiry_secs"]),
             setting("rulesets", "Rulesets", &["rulesets"]),
             setting("group_ignore", "Characters ignored when grouping", &["group_ignore"]),
+            setting("cleanup_dismissed", "Dismissed clean-up suggestions", &["cleanup_dismissed"]),
             PLAYLISTS,
             SONGS,
             STARRED_SONGS,

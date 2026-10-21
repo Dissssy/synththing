@@ -6,6 +6,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Added
 - Edit songs' details: Song info (a song's right-click menu, or the info button with songs selected) has a Details tab with the title, artist, album artist, album, composer, genre, track, disc and year to change, and the file's own details under File. Select several songs to change them all at once: a field they differ in says Mixed, and only the fields you change are written. Edits sync with the library and never touch the files; the arrow beside an edited field goes back to what the file says, and the undo button in the Songs toolbar takes back the last save.
+- Clean up (the broom in the Songs toolbar): suggestions for your songs' details. It splits several artists in one ("\"Perry Porter\"& Nujabes" at "&", ",", " x ", "feat." and "ft.") and genres ("Hip-Hop/Rap"), writes a name spelled two ways one way ("Kan R. Gao" and "Kan (Reives) Gao"), and tidies stray quotes, brackets and spacing. Apply one, change what it'll be written as first, apply them all, or dismiss the ones that are wrong ("Simon & Garfunkel"); dismissed ones stay dismissed on all your devices until you bring them back. They're made as edits, so the undo button takes them back too.
+- Artists, album artists and composers are lists, split at semicolons: a song by "Perry Porter; Nujabes" is in both artists' groups and By Artist playlists, and an album by "Uyama Hiroto; Nujabes" says "Uyama Hiroto & Nujabes", each a link to their page. A comma or "&" doesn't split them by itself, since they can be part of a name; Clean up suggests those splits instead.
 
 ## 1.2.0 (2026-10-21)
 

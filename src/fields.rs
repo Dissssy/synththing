@@ -79,40 +79,75 @@ pub struct Def {
     pub width: f32,
     /// Songs share its values often enough to group the list by them.
     pub groups: bool,
-    /// Its text is a list (`split_list`): "Electronic, Rock" is two
-    /// genres, and a song is in each one's group.
-    pub list: bool,
+    /// Its text is a list, its items split at these (`Def::split`):
+    /// "Electronic, Rock" is two genres, and a song is in each one's
+    /// group. Artists split only at semicolons (and the NULs ID3v2.4
+    /// separates values with): a comma or "&" can be in a name ("Tyler,
+    /// The Creator", "Simon & Garfunkel"), so those are only suggested
+    /// as splits (`cleanup`).
+    pub list: &'static [char],
     /// One of the file's tags, which a song's edits (`Edits`) can say
     /// otherwise.
     pub editable: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
-const fn def(field: Field, key: &'static str, label: &'static str, kind: Kind, synced: bool, width: f32, groups: bool, list: bool, editable: bool) -> Def {
+const fn def(field: Field, key: &'static str, label: &'static str, kind: Kind, synced: bool, width: f32, groups: bool, list: &'static [char], editable: bool) -> Def {
     Def { field, key, label, kind, synced, width, groups, list, editable }
 }
 
+/// A genre list's separators: "Electronic, Rock; Jazz".
+const GENRE_LIST: &[char] = &[',', ';', '\0'];
+/// A list of names' separators: "Perry Porter; Nujabes".
+const NAME_LIST: &[char] = &[';', '\0'];
+
 /// Every field, in [`Field`]'s order.
 pub const FIELDS: &[Def] = &[
-    def(Field::Title, "title", "Title", Kind::Text, true, 0.0, false, false, true),
-    def(Field::Artist, "artist", "Artist", Kind::Text, true, 140.0, true, false, true),
-    def(Field::AlbumArtist, "album_artist", "Album artist", Kind::Text, true, 140.0, true, false, true),
-    def(Field::Album, "album", "Album", Kind::Text, true, 140.0, true, false, true),
-    def(Field::Composer, "composer", "Composer", Kind::Text, true, 140.0, true, false, true),
-    def(Field::Genre, "genre", "Genre", Kind::Text, true, 100.0, true, true, true),
-    def(Field::Track, "track", "Track", Kind::Number, true, 48.0, false, false, true),
-    def(Field::Disc, "disc", "Disc", Kind::Number, true, 40.0, true, false, true),
-    def(Field::Year, "year", "Year", Kind::Number, true, 52.0, true, false, true),
-    def(Field::Length, "length", "Length", Kind::Number, true, 60.0, false, false, false),
-    def(Field::Bpm, "bpm", "BPM", Kind::Number, false, 52.0, false, false, false),
-    def(Field::Notes, "notes", "Notes", Kind::Number, false, 72.0, false, false, false),
-    def(Field::FileName, "file_name", "File name", Kind::Text, true, 160.0, false, false, false),
-    def(Field::FileExtension, "file_extension", "Type", Kind::Text, true, 52.0, true, false, false),
-    def(Field::Size, "size", "Size (MB)", Kind::Number, true, 72.0, false, false, false),
-    def(Field::Imported, "imported", "Date added", Kind::Date, true, 96.0, true, false, false),
-    def(Field::Tag, "tag", "Tag", Kind::Tag, true, 0.0, false, false, false),
-    def(Field::Starred, "starred", "Starred", Kind::Flag, true, 0.0, false, false, false),
+    def(Field::Title, "title", "Title", Kind::Text, true, 0.0, false, &[], true),
+    def(Field::Artist, "artist", "Artist", Kind::Text, true, 140.0, true, NAME_LIST, true),
+    def(Field::AlbumArtist, "album_artist", "Album artist", Kind::Text, true, 140.0, true, NAME_LIST, true),
+    def(Field::Album, "album", "Album", Kind::Text, true, 140.0, true, &[], true),
+    def(Field::Composer, "composer", "Composer", Kind::Text, true, 140.0, true, NAME_LIST, true),
+    def(Field::Genre, "genre", "Genre", Kind::Text, true, 100.0, true, GENRE_LIST, true),
+    def(Field::Track, "track", "Track", Kind::Number, true, 48.0, false, &[], true),
+    def(Field::Disc, "disc", "Disc", Kind::Number, true, 40.0, true, &[], true),
+    def(Field::Year, "year", "Year", Kind::Number, true, 52.0, true, &[], true),
+    def(Field::Length, "length", "Length", Kind::Number, true, 60.0, false, &[], false),
+    def(Field::Bpm, "bpm", "BPM", Kind::Number, false, 52.0, false, &[], false),
+    def(Field::Notes, "notes", "Notes", Kind::Number, false, 72.0, false, &[], false),
+    def(Field::FileName, "file_name", "File name", Kind::Text, true, 160.0, false, &[], false),
+    def(Field::FileExtension, "file_extension", "Type", Kind::Text, true, 52.0, true, &[], false),
+    def(Field::Size, "size", "Size (MB)", Kind::Number, true, 72.0, false, &[], false),
+    def(Field::Imported, "imported", "Date added", Kind::Date, true, 96.0, true, &[], false),
+    def(Field::Tag, "tag", "Tag", Kind::Tag, true, 0.0, false, &[], false),
+    def(Field::Starred, "starred", "Starred", Kind::Flag, true, 0.0, false, &[], false),
 ];
+
+impl Def {
+    pub fn is_list(&self) -> bool {
+        !self.list.is_empty()
+    }
+
+    /// A list field's items: its text split at its separators, trimmed
+    /// (a field that isn't a list is its one item).
+    pub fn split<'t>(&self, text: &'t str) -> impl Iterator<Item = &'t str> {
+        text.split(self.list).map(str::trim).filter(|t| !t.is_empty())
+    }
+
+    /// Names written to be read: "Uyama Hiroto & Nujabes".
+    pub fn names<S: AsRef<str>>(names: &[S]) -> String {
+        names.iter().map(AsRef::as_ref).collect::<Vec<_>>().join(" & ")
+    }
+
+    /// Items written as a list field's text, by its first separator.
+    pub fn join<S: AsRef<str>>(&self, items: &[S]) -> String {
+        let items: Vec<&str> = items.iter().map(AsRef::as_ref).collect();
+        match self.list.first() {
+            Some(sep) => items.join(&format!("{sep} ")),
+            None => items.concat(),
+        }
+    }
+}
 
 impl Field {
     pub fn def(self) -> &'static Def {
@@ -247,11 +282,18 @@ impl<'a> Facts<'a> {
     /// A text field's values: its items for a list field (`Def::list`),
     /// else its text.
     pub fn items(&self, field: Field) -> Vec<Cow<'a, str>> {
+        let def = field.def();
         match self.text(field) {
-            Some(Cow::Borrowed(text)) if field.def().list => split_list(text).map(Cow::Borrowed).collect(),
-            Some(Cow::Owned(text)) if field.def().list => split_list(&text).map(|t| Cow::Owned(t.to_string())).collect(),
+            Some(Cow::Borrowed(text)) if def.is_list() => def.split(text).map(Cow::Borrowed).collect(),
+            Some(Cow::Owned(text)) if def.is_list() => def.split(&text).map(|t| Cow::Owned(t.to_string())).collect(),
             text => text.into_iter().collect(),
         }
+    }
+
+    /// A list field's first item (the artist a song's mostly by), else
+    /// its text.
+    pub fn first(&self, field: Field) -> Option<Cow<'a, str>> {
+        self.items(field).into_iter().next()
     }
 
     pub fn has_tag(&self, id: &str) -> bool {
@@ -282,12 +324,6 @@ impl<'a> Facts<'a> {
         };
         Some(Value { number: self.number(field), text })
     }
-}
-
-/// A list field's items (`Def::list`): its text split at commas and
-/// semicolons (and the NULs ID3v2.4 separates values with), trimmed.
-pub fn split_list(text: &str) -> impl Iterator<Item = &str> {
-    text.split([',', ';', '\0']).map(str::trim).filter(|t| !t.is_empty())
 }
 
 /// Genres tagged by their ID3v1 numbers named: ID3v2 writes them as
@@ -321,7 +357,7 @@ pub fn genre_names(text: &str) -> Cow<'_, str> {
             (false, false) => vec![rest.to_string()],
         }
     };
-    let items: Vec<&str> = split_list(text).collect();
+    let items: Vec<&str> = Field::Genre.def().split(text).collect();
     let named: Vec<String> = items.iter().flat_map(|i| item(i)).collect();
     if named.iter().map(String::as_str).eq(items.iter().copied()) { Cow::Borrowed(text) } else { Cow::Owned(named.join(", ")) }
 }
@@ -394,10 +430,14 @@ mod tests {
         assert_eq!(facts.value(Field::Imported).map(|v| v.text).as_deref(), Some("1970-01-02"));
         assert_eq!(facts.value(Field::Bpm), None, "only a read here knows");
         assert!(facts.starred());
-        let meta = Meta { genre: Some("Avant-Garde, Electronic;Rock,".into()), artist: Some("A, B".into()), ..Meta::default() };
+        let meta = Meta { genre: Some("Avant-Garde, Electronic;Rock,".into()), artist: Some("A, B".into()), composer: Some("C; D\0E".into()), ..Meta::default() };
         let facts = Facts { meta: Some(&meta), ..Facts::default() };
         assert_eq!(facts.items(Field::Genre), ["Avant-Garde", "Electronic", "Rock"]);
-        assert_eq!(facts.items(Field::Artist), ["A, B"], "artists aren't lists");
+        assert_eq!(facts.items(Field::Artist), ["A, B"], "names split only at semicolons");
+        assert_eq!(facts.items(Field::Composer), ["C", "D", "E"]);
+        assert_eq!(facts.first(Field::Composer).as_deref(), Some("C"));
+        assert_eq!(Field::Composer.def().join(&["C", "D"]), "C; D");
+        assert_eq!(Field::Genre.def().join(&["Rock", "Jazz"]), "Rock, Jazz");
         // Edits over the file's tags: text, a number, and one cleared.
         let edits: Edits = [(Field::Artist, "C".to_string()), (Field::Year, "1999".to_string()), (Field::Genre, String::new())].into();
         let edited = Facts { edits: Some(&edits), ..facts };

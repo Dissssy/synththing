@@ -36,6 +36,7 @@ mod repair;
 mod script_windows;
 mod smart;
 mod song_details;
+mod cleanup;
 mod song_meta;
 mod song_names;
 mod storage;
@@ -343,6 +344,8 @@ pub struct App {
     song_details: Option<song_details::SongDetails>,
     /// How to undo the last save of songs' details: each edit as it was.
     last_edit: Option<Vec<(String, Field, Option<String>)>>,
+    /// The Clean up window, while it's open (`cleanup.rs`).
+    cleanup: Option<cleanup::CleanUp>,
     /// The Tags modal is open.
     tags_open: bool,
     /// The tag just made, to name in the Tags modal.
@@ -635,6 +638,7 @@ impl App {
             details_for: None,
             song_details: None,
             last_edit: None,
+            cleanup: None,
             tags_open: false,
             tag_to_name: None,
             playlist_selection: Selection::default(),
@@ -2460,6 +2464,7 @@ impl App {
             || self.changelog.is_some()
             || self.welcome.open
             || self.song_details.is_some()
+            || self.cleanup.is_some()
             || self.tags_open
             || self.recording.prompt_open
             || self.recording.window.is_some()
@@ -2650,6 +2655,7 @@ impl App {
         let mut info_clicked = false;
         let can_undo = self.last_edit.is_some();
         let mut undo_clicked = false;
+        let mut cleanup_clicked = false;
         let moving = self.songs_moving();
         let autoplay = self.autoplay;
         let mut autoplay_clicked = false;
@@ -2675,6 +2681,10 @@ impl App {
                 .clicked()
             {
                 info_clicked = true;
+            }
+            #[cfg(not(target_os = "android"))]
+            if ui.add(icon_button("broom")).on_hover_text("Clean up: suggestions for your songs' details, like splitting several artists").clicked() {
+                cleanup_clicked = true;
             }
             if can_undo && ui.add(icon_button("arrow-u-up-left")).on_hover_text("Undo the last edit of songs' details").clicked() {
                 undo_clicked = true;
@@ -2762,6 +2772,9 @@ impl App {
         }
         if undo_clicked {
             self.undo_edit();
+        }
+        if cleanup_clicked {
+            self.cleanup = Some(Default::default());
         }
         if let Some(paths) = info_for.or(info_clicked.then_some(selected)) {
             self.details_for = Some(paths);
@@ -3862,6 +3875,7 @@ impl eframe::App for App {
             self.rename_ui(&ctx);
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
+            self.cleanup_ui(&ctx);
             self.song_details_ui(&ctx);
             self.history_ui(&ctx);
             self.audio_import_ui(&ctx);
@@ -3884,6 +3898,7 @@ impl eframe::App for App {
             self.changelog_ui(&ctx);
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
+            self.cleanup_ui(&ctx);
             self.song_details_ui(&ctx);
             self.history_ui(&ctx);
             self.layout_save_ui(&ctx);

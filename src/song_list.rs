@@ -690,8 +690,8 @@ impl SongList {
                     };
                     match group_label(&view.group, value) {
                         // (A song in each of a list's items' groups.)
-                        Some(label) if column(&view.group).is_some_and(|c| c.list) => {
-                            let items: Vec<_> = fields::split_list(&label).map(|i| group(i.to_string())).collect();
+                        Some(label) if let Some(def) = column(&view.group).filter(|c| c.is_list()) => {
+                            let items: Vec<_> = def.split(&label).map(|i| group(i.to_string())).collect();
                             if items.is_empty() { vec![(None, None)] } else { items }
                         }
                         Some(label) => vec![group(label)],
