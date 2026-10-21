@@ -349,11 +349,7 @@ impl Worker {
 /// else by its releases.
 fn look_up(musicbrainz: &mut musicbrainz::MusicBrainz, album: &Album, fresh: bool) -> Outcome {
     if album.loose {
-        return match musicbrainz.recording(album, fresh) {
-            Ok(Some((release, track))) => Outcome::Matched(Box::new(release), vec![Some(track)]),
-            Ok(None) => Outcome::NotFound,
-            Err(e) => Outcome::Failed(format!("{e:#}")),
-        };
+        return musicbrainz.recording(album, fresh).unwrap_or_else(|e| Outcome::Failed(format!("{e:#}")));
     }
     match musicbrainz.releases(album, fresh) {
         Ok(releases) => match log_candidates(album, &releases, matching::decide(album, &releases)) {
