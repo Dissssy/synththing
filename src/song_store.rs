@@ -140,8 +140,9 @@ pub struct Meta {
 }
 
 /// The version of what's read of a song's file (`Meta::version`): 1 added
-/// its grouping, comment and sample rate.
-pub const META_VERSION: u32 = 1;
+/// its grouping, comment and sample rate; 2 trims the NULs some taggers
+/// leave at the end of a tag.
+pub const META_VERSION: u32 = 2;
 
 fn is_zero(n: &u32) -> bool {
     *n == 0
@@ -863,7 +864,7 @@ pub fn import_old(folders: &[PathBuf], dir: &Path, playlists: &Path, extensions:
     done
 }
 
-/// Every file under `dir` (subfolders too) with one of `extensions`.
+/// Every file under `dir` (subfolders too) synththing [`takes`].
 pub fn songs_under(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut pending = vec![dir.to_path_buf()];
@@ -873,13 +874,25 @@ pub fn songs_under(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
             let path = entry.path();
             if entry.file_type().is_ok_and(|t| t.is_dir()) {
                 pending.push(path);
-            } else if has_extension(&path, extensions) {
+            } else if takes(&path, extensions) {
                 found.push(path);
             }
         }
     }
     found.sort();
     found
+}
+
+/// Whether synththing takes the file at `path`: one with one of
+/// `extensions`, and not one of macOS's AppleDouble files ("._Song.flac",
+/// the Finder's notes on "Song.flac" left on drives that can't hold them).
+pub fn takes(path: &Path, extensions: &[&str]) -> bool {
+    !path.file_name().is_some_and(|n| is_apple_double(&n.to_string_lossy())) && has_extension(path, extensions)
+}
+
+/// Whether a file named `name` is one of macOS's AppleDouble files.
+pub fn is_apple_double(name: &str) -> bool {
+    name.starts_with("._")
 }
 
 pub fn has_extension(path: &Path, extensions: &[&str]) -> bool {
