@@ -150,11 +150,11 @@ fn same_artist(album: &Album, release: &Release) -> bool {
     let Some(artist) = &album.artist else {
         return true;
     };
-    let credited: Vec<&str> = release.artist.split([',', '&', ';']).map(str::trim).filter(|n| !n.is_empty()).collect();
+    let credited: Vec<&str> = release.artist.split([',', '&', ';', '/']).map(str::trim).filter(|n| !n.is_empty()).collect();
     let ours = std::iter::once(artist.as_str()).chain(album.songs.iter().filter_map(|s| s.artist.as_deref()));
     key(&release.artist) == "variousartists"
         || ours
-            .flat_map(|a| std::iter::once(a).chain(a.split([',', '&', ';'])))
+            .flat_map(|a| std::iter::once(a).chain(a.split([',', '&', ';', '/'])))
             .any(|name| similar(name, &release.artist) >= 0.8 || credited.iter().any(|c| similar(name.trim(), c) >= 0.9))
 }
 
@@ -237,6 +237,13 @@ pub fn fit(album: &Album, release: &Release) -> Fit {
     fit
 }
 
+/// Whether `release` is surely `album` though its artist's credited
+/// otherwise ("きくお" for "Kikuo"): named alike, and every one of five
+/// songs or more on it.
+fn named_otherwise(album: &Album, release: &Release, fit: &Fit) -> bool {
+    album.songs.len() >= 5 && fit.complete() && similar_album(&album.name, &release.title) >= 0.95
+}
+
 /// How many of an album's songs (at least) must be on a release for it to
 /// be the album.
 const MOSTLY: f64 = 0.75;
@@ -250,7 +257,10 @@ pub fn decide(album: &Album, releases: &[Release]) -> Verdict {
     // (bonus tracks, a single version, a live one).
     let good = |i: usize| {
         let r = &releases[i];
-        !album.rejected.contains(&r.id) && fits[i].lined_up() >= MOSTLY && similar_album(&album.name, &r.title) >= 0.85 && same_artist(album, r)
+        !album.rejected.contains(&r.id)
+            && fits[i].lined_up() >= MOSTLY
+            && similar_album(&album.name, &r.title) >= 0.85
+            && (same_artist(album, r) || named_otherwise(album, r, &fits[i]))
     };
     let mut candidates: Vec<usize> = (0..releases.len()).filter(|&i| good(i)).collect();
     if candidates.is_empty() {
@@ -265,7 +275,7 @@ pub fn decide(album: &Album, releases: &[Release]) -> Verdict {
     });
     let best = candidates[0];
     let group = |i: usize| releases[i].group.as_deref().unwrap_or(&releases[i].id);
-    let rivals: Vec<usize> = candidates.iter().copied().filter(|&i| group(i) != group(best) && fits[i].score >= fits[best].score - 0.05).collect();
+    let rivals: Vec<usize> = candidates.iter().copied().filter(|&i| group(i) != group(best) && fits[i].score >= fits[best].score - 0.02).collect();
     if rivals.is_empty() { Verdict::Match(best, fits[best].tracks.clone()) } else { Verdict::Unsure(std::iter::once(best).chain(rivals).collect()) }
 }
 
@@ -388,6 +398,7 @@ mod tests {
         assert_eq!(search_name("II"), "II");
         assert!(similar_album("To the Moon <OST>", "To the Moon (Original Soundtrack)") > 0.99);
         assert_eq!(first_name("Kazumi Totaka; Manaka Kataoka"), "Kazumi Totaka");
+        assert_eq!(first_name("Tsutchie / Force of Nature"), "Tsutchie");
         assert_eq!(track_title("27. Luke", "Grindea"), "Luke");
         assert_eq!(track_title("29. Tempest.mp3", "A Bird Story"), "Tempest");
         assert_eq!(track_title("X-Morph Defense - 12 Dark Hour", "X-Morph: Defense OST"), "X-Morph Defense - 12 Dark Hour", "punctuated otherwise");
@@ -446,6 +457,18 @@ mod tests {
         let tracks: Vec<(&str, f64)> = tracks.iter().map(|(t, l)| (t.as_str(), *l)).collect();
         let releases = [release("r1", "g1", "Modal Soul", "Tomohito Nishiura", &tracks)];
         assert_eq!(decide(&ours, &releases), Verdict::Match(0, vec![Some(0), Some(1), Some(2), Some(3), None]));
+    }
+
+    #[test]
+    fn a_whole_album_credited_otherwise_is_it() {
+        let names = ["夜想天鐘", "妖精の霧", "水の神殿", "迷子の廃園", "暗叫"];
+        let mut ours = album(names.iter().zip(1..).map(|(t, n)| song(t, n, 100.0 + f64::from(n))).collect());
+        ours.artist = Some("Kikuo Sound Works".into());
+        let tracks: Vec<(&str, f64)> = names.iter().zip(1..).map(|(t, n)| (*t, 100.0 + f64::from(n))).collect();
+        let releases = [release("r1", "g1", "Modal Soul", "きくお", &tracks)];
+        assert!(matches!(decide(&ours, &releases), Verdict::Match(0, _)));
+        ours.songs.truncate(2);
+        assert!(matches!(decide(&ours, &releases), Verdict::Unsure(_)), "too few songs to be sure");
     }
 
     #[test]
