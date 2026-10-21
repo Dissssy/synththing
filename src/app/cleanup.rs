@@ -35,7 +35,7 @@ impl App {
     fn cleanup_revision(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (self.songs.revision(), &self.config.group_ignore).hash(&mut hasher);
+        (self.songs.revision(), &self.config.group_ignore, self.lookup.artists_asked).hash(&mut hasher);
         hasher.finish()
     }
 
@@ -45,6 +45,7 @@ impl App {
         let revision = self.cleanup_revision();
         if cleanup.made_from != Some(revision) {
             cleanup.suggestions = cleanup::suggest(&self.songs, &self.config.group_ignore);
+            self.artist_suggestions(&mut cleanup.suggestions);
             cleanup.suggestions.extend(self.musicbrainz_suggestions());
             cleanup.unsure = self.unsure_albums();
             cleanup.made_from = Some(revision);
@@ -235,7 +236,10 @@ fn unsure_row_ui(
 fn describe(suggestion: &Suggestion) -> (String, String) {
     match &suggestion.what {
         What::Text { field, text } => (text.clone(), format!("{}: {text}", field.label())),
-        What::Name { spellings } => (spellings.join(" / "), format!("One name spelled {} ways:\n{}", spellings.len(), spellings.join("\n"))),
+        What::Name { spellings, artist: None } => (spellings.join(" / "), format!("One name spelled {} ways:\n{}", spellings.len(), spellings.join("\n"))),
+        What::Name { spellings, artist: Some(_) } => {
+            (spellings.join(" / "), format!("{} at MusicBrainz, spelled here as:\n{}", suggestion.to, spellings.join("\n")))
+        }
         What::Album { name } => {
             (name.clone(), format!("Album: {name}, by several artists with no album artist. Marked a compilation, it's by Various Artists."))
         }

@@ -25,7 +25,7 @@ use crate::smart::VARIOUS_ARTISTS;
 use crate::song_store::{self, SongStore};
 
 /// The fields that hold people's names.
-const NAME_FIELDS: [Field; 3] = [Field::Artist, Field::AlbumArtist, Field::Composer];
+pub const NAME_FIELDS: [Field; 3] = [Field::Artist, Field::AlbumArtist, Field::Composer];
 
 /// The fields whose text is tidied.
 const TIDIED: [Field; 6] = [Field::Title, Field::Artist, Field::AlbumArtist, Field::Album, Field::Composer, Field::Genre];
@@ -77,8 +77,10 @@ impl Kind {
 pub enum What {
     /// A field's text, as it is on its songs.
     Text { field: Field, text: String },
-    /// One name's spellings, wherever a name field has them.
-    Name { spellings: Vec<String> },
+    /// One name's spellings, wherever a name field has them; and the
+    /// MusicBrainz artist (by id) it is, if it's tied to one
+    /// (`lookup::artists`).
+    Name { spellings: Vec<String>, artist: Option<String> },
     /// An album (as its songs spell it) to mark a compilation.
     Album { name: String },
     /// macOS's AppleDouble files ("._Song.flac"), to remove.
@@ -111,9 +113,13 @@ impl Suggestion {
     pub fn id(&self, ignore: &str) -> String {
         match &self.what {
             What::Text { field, text } => format!("{}:{text}", field.def().key),
-            What::Name { spellings } => {
+            What::Name { spellings, artist } => {
                 let keys: BTreeSet<String> = spellings.iter().map(|s| fields::group_key(s, ignore)).collect();
-                format!("name:{}", keys.into_iter().collect::<Vec<_>>().join("|"))
+                let keys = keys.into_iter().collect::<Vec<_>>().join("|");
+                match artist {
+                    Some(artist) => format!("artist:{artist}:{keys}"),
+                    None => format!("name:{keys}"),
+                }
             }
             What::Album { name } => format!("compilation:{}", fields::group_key(name, ignore)),
             What::AppleDouble => "apple-double".to_string(),
@@ -354,7 +360,7 @@ fn same_names(names: &BTreeMap<String, (BTreeMap<String, usize>, BTreeSet<&str>)
             let to = counts.iter().max_by_key(|(s, n)| (**n, s.len())).map(|(s, _)| s.to_string()).unwrap_or_default();
             suggestions.push(Suggestion {
                 kind: Kind::Same,
-                what: What::Name { spellings: counts.keys().map(|s| s.to_string()).collect() },
+                what: What::Name { spellings: counts.keys().map(|s| s.to_string()).collect(), artist: None },
                 to,
                 keys: keys.into_iter().collect(),
             });
@@ -500,7 +506,7 @@ pub fn edits(store: &SongStore, chosen: &[(&Suggestion, &str)], ignore: &str) ->
                         written.insert((key.clone(), *field), to.to_string());
                     }
                 }
-                What::Name { spellings } => {
+                What::Name { spellings, .. } => {
                     let groups: BTreeSet<String> = spellings.iter().map(|s| fields::group_key(s, ignore)).collect();
                     for field in NAME_FIELDS {
                         let Some(text) = now(&written, field) else { continue };
@@ -652,7 +658,7 @@ mod tests {
         let same: Vec<_> = suggestions.iter().filter(|s| s.kind == Kind::Same).collect();
         assert_eq!(same.len(), 1, "{suggestions:?}");
         assert_eq!(same[0].to, "Kan (Reives) Gao", "the most common");
-        assert_eq!(same[0].what, What::Name { spellings: vec!["Kan (Reives) Gao".into(), "Kan R. Gao".into()] });
+        assert_eq!(same[0].what, What::Name { spellings: vec!["Kan (Reives) Gao".into(), "Kan R. Gao".into()], artist: None });
         store.edit(edits(&store, &[(same[0], &same[0].to)], ""));
         let artists: BTreeSet<String> = store.known().filter_map(|(_, s)| Facts::of(s).text(Field::Artist).map(Cow::into_owned)).collect();
         assert_eq!(artists, ["K. R. G.", "Kan (Reives) Gao", "Kevin R. Gao"].map(String::from).into());
@@ -664,8 +670,12 @@ mod tests {
         let other = Meta { artist: Some("Kan (Reives) Gao".into()), ..Meta::default() };
         let store = store("together", &[song, other]);
         let split = suggest(&store, "").into_iter().find(|s| s.kind == Kind::Split).unwrap();
-        let same =
-            Suggestion { kind: Kind::Same, what: What::Name { spellings: vec!["Kan R. Gao".into()] }, to: "Kan (Reives) Gao".into(), keys: split.keys.clone() };
+        let same = Suggestion {
+            kind: Kind::Same,
+            what: What::Name { spellings: vec!["Kan R. Gao".into()], artist: None },
+            to: "Kan (Reives) Gao".into(),
+            keys: split.keys.clone(),
+        };
         let edits = edits(&store, &[(&split, &split.to), (&same, &same.to)], "");
         assert_eq!(edits, [(split.keys[0].clone(), Field::Artist, Some("Kan (Reives) Gao; Someone".into()))]);
     }

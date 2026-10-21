@@ -44,7 +44,8 @@ pub fn track<'r>(release: &'r Release, recording: Option<&str>) -> Option<&'r Tr
 }
 
 /// A song's fields as `release` has them (and its `track`, if the song's
-/// lined up with one).
+/// lined up with one). Artists are written by their own names, not as
+/// they're credited there (`artists`).
 pub fn said(release: &Release, track: Option<&Track>, genres: &Genres, ignore: &str) -> Vec<(Field, String)> {
     let mut said = Vec::new();
     let mut credited = |credits: &[Credit], field: Field, sort: Field| {
@@ -151,7 +152,7 @@ mod tests {
     use crate::song_store::{Meta, Song};
 
     fn release() -> Release {
-        let credit = |name: &str, sort: &str| Credit { name: name.into(), sort: sort.into() };
+        let credit = |name: &str, sort: &str| Credit { id: name.into(), credited: name.into(), name: name.into(), sort: sort.into() };
         Release {
             id: "r1".into(),
             title: "Modal Soul".into(),

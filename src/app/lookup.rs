@@ -2,7 +2,8 @@
 //! chosen for it, an album at a time while the app's open, its matches
 //! saved to the songs (and so synced); its preference and status in
 //! Preferences > Songs; a song's match in Song info, with Wrong match; the
-//! albums it wasn't sure of, for Clean up's Needs a look rows.
+//! albums it wasn't sure of, for Clean up's Needs a look rows; artists'
+//! names as MusicBrainz has them, for its Same name rows.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -13,6 +14,7 @@ use super::App;
 use crate::build_info;
 use crate::cleanup;
 use crate::fields::{Facts, Field};
+use crate::lookup::artists::{self, Artist, Tied};
 use crate::lookup::matching::{self, Album, Release};
 use crate::lookup::{self, Answer, Ask, Done, Outcome, State, Tried, Worker, details};
 use crate::song_store::Online;
@@ -39,8 +41,13 @@ pub(super) struct LookupState {
     kept: HashMap<String, Option<Release>>,
     /// The songs revision matched songs' blanks were last filled at.
     filled_at: Option<u64>,
-    /// Releases that couldn't be asked for again, and when to try again.
+    /// Releases (and artists, as "artist:{id}") that couldn't be asked
+    /// for, and when to try again.
     refresh_failed: HashMap<String, Instant>,
+    /// Artists as the lookup kept them (`None`: not kept), by id.
+    artists: HashMap<String, Option<Artist>>,
+    /// How many artists have been asked for (so Clean up's made anew).
+    pub artists_asked: u64,
 }
 
 impl App {
@@ -76,6 +83,16 @@ impl App {
         match answer {
             Some(Done::Album(album, outcome)) => self.lookup_answered(&album, outcome),
             Some(Done::Release(id, release)) => self.release_refreshed(&id, release),
+            Some(Done::Artist(id, Ok(artist))) => {
+                self.lookup.artists.insert(id, Some(artist));
+                self.lookup.artists_asked += 1;
+                self.lookup.error = None;
+            }
+            Some(Done::Artist(id, Err(e))) => {
+                log::warn!("couldn't ask for artist {id}: {e}");
+                self.lookup.refresh_failed.insert(format!("artist:{id}"), Instant::now() + REFRESH_RETRY);
+                self.lookup.error = Some(e);
+            }
             None => {}
         }
         if self.lookup.filled_at != Some(self.songs.revision()) {
@@ -96,8 +113,9 @@ impl App {
         let refresh = self.lookup.refresh.pop().and_then(|id| albums.iter().find(|a| a.id == id)).cloned();
         let fresh = refresh.is_some();
         let next = refresh.or_else(|| albums.iter().find(|a| tried.get(&a.id).is_none_or(|t| t.due(now)) && lookup::wanted(&self.songs, a)).cloned());
-        // (Then matches due for a refresh, the oldest first.)
-        let ask = next.map(|album| Ask::Album(album, fresh)).or_else(|| {
+        // (Then artists not asked for yet, then matches due for a
+        // refresh, the oldest first.)
+        let ask = next.map(|album| Ask::Album(album, fresh)).or_else(|| self.artist_due().map(Ask::Artist)).or_else(|| {
             self.songs
                 .known()
                 .filter_map(|(_, s)| s.online.as_ref().filter(|o| now - o.at >= lookup::REFRESH).and_then(|o| Some((o.at, o.release.clone()?))))
@@ -112,6 +130,7 @@ impl App {
                         log::info!("looking up {:?} by {:?} ({} songs{})", album.name, album.artist, album.songs.len(), if *fresh { ", anew" } else { "" })
                     }
                     Ask::Release(id) => log::info!("asking for release {id} again"),
+                    Ask::Artist(id) => log::info!("asking for artist {id}"),
                 }
                 if let Some(worker) = &mut self.lookup.worker {
                     worker.ask(ask);
@@ -119,6 +138,41 @@ impl App {
             }
             None => self.lookup.idle_until = Some((revision, Instant::now() + IDLE)),
         }
+    }
+
+    /// An artist matched songs credit who isn't kept, to ask for.
+    fn artist_due(&mut self) -> Option<String> {
+        let matched = self.matched_with(|_| true);
+        let kept = &self.lookup.kept;
+        let credited = artists::credited(matched.iter().filter_map(|(_, r, _)| kept.get(r)?.as_ref()));
+        let now = Instant::now();
+        credited
+            .into_iter()
+            .find(|id| {
+                self.lookup.artists.entry(id.to_string()).or_insert_with(|| lookup::kept_artist(id)).is_none()
+                    && self.lookup.refresh_failed.get(&format!("artist:{id}")).is_none_or(|until| now >= *until)
+            })
+            .map(str::to_string)
+    }
+
+    /// Clean up's Same name rows for artists tied to MusicBrainz
+    /// (`lookup::artists`), in place of the offline ones (in `suggestions`)
+    /// they overlap.
+    pub(super) fn artist_suggestions(&mut self, suggestions: &mut Vec<cleanup::Suggestion>) {
+        let ignore = self.config.group_ignore.clone();
+        let matched = self.matched_with(|_| true);
+        let mut tied = Tied::of(
+            matched.iter().filter_map(|(key, release, recording)| {
+                let release = self.lookup.kept.get(release)?.as_ref()?;
+                Some((self.songs.get_by_key(key)?, release, details::track(release, recording.as_deref())))
+            }),
+            &ignore,
+        );
+        for id in tied.own.keys() {
+            self.lookup.artists.entry(id.clone()).or_insert_with(|| lookup::kept_artist(id));
+        }
+        tied.add_aliases(self.lookup.artists.values().flatten(), &ignore);
+        tied.offer(&self.songs, suggestions, &ignore);
     }
 
     /// Take in a matched release as MusicBrainz has it now: its matches
