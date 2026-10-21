@@ -2634,7 +2634,7 @@ impl App {
     fn songs_revision(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (self.songs.revision(), self.song_info.revision(), &self.config.title_patterns, &self.config.group_ignore, listed_song_extensions(&self.config))
+        (self.songs.revision(), self.song_info.revision(), &self.config.title_patterns, &self.config.group_ignore, self.config.sort_with_articles, listed_song_extensions(&self.config))
             .hash(&mut hasher);
         hasher.finish()
     }
@@ -2746,6 +2746,7 @@ impl App {
             revision,
             &mut view,
             &self.config.group_ignore,
+            self.config.sort_with_articles,
             &mut tools,
             &mut |path, keys| describe_song(&mut cache.borrow_mut(), &naming, &self.songs, path, keys),
             &mut |ui, path| song_info_widgets(ui, &mut cache.borrow_mut(), path, false),

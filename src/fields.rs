@@ -57,6 +57,13 @@ pub enum Field {
     /// Its composer's who it's by (classical music): its artist is its
     /// composer.
     ComposerAsArtist,
+    /// What its title, album, artist, album artist and composer sort as
+    /// ("Beatles" for "The Beatles"), if not themselves.
+    SortTitle,
+    SortAlbum,
+    SortArtist,
+    SortAlbumArtist,
+    SortComposer,
 }
 
 /// What a field's values are, which says how they're shown, sorted and
@@ -129,6 +136,11 @@ pub const FIELDS: &[Def] = &[
     def(Field::Starred, "starred", "Starred", Kind::Flag, true, 0.0, false, &[], false),
     def(Field::Compilation, "compilation", "Compilation", Kind::Flag, true, 0.0, false, &[], true),
     def(Field::ComposerAsArtist, "composer_as_artist", "Use composer as artist", Kind::Flag, true, 0.0, false, &[], true),
+    def(Field::SortTitle, "sort_title", "Sort title as", Kind::Text, true, 140.0, false, &[], true),
+    def(Field::SortAlbum, "sort_album", "Sort album as", Kind::Text, true, 140.0, false, &[], true),
+    def(Field::SortArtist, "sort_artist", "Sort artist as", Kind::Text, true, 140.0, false, &[], true),
+    def(Field::SortAlbumArtist, "sort_album_artist", "Sort album artist as", Kind::Text, true, 140.0, false, &[], true),
+    def(Field::SortComposer, "sort_composer", "Sort composer as", Kind::Text, true, 140.0, false, &[], true),
 ];
 
 impl Def {
@@ -175,6 +187,23 @@ impl Field {
         FIELDS.iter().find(|d| d.key == key).map(|d| d.field)
     }
 
+    /// The field saying what this one sorts as, for one that has one.
+    pub fn sorted_as(self) -> Option<Self> {
+        match self {
+            Field::Title => Some(Field::SortTitle),
+            Field::Album => Some(Field::SortAlbum),
+            Field::Artist => Some(Field::SortArtist),
+            Field::AlbumArtist => Some(Field::SortAlbumArtist),
+            Field::Composer => Some(Field::SortComposer),
+            _ => None,
+        }
+    }
+
+    /// Whether it says what another field sorts as (`sorted_as`).
+    pub fn is_sort_as(self) -> bool {
+        matches!(self, Field::SortTitle | Field::SortAlbum | Field::SortArtist | Field::SortAlbumArtist | Field::SortComposer)
+    }
+
     /// Whether a song name pattern can use it: it has a value to show.
     pub fn in_patterns(self) -> bool {
         matches!(self.kind(), Kind::Text | Kind::Number | Kind::Date)
@@ -201,6 +230,8 @@ pub fn rule_fields() -> Vec<Field> {
 pub struct Value {
     pub text: String,
     pub number: Option<f64>,
+    /// What it sorts as, when a song says (`Field::sorted_as`).
+    pub sort: Option<String>,
 }
 
 /// What's known of a song, which its fields' values come from.
@@ -258,6 +289,11 @@ impl<'a> Facts<'a> {
             Field::AlbumArtist => text(meta.map(|m| &m.album_artist)),
             Field::Album => text(meta.map(|m| &m.album)),
             Field::Composer => text(meta.map(|m| &m.composer)),
+            Field::SortTitle => text(meta.map(|m| &m.sort_title)),
+            Field::SortAlbum => text(meta.map(|m| &m.sort_album)),
+            Field::SortArtist => text(meta.map(|m| &m.sort_artist)),
+            Field::SortAlbumArtist => text(meta.map(|m| &m.sort_album_artist)),
+            Field::SortComposer => text(meta.map(|m| &m.sort_composer)),
             Field::FileName => Some(Cow::Borrowed(Path::new(self.file_name).file_stem().and_then(|s| s.to_str()).unwrap_or(self.file_name))),
             Field::FileExtension => Path::new(self.file_name).extension().map(|e| Cow::Owned(e.to_string_lossy().to_lowercase())),
             _ => None,
@@ -328,7 +364,10 @@ impl<'a> Facts<'a> {
     /// A field's value as shown (tags and flags have none).
     pub fn value(&self, field: Field) -> Option<Value> {
         let text = match field.kind() {
-            Kind::Text => return self.text(field).map(|t| Value { text: t.into_owned(), number: None }),
+            Kind::Text => {
+                let sort = field.sorted_as().and_then(|f| self.text(f)).map(Cow::into_owned);
+                return self.text(field).map(|t| Value { text: t.into_owned(), number: None, sort });
+            }
             Kind::Number | Kind::Date => {
                 let n = self.number(field)?;
                 match field {
@@ -343,7 +382,16 @@ impl<'a> Facts<'a> {
             }
             Kind::Tag | Kind::Flag => return None,
         };
-        Some(Value { number: self.number(field), text })
+        Some(Value { number: self.number(field), text, sort: None })
+    }
+
+    /// What a text field sorts by: what the song says it sorts as, else
+    /// its text, past a leading article unless `articles` (`sort_text`).
+    pub fn sort_text(&self, field: Field, articles: bool) -> Option<String> {
+        match field.sorted_as().and_then(|f| self.text(f)) {
+            Some(sort) => Some(sort.to_lowercase()),
+            None => self.text(field).map(|t| sort_text(&t, articles)),
+        }
     }
 }
 
@@ -381,6 +429,21 @@ pub fn genre_names(text: &str) -> Cow<'_, str> {
     let items: Vec<&str> = Field::Genre.def().split(text).collect();
     let named: Vec<String> = items.iter().flat_map(|i| item(i)).collect();
     if named.iter().map(String::as_str).eq(items.iter().copied()) { Cow::Borrowed(text) } else { Cow::Owned(named.join(", ")) }
+}
+
+/// What `text` sorts by: in lowercase and, unless `articles`, past a
+/// leading "The", "A" or "An" ("The Beatles" with the Bs).
+pub fn sort_text(text: &str, articles: bool) -> String {
+    let lower = text.trim().to_lowercase();
+    if articles {
+        return lower;
+    }
+    for article in ["the ", "a ", "an "] {
+        if let Some(rest) = lower.strip_prefix(article).map(str::trim_start).filter(|r| !r.is_empty()) {
+            return rest.to_string();
+        }
+    }
+    lower
 }
 
 /// `secs` (Unix seconds) as a date, `2026-10-20` (UTC).
@@ -445,7 +508,7 @@ mod tests {
         assert_eq!(facts.text(Field::Artist), None, "empty is none");
         assert_eq!(facts.text(Field::FileName).as_deref(), Some("03 Song"));
         assert_eq!(facts.text(Field::FileExtension).as_deref(), Some("mp3"));
-        assert_eq!(facts.value(Field::Track), Some(Value { text: "3".into(), number: Some(3.0) }));
+        assert_eq!(facts.value(Field::Track), Some(Value { text: "3".into(), number: Some(3.0), sort: None }));
         assert_eq!(facts.value(Field::Length).map(|v| v.text).as_deref(), Some("1:23"));
         assert_eq!(facts.value(Field::Size).map(|v| v.text).as_deref(), Some("4.2"));
         assert_eq!(facts.value(Field::Imported).map(|v| v.text).as_deref(), Some("1970-01-02"));
@@ -477,6 +540,21 @@ mod tests {
         for (tagged, named) in [("17", "Rock"), ("(17)", "Rock"), ("(17)(0)", "Rock, Blues"), ("(17)Hard Rock", "Hard Rock"), ("(RX), 31", "Remix, Trance"), ("Jazz", "Jazz"), ("(Live)", "(Live)"), ("255", "255")] {
             assert_eq!(genre_names(tagged), named, "{tagged}");
         }
+    }
+
+    #[test]
+    fn sorting_goes_past_articles_and_by_sort_as() {
+        assert_eq!(sort_text("The Beatles", false), "beatles");
+        assert_eq!(sort_text("A Bird Story", false), "bird story");
+        assert_eq!(sort_text("An Ocean", false), "ocean");
+        assert_eq!(sort_text("The Beatles", true), "the beatles");
+        assert_eq!(sort_text("The", false), "the", "nothing after it");
+        assert_eq!(sort_text("Theory", false), "theory");
+        let meta = Meta { artist: Some("The Beatles".into()), sort_artist: Some("Beatles, The".into()), album: Some("The White Album".into()), ..Meta::default() };
+        let facts = Facts { meta: Some(&meta), ..Facts::default() };
+        assert_eq!(facts.sort_text(Field::Artist, false).as_deref(), Some("beatles, the"));
+        assert_eq!(facts.sort_text(Field::Album, false).as_deref(), Some("white album"));
+        assert_eq!(facts.value(Field::Artist).and_then(|v| v.sort).as_deref(), Some("Beatles, The"));
     }
 
     #[test]

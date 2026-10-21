@@ -104,6 +104,10 @@ pub struct Config {
     /// and symbols (`fields::group_key`).
     #[serde(default)]
     pub group_ignore: String,
+    /// Preference: sort names with a leading "The", "A" or "An" as they
+    /// are (`fields::sort_text`); by default it's passed over.
+    #[serde(default)]
+    pub sort_with_articles: bool,
     /// Clean-up suggestions dismissed (`cleanup::Suggestion::id`).
     #[serde(default)]
     pub cleanup_dismissed: std::collections::BTreeSet<String>,

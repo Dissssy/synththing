@@ -244,10 +244,18 @@ pub struct Output {
     pub star: Option<(PathBuf, bool)>,
 }
 
-/// What a song sorts by for `value`: it with its text in lowercase, made
-/// once for [`compare`] rather than each time two songs are.
-fn sort_value(value: Option<&Value>) -> Option<Value> {
-    value.map(|v| Value { text: v.text.to_lowercase(), number: v.number })
+/// What a song sorts by for `value`: what it sorts as, else its text
+/// (`fields::sort_text`, past a leading article unless `articles`),
+/// made once for [`compare`] rather than each time two songs are.
+fn sort_value(value: Option<&Value>, articles: bool) -> Option<Value> {
+    value.map(|v| Value {
+        text: match &v.sort {
+            Some(sort) => sort.to_lowercase(),
+            None => fields::sort_text(&v.text, articles),
+        },
+        number: v.number,
+        sort: None,
+    })
 }
 
 /// How two values ([`sort_value`]s) compare for sorting: numbers as
@@ -410,7 +418,8 @@ impl SongList {
     /// `revision` (which changes whenever the songs or what's said of them
     /// do, `ignore` included), the view, the search or the groups closed
     /// change. Groups go by `fields::group_key`, past the characters in
-    /// `ignore`. `tools` draws buttons at the start of the toolbar, `trailing`
+    /// `ignore`, and text sorts past a leading article unless `articles`.
+    /// `tools` draws buttons at the start of the toolbar, `trailing`
     /// extra widgets at the right end of each row (right to left, in
     /// `TRAILING_WIDTH`), and `menu` a row's right-click menu.
     #[allow(clippy::too_many_arguments)]
@@ -421,6 +430,7 @@ impl SongList {
         revision: u64,
         view: &mut View,
         ignore: &str,
+        articles: bool,
         tools: &mut dyn FnMut(&mut egui::Ui),
         describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
         trailing: &mut dyn FnMut(&mut egui::Ui, &Path),
@@ -489,7 +499,7 @@ impl SongList {
         if stale {
             let songs = songs();
             let (items, queue) = if query.is_empty() {
-                self.sorted(&songs, view, &keys, sort_at, group_at, ignore, describe)
+                self.sorted(&songs, view, &keys, sort_at, group_at, ignore, articles, describe)
             } else {
                 let found = ranked_matches(&songs, query, &keys, describe);
                 let queue = found.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false, starred: e.song.starred }).collect();
@@ -656,6 +666,7 @@ impl SongList {
         sort_at: Option<usize>,
         group_at: Option<usize>,
         ignore: &str,
+        articles: bool,
         describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
     ) -> (Vec<Item>, Vec<Queued>) {
         /// A song in one of its groups, and what it sorts by: the group
@@ -673,19 +684,19 @@ impl SongList {
         for path in songs {
             let entry = Entry { song: describe(path, keys), path: path.clone() };
             let order = match sort_at {
-                Some(i) => sort_value(entry.song.values[i].as_ref()),
-                None => Some(Value { text: entry.song.name.to_lowercase(), number: None }),
+                Some(i) => sort_value(entry.song.values[i].as_ref(), articles),
+                None => Some(Value { text: fields::sort_text(&entry.song.name, articles), ..Value::default() }),
             };
             let groups: Vec<(Option<String>, Option<Value>)> = match group_at {
                 _ if by_tag && !entry.song.tags.is_empty() => {
-                    entry.song.tags.iter().map(|(name, _)| (Some(name.clone()), Some(Value { text: name.to_lowercase(), number: None }))).collect()
+                    entry.song.tags.iter().map(|(name, _)| (Some(name.clone()), Some(Value { text: name.to_lowercase(), ..Value::default() }))).collect()
                 }
                 Some(g) => {
                     let value = entry.song.values[g].as_ref();
                     // (Sorted by what tells the groups apart, so their
                     // songs stay together.)
                     let group = |label: String| {
-                        let key = Value { text: fields::group_key(&label, ignore), number: value.and_then(|v| v.number) };
+                        let key = Value { text: fields::group_key(&label, ignore), number: value.and_then(|v| v.number), sort: None };
                         (Some(label), Some(key))
                     };
                     match group_label(&view.group, value) {
@@ -954,10 +965,10 @@ mod tests {
             let mut describe = |path: &Path, keys: &[&str]| {
                 *described += 1;
                 let n: usize = path.to_str().unwrap().parse().unwrap();
-                let values = keys.iter().map(|&k| (k == "artist").then(|| Value { text: format!("Artist {}", n % 3), number: None })).collect();
+                let values = keys.iter().map(|&k| (k == "artist").then(|| Value { text: format!("Artist {}", n % 3), ..Value::default() })).collect();
                 Described { name: format!("Song {n}"), file_name: String::new(), values, tags: Vec::new(), starred: false }
             };
-            list.ui(ui, &mut || songs.to_vec(), revision, &mut view, "", &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
+            list.ui(ui, &mut || songs.to_vec(), revision, &mut view, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
         });
         output.textures_delta.clear();
     }
@@ -1020,13 +1031,13 @@ mod tests {
         let paths: Vec<PathBuf> = songs.iter().map(|(name, ..)| PathBuf::from(name)).collect();
         let mut describe = |path: &Path, _: &[&str]| {
             let (name, album, tags) = songs.iter().find(|(name, ..)| Path::new(name) == path).unwrap();
-            let values = vec![album.map(|a| Value { text: a.to_string(), number: None })];
+            let values = vec![album.map(|a| Value { text: a.to_string(), ..Value::default() })];
             let tags = tags.iter().map(|t| (t.to_string(), [0; 3])).collect();
             Described { name: name.to_string(), file_name: name.to_string(), values, tags, starred: false }
         };
         let view = View { group: group.into(), ..View::default() };
         let group_at = (group == "album").then_some(0);
-        shape(&list.sorted(&paths, &view, &["album"], None, group_at, "", &mut describe).0)
+        shape(&list.sorted(&paths, &view, &["album"], None, group_at, "", false, &mut describe).0)
     }
 
     #[test]
@@ -1057,11 +1068,11 @@ mod tests {
         let paths: Vec<PathBuf> = songs.iter().map(|(name, ..)| PathBuf::from(name)).collect();
         let mut describe = |path: &Path, _: &[&str]| {
             let (name, genre, _) = songs.iter().find(|(name, ..)| Path::new(name) == path).unwrap();
-            let values = vec![genre.map(|a| Value { text: a.to_string(), number: None })];
+            let values = vec![genre.map(|a| Value { text: a.to_string(), ..Value::default() })];
             Described { name: name.to_string(), file_name: name.to_string(), values, tags: Vec::new(), starred: false }
         };
         let view = View { group: "genre".into(), ..View::default() };
-        let rows = shape(&SongList::default().sorted(&paths, &view, &["genre"], None, Some(0), "", &mut describe).0);
+        let rows = shape(&SongList::default().sorted(&paths, &view, &["genre"], None, Some(0), "", false, &mut describe).0);
         assert_eq!(rows, ["Avant-Garde (1)", "a", "Blues (1)", "b", "Rock (2)", "a", "b"]);
     }
 
@@ -1194,7 +1205,7 @@ mod tests {
             Described { name: name.to_string(), file_name: name.to_string(), values: vec![None], tags: tags.iter().map(|t| (t.to_string(), [0; 3])).collect(), starred: false }
         };
         let view = View { group: TAG.into(), ..View::default() };
-        let (items, _) = SongList::default().sorted(&paths, &view, &["album"], None, None, "", &mut describe);
+        let (items, _) = SongList::default().sorted(&paths, &view, &["album"], None, None, "", false, &mut describe);
         assert_eq!(shape(&items), ["chill (1)", "a", "rock (2)", "a", "b"]);
         assert_eq!(active_row(&items, Path::new("a"), Some("rock")), Some(3));
         assert_eq!(active_row(&items, Path::new("a"), None), Some(1), "its first, with no group known");

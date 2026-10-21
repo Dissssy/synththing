@@ -17,6 +17,8 @@ use crate::fields::{self, Facts, Field, Kind};
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Details,
+    /// What the names sort as (`Field::sorted_as`).
+    Sorting,
     File,
 }
 
@@ -83,16 +85,22 @@ impl App {
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.add_enabled_ui(!details.keys.is_empty(), |ui| ui.selectable_value(&mut details.tab, Tab::Details, "Details"))
-                    .inner
-                    .on_disabled_hover_text("Only songs in your library can be edited");
+                for (tab, label) in [(Tab::Details, "Details"), (Tab::Sorting, "Sorting")] {
+                    ui.add_enabled_ui(!details.keys.is_empty(), |ui| ui.selectable_value(&mut details.tab, tab, label))
+                        .inner
+                        .on_disabled_hover_text("Only songs in your library can be edited");
+                }
                 if one {
                     ui.selectable_value(&mut details.tab, Tab::File, "File");
                 }
             });
             ui.separator();
             match details.tab {
-                Tab::Details => self.details_tab_ui(ui, &mut details),
+                Tab::Details => self.details_tab_ui(ui, &mut details, false),
+                Tab::Sorting => {
+                    ui.weak("What each name sorts as, if not itself: \"Beatles\" for \"The Beatles\". Empty sorts it as it is (past a leading The, A or An, as Preferences > Songs says).");
+                    self.details_tab_ui(ui, &mut details, true);
+                }
                 Tab::File => self.file_tab_ui(ui, &details.paths[0]),
             }
             ui.add_space(8.0);
@@ -112,9 +120,11 @@ impl App {
         }
     }
 
-    /// The editable fields, each with a button back to what the file says
-    /// when an edit says otherwise.
-    fn details_tab_ui(&self, ui: &mut egui::Ui, details: &mut SongDetails) {
+    /// The editable fields (those saying what names sort as, if
+    /// `sorting`, else the rest), each with a button back to what the file
+    /// says when an edit says otherwise.
+    fn details_tab_ui(&self, ui: &mut egui::Ui, details: &mut SongDetails, sorting: bool) {
+        let shown: Vec<&fields::Def> = fields::editable().filter(|d| d.field.is_sort_as() == sorting).collect();
         let SongDetails { keys, texts, changes, .. } = details;
         let songs: Vec<_> = keys.iter().filter_map(|k| self.songs.get_by_key(k)).collect();
         if keys.len() > 1 {
@@ -124,9 +134,9 @@ impl App {
         // nothing in a modal. Each box fills what's left of its row,
         // beside a label and the revert button's room.)
         let font = egui::TextStyle::Body.resolve(ui.style());
-        let label_width = fields::editable().map(|d| ui.painter().layout_no_wrap(d.label.to_string(), font.clone(), egui::Color32::WHITE).size().x).fold(0.0, f32::max);
+        let label_width = shown.iter().map(|d| ui.painter().layout_no_wrap(d.label.to_string(), font.clone(), egui::Color32::WHITE).size().x).fold(0.0, f32::max);
         let row_height = ui.spacing().interact_size.y;
-        for def in fields::editable() {
+        for def in shown {
             let field = def.field;
             let (text, mixed) = texts.get_mut(&field).expect("every editable field has its text");
             ui.horizontal(|ui| {
