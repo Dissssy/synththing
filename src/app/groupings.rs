@@ -860,6 +860,9 @@ impl App {
     }
 }
 
+/// What a song not here yet says on hover.
+const NOT_HERE: &str = "Not on this device yet: it's coming from your other devices";
+
 /// What happened on a track's row.
 #[derive(Default)]
 struct RowOutput {
@@ -879,34 +882,45 @@ enum Change {
 }
 
 /// One song's row in `rect`: its star, number, name, guest artist and
-/// length, marked when it's `playing` or `picked`, weak when its file
-/// isn't here. A click picks it and a double-click plays it (a tap, on a
-/// phone); on the desktop it drags onto a playlist. With `moves` (whether
+/// length, marked when it's `playing` or `picked`. A click picks it and a
+/// double-click plays it (a tap, on a phone); on the desktop it drags onto
+/// a playlist. One whose file isn't here yet (known from your other
+/// devices) is faint, with a download cloud for its star, and does none of
+/// that: there's nothing to play or pick yet. With `moves` (whether
 /// it can go sooner, and later), it has buttons to move it in its set, or
 /// take it out.
 #[allow(clippy::too_many_arguments)]
 fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<&str>, playing: bool, picked: bool, striped: bool, moves: Option<(bool, bool)>) -> RowOutput {
     let touch = select_list::touch(ui.ctx());
-    let sense = if touch { egui::Sense::click() } else { egui::Sense::click_and_drag() };
-    let response = ui.interact(rect, ui.id().with(("track", &track.path)), sense - egui::Sense::FOCUSABLE);
+    let sense = match (track.here, touch) {
+        (false, _) => egui::Sense::hover(),
+        (true, true) => egui::Sense::click(),
+        (true, false) => egui::Sense::click_and_drag(),
+    };
+    let mut response = ui.interact(rect, ui.id().with(("track", &track.path)), sense - egui::Sense::FOCUSABLE);
+    if !track.here {
+        response = response.on_hover_text(NOT_HERE);
+    }
     let mut output = RowOutput { picked: response.clicked(), play: response.double_clicked() || (touch && response.clicked()), ..RowOutput::default() };
     let visuals = ui.style().interact_selectable(&response, picked);
     let playing_color = crate::theme::playing_color(ui.ctx());
     if playing && !picked && !response.hovered() {
         ui.painter().rect(rect, visuals.corner_radius, playing_color.gamma_multiply(0.15), egui::Stroke::new(1.0, playing_color), egui::StrokeKind::Inside);
-    } else if picked || response.hovered() {
+    } else if picked || (track.here && response.hovered()) {
         ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
     } else if striped {
         ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
     }
-    if track.here && response.drag_started() {
+    if response.drag_started() {
         response.dnd_set_drag_payload(DraggedFiles { paths: vec![track.path.clone()], label: track.name.clone() });
     }
-    response.context_menu(|ui| {
-        if ui.button("Song info").clicked() {
-            output.info = true;
-        }
-    });
+    if track.here {
+        response.context_menu(|ui| {
+            if ui.button("Song info").clicked() {
+                output.info = true;
+            }
+        });
+    }
     let builder = egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center));
     ui.scope_builder(builder, |ui| {
         ui.style_mut().interaction.selectable_labels = false;
@@ -915,12 +929,20 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
         } else if playing {
             ui.visuals_mut().override_text_color = Some(playing_color);
         } else if !track.here {
-            ui.visuals_mut().override_text_color = Some(ui.visuals().weak_text_color());
+            let faint = ui.visuals().weak_text_color().gamma_multiply(0.45);
+            ui.visuals_mut().override_text_color = Some(faint);
         }
-        output.star = select_list::star(ui, track.starred);
+        if track.here {
+            output.star = select_list::star(ui, track.starred);
+        } else {
+            let (icon, _) = ui.allocate_exact_size(egui::vec2(select_list::STAR_WIDTH, ui.available_height()), egui::Sense::hover());
+            let font = egui::TextStyle::Body.resolve(ui.style());
+            let color = ui.visuals().weak_text_color();
+            ui.painter().text(icon.center(), egui::Align2::CENTER_CENTER, super::icon("cloud-arrow-down"), font, color);
+        }
         let number = track.number.map_or(String::new(), |n| n.to_string());
         ui.add_sized([24.0, rect.height()], egui::Label::new(egui::RichText::new(number).weak()));
-        let scroll = playing || response.contains_pointer();
+        let scroll = track.here && (playing || response.contains_pointer());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(4.0);
             if let Some((sooner, later)) = moves {

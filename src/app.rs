@@ -28,6 +28,7 @@ mod copyright;
 mod moderation;
 mod notifications;
 mod overflow;
+mod palette;
 mod previews;
 mod library;
 mod lookup;
@@ -136,6 +137,48 @@ fn plays(store: &SongStore, path: &Path) -> song_list::Plays {
         starred: store.is_starred(path),
         skip_shuffle: flag(Field::SkipShuffle),
         together: store.together_of(path).map(|(set, at)| song_list::InSet { set: set.to_string(), at, of: store.together()[set].len() }),
+    }
+}
+
+/// The Songs list's songs: the library's (with `extensions`, and only
+/// those in `only` when given), as a query's filters keep them.
+struct Listed<'a> {
+    store: &'a SongStore,
+    extensions: &'a [&'a str],
+    only: Option<&'a std::collections::HashSet<&'a str>>,
+}
+
+impl song_list::Source for Listed<'_> {
+    fn songs(&mut self, query: &str) -> (Vec<PathBuf>, crate::search::Search) {
+        let search = crate::search::parse(query, self.store.tags());
+        let songs = {
+            let matches = search.rules.matcher(crate::settings_sync::now());
+            self.store
+                .songs()
+                .filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song))
+                .map(|(path, _)| path)
+                .filter(|p| self.only.is_none_or(|only| song_store::key_in(self.store.dir(), p).is_some_and(|k| only.contains(k))))
+                .collect()
+        };
+        (songs, search)
+    }
+
+    fn values(&mut self, field: crate::fields::Field, query: &str) -> Vec<String> {
+        let rules = crate::search::parse(query, self.store.tags()).rules;
+        let matches = rules.matcher(crate::settings_sync::now());
+        let songs = self.store.songs().filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song)).map(|(_, song)| song);
+        if field == crate::fields::Field::Tag {
+            let used: std::collections::BTreeSet<&str> = songs.flat_map(|song| song.tags.iter().map(String::as_str)).collect();
+            return used.into_iter().filter_map(|id| self.store.tags().get(id)).map(|t| t.name.clone()).collect();
+        }
+        // (Each once, however it's spelled: as most songs spell it.)
+        let mut spellings: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+        for song in songs {
+            for value in crate::fields::Facts::of(song).items(field) {
+                spellings.entry(crate::fields::group_key(&value, "")).or_default().push(value.into_owned());
+            }
+        }
+        spellings.values().filter_map(|s| crate::fields::best_spelling(s.iter().map(String::as_str)).map(str::to_string)).collect()
     }
 }
 
@@ -373,6 +416,8 @@ pub struct App {
     /// A Controls binding waiting for a key press: (action index, which of
     /// its keys to replace, or `None` to add one).
     binding_capture: Option<(usize, Option<usize>)>,
+    /// The command palette, while it's open.
+    palette: Option<palette::Palette>,
     /// The script's Settings or Controls window, if open.
     script_window: Option<script_windows::ScriptWindow>,
     /// The category picked in each (Settings, Controls, Debug).
@@ -677,6 +722,7 @@ impl App {
             tag_to_name: None,
             playlist_selection: Selection::default(),
             binding_capture: None,
+            palette: None,
             script_window: None,
             script_window_tab: [0; 3],
             user_presets: None,
@@ -2514,6 +2560,7 @@ impl App {
             || self.welcome.open
             || self.song_details.is_some()
             || self.cleanup.is_some()
+            || self.palette.is_some()
             || self.tags_open
             || self.recording.prompt_open
             || self.recording.window.is_some()
@@ -2817,14 +2864,7 @@ impl App {
         };
         let output = self.song_list.ui(
             ui,
-            &mut || {
-                store
-                    .songs()
-                    .map(|(path, _)| path)
-                    .filter(|p| song_store::has_extension(p, extensions))
-                    .filter(|p| only.as_ref().is_none_or(|only| song_store::key_in(store.dir(), p).is_some_and(|k| only.contains(k))))
-                    .collect()
-            },
+            &mut Listed { store, extensions, only: only.as_ref() },
             revision,
             &mut view,
             &self.config.group_ignore,
@@ -2848,6 +2888,9 @@ impl App {
         }
         if let Some(at) = output.play {
             self.play_listed(at);
+        }
+        if let Some(query) = output.save_search {
+            self.smart_playlist_from_search(ui.ctx(), &query);
         }
         if autoplay_clicked {
             self.set_autoplay(self.autoplay.cycle());
@@ -3354,6 +3397,17 @@ impl App {
             Command::ToggleRecording => self.toggle_recording(view),
             Command::PauseRecording => self.toggle_recording_pause(),
             Command::Quit => self.close_with(ctx, close::CloseAction::Quit),
+            Command::CommandPalette => self.palette = Some(palette::Palette::default()),
+        }
+    }
+
+    /// Whether a command would do anything now. One that wouldn't leaves
+    /// its key alone and stays out of the palette.
+    fn command_available(&self, command: Command) -> bool {
+        match command {
+            Command::ExitFullscreen => self.fullscreen || self.dedicated.is_some(),
+            Command::NextTrack => self.has_next(),
+            _ => true,
         }
     }
 
@@ -3902,17 +3956,12 @@ impl eframe::App for App {
         // being captured.
         if !self.any_modal_open() && self.binding_capture.is_none() {
             let typing = ctx.memory(|m| m.focused().is_some());
-            let in_fullscreen = self.fullscreen || self.dedicated.is_some();
-            let has_next = self.has_next();
+            let available: Vec<Command> = Command::ALL.into_iter().filter(|&c| self.command_available(c)).collect();
             // Run outside `ctx.input_mut`: `send_viewport_cmd` (inside
             // `set_fullscreen`) takes the lock that closure holds, and
             // calling it from in there deadlocks.
             let pressed = ctx.input_mut(|i| {
-                commands::pressed(i, typing, |command| match command {
-                    Command::ExitFullscreen => in_fullscreen,
-                    Command::NextTrack => has_next,
-                    _ => true,
-                })
+                commands::pressed(i, typing, |command| available.contains(&command))
             });
             for command in pressed {
                 self.run_command(&ctx, command, view);
@@ -3977,6 +4026,7 @@ impl eframe::App for App {
             drop(windows);
         }
         let windows = frame_timing::scope("windows");
+        self.palette_ui(&ctx, view);
         self.remove_songs_ui(&ctx);
         self.repair_ui(&ctx);
         self.tags_ui(&ctx);
