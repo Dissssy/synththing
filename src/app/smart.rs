@@ -13,7 +13,8 @@ use super::{fit_width, App};
 use crate::playlist::{Playlist, PlaylistEntry};
 use crate::select_list;
 use crate::settings_sync;
-use crate::smart::{self, Field, Group, Kind, Limit, Op, Order, Rule, Rules, Ruleset, Split, SplitBy, Unit};
+use crate::fields::{self, Field, Kind};
+use crate::smart::{self, Group, Limit, Op, Order, Rule, Rules, Ruleset, Split, SplitBy, Unit};
 use crate::song_store::Tag;
 
 /// Whether rules can be edited on a touch screen (they can always be
@@ -121,10 +122,10 @@ impl App {
 
     /// The rules editor, while it's open.
     pub(super) fn rules_editor_ui(&mut self, ctx: &egui::Context) {
+        let revision = self.groups_revision();
         let Some(editor) = &mut self.rules_editor else { return };
-        let revision = self.songs.revision();
         if editor.preview.as_ref().is_none_or(|(seen, rules, _)| *seen != revision || *rules != editor.rules) {
-            editor.preview = Some((revision, editor.rules.clone(), summary(&editor.rules, &self.songs)));
+            editor.preview = Some((revision, editor.rules.clone(), summary(&editor.rules, &self.songs, &self.config.group_ignore)));
         }
         let ruleset = matches!(editor.editing, Editing::Ruleset(_));
         let new = matches!(editor.editing, Editing::Playlist(None) | Editing::Ruleset(None));
@@ -223,17 +224,26 @@ impl App {
         }
     }
 
+    /// What rulesets' playlists are worked out from changes: the library,
+    /// or the characters grouping ignores.
+    fn groups_revision(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (self.songs.revision(), &self.config.group_ignore).hash(&mut hasher);
+        hasher.finish()
+    }
+
     /// The playlists ruleset `id` (with `rules`) makes, worked out again
-    /// when the library or the rules change.
+    /// when the library, the rules or grouping change.
     pub(super) fn groups_of(&mut self, id: &str, rules: &Rules) -> Arc<Vec<Group>> {
-        let revision = self.songs.revision();
+        let revision = self.groups_revision();
         if let Some((seen, cached, groups)) = self.ruleset_groups.get(id)
             && *seen == revision
             && cached == rules
         {
             return groups.clone();
         }
-        let groups = Arc::new(rules.groups(&self.songs, settings_sync::now()));
+        let groups = Arc::new(rules.groups(&self.songs, settings_sync::now(), &self.config.group_ignore));
         self.ruleset_groups.insert(id.to_string(), (revision, rules.clone(), groups.clone()));
         groups
     }
@@ -290,15 +300,15 @@ impl App {
     }
 }
 
-/// The ruleset playlists last worked out, by ruleset ID: for which library
-/// revision and rules.
+/// The ruleset playlists last worked out, by ruleset ID: for which
+/// revision (`App::groups_revision`) and rules.
 pub(super) type RulesetGroups = BTreeMap<String, (u64, Rules, Arc<Vec<Group>>)>;
 
 /// What `rules` come to in `store` now, in a line.
-fn summary(rules: &Rules, store: &crate::song_store::SongStore) -> String {
+fn summary(rules: &Rules, store: &crate::song_store::SongStore, ignore: &str) -> String {
     let now = settings_sync::now();
     if rules.split.is_some() {
-        let groups = rules.groups(store, now);
+        let groups = rules.groups(store, now, ignore);
         let songs: usize = groups.iter().map(|g| g.songs.len()).sum();
         format!("{} playlist{}, {songs} songs in all", groups.len(), if groups.len() == 1 { "" } else { "s" })
     } else {
@@ -376,12 +386,12 @@ fn rules_ui(ui: &mut egui::Ui, rules: &mut Rules, tags: &BTreeMap<String, Tag>, 
 /// One rule: field, op and its values.
 fn rule_ui(ui: &mut egui::Ui, rule: &mut Rule, tags: &BTreeMap<String, Tag>) {
     let before = rule.field;
-    pick(ui, "field", &mut rule.field, &Field::ALL, |f| f.title());
+    pick(ui, "field", &mut rule.field, &fields::rule_fields(), Field::label);
     if rule.field.kind() != before.kind() {
         *rule = Rule::new(rule.field);
     }
     let kind = rule.field.kind();
-    pick(ui, "op", &mut rule.op, kind.ops(), |o| o.title());
+    pick(ui, "op", &mut rule.op, smart::ops(kind), |o| o.title());
     if rule.op.values() == 0 {
         return;
     }
@@ -398,6 +408,7 @@ fn rule_ui(ui: &mut egui::Ui, rule: &mut Rule, tags: &BTreeMap<String, Tag>) {
     }
     let hint = match (rule.field, rule.op) {
         (Field::Length, _) => "m:ss",
+        (Field::Size, _) => "MB",
         (_, Op::Before | Op::After) => "2026-10-20",
         (_, Op::InLast | Op::NotInLast) => "days",
         _ => "",

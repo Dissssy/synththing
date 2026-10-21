@@ -16,12 +16,14 @@
 //! The built-in rulesets, By Artist and By Album ([`builtin`]), are
 //! made here, not kept: they can't be removed.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::fields::{self, Facts, Field, Kind};
 use crate::song_store::{self, Song, SongStore};
 
 /// A smart playlist's (or ruleset's) definition.
@@ -62,133 +64,25 @@ pub struct Rule {
 
 impl Rule {
     pub fn new(field: Field) -> Self {
-        Self { field, op: field.kind().ops()[0], value: String::new(), to: String::new() }
+        Self { field, op: ops(field.kind())[0], value: String::new(), to: String::new() }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Field {
-    Title,
-    Artist,
-    AlbumArtist,
-    Album,
-    Composer,
-    Genre,
-    FileName,
-    Year,
-    Track,
-    Disc,
-    /// Seconds (typed as `m:ss` or seconds).
-    Length,
-    /// MB.
-    Size,
-    Imported,
-    Tag,
-    Starred,
+/// A text field's value for rules and sorting: a song without a title
+/// goes by its file name.
+fn text<'a>(song: &Facts<'a>, field: Field) -> Option<Cow<'a, str>> {
+    song.text(field).or_else(|| if field == Field::Title { song.text(Field::FileName) } else { None })
 }
 
-/// What a field's values are, which says how they can be compared.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    Text,
-    Number,
-    Date,
-    Tag,
-    Flag,
-}
-
-impl Field {
-    pub const ALL: [Self; 15] = [
-        Self::Title,
-        Self::Artist,
-        Self::AlbumArtist,
-        Self::Album,
-        Self::Composer,
-        Self::Genre,
-        Self::FileName,
-        Self::Year,
-        Self::Track,
-        Self::Disc,
-        Self::Length,
-        Self::Size,
-        Self::Imported,
-        Self::Tag,
-        Self::Starred,
-    ];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Title => "Title",
-            Self::Artist => "Artist",
-            Self::AlbumArtist => "Album artist",
-            Self::Album => "Album",
-            Self::Composer => "Composer",
-            Self::Genre => "Genre",
-            Self::FileName => "File name",
-            Self::Year => "Year",
-            Self::Track => "Track",
-            Self::Disc => "Disc",
-            Self::Length => "Length",
-            Self::Size => "Size (MB)",
-            Self::Imported => "Date added",
-            Self::Tag => "Tag",
-            Self::Starred => "Starred",
-        }
+/// Parse a value typed for `field`.
+fn parse(field: Field, text: &str) -> Option<f64> {
+    let text = text.trim();
+    if field == Field::Length
+        && let Some((m, s)) = text.split_once(':')
+    {
+        return Some(m.trim().parse::<f64>().ok()? * 60.0 + s.trim().parse::<f64>().ok()?);
     }
-
-    pub fn kind(self) -> Kind {
-        match self {
-            Self::Title | Self::Artist | Self::AlbumArtist | Self::Album | Self::Composer | Self::Genre | Self::FileName => Kind::Text,
-            Self::Year | Self::Track | Self::Disc | Self::Length | Self::Size => Kind::Number,
-            Self::Imported => Kind::Date,
-            Self::Tag => Kind::Tag,
-            Self::Starred => Kind::Flag,
-        }
-    }
-
-    fn text<'a>(self, song: &'a Song) -> Option<&'a str> {
-        let meta = song.meta.as_ref();
-        let text = match self {
-            Self::Title => meta.and_then(|m| m.title.as_deref()).or_else(|| Some(stem(&song.name))),
-            Self::Artist => meta.and_then(|m| m.artist.as_deref()),
-            Self::AlbumArtist => meta.and_then(|m| m.album_artist.as_deref()),
-            Self::Album => meta.and_then(|m| m.album.as_deref()),
-            Self::Composer => meta.and_then(|m| m.composer.as_deref()),
-            Self::Genre => meta.and_then(|m| m.genre.as_deref()),
-            Self::FileName => Some(song.name.as_str()),
-            _ => None,
-        };
-        text.map(str::trim).filter(|t| !t.is_empty())
-    }
-
-    fn number(self, song: &Song) -> Option<f64> {
-        let meta = song.meta.as_ref()?;
-        match self {
-            Self::Year => meta.year.map(f64::from),
-            Self::Track => meta.track.map(f64::from),
-            Self::Disc => meta.disc.map(f64::from),
-            Self::Length => meta.length,
-            Self::Size => Some(meta.size as f64 / 1e6),
-            _ => None,
-        }
-    }
-
-    /// Parse a value typed for this field.
-    fn parse(self, text: &str) -> Option<f64> {
-        let text = text.trim();
-        if self == Self::Length
-            && let Some((m, s)) = text.split_once(':')
-        {
-            return Some(m.trim().parse::<f64>().ok()? * 60.0 + s.trim().parse::<f64>().ok()?);
-        }
-        text.parse().ok()
-    }
-}
-
-/// The file name without its extension.
-fn stem(name: &str) -> &str {
-    name.rsplit_once('.').map_or(name, |(stem, _)| stem)
+    text.parse().ok()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,17 +111,15 @@ pub enum Op {
     IsFalse,
 }
 
-impl Kind {
-    /// The ops for this kind of field (the first is a new rule's).
-    pub fn ops(self) -> &'static [Op] {
-        use Op::*;
-        match self {
-            Self::Text => &[Contains, NotContains, Is, IsNot, StartsWith, EndsWith, IsEmpty, IsNotEmpty],
-            Self::Number => &[Is, IsNot, Greater, Less, InRange, IsEmpty, IsNotEmpty],
-            Self::Date => &[InLast, NotInLast, Before, After],
-            Self::Tag => &[Has, HasNot],
-            Self::Flag => &[IsTrue, IsFalse],
-        }
+/// The ops for a kind of field (the first is a new rule's).
+pub fn ops(kind: Kind) -> &'static [Op] {
+    use Op::*;
+    match kind {
+        Kind::Text => &[Contains, NotContains, Is, IsNot, StartsWith, EndsWith, IsEmpty, IsNotEmpty],
+        Kind::Number => &[Is, IsNot, Greater, Less, InRange, IsEmpty, IsNotEmpty],
+        Kind::Date => &[InLast, NotInLast, Before, After],
+        Kind::Tag => &[Has, HasNot],
+        Kind::Flag => &[IsTrue, IsFalse],
     }
 }
 
@@ -393,8 +285,8 @@ impl SplitBy {
     }
 }
 
-/// A playlist a ruleset made: what tells it apart (its value in
-/// lowercase), its title, a line under that (an album's artist), and its
+/// A playlist a ruleset made: what tells it apart (its value's
+/// `fields::group_key`, and its subtitle's), its title, a line under that (an album's artist), and its
 /// songs by key.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Group {
@@ -403,6 +295,10 @@ pub struct Group {
     pub subtitle: Option<String>,
     pub songs: Vec<String>,
 }
+
+/// The subtitle of an album whose songs are by several artists, and no
+/// album artist says who it's by.
+pub const VARIOUS_ARTISTS: &str = "Various Artists";
 
 /// A ruleset as kept: its name and definition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -449,32 +345,38 @@ impl<'a> Test<'a> {
                 Op::InLast | Op::NotInLast => text.trim().parse::<f64>().ok().map(|days| now as f64 - days * 86_400.0),
                 _ => parse_date(text).map(|secs| secs as f64),
             },
-            _ => rule.field.parse(text),
+            _ => parse(rule.field, text),
         };
         Self { rule, text: rule.value.trim().to_lowercase(), numbers: [parse(&rule.value), parse(&rule.to)] }
     }
 
     fn matches(&self, song: &Song) -> bool {
         let Rule { field, op, value, .. } = self.rule;
+        let song = Facts::of(song);
         match field.kind() {
             Kind::Text => {
-                let have = field.text(song).map(str::to_lowercase);
+                // (Each of a list field's items: a song's genre "is" each
+                // of its genres.)
+                let have: Vec<String> = match field {
+                    Field::Title => text(&song, *field).into_iter().map(|t| t.to_lowercase()).collect(),
+                    _ => song.items(*field).iter().map(|t| t.to_lowercase()).collect(),
+                };
                 let want = self.text.as_str();
-                match (op, have) {
-                    (Op::IsEmpty, have) => have.is_none(),
-                    (Op::IsNotEmpty, have) => have.is_some(),
-                    (Op::IsNot, have) => have.as_deref() != Some(want),
-                    (Op::NotContains, have) => !have.is_some_and(|h| h.contains(want)),
-                    (_, None) => false,
-                    (Op::Is, Some(h)) => h == want,
-                    (Op::Contains, Some(h)) => h.contains(want),
-                    (Op::StartsWith, Some(h)) => h.starts_with(want),
-                    (Op::EndsWith, Some(h)) => h.ends_with(want),
+                let any = |test: &dyn Fn(&str) -> bool| have.iter().any(|h| test(h));
+                match op {
+                    Op::IsEmpty => have.is_empty(),
+                    Op::IsNotEmpty => !have.is_empty(),
+                    Op::Is => any(&|h| h == want),
+                    Op::IsNot => !any(&|h| h == want),
+                    Op::Contains => any(&|h| h.contains(want)),
+                    Op::NotContains => !any(&|h| h.contains(want)),
+                    Op::StartsWith => any(&|h| h.starts_with(want)),
+                    Op::EndsWith => any(&|h| h.ends_with(want)),
                     _ => false,
                 }
             }
             Kind::Number => {
-                let have = field.number(song);
+                let have = song.number(*field);
                 match (op, have, self.numbers) {
                     (Op::IsEmpty, have, _) => have.is_none(),
                     (Op::IsNotEmpty, have, _) => have.is_some(),
@@ -488,7 +390,7 @@ impl<'a> Test<'a> {
                 }
             }
             Kind::Date => {
-                let have = song.imported as f64;
+                let Some(have) = song.number(*field) else { return false };
                 match (op, self.numbers[0]) {
                     (Op::InLast, Some(since)) => have >= since,
                     (Op::NotInLast, Some(since)) => have < since,
@@ -498,12 +400,12 @@ impl<'a> Test<'a> {
                 }
             }
             Kind::Tag => {
-                let has = song.tags.iter().any(|t| t == value);
+                let has = song.has_tag(value);
                 if *op == Op::HasNot { !has } else { has }
             }
             Kind::Flag => {
-                let starred = song.tags.iter().any(|t| t == song_store::STARRED);
-                if *op == Op::IsFalse { !starred } else { starred }
+                let set = song.has_tag(song_store::STARRED);
+                if *op == Op::IsFalse { !set } else { set }
             }
         }
     }
@@ -534,14 +436,19 @@ struct SortKey {
 }
 
 fn sort_key(order: Order, seed: u64, key: &str, song: &Song) -> SortKey {
-    let lower = |field: Field| field.text(song).map(str::to_lowercase).unwrap_or_else(|| "\u{10ffff}".into());
+    let facts = Facts::of(song);
+    let lower = |field: Field| text(&facts, field).map(|t| t.to_lowercase()).unwrap_or_else(|| "\u{10ffff}".into());
+    // (Spellings of one name together, as they're grouped.)
+    let name = |field: Field| text(&facts, field).map(|t| fields::group_key(&t, "")).unwrap_or_else(|| "\u{10ffff}".into());
     let meta = song.meta.as_ref();
     let title = lower(Field::Title);
     match order {
         Order::Random => SortKey { numbers: [shuffled(seed, key), 0, 0], ..SortKey::default() },
         Order::Title => SortKey { text: [title, String::new(), String::new()], ..SortKey::default() },
-        Order::Artist => SortKey { text: [lower(Field::Artist), lower(Field::Album), title], ..track_numbers(meta) },
-        Order::Album => SortKey { text: [lower(Field::Album), filed_under(song).map(str::to_lowercase).unwrap_or_default(), title], ..track_numbers(meta) },
+        Order::Artist => SortKey { text: [name(Field::Artist), name(Field::Album), title], ..track_numbers(meta) },
+        // (An album's songs in track order whoever each is by: an album is
+        // its name's songs, `Rules::groups`.)
+        Order::Album => SortKey { text: [name(Field::Album), String::new(), title], ..track_numbers(meta) },
         Order::Genre => SortKey { text: [lower(Field::Genre), title, String::new()], ..SortKey::default() },
         Order::Year => SortKey { text: [title, String::new(), String::new()], numbers: [meta.and_then(|m| m.year).map_or(u64::MAX, u64::from), 0, 0] },
         Order::NewestAdded => SortKey { numbers: [u64::MAX - song.imported.max(0) as u64, 0, 0], text: [title, String::new(), String::new()] },
@@ -567,8 +474,8 @@ fn compare(order: Order, a: &SortKey, b: &SortKey) -> Ordering {
 }
 
 /// Who an album's filed under: its album artist, else its artist.
-fn filed_under(song: &Song) -> Option<&str> {
-    Field::AlbumArtist.text(song).or_else(|| Field::Artist.text(song))
+fn filed_under<'a>(song: &Facts<'a>) -> Option<Cow<'a, str>> {
+    song.text(Field::AlbumArtist).or_else(|| song.text(Field::Artist))
 }
 
 /// `songs` (by key) in `order`, ties going by key.
@@ -624,38 +531,81 @@ impl Rules {
     /// The playlists of a ruleset with this definition (none if it isn't
     /// one), by title: the songs that match, each in its value's
     /// playlist (a song without one is in none), limited and ordered in
-    /// each.
-    pub fn groups(&self, store: &SongStore, now: i64) -> Vec<Group> {
+    /// each. Values are told apart by `fields::group_key` (past the
+    /// characters in `ignore`), each playlist titled with the best of its
+    /// songs' spellings.
+    pub fn groups(&self, store: &SongStore, now: i64, ignore: &str) -> Vec<Group> {
+        /// A playlist being made: its songs' spellings of its title and
+        /// subtitle (an album's: its album artists', else its artists'),
+        /// and its songs.
+        #[derive(Default)]
+        struct Making<'a> {
+            titles: Vec<Cow<'a, str>>,
+            subtitles: Vec<Cow<'a, str>>,
+            artists: Vec<Cow<'a, str>>,
+            songs: Vec<(&'a str, &'a Song)>,
+        }
+        /// A song on an album: its key, it, and the album's name, album
+        /// artist and artist as it says them (by the name's group key).
+        type OnAlbum<'a> = (&'a str, &'a Song, Cow<'a, str>, Option<Cow<'a, str>>, Option<Cow<'a, str>>);
         let Some(split) = &self.split else { return Vec::new() };
         let tags = store.tags();
         let candidates = store.known().filter(|(key, _)| !store.is_blocked(key));
-        let mut groups: BTreeMap<String, (String, Option<String>, Vec<(&str, &Song)>)> = BTreeMap::new();
+        let mut groups: BTreeMap<String, Making> = BTreeMap::new();
+        let mut albums: BTreeMap<String, Vec<OnAlbum>> = BTreeMap::new();
         for (key, song) in self.matching(candidates, now) {
-            let values: Vec<(String, Option<String>)> = match split.by {
-                SplitBy::Artist => Field::Artist.text(song).map(|a| (a.to_string(), None)).into_iter().collect(),
-                SplitBy::AlbumArtist => filed_under(song).map(|a| (a.to_string(), None)).into_iter().collect(),
-                SplitBy::Album => match (Field::Album.text(song), filed_under(song)) {
-                    (Some(album), artist) => vec![(album.to_string(), artist.map(str::to_string))],
-                    _ => Vec::new(),
-                },
-                SplitBy::Composer => Field::Composer.text(song).map(|c| (c.to_string(), None)).into_iter().collect(),
-                SplitBy::Genre => Field::Genre.text(song).map(|g| (g.to_string(), None)).into_iter().collect(),
-                SplitBy::Year => song.meta.as_ref().and_then(|m| m.year).map(|y| (y.to_string(), None)).into_iter().collect(),
-                SplitBy::Tag => song.tags.iter().filter_map(|id| tags.get(id)).map(|t| (t.name.clone(), None)).collect(),
+            let facts = Facts::of(song);
+            if split.by == SplitBy::Album {
+                if let Some(album) = facts.text(Field::Album) {
+                    let on = (key, song, album, facts.text(Field::AlbumArtist), facts.text(Field::Artist));
+                    albums.entry(fields::group_key(&on.2, ignore)).or_default().push(on);
+                }
+                continue;
+            }
+            let one = |field: Field| facts.text(field).map(|t| (t, None)).into_iter().collect();
+            let values: Vec<(Cow<str>, Option<Cow<str>>)> = match split.by {
+                SplitBy::Artist => one(Field::Artist),
+                SplitBy::AlbumArtist => filed_under(&facts).map(|a| (a, None)).into_iter().collect(),
+                SplitBy::Album => unreachable!("albums are made below"),
+                SplitBy::Composer => one(Field::Composer),
+                SplitBy::Genre => facts.items(Field::Genre).into_iter().map(|g| (g, None)).collect(),
+                SplitBy::Year => song.meta.as_ref().and_then(|m| m.year).map(|y| (Cow::Owned(y.to_string()), None)).into_iter().collect(),
+                SplitBy::Tag => song.tags.iter().filter_map(|id| tags.get(id)).map(|t| (Cow::Borrowed(t.name.as_str()), None)).collect(),
             };
             for (title, subtitle) in values {
-                let key_of = format!("{}\u{0}{}", title.to_lowercase(), subtitle.as_deref().unwrap_or_default().to_lowercase());
-                groups.entry(key_of).or_insert_with(|| (title, subtitle, Vec::new())).2.push((key, song));
+                let group_of = format!("{}\u{0}{}", fields::group_key(&title, ignore), subtitle.as_deref().map(|s| fields::group_key(s, ignore)).unwrap_or_default());
+                let making = groups.entry(group_of).or_default();
+                making.titles.push(title);
+                making.subtitles.extend(subtitle);
+                making.songs.push((key, song));
+            }
+        }
+        // An album is its name's songs, whoever each is by: a soundtrack's
+        // songs by several artists, or with its album artist spelled
+        // several ways, are one album.
+        for (name, songs) in albums {
+            let making = groups.entry(format!("{name}\u{0}")).or_default();
+            for (key, song, album, album_artist, artist) in songs {
+                making.titles.push(album);
+                making.subtitles.extend(album_artist);
+                making.artists.extend(artist);
+                making.songs.push((key, song));
             }
         }
         groups
             .into_iter()
-            .filter(|(_, (_, _, songs))| songs.len() >= split.min.max(1))
-            .map(|(key, (title, subtitle, songs))| Group {
+            .filter(|(_, making)| making.songs.len() >= split.min.max(1))
+            .map(|(key, making)| Group {
                 key,
-                title,
-                subtitle,
-                songs: self.limited(songs).into_iter().map(|(key, _)| key.to_string()).collect(),
+                title: fields::best_spelling(making.titles.iter().map(|t| t.as_ref())).unwrap_or_default().to_string(),
+                subtitle: fields::best_spelling(making.subtitles.iter().map(|t| t.as_ref()))
+                    .map(str::to_string)
+                    .or_else(|| match making.artists.iter().map(|a| fields::group_key(a, ignore)).collect::<BTreeSet<_>>().len() {
+                        0 => None,
+                        1 => fields::best_spelling(making.artists.iter().map(|a| a.as_ref())).map(str::to_string),
+                        _ => Some(VARIOUS_ARTISTS.to_string()),
+                    }),
+                songs: self.limited(making.songs).into_iter().map(|(key, _)| key.to_string()).collect(),
             })
             .collect()
     }
@@ -718,7 +668,7 @@ mod tests {
         let rules = Rules { rules: vec![rule(Field::Imported, Op::InLast, "1")], ..Rules::default() };
         assert_eq!(names(&lib, &rules.songs(&lib, 86_400 + 300)), ["c.ogg", "d.ogg", "e.ogg"]);
         assert_eq!(parse_date("1970-01-02"), Some(86_400));
-        assert_eq!(parse_date("2026-10-20").map(crate::song_list::date).as_deref(), Some("2026-10-20"));
+        assert_eq!(parse_date("2026-10-20").map(fields::date).as_deref(), Some("2026-10-20"));
     }
 
     #[test]
@@ -763,15 +713,50 @@ mod tests {
     fn rulesets_split_into_playlists() {
         let lib = library();
         let [(_, artists), (_, albums)] = builtin();
-        let groups = artists.rules.groups(&lib, 0);
+        let groups = artists.rules.groups(&lib, 0, "");
         let titles: Vec<&str> = groups.iter().map(|g| g.title.as_str()).collect();
         assert_eq!(titles, ["Basil Poledouris", "Nujabes"], "case-insensitive, songs without an artist in none");
         assert_eq!(names(&lib, &groups[1].songs), ["c.ogg", "b.ogg", "a.ogg"], "by album, then track");
-        let groups = albums.rules.groups(&lib, 0);
+        let groups = albums.rules.groups(&lib, 0, "");
         let titles: Vec<(&str, Option<&str>)> = groups.iter().map(|g| (g.title.as_str(), g.subtitle.as_deref())).collect();
         assert_eq!(titles, [("Metaphorical Music", Some("nujabes")), ("Modal Soul", Some("Nujabes"))]);
         assert_eq!(names(&lib, &groups[1].songs), ["b.ogg", "a.ogg"]);
         let at_least_two = Rules { split: Some(Split { by: SplitBy::AlbumArtist, min: 2 }), ..artists.rules.clone() };
-        assert_eq!(at_least_two.groups(&lib, 0).len(), 1);
+        assert_eq!(at_least_two.groups(&lib, 0, "").len(), 1);
+        // "<OST>" and "OST" are one album, under the spelling most of its
+        // songs have.
+        let ost = store(&[
+            ("a.ogg", meta("Composer", "<OST>", 1, 1.0), &[], 0),
+            ("b.ogg", meta("COMPOSER", "OST", 2, 1.0), &[], 0),
+            ("c.ogg", meta("composer", "<OST>", 3, 1.0), &[], 0),
+        ]);
+        let groups = albums.rules.groups(&ost, 0, "");
+        let titles: Vec<(&str, Option<&str>)> = groups.iter().map(|g| (g.title.as_str(), g.subtitle.as_deref())).collect();
+        assert_eq!(titles, [("<OST>", Some("Composer"))]);
+        assert_eq!(names(&ost, &groups[0].songs), ["a.ogg", "b.ogg", "c.ogg"]);
+        // A soundtrack by several artists is one album, in track order;
+        // so is one with its album artist spelled two ways.
+        let various = store(&[
+            ("a.ogg", meta("Kan Gao", "Finding Paradise <OST>", 2, 1.0), &[], 0),
+            ("b.ogg", meta("Laura Shigihara", "Finding Paradise OST", 1, 1.0), &[], 0),
+            ("c.ogg", Meta { album_artist: Some("Kan R. Gao".into()), ..meta("Kan Gao", "A Bird Story", 2, 1.0) }, &[], 0),
+            ("d.ogg", Meta { album_artist: Some("Kan (Reives) Gao".into()), ..meta("Kan Gao", "A Bird Story", 1, 1.0) }, &[], 0),
+        ]);
+        let groups = albums.rules.groups(&various, 0, "");
+        let titles: Vec<(&str, Option<&str>)> = groups.iter().map(|g| (g.title.as_str(), g.subtitle.as_deref())).collect();
+        assert_eq!(titles, [("A Bird Story", Some("Kan (Reives) Gao")), ("Finding Paradise <OST>", Some(VARIOUS_ARTISTS))]);
+        assert_eq!(names(&various, &groups[0].songs), ["d.ogg", "c.ogg"]);
+        assert_eq!(names(&various, &groups[1].songs), ["b.ogg", "a.ogg"]);
+        // A song is in each of its genres.
+        let genres = store(&[
+            ("a.ogg", Meta { genre: Some("Avant-Garde, Rock".into()), ..Meta::default() }, &[], 0),
+            ("b.ogg", Meta { genre: Some("rock; Classical".into()), ..Meta::default() }, &[], 0),
+        ]);
+        let by_genre = Rules { split: Some(Split { by: SplitBy::Genre, min: 1 }), ..Rules::default() };
+        let groups = by_genre.groups(&genres, 0, "");
+        let found: Vec<(&str, usize)> = groups.iter().map(|g| (g.title.as_str(), g.songs.len())).collect();
+        assert_eq!(found, [("Avant-Garde", 1), ("Classical", 1), ("Rock", 2)]);
+        let rock = Rules { rules: vec![Rule { field: Field::Genre, op: Op::Is, value: "rock".into(), to: String::new() }], ..Rules::default() };
+        assert_eq!(names(&genres, &rock.songs(&genres, 0)), ["a.ogg", "b.ogg"]);
     }
 }

@@ -20,8 +20,7 @@ impl App {
         let mut read = Vec::new();
         for (key, path) in lacking {
             if let Some(info) = self.song_info.fresh(&path) {
-                let size = std::fs::metadata(&path).map_or(0, |m| m.len());
-                read.push((key, info.meta(size)));
+                read.push((key, info.meta.clone()));
             }
         }
         if self.songs.note_meta(read) {

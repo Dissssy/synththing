@@ -23,8 +23,9 @@ use eframe::egui;
 
 use super::{icon_button, is_midi_path, naming, App, PrefTab};
 use crate::album_art::AlbumArt;
+use crate::fields;
 use crate::select_list;
-use crate::smart::{Group, Ruleset, SplitBy};
+use crate::smart::{Group, Ruleset, SplitBy, VARIOUS_ARTISTS};
 use crate::song_info::{format_length, thousands};
 use crate::song_list::DraggedFiles;
 use crate::song_store::STARRED;
@@ -621,6 +622,7 @@ impl App {
         let art_from = self.art_from(albums, group);
         let current = self.current_song.clone();
         let links_to_artist = albums && id == "albums";
+        let ignore = self.config.group_ignore.clone();
         let view = self.groupings.view();
         ui.horizontal(|ui| {
             // (A phone's top bar has Back.)
@@ -644,6 +646,15 @@ impl App {
         let mut heights = vec![art + 16.0];
         let words: Vec<String> = view.find.to_lowercase().split_whitespace().map(str::to_string).collect();
         let discs = albums && tracks.iter().any(|t| t.disc.unwrap_or(1) != tracks[0].disc.unwrap_or(1));
+        // Spellings of an album are one section, under the best of them.
+        let album_key = |track: &Track| track.album.as_deref().map(|a| fields::group_key(a, &ignore));
+        let mut spellings: HashMap<String, Vec<&str>> = HashMap::new();
+        for track in tracks.iter() {
+            if let (Some(key), Some(album)) = (album_key(track), &track.album) {
+                spellings.entry(key).or_default().push(album);
+            }
+        }
+        let best: HashMap<String, &str> = spellings.into_iter().filter_map(|(key, names)| Some((key, fields::best_spelling(names)?))).collect();
         let mut section: Option<String> = None;
         for (t, track) in tracks.iter().enumerate() {
             let name = track.name.to_lowercase();
@@ -651,7 +662,11 @@ impl App {
                 continue;
             }
             // Albums under their discs, the rest under their albums.
-            let this = if albums { discs.then(|| format!("Disc {}", track.disc.unwrap_or(1))) } else { Some(track.album.clone().unwrap_or_else(|| "No album".into())) };
+            let this = if albums {
+                discs.then(|| format!("Disc {}", track.disc.unwrap_or(1)))
+            } else {
+                Some(album_key(track).and_then(|k| best.get(&k).map(|b| b.to_string())).unwrap_or_else(|| "No album".into()))
+            };
             if this.is_some() && this != section {
                 section = this.clone();
                 rows.push(Row::Section(this.unwrap_or_default()));
@@ -678,9 +693,9 @@ impl App {
                         ui.add(egui::Label::new(egui::RichText::new(&group.title).heading()).truncate());
                     }
                     if let Some(subtitle) = &group.subtitle {
-                        if links_to_artist {
+                        if links_to_artist && subtitle != VARIOUS_ARTISTS {
                             if ui.link(subtitle).on_hover_text("Show the artist").clicked() {
-                                act = Some(Act::Open(ARTISTS.into(), format!("{}\u{0}", subtitle.to_lowercase())));
+                                act = Some(Act::Open(ARTISTS.into(), format!("{}\u{0}", fields::group_key(subtitle, &ignore))));
                             }
                         } else {
                             ui.label(subtitle);

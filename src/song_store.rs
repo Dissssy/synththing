@@ -66,8 +66,8 @@ impl Song {
     }
 }
 
-/// What a song's file says of itself: its tags (`song_info::Tags`), how
-/// long it is and its size. Kept under short names: the synced library has
+/// What a song's file says of itself (as `song_info` reads it): its tags,
+/// how long it is and its size; its fields as `fields::Facts` gives them. Kept under short names: the synced library has
 /// one for every song.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -96,25 +96,6 @@ pub struct Meta {
     /// Bytes.
     #[serde(rename = "s")]
     pub size: u64,
-}
-
-impl Meta {
-    /// The tag `name` (as a title pattern writes it), if the file has it.
-    pub fn tag(&self, name: &str) -> Option<String> {
-        let text = |t: &Option<String>| t.clone();
-        match name {
-            "title" => text(&self.title),
-            "artist" => text(&self.artist),
-            "album" => text(&self.album),
-            "album_artist" => text(&self.album_artist),
-            "composer" => text(&self.composer),
-            "genre" => text(&self.genre),
-            "track" => self.track.map(|n| n.to_string()),
-            "disc" => self.disc.map(|n| n.to_string()),
-            "year" => self.year.map(|n| n.to_string()),
-            _ => None,
-        }
-    }
 }
 
 /// A tag of the user's own.

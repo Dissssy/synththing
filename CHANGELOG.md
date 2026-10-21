@@ -10,6 +10,13 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Groupings (View > Groupings, or the playlist button in the controls; on a phone, Playlists and each ruleset are in the menu after Songs): your playlists, then the playlists each ruleset makes, By Album, By Artist and your own, picked along the top. Playlists moved here from their own tab: a playlist opens on its page to play and edit as before, + makes one, and dropping songs on them all makes a new one of them. Smart playlists have an engine in their tile's corner, and the engine is now smart playlists' icon everywhere (it was a sparkle). Show them as a grid of tiles or a list, search them, sort them by title, size or what's newest, or play them all. Open one for its page: its art, its artist (an album's links to them), play (it plays through to its end, whatever Autoplay is set to), shuffle, star them all, find in it, and its songs under their discs or albums. Each ruleset remembers where you were (search, sort, grid or list, what's open, how far you scrolled) until you close synththing.
 - Album art from the picture in the songs' files, read in the background. Anything without art gets a tile in a color of its own with its first letters: one to four of them (Preferences > Songs; four make a square).
 - A playlist remembers the song it was on: the fast-forward button beside Play continues from there.
+- Spellings of a name are one group: albums, artists and the Songs list's groups see past case, spacing, punctuation and symbols (and full-width letters), so "<OST>" and "OST", or "Justcore Extravaganza" and "JUSTCORE EXTRAVAGANZA", are one, shown as the spelling with mixed case (else the one most of its songs have). Preferences > Songs can name more characters to pass over.
+- An album is its name's songs, whoever each is by: a soundtrack with songs by several artists, or with its album artist spelled two ways, is one album (its artist line says Various Artists when its songs' artists differ and no album artist is set), its songs in track order.
+- Genres are lists: a song tagged "Avant-Garde, Electronic, Rock" (commas or semicolons) is in each of those genres, in By Genre rulesets, the Songs list's genre groups and genre rules. Genres tagged by their old ID3 numbers ("17", "(17)") show as their names (Rock).
+- More Songs list columns: Disc and Size. Song names can use every field ({disc}, {size}, {imported}...), and smart playlist rules can go by file type.
+
+### Changed
+- "Imported" is "Date added" everywhere, and the File column shows the name without its extension (Type has that).
 
 ## 1.1.0 (2026-10-20)
 
