@@ -28,12 +28,14 @@ impl App {
     /// time, at its volume.
     pub(super) fn song_options_loaded(&mut self) {
         self.playing_at = None;
+        // (A preview from Song info plays from where it asked.)
+        let previewed = self.seek_on_load.take().filter(|(path, _)| self.current_song.as_ref() == Some(path)).map(|(_, at)| at);
         let Some(facts) = self.playing_facts() else {
             self.send_volume();
             return;
         };
         let left = self.current_song.as_deref().and_then(|p| self.songs.get(p)).and_then(|s| s.position).filter(|_| facts.flag(Field::RememberPosition));
-        if let Some(at) = left.or_else(|| facts.number(Field::StartTime)).filter(|&at| at > 0.0) {
+        if let Some(at) = previewed.or(left).or_else(|| facts.number(Field::StartTime)).filter(|&at| at > 0.0) {
             self.send(AudioCommand::Seek(at));
         }
         self.send_volume();

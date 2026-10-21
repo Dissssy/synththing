@@ -435,6 +435,9 @@ pub struct App {
     /// The engine's generation (`EngineView::generation`) the current song
     /// last got to its stop time in, so it's acted on once.
     stopped_in: Option<u64>,
+    /// Where to start the song at this path once it's loaded, over its own
+    /// start: a preview from Song info's Options.
+    seek_on_load: Option<(PathBuf, f64)>,
     rng: Rng,
     /// Text being typed into the playlist rename box, while renaming.
     playlist_rename: Option<String>,
@@ -688,6 +691,7 @@ impl App {
             song_loads: 0,
             playing_at: None,
             stopped_in: None,
+            seek_on_load: None,
             rng: Rng::from_time(),
             playlist_rename: None,
             confirm_delete_playlist: false,
