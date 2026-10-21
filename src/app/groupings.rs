@@ -249,7 +249,7 @@ impl App {
 
     /// The ruleset shown: its groups, or the one open.
     pub(super) fn grouping_ui(&mut self, ui: &mut egui::Ui) {
-        self.groupings.art.frame(ui.ctx(), self.config.online_lookup);
+        self.groupings.art.frame(ui.ctx(), self.config.online_lookup && crate::build_info::online_features());
         self.groupings.art.letters = self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS);
         let act = if self.groupings.shown() == PLAYLISTS { self.playlists_grouping_ui(ui) } else { self.ruleset_ui(ui) };
         match act {

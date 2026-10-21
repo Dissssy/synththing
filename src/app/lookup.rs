@@ -36,7 +36,7 @@ pub(super) struct LookupState {
 impl App {
     /// This device looks albums up.
     fn looks_up(&self) -> bool {
-        self.config.online_lookup && self.config.lookup_device.as_deref() == Some(self.device_id())
+        crate::build_info::online_features() && self.config.online_lookup && self.config.lookup_device.as_deref() == Some(self.device_id())
     }
 
     /// Work out the library's albums again, if its songs changed.
@@ -124,6 +124,10 @@ impl App {
     /// Preferences > Songs: whether albums are looked up, on which device,
     /// and how far it's got.
     pub(super) fn lookup_preferences_ui(&mut self, ui: &mut egui::Ui) {
+        if !crate::build_info::online_features() {
+            ui.weak(crate::build_info::OFFLINE_NOTE);
+            return;
+        }
         let mut on = self.config.online_lookup;
         super::with_info(
             ui,
