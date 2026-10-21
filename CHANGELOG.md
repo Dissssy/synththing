@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Command palette: Ctrl+Shift+P lists what the app can do with its keyboard shortcut beside it. Type to filter, Up/Down and Enter (or a click) to run one, Esc to close.
+
 ### Changed
 - The player buttons' hover text shows their keyboard shortcut (Play/Pause (Space), Next (N), Fullscreen (F)...). Shortcuts no longer fire while a script control is waiting for a key to bind.
 

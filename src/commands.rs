@@ -2,9 +2,9 @@
 //! that do it.
 //!
 //! A [`Command`] says nothing about where it came from: the keymap here
-//! is one source, `App::run_command` carries any of them out. Media keys,
-//! system-wide hotkeys or a command palette would be more sources of the
-//! same commands.
+//! is one source and the command palette (`app/palette.rs`) another;
+//! `App::run_command` carries any of them out. Media keys or system-wide
+//! hotkeys would be more sources of the same commands.
 
 use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
 
@@ -25,11 +25,54 @@ pub enum Command {
     ToggleRecording,
     PauseRecording,
     Quit,
+    CommandPalette,
+}
+
+impl Command {
+    /// Every command, in the order the palette lists them.
+    pub const ALL: [Command; 15] = [
+        Self::TogglePause,
+        Self::NextTrack,
+        Self::PreviousTrack,
+        Self::SeekBack,
+        Self::SeekForward,
+        Self::RestartSong,
+        Self::ToggleVisualizer,
+        Self::ToggleFullscreen,
+        Self::ExitFullscreen,
+        Self::DedicatedVisualizer,
+        Self::RestartScript,
+        Self::ToggleRecording,
+        Self::PauseRecording,
+        Self::CommandPalette,
+        Self::Quit,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::TogglePause => "Play/pause",
+            Self::SeekBack => "Seek back 5 seconds",
+            Self::SeekForward => "Seek forward 5 seconds",
+            Self::RestartSong => "Restart song",
+            Self::NextTrack => "Next track",
+            Self::PreviousTrack => "Previous track",
+            Self::ToggleVisualizer => "Show/hide visualizer",
+            Self::ToggleFullscreen => "Fullscreen on/off",
+            Self::ExitFullscreen => "Exit fullscreen",
+            Self::DedicatedVisualizer => "Fullscreen visualizer",
+            Self::RestartScript => "Restart script",
+            Self::ToggleRecording => "Start/stop recording",
+            Self::PauseRecording => "Pause/resume recording",
+            Self::Quit => "Quit",
+            Self::CommandPalette => "Command palette",
+        }
+    }
 }
 
 /// Every binding, most specific first: egui ignores extra Shift and Alt
 /// when matching, so Shift+Left listed after Left would never fire.
-const BINDINGS: [(Command, KeyboardShortcut); 14] = [
+const BINDINGS: [(Command, KeyboardShortcut); 15] = [
+    (Command::CommandPalette, KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::P)),
     (Command::Quit, KeyboardShortcut::new(Modifiers::COMMAND, Key::Q)),
     (Command::TogglePause, key(Key::Space)),
     (Command::SeekBack, key(Key::ArrowLeft)),
@@ -84,14 +127,15 @@ pub fn reserved(key: Key) -> bool {
         .any(|(_, s)| s.logical_key == key && s.modifiers.is_none() && works_while_typing(s))
 }
 
+/// The command's key, as the OS writes it ("Ctrl+Shift+P"), if it has one.
+pub fn shortcut_text(ctx: &egui::Context, command: Command) -> Option<String> {
+    BINDINGS.iter().find(|(c, _)| *c == command).map(|(_, shortcut)| ctx.format_shortcut(shortcut))
+}
+
 /// " (F5)": the command's key for the end of a hover text, or nothing
 /// when it has none.
 pub fn hint(ctx: &egui::Context, command: Command) -> String {
-    BINDINGS
-        .iter()
-        .find(|(c, _)| *c == command)
-        .map(|(_, shortcut)| format!(" ({})", ctx.format_shortcut(shortcut)))
-        .unwrap_or_default()
+    shortcut_text(ctx, command).map(|text| format!(" ({text})")).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -112,6 +156,8 @@ mod tests {
         assert_eq!(pressed(&mut press(Key::Space, Modifiers::NONE), true, |_| true), []);
         assert_eq!(pressed(&mut press(Key::F5, Modifiers::NONE), true, |_| true), [Command::RestartScript]);
         assert_eq!(pressed(&mut press(Key::Q, Modifiers::COMMAND), true, |_| true), [Command::Quit]);
+        let palette = Modifiers::COMMAND | Modifiers::SHIFT;
+        assert_eq!(pressed(&mut press(Key::P, palette), true, |_| true), [Command::CommandPalette]);
     }
 
     #[test]
