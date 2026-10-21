@@ -5,6 +5,7 @@
 //! sure of, or doesn't find, is noted here (`Tried`, in `lookup.json`, on
 //! this device only) and tried again later.
 
+pub mod art;
 pub mod matching;
 mod musicbrainz;
 
@@ -134,26 +135,33 @@ pub fn release_of(song: &song_store::Song) -> Option<(&str, Option<&str>)> {
     }
 }
 
-/// The matches `album`'s songs get from `release`: each song's track.
-pub fn matches(album: &Album, release: &Release, tracks: &[Option<usize>], store: &SongStore) -> Vec<(String, Option<song_store::Online>)> {
+/// The matches `album`'s songs get from `release` (`by_user`: picked by
+/// the user): each song's track. What's rejected and the art chosen stay.
+pub fn matches(album: &Album, release: &Release, tracks: &[Option<usize>], by_user: bool, store: &SongStore) -> Vec<(String, Option<song_store::Online>)> {
     let at = crate::settings_sync::now();
     album
         .songs
         .iter()
         .zip(tracks)
         .map(|(song, track)| {
-            let rejected = store.get_by_key(&song.key).and_then(|s| s.online.as_ref()).map(|o| o.rejected.clone()).unwrap_or_default();
+            let was = store.get_by_key(&song.key).and_then(|s| s.online.clone()).unwrap_or_default();
             let online = song_store::Online {
                 release: Some(release.id.clone()),
                 group: release.group.clone(),
                 recording: track.and_then(|t| release.tracks[t].recording.clone()),
-                by_user: false,
-                rejected,
+                by_user,
                 at,
+                ..was
             };
             (song.key.clone(), Some(online))
         })
         .collect()
+}
+
+/// The release `id`, with its tracks, as MusicBrainz said when it was
+/// last asked (on this device).
+pub fn kept_release(id: &str) -> Option<Release> {
+    musicbrainz::kept_release(id)
 }
 
 /// An album the lookup tried and didn't match, when, and what it found.

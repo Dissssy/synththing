@@ -66,11 +66,19 @@ pub struct MusicBrainz {
     cache: Cache,
 }
 
+fn cache() -> Cache {
+    Cache { dir: crate::config::config_dir().ok().map(|d| d.join("musicbrainz")) }
+}
+
+/// The release `id` as it was kept, if it was.
+pub fn kept_release(id: &str) -> Option<Release> {
+    cache().get::<Entity>("release", id).map(|e| converted(&e))
+}
+
 impl MusicBrainz {
     pub fn new() -> Self {
         let agent = format!("synththing/{} ( https://github.com/Dissssy/synththing )", crate::build_info::VERSION);
-        let dir = crate::config::config_dir().ok().map(|d| d.join("musicbrainz"));
-        Self { client: MusicBrainzClient::new(&agent), last: None, cache: Cache { dir } }
+        Self { client: MusicBrainzClient::new(&agent), last: None, cache: cache() }
     }
 
     fn wait_turn(&mut self) {

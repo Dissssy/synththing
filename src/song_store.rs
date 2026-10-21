@@ -99,6 +99,21 @@ pub struct Online {
     /// When (Unix seconds).
     #[serde(rename = "at")]
     pub at: i64,
+    /// The art its album's shown with, as chosen (Choose art): its files'
+    /// own, or a picture online.
+    #[serde(rename = "a", skip_serializing_if = "Option::is_none")]
+    pub art: Option<Art>,
+}
+
+/// An album's art, as chosen.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Art {
+    /// What its files have (never a picture online).
+    #[serde(rename = "f")]
+    Files,
+    /// The picture at this address.
+    #[serde(rename = "u")]
+    Url(String),
 }
 
 impl Song {

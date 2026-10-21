@@ -96,7 +96,7 @@ pub(super) struct Groupings {
     /// The ruleset shown (its ID); none yet: By Album.
     shown: Option<String>,
     views: HashMap<String, RulesetView>,
-    art: AlbumArt,
+    pub(super) art: AlbumArt,
     /// The open group's songs, and what they were made from (the songs'
     /// revision, the ruleset and the group).
     page: Option<(u64, String, String, Arc<Vec<Track>>)>,
@@ -464,7 +464,8 @@ impl App {
             .filter_map(|key| crate::lookup::release_of(self.songs.get_by_key(key)?))
             .map(|(release, group)| (release.to_string(), group.map(str::to_string)))
             .next();
-        AlbumArtSource { file, release }
+        let chosen = group.songs.iter().find_map(|key| self.songs.get_by_key(key)?.online.as_ref()?.art.clone());
+        AlbumArtSource { file, release, chosen }
     }
 
     /// Every group of `id` (each one `what`; `albums` have art), as tiles
@@ -760,6 +761,7 @@ impl App {
         let art_cache = &mut self.groupings.art;
         let view = self.groupings.views.entry(id.to_string()).or_default();
         let mut act = None;
+        let mut choose_art = false;
         virtual_rows(ui, ("group_page", id, &group.key), &heights, |ui, rect, i| match &rows[i] {
             Row::Header => {
                 let inner = rect.shrink(8.0);
@@ -798,6 +800,9 @@ impl App {
                         let hover = if all_starred { "Unstar them all" } else { "Star them all" };
                         if ui.add(icon_button(select_list::STAR_ICON).selected(all_starred)).on_hover_text(hover).clicked() {
                             act = Some(Act::Star(tracks.iter().map(|t| t.path.clone()).collect(), !all_starred));
+                        }
+                        if albums && ui.add(icon_button("image")).on_hover_text("Choose art").clicked() {
+                            choose_art = true;
                         }
                     });
                 });
@@ -848,6 +853,9 @@ impl App {
                 }
             }
         });
+        if choose_art {
+            self.open_choose_art(&group.title, group.subtitle.clone(), group.songs.clone(), art_from);
+        }
         act
     }
 }
