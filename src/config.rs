@@ -104,6 +104,9 @@ pub struct Config {
     /// and symbols (`fields::group_key`).
     #[serde(default)]
     pub group_ignore: String,
+    /// Clean-up suggestions dismissed (`cleanup::Suggestion::id`).
+    #[serde(default)]
+    pub cleanup_dismissed: std::collections::BTreeSet<String>,
     /// Preference: copy visualizer scripts' log() messages to the app's log.
     #[serde(default)]
     pub script_log_to_app: bool,

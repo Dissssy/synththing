@@ -25,6 +25,7 @@ mod audio;
 mod build_info;
 mod changelog;
 mod channels;
+mod cleanup;
 mod cli;
 mod code_edit;
 mod config;

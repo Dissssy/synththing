@@ -474,7 +474,7 @@ fn compare(order: Order, a: &SortKey, b: &SortKey) -> Ordering {
 
 /// Who an album's filed under: its album artist, else its artist.
 fn filed_under<'a>(song: &Facts<'a>) -> Option<Cow<'a, str>> {
-    song.text(Field::AlbumArtist).or_else(|| song.text(Field::Artist))
+    song.text(Field::AlbumArtist).or_else(|| song.first(Field::Artist))
 }
 
 /// `songs` (by key) in `order`, ties going by key.
@@ -556,18 +556,18 @@ impl Rules {
             let facts = Facts::of(song);
             if split.by == SplitBy::Album {
                 if let Some(album) = facts.text(Field::Album) {
-                    let on = (key, song, album, facts.text(Field::AlbumArtist), facts.text(Field::Artist));
+                    let on = (key, song, album, facts.text(Field::AlbumArtist), facts.first(Field::Artist));
                     albums.entry(fields::group_key(&on.2, ignore)).or_default().push(on);
                 }
                 continue;
             }
-            let one = |field: Field| facts.text(field).map(|t| (t, None)).into_iter().collect();
+            let each = |field: Field| facts.items(field).into_iter().map(|t| (t, None)).collect();
             let values: Vec<(Cow<str>, Option<Cow<str>>)> = match split.by {
-                SplitBy::Artist => one(Field::Artist),
+                SplitBy::Artist => each(Field::Artist),
                 SplitBy::AlbumArtist => filed_under(&facts).map(|a| (a, None)).into_iter().collect(),
                 SplitBy::Album => unreachable!("albums are made below"),
-                SplitBy::Composer => one(Field::Composer),
-                SplitBy::Genre => facts.items(Field::Genre).into_iter().map(|g| (g, None)).collect(),
+                SplitBy::Composer => each(Field::Composer),
+                SplitBy::Genre => each(Field::Genre),
                 SplitBy::Year => facts.value(Field::Year).map(|y| (Cow::Owned(y.text), None)).into_iter().collect(),
                 SplitBy::Tag => song.tags.iter().filter_map(|id| tags.get(id)).map(|t| (Cow::Borrowed(t.name.as_str()), None)).collect(),
             };
