@@ -64,6 +64,25 @@ pub enum Field {
     SortArtist,
     SortAlbumArtist,
     SortComposer,
+    /// Where it starts playing, and stops (seconds; edits only).
+    StartTime,
+    StopTime,
+    /// Its volume, up or down (-100 to 100%).
+    VolumeAdjust,
+    /// Shuffling passes over it.
+    SkipShuffle,
+    /// It starts again where it was left (`song_store::Song::position`).
+    RememberPosition,
+}
+
+/// Where Song info shows an editable field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Section {
+    Details,
+    /// What names sort as.
+    Sorting,
+    /// How it plays.
+    Options,
 }
 
 /// What a field's values are, which says how they're shown, sorted and
@@ -141,6 +160,11 @@ pub const FIELDS: &[Def] = &[
     def(Field::SortArtist, "sort_artist", "Sort artist as", Kind::Text, true, 140.0, false, &[], true),
     def(Field::SortAlbumArtist, "sort_album_artist", "Sort album artist as", Kind::Text, true, 140.0, false, &[], true),
     def(Field::SortComposer, "sort_composer", "Sort composer as", Kind::Text, true, 140.0, false, &[], true),
+    def(Field::StartTime, "start_time", "Start at", Kind::Number, true, 0.0, false, &[], true),
+    def(Field::StopTime, "stop_time", "Stop at", Kind::Number, true, 0.0, false, &[], true),
+    def(Field::VolumeAdjust, "volume_adjust", "Volume adjust (%)", Kind::Number, true, 0.0, false, &[], true),
+    def(Field::SkipShuffle, "skip_shuffle", "Skip when shuffling", Kind::Flag, true, 0.0, false, &[], true),
+    def(Field::RememberPosition, "remember_position", "Remember position", Kind::Flag, true, 0.0, false, &[], true),
 ];
 
 impl Def {
@@ -199,9 +223,13 @@ impl Field {
         }
     }
 
-    /// Whether it says what another field sorts as (`sorted_as`).
-    pub fn is_sort_as(self) -> bool {
-        matches!(self, Field::SortTitle | Field::SortAlbum | Field::SortArtist | Field::SortAlbumArtist | Field::SortComposer)
+    /// Where Song info shows it.
+    pub fn section(self) -> Section {
+        match self {
+            Field::SortTitle | Field::SortAlbum | Field::SortArtist | Field::SortAlbumArtist | Field::SortComposer => Section::Sorting,
+            Field::StartTime | Field::StopTime | Field::VolumeAdjust | Field::SkipShuffle | Field::RememberPosition => Section::Options,
+            _ => Section::Details,
+        }
     }
 
     /// Whether a song name pattern can use it: it has a value to show.
@@ -309,7 +337,11 @@ impl<'a> Facts<'a> {
     pub fn number(&self, field: Field) -> Option<f64> {
         let meta = self.meta;
         if let Some(edit) = self.edit(field) {
-            return crate::song_info::leading_number(edit).map(f64::from);
+            return match field {
+                Field::StartTime | Field::StopTime => seconds(edit),
+                Field::VolumeAdjust => edit.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|n| n.clamp(-100.0, 100.0)),
+                _ => crate::song_info::leading_number(edit).map(f64::from),
+            };
         }
         match field {
             Field::Track => meta?.track.map(f64::from),
@@ -371,7 +403,8 @@ impl<'a> Facts<'a> {
             Kind::Number | Kind::Date => {
                 let n = self.number(field)?;
                 match field {
-                    Field::Length => format_length(n),
+                    Field::Length | Field::StartTime | Field::StopTime => format_length(n),
+                    Field::VolumeAdjust => format!("{n:+.0}"),
                     Field::Bpm if (n - n.round()).abs() < 0.05 => format!("{n:.0}"),
                     Field::Bpm => format!("{n:.1}"),
                     Field::Notes => thousands(n as usize),
@@ -429,6 +462,16 @@ pub fn genre_names(text: &str) -> Cow<'_, str> {
     let items: Vec<&str> = Field::Genre.def().split(text).collect();
     let named: Vec<String> = items.iter().flat_map(|i| item(i)).collect();
     if named.iter().map(String::as_str).eq(items.iter().copied()) { Cow::Borrowed(text) } else { Cow::Owned(named.join(", ")) }
+}
+
+/// A time as seconds: "83", "1:23", "1:02:03" or "83.5".
+pub fn seconds(text: &str) -> Option<f64> {
+    let mut total = 0.0;
+    for part in text.trim().split(':') {
+        let n: f64 = part.trim().parse().ok().filter(|n: &f64| *n >= 0.0)?;
+        total = total * 60.0 + n;
+    }
+    Some(total)
 }
 
 /// What `text` sorts by: in lowercase and, unless `articles`, past a
@@ -540,6 +583,20 @@ mod tests {
         for (tagged, named) in [("17", "Rock"), ("(17)", "Rock"), ("(17)(0)", "Rock, Blues"), ("(17)Hard Rock", "Hard Rock"), ("(RX), 31", "Remix, Trance"), ("Jazz", "Jazz"), ("(Live)", "(Live)"), ("255", "255")] {
             assert_eq!(genre_names(tagged), named, "{tagged}");
         }
+    }
+
+    #[test]
+    fn playback_options_read_as_times_and_percents() {
+        assert_eq!(seconds("83"), Some(83.0));
+        assert_eq!(seconds("1:23"), Some(83.0));
+        assert_eq!(seconds("1:02:03"), Some(3723.0));
+        assert_eq!(seconds("0:01.5"), Some(1.5));
+        assert_eq!(seconds("soon"), None);
+        let edits: Edits = [(Field::StartTime, "0:30".to_string()), (Field::VolumeAdjust, "-150%".to_string())].into();
+        let facts = Facts { edits: Some(&edits), ..Facts::default() };
+        assert_eq!(facts.value(Field::StartTime).map(|v| v.text).as_deref(), Some("0:30"));
+        assert_eq!(facts.number(Field::VolumeAdjust), Some(-100.0));
+        assert_eq!(facts.value(Field::VolumeAdjust).map(|v| v.text).as_deref(), Some("-100"));
     }
 
     #[test]

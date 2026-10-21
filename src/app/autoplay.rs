@@ -53,6 +53,8 @@ impl App {
     /// at `start`: an album's or artist's songs, to their end, leaving any
     /// playlist.
     pub(super) fn play_tracks(&mut self, tracks: Vec<(std::path::PathBuf, bool)>, start: usize) {
+        let skips = |path: &std::path::Path| self.songs.get(path).is_some_and(|s| crate::fields::Facts::of(s).flag(crate::fields::Field::SkipShuffle));
+        let tracks: Vec<_> = tracks.into_iter().map(|(path, starred)| (path.clone(), starred, skips(&path))).collect();
         let Some(playing) = Playing::tracks(tracks, start) else { return };
         let path = playing.at.path.clone();
         self.now_playing = None;

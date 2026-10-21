@@ -12,13 +12,16 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use super::{fit_width, App};
-use crate::fields::{self, Facts, Field, Kind};
+use crate::song_info::format_length;
+use crate::fields::{self, Facts, Field, Kind, Section};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Details,
     /// What the names sort as (`Field::sorted_as`).
     Sorting,
+    /// How it plays.
+    Options,
     File,
 }
 
@@ -69,6 +72,7 @@ impl App {
         let Some(mut details) = self.song_details.take() else { return };
         let mut close = false;
         let mut save = false;
+        let mut preview = None;
         let one = details.paths.len() == 1;
         let response = egui::Modal::new(egui::Id::new("song_details")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 480.0));
@@ -85,7 +89,7 @@ impl App {
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                for (tab, label) in [(Tab::Details, "Details"), (Tab::Sorting, "Sorting")] {
+                for (tab, label) in [(Tab::Details, "Details"), (Tab::Sorting, "Sorting"), (Tab::Options, "Options")] {
                     ui.add_enabled_ui(!details.keys.is_empty(), |ui| ui.selectable_value(&mut details.tab, tab, label))
                         .inner
                         .on_disabled_hover_text("Only songs in your library can be edited");
@@ -96,10 +100,15 @@ impl App {
             });
             ui.separator();
             match details.tab {
-                Tab::Details => self.details_tab_ui(ui, &mut details, false),
+                Tab::Details => self.details_tab_ui(ui, &mut details, Section::Details),
                 Tab::Sorting => {
                     ui.weak("What each name sorts as, if not itself: \"Beatles\" for \"The Beatles\". Empty sorts it as it is (past a leading The, A or An, as Preferences > Songs says).");
-                    self.details_tab_ui(ui, &mut details, true);
+                    self.details_tab_ui(ui, &mut details, Section::Sorting);
+                }
+                Tab::Options => {
+                    ui.weak("How it plays: times as 1:23, the volume from -100 to 100%. Remember position starts it again where you left it.");
+                    preview = self.options_range_ui(ui, &mut details);
+                    self.details_tab_ui(ui, &mut details, Section::Options);
                 }
                 Tab::File => self.file_tab_ui(ui, &details.paths[0]),
             }
@@ -113,6 +122,9 @@ impl App {
                 }
             });
         });
+        if let Some(at) = preview {
+            self.preview_at(&details.paths[0], at);
+        }
         if save {
             self.save_details(&details);
         } else if !(close || response.should_close()) {
@@ -120,11 +132,10 @@ impl App {
         }
     }
 
-    /// The editable fields (those saying what names sort as, if
-    /// `sorting`, else the rest), each with a button back to what the file
-    /// says when an edit says otherwise.
-    fn details_tab_ui(&self, ui: &mut egui::Ui, details: &mut SongDetails, sorting: bool) {
-        let shown: Vec<&fields::Def> = fields::editable().filter(|d| d.field.is_sort_as() == sorting).collect();
+    /// The editable fields Song info shows in `section`, each with a
+    /// button back to what the file says when an edit says otherwise.
+    fn details_tab_ui(&self, ui: &mut egui::Ui, details: &mut SongDetails, section: Section) {
+        let shown: Vec<&fields::Def> = fields::editable().filter(|d| d.field.section() == section).collect();
         let SongDetails { keys, texts, changes, .. } = details;
         let songs: Vec<_> = keys.iter().filter_map(|k| self.songs.get_by_key(k)).collect();
         if keys.len() > 1 {
@@ -163,6 +174,20 @@ impl App {
                         }
                     }
                     let hint = if *mixed && !changes.contains_key(&field) { "Mixed" } else { "" };
+                    if field == Field::VolumeAdjust {
+                        // (A slider; at 0 while the songs differ, till it's moved.)
+                        let mut percent = fields::Facts { edits: Some(&[(field, text.clone())].into()), ..Facts::default() }.number(field).unwrap_or(0.0);
+                        let slider = egui::Slider::new(&mut percent, -100.0..=100.0).suffix("%").step_by(1.0).custom_formatter(|n, _| format!("{n:+.0}"));
+                        let response = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(slider)).inner;
+                        if response.changed() {
+                            *text = if percent == 0.0 { String::new() } else { format!("{percent:+.0}") };
+                            changes.insert(field, Change::Set(text.clone()));
+                        }
+                        if !hint.is_empty() {
+                            response.on_hover_text("The songs differ: moving it sets them all");
+                        }
+                        return;
+                    }
                     if def.kind == Kind::Flag {
                         // (Its box is a dash while the songs differ.)
                         let mut on = text == "1";
@@ -185,6 +210,52 @@ impl App {
                     }
                 });
             });
+        }
+    }
+
+    /// One song's start and stop times as a range over its length, each
+    /// end dragged, with buttons to hear each; the times' boxes below say
+    /// them exactly. What to play from, when a button's clicked.
+    fn options_range_ui(&self, ui: &mut egui::Ui, details: &mut SongDetails) -> Option<f64> {
+        let [key] = details.keys.as_slice() else { return None };
+        let length = self.songs.get_by_key(key).and_then(|s| Facts::of(s).number(Field::Length)).filter(|&l| l > 1.0)?;
+        let at = |text: &str| fields::seconds(text).filter(|&s| s > 0.0);
+        let mut start = at(&details.texts[&Field::StartTime].0).unwrap_or(0.0).min(length);
+        let mut stop = at(&details.texts[&Field::StopTime].0).unwrap_or(length).min(length);
+        let mut play = None;
+        ui.horizontal(|ui| {
+            if ui.add(super::icon_button("play")).on_hover_text("Hear it from where it starts").clicked() {
+                play = Some(start);
+            }
+            if ui.add(super::icon_button("skip-forward")).on_hover_text("Hear the last seconds before it stops").clicked() {
+                play = Some((stop - 5.0).max(start));
+            }
+            let label = format!("{} to {}", format_length(start), format_length(stop));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.monospace(label);
+                if time_range(ui, &mut start, &mut stop, length) {
+                    // (Its very start or end is no time at all.)
+                    let text = |t: f64, none: bool| if none { String::new() } else { format_length(t) };
+                    for (field, t, none) in [(Field::StartTime, start, start < 0.5), (Field::StopTime, stop, stop > length - 0.5)] {
+                        let text = text(t, none);
+                        if details.texts[&field].0 != text {
+                            details.texts.insert(field, (text.clone(), false));
+                            details.changes.insert(field, Change::Set(text));
+                        }
+                    }
+                }
+            });
+        });
+        play
+    }
+
+    /// Play the song at `path` from `at` seconds, to hear its options.
+    fn preview_at(&mut self, path: &std::path::Path, at: f64) {
+        if self.current_song.as_deref() == Some(path) {
+            self.send(crate::audio::AudioCommand::Seek(at));
+        } else {
+            self.seek_on_load = Some((path.to_path_buf(), at));
+            self.request_play(path, None, None, false);
         }
     }
 
@@ -236,6 +307,8 @@ impl App {
         let songs = before.iter().map(|(key, ..)| key).collect::<std::collections::BTreeSet<_>>().len();
         self.last_edit = Some(before);
         self.songs_changed();
+        // (The playing song's volume adjust may have changed.)
+        self.send_volume();
         self.status = format!("Edited {songs} song{}.", if songs == 1 { "" } else { "s" });
     }
 
@@ -244,8 +317,58 @@ impl App {
         let Some(before) = self.last_edit.take() else { return };
         self.songs.edit(before);
         self.songs_changed();
+        self.send_volume();
         self.status = "Undid the last edit.".to_string();
     }
+}
+
+/// Two handles over `0..length` seconds, `start` and `stop`, each dragged
+/// by a press right on it, at least a second apart: whether either moved.
+fn time_range(ui: &mut egui::Ui, start: &mut f64, stop: &mut f64, length: f64) -> bool {
+    let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+    let track = rect.shrink2(egui::vec2(8.0, 0.0));
+    let x_of = |t: f64| track.left() + (t / length) as f32 * track.width();
+    let t_of = |x: f32| f64::from(((x - track.left()) / track.width()).clamp(0.0, 1.0)) * length;
+    const GRAB: f32 = 8.0;
+    // The handle under `x`, if one is (`true`: the stop's), the nearer of
+    // the two where they meet.
+    let (start_x, stop_x) = (x_of(*start), x_of(*stop));
+    let under = move |x: f32| {
+        let (to_start, to_stop) = ((x - start_x).abs(), (x - stop_x).abs());
+        (to_start.min(to_stop) <= GRAB).then_some(to_stop < to_start)
+    };
+    let id = response.id;
+    let mut changed = false;
+    if let Some(pointer) = response.interact_pointer_pos() {
+        // (The handle pressed is kept for the drag, so they can't swap
+        // halfway; a press beside them grabs nothing.)
+        if ui.input(|i| i.pointer.any_pressed()) {
+            ui.data_mut(|d| d.insert_temp(id, under(pointer.x)));
+        }
+        let t = t_of(pointer.x);
+        match ui.data(|d| d.get_temp::<Option<bool>>(id)).flatten() {
+            Some(true) => *stop = t.max(*start + 1.0).min(length),
+            Some(false) => *start = t.min(*stop - 1.0).max(0.0),
+            None => {}
+        }
+        changed = ui.data(|d| d.get_temp::<Option<bool>>(id)).flatten().is_some();
+    }
+    let over = response.hover_pos().and_then(|p| under(p.x)).is_some();
+    if over || response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    let visuals = ui.visuals();
+    let y = rect.center().y;
+    let painter = ui.painter();
+    painter.line_segment([egui::pos2(track.left(), y), egui::pos2(track.right(), y)], egui::Stroke::new(4.0, visuals.widgets.inactive.bg_fill));
+    painter.line_segment([egui::pos2(x_of(*start), y), egui::pos2(x_of(*stop), y)], egui::Stroke::new(4.0, visuals.selection.bg_fill));
+    let handle = if over || response.dragged() { visuals.widgets.hovered.fg_stroke.color } else { visuals.widgets.inactive.fg_stroke.color };
+    for t in [*start, *stop] {
+        painter.circle_filled(egui::pos2(x_of(t), y), 6.0, handle);
+    }
+    response.on_hover_text("Drag either end: where it starts and stops");
+    changed
 }
 
 /// A field's text as the editor shows it: numbers as they're shown, a

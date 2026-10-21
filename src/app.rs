@@ -38,6 +38,7 @@ mod smart;
 mod song_details;
 mod cleanup;
 mod song_meta;
+mod song_options;
 mod song_names;
 mod storage;
 mod sprite_editor;
@@ -122,7 +123,8 @@ fn describe_song(cache: &mut SongInfoCache, naming: &Naming, store: &SongStore, 
     let values = keys.iter().map(|&key| Field::by_key(key).and_then(|field| song.value(field))).collect();
     let tags = store.tags_of(path).into_iter().map(|(_, tag)| (tag.name.clone(), tag.color)).collect();
     let starred = song.starred();
-    song_list::Described { name: naming.name(path, info.as_deref()), file_name: song.file_name.to_string(), values, tags, starred }
+    let skip_shuffle = song.flag(Field::SkipShuffle);
+    song_list::Described { name: naming.name(path, info.as_deref()), file_name: song.file_name.to_string(), values, tags, starred, skip_shuffle }
 }
 
 /// The song at `path`'s name, by `naming`.
@@ -424,6 +426,18 @@ pub struct App {
     /// finished), so the "finished" that ends it advances exactly once, not
     /// again on a stale snapshot from before the next track loaded.
     advance_armed: bool,
+    /// The engine's song load count once the current song's loaded
+    /// (`EngineView::loads`): till then its view is another's.
+    song_loads: u64,
+    /// Where the current song is, and its length, while it plays: where
+    /// it was left, for a song that remembers that (`song_options.rs`).
+    playing_at: Option<(f64, f64)>,
+    /// The engine's generation (`EngineView::generation`) the current song
+    /// last got to its stop time in, so it's acted on once.
+    stopped_in: Option<u64>,
+    /// Where to start the song at this path once it's loaded, over its own
+    /// start: a preview from Song info's Options.
+    seek_on_load: Option<(PathBuf, f64)>,
     rng: Rng,
     /// Text being typed into the playlist rename box, while renaming.
     playlist_rename: Option<String>,
@@ -674,6 +688,10 @@ impl App {
             now_playing: None,
             listed: None,
             advance_armed: false,
+            song_loads: 0,
+            playing_at: None,
+            stopped_in: None,
+            seek_on_load: None,
             rng: Rng::from_time(),
             playlist_rename: None,
             confirm_delete_playlist: false,
@@ -849,6 +867,7 @@ impl App {
     /// Note what this session ends with, for the next one to start with
     /// (whatever Preferences > Playback says to remember), and save it.
     fn save_session(&mut self) {
+        self.remember_position();
         let remember = self.config.remember;
         let speed = self.shared.lock().map(|s| s.view.speed).unwrap_or(1.0);
         let session = crate::config::Session {
@@ -1522,7 +1541,7 @@ impl App {
                 .add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false))
                 .changed()
             {
-                self.send(AudioCommand::SetVolume(self.volume));
+                self.send_volume();
             }
             ui.monospace(format!("{:>3.0}%", self.volume * 100.0));
         });
@@ -3094,7 +3113,7 @@ impl App {
                 }
                 tray_panel::Action::Volume(volume) => {
                     self.volume = volume.clamp(0.0, 1.0);
-                    self.send(AudioCommand::SetVolume(self.volume));
+                    self.send_volume();
                 }
                 tray_panel::Action::Soundfont(index) => self.activate_soundfont(index),
                 tray_panel::Action::Play(list, entry) => self.play_entry(list, entry),
