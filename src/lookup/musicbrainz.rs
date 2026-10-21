@@ -10,14 +10,16 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::{Context, Result};
 use musicbrainz_rs::MusicBrainzClient;
 use musicbrainz_rs::entity::artist_credit::ArtistCredit;
+use musicbrainz_rs::entity::genre::Genre;
 use musicbrainz_rs::entity::release::{Release as Entity, ReleaseStatus};
+use musicbrainz_rs::entity::release_group::ReleaseGroupSecondaryType;
 use musicbrainz_rs::entity::search::SearchResult;
 use musicbrainz_rs::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha2::Digest;
 
-use super::matching::{self, Album, Release, Track};
+use super::matching::{self, Album, Credit, Release, Track};
 
 /// How many search hits are looked at.
 const HITS: u8 = 10;
@@ -166,9 +168,17 @@ fn quoted(text: &str) -> String {
     format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// MusicBrainz's Various Artists.
+const VARIOUS_ARTISTS: &str = "89ad4ac3-39f7-470e-963a-56509c546377";
+
 /// A credit as it reads: each name, then its join phrase.
 fn credit(credits: &[ArtistCredit]) -> String {
     credits.iter().map(|c| format!("{}{}", c.name, c.joinphrase.as_deref().unwrap_or(""))).collect()
+}
+
+/// Each artist credited, by name.
+fn credits(credits: &[ArtistCredit]) -> Vec<Credit> {
+    credits.iter().map(|c| Credit { name: c.name.clone(), sort: c.artist.sort_name.clone() }).collect()
 }
 
 /// A release as matching sees it (its tracks only if they were asked
@@ -184,10 +194,18 @@ fn converted(entity: &Entity) -> Release {
                 title: t.title.clone(),
                 length: t.length.map(|ms| f64::from(ms) / 1000.0),
                 recording: t.recording.as_ref().map(|r| r.id.clone()),
+                credits: t.artist_credit.as_deref().map(credits).unwrap_or_default(),
             })),
             None => tracks.extend((1..=medium.track_count).map(|position| Track { disc, position, ..Track::default() })),
         }
     }
+    let group = entity.release_group.as_ref();
+    let mut genres: Vec<&Genre> = entity.genres.iter().flatten().collect();
+    if genres.is_empty() {
+        genres = group.and_then(|g| g.genres.as_ref()).into_iter().flatten().collect();
+    }
+    genres.sort_by_key(|g| std::cmp::Reverse(g.count.unwrap_or(0)));
+    let various = entity.artist_credit.iter().flatten().any(|c| c.artist.id == VARIOUS_ARTISTS);
     Release {
         id: entity.id.clone(),
         group: entity.release_group.as_ref().map(|g| g.id.clone()),
@@ -196,7 +214,12 @@ fn converted(entity: &Entity) -> Release {
         official: entity.status == Some(ReleaseStatus::Official),
         date: entity.date.as_ref().map(|d| d.0.clone()).filter(|d| !d.is_empty()),
         front: entity.cover_art_archive.as_ref().is_some_and(|c| c.front),
+        discs: entity.media.as_ref().map_or(0, |m| m.len() as u32),
         tracks,
+        credits: entity.artist_credit.as_deref().map(credits).unwrap_or_default(),
+        first_released: group.and_then(|g| g.first_release_date.as_ref()).map(|d| d.0.clone()).filter(|d| !d.is_empty()),
+        genres: genres.into_iter().map(|g| g.name.clone()).collect(),
+        compilation: various || group.is_some_and(|g| g.secondary_types.contains(&ReleaseGroupSecondaryType::Compilation)),
     }
 }
 

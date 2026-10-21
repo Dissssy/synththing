@@ -108,6 +108,10 @@ pub struct Online {
     /// own, or a picture online.
     #[serde(rename = "a", skip_serializing_if = "Option::is_none")]
     pub art: Option<Art>,
+    /// The fields its match filled in (as edits) and that are still as
+    /// they were filled, once it's filled them (`SongStore::fill`).
+    #[serde(rename = "f", skip_serializing_if = "Option::is_none")]
+    pub filled: Option<Vec<Field>>,
 }
 
 /// An album's art, as chosen.
@@ -610,6 +614,10 @@ impl SongStore {
                 None => song.edits.remove(&field),
             };
             if song.edits.get(&field) != was.as_ref() {
+                // (No longer as its match filled it.)
+                if let Some(filled) = song.online.as_mut().and_then(|o| o.filled.as_mut()) {
+                    filled.retain(|f| *f != field);
+                }
                 before.push((key, field, was));
             }
         }
@@ -617,6 +625,27 @@ impl SongStore {
             self.save();
         }
         before
+    }
+
+    /// Fill matched songs' blank fields in from their match, by key (as
+    /// edits, noted as filled on the match: `Online::filled`); saved once.
+    pub fn fill(&mut self, fills: Vec<(String, Vec<(Field, String)>)>) {
+        let mut changed = false;
+        for (key, fields) in fills {
+            let Some(song) = self.songs.get_mut(&key) else { continue };
+            let Some(online) = song.online.as_mut() else { continue };
+            let filled = online.filled.get_or_insert_with(Vec::new);
+            for (field, value) in fields {
+                song.edits.insert(field, value);
+                if !filled.contains(&field) {
+                    filled.push(field);
+                }
+            }
+            changed = true;
+        }
+        if changed {
+            self.save();
+        }
     }
 
     /// Set (`Some`) or drop (`None`) songs' matches at MusicBrainz, by
@@ -1167,6 +1196,22 @@ mod tests {
         assert_eq!(store.get_by_key(&key).unwrap().edits.len(), 2);
         store.edit(before);
         assert!(store.get_by_key(&key).unwrap().edits.is_empty());
+    }
+
+    #[test]
+    fn filled_fields_are_noted_until_edited() {
+        let dir = temp_dir("filled");
+        let stored = write_in(b"filled", "song.mp3", &dir).unwrap();
+        let mut store = SongStore::open(dir);
+        store.add(stored.clone());
+        let key = stored.key.clone();
+        store.set_online(vec![(key.clone(), Some(Online { release: Some("r1".into()), ..Online::default() }))]);
+        store.fill(vec![(key.clone(), vec![(Field::Album, "Modal Soul".into()), (Field::Year, "2005".into())])]);
+        let song = store.get_by_key(&key).unwrap();
+        assert_eq!(song.edits.get(&Field::Album).map(String::as_str), Some("Modal Soul"));
+        assert_eq!(song.online.as_ref().unwrap().filled, Some(vec![Field::Album, Field::Year]));
+        store.edit(vec![(key.clone(), Field::Year, Some("2006".into()))]);
+        assert_eq!(store.get_by_key(&key).unwrap().online.as_ref().unwrap().filled, Some(vec![Field::Album]), "no longer as filled");
     }
 
     #[test]
