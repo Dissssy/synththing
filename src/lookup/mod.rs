@@ -56,10 +56,21 @@ pub fn album_id(album: &str, album_artist: Option<&str>, ignore: &str) -> String
     id
 }
 
-/// The id of the album `song` is on, if it's on one.
-pub fn album_of(song: &song_store::Song, ignore: &str) -> Option<String> {
+/// The album `song` is on, if it's on one of its own (one its match
+/// filled in isn't).
+fn own_album<'s>(song: &song_store::Song, facts: &Facts<'s>, ignore: &str) -> Option<std::borrow::Cow<'s, str>> {
+    let filled = song.online.as_ref().and_then(|o| o.filled.as_ref()).is_some_and(|f| f.contains(&Field::Album));
+    facts.text(Field::Album).filter(|n| !filled && !fields::group_key(n, ignore).is_empty())
+}
+
+/// What the lookup knows the song `key` by: its album's id, or (on none)
+/// its own.
+pub fn album_of(key: &str, song: &song_store::Song, ignore: &str) -> String {
     let facts = Facts::of(song);
-    Some(album_id(&facts.text(Field::Album)?, facts.text(Field::AlbumArtist).as_deref(), ignore))
+    match own_album(song, &facts, ignore) {
+        Some(name) => album_id(&name, facts.text(Field::AlbumArtist).as_deref(), ignore),
+        None => format!("song:{key}"),
+    }
 }
 
 fn is_midi(name: &str) -> bool {
@@ -88,7 +99,7 @@ pub fn albums(store: &SongStore, ignore: &str) -> Vec<Album> {
             disc: facts.number(Field::Disc).map(|n| n as u32),
             length: facts.number(Field::Length),
         };
-        let Some(name) = facts.text(Field::Album).filter(|n| !fields::group_key(n, ignore).is_empty()) else {
+        let Some(name) = own_album(song, &facts, ignore) else {
             // (On no album: looked up by itself, if it says who it's by.)
             if ours.artist.is_some() && facts.text(Field::Title).is_some() {
                 loose.push(Album {

@@ -281,42 +281,42 @@ impl App {
         let busy = self.lookup.worker.as_ref().and_then(|w| w.busy.clone());
         self.lookup_albums();
         let albums = self.lookup.albums.as_ref().map(|(_, a)| a.as_slice()).unwrap_or_default();
-        let (mut matched, mut unsure, mut not_found, mut waiting) = (0, 0, 0, 0);
-        let (mut loose, mut loose_matched) = (0, 0);
+        // (Albums, then songs on no album: matched, unsure, not found,
+        // to look up.)
+        let mut counts = [[0; 4]; 2];
         for album in albums {
-            if album.loose {
-                loose += 1;
-            }
-            if !lookup::wanted(&self.songs, album) {
-                if album.loose {
-                    loose_matched += 1;
-                } else {
-                    matched += 1;
+            let counts = &mut counts[usize::from(album.loose)];
+            let at = if !lookup::wanted(&self.songs, album) {
+                0
+            } else {
+                match tried.get(&album.id) {
+                    Some(t) if !t.due(now) && matches!(t.found, Answer::Unsure(_)) => 1,
+                    Some(t) if !t.due(now) && t.found == Answer::NotFound => 2,
+                    _ => 3,
                 }
-                continue;
-            }
-            match tried.get(&album.id) {
-                Some(t) if !t.due(now) && matches!(t.found, Answer::Unsure(_)) => unsure += 1,
-                Some(t) if !t.due(now) && t.found == Answer::NotFound => not_found += 1,
-                _ => waiting += 1,
-            }
+            };
+            counts[at] += 1;
         }
-        let total = albums.len() - loose;
         let busy = busy.and_then(|id| albums.iter().find(|a| a.id == id)).map(|a| a.name.clone());
-        let mut review = false;
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!(
-                "{matched} of {total} albums and {loose_matched} of {loose} songs on no album matched, {unsure} unsure, {not_found} not found, {waiting} to look up."
-            ));
-            review = unsure > 0 && ui.button("Needs a look").on_hover_text("Pick the release each unsure album is, in Clean up").clicked();
-        });
-        if review {
+        let line = |name: &str, [matched, unsure, not_found, waiting]: [usize; 4]| {
+            let mut parts = vec![format!("{name}: {matched} of {} matched", matched + unsure + not_found + waiting)];
+            if unsure > 0 {
+                parts.push(format!("{unsure} unsure"));
+            }
+            parts.push(format!("{not_found} not found"));
+            parts.push(format!("{waiting} to look up"));
+            parts.join(", ")
+        };
+        ui.label(line("Albums", counts[0]));
+        ui.label(line("Songs on no album", counts[1]));
+        if counts[0][1] > 0 && ui.button("Needs a look").on_hover_text("Pick the release each unsure album is, in Clean up").clicked() {
             self.cleanup = Some(Default::default());
         }
         if let Some(name) = busy {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.weak(format!("Looking up {name}..."));
+                let text = format!("Looking up {name}...");
+                ui.add(egui::Label::new(egui::RichText::new(&text).weak()).truncate()).on_hover_text(text);
             });
         }
         if let Some(error) = &self.lookup.error {
@@ -329,18 +329,17 @@ impl App {
     /// and, on the device that looks albums up, to look its album up
     /// again, asking MusicBrainz anew.
     pub(super) fn online_match_ui(&mut self, ui: &mut egui::Ui, path: &std::path::Path) {
-        let Some(song) = self.songs.get(path) else {
+        let Some((key, song)) = self.songs.key(path).and_then(|k| Some((k.clone(), self.songs.get_by_key(&k)?))) else {
             return;
         };
-        let album = lookup::album_of(song, &self.config.group_ignore);
+        let album = lookup::album_of(&key, song, &self.config.group_ignore);
         let online = song.online.clone();
-        if self.looks_up()
-            && let Some(album) = album
-        {
+        if self.looks_up() {
             ui.add_space(4.0);
             let asked = self.lookup.refresh.contains(&album) || self.lookup.worker.as_ref().is_some_and(|w| w.busy.as_ref() == Some(&album));
+            let again = if album.starts_with("song:") { "Look it up again" } else { "Look up its album again" };
             let refresh = ui
-                .add_enabled(!asked, egui::Button::new(if asked { "Looking up..." } else { "Look up its album again" }))
+                .add_enabled(!asked, egui::Button::new(if asked { "Looking up..." } else { again }))
                 .on_hover_text("Ask MusicBrainz about its album again, rather than going by what was kept from last time");
             if refresh.clicked() {
                 self.lookup.refresh.push(album);
