@@ -138,6 +138,9 @@ enum Act {
     /// Open group `key` of ruleset `id` (a playlist, by its ID, for
     /// `PLAYLISTS`).
     Open(String, String),
+    /// Make the set of songs that play together with this ID these, in
+    /// order.
+    Together(String, Vec<String>),
 }
 
 /// "3 songs": how many of `what` (singular) there are.
@@ -274,6 +277,10 @@ impl App {
                 view.open = Some(key);
                 view.find.clear();
                 view.picked = None;
+            }
+            Some(Act::Together(id, keys)) => {
+                self.songs.set_together(&id, keys);
+                self.songs_changed();
             }
             Some(Act::Shuffle(_)) | None => {}
         }
@@ -801,7 +808,20 @@ impl App {
                 let guest = guest.as_deref();
                 let playing = current.as_deref() == Some(track.path.as_path());
                 let picked = view.picked.as_deref() == Some(track.path.as_path());
-                let output = track_row(ui, rect, track, guest, playing, picked, *t % 2 == 1);
+                // (A set's songs move and come out of it here.)
+                let moves = (id == TOGETHER).then(|| (*t > 0, *t + 1 < tracks.len()));
+                let output = track_row(ui, rect, track, guest, playing, picked, *t % 2 == 1, moves);
+                if let Some(change) = output.change {
+                    let mut keys = group.songs.clone();
+                    match change {
+                        Change::Sooner => keys.swap(*t - 1, *t),
+                        Change::Later => keys.swap(*t, *t + 1),
+                        Change::Out => {
+                            keys.remove(*t);
+                        }
+                    }
+                    act = Some(Act::Together(group.key.clone(), keys));
+                }
                 if output.picked {
                     view.picked = Some(track.path.clone());
                 }
@@ -828,13 +848,25 @@ struct RowOutput {
     play: bool,
     star: bool,
     info: bool,
+    change: Option<Change>,
+}
+
+/// A change to where a song is in the set it plays together with.
+#[derive(Clone, Copy)]
+enum Change {
+    Sooner,
+    Later,
+    Out,
 }
 
 /// One song's row in `rect`: its star, number, name, guest artist and
 /// length, marked when it's `playing` or `picked`, weak when its file
 /// isn't here. A click picks it and a double-click plays it (a tap, on a
-/// phone); on the desktop it drags onto a playlist.
-fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<&str>, playing: bool, picked: bool, striped: bool) -> RowOutput {
+/// phone); on the desktop it drags onto a playlist. With `moves` (whether
+/// it can go sooner, and later), it has buttons to move it in its set, or
+/// take it out.
+#[allow(clippy::too_many_arguments)]
+fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<&str>, playing: bool, picked: bool, striped: bool, moves: Option<(bool, bool)>) -> RowOutput {
     let touch = select_list::touch(ui.ctx());
     let sense = if touch { egui::Sense::click() } else { egui::Sense::click_and_drag() };
     let response = ui.interact(rect, ui.id().with(("track", &track.path)), sense - egui::Sense::FOCUSABLE);
@@ -872,6 +904,17 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
         let scroll = playing || response.contains_pointer();
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(4.0);
+            if let Some((sooner, later)) = moves {
+                if ui.button(super::icon("x")).on_hover_text("Take it out").clicked() {
+                    output.change = Some(Change::Out);
+                }
+                if ui.add_enabled(later, egui::Button::new(super::icon("arrow-down"))).on_hover_text("Play it later").clicked() {
+                    output.change = Some(Change::Later);
+                }
+                if ui.add_enabled(sooner, egui::Button::new(super::icon("arrow-up"))).on_hover_text("Play it sooner").clicked() {
+                    output.change = Some(Change::Sooner);
+                }
+            }
             if let Some(length) = track.length {
                 ui.label(egui::RichText::new(format_length(length)).weak());
             }
