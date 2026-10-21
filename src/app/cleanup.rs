@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use super::{fit_width, icon_button, App};
-use crate::cleanup::{self, Suggestion, What};
+use crate::cleanup::{self, Kind, Suggestion, What};
 
 /// The Clean up window, while it's open.
 #[derive(Default)]
@@ -78,11 +78,16 @@ impl App {
                             if ui.add(icon_button("x")).on_hover_text("Dismiss: leave it as it is").clicked() {
                                 dismiss.push(id.clone());
                             }
-                            if ui.add_enabled(!to.trim().is_empty(), icon_button("check")).on_hover_text("Apply").clicked() {
+                            let fixed = suggestion.kind == Kind::Compilation;
+                            if ui.add_enabled(fixed || !to.trim().is_empty(), icon_button("check")).on_hover_text("Apply").clicked() {
                                 apply.push(*i);
                             }
-                            ui.add(egui::TextEdit::singleline(to).desired_width(f32::INFINITY))
-                                .on_hover_text("What it'll be written as. Separate artists with semicolons.");
+                            if fixed {
+                                ui.label(format!("Mark a compilation, by {to}"));
+                            } else {
+                                ui.add(egui::TextEdit::singleline(to).desired_width(f32::INFINITY))
+                                    .on_hover_text("What it'll be written as. Separate artists with semicolons.");
+                            }
                         });
                     });
                 }
@@ -108,7 +113,7 @@ impl App {
                     let to = cleanup.to.get(&suggestion.id(&ignore)).map_or(suggestion.to.as_str(), String::as_str);
                     (suggestion, to)
                 })
-                .filter(|(_, to)| !to.trim().is_empty())
+                .filter(|(s, to)| s.kind == Kind::Compilation || !to.trim().is_empty())
                 .collect();
             let edits = cleanup::edits(&self.songs, &chosen, &ignore);
             let before = self.songs.edit(edits);
@@ -143,5 +148,6 @@ fn describe(suggestion: &Suggestion) -> (String, String) {
     match &suggestion.what {
         What::Text { field, text } => (text.clone(), format!("{}: {text}", field.label())),
         What::Name { spellings } => (spellings.join(" / "), format!("One name spelled {} ways:\n{}", spellings.len(), spellings.join("\n"))),
+        What::Album { name } => (name.clone(), format!("Album: {name}, by several artists with no album artist. Marked a compilation, it's by Various Artists.")),
     }
 }

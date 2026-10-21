@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::fields::{self, Facts, Field, Kind};
-use crate::song_store::{self, Song, SongStore};
+use crate::song_store::{Song, SongStore};
 
 /// A smart playlist's (or ruleset's) definition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -406,7 +406,7 @@ impl<'a> Test<'a> {
                 if *op == Op::HasNot { !has } else { has }
             }
             Kind::Flag => {
-                let set = song.has_tag(song_store::STARRED);
+                let set = song.flag(*field);
                 if *op == Op::IsFalse { !set } else { set }
             }
         }
@@ -474,11 +474,15 @@ fn compare(order: Order, a: &SortKey, b: &SortKey) -> Ordering {
     }
 }
 
-/// Who a song's album is filed under: its album artists, else its
-/// artists.
+/// Who a song's album is filed under: its album artists, else Various
+/// Artists for a compilation's, else its artists.
 fn filed_under<'a>(song: &Facts<'a>) -> Vec<Cow<'a, str>> {
     let album_artists = song.items(Field::AlbumArtist);
-    if album_artists.is_empty() { song.items(Field::Artist) } else { album_artists }
+    match () {
+        _ if !album_artists.is_empty() => album_artists,
+        _ if song.flag(Field::Compilation) => vec![Cow::Borrowed(VARIOUS_ARTISTS)],
+        _ => song.items(Field::Artist),
+    }
 }
 
 /// `songs` (by key) in `order`, ties going by key.
@@ -546,6 +550,8 @@ impl Rules {
             titles: Vec<Cow<'a, str>>,
             subtitles: Vec<Cow<'a, str>>,
             artists: Vec<Cow<'a, str>>,
+            /// A song says it's on a compilation.
+            compilation: bool,
             songs: Vec<(&'a str, &'a Song)>,
         }
         /// A song on an album: its key, it, and the album's name, album
@@ -592,6 +598,7 @@ impl Rules {
                 making.titles.push(album);
                 making.subtitles.extend(album_artist);
                 making.artists.extend(artist);
+                making.compilation |= Facts::of(song).flag(Field::Compilation);
                 making.songs.push((key, song));
             }
         }
@@ -601,7 +608,7 @@ impl Rules {
             .map(|(key, making)| {
                 let artists: Vec<String> = match fields::best_spelling(making.subtitles.iter().map(|t| t.as_ref())) {
                     Some(album_artists) => Field::AlbumArtist.def().split(album_artists).map(str::to_string).collect(),
-                    None if making.artists.iter().map(|a| fields::group_key(a, ignore)).collect::<BTreeSet<_>>().len() == 1 => {
+                    None if !making.compilation && making.artists.iter().map(|a| fields::group_key(a, ignore)).collect::<BTreeSet<_>>().len() == 1 => {
                         fields::best_spelling(making.artists.iter().map(|a| a.as_ref())).map(str::to_string).into_iter().collect()
                     }
                     None => Vec::new(),
@@ -609,6 +616,7 @@ impl Rules {
                 let subtitle = match (artists.is_empty(), making.artists.is_empty()) {
                     (false, _) => Some(fields::Def::names(&artists)),
                     (true, false) => Some(VARIOUS_ARTISTS.to_string()),
+                    (true, true) if making.compilation => Some(VARIOUS_ARTISTS.to_string()),
                     (true, true) => None,
                 };
                 Group {
@@ -766,6 +774,15 @@ mod tests {
         assert_eq!((groups[0].subtitle.as_deref(), groups[0].artists.as_slice()), (Some("Uyama Hiroto & Nujabes"), &["Uyama Hiroto".to_string(), "Nujabes".to_string()][..]));
         let titles: Vec<String> = artists.rules.groups(&duo, 0, "").into_iter().map(|g| g.title).collect();
         assert_eq!(titles, ["Nujabes", "Uyama Hiroto"]);
+        // A compilation (with no album artist) is by Various Artists, and
+        // filed whole under them.
+        let compilation = store(&[
+            ("a.ogg", Meta { compilation: true, ..meta("Nujabes", "Hydeout Productions", 1, 1.0) }, &[], 0),
+            ("b.ogg", meta("Nujabes", "Hydeout Productions", 2, 1.0), &[], 0),
+        ]);
+        assert_eq!(albums.rules.groups(&compilation, 0, "")[0].subtitle.as_deref(), Some(VARIOUS_ARTISTS));
+        let titles: Vec<String> = artists.rules.groups(&compilation, 0, "").into_iter().map(|g| g.title).collect();
+        assert_eq!(titles, ["Nujabes", VARIOUS_ARTISTS], "only the song that says so");
         // A song is in each of its genres.
         let genres = store(&[
             ("a.ogg", Meta { genre: Some("Avant-Garde, Rock".into()), ..Meta::default() }, &[], 0),

@@ -70,6 +70,8 @@ fn set_tag(meta: &mut Meta, key: &str, value: &str) {
         "tracknumber" | "track" => number(&mut meta.track),
         "discnumber" | "disc" => number(&mut meta.disc),
         "date" | "year" | "releasedate" | "originaldate" => number(&mut meta.year),
+        // (iTunes writes "1"; some taggers "true".)
+        "compilation" | "itunescompilation" => meta.compilation |= value == "1" || value.eq_ignore_ascii_case("true"),
         _ => {}
     }
 }

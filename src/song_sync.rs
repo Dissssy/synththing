@@ -540,6 +540,7 @@ mod tests {
                 year: Some(1980 + i % 40),
                 length: Some(f64::from(120 + i % 300) + 0.25),
                 size: 4_000_000 + u64::from(i) * 977,
+                compilation: true,
             };
             let song = Song { name: format!("{:02} Song number {i}.mp3", i % 14 + 1), imported: 1_790_000_000 + i64::from(i), tags: vec![song_store::STARRED.into()], meta: Some(meta), ..Song::default() };
             leaves.insert(key, crate::settings_sync::Field { value: serde_json::to_value(song).unwrap(), changed: 1_790_000_000 });
