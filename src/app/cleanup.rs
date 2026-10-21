@@ -2,14 +2,17 @@
 //! (`crate::cleanup`), each to apply as it is, written otherwise, or
 //! dismiss. Applying makes songs' edits, undone like the details
 //! editor's from the Songs toolbar, except for songs that aren't songs,
-//! which are offered removed from the library.
+//! which are offered removed from the library. On the device that looks
+//! albums up, the ones it wasn't sure of come first (Needs a look): pick
+//! the release each is, or none of them.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use eframe::egui;
 
-use super::{fit_width, icon_button, App};
+use super::lookup::{Reviewed, Unsure};
+use super::{App, fit_width, icon_button};
 use crate::cleanup::{self, Kind, Suggestion, What};
 
 /// The Clean up window, while it's open.
@@ -20,6 +23,10 @@ pub(super) struct CleanUp {
     suggestions: Vec<Suggestion>,
     /// What suggestions are to be written as instead, by ID.
     to: BTreeMap<String, String>,
+    /// The albums the lookup wasn't sure of.
+    unsure: Vec<Unsure>,
+    /// The release picked for each (by its album's id), by index.
+    picks: BTreeMap<String, usize>,
 }
 
 impl App {
@@ -38,6 +45,7 @@ impl App {
         let revision = self.cleanup_revision();
         if cleanup.made_from != Some(revision) {
             cleanup.suggestions = cleanup::suggest(&self.songs, &self.config.group_ignore);
+            cleanup.unsure = self.unsure_albums();
             cleanup.made_from = Some(revision);
         }
         let ignore = self.config.group_ignore.clone();
@@ -50,16 +58,26 @@ impl App {
         let mut show: Option<Vec<PathBuf>> = None;
         let mut bring_back = false;
         let mut close = false;
+        let mut reviewed: Option<Reviewed> = None;
         let response = egui::Modal::new(egui::Id::new("cleanup")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 640.0));
             ui.heading("Clean up");
             ui.weak("Suggestions from what your songs' details say. Nothing changes until you apply one, and the files themselves are never written.");
             ui.add_space(4.0);
-            if shown.is_empty() {
+            if shown.is_empty() && cleanup.unsure.is_empty() {
                 ui.label("Nothing to clean up.");
             }
             let row_height = ui.spacing().interact_size.y;
             let from_width = (ui.available_width() * 0.4).max(120.0);
+            for unsure in &cleanup.unsure {
+                let pick = cleanup.picks.entry(unsure.album.id.clone()).or_default();
+                if let Some(r) = unsure_row_ui(ui, unsure, pick, from_width, row_height, &mut show, |k| self.songs.path(k)) {
+                    reviewed = Some(r);
+                }
+            }
+            if !cleanup.unsure.is_empty() {
+                ui.separator();
+            }
             egui::ScrollArea::vertical().max_height(400.0).auto_shrink([false, true]).show_rows(ui, row_height, shown.len(), |ui, rows| {
                 for (i, id) in &shown[rows] {
                     let suggestion = &cleanup.suggestions[*i];
@@ -111,6 +129,9 @@ impl App {
                 });
             });
         });
+        if let Some(reviewed) = reviewed {
+            self.reviewed(reviewed);
+        }
         // (Junk's removed, asked about first: `App::remove_songs_ui`.)
         let (junk, apply): (Vec<usize>, Vec<usize>) = apply.into_iter().partition(|&i| cleanup.suggestions[i].kind == Kind::Junk);
         for i in junk {
@@ -154,16 +175,77 @@ impl App {
     }
 }
 
+/// A Needs a look row: the album, the release it might be (picked from
+/// those it might), and This one or None of these.
+fn unsure_row_ui(
+    ui: &mut egui::Ui,
+    unsure: &Unsure,
+    pick: &mut usize,
+    from_width: f32,
+    row_height: f32,
+    show: &mut Option<Vec<PathBuf>>,
+    path: impl Fn(&str) -> PathBuf,
+) -> Option<Reviewed> {
+    let album = &unsure.album;
+    *pick = (*pick).min(unsure.releases.len() - 1);
+    let mut reviewed = None;
+    ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(from_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_width(from_width);
+            ui.weak("Needs a look");
+            let by = album.artist.as_deref().map(|a| format!(" by {a}")).unwrap_or_default();
+            ui.add(egui::Label::new(&album.name).truncate()).on_hover_text(format!(
+                "{}{by}, {} songs: the lookup isn't sure which release it is.",
+                album.name,
+                album.songs.len()
+            ));
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let songs = album.songs.len();
+            if ui.add(icon_button("info")).on_hover_text(format!("See its {songs} song{}", if songs == 1 { "" } else { "s" })).clicked() {
+                *show = Some(album.songs.iter().map(|s| path(&s.key)).collect());
+            }
+            if ui.add(icon_button("x")).on_hover_text("None of these: leave it unmatched, and never take these for it").clicked() {
+                reviewed = Some(Reviewed::NoneOf(album.clone(), unsure.releases.iter().map(|r| r.id.clone()).collect()));
+            }
+            let release = &unsure.releases[*pick];
+            if ui.add(icon_button("check")).on_hover_text("This one: match it to the release picked").clicked() {
+                reviewed = Some(Reviewed::This(album.clone(), release.clone()));
+            }
+            if ui.add(icon_button("arrow-square-out")).on_hover_text("Open the release picked on MusicBrainz").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(format!("https://musicbrainz.org/release/{}", release.id)));
+            }
+            egui::ComboBox::from_id_salt(("unsure", &album.id)).width(ui.available_width()).truncate().selected_text(unsure.describe(release)).show_ui(
+                ui,
+                |ui| {
+                    for (i, release) in unsure.releases.iter().enumerate() {
+                        ui.selectable_value(pick, i, unsure.describe(release));
+                    }
+                },
+            );
+        });
+    });
+    reviewed
+}
+
 /// What a suggestion's of, short and in full.
 fn describe(suggestion: &Suggestion) -> (String, String) {
     match &suggestion.what {
         What::Text { field, text } => (text.clone(), format!("{}: {text}", field.label())),
         What::Name { spellings } => (spellings.join(" / "), format!("One name spelled {} ways:\n{}", spellings.len(), spellings.join("\n"))),
-        What::Album { name } => (name.clone(), format!("Album: {name}, by several artists with no album artist. Marked a compilation, it's by Various Artists.")),
+        What::Album { name } => {
+            (name.clone(), format!("Album: {name}, by several artists with no album artist. Marked a compilation, it's by Various Artists."))
+        }
         What::Fields { from, set, .. } => {
             let n = set.len();
             let label = suggestion.kind.label();
-            (from.clone(), format!("{label}: {from}{}", if n > 1 { format!("\n(and {} more songs like it: see them with the info button)", n - 1) } else { String::new() }))
+            (
+                from.clone(),
+                format!(
+                    "{label}: {from}{}",
+                    if n > 1 { format!("\n(and {} more songs like it: see them with the info button)", n - 1) } else { String::new() }
+                ),
+            )
         }
         What::AppleDouble => {
             let n = suggestion.keys.len();

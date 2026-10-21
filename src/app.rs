@@ -3993,7 +3993,6 @@ impl eframe::App for App {
             self.welcome_ui(&ctx);
             self.cleanup_ui(&ctx);
             self.choose_art_ui(&ctx);
-            self.review_ui(&ctx);
             self.song_details_ui(&ctx);
             self.history_ui(&ctx);
             self.audio_import_ui(&ctx);
@@ -4018,7 +4017,6 @@ impl eframe::App for App {
             self.welcome_ui(&ctx);
             self.cleanup_ui(&ctx);
             self.choose_art_ui(&ctx);
-            self.review_ui(&ctx);
             self.song_details_ui(&ctx);
             self.history_ui(&ctx);
             self.layout_save_ui(&ctx);
