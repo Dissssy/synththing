@@ -355,18 +355,23 @@ impl<'a> Test<'a> {
         let song = Facts::of(song);
         match field.kind() {
             Kind::Text => {
-                let have = text(&song, *field).map(|t| t.to_lowercase());
+                // (Each of a list field's items: a song's genre "is" each
+                // of its genres.)
+                let have: Vec<String> = match field {
+                    Field::Title => text(&song, *field).into_iter().map(|t| t.to_lowercase()).collect(),
+                    _ => song.items(*field).iter().map(|t| t.to_lowercase()).collect(),
+                };
                 let want = self.text.as_str();
-                match (op, have) {
-                    (Op::IsEmpty, have) => have.is_none(),
-                    (Op::IsNotEmpty, have) => have.is_some(),
-                    (Op::IsNot, have) => have.as_deref() != Some(want),
-                    (Op::NotContains, have) => !have.is_some_and(|h| h.contains(want)),
-                    (_, None) => false,
-                    (Op::Is, Some(h)) => h == want,
-                    (Op::Contains, Some(h)) => h.contains(want),
-                    (Op::StartsWith, Some(h)) => h.starts_with(want),
-                    (Op::EndsWith, Some(h)) => h.ends_with(want),
+                let any = |test: &dyn Fn(&str) -> bool| have.iter().any(|h| test(h));
+                match op {
+                    Op::IsEmpty => have.is_empty(),
+                    Op::IsNotEmpty => !have.is_empty(),
+                    Op::Is => any(&|h| h == want),
+                    Op::IsNot => !any(&|h| h == want),
+                    Op::Contains => any(&|h| h.contains(want)),
+                    Op::NotContains => !any(&|h| h.contains(want)),
+                    Op::StartsWith => any(&|h| h.starts_with(want)),
+                    Op::EndsWith => any(&|h| h.ends_with(want)),
                     _ => false,
                 }
             }
@@ -563,7 +568,7 @@ impl Rules {
                 SplitBy::AlbumArtist => filed_under(&facts).map(|a| (a, None)).into_iter().collect(),
                 SplitBy::Album => unreachable!("albums are made below"),
                 SplitBy::Composer => one(Field::Composer),
-                SplitBy::Genre => one(Field::Genre),
+                SplitBy::Genre => facts.items(Field::Genre).into_iter().map(|g| (g, None)).collect(),
                 SplitBy::Year => song.meta.as_ref().and_then(|m| m.year).map(|y| (Cow::Owned(y.to_string()), None)).into_iter().collect(),
                 SplitBy::Tag => song.tags.iter().filter_map(|id| tags.get(id)).map(|t| (Cow::Borrowed(t.name.as_str()), None)).collect(),
             };
@@ -742,5 +747,16 @@ mod tests {
         assert_eq!(titles, [("A Bird Story", Some("Kan (Reives) Gao")), ("Finding Paradise <OST>", Some(VARIOUS_ARTISTS))]);
         assert_eq!(names(&various, &groups[0].songs), ["d.ogg", "c.ogg"]);
         assert_eq!(names(&various, &groups[1].songs), ["b.ogg", "a.ogg"]);
+        // A song is in each of its genres.
+        let genres = store(&[
+            ("a.ogg", Meta { genre: Some("Avant-Garde, Rock".into()), ..Meta::default() }, &[], 0),
+            ("b.ogg", Meta { genre: Some("rock; Classical".into()), ..Meta::default() }, &[], 0),
+        ]);
+        let by_genre = Rules { split: Some(Split { by: SplitBy::Genre, min: 1 }), ..Rules::default() };
+        let groups = by_genre.groups(&genres, 0, "");
+        let found: Vec<(&str, usize)> = groups.iter().map(|g| (g.title.as_str(), g.songs.len())).collect();
+        assert_eq!(found, [("Avant-Garde", 1), ("Classical", 1), ("Rock", 2)]);
+        let rock = Rules { rules: vec![Rule { field: Field::Genre, op: Op::Is, value: "rock".into(), to: String::new() }], ..Rules::default() };
+        assert_eq!(names(&genres, &rock.songs(&genres, 0)), ["a.ogg", "b.ogg"]);
     }
 }

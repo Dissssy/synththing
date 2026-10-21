@@ -79,32 +79,36 @@ pub struct Def {
     pub width: f32,
     /// Songs share its values often enough to group the list by them.
     pub groups: bool,
+    /// Its text is a list (`split_list`): "Electronic, Rock" is two
+    /// genres, and a song is in each one's group.
+    pub list: bool,
 }
 
-const fn def(field: Field, key: &'static str, label: &'static str, kind: Kind, synced: bool, width: f32, groups: bool) -> Def {
-    Def { field, key, label, kind, synced, width, groups }
+#[allow(clippy::too_many_arguments)]
+const fn def(field: Field, key: &'static str, label: &'static str, kind: Kind, synced: bool, width: f32, groups: bool, list: bool) -> Def {
+    Def { field, key, label, kind, synced, width, groups, list }
 }
 
 /// Every field, in [`Field`]'s order.
 pub const FIELDS: &[Def] = &[
-    def(Field::Title, "title", "Title", Kind::Text, true, 0.0, false),
-    def(Field::Artist, "artist", "Artist", Kind::Text, true, 140.0, true),
-    def(Field::AlbumArtist, "album_artist", "Album artist", Kind::Text, true, 140.0, true),
-    def(Field::Album, "album", "Album", Kind::Text, true, 140.0, true),
-    def(Field::Composer, "composer", "Composer", Kind::Text, true, 140.0, true),
-    def(Field::Genre, "genre", "Genre", Kind::Text, true, 100.0, true),
-    def(Field::Track, "track", "Track", Kind::Number, true, 48.0, false),
-    def(Field::Disc, "disc", "Disc", Kind::Number, true, 40.0, true),
-    def(Field::Year, "year", "Year", Kind::Number, true, 52.0, true),
-    def(Field::Length, "length", "Length", Kind::Number, true, 60.0, false),
-    def(Field::Bpm, "bpm", "BPM", Kind::Number, false, 52.0, false),
-    def(Field::Notes, "notes", "Notes", Kind::Number, false, 72.0, false),
-    def(Field::FileName, "file_name", "File name", Kind::Text, true, 160.0, false),
-    def(Field::FileExtension, "file_extension", "Type", Kind::Text, true, 52.0, true),
-    def(Field::Size, "size", "Size (MB)", Kind::Number, true, 72.0, false),
-    def(Field::Imported, "imported", "Date added", Kind::Date, true, 96.0, true),
-    def(Field::Tag, "tag", "Tag", Kind::Tag, true, 0.0, false),
-    def(Field::Starred, "starred", "Starred", Kind::Flag, true, 0.0, false),
+    def(Field::Title, "title", "Title", Kind::Text, true, 0.0, false, false),
+    def(Field::Artist, "artist", "Artist", Kind::Text, true, 140.0, true, false),
+    def(Field::AlbumArtist, "album_artist", "Album artist", Kind::Text, true, 140.0, true, false),
+    def(Field::Album, "album", "Album", Kind::Text, true, 140.0, true, false),
+    def(Field::Composer, "composer", "Composer", Kind::Text, true, 140.0, true, false),
+    def(Field::Genre, "genre", "Genre", Kind::Text, true, 100.0, true, true),
+    def(Field::Track, "track", "Track", Kind::Number, true, 48.0, false, false),
+    def(Field::Disc, "disc", "Disc", Kind::Number, true, 40.0, true, false),
+    def(Field::Year, "year", "Year", Kind::Number, true, 52.0, true, false),
+    def(Field::Length, "length", "Length", Kind::Number, true, 60.0, false, false),
+    def(Field::Bpm, "bpm", "BPM", Kind::Number, false, 52.0, false, false),
+    def(Field::Notes, "notes", "Notes", Kind::Number, false, 72.0, false, false),
+    def(Field::FileName, "file_name", "File name", Kind::Text, true, 160.0, false, false),
+    def(Field::FileExtension, "file_extension", "Type", Kind::Text, true, 52.0, true, false),
+    def(Field::Size, "size", "Size (MB)", Kind::Number, true, 72.0, false, false),
+    def(Field::Imported, "imported", "Date added", Kind::Date, true, 96.0, true, false),
+    def(Field::Tag, "tag", "Tag", Kind::Tag, true, 0.0, false, false),
+    def(Field::Starred, "starred", "Starred", Kind::Flag, true, 0.0, false, false),
 ];
 
 impl Field {
@@ -179,7 +183,10 @@ impl<'a> Facts<'a> {
             Field::AlbumArtist => text(meta.map(|m| &m.album_artist)),
             Field::Album => text(meta.map(|m| &m.album)),
             Field::Composer => text(meta.map(|m| &m.composer)),
-            Field::Genre => text(meta.map(|m| &m.genre)),
+            Field::Genre => text(meta.map(|m| &m.genre)).map(|g| match genre_names(&g) {
+                Cow::Borrowed(_) => g,
+                Cow::Owned(named) => Cow::Owned(named),
+            }),
             Field::FileName => Some(Cow::Borrowed(Path::new(self.file_name).file_stem().and_then(|s| s.to_str()).unwrap_or(self.file_name))),
             Field::FileExtension => Path::new(self.file_name).extension().map(|e| Cow::Owned(e.to_string_lossy().to_lowercase())),
             _ => None,
@@ -204,6 +211,16 @@ impl<'a> Facts<'a> {
             Field::Size => meta.filter(|m| m.size > 0).map(|m| m.size as f64 / 1e6),
             Field::Imported => self.imported.map(|secs| secs as f64),
             _ => None,
+        }
+    }
+
+    /// A text field's values: its items for a list field (`Def::list`),
+    /// else its text.
+    pub fn items(&self, field: Field) -> Vec<Cow<'a, str>> {
+        match self.text(field) {
+            Some(Cow::Borrowed(text)) if field.def().list => split_list(text).map(Cow::Borrowed).collect(),
+            Some(Cow::Owned(text)) if field.def().list => split_list(&text).map(|t| Cow::Owned(t.to_string())).collect(),
+            text => text.into_iter().collect(),
         }
     }
 
@@ -235,6 +252,48 @@ impl<'a> Facts<'a> {
         };
         Some(Value { number: self.number(field), text })
     }
+}
+
+/// A list field's items (`Def::list`): its text split at commas and
+/// semicolons (and the NULs ID3v2.4 separates values with), trimmed.
+pub fn split_list(text: &str) -> impl Iterator<Item = &str> {
+    text.split([',', ';', '\0']).map(str::trim).filter(|t| !t.is_empty())
+}
+
+/// Genres tagged by their ID3v1 numbers named: ID3v2 writes them as
+/// "17", "(17)", "(17)(31)" or "(17)Rock" (the text, when there is one,
+/// is the name), and "(RX)" and "(CR)" for remix and cover.
+pub fn genre_names(text: &str) -> Cow<'_, str> {
+    let named = |code: &str| -> Option<&'static str> {
+        match code {
+            "RX" => Some("Remix"),
+            "CR" => Some("Cover"),
+            _ => symphonia_metadata::id3v1::util::genre_name(code.parse().ok()?).copied(),
+        }
+    };
+    let item = |item: &str| -> Vec<String> {
+        if let Some(name) = named(item) {
+            return vec![name.to_string()];
+        }
+        let mut names = Vec::new();
+        let mut rest = item;
+        while let Some(inner) = rest.strip_prefix('(')
+            && let Some((code, after)) = inner.split_once(')')
+            && let Some(name) = named(code)
+        {
+            names.push(name);
+            rest = after.trim_start();
+        }
+        match (names.is_empty(), rest.is_empty()) {
+            (true, _) => vec![item.to_string()],
+            (false, true) => names.into_iter().map(str::to_string).collect(),
+            // "(17)Rock": the text says it.
+            (false, false) => vec![rest.to_string()],
+        }
+    };
+    let items: Vec<&str> = split_list(text).collect();
+    let named: Vec<String> = items.iter().flat_map(|i| item(i)).collect();
+    if named.iter().map(String::as_str).eq(items.iter().copied()) { Cow::Borrowed(text) } else { Cow::Owned(named.join(", ")) }
 }
 
 /// `secs` (Unix seconds) as a date, `2026-10-20` (UTC).
@@ -305,6 +364,13 @@ mod tests {
         assert_eq!(facts.value(Field::Imported).map(|v| v.text).as_deref(), Some("1970-01-02"));
         assert_eq!(facts.value(Field::Bpm), None, "only a read here knows");
         assert!(facts.starred());
+        let meta = Meta { genre: Some("Avant-Garde, Electronic;Rock,".into()), artist: Some("A, B".into()), ..Meta::default() };
+        let facts = Facts { meta: Some(&meta), ..Facts::default() };
+        assert_eq!(facts.items(Field::Genre), ["Avant-Garde", "Electronic", "Rock"]);
+        assert_eq!(facts.items(Field::Artist), ["A, B"], "artists aren't lists");
+        for (tagged, named) in [("17", "Rock"), ("(17)", "Rock"), ("(17)(0)", "Rock, Blues"), ("(17)Hard Rock", "Hard Rock"), ("(RX), 31", "Remix, Trance"), ("Jazz", "Jazz"), ("(Live)", "(Live)"), ("255", "255")] {
+            assert_eq!(genre_names(tagged), named, "{tagged}");
+        }
     }
 
     #[test]

@@ -12,6 +12,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - A playlist remembers the song it was on: the fast-forward button beside Play continues from there.
 - Spellings of a name are one group: albums, artists and the Songs list's groups see past case, spacing, punctuation and symbols (and full-width letters), so "<OST>" and "OST", or "Justcore Extravaganza" and "JUSTCORE EXTRAVAGANZA", are one, shown as the spelling with mixed case (else the one most of its songs have). Preferences > Songs can name more characters to pass over.
 - An album is its name's songs, whoever each is by: a soundtrack with songs by several artists, or with its album artist spelled two ways, is one album (its artist line says Various Artists when its songs' artists differ and no album artist is set), its songs in track order.
+- Genres are lists: a song tagged "Avant-Garde, Electronic, Rock" (commas or semicolons) is in each of those genres, in By Genre rulesets, the Songs list's genre groups and genre rules. Genres tagged by their old ID3 numbers ("17", "(17)") show as their names (Rock).
 - More Songs list columns: Disc and Size. Song names can use every field ({disc}, {size}, {imported}...), and smart playlist rules can go by file type.
 
 ### Changed

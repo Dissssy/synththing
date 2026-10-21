@@ -682,13 +682,23 @@ impl SongList {
                 _ if by_tag && !entry.song.tags.is_empty() => {
                     entry.song.tags.iter().map(|(name, _)| (Some(name.clone()), Some(Value { text: name.to_lowercase(), number: None }))).collect()
                 }
-                    Some(g) => {
+                Some(g) => {
                     let value = entry.song.values[g].as_ref();
-                    let label = group_label(&view.group, value);
                     // (Sorted by what tells the groups apart, so their
                     // songs stay together.)
-                    let key = label.as_deref().map(|l| Value { text: fields::group_key(l, ignore), number: value.and_then(|v| v.number) });
-                    vec![(label, key)]
+                    let group = |label: String| {
+                        let key = Value { text: fields::group_key(&label, ignore), number: value.and_then(|v| v.number) };
+                        (Some(label), Some(key))
+                    };
+                    match group_label(&view.group, value) {
+                        // (A song in each of a list's items' groups.)
+                        Some(label) if column(&view.group).is_some_and(|c| c.list) => {
+                            let items: Vec<_> = fields::split_list(&label).map(|i| group(i.to_string())).collect();
+                            if items.is_empty() { vec![(None, None)] } else { items }
+                        }
+                        Some(label) => vec![group(label)],
+                        None => vec![(None, None)],
+                    }
                 }
                 None => vec![(None, None)],
             };
@@ -1041,6 +1051,20 @@ mod tests {
     fn songs_without_a_value_go_last_apart_from_one_named_unknown() {
         let songs: &[(&str, Option<&str>, &[&str])] = &[("a", None, &[]), ("b", Some("Unknown"), &[]), ("c", Some("Abc"), &[])];
         assert_eq!(grouped(&SongList::default(), "album", songs), ["Abc (1)", "c", "Unknown (1)", "b", "Unknown (1)", "a"]);
+    }
+
+    #[test]
+    fn songs_are_in_each_of_their_genres() {
+        let songs: &[(&str, Option<&str>, &[&str])] = &[("a", Some("Avant-Garde, Rock"), &[]), ("b", Some("rock; Blues"), &[])];
+        let paths: Vec<PathBuf> = songs.iter().map(|(name, ..)| PathBuf::from(name)).collect();
+        let mut describe = |path: &Path, _: &[&str]| {
+            let (name, genre, _) = songs.iter().find(|(name, ..)| Path::new(name) == path).unwrap();
+            let values = vec![genre.map(|a| Value { text: a.to_string(), number: None })];
+            Described { name: name.to_string(), file_name: name.to_string(), values, tags: Vec::new(), starred: false }
+        };
+        let view = View { group: "genre".into(), ..View::default() };
+        let rows = shape(&SongList::default().sorted(&paths, &view, &["genre"], None, Some(0), "", &mut describe).0);
+        assert_eq!(rows, ["Avant-Garde (1)", "a", "Blues (1)", "b", "Rock (2)", "a", "b"]);
     }
 
     #[test]

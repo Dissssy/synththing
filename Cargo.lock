@@ -5336,6 +5336,7 @@ dependencies = [
  "skrifa",
  "stylua",
  "symphonia",
+ "symphonia-metadata",
  "tiny_http",
  "tray-icon",
  "unicode-normalization",
