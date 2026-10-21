@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.3.1 (2026-10-21)
+
 ### Added
 - Search filters in Songs: type key:value terms beside (or instead of) your search, like `type:mid`, `artist:bonno`, `year:1990..1999`, `length:>3:00`, `added:30d`, `tag:chill`, `is:starred` or `has:album`, and put - in front of one to leave those songs out (`-type:mid`). With only filters, the list stays sorted and grouped. Hover the search box for all of them.
 - Three ways to match: as typed or in 'single quotes' fuzzily (`artist:'daft pk'`), in "double quotes" closely (the same past case, spacing and punctuation: `artist:"daft punk"`, or a phrase in the search), and after a ^ exactly (`artist:^"Daft Punk"`). Smart playlists can use "is like (fuzzy)" and "is exactly (case too)" rules, and their "is" sees past punctuation too.
