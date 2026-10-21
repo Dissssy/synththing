@@ -440,25 +440,24 @@ fn sort_key(order: Order, seed: u64, key: &str, song: &Song) -> SortKey {
     let lower = |field: Field| text(&facts, field).map(|t| t.to_lowercase()).unwrap_or_else(|| "\u{10ffff}".into());
     // (Spellings of one name together, as they're grouped.)
     let name = |field: Field| text(&facts, field).map(|t| fields::group_key(&t, "")).unwrap_or_else(|| "\u{10ffff}".into());
-    let meta = song.meta.as_ref();
     let title = lower(Field::Title);
     match order {
         Order::Random => SortKey { numbers: [shuffled(seed, key), 0, 0], ..SortKey::default() },
         Order::Title => SortKey { text: [title, String::new(), String::new()], ..SortKey::default() },
-        Order::Artist => SortKey { text: [name(Field::Artist), name(Field::Album), title], ..track_numbers(meta) },
+        Order::Artist => SortKey { text: [name(Field::Artist), name(Field::Album), title], ..track_numbers(&facts) },
         // (An album's songs in track order whoever each is by: an album is
         // its name's songs, `Rules::groups`.)
-        Order::Album => SortKey { text: [name(Field::Album), String::new(), title], ..track_numbers(meta) },
+        Order::Album => SortKey { text: [name(Field::Album), String::new(), title], ..track_numbers(&facts) },
         Order::Genre => SortKey { text: [lower(Field::Genre), title, String::new()], ..SortKey::default() },
-        Order::Year => SortKey { text: [title, String::new(), String::new()], numbers: [meta.and_then(|m| m.year).map_or(u64::MAX, u64::from), 0, 0] },
+        Order::Year => SortKey { text: [title, String::new(), String::new()], numbers: [facts.number(Field::Year).map_or(u64::MAX, |y| y as u64), 0, 0] },
         Order::NewestAdded => SortKey { numbers: [u64::MAX - song.imported.max(0) as u64, 0, 0], text: [title, String::new(), String::new()] },
         Order::OldestAdded => SortKey { numbers: [song.imported.max(0) as u64, 0, 0], text: [title, String::new(), String::new()] },
     }
 }
 
-fn track_numbers(meta: Option<&song_store::Meta>) -> SortKey {
-    let n = |v: Option<u32>| v.map_or(u64::MAX, u64::from);
-    SortKey { numbers: [0, n(meta.and_then(|m| m.disc).or(Some(1))), n(meta.and_then(|m| m.track))], ..SortKey::default() }
+fn track_numbers(song: &Facts) -> SortKey {
+    let n = |field| song.number(field).map_or(u64::MAX, |n| n as u64);
+    SortKey { numbers: [0, song.number(Field::Disc).map_or(1, |d| d as u64), n(Field::Track)], ..SortKey::default() }
 }
 
 fn compare(order: Order, a: &SortKey, b: &SortKey) -> Ordering {
@@ -569,7 +568,7 @@ impl Rules {
                 SplitBy::Album => unreachable!("albums are made below"),
                 SplitBy::Composer => one(Field::Composer),
                 SplitBy::Genre => facts.items(Field::Genre).into_iter().map(|g| (g, None)).collect(),
-                SplitBy::Year => song.meta.as_ref().and_then(|m| m.year).map(|y| (Cow::Owned(y.to_string()), None)).into_iter().collect(),
+                SplitBy::Year => facts.value(Field::Year).map(|y| (Cow::Owned(y.text), None)).into_iter().collect(),
                 SplitBy::Tag => song.tags.iter().filter_map(|id| tags.get(id)).map(|t| (Cow::Borrowed(t.name.as_str()), None)).collect(),
             };
             for (title, subtitle) in values {
@@ -622,7 +621,7 @@ mod tests {
         let mut store = SongStore::open(dir);
         store.learn(songs.iter().enumerate().map(|(i, (name, meta, tags, imported))| {
             let key = format!("{:064x}.ogg", i + 1);
-            let song = Song { name: name.to_string(), imported: *imported, tags: tags.iter().map(|t| t.to_string()).collect(), meta: Some(meta.clone()) };
+            let song = Song { name: name.to_string(), imported: *imported, tags: tags.iter().map(|t| t.to_string()).collect(), meta: Some(meta.clone()), ..Song::default() };
             (key, song)
         }));
         store
