@@ -28,6 +28,7 @@ mod copyright;
 mod moderation;
 mod notifications;
 mod overflow;
+mod palette;
 mod previews;
 mod library;
 mod groupings;
@@ -415,6 +416,8 @@ pub struct App {
     /// A Controls binding waiting for a key press: (action index, which of
     /// its keys to replace, or `None` to add one).
     binding_capture: Option<(usize, Option<usize>)>,
+    /// The command palette, while it's open.
+    palette: Option<palette::Palette>,
     /// The script's Settings or Controls window, if open.
     script_window: Option<script_windows::ScriptWindow>,
     /// The category picked in each (Settings, Controls, Debug).
@@ -718,6 +721,7 @@ impl App {
             tag_to_name: None,
             playlist_selection: Selection::default(),
             binding_capture: None,
+            palette: None,
             script_window: None,
             script_window_tab: [0; 3],
             user_presets: None,
@@ -2553,6 +2557,7 @@ impl App {
             || self.welcome.open
             || self.song_details.is_some()
             || self.cleanup.is_some()
+            || self.palette.is_some()
             || self.tags_open
             || self.recording.prompt_open
             || self.recording.window.is_some()
@@ -3407,6 +3412,17 @@ impl App {
             Command::ToggleRecording => self.toggle_recording(view),
             Command::PauseRecording => self.toggle_recording_pause(),
             Command::Quit => self.close_with(ctx, close::CloseAction::Quit),
+            Command::CommandPalette => self.palette = Some(palette::Palette::default()),
+        }
+    }
+
+    /// Whether a command would do anything now. One that wouldn't leaves
+    /// its key alone and stays out of the palette.
+    fn command_available(&self, command: Command) -> bool {
+        match command {
+            Command::ExitFullscreen => self.fullscreen || self.dedicated.is_some(),
+            Command::NextTrack => self.has_next(),
+            _ => true,
         }
     }
 
@@ -3954,17 +3970,12 @@ impl eframe::App for App {
         // being captured.
         if !self.any_modal_open() && self.binding_capture.is_none() {
             let typing = ctx.memory(|m| m.focused().is_some());
-            let in_fullscreen = self.fullscreen || self.dedicated.is_some();
-            let has_next = self.has_next();
+            let available: Vec<Command> = Command::ALL.into_iter().filter(|&c| self.command_available(c)).collect();
             // Run outside `ctx.input_mut`: `send_viewport_cmd` (inside
             // `set_fullscreen`) takes the lock that closure holds, and
             // calling it from in there deadlocks.
             let pressed = ctx.input_mut(|i| {
-                commands::pressed(i, typing, |command| match command {
-                    Command::ExitFullscreen => in_fullscreen,
-                    Command::NextTrack => has_next,
-                    _ => true,
-                })
+                commands::pressed(i, typing, |command| available.contains(&command))
             });
             for command in pressed {
                 self.run_command(&ctx, command, view);
@@ -4025,6 +4036,7 @@ impl eframe::App for App {
             drop(windows);
         }
         let windows = frame_timing::scope("windows");
+        self.palette_ui(&ctx, view);
         self.remove_songs_ui(&ctx);
         self.repair_ui(&ctx);
         self.tags_ui(&ctx);
