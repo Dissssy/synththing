@@ -74,6 +74,13 @@ pub struct Config {
     /// or quits (`Some(false)`); `None` until the first close asks.
     #[serde(default)]
     pub close_to_tray: Option<bool>,
+    /// Keys given to commands in place of their defaults, by command id
+    /// (`commands::Keymap`), synced.
+    #[serde(default)]
+    pub keymap: crate::commands::Bindings,
+    /// This device's own keys for commands, over `keymap`'s.
+    #[serde(default)]
+    pub local_keymap: crate::commands::Bindings,
     /// Preference: which of the last session's settings to start with.
     #[serde(default)]
     pub remember: Remember,

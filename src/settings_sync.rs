@@ -59,6 +59,7 @@ const LOCAL: &[&str] = &[
     "fullscreen_over_cutout",
     "ui_scale",
     "sync_debug",
+    "local_keymap",
 ];
 
 /// A setting a device can choose not to sync: one or more leaves.
@@ -158,7 +159,14 @@ pub const CATEGORIES: &[Category] = &[
             setting("notifications", "Notifications", &["library/notifications"]),
         ],
     },
-    Category { name: "App", settings: &[setting("tray", "Keep running in the tray", &["close_to_tray"]), OTHER] },
+    Category {
+        name: "App",
+        settings: &[
+            setting("tray", "Keep running in the tray", &["close_to_tray"]),
+            setting("keymap", "Keyboard shortcuts", &["keymap"]),
+            OTHER,
+        ],
+    },
 ];
 
 /// Leaves no setting lists: a newer app's, or ones not listed yet.
