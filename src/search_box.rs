@@ -46,7 +46,9 @@ impl SearchBox {
         revision: u64,
         values: &mut dyn FnMut(Field, &str) -> Vec<String>,
     ) -> Output {
-        let id = ui.id().with("search");
+        // (One ID wherever it's drawn, so it keeps the focus moving under
+        // the buttons or back.)
+        let id = egui::Id::new("songs_search");
         let ctx = ui.ctx().clone();
         let focused = ctx.memory(|m| m.has_focus(id));
         let mut changed = false;
@@ -97,7 +99,8 @@ impl SearchBox {
                 .clicked();
 
         let warn = ui.visuals().warn_fg_color;
-        let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+        // (One line, scrolling sideways: never wrapped.)
+        let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap_width: f32| {
             let text = text.as_str();
             let font = egui::TextStyle::Body.resolve(ui.style());
             let plain = egui::TextFormat { font_id: font.clone(), color: ui.visuals().text_color(), ..Default::default() };
@@ -113,7 +116,6 @@ impl SearchBox {
                 at = p.at.end;
             }
             job.append(&text[at..], 0.0, plain);
-            job.wrap.max_width = wrap_width;
             ui.fonts_mut(|f| f.layout_job(job))
         };
         let hint = if crate::select_list::touch(&ctx) { "search, or filter: type:mid..." } else { "search, or filter: type:mid... (Ctrl+F)" };
@@ -212,7 +214,7 @@ mod tests {
         };
         let mut out = None;
         let mut output = ctx.run_ui(input, |ui| {
-            ui.ctx().memory_mut(|m| m.request_focus(ui.id().with("search")));
+            ui.ctx().memory_mut(|m| m.request_focus(egui::Id::new("songs_search")));
             let mut values = |field: Field, _: &str| if field == Field::Artist { vec!["Daft Punk".to_string()] } else { Vec::new() };
             out = Some(search.ui(ui, &[], Some(3), 0, &mut values));
         });

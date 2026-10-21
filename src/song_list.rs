@@ -31,6 +31,9 @@ use crate::together::{self, Member};
 const MAX_SEARCH_RESULTS: usize = 200;
 /// Room at the end of each row for its own widgets (`trailing`).
 const TRAILING_WIDTH: f32 = 36.0;
+/// The least room the search box has beside the toolbar's buttons (else
+/// it goes under them).
+const MIN_SEARCH_WIDTH: f32 = 180.0;
 /// The least the name keeps: columns that don't fit beside it are left out.
 const MIN_NAME_WIDTH: f32 = 120.0;
 
@@ -492,6 +495,18 @@ impl SongList {
         let touch = select_list::touch(ui.ctx());
         let mut view_changed = false;
         let mut save_search = false;
+        let mut search = |list: &mut Self, ui: &mut egui::Ui| {
+            let built = list.built.as_ref();
+            let problems = built.map_or(&[][..], |b| b.problems.as_slice());
+            let found = built.filter(|b| !b.query.trim().is_empty()).map(|b| b.found);
+            let output = list.search.ui(ui, problems, found, revision, &mut |field, others| source.values(field, others));
+            if output.changed {
+                list.selection.clear();
+                ui.ctx().request_repaint();
+            }
+            save_search = output.save;
+        };
+        let mut below = false;
         ui.horizontal(|ui| {
             // Fixed-size widgets first, then the text edit last with
             // `desired_width(INFINITY)` to soak up whatever's left, sizing it
@@ -502,16 +517,15 @@ impl SongList {
                 let button = crate::app::icon_button("sort-ascending");
                 egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| view_changed |= view_menu(ui, view, true));
             }
-            let built = self.built.as_ref();
-            let problems = built.map_or(&[][..], |b| b.problems.as_slice());
-            let found = built.filter(|b| !b.query.trim().is_empty()).map(|b| b.found);
-            let output = self.search.ui(ui, problems, found, revision, &mut |field, others| source.values(field, others));
-            if output.changed {
-                self.selection.clear();
-                ui.ctx().request_repaint();
+            // (On a line of its own when the buttons leave it too little.)
+            below = ui.available_width() < MIN_SEARCH_WIDTH;
+            if !below {
+                search(self, ui);
             }
-            save_search = output.save;
         });
+        if below {
+            ui.horizontal(|ui| search(self, ui));
+        }
 
         // The columns that fit beside the name, and the one sorted by
         // (for touch, just that, on the second line).
