@@ -21,6 +21,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha2::Digest;
 
+use super::Outcome;
 use super::artists::Artist;
 use super::matching::{self, Album, Credit, Hit, HitRelease, Release, Track};
 
@@ -129,11 +130,12 @@ impl MusicBrainz {
         Ok(found.entities)
     }
 
-    /// The release a song on no album (`album`'s one song) is on, with
-    /// the track it is, if it surely is one (`matching::pick_recording`).
-    pub fn recording(&mut self, album: &Album, fresh: bool) -> Result<Option<(Release, usize)>> {
+    /// What a song on no album (`album`'s one song) is
+    /// (`matching::pick_recording`): a track of the release it's surely
+    /// on, or, if it's only on compilations, those it might be put on.
+    pub fn recording(&mut self, album: &Album, fresh: bool) -> Result<Outcome> {
         let song = &album.songs[0];
-        let Some(artist) = &song.artist else { return Ok(None) };
+        let Some(artist) = &song.artist else { return Ok(Outcome::NotFound) };
         let query = format!("recording:{} AND artist:{}", quoted(&song.title), quoted(matching::first_name(artist)));
         let hits: Vec<Hit> = self
             .search_recordings(query, fresh)?
@@ -144,10 +146,18 @@ impl MusicBrainz {
                 h
             })
             .collect();
-        let Some((i, release)) = matching::pick_recording(song, &hits) else { return Ok(None) };
-        let release = converted(&self.release(&release, fresh)?);
-        let track = release.tracks.iter().position(|t| t.recording.as_deref() == Some(hits[i].recording.as_str()));
-        Ok(track.map(|t| (release, t)))
+        let picked = matching::pick_recording(song, &hits);
+        match picked.first() {
+            None => Ok(Outcome::NotFound),
+            Some((i, first)) if first.kind != matching::COMPILATION => {
+                let release = converted(&self.release(&first.id, fresh)?);
+                Ok(match release.tracks.iter().position(|t| t.recording.as_deref() == Some(hits[*i].recording.as_str())) {
+                    Some(track) => Outcome::Matched(Box::new(release), vec![Some(track)]),
+                    None => Outcome::NotFound,
+                })
+            }
+            Some(_) => Ok(Outcome::Unsure(picked.iter().take(FETCHED).map(|(_, r)| self.release(&r.id, fresh).map(|e| converted(&e))).collect::<Result<_>>()?)),
+        }
     }
 
     /// The release `id` as MusicBrainz has it now (and kept).
