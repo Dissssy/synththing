@@ -51,6 +51,12 @@ pub enum Field {
     Imported,
     Tag,
     Starred,
+    /// Its album's songs are by various artists: it's filed under
+    /// Various Artists, unless an album artist says otherwise.
+    Compilation,
+    /// Its composer's who it's by (classical music): its artist is its
+    /// composer.
+    ComposerAsArtist,
 }
 
 /// What a field's values are, which says how they're shown, sorted and
@@ -86,8 +92,8 @@ pub struct Def {
     /// The Creator", "Simon & Garfunkel"), so those are only suggested
     /// as splits (`cleanup`).
     pub list: &'static [char],
-    /// One of the file's tags, which a song's edits (`Edits`) can say
-    /// otherwise.
+    /// A song's edits (`Edits`) can say what it is, over what the file
+    /// says (if it says).
     pub editable: bool,
 }
 
@@ -121,6 +127,8 @@ pub const FIELDS: &[Def] = &[
     def(Field::Imported, "imported", "Date added", Kind::Date, true, 96.0, true, &[], false),
     def(Field::Tag, "tag", "Tag", Kind::Tag, true, 0.0, false, &[], false),
     def(Field::Starred, "starred", "Starred", Kind::Flag, true, 0.0, false, &[], false),
+    def(Field::Compilation, "compilation", "Compilation", Kind::Flag, true, 0.0, false, &[], true),
+    def(Field::ComposerAsArtist, "composer_as_artist", "Use composer as artist", Kind::Flag, true, 0.0, false, &[], true),
 ];
 
 impl Def {
@@ -243,6 +251,7 @@ impl<'a> Facts<'a> {
                 Cow::Borrowed(_) => g,
                 Cow::Owned(named) => Cow::Owned(named),
             }),
+            Field::Artist if self.flag(Field::ComposerAsArtist) && self.text(Field::Composer).is_some() => return self.text(Field::Composer),
             _ if edit.is_some() => edit.flatten(),
             Field::Title => text(meta.map(|m| &m.title)),
             Field::Artist => text(meta.map(|m| &m.artist)),
@@ -302,6 +311,18 @@ impl<'a> Facts<'a> {
 
     pub fn starred(&self) -> bool {
         self.has_tag(STARRED)
+    }
+
+    /// A flag field's value. An edit says yes with any text but "" or "0".
+    pub fn flag(&self, field: Field) -> bool {
+        if let Some(edit) = self.edit(field) {
+            return !matches!(edit.trim(), "" | "0");
+        }
+        match field {
+            Field::Starred => self.starred(),
+            Field::Compilation => self.meta.is_some_and(|m| m.compilation),
+            _ => false,
+        }
     }
 
     /// A field's value as shown (tags and flags have none).
@@ -445,6 +466,14 @@ mod tests {
         assert_eq!(edited.number(Field::Year), Some(1999.0));
         assert_eq!(edited.items(Field::Genre), Vec::<Cow<str>>::new());
         assert_eq!(edited.unedited().text(Field::Artist).as_deref(), Some("A, B"));
+        // Flags: from the file, said otherwise, and the composer as artist.
+        let meta = Meta { compilation: true, artist: Some("Orchestra".into()), composer: Some("Bach".into()), ..Meta::default() };
+        let facts = Facts { meta: Some(&meta), ..Facts::default() };
+        assert!(facts.flag(Field::Compilation));
+        let edits: Edits = [(Field::Compilation, String::new()), (Field::ComposerAsArtist, "1".to_string())].into();
+        let edited = Facts { edits: Some(&edits), ..facts };
+        assert!(!edited.flag(Field::Compilation));
+        assert_eq!(edited.text(Field::Artist).as_deref(), Some("Bach"));
         for (tagged, named) in [("17", "Rock"), ("(17)", "Rock"), ("(17)(0)", "Rock, Blues"), ("(17)Hard Rock", "Hard Rock"), ("(RX), 31", "Remix, Trance"), ("Jazz", "Jazz"), ("(Live)", "(Live)"), ("255", "255")] {
             assert_eq!(genre_names(tagged), named, "{tagged}");
         }

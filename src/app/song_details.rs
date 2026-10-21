@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use super::{fit_width, App};
-use crate::fields::{self, Facts, Field};
+use crate::fields::{self, Facts, Field, Kind};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -140,6 +140,7 @@ impl App {
                     if edited {
                         let unedited: Vec<String> = songs.iter().map(|s| field_text(&Facts::of(s).unedited(), field)).collect();
                         let hover = match unedited.as_slice() {
+                            [one] if def.kind == Kind::Flag => format!("Back to what the file says: {}", if one.is_empty() { "no" } else { "yes" }),
                             [one] if one.is_empty() => "Back to what the file says (nothing)".to_string(),
                             [one] => format!("Back to what the file says: {one}"),
                             _ => "Back to what each file says".to_string(),
@@ -152,6 +153,17 @@ impl App {
                         }
                     }
                     let hint = if *mixed && !changes.contains_key(&field) { "Mixed" } else { "" };
+                    if def.kind == Kind::Flag {
+                        // (Its box is a dash while the songs differ.)
+                        let mut on = text == "1";
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            if ui.add(egui::Checkbox::without_text(&mut on).indeterminate(!hint.is_empty())).changed() {
+                                *text = if on { "1" } else { "" }.to_string();
+                                changes.insert(field, Change::Set(text.clone()));
+                            }
+                        });
+                        return;
+                    }
                     let response = ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(f32::INFINITY));
                     if response.changed() {
                         // (Typed into and emptied again, "Mixed" stays as it is.)
@@ -226,7 +238,11 @@ impl App {
     }
 }
 
-/// A field's text as the editor shows it: numbers as they're shown.
+/// A field's text as the editor shows it: numbers as they're shown, a
+/// flag "1" when it's set.
 fn field_text(song: &Facts, field: Field) -> String {
-    song.value(field).map(|v| v.text).unwrap_or_default()
+    match field.kind() {
+        Kind::Flag => if song.flag(field) { "1" } else { "" }.to_string(),
+        _ => song.value(field).map(|v| v.text).unwrap_or_default(),
+    }
 }

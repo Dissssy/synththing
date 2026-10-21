@@ -3,7 +3,8 @@
 //! artists in one name split ("\"Perry Porter\"& Nujabes" is Perry
 //! Porter and Nujabes), genres split ("Hip-Hop/Rap"), and one name
 //! spelled several ways written one way ("Kan R. Gao" and "Kan (Reives)
-//! Gao"). Each is made as songs' edits (`song_store::Song::edits`), so
+//! Gao"), and an album by several artists with no album artist marked
+//! a compilation. Each is made as songs' edits (`song_store::Song::edits`), so
 //! the files are never written, and one that's wrong can be dismissed
 //! (`Config::cleanup_dismissed`).
 
@@ -13,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::fields::{self, Facts, Field};
+use crate::smart::VARIOUS_ARTISTS;
 use crate::song_store::SongStore;
 
 /// The fields that hold people's names.
@@ -27,6 +29,8 @@ pub enum Kind {
     Split,
     /// One name spelled several ways: write it one way.
     Same,
+    /// An album by several artists, with no album artist: a compilation.
+    Compilation,
     /// Stray quotes, brackets or spacing.
     Tidy,
 }
@@ -36,6 +40,7 @@ impl Kind {
         match self {
             Kind::Split => "Split",
             Kind::Same => "Same name",
+            Kind::Compilation => "Compilation",
             Kind::Tidy => "Tidy",
         }
     }
@@ -48,13 +53,16 @@ pub enum What {
     Text { field: Field, text: String },
     /// One name's spellings, wherever a name field has them.
     Name { spellings: Vec<String> },
+    /// An album (as its songs spell it) to mark a compilation.
+    Album { name: String },
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Suggestion {
     pub kind: Kind,
     pub what: What,
-    /// What it'd be written as (for a list, its items written as one).
+    /// What it'd be written as (for a list, its items written as one;
+    /// a compilation's is who it'll be by, and can't be changed).
     pub to: String,
     /// Its songs, by key.
     pub keys: Vec<String>,
@@ -69,6 +77,7 @@ impl Suggestion {
                 let keys: BTreeSet<String> = spellings.iter().map(|s| fields::group_key(s, ignore)).collect();
                 format!("name:{}", keys.into_iter().collect::<Vec<_>>().join("|"))
             }
+            What::Album { name } => format!("compilation:{}", fields::group_key(name, ignore)),
         }
     }
 }
@@ -79,8 +88,18 @@ pub fn suggest(store: &SongStore, ignore: &str) -> Vec<Suggestion> {
     let mut texts: BTreeMap<(Field, String), Suggestion> = BTreeMap::new();
     // Each name's spellings (by group key), and how many songs each is on.
     let mut names: BTreeMap<String, (BTreeMap<String, usize>, BTreeSet<&str>)> = BTreeMap::new();
+    let mut albums: BTreeMap<String, Album> = BTreeMap::new();
     for (key, song) in store.known() {
         let facts = Facts::of(song);
+        if let Some(name) = facts.text(Field::Album) {
+            let album = albums.entry(fields::group_key(&name, ignore)).or_default();
+            album.artists.extend(facts.first(Field::Artist).map(|a| fields::group_key(&a, ignore)));
+            album.album_artist |= facts.text(Field::AlbumArtist).is_some();
+            if !facts.flag(Field::Compilation) {
+                album.unmarked.push(key.to_string());
+            }
+            album.spellings.push(name.into_owned());
+        }
         for field in TIDIED {
             let Some(text) = facts.text(field) else { continue };
             let items = facts.items(field);
@@ -109,8 +128,26 @@ pub fn suggest(store: &SongStore, ignore: &str) -> Vec<Suggestion> {
     }
     let mut suggestions: Vec<Suggestion> = texts.into_values().collect();
     suggestions.extend(same_names(&names));
+    suggestions.extend(albums.into_values().filter(|a| a.artists.len() > 1 && !a.album_artist && !a.unmarked.is_empty()).map(|album| Suggestion {
+        kind: Kind::Compilation,
+        what: What::Album { name: fields::best_spelling(album.spellings.iter().map(String::as_str)).unwrap_or_default().to_string() },
+        to: VARIOUS_ARTISTS.to_string(),
+        keys: album.unmarked,
+    }));
     suggestions.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| b.keys.len().cmp(&a.keys.len())));
     suggestions
+}
+
+/// What's known of an album, for whether it's a compilation.
+#[derive(Default)]
+struct Album {
+    spellings: Vec<String>,
+    /// Its songs' (first) artists, by group key.
+    artists: BTreeSet<String>,
+    /// A song of it says its album artist.
+    album_artist: bool,
+    /// Its songs not marked as on a compilation.
+    unmarked: Vec<String>,
 }
 
 /// Names that look like one name spelled several ways: as many words,
@@ -264,6 +301,9 @@ pub fn edits(store: &SongStore, chosen: &[(&Suggestion, &str)], ignore: &str) ->
                 written.get(&(key.clone(), field)).cloned().or_else(|| facts.text(field).map(Cow::into_owned))
             };
             match &suggestion.what {
+                What::Album { .. } => {
+                    written.insert((key.clone(), Field::Compilation), "1".to_string());
+                }
                 What::Text { field, text } => {
                     if now(&written, *field).as_deref() == Some(text) {
                         written.insert((key.clone(), *field), to.to_string());
@@ -335,17 +375,22 @@ mod tests {
 
     #[test]
     fn nujams_is_split() {
-        let song = Meta { title: Some("Middle-Horn Shuffle".into()), artist: Some("\"Perry Porter\"& Nujabes".into()), composer: Some("Nujabes".into()), album: Some("Tribute To Nujabes... \"NuJams\"".into()), ..Meta::default() };
-        let mut store = store("nujams", &[song]);
+        let album = Some("Tribute To Nujabes... \"NuJams\"".to_string());
+        let song = Meta { title: Some("Middle-Horn Shuffle".into()), artist: Some("\"Perry Porter\"& Nujabes".into()), composer: Some("Nujabes".into()), album: album.clone(), ..Meta::default() };
+        let other = Meta { title: Some("Another".into()), artist: Some("Substantial".into()), album, ..Meta::default() };
+        let mut store = store("nujams", &[song, other]);
         let suggestions = suggest(&store, "");
-        assert_eq!(suggestions.len(), 1, "{suggestions:?}");
+        let kinds: Vec<Kind> = suggestions.iter().map(|s| s.kind).collect();
+        assert_eq!(kinds, [Kind::Split, Kind::Compilation], "{suggestions:?}");
         let split = &suggestions[0];
-        assert_eq!((split.kind, split.to.as_str()), (Kind::Split, "Perry Porter; Nujabes"));
-        let edits = edits(&store, &[(split, &split.to)], "");
-        store.edit(edits);
-        let facts = Facts::of(store.known().next().unwrap().1);
-        assert_eq!(facts.items(Field::Artist), ["Perry Porter", "Nujabes"]);
-        assert!(suggest(&store, "").is_empty(), "nothing more");
+        assert_eq!(split.to, "Perry Porter; Nujabes");
+        let compilation = &suggestions[1];
+        assert_eq!(compilation.what, What::Album { name: "Tribute To Nujabes... \"NuJams\"".into() });
+        store.edit(edits(&store, &[(split, &split.to), (compilation, &compilation.to)], ""));
+        let facts: Vec<Facts> = store.known().map(|(_, s)| Facts::of(s)).collect();
+        assert_eq!(facts[0].items(Field::Artist), ["Perry Porter", "Nujabes"]);
+        assert!(facts.iter().all(|f| f.flag(Field::Compilation)));
+        assert!(suggest(&store, "").is_empty(), "nothing more"); 
     }
 
     #[test]

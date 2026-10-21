@@ -101,6 +101,9 @@ pub struct Meta {
     /// Bytes.
     #[serde(rename = "s")]
     pub size: u64,
+    /// Its album's a compilation (by various artists).
+    #[serde(rename = "cp", default, skip_serializing_if = "std::ops::Not::not")]
+    pub compilation: bool,
 }
 
 /// A tag of the user's own.
