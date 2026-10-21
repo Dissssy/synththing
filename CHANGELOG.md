@@ -12,8 +12,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Lengths, sizes and dates the way you'd say them, in the search and in smart playlist rules: a length as 6:00, 1:02:30, 6m, 90s or 1h2m (a bare number is now minutes, not seconds), a size in MB or as 800kb or 1.2gb, added as 12h, 30d, 2w, 6mo or 1y ago, or in a year, month or day (`added:2026-10` is all of October). Numbers, lengths, sizes and dates take >, <, >=, <= and ranges, open-ended too (`length:3m..5m`, `track:..3`, `added:2026..`), and `year:90s` or `year:1990s` is a decade. A rule's value that doesn't make sense shows in the warning color.
 - Save a search as a smart playlist (the engine button beside it): its filters become the rules, and the editor says what couldn't be one.
 - Command palette: Ctrl+Shift+P lists what the app can do with its keyboard shortcut beside it. Type to filter, Up/Down and Enter (or a click) to run one, Esc to close.
+- Change the keyboard shortcuts: Preferences > Keyboard lists every command with its keys. Click a key to change it, + to add another, right-click one to remove it, or Reset. A key bound to two commands shows in the warning color. Your keys sync with your other devices (Keyboard shortcuts, under App in what syncs), and "This device only" keeps a command's keys to the device you're on.
 
 ### Changed
+- Scripts now see the function keys the app doesn't use: F5, F9, F10 and F11 reach a script once they're rebound away from their commands. Escape always stays the app's.
 - The player buttons' hover text shows their keyboard shortcut (Play/Pause (Space), Next (N), Fullscreen (F)...). Shortcuts no longer fire while a script control is waiting for a key to bind.
 
 ## 1.3.0 (2026-10-21)
