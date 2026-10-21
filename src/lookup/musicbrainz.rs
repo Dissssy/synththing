@@ -22,7 +22,7 @@ use super::matching::{self, Album, Release, Track};
 /// How many search hits are looked at.
 const HITS: u8 = 10;
 /// How many releases' track lists are fetched at most, for one album.
-const FETCHED: usize = 3;
+const FETCHED: usize = 4;
 /// The least time between two requests.
 const PACE: Duration = Duration::from_millis(1100);
 /// How long an answer is kept before it's asked for again.
@@ -114,14 +114,19 @@ impl MusicBrainz {
     /// hits that are named like it, those most like it first. Asked for
     /// again if `fresh`, else from what's kept where it can be.
     pub fn releases(&mut self, album: &Album, fresh: bool) -> Result<Vec<Release>> {
-        let mut query = format!("release:{}", quoted(matching::search_name(&album.name)));
+        let name = format!("release:{}", quoted(&matching::search_name(&album.name)));
+        let named_like =
+            |hits: Vec<Entity>| -> Vec<Release> { hits.iter().map(converted).filter(|r| matching::similar_album(&album.name, &r.title) >= 0.85).collect() };
+        let mut hits = Vec::new();
         if let Some(artist) = &album.artist {
-            query += &format!(" AND artist:{}", quoted(artist));
+            hits = named_like(self.search(format!("{name} AND artist:{}", quoted(matching::first_name(artist))), fresh)?);
         }
-        let hits = self.search(query, fresh)?;
-        let mut hits: Vec<Release> = hits.iter().map(converted).filter(|r| matching::similar(&album.name, &r.title) >= 0.85).collect();
-        // The ones with as many tracks as there are songs or more first.
-        let songs = album.songs.len();
+        // (Credited otherwise there, or a compilation: by its name alone.)
+        if hits.is_empty() {
+            hits = named_like(self.search(name, fresh)?);
+        }
+        // The ones with as many tracks as it has songs or more first.
+        let songs = album.distinct_songs();
         hits.sort_by_key(|r| r.tracks.len() < songs);
         let mut fetched = Vec::new();
         for hit in hits.into_iter().filter(|r| !album.rejected.contains(&r.id)).take(FETCHED) {

@@ -66,7 +66,7 @@ pub fn albums(store: &SongStore, ignore: &str) -> Vec<Album> {
             continue;
         }
         let facts = Facts::of(song);
-        let Some(name) = facts.text(Field::Album) else {
+        let Some(name) = facts.text(Field::Album).filter(|n| !fields::group_key(n, ignore).is_empty()) else {
             continue;
         };
         let album_artist = facts.text(Field::AlbumArtist);
@@ -206,6 +206,33 @@ impl State {
     }
 }
 
+/// Note in the log how each release fit `album`, when none was taken:
+/// what's needed to tell why.
+fn log_candidates(album: &Album, releases: &[Release], verdict: Verdict) -> Verdict {
+    if !matches!(verdict, Verdict::Match(..)) {
+        let searched = matching::search_name(&album.name);
+        log::info!("{:?} (searched as {searched:?}, {} songs): {} releases looked at", album.name, album.songs.len(), releases.len());
+        for release in releases {
+            let fit = matching::fit(album, release);
+            let missing: Vec<&str> = album.songs.iter().zip(&fit.tracks).filter(|(_, t)| t.is_none()).map(|(s, _)| s.title.as_str()).take(5).collect();
+            log::info!(
+                "  {} {:?} by {:?} ({} tracks, {}): {}/{} songs fit, name {:.2}, score {:.2}{}",
+                release.id,
+                release.title,
+                release.artist,
+                release.tracks.len(),
+                release.date.as_deref().unwrap_or("no date"),
+                fit.tracks.iter().flatten().count(),
+                fit.tracks.len(),
+                matching::similar_album(&album.name, &release.title),
+                fit.score,
+                if missing.is_empty() { String::new() } else { format!(", missing {missing:?}") },
+            );
+        }
+    }
+    verdict
+}
+
 /// The lookup thread: an album at a time, asked for and answered.
 pub struct Worker {
     /// An album, and whether to ask MusicBrainz again (not what's kept).
@@ -223,7 +250,7 @@ impl Worker {
             let mut musicbrainz = musicbrainz::MusicBrainz::new();
             for (album, fresh) in asked {
                 let outcome = match musicbrainz.releases(&album, fresh) {
-                    Ok(releases) => match matching::decide(&album, &releases) {
+                    Ok(releases) => match log_candidates(&album, &releases, matching::decide(&album, &releases)) {
                         Verdict::Match(i, tracks) => Outcome::Matched(releases[i].clone(), tracks),
                         Verdict::Unsure(found) => Outcome::Unsure(found.into_iter().map(|i| releases[i].clone()).collect()),
                         Verdict::NotFound => Outcome::NotFound,

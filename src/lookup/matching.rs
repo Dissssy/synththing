@@ -32,6 +32,24 @@ pub struct Song {
     pub length: Option<f64>,
 }
 
+impl Album {
+    /// How many songs it has, counting one that's in twice once.
+    pub fn distinct_songs(&self) -> usize {
+        (0..self.songs.len()).filter(|&s| !(0..s).any(|o| self.songs[o].same_as(&self.songs[s]))).count()
+    }
+}
+
+impl Song {
+    /// It's `other` again: named and as long alike.
+    fn same_as(&self, other: &Song) -> bool {
+        key(&self.title) == key(&other.title)
+            && match (self.length, other.length) {
+                (Some(a), Some(b)) => (a - b).abs() <= 1.0,
+                (a, b) => a.is_none() && b.is_none(),
+            }
+    }
+}
+
 /// A release at MusicBrainz, with its tracks.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Release {
@@ -146,7 +164,8 @@ pub fn fit(album: &Album, release: &Release) -> Fit {
     for (s, song) in album.songs.iter().enumerate() {
         for (t, track) in release.tracks.iter().enumerate() {
             let title = similar(&song.title, &track.title);
-            let placed = song.track == Some(track.position) && song.disc.unwrap_or(1) == track.disc;
+            // (A song that doesn't say its disc can be on any.)
+            let placed = song.track == Some(track.position) && song.disc.is_none_or(|d| d == track.disc);
             let length = match (song.length, track.length) {
                 (Some(a), Some(b)) => Some(same_length(a, b)),
                 _ => None,
@@ -173,7 +192,13 @@ pub fn fit(album: &Album, release: &Release) -> Fit {
             taken[t] = true;
         }
     }
-    let title = similar(&album.name, &release.title);
+    // A song that's in the library twice is the same track both times.
+    for s in 0..tracks.len() {
+        if tracks[s].is_none() {
+            tracks[s] = (0..tracks.len()).filter(|&o| o != s && album.songs[o].same_as(&album.songs[s])).find_map(|o| tracks[o]);
+        }
+    }
+    let title = similar_album(&album.name, &release.title);
     let artist = if same_artist(album, release) { 1.0 } else { 0.0 };
     let mut fit = Fit { score: 0.0, tracks };
     fit.score = title * 0.3 + artist * 0.2 + fit.lined_up() * 0.5;
@@ -187,7 +212,7 @@ pub fn decide(album: &Album, releases: &[Release]) -> Verdict {
     let fits: Vec<Fit> = releases.iter().map(|r| fit(album, r)).collect();
     let good = |i: usize| {
         let r = &releases[i];
-        !album.rejected.contains(&r.id) && fits[i].complete() && similar(&album.name, &r.title) >= 0.85 && same_artist(album, r)
+        !album.rejected.contains(&r.id) && fits[i].complete() && similar_album(&album.name, &r.title) >= 0.85 && same_artist(album, r)
     };
     let mut candidates: Vec<usize> = (0..releases.len()).filter(|&i| good(i)).collect();
     if candidates.is_empty() {
@@ -206,21 +231,76 @@ pub fn decide(album: &Album, releases: &[Release]) -> Verdict {
     if rivals.is_empty() { Verdict::Match(best, fits[best].tracks.clone()) } else { Verdict::Unsure(std::iter::once(best).chain(rivals).collect()) }
 }
 
-/// An album's name to search by: without edition words in brackets at
-/// its end ("(Deluxe Edition)", "[Remastered 2011]").
-pub fn search_name(name: &str) -> &str {
-    const EDITIONS: &[&str] = &["deluxe", "edition", "remaster", "expanded", "anniversary", "bonus"];
-    let trimmed = name.trim_end();
-    if let Some(close) = trimmed.chars().last().filter(|c| matches!(c, ')' | ']'))
-        && let Some(open) = trimmed.rfind(if close == ')' { '(' } else { '[' })
-        && open > 0
-    {
-        let inside = trimmed[open..].to_lowercase();
-        if EDITIONS.iter().any(|w| inside.contains(w)) {
-            return trimmed[..open].trim_end();
+/// An album's name to search by: without its bracketed parts ("(Deluxe
+/// Edition)", "<OST>"), and what a soundtrack's called besides its game
+/// or film ("Original Soundtrack"); "<A Bird Story> OST" is "A Bird
+/// Story".
+pub fn search_name(name: &str) -> String {
+    let unbracketed = without_brackets(name);
+    let trimmed = without_extras(&unbracketed);
+    if trimmed.chars().filter(|c| c.is_alphanumeric()).count() >= 2 {
+        return trimmed;
+    }
+    let opened: String = name.chars().map(|c| if is_bracket(c) { ' ' } else { c }).collect();
+    let trimmed = without_extras(&opened);
+    if trimmed.is_empty() { name.trim().to_string() } else { trimmed }
+}
+
+fn is_bracket(c: char) -> bool {
+    matches!(c, '(' | ')' | '[' | ']' | '<' | '>' | '【' | '】' | '「' | '」' | '〈' | '〉')
+}
+
+/// `text` without its bracketed parts, its spacing tidied.
+fn without_brackets(text: &str) -> String {
+    let mut depth = 0usize;
+    let mut out = String::new();
+    for c in text.chars() {
+        match c {
+            '(' | '[' | '<' | '【' | '「' | '〈' => depth += 1,
+            ')' | ']' | '>' | '】' | '」' | '〉' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => out.push(c),
+            _ => {}
         }
     }
-    trimmed
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `name` without what follows a soundtrack's name ("- Original Game
+/// Soundtrack", "OST") or a single's ("- Single").
+fn without_extras(name: &str) -> String {
+    const EXTRAS: &[&str] = &[
+        "original game soundtrack",
+        "original soundtrack",
+        "original series soundtrack",
+        "official soundtrack",
+        "official sountrack",
+        "game soundtrack",
+        "soundtrack",
+        "ost",
+        "single",
+        "ep",
+    ];
+    let separators: &[char] = &[' ', '-', '–', '—', ':', ',', '~'];
+    let mut name = name.trim_matches(separators).to_string();
+    loop {
+        let lower = name.to_lowercase();
+        let Some(extra) = EXTRAS.iter().find(|e| lower.ends_with(*e) && !lower[..lower.len() - e.len()].ends_with(|c: char| c.is_alphanumeric())) else {
+            return name;
+        };
+        name = name[..name.len() - extra.len()].trim_end_matches(separators).to_string();
+    }
+}
+
+/// How alike two albums' names are: as they are, or past their bracketed
+/// parts and what a soundtrack's called besides ("Finding Paradise <OST>"
+/// is "Finding Paradise (Original Soundtrack)").
+pub fn similar_album(a: &str, b: &str) -> f64 {
+    similar(a, b).max(similar(&search_name(a), &search_name(b)))
+}
+
+/// The first of several names ("Kazumi Totaka; Manaka Kataoka"), to search by.
+pub fn first_name(names: &str) -> &str {
+    names.split([';', ',', '&', '/']).map(str::trim).find(|n| !n.is_empty()).unwrap_or(names)
 }
 
 #[cfg(test)]
@@ -260,7 +340,16 @@ mod tests {
         assert!(similar("Luv(sic.) Part 3", "Luv (sic) pt. 3") > 0.7);
         assert!(similar("Feather", "Reflection Eternal") < 0.5);
         assert_eq!(search_name("Modal Soul (Deluxe Edition)"), "Modal Soul");
-        assert_eq!(search_name("Secrets of Grindea OST [Story Mode]"), "Secrets of Grindea OST [Story Mode]");
+        assert_eq!(search_name("Secrets of Grindea Original Soundtrack [Story Mode]"), "Secrets of Grindea");
+        assert_eq!(search_name("<A Bird Story> OST"), "A Bird Story");
+        assert_eq!(search_name("Finding Paradise <OST>"), "Finding Paradise");
+        assert_eq!(search_name("Paradise Lost - Official Sountrack"), "Paradise Lost");
+        assert_eq!(search_name("No Wonder I - Single"), "No Wonder I");
+        assert_eq!(search_name("Hydeout Productions (First Collection)"), "Hydeout Productions");
+        assert_eq!(search_name("Ghost"), "Ghost", "not an \"ost\" at its end");
+        assert_eq!(search_name("II"), "II");
+        assert!(similar_album("To the Moon <OST>", "To the Moon (Original Soundtrack)") > 0.99);
+        assert_eq!(first_name("Kazumi Totaka; Manaka Kataoka"), "Kazumi Totaka");
     }
 
     #[test]
@@ -289,6 +378,16 @@ mod tests {
         assert_eq!(decide(&ours, &[first.clone(), other]), Verdict::Unsure(vec![0, 1]));
         let rejected = Album { rejected: vec!["r1".into()], ..ours.clone() };
         assert_eq!(decide(&rejected, &[first]), Verdict::NotFound);
+    }
+
+    #[test]
+    fn songs_without_discs_or_in_twice_still_fit() {
+        let mut remix = song("Rhayader (NEW remixed 2023)", 2, 190.0);
+        remix.track = Some(2);
+        let ours = album(vec![song("Rhayader", 2, 182.0), song("Rhayader", 2, 182.0), remix]);
+        let mut release = release("r1", "g1", "Modal Soul", "Nujabes", &[("The Great Marsh", 124.0), ("Rhayader", 182.5)]);
+        release.tracks.push(Track { disc: 2, position: 2, title: "Rhayader (2023 remix)".into(), length: Some(190.5), recording: None });
+        assert_eq!(decide(&ours, &[release]), Verdict::Match(0, vec![Some(1), Some(1), Some(2)]));
     }
 
     #[test]
