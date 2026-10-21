@@ -2804,14 +2804,16 @@ impl App {
             ui,
             &mut |query| {
                 let search = crate::search::parse(query, store.tags());
-                let matches = search.rules.matcher(crate::settings_sync::now());
-                let songs = store
-                    .songs()
-                    .filter(|(path, song)| song_store::has_extension(path, extensions) && matches(song))
-                    .map(|(path, _)| path)
-                    .filter(|p| only.as_ref().is_none_or(|only| song_store::key_in(store.dir(), p).is_some_and(|k| only.contains(k))))
-                    .collect();
-                (songs, search.text)
+                let songs = {
+                    let matches = search.rules.matcher(crate::settings_sync::now());
+                    store
+                        .songs()
+                        .filter(|(path, song)| song_store::has_extension(path, extensions) && matches(song))
+                        .map(|(path, _)| path)
+                        .filter(|p| only.as_ref().is_none_or(|only| song_store::key_in(store.dir(), p).is_some_and(|k| only.contains(k))))
+                        .collect()
+                };
+                (songs, search)
             },
             revision,
             &mut view,

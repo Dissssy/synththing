@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::fields::{self, Facts, Field, Kind};
+use crate::matching;
 use crate::song_store::{Song, SongStore, Tag};
 
 /// A smart playlist's (or ruleset's) definition.
@@ -88,10 +89,17 @@ fn parse(field: Field, text: &str) -> Option<f64> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Op {
+    /// The same past case, spacing and punctuation (`matching::close`).
     Is,
     IsNot,
     Contains,
     NotContains,
+    /// Fuzzily (`matching::fuzzy`).
+    Like,
+    NotLike,
+    /// Case and all.
+    Exactly,
+    NotExactly,
     StartsWith,
     EndsWith,
     IsEmpty,
@@ -115,7 +123,7 @@ pub enum Op {
 pub fn ops(kind: Kind) -> &'static [Op] {
     use Op::*;
     match kind {
-        Kind::Text => &[Contains, NotContains, Is, IsNot, StartsWith, EndsWith, IsEmpty, IsNotEmpty],
+        Kind::Text => &[Contains, NotContains, Is, IsNot, Like, NotLike, Exactly, NotExactly, StartsWith, EndsWith, IsEmpty, IsNotEmpty],
         Kind::Number => &[Is, IsNot, Greater, Less, InRange, IsEmpty, IsNotEmpty],
         Kind::Date => &[InLast, NotInLast, Before, After],
         Kind::Tag => &[Has, HasNot],
@@ -130,6 +138,10 @@ impl Op {
             Self::IsNot => "is not",
             Self::Contains => "contains",
             Self::NotContains => "does not contain",
+            Self::Like => "is like (fuzzy)",
+            Self::NotLike => "is not like (fuzzy)",
+            Self::Exactly => "is exactly (case too)",
+            Self::NotExactly => "is not exactly (case too)",
             Self::StartsWith => "starts with",
             Self::EndsWith => "ends with",
             Self::IsEmpty => "is empty",
@@ -361,17 +373,23 @@ impl<'a> Test<'a> {
             Kind::Text => {
                 // (Each of a list field's items: a song's genre "is" each
                 // of its genres.)
-                let have: Vec<String> = match field {
-                    Field::Title => text(&song, *field).into_iter().map(|t| t.to_lowercase()).collect(),
-                    _ => song.items(*field).iter().map(|t| t.to_lowercase()).collect(),
+                let raw: Vec<Cow<str>> = match field {
+                    Field::Title => text(&song, *field).into_iter().collect(),
+                    _ => song.items(*field),
                 };
+                let have: Vec<String> = raw.iter().map(|t| t.to_lowercase()).collect();
                 let want = self.text.as_str();
                 let any = |test: &dyn Fn(&str) -> bool| have.iter().any(|h| test(h));
+                let any_raw = |test: &dyn Fn(&str) -> bool| raw.iter().any(|h| test(h));
                 match op {
                     Op::IsEmpty => have.is_empty(),
                     Op::IsNotEmpty => !have.is_empty(),
-                    Op::Is => any(&|h| h == want),
-                    Op::IsNot => !any(&|h| h == want),
+                    Op::Is => any(&|h| matching::close(h, want)),
+                    Op::IsNot => !any(&|h| matching::close(h, want)),
+                    Op::Like => any(&|h| matching::fuzzy(h, want).is_some()),
+                    Op::NotLike => !any(&|h| matching::fuzzy(h, want).is_some()),
+                    Op::Exactly => any_raw(&|h| h == value.trim()),
+                    Op::NotExactly => !any_raw(&|h| h == value.trim()),
                     Op::Contains => any(&|h| h.contains(want)),
                     Op::NotContains => !any(&|h| h.contains(want)),
                     Op::StartsWith => any(&|h| h.starts_with(want)),

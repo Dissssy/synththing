@@ -50,6 +50,7 @@ mod lua_docs;
 mod lua_highlight;
 mod lua_visualizer;
 mod marquee;
+mod matching;
 mod midi_notes;
 mod offline;
 mod pixel_font;
