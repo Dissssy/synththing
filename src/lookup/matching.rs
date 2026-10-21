@@ -1,8 +1,9 @@
 //! Telling whether a release at MusicBrainz is one of the library's
-//! albums: its title and artist alike, and every one of the album's songs
-//! lined up with one of its tracks (by disc and track number, title and
-//! length). Only a release that fits every song, clearly better than any
-//! other edition-of-another-album that fits, is taken without asking.
+//! albums: its title and artist alike, and most of the album's songs
+//! (`MOSTLY`) lined up with its tracks (by disc and track number, title
+//! and length); the rest can be another edition's. Only a release that
+//! fits clearly better than any edition of another album that fits is
+//! taken without asking.
 
 use strsim::normalized_levenshtein;
 
@@ -142,19 +143,50 @@ fn same_length(a: f64, b: f64) -> bool {
     (a - b).abs() <= 3.0_f64.max(b * 0.02)
 }
 
-/// Whether `release`'s credit is `album`'s artist: alike, or one of its
-/// names; any credit does for a compilation.
+/// Whether `release`'s credit is `album`'s artist, or one of its songs'
+/// (an album artist can be a label: "Level-5"): alike, or one of the
+/// names in it; any credit does for a compilation.
 fn same_artist(album: &Album, release: &Release) -> bool {
     let Some(artist) = &album.artist else {
         return true;
     };
-    similar(artist, &release.artist) >= 0.8
-        || release
-            .artist
-            .split([',', '&', ';'])
-            .chain(artist.split([',', '&', ';']))
-            .any(|name| similar(name, artist) >= 0.9 && similar(name, &release.artist) >= 0.4)
-        || key(&release.artist) == "variousartists"
+    let credited: Vec<&str> = release.artist.split([',', '&', ';']).map(str::trim).filter(|n| !n.is_empty()).collect();
+    let ours = std::iter::once(artist.as_str()).chain(album.songs.iter().filter_map(|s| s.artist.as_deref()));
+    key(&release.artist) == "variousartists"
+        || ours
+            .flat_map(|a| std::iter::once(a).chain(a.split([',', '&', ';'])))
+            .any(|name| similar(name, &release.artist) >= 0.8 || credited.iter().any(|c| similar(name.trim(), c) >= 0.9))
+}
+
+/// A song's title as a track would have it: without a file's extension
+/// ("Tempest.mp3"), a leading track number ("27. Luke") or the album's
+/// name before it ("X-Morph Defense - 12 Dark Hour").
+fn track_title<'t>(title: &'t str, album: &str) -> &'t str {
+    let mut title = title.trim();
+    for ext in [".mp3", ".flac", ".ogg", ".wav", ".m4a", ".opus"] {
+        if title.len() > ext.len() && title.is_char_boundary(title.len() - ext.len()) && title[title.len() - ext.len()..].eq_ignore_ascii_case(ext) {
+            title = &title[..title.len() - ext.len()];
+        }
+    }
+    let album = search_name(album);
+    let mut prefixed = false;
+    if let Some(rest) = title.get(..album.len()).filter(|start| start.eq_ignore_ascii_case(&album)).map(|_| &title[album.len()..])
+        && rest.starts_with([' ', '-', ':', '–'])
+    {
+        title = rest.trim_start_matches([' ', '-', ':', '–']);
+        prefixed = true;
+    }
+    // ("12 Dark Hour" after the album's name; "4 PM" by itself is a title.)
+    let digits = title.len() - title.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if (1..=3).contains(&digits) {
+        let rest = &title[digits..];
+        let marked = rest.trim_start().starts_with(['.', '-', '_', ')']);
+        let unnumbered = rest.trim_start_matches(['.', ' ', '-', '_', ')']);
+        if (marked || (prefixed && rest.starts_with(' '))) && !unnumbered.is_empty() {
+            title = unnumbered;
+        }
+    }
+    title
 }
 
 /// How well `release` fits `album`: its songs lined up with its tracks,
@@ -163,7 +195,7 @@ pub fn fit(album: &Album, release: &Release) -> Fit {
     let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
     for (s, song) in album.songs.iter().enumerate() {
         for (t, track) in release.tracks.iter().enumerate() {
-            let title = similar(&song.title, &track.title);
+            let title = similar(&song.title, &track.title).max(similar(track_title(&song.title, &album.name), &track.title));
             // (A song that doesn't say its disc can be on any.)
             let placed = song.track == Some(track.position) && song.disc.is_none_or(|d| d == track.disc);
             let length = match (song.length, track.length) {
@@ -205,14 +237,20 @@ pub fn fit(album: &Album, release: &Release) -> Fit {
     fit
 }
 
+/// How many of an album's songs (at least) must be on a release for it to
+/// be the album.
+const MOSTLY: f64 = 0.75;
+
 /// Which of `releases` is `album`, if one surely is. Editions of one
 /// album (a release group) that fit alike are one answer: the official
 /// one with a cover, then the earliest.
 pub fn decide(album: &Album, releases: &[Release]) -> Verdict {
     let fits: Vec<Fit> = releases.iter().map(|r| fit(album, r)).collect();
+    // Most of its songs on it: the rest can be from another edition
+    // (bonus tracks, a single version, a live one).
     let good = |i: usize| {
         let r = &releases[i];
-        !album.rejected.contains(&r.id) && fits[i].complete() && similar_album(&album.name, &r.title) >= 0.85 && same_artist(album, r)
+        !album.rejected.contains(&r.id) && fits[i].lined_up() >= MOSTLY && similar_album(&album.name, &r.title) >= 0.85 && same_artist(album, r)
     };
     let mut candidates: Vec<usize> = (0..releases.len()).filter(|&i| good(i)).collect();
     if candidates.is_empty() {
@@ -350,6 +388,12 @@ mod tests {
         assert_eq!(search_name("II"), "II");
         assert!(similar_album("To the Moon <OST>", "To the Moon (Original Soundtrack)") > 0.99);
         assert_eq!(first_name("Kazumi Totaka; Manaka Kataoka"), "Kazumi Totaka");
+        assert_eq!(track_title("27. Luke", "Grindea"), "Luke");
+        assert_eq!(track_title("29. Tempest.mp3", "A Bird Story"), "Tempest");
+        assert_eq!(track_title("X-Morph Defense - 12 Dark Hour", "X-Morph: Defense OST"), "X-Morph Defense - 12 Dark Hour", "punctuated otherwise");
+        assert_eq!(track_title("X-Morph Defense - 12 Dark Hour", "X-Morph Defense"), "Dark Hour");
+        assert_eq!(track_title("1999", "Prince"), "1999", "a title that's a number");
+        assert_eq!(track_title("4 PM", "Animal Crossing"), "4 PM");
     }
 
     #[test]
@@ -388,6 +432,20 @@ mod tests {
         let mut release = release("r1", "g1", "Modal Soul", "Nujabes", &[("The Great Marsh", 124.0), ("Rhayader", 182.5)]);
         release.tracks.push(Track { disc: 2, position: 2, title: "Rhayader (2023 remix)".into(), length: Some(190.5), recording: None });
         assert_eq!(decide(&ours, &[release]), Verdict::Match(0, vec![Some(1), Some(1), Some(2)]));
+    }
+
+    #[test]
+    fn most_songs_on_it_and_a_song_artist_credited_do() {
+        let mut ours = album((1..=4).map(|n| song(&format!("Song {n}"), n, 100.0 + f64::from(n) * 20.0)).collect());
+        ours.artist = Some("Level-5".into());
+        for s in &mut ours.songs {
+            s.artist = Some("Tomohito Nishiura".into());
+        }
+        ours.songs.push(song("Bonus (live)", 9, 300.0));
+        let tracks: Vec<(String, f64)> = (1..=4).map(|n| (format!("Song {n}"), 100.0 + f64::from(n) * 20.0)).collect();
+        let tracks: Vec<(&str, f64)> = tracks.iter().map(|(t, l)| (t.as_str(), *l)).collect();
+        let releases = [release("r1", "g1", "Modal Soul", "Tomohito Nishiura", &tracks)];
+        assert_eq!(decide(&ours, &releases), Verdict::Match(0, vec![Some(0), Some(1), Some(2), Some(3), None]));
     }
 
     #[test]

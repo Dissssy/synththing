@@ -125,6 +125,15 @@ impl MusicBrainz {
         if hits.is_empty() {
             hits = named_like(self.search(name, fresh)?);
         }
+        // Named a little otherwise ("Music Records - Masta" for "Music
+        // Record: Masta"): by its words.
+        if hits.is_empty() {
+            let words: Vec<String> =
+                matching::search_name(&album.name).split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect();
+            if words.len() > 1 {
+                hits = named_like(self.search(format!("release:({})", words.join(" ")), fresh)?);
+            }
+        }
         // The ones with as many tracks as it has songs or more first.
         let songs = album.distinct_songs();
         hits.sort_by_key(|r| r.tracks.len() < songs);
