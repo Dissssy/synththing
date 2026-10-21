@@ -164,10 +164,7 @@ fn row_height(ui: &egui::Ui) -> f32 {
     if select_list::touch(ui.ctx()) { 44.0 } else { ui.spacing().interact_size.y }
 }
 
-/// The icon in the corner of a smart playlist's tile.
-const SMART_BADGE: &str = "engine";
-
-/// A smart playlist's mark on its tile at `rect`: the engine, in the
+/// A smart playlist's mark on its tile at `rect`: its icon, in the
 /// theme's accent, on a dimmed notch in the bottom right corner (its inner
 /// corner rounded).
 fn smart_badge(ui: &egui::Ui, rect: egui::Rect) {
@@ -178,7 +175,7 @@ fn smart_badge(ui: &egui::Ui, rect: egui::Rect) {
     painter.rect_filled(notch, corners, egui::Color32::from_black_alpha(150));
     let font = egui::FontId::new(size * 0.62, egui::FontFamily::Name(super::fonts::PHOSPHOR_FILL.into()));
     let color = ui.visuals().selection.stroke.color.gamma_multiply(0.85);
-    painter.text(notch.center(), egui::Align2::CENTER_CENTER, super::icon(SMART_BADGE), font, color);
+    painter.text(notch.center(), egui::Align2::CENTER_CENTER, super::icon(super::smart::SMART_ICON), font, color);
 }
 
 /// Draw only the rows of `heights` in sight, in a scroll area filling

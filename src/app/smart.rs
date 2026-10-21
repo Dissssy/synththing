@@ -21,7 +21,7 @@ use crate::song_store::Tag;
 const EDIT_RULES_ON_TOUCH: bool = false;
 
 /// The icon smart playlists have.
-pub(super) const SMART_ICON: &str = "sparkle";
+pub(super) const SMART_ICON: &str = "engine";
 
 /// Whether rules can be edited here (not on a touch screen, for now).
 pub(super) fn rules_editable(ctx: &egui::Context) -> bool {
