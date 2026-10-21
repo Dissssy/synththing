@@ -77,6 +77,8 @@ fn set_tag(meta: &mut Meta, key: &str, value: &str) {
         "discnumber" | "disc" => number(&mut meta.disc),
         "date" | "year" | "releasedate" | "originaldate" => number(&mut meta.year),
         // (iTunes writes "1"; some taggers "true".)
+        "contentgroup" | "grouping" | "itunesgrouping" => text(&mut meta.grouping),
+        "comment" | "comments" => text(&mut meta.comment),
         "compilation" | "itunescompilation" => meta.compilation |= value == "1" || value.eq_ignore_ascii_case("true"),
         _ => {}
     }
@@ -331,6 +333,7 @@ pub fn read(path: &Path) -> Result<SongInfo, String> {
         .is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"));
     let mut info = if is_midi { read_midi(path) } else { read_audio(path) }?;
     info.meta.size = std::fs::metadata(path).map_or(0, |m| m.len());
+    info.meta.version = crate::song_store::META_VERSION;
     Ok(info)
 }
 
@@ -459,6 +462,7 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
             // Known to the container, but there's no decoder to name it (ffmpeg plays it).
             details.push(("Codec".into(), "Opus".into()));
         }
+        meta.sample_rate = params.sample_rate;
         if let Some(rate) = params.sample_rate {
             details.push(("Sample rate".into(), format!("{rate} Hz")));
         }
@@ -537,6 +541,7 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
     let rest: Vec<&str> = parts.collect();
     let rate_at = rest.iter().position(|p| p.ends_with(" Hz"));
     if let Some(rate) = rate_at.map(|i| rest[i]) {
+        meta.sample_rate = rate.trim_end_matches(" Hz").parse().ok();
         details.push(("Sample rate".into(), rate.to_string()));
     }
     if let Some(layout) = rate_at.and_then(|i| rest.get(i + 1)) {
@@ -654,6 +659,7 @@ At least one output file must be specified
 ";
         let info = parse_ffmpeg_info(log).unwrap();
         assert_eq!(info.meta.length, Some(90.5));
+        assert_eq!(info.meta.sample_rate, Some(44100));
         let details: Vec<(&str, &str)> = info.details.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         assert_eq!(
             details,

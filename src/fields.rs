@@ -37,6 +37,9 @@ pub enum Field {
     Track,
     Disc,
     Year,
+    /// What it's grouped under (a work, a movement).
+    Grouping,
+    Comment,
     /// Seconds.
     Length,
     Bpm,
@@ -47,6 +50,10 @@ pub enum Field {
     FileExtension,
     /// MB.
     Size,
+    /// kbps, on average: its size over its length (not MIDI's).
+    BitRate,
+    /// Hz.
+    SampleRate,
     /// When it came into the library (Unix seconds).
     Imported,
     Tag,
@@ -144,12 +151,16 @@ pub const FIELDS: &[Def] = &[
     def(Field::Track, "track", "Track", Kind::Number, true, 48.0, false, &[], true),
     def(Field::Disc, "disc", "Disc", Kind::Number, true, 40.0, true, &[], true),
     def(Field::Year, "year", "Year", Kind::Number, true, 52.0, true, &[], true),
+    def(Field::Grouping, "grouping", "Grouping", Kind::Text, true, 120.0, true, &[], true),
+    def(Field::Comment, "comment", "Comment", Kind::Text, true, 160.0, false, &[], true),
     def(Field::Length, "length", "Length", Kind::Number, true, 60.0, false, &[], false),
     def(Field::Bpm, "bpm", "BPM", Kind::Number, false, 52.0, false, &[], false),
     def(Field::Notes, "notes", "Notes", Kind::Number, false, 72.0, false, &[], false),
     def(Field::FileName, "file_name", "File name", Kind::Text, true, 160.0, false, &[], false),
     def(Field::FileExtension, "file_extension", "Type", Kind::Text, true, 52.0, true, &[], false),
     def(Field::Size, "size", "Size (MB)", Kind::Number, true, 72.0, false, &[], false),
+    def(Field::BitRate, "bit_rate", "Bit rate (kbps)", Kind::Number, true, 64.0, false, &[], false),
+    def(Field::SampleRate, "sample_rate", "Sample rate", Kind::Number, true, 80.0, true, &[], false),
     def(Field::Imported, "imported", "Date added", Kind::Date, true, 96.0, true, &[], false),
     def(Field::Tag, "tag", "Tag", Kind::Tag, true, 0.0, false, &[], false),
     def(Field::Starred, "starred", "Starred", Kind::Flag, true, 0.0, false, &[], false),
@@ -322,6 +333,8 @@ impl<'a> Facts<'a> {
             Field::SortArtist => text(meta.map(|m| &m.sort_artist)),
             Field::SortAlbumArtist => text(meta.map(|m| &m.sort_album_artist)),
             Field::SortComposer => text(meta.map(|m| &m.sort_composer)),
+            Field::Grouping => text(meta.map(|m| &m.grouping)),
+            Field::Comment => text(meta.map(|m| &m.comment)),
             Field::FileName => Some(Cow::Borrowed(Path::new(self.file_name).file_stem().and_then(|s| s.to_str()).unwrap_or(self.file_name))),
             Field::FileExtension => Path::new(self.file_name).extension().map(|e| Cow::Owned(e.to_string_lossy().to_lowercase())),
             _ => None,
@@ -351,6 +364,8 @@ impl<'a> Facts<'a> {
             Field::Bpm => self.info?.bpm,
             Field::Notes => self.info?.notes.map(|n| n as f64),
             Field::Size => meta.filter(|m| m.size > 0).map(|m| m.size as f64 / 1e6),
+            Field::BitRate if !self.is_midi() => meta.filter(|m| m.size > 0).and_then(|m| Some(m.size as f64 * 8.0 / m.length.filter(|&l| l > 0.0)? / 1000.0)),
+            Field::SampleRate => meta?.sample_rate.map(f64::from),
             Field::Imported => self.imported.map(|secs| secs as f64),
             _ => None,
         }
@@ -371,6 +386,11 @@ impl<'a> Facts<'a> {
     /// its text.
     pub fn first(&self, field: Field) -> Option<Cow<'a, str>> {
         self.items(field).into_iter().next()
+    }
+
+    /// Whether it's a MIDI file.
+    fn is_midi(&self) -> bool {
+        Path::new(self.file_name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
     }
 
     pub fn has_tag(&self, id: &str) -> bool {
@@ -409,6 +429,8 @@ impl<'a> Facts<'a> {
                     Field::Bpm => format!("{n:.1}"),
                     Field::Notes => thousands(n as usize),
                     Field::Size => format!("{n:.1}"),
+                    Field::BitRate => format!("{n:.0}"),
+                    Field::SampleRate => format!("{} kHz", n / 1000.0),
                     Field::Imported => date(n as i64),
                     _ => format!("{n}"),
                 }
@@ -554,6 +576,9 @@ mod tests {
         assert_eq!(facts.value(Field::Track), Some(Value { text: "3".into(), number: Some(3.0), sort: None }));
         assert_eq!(facts.value(Field::Length).map(|v| v.text).as_deref(), Some("1:23"));
         assert_eq!(facts.value(Field::Size).map(|v| v.text).as_deref(), Some("4.2"));
+        assert_eq!(facts.value(Field::BitRate).map(|v| v.text).as_deref(), Some("405"), "its size over its length");
+        let midi = Facts { file_name: "Song.mid", ..facts };
+        assert_eq!(midi.value(Field::BitRate), None, "not MIDI's");
         assert_eq!(facts.value(Field::Imported).map(|v| v.text).as_deref(), Some("1970-01-02"));
         assert_eq!(facts.value(Field::Bpm), None, "only a read here knows");
         assert!(facts.starred());
