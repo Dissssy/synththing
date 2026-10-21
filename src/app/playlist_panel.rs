@@ -64,6 +64,7 @@ impl App {
             // The list changed: what comes next may have too.
             self.plan_listed();
         }
+        self.song_options_tick(view);
         if self.has_next() && !self.recording.holds_advance() {
             if !view.finished {
                 self.advance_armed = true;
@@ -122,7 +123,9 @@ impl App {
     fn pick_next(&mut self, np: &NowPlaying) -> Option<usize> {
         let entries = self.playlists.lists.get(np.list).map_or(&[][..], |l| &l.playlist.entries[..]);
         let only_starred = self.config.only_starred;
-        let playable: Vec<bool> = entries.iter().map(|e| !only_starred || self.songs.is_starred(&e.path)).collect();
+        // (Shuffling passes over the songs that say to.)
+        let skips = |path: &std::path::Path| self.shuffle && self.songs.get(path).is_some_and(|s| crate::fields::Facts::of(s).flag(crate::fields::Field::SkipShuffle));
+        let playable: Vec<bool> = entries.iter().map(|e| (!only_starred || self.songs.is_starred(&e.path)) && !skips(&e.path)).collect();
         let random = self.rng.next();
         playlist::next_entry(&playable, np.entry, self.loop_mode, self.shuffle, &np.history, random)
     }

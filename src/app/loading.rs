@@ -211,6 +211,8 @@ impl App {
         let script_running = self.dedicated.is_some() || self.is_open(crate::layout::Section::Visualizer);
         let paused =
             script_running && (self.script.options().start_paused || self.recording.loads_paused());
+        // (Counted before it's sent: the song's playing once it's loaded.)
+        let loads = self.shared.lock().map(|s| s.view.loads).unwrap_or_default() + 1;
         match song {
             Asset::Midi(midi) => {
                 self.send(AudioCommand::LoadMidi(midi.file, name.clone(), paused));
@@ -235,7 +237,10 @@ impl App {
         }
         let group = self.listed.as_ref().filter(|p| p.at.path == path).and_then(|p| p.at.group.clone());
         self.song_list.set_active(Some((path.clone(), group)));
+        self.remember_position();
+        self.song_loads = loads;
         self.current_song = Some(path);
+        self.song_options_loaded();
         self.advance_armed = false;
         self.skips_in_a_row = 0;
         self.recording_song_loaded();

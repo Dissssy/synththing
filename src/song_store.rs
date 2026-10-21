@@ -63,6 +63,10 @@ pub struct Song {
     /// What the user says of it over that (`fields::Edits`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub edits: Edits,
+    /// Where it was left (seconds), for a song that remembers it
+    /// (`Field::RememberPosition`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<f64>,
 }
 
 impl Song {
@@ -378,6 +382,17 @@ impl SongStore {
             self.save();
         }
         before
+    }
+
+    /// Note where the song at `key` was left (`None`: from its start);
+    /// saved if it changed.
+    pub fn set_position(&mut self, key: &str, position: Option<f64>) {
+        if let Some(song) = self.songs.get_mut(key)
+            && song.position != position
+        {
+            song.position = position;
+            self.save();
+        }
     }
 
     /// A number that changes whenever anything in the store does, so

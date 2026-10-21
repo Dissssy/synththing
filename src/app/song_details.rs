@@ -12,13 +12,15 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use super::{fit_width, App};
-use crate::fields::{self, Facts, Field, Kind};
+use crate::fields::{self, Facts, Field, Kind, Section};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Details,
     /// What the names sort as (`Field::sorted_as`).
     Sorting,
+    /// How it plays.
+    Options,
     File,
 }
 
@@ -85,7 +87,7 @@ impl App {
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                for (tab, label) in [(Tab::Details, "Details"), (Tab::Sorting, "Sorting")] {
+                for (tab, label) in [(Tab::Details, "Details"), (Tab::Sorting, "Sorting"), (Tab::Options, "Options")] {
                     ui.add_enabled_ui(!details.keys.is_empty(), |ui| ui.selectable_value(&mut details.tab, tab, label))
                         .inner
                         .on_disabled_hover_text("Only songs in your library can be edited");
@@ -96,10 +98,14 @@ impl App {
             });
             ui.separator();
             match details.tab {
-                Tab::Details => self.details_tab_ui(ui, &mut details, false),
+                Tab::Details => self.details_tab_ui(ui, &mut details, Section::Details),
                 Tab::Sorting => {
                     ui.weak("What each name sorts as, if not itself: \"Beatles\" for \"The Beatles\". Empty sorts it as it is (past a leading The, A or An, as Preferences > Songs says).");
-                    self.details_tab_ui(ui, &mut details, true);
+                    self.details_tab_ui(ui, &mut details, Section::Sorting);
+                }
+                Tab::Options => {
+                    ui.weak("How it plays: times as 1:23, the volume from -100 to 100%. Remember position starts it again where you left it.");
+                    self.details_tab_ui(ui, &mut details, Section::Options);
                 }
                 Tab::File => self.file_tab_ui(ui, &details.paths[0]),
             }
@@ -120,11 +126,10 @@ impl App {
         }
     }
 
-    /// The editable fields (those saying what names sort as, if
-    /// `sorting`, else the rest), each with a button back to what the file
-    /// says when an edit says otherwise.
-    fn details_tab_ui(&self, ui: &mut egui::Ui, details: &mut SongDetails, sorting: bool) {
-        let shown: Vec<&fields::Def> = fields::editable().filter(|d| d.field.is_sort_as() == sorting).collect();
+    /// The editable fields Song info shows in `section`, each with a
+    /// button back to what the file says when an edit says otherwise.
+    fn details_tab_ui(&self, ui: &mut egui::Ui, details: &mut SongDetails, section: Section) {
+        let shown: Vec<&fields::Def> = fields::editable().filter(|d| d.field.section() == section).collect();
         let SongDetails { keys, texts, changes, .. } = details;
         let songs: Vec<_> = keys.iter().filter_map(|k| self.songs.get_by_key(k)).collect();
         if keys.len() > 1 {
@@ -236,6 +241,8 @@ impl App {
         let songs = before.iter().map(|(key, ..)| key).collect::<std::collections::BTreeSet<_>>().len();
         self.last_edit = Some(before);
         self.songs_changed();
+        // (The playing song's volume adjust may have changed.)
+        self.send_volume();
         self.status = format!("Edited {songs} song{}.", if songs == 1 { "" } else { "s" });
     }
 
@@ -244,6 +251,7 @@ impl App {
         let Some(before) = self.last_edit.take() else { return };
         self.songs.edit(before);
         self.songs_changed();
+        self.send_volume();
         self.status = "Undid the last edit.".to_string();
     }
 }
