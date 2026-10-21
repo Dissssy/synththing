@@ -65,6 +65,23 @@ pub struct Release {
     /// The Cover Art Archive has its front cover.
     pub front: bool,
     pub tracks: Vec<Track>,
+    /// Who it's credited to, each by name.
+    pub credits: Vec<Credit>,
+    /// When the first of its group came out: "1975", or a whole date.
+    pub first_released: Option<String>,
+    /// Its genres, those voted for most first.
+    pub genres: Vec<String>,
+    /// It's a compilation (or by Various Artists).
+    pub compilation: bool,
+    /// How many discs it's on.
+    pub discs: u32,
+}
+
+/// An artist credited, and what they sort as.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Credit {
+    pub name: String,
+    pub sort: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -75,6 +92,8 @@ pub struct Track {
     /// Seconds.
     pub length: Option<f64>,
     pub recording: Option<String>,
+    /// Who it's credited to, if not its release's credits.
+    pub credits: Vec<Credit>,
 }
 
 /// How well a release fits an album.
@@ -370,7 +389,14 @@ mod tests {
             tracks: tracks
                 .iter()
                 .enumerate()
-                .map(|(i, (t, l))| Track { disc: 1, position: i as u32 + 1, title: t.to_string(), length: Some(*l), recording: Some(format!("rec-{t}")) })
+                .map(|(i, (t, l))| Track {
+                    disc: 1,
+                    position: i as u32 + 1,
+                    title: t.to_string(),
+                    length: Some(*l),
+                    recording: Some(format!("rec-{t}")),
+                    ..Track::default()
+                })
                 .collect(),
             ..Release::default()
         }
@@ -441,7 +467,7 @@ mod tests {
         remix.track = Some(2);
         let ours = album(vec![song("Rhayader", 2, 182.0), song("Rhayader", 2, 182.0), remix]);
         let mut release = release("r1", "g1", "Modal Soul", "Nujabes", &[("The Great Marsh", 124.0), ("Rhayader", 182.5)]);
-        release.tracks.push(Track { disc: 2, position: 2, title: "Rhayader (2023 remix)".into(), length: Some(190.5), recording: None });
+        release.tracks.push(Track { disc: 2, position: 2, title: "Rhayader (2023 remix)".into(), length: Some(190.5), recording: None, ..Track::default() });
         assert_eq!(decide(&ours, &[release]), Verdict::Match(0, vec![Some(1), Some(1), Some(2)]));
     }
 

@@ -45,6 +45,7 @@ impl App {
         let revision = self.cleanup_revision();
         if cleanup.made_from != Some(revision) {
             cleanup.suggestions = cleanup::suggest(&self.songs, &self.config.group_ignore);
+            cleanup.suggestions.extend(self.musicbrainz_suggestions());
             cleanup.unsure = self.unsure_albums();
             cleanup.made_from = Some(revision);
         }
@@ -97,11 +98,15 @@ impl App {
                             if ui.add(icon_button("x")).on_hover_text("Dismiss: leave it as it is").clicked() {
                                 dismiss.push(id.clone());
                             }
-                            let fixed = matches!(suggestion.kind, Kind::Compilation | Kind::Junk) || matches!(suggestion.what, What::Fields { .. });
-                            if ui.add_enabled(fixed || !to.trim().is_empty(), icon_button("check")).on_hover_text("Apply").clicked() {
+                            let fixed = matches!(suggestion.kind, Kind::Compilation | Kind::Junk)
+                                || matches!(suggestion.what, What::Fields { .. } | What::Online { .. });
+                            let look = suggestion.kind == Kind::LengthDiffers;
+                            if !look && ui.add_enabled(fixed || !to.trim().is_empty(), icon_button("check")).on_hover_text("Apply").clicked() {
                                 apply.push(*i);
                             }
-                            if suggestion.kind == Kind::Junk {
+                            if look {
+                                ui.add(egui::Label::new(to.as_str()).truncate());
+                            } else if suggestion.kind == Kind::Junk {
                                 ui.label("Remove from the library");
                             } else if suggestion.kind == Kind::Compilation {
                                 ui.label(format!("Mark a compilation, by {to}"));
@@ -123,8 +128,9 @@ impl App {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     close |= ui.button("Close").clicked();
-                    if !shown.is_empty() && ui.button(format!("Apply all {}", shown.len())).clicked() {
-                        apply = shown.iter().map(|(i, _)| *i).collect();
+                    let applicable: Vec<usize> = shown.iter().map(|(i, _)| *i).filter(|&i| cleanup.suggestions[i].kind != Kind::LengthDiffers).collect();
+                    if !applicable.is_empty() && ui.button(format!("Apply all {}", applicable.len())).clicked() {
+                        apply = applicable;
                     }
                 });
             });
@@ -247,6 +253,19 @@ fn describe(suggestion: &Suggestion) -> (String, String) {
                 ),
             )
         }
+        What::Online { field, album, changes, .. } => {
+            let mut lines: Vec<String> = changes.iter().take(20).map(|(now, to)| format!("“{now}” to “{to}”")).collect();
+            if changes.len() > 20 {
+                lines.push(format!("and {} more", changes.len() - 20));
+            }
+            (format!("{album}: {}", field.label()), format!("{} on {album}, as MusicBrainz has it:\n{}", field.label(), lines.join("\n")))
+        }
+        What::Length { title, .. } => (
+            title.clone(),
+            format!(
+                "{title} is far from its track's length at MusicBrainz: it may be another version, or a bad rip. Nothing to apply; dismiss it once you've had a look."
+            ),
+        ),
         What::AppleDouble => {
             let n = suggestion.keys.len();
             (

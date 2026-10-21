@@ -6,6 +6,7 @@
 //! this device only) and tried again later.
 
 pub mod art;
+pub mod details;
 pub mod matching;
 mod musicbrainz;
 
@@ -29,7 +30,7 @@ const RETRY_FAILED: i64 = 60 * 60;
 #[derive(Debug)]
 pub enum Outcome {
     /// This release, each song's track (by index).
-    Matched(Release, Vec<Option<usize>>),
+    Matched(Box<Release>, Vec<Option<usize>>),
     /// These might be it.
     Unsure(Vec<Release>),
     NotFound,
@@ -144,7 +145,11 @@ pub fn matches(album: &Album, release: &Release, tracks: &[Option<usize>], by_us
         .iter()
         .zip(tracks)
         .map(|(song, track)| {
-            let was = store.get_by_key(&song.key).and_then(|s| s.online.clone()).unwrap_or_default();
+            let mut was = store.get_by_key(&song.key).and_then(|s| s.online.clone()).unwrap_or_default();
+            // (Another release: its blanks are filled anew.)
+            if was.release.as_ref() != Some(&release.id) {
+                was.filled = None;
+            }
             let online = song_store::Online {
                 release: Some(release.id.clone()),
                 group: release.group.clone(),
@@ -259,7 +264,7 @@ impl Worker {
             for (album, fresh) in asked {
                 let outcome = match musicbrainz.releases(&album, fresh) {
                     Ok(releases) => match log_candidates(&album, &releases, matching::decide(&album, &releases)) {
-                        Verdict::Match(i, tracks) => Outcome::Matched(releases[i].clone(), tracks),
+                        Verdict::Match(i, tracks) => Outcome::Matched(Box::new(releases[i].clone()), tracks),
                         Verdict::Unsure(found) => Outcome::Unsure(found.into_iter().map(|i| releases[i].clone()).collect()),
                         Verdict::NotFound => Outcome::NotFound,
                     },

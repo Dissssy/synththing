@@ -10,7 +10,9 @@
 //! "._" files, imported before they were skipped) are suggested removed.
 //! Tags a song's file name, numbered title or video title say
 //! (`file_tags`) are suggested for those that lack them, grouped by who
-//! and what album they'd be.
+//! and what album they'd be. What MusicBrainz says otherwise of matched
+//! songs (`lookup::details`) is offered field by field for each album,
+//! and songs far from their track's length are flagged for a look.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -46,6 +48,11 @@ pub enum Kind {
     Compilation,
     /// Stray quotes, brackets or spacing.
     Tidy,
+    /// What MusicBrainz says otherwise of a matched album's songs.
+    MusicBrainz,
+    /// A matched song far from its track's length: another version, or
+    /// a bad rip. Only to look at.
+    LengthDiffers,
 }
 
 impl Kind {
@@ -59,6 +66,8 @@ impl Kind {
             Kind::Same => "Same name",
             Kind::Compilation => "Compilation",
             Kind::Tidy => "Tidy",
+            Kind::MusicBrainz => "From MusicBrainz",
+            Kind::LengthDiffers => "Length differs",
         }
     }
 }
@@ -78,6 +87,12 @@ pub enum What {
     /// order): what one of them said (`from`), and what the group's
     /// known by (who and what album they'd be).
     Fields { from: String, group: String, set: Vec<Vec<(Field, String)>> },
+    /// A field as MusicBrainz has it on a release (`album`), for each of
+    /// its songs (`Suggestion::keys`, in their order): what it is, and
+    /// what it'd be.
+    Online { field: Field, album: String, release: String, changes: Vec<(String, String)> },
+    /// A song's length (seconds) here and at MusicBrainz.
+    Length { title: String, here: f64, there: f64 },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -103,6 +118,8 @@ impl Suggestion {
             What::Album { name } => format!("compilation:{}", fields::group_key(name, ignore)),
             What::AppleDouble => "apple-double".to_string(),
             What::Fields { group, .. } => format!("{:?}:{group}", self.kind),
+            What::Online { field, release, .. } => format!("musicbrainz:{release}:{}", field.def().key),
+            What::Length { .. } => format!("length:{}", self.keys.join("|")),
         }
     }
 }
@@ -110,7 +127,8 @@ impl Suggestion {
 /// Every suggestion for `store`'s songs (names grouped as by
 /// `fields::group_key`, past `ignore`), junk first, then splits.
 pub fn suggest(store: &SongStore, ignore: &str) -> Vec<Suggestion> {
-    let junk: Vec<String> = store.known().filter(|(key, song)| !store.is_blocked(key) && song_store::is_apple_double(&song.name)).map(|(key, _)| key.to_string()).collect();
+    let junk: Vec<String> =
+        store.known().filter(|(key, song)| !store.is_blocked(key) && song_store::is_apple_double(&song.name)).map(|(key, _)| key.to_string()).collect();
     let mut texts: BTreeMap<(Field, String), Suggestion> = BTreeMap::new();
     // Each name's spellings (by group key), and how many songs each is on.
     let mut names: BTreeMap<String, (BTreeMap<String, usize>, BTreeSet<&str>)> = BTreeMap::new();
@@ -210,6 +228,63 @@ fn guess(facts: &Facts, known: &Known) -> Option<(Kind, String, Vec<(Field, Stri
         set.push((Field::Title, rest));
     }
     Some((Kind::VideoTitle, title.into_owned(), set))
+}
+
+/// What MusicBrainz says of a matched song (`lookup::details`).
+pub struct Offered {
+    pub key: String,
+    pub title: String,
+    pub release: String,
+    /// Its release's title.
+    pub album: String,
+    /// Its fields that MusicBrainz has otherwise: what they are, and what
+    /// MusicBrainz says.
+    pub differs: Vec<(Field, String, String)>,
+    /// Its length, and its track's (seconds).
+    pub length: Option<(f64, f64)>,
+}
+
+/// Matched songs' fields that MusicBrainz has otherwise, a suggestion for
+/// each field of each release; and those more than `leeway` seconds from
+/// their track's length, one for each song.
+pub fn from_musicbrainz(offered: Vec<Offered>, leeway: f64) -> Vec<Suggestion> {
+    let mut by_field: BTreeMap<(String, Field), Suggestion> = BTreeMap::new();
+    let mut lengths = Vec::new();
+    for song in offered {
+        for (field, now, to) in song.differs {
+            let suggestion = by_field.entry((song.release.clone(), field)).or_insert_with(|| Suggestion {
+                kind: Kind::MusicBrainz,
+                what: What::Online { field, album: song.album.clone(), release: song.release.clone(), changes: Vec::new() },
+                to: String::new(),
+                keys: Vec::new(),
+            });
+            if let What::Online { changes, .. } = &mut suggestion.what {
+                changes.push((now, to));
+            }
+            suggestion.keys.push(song.key.clone());
+        }
+        if let Some((here, there)) = song.length
+            && (here - there).abs() > leeway
+        {
+            lengths.push(Suggestion {
+                kind: Kind::LengthDiffers,
+                what: What::Length { title: song.title, here, there },
+                to: format!("{} here, {} at MusicBrainz", crate::song_info::format_length(here), crate::song_info::format_length(there)),
+                keys: vec![song.key],
+            });
+        }
+    }
+    let mut suggestions: Vec<Suggestion> = by_field.into_values().collect();
+    for suggestion in &mut suggestions {
+        if let What::Online { changes, .. } = &suggestion.what {
+            // (One value for the whole album, or the first song's.)
+            let (now, to) = &changes[0];
+            suggestion.to =
+                if changes.iter().all(|(_, t)| t == to) || changes.len() == 1 { format!("“{to}”") } else { format!("“{to}” (was “{now}”)") };
+        }
+    }
+    suggestions.extend(lengths);
+    suggestions
 }
 
 /// What a song's fields will be set to, as one line: "Track 34, Title
@@ -316,8 +391,24 @@ fn same_words(a: &[String], b: &[String]) -> bool {
 /// not), a genre's at "/" and " & ".
 fn split(field: Field, item: &str) -> Vec<String> {
     const NAMES: &[&str] = &[
-        "(featuring ", "[featuring ", "(feat. ", "[feat. ", "(feat ", "[feat ", "(ft. ", "[ft. ", "(ft ", "[ft ",
-        " featuring ", " feat. ", " feat ", " ft. ", " ft ", " x ", "&", ",",
+        "(featuring ",
+        "[featuring ",
+        "(feat. ",
+        "[feat. ",
+        "(feat ",
+        "[feat ",
+        "(ft. ",
+        "[ft. ",
+        "(ft ",
+        "[ft ",
+        " featuring ",
+        " feat. ",
+        " feat ",
+        " ft. ",
+        " ft ",
+        " x ",
+        "&",
+        ",",
     ];
     const GENRES: &[&str] = &["/", " & "];
     let at = match field {
@@ -387,8 +478,14 @@ pub fn edits(store: &SongStore, chosen: &[(&Suggestion, &str)], ignore: &str) ->
                 written.get(&(key.clone(), field)).cloned().or_else(|| facts.text(field).map(Cow::into_owned))
             };
             match &suggestion.what {
-                // (Removed, not edited: `App::remove_songs`.)
-                What::AppleDouble => {}
+                // (Removed, not edited: `App::remove_songs`; or only to
+                // look at.)
+                What::AppleDouble | What::Length { .. } => {}
+                What::Online { field, changes, .. } => {
+                    if let Some((_, to)) = suggestion.keys.iter().position(|k| k == key).map(|i| &changes[i]) {
+                        written.insert((key.clone(), *field), to.clone());
+                    }
+                }
                 What::Album { .. } => {
                     written.insert((key.clone(), Field::Compilation), "1".to_string());
                 }
@@ -445,9 +542,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("synththing-cleanup-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut store = SongStore::open(dir);
-        store.learn(songs.iter().enumerate().map(|(i, meta)| {
-            (format!("{:064x}.ogg", i + 1), Song { name: format!("{i}.ogg"), meta: Some(meta.clone()), ..Song::default() })
-        }));
+        store.learn(
+            songs
+                .iter()
+                .enumerate()
+                .map(|(i, meta)| (format!("{:064x}.ogg", i + 1), Song { name: format!("{i}.ogg"), meta: Some(meta.clone()), ..Song::default() })),
+        );
         store
     }
 
@@ -462,7 +562,15 @@ mod tests {
         assert_eq!(split(Field::Genre, "R&B"), ["R&B"]);
         assert_eq!(split(Field::Title, "A & B"), ["A & B"]);
         assert_eq!(split(Field::AlbumArtist, "Uyama Hiroto & Nujabes"), ["Uyama Hiroto ", " Nujabes"]);
-        for (text, tidied) in [("\"Perry Porter\"", "Perry Porter"), (" Nujabes", "Nujabes"), ("B)", "B"), ("Perry  Porter\"", "Perry Porter"), ("“Song”", "Song"), ("Guns N' Roses", "Guns N' Roses"), ("Song (Live)", "Song (Live)")] {
+        for (text, tidied) in [
+            ("\"Perry Porter\"", "Perry Porter"),
+            (" Nujabes", "Nujabes"),
+            ("B)", "B"),
+            ("Perry  Porter\"", "Perry Porter"),
+            ("“Song”", "Song"),
+            ("Guns N' Roses", "Guns N' Roses"),
+            ("Song (Live)", "Song (Live)"),
+        ] {
             assert_eq!(tidy(text), tidied, "{text}");
         }
     }
@@ -470,7 +578,13 @@ mod tests {
     #[test]
     fn nujams_is_split() {
         let album = Some("Tribute To Nujabes... \"NuJams\"".to_string());
-        let song = Meta { title: Some("Middle-Horn Shuffle".into()), artist: Some("\"Perry Porter\"& Nujabes".into()), composer: Some("Nujabes".into()), album: album.clone(), ..Meta::default() };
+        let song = Meta {
+            title: Some("Middle-Horn Shuffle".into()),
+            artist: Some("\"Perry Porter\"& Nujabes".into()),
+            composer: Some("Nujabes".into()),
+            album: album.clone(),
+            ..Meta::default()
+        };
         let other = Meta { title: Some("Another".into()), artist: Some("Substantial".into()), album, ..Meta::default() };
         let mut store = store("nujams", &[song, other]);
         let suggestions = suggest(&store, "");
@@ -484,14 +598,15 @@ mod tests {
         let facts: Vec<Facts> = store.known().map(|(_, s)| Facts::of(s)).collect();
         assert_eq!(facts[0].items(Field::Artist), ["Perry Porter", "Nujabes"]);
         assert!(facts.iter().all(|f| f.flag(Field::Compilation)));
-        assert!(suggest(&store, "").is_empty(), "nothing more"); 
+        assert!(suggest(&store, "").is_empty(), "nothing more");
     }
 
     #[test]
     fn file_names_numbers_and_videos_fill_in_tags() {
         let mut store = store("guessed", &[]);
         let song = |i: usize, name: &str, meta: Meta| (format!("{i:064x}.mp3"), Song { name: name.into(), meta: Some(meta), ..Song::default() });
-        let video = Meta { artist: Some("georgemichaelVEVO".into()), title: Some("George Michael - Careless Whisper (Official Video)".into()), ..Meta::default() };
+        let video =
+            Meta { artist: Some("georgemichaelVEVO".into()), title: Some("George Michael - Careless Whisper (Official Video)".into()), ..Meta::default() };
         store.learn([
             song(1, "34. Days - Kan Gao.mp3", Meta::default()),
             song(2, "35. Back Home - Kan Gao.mp3", Meta { track: Some(35), ..Meta::default() }),
@@ -549,8 +664,31 @@ mod tests {
         let other = Meta { artist: Some("Kan (Reives) Gao".into()), ..Meta::default() };
         let store = store("together", &[song, other]);
         let split = suggest(&store, "").into_iter().find(|s| s.kind == Kind::Split).unwrap();
-        let same = Suggestion { kind: Kind::Same, what: What::Name { spellings: vec!["Kan R. Gao".into()] }, to: "Kan (Reives) Gao".into(), keys: split.keys.clone() };
+        let same =
+            Suggestion { kind: Kind::Same, what: What::Name { spellings: vec!["Kan R. Gao".into()] }, to: "Kan (Reives) Gao".into(), keys: split.keys.clone() };
         let edits = edits(&store, &[(&split, &split.to), (&same, &same.to)], "");
         assert_eq!(edits, [(split.keys[0].clone(), Field::Artist, Some("Kan (Reives) Gao; Someone".into()))]);
+    }
+
+    #[test]
+    fn musicbrainz_offers_by_album_and_field() {
+        let meta = |title: &str| Meta { title: Some(title.into()), album: Some("Modal Soul".into()), ..Meta::default() };
+        let mut store = store("musicbrainz", &[meta("feather "), meta("Reflection Eternal")]);
+        let keys: Vec<String> = store.known().map(|(k, _)| k.to_string()).collect();
+        let offered = |i: usize, title: &str, length| Offered {
+            key: keys[i].clone(),
+            title: title.into(),
+            release: "r1".into(),
+            album: "Modal Soul".into(),
+            differs: vec![(Field::Title, title.into(), format!("{title}!"))],
+            length,
+        };
+        let suggestions = from_musicbrainz(vec![offered(0, "feather", Some((587.0, 660.0))), offered(1, "Reflection Eternal", Some((280.0, 284.0)))], 10.0);
+        let kinds: Vec<(Kind, usize)> = suggestions.iter().map(|s| (s.kind, s.keys.len())).collect();
+        assert_eq!(kinds, [(Kind::MusicBrainz, 2), (Kind::LengthDiffers, 1)], "{suggestions:?}");
+        assert_eq!(suggestions[1].to, "9:47 here, 11:00 at MusicBrainz");
+        store.edit(edits(&store, &[(&suggestions[0], &suggestions[0].to), (&suggestions[1], &suggestions[1].to)], ""));
+        let titles: Vec<String> = store.known().filter_map(|(_, s)| Facts::of(s).text(Field::Title).map(Cow::into_owned)).collect();
+        assert_eq!(titles, ["feather!", "Reflection Eternal!"]);
     }
 }
