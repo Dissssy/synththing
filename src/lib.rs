@@ -35,6 +35,7 @@ mod credits;
 mod decoded_audio;
 mod engine;
 mod fields;
+mod file_tags;
 mod frame_timing;
 mod ffmpeg;
 mod gamepad;
