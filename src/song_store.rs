@@ -72,6 +72,33 @@ pub struct Song {
     /// (`Field::RememberPosition`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<f64>,
+    /// What it was matched to at MusicBrainz (`lookup`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online: Option<Online>,
+}
+
+/// A song's match at MusicBrainz, or that its last one was wrong. Kept
+/// under short names: the synced library has one for most songs.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Online {
+    /// The release (album) it's on, if it's matched.
+    #[serde(rename = "r", skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
+    /// That release's group (every edition of the album).
+    #[serde(rename = "g", skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(rename = "c", skip_serializing_if = "Option::is_none")]
+    pub recording: Option<String>,
+    /// Who matched it: the lookup by itself, or the user.
+    #[serde(rename = "u", skip_serializing_if = "std::ops::Not::not")]
+    pub by_user: bool,
+    /// Releases it was matched to and isn't on (Wrong match).
+    #[serde(rename = "x", skip_serializing_if = "Vec::is_empty")]
+    pub rejected: Vec<String>,
+    /// When (Unix seconds).
+    #[serde(rename = "at")]
+    pub at: i64,
 }
 
 impl Song {
@@ -133,6 +160,14 @@ pub struct Meta {
     /// Hz.
     #[serde(rename = "sr", skip_serializing_if = "Option::is_none")]
     pub sample_rate: Option<u32>,
+    /// Its MusicBrainz IDs, where a tagger (Picard) wrote them: its
+    /// release (album), its recording, and its track on that release.
+    #[serde(rename = "mbr", skip_serializing_if = "Option::is_none")]
+    pub musicbrainz_release: Option<String>,
+    #[serde(rename = "mbc", skip_serializing_if = "Option::is_none")]
+    pub musicbrainz_recording: Option<String>,
+    #[serde(rename = "mbt", skip_serializing_if = "Option::is_none")]
+    pub musicbrainz_track: Option<String>,
     /// Which `META_VERSION` read it: one read by an older one is read
     /// again, for what it didn't read.
     #[serde(rename = "v", skip_serializing_if = "is_zero")]
@@ -141,8 +176,8 @@ pub struct Meta {
 
 /// The version of what's read of a song's file (`Meta::version`): 1 added
 /// its grouping, comment and sample rate; 2 trims the NULs some taggers
-/// leave at the end of a tag.
-pub const META_VERSION: u32 = 2;
+/// leave at the end of a tag; 3 added its MusicBrainz IDs.
+pub const META_VERSION: u32 = 3;
 
 fn is_zero(n: &u32) -> bool {
     *n == 0
@@ -469,6 +504,23 @@ impl SongStore {
             self.save();
         }
         before
+    }
+
+    /// Set (`Some`) or drop (`None`) songs' matches at MusicBrainz, by
+    /// key; saved once.
+    pub fn set_online(&mut self, changes: Vec<(String, Option<Online>)>) {
+        let mut changed = false;
+        for (key, online) in changes {
+            if let Some(song) = self.songs.get_mut(&key)
+                && song.online != online
+            {
+                song.online = online;
+                changed = true;
+            }
+        }
+        if changed {
+            self.save();
+        }
     }
 
     /// Note where the song at `key` was left (`None`: from its start);

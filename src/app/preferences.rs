@@ -379,6 +379,8 @@ impl App {
                     },
                 );
                 ui.separator();
+                self.lookup_preferences_ui(ui);
+                ui.separator();
                 self.rulesets_ui(ui);
                 ui.separator();
                 let loaded = self.assets.summary();

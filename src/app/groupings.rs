@@ -22,7 +22,7 @@ use std::sync::Arc;
 use eframe::egui;
 
 use super::{icon_button, is_midi_path, naming, App, PrefTab};
-use crate::album_art::AlbumArt;
+use crate::album_art::{AlbumArt, Source as AlbumArtSource};
 use crate::fields::{self, Facts, Field};
 use crate::select_list;
 use crate::smart::{Group, Ruleset, SplitBy};
@@ -249,7 +249,7 @@ impl App {
 
     /// The ruleset shown: its groups, or the one open.
     pub(super) fn grouping_ui(&mut self, ui: &mut egui::Ui) {
-        self.groupings.art.frame(ui.ctx());
+        self.groupings.art.frame(ui.ctx(), self.config.online_lookup);
         self.groupings.art.letters = self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS);
         let act = if self.groupings.shown() == PLAYLISTS { self.playlists_grouping_ui(ui) } else { self.ruleset_ui(ui) };
         match act {
@@ -450,10 +450,21 @@ impl App {
         group.songs.iter().filter(|key| self.songs.has(key)).map(|key| self.songs.path(key)).collect()
     }
 
-    /// Where `group`'s art comes from: the first song of it here that
-    /// isn't MIDI, when the ruleset splits by album.
-    fn art_from(&self, albums: bool, group: &Group) -> Option<PathBuf> {
-        albums.then(|| group.songs.iter().filter(|key| self.songs.has(key)).map(|key| self.songs.path(key)).find(|p| !is_midi_path(p))).flatten()
+    /// Where `group`'s art comes from, when the ruleset splits by album:
+    /// the first song of it here that isn't MIDI, and the first release
+    /// one of its songs is on.
+    fn art_from(&self, albums: bool, group: &Group) -> AlbumArtSource {
+        if !albums {
+            return AlbumArtSource::default();
+        }
+        let file = group.songs.iter().filter(|key| self.songs.has(key)).map(|key| self.songs.path(key)).find(|p| !is_midi_path(p));
+        let release = group
+            .songs
+            .iter()
+            .filter_map(|key| crate::lookup::release_of(self.songs.get_by_key(key)?))
+            .map(|(release, group)| (release.to_string(), group.map(str::to_string)))
+            .next();
+        AlbumArtSource { file, release }
     }
 
     /// Every group of `id` (each one `what`; `albums` have art), as tiles
@@ -538,8 +549,8 @@ impl App {
         } else {
             HashSet::new()
         };
-        let tile_ui = |ui: &egui::Ui, art: &mut AlbumArt, rect: egui::Rect, from: Option<PathBuf>, group: &Group| {
-            art.tile(ui, rect, from.as_deref(), &group.title);
+        let tile_ui = |ui: &egui::Ui, art: &mut AlbumArt, rect: egui::Rect, from: AlbumArtSource, group: &Group| {
+            art.tile(ui, rect, &from, &group.title);
             if smart.contains(&group.key) {
                 smart_badge(ui, rect);
             }
@@ -753,7 +764,7 @@ impl App {
             Row::Header => {
                 let inner = rect.shrink(8.0);
                 let cover = egui::Rect::from_min_size(inner.min, egui::vec2(art, art));
-                art_cache.tile(ui, cover, art_from.as_deref(), &group.title);
+                art_cache.tile(ui, cover, &art_from, &group.title);
                 let text = egui::Rect::from_min_max(egui::pos2(cover.right() + 12.0, inner.top()), inner.max);
                 ui.scope_builder(egui::UiBuilder::new().max_rect(text), |ui| {
                     if !phone {

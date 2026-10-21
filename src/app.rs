@@ -31,6 +31,7 @@ mod overflow;
 mod palette;
 mod previews;
 mod library;
+mod lookup;
 mod groupings;
 mod recording;
 mod repair;
@@ -443,6 +444,7 @@ pub struct App {
     identity: identity::IdentityState,
     /// Signing in another device, or this one with a link.
     pairing: pairing::PairingState,
+    lookup: lookup::LookupState,
     /// Settings sync between the identity's devices.
     sync: sync::SyncState,
     /// Notifications from library servers.
@@ -733,6 +735,7 @@ impl App {
             repair: Default::default(),
             identity: Default::default(),
             pairing: Default::default(),
+            lookup: Default::default(),
             sync: Default::default(),
             notifications: Default::default(),
             copyright: Default::default(),
@@ -3879,6 +3882,7 @@ impl App {
         frame_timing::time("poll_pairing", || self.poll_pairing());
         frame_timing::time("poll_notifications", || self.poll_notifications(ctx));
         frame_timing::time("poll_sync", || self.poll_sync());
+        frame_timing::time("lookup_tick", || self.lookup_tick());
         if self.songs_moving().is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }

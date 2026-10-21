@@ -111,6 +111,14 @@ pub struct Config {
     /// Clean-up suggestions dismissed (`cleanup::Suggestion::id`).
     #[serde(default)]
     pub cleanup_dismissed: std::collections::BTreeSet<String>,
+    /// Preference: look albums up at MusicBrainz for their art and
+    /// details (`lookup`).
+    #[serde(default)]
+    pub online_lookup: bool,
+    /// The one device that looks them up (`device::Device::id`), so they're
+    /// looked up once for every device.
+    #[serde(default)]
+    pub lookup_device: Option<String>,
     /// Preference: copy visualizer scripts' log() messages to the app's log.
     #[serde(default)]
     pub script_log_to_app: bool,

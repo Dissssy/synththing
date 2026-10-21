@@ -59,6 +59,8 @@ skrifa = "0.44"                                           # reading which charac
 # crates.io is still on egui 0.33.
 puffin = { git = "https://github.com/EmbarkStudios/puffin", rev = "c81e9bb5e3839f516f3e56fe2d9e9649b5bdea86" }
 puffin_egui = { git = "https://github.com/EmbarkStudios/puffin", rev = "c81e9bb5e3839f516f3e56fe2d9e9649b5bdea86" }
+musicbrainz_rs = { version = "0.14", default-features = false, features = ["sync", "rustls"] }
+strsim = "0.11"
 
 # The GUI framework (re-exports egui): on the desktop with its defaults, on
 # Android with the native-activity backend and what that allows (not

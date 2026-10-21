@@ -112,7 +112,10 @@ impl App {
                     ui.separator();
                     self.together_ui(ui, &details);
                 }
-                Tab::File => self.file_tab_ui(ui, &details.paths[0]),
+                Tab::File => {
+                    self.file_tab_ui(ui, &details.paths[0]);
+                    self.online_match_ui(ui, &details.paths[0]);
+                }
             }
             ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
@@ -327,6 +330,14 @@ impl App {
                             ui.strong(key);
                             ui.add(egui::Label::new(value).wrap());
                             ui.end_row();
+                        }
+                        // Its MusicBrainz IDs (in the rows above too), as links.
+                        for (kind, id) in [("release", &info.meta.musicbrainz_release), ("recording", &info.meta.musicbrainz_recording)] {
+                            if let Some(id) = id {
+                                ui.strong(format!("MusicBrainz {kind}"));
+                                ui.hyperlink_to("Open on MusicBrainz", format!("https://musicbrainz.org/{kind}/{id}"));
+                                ui.end_row();
+                            }
                         }
                     });
                 });

@@ -80,6 +80,10 @@ pub enum Field {
     SkipShuffle,
     /// It starts again where it was left (`song_store::Song::position`).
     RememberPosition,
+    /// The ID of the release (album) it's on at MusicBrainz, as its tags
+    /// say.
+    #[serde(rename = "musicbrainz_release")]
+    MusicBrainzRelease,
 }
 
 /// Where Song info shows an editable field.
@@ -176,6 +180,7 @@ pub const FIELDS: &[Def] = &[
     def(Field::VolumeAdjust, "volume_adjust", "Volume adjust (%)", Kind::Number, true, 0.0, false, &[], true),
     def(Field::SkipShuffle, "skip_shuffle", "Skip when shuffling", Kind::Flag, true, 0.0, false, &[], true),
     def(Field::RememberPosition, "remember_position", "Remember position", Kind::Flag, true, 0.0, false, &[], true),
+    def(Field::MusicBrainzRelease, "musicbrainz_release", "MusicBrainz release", Kind::Text, true, 0.0, false, &[], false),
 ];
 
 impl Def {
@@ -335,6 +340,7 @@ impl<'a> Facts<'a> {
             Field::SortComposer => text(meta.map(|m| &m.sort_composer)),
             Field::Grouping => text(meta.map(|m| &m.grouping)),
             Field::Comment => text(meta.map(|m| &m.comment)),
+            Field::MusicBrainzRelease => text(meta.map(|m| &m.musicbrainz_release)),
             Field::FileName => Some(Cow::Borrowed(Path::new(self.file_name).file_stem().and_then(|s| s.to_str()).unwrap_or(self.file_name))),
             Field::FileExtension => Path::new(self.file_name).extension().map(|e| Cow::Owned(e.to_string_lossy().to_lowercase())),
             _ => None,
