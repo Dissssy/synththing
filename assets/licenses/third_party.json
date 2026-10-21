@@ -4805,6 +4805,22 @@
         "kwantam <kwantam@gmail.com>",
         "Manish Goregaokar <manishsmail@gmail.com>"
       ],
+      "license": "(MIT OR Apache-2.0) AND Unicode-3.0",
+      "name": "unicode-normalization",
+      "repository": "https://github.com/unicode-rs/unicode-normalization",
+      "texts": [
+        272,
+        7,
+        140,
+        271
+      ],
+      "version": "0.1.26"
+    },
+    {
+      "authors": [
+        "kwantam <kwantam@gmail.com>",
+        "Manish Goregaokar <manishsmail@gmail.com>"
+      ],
       "license": "MIT OR Apache-2.0",
       "name": "unicode-segmentation",
       "repository": "https://github.com/unicode-rs/unicode-segmentation",

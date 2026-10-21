@@ -71,6 +71,7 @@ use crate::lua_visualizer::{
     self, DebugVar, PlaybackRequest, SettingDescriptor, SettingKind, SettingValue,
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
+use crate::fields::Field;
 use crate::song_info::{format_length, SongInfoCache};
 use crate::song_title::Naming;
 use crate::updater::{self, Track, UpdateState, Updater};
@@ -116,18 +117,9 @@ fn naming<'a>(config: &'a Config, songs: &'a SongStore) -> Naming<'a> {
 fn describe_song(cache: &mut SongInfoCache, naming: &Naming, store: &SongStore, path: &Path, keys: &[&str]) -> song_list::Described {
     let info = cache.get(path);
     let song = naming.song(path, info.as_deref());
-    let values = keys
-        .iter()
-        .map(|&key| match key {
-            "imported" => naming.imported(path).map(|secs| song_list::Value { text: song_list::date(secs), number: Some(secs as f64) }),
-            "file_name" => Some(song_list::Value { text: song.file_name.to_string(), number: None }),
-            // (One type whatever the case its files were named in.)
-            "file_extension" => song.field(key).map(|text| song_list::Value { text: text.to_lowercase(), number: None }),
-            key => song.field(key).map(|text| song_list::Value { text, number: song.number(key) }),
-        })
-        .collect();
+    let values = keys.iter().map(|&key| Field::by_key(key).and_then(|field| song.value(field))).collect();
     let tags = store.tags_of(path).into_iter().map(|(_, tag)| (tag.name.clone(), tag.color)).collect();
-    let starred = store.is_starred(path);
+    let starred = song.starred();
     song_list::Described { name: naming.name(path, info.as_deref()), file_name: song.file_name.to_string(), values, tags, starred }
 }
 
@@ -2684,7 +2676,8 @@ impl App {
     fn songs_revision(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (self.songs.revision(), self.song_info.revision(), &self.config.title_patterns, listed_song_extensions(&self.config)).hash(&mut hasher);
+        (self.songs.revision(), self.song_info.revision(), &self.config.title_patterns, &self.config.group_ignore, listed_song_extensions(&self.config))
+            .hash(&mut hasher);
         hasher.finish()
     }
 
@@ -2786,6 +2779,7 @@ impl App {
             &mut || store.songs().map(|(path, _)| path).filter(|p| song_store::has_extension(p, extensions)).collect(),
             revision,
             &mut view,
+            &self.config.group_ignore,
             &mut tools,
             &mut |path, keys| describe_song(&mut cache.borrow_mut(), &naming, &self.songs, path, keys),
             &mut |ui, path| song_info_widgets(ui, &mut cache.borrow_mut(), path, false),
@@ -2831,7 +2825,7 @@ impl App {
     /// Save a copy of the library's song at `path`, under its own name.
     #[cfg(not(target_os = "android"))]
     fn save_song_copy(&mut self, path: &Path) {
-        let name = naming(&self.config, &self.songs).file_name(path).to_string();
+        let name = naming(&self.config, &self.songs).song(path, None).file_name.to_string();
         let Some(to) = rfd::FileDialog::new().set_file_name(&name).save_file() else { return };
         self.status = match std::fs::copy(path, &to) {
             Ok(_) => format!("Saved a copy as {}.", to.display()),
@@ -3223,7 +3217,7 @@ impl App {
                 .iter()
                 .map(|entry| lua_visualizer::PlaylistEntryView {
                     name: title_of(&mut self.song_info, &naming, &entry.path),
-                    length: self.song_info.get(&entry.path).and_then(|info| info.length),
+                    length: self.song_info.get(&entry.path).and_then(|info| info.meta.length),
                     missing: entry.missing,
                 })
                 .collect();
@@ -4189,7 +4183,7 @@ fn inline_code_job(ui: &egui::Ui, prefix: &str, text: &str) -> egui::text::Layou
 fn length_text(info: Option<&crate::song_info::SongInfo>) -> String {
     match info {
         None => "...".to_string(),
-        Some(info) => info.length.map(format_length).unwrap_or_else(|| "--:--".to_string()),
+        Some(info) => info.meta.length.map(format_length).unwrap_or_else(|| "--:--".to_string()),
     }
 }
 

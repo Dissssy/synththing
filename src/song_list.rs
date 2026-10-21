@@ -11,13 +11,14 @@
 //! Autoplay plays on down the list as it is when each song ends (`next`).
 
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
+use crate::fields::{self, Def, Field, Value};
 use crate::select_list::{self, Selection};
 
 /// How many ranked matches are shown for a query.
@@ -135,7 +136,7 @@ pub type RowMenu<'a> = &'a mut dyn FnMut(&mut egui::Ui, &[PathBuf]);
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct View {
-    /// Shown after the name, in order (`COLUMNS`' keys).
+    /// Shown after the name, in order (columns' keys).
     pub columns: Vec<String>,
     /// `"name"`, or a column's key.
     pub sort: String,
@@ -150,38 +151,9 @@ impl Default for View {
     }
 }
 
-/// A column the list can show: a song title field (`song_title::FIELDS`)
-/// or when the song was imported.
-pub struct Column {
-    pub key: &'static str,
-    pub title: &'static str,
-    width: f32,
-    /// Songs share its values often enough to group by them.
-    groups: bool,
-}
-
-const fn col(key: &'static str, title: &'static str, width: f32, groups: bool) -> Column {
-    Column { key, title, width, groups }
-}
-
-pub const COLUMNS: &[Column] = &[
-    col("artist", "Artist", 140.0, true),
-    col("album", "Album", 140.0, true),
-    col("album_artist", "Album artist", 140.0, true),
-    col("composer", "Composer", 140.0, true),
-    col("genre", "Genre", 100.0, true),
-    col("track", "Track", 48.0, false),
-    col("year", "Year", 52.0, true),
-    col("length", "Length", 60.0, false),
-    col("bpm", "BPM", 52.0, false),
-    col("notes", "Notes", 72.0, false),
-    col("file_extension", "Type", 52.0, true),
-    col("imported", "Imported", 96.0, true),
-    col("file_name", "File", 160.0, false),
-];
-
-fn column(key: &str) -> Option<&'static Column> {
-    COLUMNS.iter().find(|c| c.key == key)
+/// A column the list can show: a field with a width (`fields::columns`).
+fn column(key: &str) -> Option<&'static Def> {
+    Field::by_key(key).map(Field::def).filter(|d| d.width > 0.0)
 }
 
 /// Group by the songs' tags (`View::group`): a song is in each of its
@@ -190,30 +162,7 @@ const TAG: &str = "tag";
 
 /// What the list's grouped by, for the groups' headers.
 fn group_title(key: &str) -> Option<&'static str> {
-    if key == TAG { Some("Tag") } else { column(key).map(|c| c.title) }
-}
-
-/// A column's value for a song: its text, and its number for those that
-/// sort as numbers.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Value {
-    pub text: String,
-    pub number: Option<f64>,
-}
-
-/// `secs` (Unix seconds) as a date, `2026-10-20` (UTC).
-pub fn date(secs: i64) -> String {
-    // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
-    let z = secs.div_euclid(86_400) + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}")
+    if key == TAG { Some("Tag") } else { column(key).map(|c| c.label) }
 }
 
 /// A song as the list shows it: its name, its original file's name, the
@@ -334,8 +283,8 @@ fn view_menu(ui: &mut egui::Ui, view: &mut View, touch: bool) -> bool {
     let before = view.clone();
     ui.menu_button("Sort by", |ui| {
         ui.radio_value(&mut view.sort, "name".to_string(), "Name");
-        for c in COLUMNS {
-            ui.radio_value(&mut view.sort, c.key.to_string(), c.title);
+        for c in fields::columns() {
+            ui.radio_value(&mut view.sort, c.key.to_string(), c.label);
         }
         ui.separator();
         ui.checkbox(&mut view.descending, "Descending");
@@ -343,16 +292,16 @@ fn view_menu(ui: &mut egui::Ui, view: &mut View, touch: bool) -> bool {
     ui.menu_button("Group by", |ui| {
         ui.radio_value(&mut view.group, String::new(), "Nothing");
         ui.separator();
-        for c in COLUMNS.iter().filter(|c| c.groups) {
-            ui.radio_value(&mut view.group, c.key.to_string(), c.title);
+        for c in fields::columns().filter(|c| c.groups) {
+            ui.radio_value(&mut view.group, c.key.to_string(), c.label);
         }
         ui.radio_value(&mut view.group, TAG.to_string(), "Tag");
     });
     if !touch {
         ui.menu_button("Columns", |ui| {
-            for c in COLUMNS {
+            for c in fields::columns() {
                 let mut shown = view.columns.iter().any(|k| k == c.key);
-                if ui.checkbox(&mut shown, c.title).changed() {
+                if ui.checkbox(&mut shown, c.label).changed() {
                     if shown {
                         view.columns.push(c.key.to_string());
                     } else {
@@ -461,7 +410,9 @@ impl SongList {
     /// `describe` one's name, file name and the values of the columns
     /// asked for; they're asked only when the rows are made again: when
     /// `revision` (which changes whenever the songs or what's said of them
-    /// do), the view, the search or the groups closed change. `tools` draws buttons at the start of the toolbar, `trailing`
+    /// do, `ignore` included), the view, the search or the groups closed
+    /// change. Groups go by `fields::group_key`, past the characters in
+    /// `ignore`. `tools` draws buttons at the start of the toolbar, `trailing`
     /// extra widgets at the right end of each row (right to left, in
     /// `TRAILING_WIDTH`), and `menu` a row's right-click menu.
     #[allow(clippy::too_many_arguments)]
@@ -471,6 +422,7 @@ impl SongList {
         songs: &mut dyn FnMut() -> Vec<PathBuf>,
         revision: u64,
         view: &mut View,
+        ignore: &str,
         tools: &mut dyn FnMut(&mut egui::Ui),
         describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
         trailing: &mut dyn FnMut(&mut egui::Ui, &Path),
@@ -503,7 +455,7 @@ impl SongList {
         let room = ui.available_width() - TRAILING_WIDTH - MIN_NAME_WIDTH;
         let mut used = 0.0;
         let sorted = column(&view.sort);
-        let shown: Vec<&'static Column> = if touch {
+        let shown: Vec<&'static Def> = if touch {
             sorted.into_iter().collect()
         } else {
             let hidden = sorted.filter(|c| !view.columns.iter().any(|k| k == c.key));
@@ -539,7 +491,7 @@ impl SongList {
         if stale {
             let songs = songs();
             let (items, queue) = if query.is_empty() {
-                self.sorted(&songs, view, &keys, sort_at, group_at, describe)
+                self.sorted(&songs, view, &keys, sort_at, group_at, ignore, describe)
             } else {
                 let found = ranked_matches(&songs, query, &keys, describe);
                 let queue = found.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false, starred: e.song.starred }).collect();
@@ -644,7 +596,7 @@ impl SongList {
 
     /// The column headers: click one to sort by it (again to turn it
     /// around), right-click for the view's menu.
-    fn header_ui(&mut self, ui: &mut egui::Ui, view: &mut View, shown: &[&Column]) -> bool {
+    fn header_ui(&mut self, ui: &mut egui::Ui, view: &mut View, shown: &[&Def]) -> bool {
         let height = ui.spacing().interact_size.y;
         // The whole row first, under the headers, for right-clicks between them.
         let (rect, background) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
@@ -661,7 +613,7 @@ impl SongList {
         ui.scope_builder(builder, |ui| {
             ui.add_space(TRAILING_WIDTH + ui.spacing().item_spacing.x);
             for c in shown.iter().rev() {
-                let response = cell(ui, c.width, title(c.key, c.title), false).interact(egui::Sense::click());
+                let response = cell(ui, c.width, title(c.key, c.label), false).interact(egui::Sense::click());
                 headers.push((c.key, response));
             }
             let name = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -705,6 +657,7 @@ impl SongList {
         keys: &[&str],
         sort_at: Option<usize>,
         group_at: Option<usize>,
+        ignore: &str,
         describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
     ) -> (Vec<Item>, Vec<Queued>) {
         /// A song in one of its groups, and what it sorts by: the group
@@ -729,12 +682,19 @@ impl SongList {
                 _ if by_tag && !entry.song.tags.is_empty() => {
                     entry.song.tags.iter().map(|(name, _)| (Some(name.clone()), Some(Value { text: name.to_lowercase(), number: None }))).collect()
                 }
-                Some(g) => vec![(group_label(&view.group, entry.song.values[g].as_ref()), sort_value(entry.song.values[g].as_ref()))],
+                    Some(g) => {
+                    let value = entry.song.values[g].as_ref();
+                    let label = group_label(&view.group, value);
+                    // (Sorted by what tells the groups apart, so their
+                    // songs stay together.)
+                    let key = label.as_deref().map(|l| Value { text: fields::group_key(l, ignore), number: value.and_then(|v| v.number) });
+                    vec![(label, key)]
+                }
                 None => vec![(None, None)],
             };
             let mut seen = BTreeSet::new();
             for (label, value) in groups {
-                let group = label.as_deref().map(str::to_lowercase);
+                let group = value.as_ref().map(|v| v.text.clone());
                 // (Once, even with two tags that differ only in case.)
                 if seen.insert(group.clone()) {
                     sorting.push(Sorting { label, group, value, order: order.clone(), entry: entry.clone() });
@@ -753,6 +713,15 @@ impl SongList {
             let queue = sorting.iter().map(|s| Queued { path: s.entry.path.clone(), group: None, collapsed: false, starred: s.entry.song.starred }).collect();
             return (sorting.into_iter().map(|s| Item::Song(s.entry)).collect(), queue);
         }
+        // Each group's header shows the best of its songs' spellings.
+        let mut spellings: HashMap<&str, Vec<&str>> = HashMap::new();
+        for s in &sorting {
+            if let (Some(group), Some(label)) = (&s.group, &s.label) {
+                spellings.entry(group).or_default().push(label);
+            }
+        }
+        let best: HashMap<String, String> =
+            spellings.into_iter().filter_map(|(group, labels)| Some((group.to_string(), fields::best_spelling(labels)?.to_string()))).collect();
         let missing = if by_tag { "Untagged" } else { "Unknown" };
         let mut items = Vec::new();
         let mut queue = Vec::with_capacity(sorting.len());
@@ -763,7 +732,8 @@ impl SongList {
                 _ => {
                     let key = group.clone().unwrap_or_default();
                     let collapsed = self.collapsed.contains(&key);
-                    items.push(Item::Group { label: label.unwrap_or_else(|| missing.to_string()), key, count: 0, collapsed });
+                    let label = best.get(&key).cloned().or(label).unwrap_or_else(|| missing.to_string());
+                    items.push(Item::Group { label, key, count: 0, collapsed });
                     current = Some((items.len() - 1, group));
                     items.len() - 1
                 }
@@ -979,7 +949,7 @@ mod tests {
                 let values = keys.iter().map(|&k| (k == "artist").then(|| Value { text: format!("Artist {}", n % 3), number: None })).collect();
                 Described { name: format!("Song {n}"), file_name: String::new(), values, tags: Vec::new(), starred: false }
             };
-            list.ui(ui, &mut || songs.to_vec(), revision, &mut view, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
+            list.ui(ui, &mut || songs.to_vec(), revision, &mut view, "", &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
         });
         output.textures_delta.clear();
     }
@@ -1020,7 +990,7 @@ mod tests {
                 .collect()
         };
         assert_eq!(rows(&list), ["Artist 0 (2)", "Song 0", "Song 3", "Artist 1 (2)", "Song 1", "Song 4", "Artist 2 (2)", "Song 2", "Song 5"]);
-        list.collapsed.insert("artist 1".into());
+        list.collapsed.insert("artist1".into());
         list.built = None;
         frame(&ctx, &mut list, &songs, 1, &mut described);
         assert_eq!(rows(&list), ["Artist 0 (2)", "Song 0", "Song 3", "Artist 1 (2)", "Artist 2 (2)", "Song 2", "Song 5"]);
@@ -1048,14 +1018,14 @@ mod tests {
         };
         let view = View { group: group.into(), ..View::default() };
         let group_at = (group == "album").then_some(0);
-        shape(&list.sorted(&paths, &view, &["album"], None, group_at, &mut describe).0)
+        shape(&list.sorted(&paths, &view, &["album"], None, group_at, "", &mut describe).0)
     }
 
     #[test]
     fn songs_with_several_tags_are_in_each_group() {
         let songs: &[(&str, Option<&str>, &[&str])] = &[("c", None, &[]), ("b", None, &["Rock", "chill", "ROCK"]), ("a", None, &["rock"])];
         let rows = grouped(&SongList::default(), TAG, songs);
-        assert_eq!(rows, ["chill (1)", "b", "rock (2)", "a", "b", "Untagged (1)", "c"]);
+        assert_eq!(rows, ["chill (1)", "b", "Rock (2)", "a", "b", "Untagged (1)", "c"], "under the best spelling");
     }
 
     #[test]
@@ -1071,6 +1041,20 @@ mod tests {
     fn songs_without_a_value_go_last_apart_from_one_named_unknown() {
         let songs: &[(&str, Option<&str>, &[&str])] = &[("a", None, &[]), ("b", Some("Unknown"), &[]), ("c", Some("Abc"), &[])];
         assert_eq!(grouped(&SongList::default(), "album", songs), ["Abc (1)", "c", "Unknown (1)", "b", "Unknown (1)", "a"]);
+    }
+
+    #[test]
+    fn spellings_of_a_name_are_one_group_under_the_best() {
+        let songs: &[(&str, Option<&str>, &[&str])] = &[
+            ("a", Some("JUSTCORE EXTRAVAGANZA"), &[]),
+            ("b", Some("<OST>"), &[]),
+            ("c", Some("Justcore Extravaganza"), &[]),
+            ("d", Some("Modal Soul"), &[]),
+            ("e", Some("OST"), &[]),
+            ("f", Some("justcore  extravaganza"), &[]),
+        ];
+        let rows = grouped(&SongList::default(), "album", songs);
+        assert_eq!(rows, ["Justcore Extravaganza (3)", "a", "c", "f", "Modal Soul (1)", "d", "<OST> (2)", "b", "e"]);
     }
 
     /// A play order of (song, group, closed).
@@ -1188,7 +1172,7 @@ mod tests {
             Described { name: name.to_string(), file_name: name.to_string(), values: vec![None], tags: tags.iter().map(|t| (t.to_string(), [0; 3])).collect(), starred: false }
         };
         let view = View { group: TAG.into(), ..View::default() };
-        let (items, _) = SongList::default().sorted(&paths, &view, &["album"], None, None, &mut describe);
+        let (items, _) = SongList::default().sorted(&paths, &view, &["album"], None, None, "", &mut describe);
         assert_eq!(shape(&items), ["chill (1)", "a", "rock (2)", "a", "b"]);
         assert_eq!(active_row(&items, Path::new("a"), Some("rock")), Some(3));
         assert_eq!(active_row(&items, Path::new("a"), None), Some(1), "its first, with no group known");

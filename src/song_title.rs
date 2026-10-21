@@ -6,29 +6,12 @@
 use std::path::Path;
 
 use crate::config::Config;
-use crate::song_info::{format_length, thousands, SongInfo};
-use crate::song_store::{Meta, SongStore};
+use crate::fields::{Facts, Field};
+use crate::song_info::SongInfo;
+use crate::song_store::SongStore;
 
 /// The patterns until changed.
 pub const DEFAULT_PATTERNS: [&str; 2] = ["{title} by {artist}", "{title}"];
-
-/// The fields a pattern can use, as it writes them (for the preferences'
-/// list of them): the song's tags, then what's known of its file.
-pub const FIELDS: [&str; 13] = [
-    "title",
-    "artist",
-    "album",
-    "album_artist",
-    "composer",
-    "genre",
-    "track",
-    "year",
-    "file_name",
-    "file_extension",
-    "length",
-    "bpm",
-    "notes",
-];
 
 /// How songs are named: the patterns, and the library, which knows its
 /// songs' original file names.
@@ -42,26 +25,19 @@ impl<'a> Naming<'a> {
         Self { patterns: config.title_patterns.as_deref(), store }
     }
 
-    /// The original name of the file at `path`: the library's name for
-    /// it, or (a file played from outside it) its own.
-    pub fn file_name<'p>(&'p self, path: &'p Path) -> &'p str {
+    /// What's known of the song at `path`, with what's been read of it
+    /// here (`info`): the library's, else (a file played from outside
+    /// it) its own.
+    pub fn song<'p>(&'p self, path: &'p Path, info: Option<&'p SongInfo>) -> Facts<'p> {
         match self.store.get(path) {
-            Some(song) => &song.name,
-            None => path.file_name().and_then(|n| n.to_str()).unwrap_or_default(),
+            Some(song) => Facts { meta: song.meta.as_ref().or(info.map(|i| &i.meta)), info, ..Facts::of(song) },
+            None => Facts {
+                file_name: path.file_name().and_then(|n| n.to_str()).unwrap_or_default(),
+                meta: info.map(|i| &i.meta),
+                info,
+                ..Facts::default()
+            },
         }
-    }
-
-    /// The song at `path`, with what's been read of it (`info`), for its
-    /// fields: without that, what the library knows of it (read on another
-    /// device).
-    pub fn song<'p>(&'p self, path: &'p Path, info: Option<&'p SongInfo>) -> Song<'p> {
-        let meta = if info.is_none() { self.store.get(path).and_then(|s| s.meta.as_ref()) } else { None };
-        Song { file_name: self.file_name(path), info, meta }
-    }
-
-    /// When the song at `path` came into the library (Unix seconds).
-    pub fn imported(&self, path: &Path) -> Option<i64> {
-        self.store.get(path).map(|song| song.imported)
     }
 
     /// The song at `path`'s name, with what's been read of it (`info`).
@@ -71,90 +47,26 @@ impl<'a> Naming<'a> {
             Some(patterns) => first_match(patterns, &song),
             None => first_match(&DEFAULT_PATTERNS, &song),
         }
-        .unwrap_or_else(|| stem(song.file_name).to_string())
+        .or_else(|| song.text(Field::FileName).map(|t| t.into_owned()))
+        .unwrap_or_default()
     }
 }
 
-fn stem(file_name: &str) -> &str {
-    Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or(file_name)
-}
-
-fn first_match(patterns: &[impl AsRef<str>], song: &Song) -> Option<String> {
+fn first_match(patterns: &[impl AsRef<str>], song: &Facts) -> Option<String> {
     patterns.iter().find_map(|pattern| render(pattern.as_ref(), song))
 }
 
-/// What a pattern's fields are filled in from.
-pub struct Song<'a> {
-    /// The song's original file name.
-    pub file_name: &'a str,
-    pub info: Option<&'a SongInfo>,
-    /// What the library knows of it, for a song not read here.
-    pub meta: Option<&'a Meta>,
-}
-
-impl Song<'_> {
-    /// The field `name` (as a pattern writes it), if the song has it.
-    pub fn field(&self, name: &str) -> Option<String> {
-        let info = self.info;
-        let value = match name {
-            "file_name" => stem(self.file_name).to_string(),
-            "file_extension" => Path::new(self.file_name).extension()?.to_string_lossy().into_owned(),
-            "length" => format_length(self.length()?),
-            "bpm" => {
-                let bpm = info?.bpm?;
-                if (bpm - bpm.round()).abs() < 0.05 { format!("{bpm:.0}") } else { format!("{bpm:.1}") }
-            }
-            "notes" => thousands(info?.notes?),
-            tag => match info {
-                Some(info) => info.tags.get(tag)?.to_string(),
-                None => self.meta?.tag(tag)?,
-            },
-        };
-        (!value.is_empty()).then_some(value)
-    }
-}
-
-impl Song<'_> {
-    fn length(&self) -> Option<f64> {
-        match self.info {
-            Some(info) => info.length,
-            None => self.meta?.length,
-        }
-    }
-
-    /// The field `name` as a number, for the ones that are (to sort by).
-    pub fn number(&self, name: &str) -> Option<f64> {
-        if name == "length" {
-            return self.length();
-        }
-        let Some(info) = self.info else {
-            let meta = self.meta?;
-            return match name {
-                "track" => meta.track,
-                "year" => meta.year,
-                _ => None,
-            }
-            .map(f64::from);
-        };
-        match name {
-            "bpm" => info.bpm,
-            "notes" => info.notes.map(|n| n as f64),
-            "track" | "year" => crate::song_info::leading_number(info.tags.get(name)?).map(f64::from),
-            _ => None,
-        }
-    }
-}
-
-/// `pattern` with each `{field}` filled in, or `None` when the song doesn't
-/// have one of them (or it names no field). A `{` with no `}` after it is
-/// just a `{`.
-pub fn render(pattern: &str, song: &Song) -> Option<String> {
+/// `pattern` with each `{field}` (a field's key, `fields.rs`) filled in,
+/// or `None` when the song doesn't have one of them (or it names no
+/// field). A `{` with no `}` after it is just a `{`.
+pub fn render(pattern: &str, song: &Facts) -> Option<String> {
     let mut out = String::new();
     let mut rest = pattern;
     while let Some(open) = rest.find('{') {
         let Some(close) = rest[open..].find('}').map(|c| open + c) else { break };
         out.push_str(&rest[..open]);
-        out.push_str(&song.field(rest[open + 1..close].trim())?);
+        let field = Field::by_key(rest[open + 1..close].trim()).filter(|f| f.in_patterns())?;
+        out.push_str(&song.value(field)?.text);
         rest = &rest[close + 1..];
     }
     out.push_str(rest);
@@ -165,25 +77,25 @@ pub fn render(pattern: &str, song: &Song) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::song_info::Tags;
+    use crate::song_store::Meta;
 
     fn info() -> SongInfo {
         SongInfo {
-            length: Some(83.0),
             bpm: Some(120.0),
             notes: Some(12345),
-            tags: Tags {
+            meta: Meta {
                 title: Some("Harbour Lights".into()),
                 artist: Some("The Night Owls".into()),
-                year: Some("2010".into()),
-                ..Tags::default()
+                year: Some(2010),
+                length: Some(83.0),
+                ..Meta::default()
             },
             ..SongInfo::default()
         }
     }
 
-    fn song<'a>(file_name: &'a str, info: &'a SongInfo) -> Song<'a> {
-        Song { file_name, info: Some(info), meta: None }
+    fn song<'a>(file_name: &'a str, info: &'a SongInfo) -> Facts<'a> {
+        Facts { file_name, meta: Some(&info.meta), info: Some(info), ..Facts::default() }
     }
 
     #[test]

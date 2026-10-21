@@ -28,6 +28,7 @@ ureq = { version = "3.4", features = ["json"] }            # HTTPS for update ch
 semver = "1.0"                                            # comparing release versions
 self-replace = "1.5"                                      # swapping the running exe on update
 sha2 = "0.11"                                             # verifying downloaded updates
+unicode-normalization = "0.1"                             # NFKC for grouping names (fields::group_key)
 log = "0.4"                                               # app-wide log (applog.rs)
 notify = "8"                                              # live-refresh watched folders (watch.rs)
 symphonia = { version = "0.5.5", default-features = false, features = ["alac", "adpcm", "aiff", "caf", "mkv", "mpa"] } # song info (song_info.rs); the same copy rodio uses, so these formats reach playback too

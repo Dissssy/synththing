@@ -687,7 +687,7 @@ impl App {
         // Total time from what's been read so far.
         let (mut total, mut unknown) = (0.0, 0usize);
         for entry in entries {
-            match cache.get(&entry.path).and_then(|i| i.length) {
+            match cache.get(&entry.path).and_then(|i| i.meta.length) {
                 Some(length) => total += length,
                 None => unknown += 1,
             }
@@ -854,7 +854,7 @@ impl App {
         let cache = &mut self.song_info;
         let naming = super::naming(&self.config, &self.songs);
         let text = playlist::to_m3u(&stored.playlist, |p| {
-            (super::title_of(cache, &naming, p), cache.get(p).and_then(|i| i.length))
+            (super::title_of(cache, &naming, p), cache.get(p).and_then(|i| i.meta.length))
         });
         self.status = match std::fs::write(&path, text) {
             Ok(()) => format!("Exported to {}.", path.display()),
