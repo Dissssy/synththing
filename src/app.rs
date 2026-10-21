@@ -21,6 +21,7 @@ mod profiler;
 use preferences::PrefTab;
 mod playlist_panel;
 mod identity;
+mod keyboard;
 mod pairing;
 mod sync;
 mod tags;
@@ -60,7 +61,7 @@ use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{DockArea, DockState, TabViewer};
 
 use crate::applog;
-use crate::commands::{self, Command};
+use crate::commands::{self, Command, Keymap};
 use crate::frame_timing;
 use crate::credits::{self, Contributors, ContributorsState};
 use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
@@ -419,6 +420,10 @@ pub struct App {
     binding_capture: Option<(usize, Option<usize>)>,
     /// The command palette, while it's open.
     palette: Option<palette::Palette>,
+    /// The keys for commands, from the config's keymaps (`sync_keymap`).
+    keymap: Arc<Keymap>,
+    /// Preferences > Keyboard waiting for a key.
+    keymap_capture: Option<keyboard::Capture>,
     /// The script's Settings or Controls window, if open.
     script_window: Option<script_windows::ScriptWindow>,
     /// The category picked in each (Settings, Controls, Debug).
@@ -724,6 +729,8 @@ impl App {
             playlist_selection: Selection::default(),
             binding_capture: None,
             palette: None,
+            keymap: Arc::default(),
+            keymap_capture: None,
             script_window: None,
             script_window_tab: [0; 3],
             user_presets: None,
@@ -3419,6 +3426,16 @@ impl App {
         }
     }
 
+    /// Rebuild the keymap when the config's keymaps changed (in
+    /// Preferences, or by a sync), and put it in use.
+    fn sync_keymap(&mut self, ctx: &egui::Context) {
+        let keymap = Keymap::new(&self.config.keymap, &self.config.local_keymap);
+        if *self.keymap != keymap {
+            self.keymap = Arc::new(keymap);
+            self.keymap.install(ctx);
+        }
+    }
+
     /// Whether a command would do anything now. One that wouldn't leaves
     /// its key alone and stays out of the palette.
     fn command_available(&self, command: Command) -> bool {
@@ -3972,14 +3989,16 @@ impl eframe::App for App {
         // still does its usual job elsewhere. All of it pauses while a
         // modal is up (Escape closes the modal instead) or a binding is
         // being captured.
+        self.sync_keymap(&ctx);
         if !self.any_modal_open() && self.binding_capture.is_none() {
             let typing = ctx.memory(|m| m.focused().is_some());
             let available: Vec<Command> = Command::ALL.into_iter().filter(|&c| self.command_available(c)).collect();
+            let keymap = self.keymap.clone();
             // Run outside `ctx.input_mut`: `send_viewport_cmd` (inside
             // `set_fullscreen`) takes the lock that closure holds, and
             // calling it from in there deadlocks.
             let pressed = ctx.input_mut(|i| {
-                commands::pressed(i, typing, |command| available.contains(&command))
+                keymap.pressed(i, typing, |command| available.contains(&command))
             });
             for command in pressed {
                 self.run_command(&ctx, command, view);

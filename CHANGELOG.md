@@ -13,8 +13,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Save a search as a smart playlist (the engine button beside it): its filters become the rules, and the editor says what couldn't be one.
 - Remove songs from all your devices: with your song library syncing, removing songs offers "Remove from all my devices", and your other devices delete them too. A song you'd only removed from one device can go everywhere from the sync settings' "Songs removed from this device" list. Importing a song again brings it back everywhere.
 - Command palette: Ctrl+Shift+P lists what the app can do with its keyboard shortcut beside it. Type to filter, Up/Down and Enter (or a click) to run one, Esc to close.
+- Change the keyboard shortcuts: Preferences > Keyboard lists every command with its keys. Click a key to change it, + to add another, right-click one to remove it, or Reset. A key bound to two commands shows in the warning color. Your keys sync with your other devices (Keyboard shortcuts, under App in what syncs), and "This device only" keeps a command's keys to the device you're on.
 
 ### Changed
+- Scripts now see the function keys the app doesn't use: F5, F9, F10 and F11 reach a script once they're rebound away from their commands. Escape always stays the app's.
 - The player buttons' hover text shows their keyboard shortcut (Play/Pause (Space), Next (N), Fullscreen (F)...). Shortcuts no longer fire while a script control is waiting for a key to bind.
 
 ## 1.3.0 (2026-10-21)
