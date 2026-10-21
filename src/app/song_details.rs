@@ -120,41 +120,50 @@ impl App {
         if keys.len() > 1 {
             ui.weak("Only the fields you change are written, to every one of them.");
         }
-        egui::Grid::new("song_details_grid").num_columns(3).spacing([12.0, 6.0]).show(ui, |ui| {
-            for def in fields::editable() {
-                let field = def.field;
-                let (text, mixed) = texts.get_mut(&field).expect("every editable field has its text");
-                ui.label(def.label);
-                let hint = if *mixed && !changes.contains_key(&field) { "Mixed" } else { "" };
-                let response = ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(260.0));
-                if response.changed() {
-                    // (Typed into and emptied again, "Mixed" stays as it is.)
-                    if *mixed && text.is_empty() {
-                        changes.remove(&field);
-                    } else {
-                        changes.insert(field, Change::Set(text.clone()));
+        // (Rows rather than a grid: a grid squeezes its text boxes to
+        // nothing in a modal. Each box fills what's left of its row,
+        // beside a label and the revert button's room.)
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let label_width = fields::editable().map(|d| ui.painter().layout_no_wrap(d.label.to_string(), font.clone(), egui::Color32::WHITE).size().x).fold(0.0, f32::max);
+        let row_height = ui.spacing().interact_size.y;
+        for def in fields::editable() {
+            let field = def.field;
+            let (text, mixed) = texts.get_mut(&field).expect("every editable field has its text");
+            ui.horizontal(|ui| {
+                ui.allocate_ui_with_layout(egui::vec2(label_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.set_width(label_width);
+                    ui.label(def.label);
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let edited = changes.get(&field) != Some(&Change::Revert) && songs.iter().any(|s| s.edits.contains_key(&field));
+                    let revert = ui.add_visible(edited, super::icon_button("arrow-counter-clockwise"));
+                    if edited {
+                        let unedited: Vec<String> = songs.iter().map(|s| field_text(&Facts::of(s).unedited(), field)).collect();
+                        let hover = match unedited.as_slice() {
+                            [one] if one.is_empty() => "Back to what the file says (nothing)".to_string(),
+                            [one] => format!("Back to what the file says: {one}"),
+                            _ => "Back to what each file says".to_string(),
+                        };
+                        if revert.on_hover_text(hover).clicked() {
+                            changes.insert(field, Change::Revert);
+                            let same = unedited.iter().all(|u| *u == unedited[0]);
+                            *text = if same { unedited[0].clone() } else { String::new() };
+                            *mixed = !same;
+                        }
                     }
-                }
-                let edited = changes.get(&field) != Some(&Change::Revert) && songs.iter().any(|s| s.edits.contains_key(&field));
-                if edited {
-                    let unedited: Vec<String> = songs.iter().map(|s| field_text(&Facts::of(s).unedited(), field)).collect();
-                    let hover = match unedited.as_slice() {
-                        [one] if one.is_empty() => "Back to what the file says (nothing)".to_string(),
-                        [one] => format!("Back to what the file says: {one}"),
-                        _ => "Back to what each file says".to_string(),
-                    };
-                    if ui.add(super::icon_button("arrow-counter-clockwise")).on_hover_text(hover).clicked() {
-                        changes.insert(field, Change::Revert);
-                        let same = unedited.iter().all(|u| *u == unedited[0]);
-                        *text = if same { unedited[0].clone() } else { String::new() };
-                        *mixed = !same;
+                    let hint = if *mixed && !changes.contains_key(&field) { "Mixed" } else { "" };
+                    let response = ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(f32::INFINITY));
+                    if response.changed() {
+                        // (Typed into and emptied again, "Mixed" stays as it is.)
+                        if *mixed && text.is_empty() {
+                            changes.remove(&field);
+                        } else {
+                            changes.insert(field, Change::Set(text.clone()));
+                        }
                     }
-                } else {
-                    ui.label("");
-                }
-                ui.end_row();
-            }
-        });
+                });
+            });
+        }
     }
 
     /// Every detail read from the file at `path`.
