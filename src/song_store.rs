@@ -36,6 +36,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::fields::{Edits, Field};
+
 const INDEX: &str = "library.json";
 const BLOCKED: &str = "blocked.json";
 const TAGS: &str = "tags.json";
@@ -58,11 +60,14 @@ pub struct Song {
     /// What its file says of itself, once a device that has it has read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
+    /// What the user says of it over that (`fields::Edits`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub edits: Edits,
 }
 
 impl Song {
     fn new(name: String) -> Self {
-        Self { name, imported: now(), tags: Vec::new(), meta: None }
+        Self { name, imported: now(), ..Self::default() }
     }
 }
 
@@ -339,6 +344,26 @@ impl SongStore {
             song.tags = tags;
             self.save();
         }
+    }
+
+    /// Set (`Some`) or drop (`None`) edits of songs' fields, by key; saved
+    /// once. What each was before, to undo them with.
+    pub fn edit(&mut self, changes: Vec<(String, Field, Option<String>)>) -> Vec<(String, Field, Option<String>)> {
+        let mut before = Vec::new();
+        for (key, field, value) in changes {
+            let Some(song) = self.songs.get_mut(&key) else { continue };
+            let was = match value {
+                Some(value) => song.edits.insert(field, value.trim().to_string()),
+                None => song.edits.remove(&field),
+            };
+            if song.edits.get(&field) != was.as_ref() {
+                before.push((key, field, was));
+            }
+        }
+        if !before.is_empty() {
+            self.save();
+        }
+        before
     }
 
     /// A number that changes whenever anything in the store does, so
@@ -810,6 +835,24 @@ mod tests {
         assert_eq!(store.get(&path_of(&dir, &elsewhere)).unwrap().name, "Elsewhere.mid");
         assert!(store.get(&dir.join("../escape")).is_none());
         assert_eq!(store.songs().count(), 2);
+    }
+
+    #[test]
+    fn edits_are_kept_and_undone() {
+        let dir = temp_dir("edits");
+        let stored = write_in(b"edited", "song.mp3", &dir).unwrap();
+        let mut store = SongStore::open(dir.clone());
+        store.add(stored.clone());
+        let key = stored.key.clone();
+        let before = store.edit(vec![(key.clone(), Field::Artist, Some(" Nujabes ".into())), (key.clone(), Field::Year, Some("2005".into()))]);
+        assert_eq!(before, [(key.clone(), Field::Artist, None), (key.clone(), Field::Year, None)]);
+        assert_eq!(store.get_by_key(&key).unwrap().edits.get(&Field::Artist).map(String::as_str), Some("Nujabes"));
+        assert!(store.edit(vec![(key.clone(), Field::Artist, Some("Nujabes".into()))]).is_empty(), "no change, nothing to undo");
+        // Kept, and undone.
+        let mut store = SongStore::open(dir);
+        assert_eq!(store.get_by_key(&key).unwrap().edits.len(), 2);
+        store.edit(before);
+        assert!(store.get_by_key(&key).unwrap().edits.is_empty());
     }
 
     #[test]

@@ -23,7 +23,7 @@ use eframe::egui;
 
 use super::{icon_button, is_midi_path, naming, App, PrefTab};
 use crate::album_art::AlbumArt;
-use crate::fields;
+use crate::fields::{self, Facts, Field};
 use crate::select_list;
 use crate::smart::{Group, Ruleset, SplitBy, VARIOUS_ARTISTS};
 use crate::song_info::{format_length, thousands};
@@ -249,7 +249,7 @@ impl App {
                 self.play_tracks(tracks, start);
             }
             Some(Act::Star(paths, on)) => self.tag_songs(super::tags::TagAction::Set(STARRED.into(), on), &paths),
-            Some(Act::Info(path)) => self.song_info_open = Some(path),
+            Some(Act::Info(path)) => self.details_for = Some(vec![path]),
             Some(Act::Open(id, key)) if id == PLAYLISTS => {
                 if let Some(list) = self.playlists.find(&key) {
                     self.open_playlist(Some(list));
@@ -592,16 +592,16 @@ impl App {
                 let path = self.songs.path(key);
                 let here = self.songs.has(key);
                 let info = if here { cache.get(&path) } else { None };
-                let song = self.songs.get_by_key(key);
-                let meta = song.and_then(|s| s.meta.as_ref());
+                let facts = self.songs.get_by_key(key).map(Facts::of).unwrap_or_default();
+                let text = |field| facts.text(field).map(|t| t.into_owned());
                 Track {
                     name: naming.name(&path, info.as_deref()),
-                    artist: meta.and_then(|m| m.artist.clone()),
-                    album: meta.and_then(|m| m.album.clone()),
-                    disc: meta.and_then(|m| m.disc),
-                    number: meta.and_then(|m| m.track),
-                    length: meta.and_then(|m| m.length),
-                    starred: song.is_some_and(|s| s.tags.iter().any(|t| t == STARRED)),
+                    artist: text(Field::Artist),
+                    album: text(Field::Album),
+                    disc: facts.number(Field::Disc).map(|n| n as u32),
+                    number: facts.number(Field::Track).map(|n| n as u32),
+                    length: facts.number(Field::Length),
+                    starred: facts.starred(),
                     here,
                     path,
                 }

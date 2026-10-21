@@ -25,7 +25,7 @@ use crate::song_info::{format_length, thousands, SongInfo};
 use crate::song_store::{self, Meta, STARRED};
 
 /// A song field. Kept (in smart playlist rules) by its key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Field {
     Title,
@@ -82,33 +82,36 @@ pub struct Def {
     /// Its text is a list (`split_list`): "Electronic, Rock" is two
     /// genres, and a song is in each one's group.
     pub list: bool,
+    /// One of the file's tags, which a song's edits (`Edits`) can say
+    /// otherwise.
+    pub editable: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
-const fn def(field: Field, key: &'static str, label: &'static str, kind: Kind, synced: bool, width: f32, groups: bool, list: bool) -> Def {
-    Def { field, key, label, kind, synced, width, groups, list }
+const fn def(field: Field, key: &'static str, label: &'static str, kind: Kind, synced: bool, width: f32, groups: bool, list: bool, editable: bool) -> Def {
+    Def { field, key, label, kind, synced, width, groups, list, editable }
 }
 
 /// Every field, in [`Field`]'s order.
 pub const FIELDS: &[Def] = &[
-    def(Field::Title, "title", "Title", Kind::Text, true, 0.0, false, false),
-    def(Field::Artist, "artist", "Artist", Kind::Text, true, 140.0, true, false),
-    def(Field::AlbumArtist, "album_artist", "Album artist", Kind::Text, true, 140.0, true, false),
-    def(Field::Album, "album", "Album", Kind::Text, true, 140.0, true, false),
-    def(Field::Composer, "composer", "Composer", Kind::Text, true, 140.0, true, false),
-    def(Field::Genre, "genre", "Genre", Kind::Text, true, 100.0, true, true),
-    def(Field::Track, "track", "Track", Kind::Number, true, 48.0, false, false),
-    def(Field::Disc, "disc", "Disc", Kind::Number, true, 40.0, true, false),
-    def(Field::Year, "year", "Year", Kind::Number, true, 52.0, true, false),
-    def(Field::Length, "length", "Length", Kind::Number, true, 60.0, false, false),
-    def(Field::Bpm, "bpm", "BPM", Kind::Number, false, 52.0, false, false),
-    def(Field::Notes, "notes", "Notes", Kind::Number, false, 72.0, false, false),
-    def(Field::FileName, "file_name", "File name", Kind::Text, true, 160.0, false, false),
-    def(Field::FileExtension, "file_extension", "Type", Kind::Text, true, 52.0, true, false),
-    def(Field::Size, "size", "Size (MB)", Kind::Number, true, 72.0, false, false),
-    def(Field::Imported, "imported", "Date added", Kind::Date, true, 96.0, true, false),
-    def(Field::Tag, "tag", "Tag", Kind::Tag, true, 0.0, false, false),
-    def(Field::Starred, "starred", "Starred", Kind::Flag, true, 0.0, false, false),
+    def(Field::Title, "title", "Title", Kind::Text, true, 0.0, false, false, true),
+    def(Field::Artist, "artist", "Artist", Kind::Text, true, 140.0, true, false, true),
+    def(Field::AlbumArtist, "album_artist", "Album artist", Kind::Text, true, 140.0, true, false, true),
+    def(Field::Album, "album", "Album", Kind::Text, true, 140.0, true, false, true),
+    def(Field::Composer, "composer", "Composer", Kind::Text, true, 140.0, true, false, true),
+    def(Field::Genre, "genre", "Genre", Kind::Text, true, 100.0, true, true, true),
+    def(Field::Track, "track", "Track", Kind::Number, true, 48.0, false, false, true),
+    def(Field::Disc, "disc", "Disc", Kind::Number, true, 40.0, true, false, true),
+    def(Field::Year, "year", "Year", Kind::Number, true, 52.0, true, false, true),
+    def(Field::Length, "length", "Length", Kind::Number, true, 60.0, false, false, false),
+    def(Field::Bpm, "bpm", "BPM", Kind::Number, false, 52.0, false, false, false),
+    def(Field::Notes, "notes", "Notes", Kind::Number, false, 72.0, false, false, false),
+    def(Field::FileName, "file_name", "File name", Kind::Text, true, 160.0, false, false, false),
+    def(Field::FileExtension, "file_extension", "Type", Kind::Text, true, 52.0, true, false, false),
+    def(Field::Size, "size", "Size (MB)", Kind::Number, true, 72.0, false, false, false),
+    def(Field::Imported, "imported", "Date added", Kind::Date, true, 96.0, true, false, false),
+    def(Field::Tag, "tag", "Tag", Kind::Tag, true, 0.0, false, false, false),
+    def(Field::Starred, "starred", "Starred", Kind::Flag, true, 0.0, false, false, false),
 ];
 
 impl Field {
@@ -133,6 +136,11 @@ impl Field {
     pub fn in_patterns(self) -> bool {
         matches!(self.kind(), Kind::Text | Kind::Number | Kind::Date)
     }
+}
+
+/// The fields a song's edits can change, in order.
+pub fn editable() -> impl Iterator<Item = &'static Def> {
+    FIELDS.iter().filter(|d| d.editable)
 }
 
 /// The Songs list's columns.
@@ -165,28 +173,47 @@ pub struct Facts<'a> {
     pub imported: Option<i64>,
     /// Its tags, by ID.
     pub tags: &'a [String],
+    /// What the user says of it over what its file does.
+    pub edits: Option<&'a Edits>,
 }
+
+/// A song's edits (in the synced library, `song_store::Song::edits`): an
+/// editable field's text, over what its file says. Empty clears it.
+/// The file itself is never written: its hash is the song.
+pub type Edits = BTreeMap<Field, String>;
 
 impl<'a> Facts<'a> {
     /// A song in the library, as every device knows it.
     pub fn of(song: &'a song_store::Song) -> Self {
-        Self { file_name: &song.name, meta: song.meta.as_ref(), info: None, imported: Some(song.imported), tags: &song.tags }
+        Self { file_name: &song.name, meta: song.meta.as_ref(), info: None, imported: Some(song.imported), tags: &song.tags, edits: Some(&song.edits) }
+    }
+
+    /// What the song's edits say `field` is, if they do.
+    pub fn edit(&self, field: Field) -> Option<&'a str> {
+        self.edits?.get(&field).map(String::as_str)
+    }
+
+    /// What its file says, without its edits.
+    pub fn unedited(&self) -> Self {
+        Self { edits: None, ..*self }
     }
 
     /// A text field's value (trimmed; `None` when empty).
     pub fn text(&self, field: Field) -> Option<Cow<'a, str>> {
         let meta = self.meta;
         let text = |t: Option<&'a Option<String>>| t.and_then(|t| t.as_deref()).map(Cow::Borrowed);
+        let edit = self.edit(field).map(|e| Some(Cow::Borrowed(e)));
         let value = match field {
+            Field::Genre => edit.unwrap_or_else(|| text(meta.map(|m| &m.genre))).map(|g| match genre_names(&g) {
+                Cow::Borrowed(_) => g,
+                Cow::Owned(named) => Cow::Owned(named),
+            }),
+            _ if edit.is_some() => edit.flatten(),
             Field::Title => text(meta.map(|m| &m.title)),
             Field::Artist => text(meta.map(|m| &m.artist)),
             Field::AlbumArtist => text(meta.map(|m| &m.album_artist)),
             Field::Album => text(meta.map(|m| &m.album)),
             Field::Composer => text(meta.map(|m| &m.composer)),
-            Field::Genre => text(meta.map(|m| &m.genre)).map(|g| match genre_names(&g) {
-                Cow::Borrowed(_) => g,
-                Cow::Owned(named) => Cow::Owned(named),
-            }),
             Field::FileName => Some(Cow::Borrowed(Path::new(self.file_name).file_stem().and_then(|s| s.to_str()).unwrap_or(self.file_name))),
             Field::FileExtension => Path::new(self.file_name).extension().map(|e| Cow::Owned(e.to_string_lossy().to_lowercase())),
             _ => None,
@@ -201,6 +228,9 @@ impl<'a> Facts<'a> {
     /// A number or date field's value.
     pub fn number(&self, field: Field) -> Option<f64> {
         let meta = self.meta;
+        if let Some(edit) = self.edit(field) {
+            return crate::song_info::leading_number(edit).map(f64::from);
+        }
         match field {
             Field::Track => meta?.track.map(f64::from),
             Field::Disc => meta?.disc.map(f64::from),
@@ -353,7 +383,7 @@ mod tests {
     fn facts_give_each_field() {
         let meta = Meta { title: Some(" Song ".into()), artist: Some(String::new()), track: Some(3), length: Some(83.0), size: 4_200_000, ..Meta::default() };
         let tags = vec![STARRED.to_string()];
-        let facts = Facts { file_name: "03 Song.MP3", meta: Some(&meta), info: None, imported: Some(86_400), tags: &tags };
+        let facts = Facts { file_name: "03 Song.MP3", meta: Some(&meta), info: None, imported: Some(86_400), tags: &tags, edits: None };
         assert_eq!(facts.text(Field::Title).as_deref(), Some("Song"));
         assert_eq!(facts.text(Field::Artist), None, "empty is none");
         assert_eq!(facts.text(Field::FileName).as_deref(), Some("03 Song"));
@@ -368,6 +398,13 @@ mod tests {
         let facts = Facts { meta: Some(&meta), ..Facts::default() };
         assert_eq!(facts.items(Field::Genre), ["Avant-Garde", "Electronic", "Rock"]);
         assert_eq!(facts.items(Field::Artist), ["A, B"], "artists aren't lists");
+        // Edits over the file's tags: text, a number, and one cleared.
+        let edits: Edits = [(Field::Artist, "C".to_string()), (Field::Year, "1999".to_string()), (Field::Genre, String::new())].into();
+        let edited = Facts { edits: Some(&edits), ..facts };
+        assert_eq!(edited.text(Field::Artist).as_deref(), Some("C"));
+        assert_eq!(edited.number(Field::Year), Some(1999.0));
+        assert_eq!(edited.items(Field::Genre), Vec::<Cow<str>>::new());
+        assert_eq!(edited.unedited().text(Field::Artist).as_deref(), Some("A, B"));
         for (tagged, named) in [("17", "Rock"), ("(17)", "Rock"), ("(17)(0)", "Rock, Blues"), ("(17)Hard Rock", "Hard Rock"), ("(RX), 31", "Remix, Trance"), ("Jazz", "Jazz"), ("(Live)", "(Live)"), ("255", "255")] {
             assert_eq!(genre_names(tagged), named, "{tagged}");
         }

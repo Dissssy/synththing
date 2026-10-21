@@ -346,15 +346,13 @@ impl SongList {
         self.hovered = None;
     }
 
-    /// The one song selected, if just one is.
-    pub fn selected_one(&self) -> Option<PathBuf> {
-        match (self.selection.rows(), &self.built) {
-            ([one], Some(built)) => match built.items.get(*one) {
-                Some(Item::Song(entry)) => Some(entry.path.clone()),
-                _ => None,
-            },
+    /// The songs selected, each once.
+    pub fn selected(&self) -> Vec<PathBuf> {
+        let Some(built) = &self.built else { return Vec::new() };
+        unique(self.selection.rows().iter().filter_map(|&i| match built.items.get(i) {
+            Some(Item::Song(entry)) => Some(entry.path.clone()),
             _ => None,
-        }
+        }))
     }
 
     /// The library changed: what was selected may be gone.

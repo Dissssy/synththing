@@ -35,6 +35,7 @@ mod recording;
 mod repair;
 mod script_windows;
 mod smart;
+mod song_details;
 mod song_meta;
 mod song_names;
 mod storage;
@@ -336,8 +337,12 @@ pub struct App {
     editor_goto_line: Option<usize>,
     /// Lengths and details of songs in the lists, read in the background.
     song_info: SongInfoCache,
-    /// The song whose info modal is open.
-    song_info_open: Option<PathBuf>,
+    /// The songs whose details were asked for, to open next frame.
+    details_for: Option<Vec<PathBuf>>,
+    /// The song details open (`song_details.rs`).
+    song_details: Option<song_details::SongDetails>,
+    /// How to undo the last save of songs' details: each edit as it was.
+    last_edit: Option<Vec<(String, Field, Option<String>)>>,
     /// The Tags modal is open.
     tags_open: bool,
     /// The tag just made, to name in the Tags modal.
@@ -627,7 +632,9 @@ impl App {
                 Ok(dir) => SongInfoCache::saved_in(dir.join("song-info.json")),
                 Err(_) => SongInfoCache::new(),
             },
-            song_info_open: None,
+            details_for: None,
+            song_details: None,
+            last_edit: None,
             tags_open: false,
             tag_to_name: None,
             playlist_selection: Selection::default(),
@@ -2341,60 +2348,6 @@ impl App {
         );
     }
 
-    /// The song info modal: every detail read from one file.
-    fn song_info_ui(&mut self, ctx: &egui::Context) {
-        let Some(path) = self.song_info_open.clone() else {
-            return;
-        };
-        let info = self.song_info.get(&path);
-        let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("song_info")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 460.0));
-            ui.heading(self.song_title(&path));
-            // (A library song by the file it came from; one played from
-            // elsewhere by where it is.)
-            match self.songs.get(&path) {
-                Some(song) => ui.weak(&song.name),
-                None => ui.weak(path.display().to_string()),
-            };
-            ui.add_space(6.0);
-            match &info {
-                None => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.weak("Reading...");
-                    });
-                }
-                Some(info) if info.details.is_empty() => {
-                    ui.weak("Nothing to show for this file.");
-                }
-                Some(info) => {
-                    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                        egui::Grid::new("song_info_grid").num_columns(2).spacing([16.0, 4.0]).striped(true).show(
-                            ui,
-                            |ui| {
-                                for (key, value) in &info.details {
-                                    ui.strong(key);
-                                    ui.add(egui::Label::new(value).wrap());
-                                    ui.end_row();
-                                }
-                            },
-                        );
-                    });
-                }
-            }
-            ui.add_space(8.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if ui.button("Close").clicked() {
-                    close = true;
-                }
-            });
-        });
-        if close || response.should_close() {
-            self.song_info_open = None;
-        }
-    }
-
     /// The Rename script modal: a new name for the running script's file.
     fn rename_ui(&mut self, ctx: &egui::Context) {
         let Some(rename) = &mut self.rename else {
@@ -2506,7 +2459,7 @@ impl App {
             || self.credits_open
             || self.changelog.is_some()
             || self.welcome.open
-            || self.song_info_open.is_some()
+            || self.song_details.is_some()
             || self.tags_open
             || self.recording.prompt_open
             || self.recording.window.is_some()
@@ -2692,9 +2645,11 @@ impl App {
         let extensions = listed_song_extensions(&self.config);
         // What the list's made from: it's made again when this changes.
         let revision = self.songs_revision();
-        let selected = self.song_list.selected_one();
-        let mut info_for: Option<PathBuf> = None;
+        let selected = self.song_list.selected();
+        let mut info_for: Option<Vec<PathBuf>> = None;
         let mut info_clicked = false;
+        let can_undo = self.last_edit.is_some();
+        let mut undo_clicked = false;
         let moving = self.songs_moving();
         let autoplay = self.autoplay;
         let mut autoplay_clicked = false;
@@ -2714,12 +2669,15 @@ impl App {
             }
             #[cfg(not(target_os = "android"))]
             if ui
-                .add_enabled(selected.is_some(), icon_button("info"))
-                .on_hover_text("Song info")
-                .on_disabled_hover_text("Song info: select a song")
+                .add_enabled(!selected.is_empty(), icon_button("info"))
+                .on_hover_text("Song info: see and edit its details (several songs' at once)")
+                .on_disabled_hover_text("Song info: select songs")
                 .clicked()
             {
                 info_clicked = true;
+            }
+            if can_undo && ui.add(icon_button("arrow-u-up-left")).on_hover_text("Undo the last edit of songs' details").clicked() {
+                undo_clicked = true;
             }
             sync::songs_moving_ui(ui, moving);
             autoplay_clicked |= autoplay::button_ui(ui, autoplay);
@@ -2762,10 +2720,8 @@ impl App {
             {
                 save_copy = Some(path.clone());
             }
-            if let [path] = paths
-                && ui.button("Song info").clicked()
-            {
-                info_for = Some(path.clone());
+            if ui.button("Song info").clicked() {
+                info_for = Some(paths.to_vec());
             }
             if let Some(action) = tags::tags_menu(ui, store, paths) {
                 tag = Some((action, paths.to_vec()));
@@ -2804,8 +2760,11 @@ impl App {
             self.set_autoplay(self.autoplay.cycle());
             toast::show(ui.ctx(), autoplay::text(self.autoplay));
         }
-        if let Some(path) = info_for.or(selected.filter(|_| info_clicked)) {
-            self.song_info_open = Some(path);
+        if undo_clicked {
+            self.undo_edit();
+        }
+        if let Some(paths) = info_for.or(info_clicked.then_some(selected)) {
+            self.details_for = Some(paths);
         }
         #[cfg(not(target_os = "android"))]
         if let Some(path) = save_copy {
@@ -3903,7 +3862,7 @@ impl eframe::App for App {
             self.rename_ui(&ctx);
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
-            self.song_info_ui(&ctx);
+            self.song_details_ui(&ctx);
             self.history_ui(&ctx);
             self.audio_import_ui(&ctx);
             self.status_toast_ui(&ctx);
@@ -3925,7 +3884,7 @@ impl eframe::App for App {
             self.changelog_ui(&ctx);
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
-            self.song_info_ui(&ctx);
+            self.song_details_ui(&ctx);
             self.history_ui(&ctx);
             self.layout_save_ui(&ctx);
             self.new_sprite_ui(&ctx);

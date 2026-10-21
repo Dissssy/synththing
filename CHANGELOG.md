@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Edit songs' details: Song info (a song's right-click menu, or the info button with songs selected) has a Details tab with the title, artist, album artist, album, composer, genre, track, disc and year to change, and the file's own details under File. Select several songs to change them all at once: a field they differ in says Mixed, and only the fields you change are written. Edits sync with the library and never touch the files; the arrow beside an edited field goes back to what the file says, and the undo button in the Songs toolbar takes back the last save.
+
 ## 1.2.0 (2026-10-21)
 
 ### Added

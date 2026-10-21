@@ -680,7 +680,7 @@ impl App {
         let selection = &mut self.playlist_selection;
         let cache = &mut self.song_info;
         let naming = super::naming(&self.config, &self.songs);
-        let info_open = &mut self.song_info_open;
+        let info_open = &mut self.details_for;
         let store = &self.songs;
         let touch = select_list::touch(ui.ctx());
 
@@ -719,7 +719,7 @@ impl App {
                     action = Some(RowAction::Play(idx));
                 }
                 if rows.len() == 1 && !entry.missing && ui.button("Song info").clicked() {
-                    *info_open = Some(entry.path.clone());
+                    *info_open = Some(vec![entry.path.clone()]);
                 }
                 if !smart && (is_midi_path(&entry.path) || rows.len() > 1) {
                     if ui
