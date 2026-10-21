@@ -90,6 +90,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("theme", "Theme", &["theme", "custom_themes"]),
             setting("beat_pulse", "Beat pulse", &["beat_pulse", "beat_pulse_length"]),
             setting("song_names", "Song names", &["title_patterns"]),
+            setting("tile_letters", "Letters on tiles without art", &["tile_letters"]),
         ],
     },
     Category {

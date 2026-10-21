@@ -110,6 +110,9 @@ impl App {
         else {
             return;
         };
+        if let Some(stored) = self.playlists.lists.get(np.list) {
+            self.playlist_positions.insert(stored.id.clone(), np.entry);
+        }
         self.now_playing = Some(np.clone());
         self.listed = None;
         self.plan_upcoming();
@@ -239,10 +242,7 @@ impl App {
             np.list = playlist::index_after_remove(np.list, list)?;
             Some(np)
         });
-        self.viewed_playlist = self
-            .viewed_playlist
-            .and_then(|v| playlist::index_after_remove(v, list))
-            .or_else(|| (!self.playlists.lists.is_empty()).then_some(0));
+        self.viewed_playlist = self.viewed_playlist.and_then(|v| playlist::index_after_remove(v, list));
     }
 
     /// Add `songs` to the end of playlist `list`, or a new playlist of
@@ -266,7 +266,7 @@ impl App {
     }
 
     /// Insert `songs` (the library's) at `at`.
-    fn insert_songs(&mut self, list: usize, at: usize, songs: Vec<PathBuf>) {
+    pub(super) fn insert_songs(&mut self, list: usize, at: usize, songs: Vec<PathBuf>) {
         if songs.is_empty() {
             return;
         }
@@ -442,7 +442,8 @@ impl App {
         }
         // Into the library first, for the playlist; just played from
         // where it is, with none showing.
-        match self.viewed_playlist.filter(|_| self.is_open(Section::Playlists)) {
+        let shown = self.groupings.shown_id() == super::groupings::PLAYLISTS && (self.mobile() || self.is_open(Section::Groupings));
+        match self.viewed_playlist.filter(|_| shown) {
             Some(list) => {
                 let at = self.playlists.lists.get(list).map_or(0, |l| l.playlist.entries.len());
                 let files = songs.into_iter().map(|p| (p, None)).collect();
@@ -483,47 +484,33 @@ impl App {
 
     // --- UI ----------------------------------------------------------------
 
-    pub(super) fn playlist_panel_ui(&mut self, ui: &mut egui::Ui) {
+    /// Playlist `list`'s page (in Groupings): its header, then its
+    /// entries.
+    pub(super) fn playlist_panel_ui(&mut self, ui: &mut egui::Ui, list: usize) {
         let panel_rect = ui.max_rect();
 
-        self.playlist_header_ui(ui);
-        if self.playlists.lists.is_empty() {
-            ui.weak("No playlists yet. Make one with +, or drag a song from Songs into this panel.");
+        self.playlist_header_ui(ui, list);
+        // (Back, or Delete.)
+        if self.viewed_playlist != Some(list) {
+            return;
         }
-
-        let mut row_drop = None;
-        let mut action = None;
-        if let Some(list) = self.viewed_playlist.filter(|&l| l < self.playlists.lists.len()) {
-            (row_drop, action) = self.playlist_rows_ui(ui, list);
-        }
+        let (row_drop, action) = self.playlist_rows_ui(ui, list);
 
         // Rows take a drop first; anything released elsewhere over the
-        // panel appends (creating a playlist if there's none to append to).
+        // panel appends.
         let released_here =
             ui.rect_contains_pointer(panel_rect) && ui.input(|i| i.pointer.any_released());
         if row_drop.is_none() && released_here {
-            let smart = self.viewed_playlist.and_then(|l| self.playlists.lists.get(l)).is_some_and(|l| l.playlist.smart.is_some());
+            let smart = self.playlists.lists[list].playlist.smart.is_some();
             if smart && egui::DragAndDrop::take_payload::<DraggedFiles>(ui.ctx()).is_some() {
                 self.status = "A smart playlist's rules pick its songs.".to_string();
             } else if let Some(files) = egui::DragAndDrop::take_payload::<DraggedFiles>(ui.ctx()) {
-                let list = match self.viewed_playlist.filter(|&l| l < self.playlists.lists.len()) {
-                    Some(list) => list,
-                    None => {
-                        let name = self.unique_playlist_name("New playlist");
-                        self.create_playlist(&name, Vec::new());
-                        self.viewed_playlist.unwrap_or(0)
-                    }
-                };
-                let at = self.playlists.lists.get(list).map_or(0, |l| l.playlist.entries.len());
+                let at = self.playlists.lists[list].playlist.entries.len();
                 self.insert_songs(list, at, files.paths.clone());
             } else if egui::DragAndDrop::take_payload::<DraggedSoundfont>(ui.ctx()).is_some() {
                 self.status = "Drop a soundfont onto a MIDI entry to override its soundfont.".to_string();
             }
         }
-
-        let Some(list) = self.viewed_playlist else {
-            return;
-        };
 
         match row_drop {
             Some(RowDrop::Songs(paths, at)) => self.insert_songs(list, at, paths),
@@ -550,16 +537,28 @@ impl App {
         }
     }
 
-    /// One row: the playlist picker (a text box in its place while
-    /// renaming), then play-from-the-top, new, rename, export and delete.
-    fn playlist_header_ui(&mut self, ui: &mut egui::Ui) {
-        let viewed = self.viewed_playlist.filter(|&l| l < self.playlists.lists.len());
-        let mut pick = None;
+    /// Play playlist `list` from the top (from anywhere, shuffling).
+    pub(super) fn play_playlist(&mut self, list: usize) {
+        let len = self.playlists.lists.get(list).map_or(0, |l| l.playlist.entries.len());
+        if len == 0 {
+            return;
+        }
+        let start = if self.shuffle { (self.rng.next() % len as u64) as usize } else { 0 };
+        self.play_entry(list, start);
+    }
+
+    /// One row: Back and the playlist's name (a text box in its place
+    /// while renaming; a phone's top bar has both), then play-from-the-top,
+    /// continue, rename, export and delete.
+    fn playlist_header_ui(&mut self, ui: &mut egui::Ui, list: usize) {
+        let phone = self.mobile();
+        let mut back = false;
         let (mut edit_rules, mut freeze) = (None, None);
         ui.horizontal_wrapped(|ui| {
-            if let Some(list) = viewed
-                && let Some(name) = &mut self.playlist_rename
-            {
+            if !phone && ui.add(super::icon_button("arrow-left")).on_hover_text("Back to Playlists").clicked() {
+                back = true;
+            }
+            if let Some(name) = &mut self.playlist_rename {
                 let response = ui.add(egui::TextEdit::singleline(name).desired_width(160.0));
                 let commit = response.lost_focus() || ui.add(super::icon_button("check")).on_hover_text("Rename").clicked();
                 if commit {
@@ -572,50 +571,31 @@ impl App {
                 } else if !response.has_focus() && !response.lost_focus() {
                     response.request_focus();
                 }
-            } else if !self.playlists.lists.is_empty() {
-                let current = viewed
-                    .map(|l| {
-                        let playlist = &self.playlists.lists[l].playlist;
-                        match playlist.smart {
-                            Some(_) => format!("{} {}", super::icon(super::smart::SMART_ICON), playlist.name),
-                            None => playlist.name.clone(),
-                        }
-                    })
-                    .unwrap_or_else(|| "(pick one)".to_string());
-                egui::ComboBox::from_id_salt("playlist_picker")
-                    .selected_text(current)
-                    .show_ui(ui, |ui| {
-                        for (i, stored) in self.playlists.lists.iter().enumerate() {
-                            let playing = self.now_playing.as_ref().is_some_and(|np| np.list == i);
-                            let mut label = stored.playlist.name.clone();
-                            if stored.playlist.smart.is_some() {
-                                label = format!("{} {label}", super::icon(super::smart::SMART_ICON));
-                            }
-                            if playing {
-                                label.push_str(" (playing)");
-                            }
-                            if ui.selectable_label(viewed == Some(i), label).clicked() {
-                                pick = Some(i);
-                            }
-                        }
-                    });
+            } else if !phone {
+                let playlist = &self.playlists.lists[list].playlist;
+                let name = match playlist.smart {
+                    Some(_) => format!("{} {}", super::icon(super::smart::SMART_ICON), playlist.name),
+                    None => playlist.name.clone(),
+                };
+                ui.label(egui::RichText::new(name).strong());
             }
 
-            if let Some(list) = viewed {
-                let empty = self.playlists.lists[list].playlist.entries.is_empty();
-                if ui.add_enabled(!empty, super::icon_button("play")).on_hover_text("Play it from the top").clicked() {
-                    let start = if self.shuffle {
-                        (self.rng.next() % self.playlists.lists[list].playlist.entries.len() as u64) as usize
-                    } else {
-                        0
-                    };
-                    self.play_entry(list, start);
+            let empty = self.playlists.lists[list].playlist.entries.is_empty();
+            if ui.add_enabled(!empty, super::icon_button("play")).on_hover_text("Play it from the top").clicked() {
+                self.play_playlist(list);
+            }
+            // Where it was left, unless that's playing now.
+            let stored = &self.playlists.lists[list];
+            let playing = self.now_playing.as_ref().is_some_and(|np| np.list == list);
+            let left_at = self.playlist_positions.get(&stored.id).copied().filter(|&e| e < stored.playlist.entries.len() && !playing);
+            if let Some(entry) = left_at {
+                let path = stored.playlist.entries[entry].path.clone();
+                let name = self.song_title(&path);
+                if ui.add(super::icon_button("fast-forward")).on_hover_text(format!("Continue from {name}")).clicked() {
+                    self.play_entry(list, entry);
                 }
             }
 
-            self.new_playlist_menu_ui(ui);
-
-            let Some(list) = viewed else { return };
             if self.playlists.lists[list].playlist.smart.is_some() {
                 let (icon, hover) = if super::smart::rules_editable(ui.ctx()) { ("sliders-horizontal", "Edit rules") } else { ("eye", "View rules") };
                 if ui.add(super::icon_button(icon)).on_hover_text(hover).clicked() {
@@ -661,16 +641,13 @@ impl App {
         if let Some(list) = freeze {
             self.freeze_playlist(list);
         }
-        if let Some(i) = pick {
-            self.viewed_playlist = Some(i);
-            self.playlist_rename = None;
-            self.confirm_delete_playlist = false;
-            self.playlist_selection.clear();
+        if back {
+            self.open_playlist(None);
         }
     }
 
     /// +: a new playlist, blank or imported from an .m3u.
-    fn new_playlist_menu_ui(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn new_playlist_menu_ui(&mut self, ui: &mut egui::Ui) {
         egui::containers::menu::MenuButton::from_button(super::icon_button("plus")).ui(ui, |ui| {
             if ui.button("Blank").clicked() {
                 let name = self.unique_playlist_name("New playlist");

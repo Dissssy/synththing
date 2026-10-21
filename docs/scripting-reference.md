@@ -506,7 +506,7 @@ set_loop(mode)      -- "off", "one" or "all"
 set_shuffle(on)
 ```
 
-A script can see the current playlist and move between its songs, enough to draw its own player: a track list, next and previous buttons, a now-playing line. It's the playlist that's playing, or if none is, the one open in the Playlists tab; nil when there isn't one. It's read-only: a script can't add, remove or reorder songs, or play anything that isn't in the playlist, so what it can play is always up to you.
+A script can see the current playlist and move between its songs, enough to draw its own player: a track list, next and previous buttons, a now-playing line. It's the playlist that's playing, or if none is, the one open in Groupings; nil when there isn't one. It's read-only: a script can't add, remove or reorder songs, or play anything that isn't in the playlist, so what it can play is always up to you.
 
 - `name`: the playlist's name
 - `playing`: whether it's the one playing (rather than only open)

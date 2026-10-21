@@ -143,6 +143,7 @@ impl App {
         let mut hover_preload = self.config.preload_on_hover;
         let mut skip_collapsed = self.config.autoplay_skip_collapsed;
         let mut only_starred = self.config.only_starred;
+        let mut tile_letters = self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS);
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
         let mut canary = self.config.canary_updates();
         let mut close_to_tray = self.config.close_to_tray.unwrap_or(false);
@@ -323,6 +324,16 @@ impl App {
                         label | ui.add(egui::Slider::new(&mut expiry, PRELOAD_EXPIRY_RANGE).suffix(" s").logarithmic(true))
                     },
                 );
+                with_info(
+                    ui,
+                    "A playlist in Groupings with no art (or while its art is read) shows the first \
+                     letters of its name's words on a color of its own: one to three letters in a row, \
+                     or four in a square.",
+                    |ui| {
+                        let label = ui.label("Letters on tiles without art");
+                        label | ui.add(egui::Slider::new(&mut tile_letters, 1..=4))
+                    },
+                );
                 ui.separator();
                 self.rulesets_ui(ui);
                 ui.separator();
@@ -444,6 +455,7 @@ impl App {
             || hover_preload != self.config.preload_on_hover
             || skip_collapsed != self.config.autoplay_skip_collapsed
             || only_starred != self.config.only_starred
+            || tile_letters != self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS)
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
             || canary != self.config.canary_updates()
             || (self.tray.is_some() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
@@ -487,6 +499,7 @@ impl App {
             self.config.preload_expiry_secs = expiry;
             self.config.preload_on_hover = hover_preload;
             self.config.autoplay_skip_collapsed = skip_collapsed;
+            self.config.tile_letters = Some(tile_letters).filter(|&n| n != crate::album_art::DEFAULT_LETTERS);
             if self.config.only_starred != only_starred {
                 self.config.only_starred = only_starred;
                 self.plan_upcoming();

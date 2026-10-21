@@ -105,10 +105,10 @@ const STEPS: &[Step] = &[
     },
     Step {
         title: "Playlists",
-        text: "Drag songs from the Songs tab onto this one to make a playlist (a whole folder works too; + \
+        text: "Drag songs from the Songs tab onto Playlists here to make a playlist (a whole folder works too; + \
                makes an empty one). Double-click a song in it to play it; Loop and Shuffle are in the controls.",
-        target: Some(Target::Tab(Section::Playlists)),
-        tabs: &[Section::Songs, Section::Playlists],
+        target: Some(Target::Tab(Section::Groupings)),
+        tabs: &[Section::Songs, Section::Groupings],
         done: DoneWhen::PlaylistGrew,
         drag_from: Some(Target::Tab(Section::Songs)),
     },
@@ -116,8 +116,8 @@ const STEPS: &[Step] = &[
         title: "A soundfont for one song",
         text: "Drag a soundfont onto a song in a playlist, and that song always plays with it, whatever's \
                picked in the Soundfonts tab.",
-        target: Some(Target::Tab(Section::Playlists)),
-        tabs: &[Section::Soundfonts, Section::Playlists],
+        target: Some(Target::Tab(Section::Groupings)),
+        tabs: &[Section::Soundfonts, Section::Groupings],
         done: DoneWhen::SoundfontOnSong,
         drag_from: Some(Target::Tab(Section::Soundfonts)),
     },
@@ -239,11 +239,15 @@ impl App {
     /// group.
     fn open_step_tabs(&mut self, tabs: &[Section]) {
         for &section in tabs {
-            // Playlists go in the visualizer's spot (as a tab beside it)
-            // rather than squeezing in another column.
-            let beside_visualizer = section == Section::Playlists
+            // Groupings go in the visualizer's spot (as a tab beside it)
+            // rather than squeezing in another column, showing the
+            // playlists.
+            if section == Section::Groupings {
+                self.groupings.show(super::groupings::PLAYLISTS);
+            }
+            let beside_visualizer = section == Section::Groupings
                 && self.is_open(Section::Visualizer)
-                && layout::tab_alongside(&mut self.dock, Section::Playlists, Section::Visualizer, true);
+                && layout::tab_alongside(&mut self.dock, Section::Groupings, Section::Visualizer, true);
             if !beside_visualizer && !self.is_open(section) {
                 self.set_open(section, true);
             }

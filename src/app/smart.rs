@@ -5,6 +5,7 @@
 //! section of Preferences.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use eframe::egui;
 
@@ -20,7 +21,7 @@ use crate::song_store::Tag;
 const EDIT_RULES_ON_TOUCH: bool = false;
 
 /// The icon smart playlists have.
-pub(super) const SMART_ICON: &str = "sparkle";
+pub(super) const SMART_ICON: &str = "engine";
 
 /// Whether rules can be edited here (not on a touch screen, for now).
 pub(super) fn rules_editable(ctx: &egui::Context) -> bool {
@@ -195,8 +196,8 @@ impl App {
                     None => match self.playlists.create(&playlist.name, Vec::new()) {
                         Ok(at) => {
                             self.playlists.lists[at].playlist.smart = playlist.smart;
-                            self.viewed_playlist = Some(at);
-                            self.playlist_selection.clear();
+                            self.groupings.show(super::groupings::PLAYLISTS);
+                            self.open_playlist(Some(at));
                             at
                         }
                         Err(e) => {
@@ -222,6 +223,27 @@ impl App {
         }
     }
 
+    /// The playlists ruleset `id` (with `rules`) makes, worked out again
+    /// when the library or the rules change.
+    pub(super) fn groups_of(&mut self, id: &str, rules: &Rules) -> Arc<Vec<Group>> {
+        let revision = self.songs.revision();
+        if let Some((seen, cached, groups)) = self.ruleset_groups.get(id)
+            && *seen == revision
+            && cached == rules
+        {
+            return groups.clone();
+        }
+        let groups = Arc::new(rules.groups(&self.songs, settings_sync::now()));
+        self.ruleset_groups.insert(id.to_string(), (revision, rules.clone(), groups.clone()));
+        groups
+    }
+
+    /// Every ruleset: the built-in ones, then the user's, by ID.
+    pub(super) fn all_rulesets(&self) -> Vec<(String, Ruleset)> {
+        let builtin = smart::builtin().map(|(id, ruleset)| (id.to_string(), ruleset));
+        builtin.into_iter().chain(self.config.rulesets.iter().map(|(id, r)| (id.clone(), r.clone()))).collect()
+    }
+
     /// Preferences' Rulesets: the built-in ones and the user's, each
     /// opening to the playlists it makes.
     pub(super) fn rulesets_ui(&mut self, ui: &mut egui::Ui) {
@@ -230,7 +252,6 @@ impl App {
         let builtin = smart::builtin().map(|(id, ruleset)| (id.to_string(), ruleset, true));
         let own = self.config.rulesets.iter().map(|(id, ruleset)| (id.clone(), ruleset.clone(), false));
         let all: Vec<(String, Ruleset, bool)> = builtin.into_iter().chain(own).collect();
-        let revision = self.songs.revision();
         let (mut open, mut delete) = (None, None);
         for (id, ruleset, builtin) in all {
             egui::CollapsingHeader::new(&ruleset.name).id_salt(("ruleset", &id)).show(ui, |ui| {
@@ -243,12 +264,7 @@ impl App {
                         delete = Some(id.clone());
                     }
                 });
-                let cached = self.ruleset_groups.get(&id).filter(|(seen, rules, _)| *seen == revision && *rules == ruleset.rules);
-                if cached.is_none() {
-                    let groups = ruleset.rules.groups(&self.songs, settings_sync::now());
-                    self.ruleset_groups.insert(id.clone(), (revision, ruleset.rules.clone(), groups));
-                }
-                let groups = &self.ruleset_groups[&id].2;
+                let groups = self.groups_of(&id, &ruleset.rules);
                 ui.weak(format!("{} playlist{}", groups.len(), if groups.len() == 1 { "" } else { "s" }));
                 for group in groups.iter().take(SHOWN_GROUPS) {
                     let subtitle = group.subtitle.as_deref().map(|s| format!(" \u{b7} {s}")).unwrap_or_default();
@@ -274,9 +290,9 @@ impl App {
     }
 }
 
-/// The ruleset playlists last worked out for Preferences, by ruleset ID:
-/// for which library revision and rules.
-pub(super) type RulesetGroups = BTreeMap<String, (u64, Rules, Vec<Group>)>;
+/// The ruleset playlists last worked out, by ruleset ID: for which library
+/// revision and rules.
+pub(super) type RulesetGroups = BTreeMap<String, (u64, Rules, Arc<Vec<Group>>)>;
 
 /// What `rules` come to in `store` now, in a line.
 fn summary(rules: &Rules, store: &crate::song_store::SongStore) -> String {
