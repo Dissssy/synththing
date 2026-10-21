@@ -28,6 +28,7 @@ mod tags;
 mod copyright;
 mod moderation;
 mod notifications;
+mod online;
 mod overflow;
 mod palette;
 mod previews;

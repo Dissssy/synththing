@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 
 use super::App;
+use crate::build_info;
 use crate::lookup::matching::Album;
 use crate::lookup::{self, Answer, Outcome, State, Tried, Worker};
 use crate::song_store::Online;
@@ -32,7 +33,9 @@ pub(super) struct LookupState {
 impl App {
     /// This device looks albums up.
     fn looks_up(&self) -> bool {
-        self.config.online_lookup && self.config.lookup_device.as_deref() == Some(self.device_id())
+        build_info::online(build_info::Online::Lookup)
+            && self.config.online_lookup
+            && self.config.lookup_device.as_deref() == Some(self.device_id())
     }
 
     /// Work out the library's albums again, if its songs changed.
@@ -138,7 +141,7 @@ impl App {
             }
             changed = true;
         }
-        if on {
+        if on && self.online_ui(ui, build_info::Online::Lookup) {
             ui.indent("online_lookup", |ui| {
                 if self.looks_up() {
                     self.lookup_status_ui(ui);

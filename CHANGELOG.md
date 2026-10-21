@@ -16,6 +16,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Change the keyboard shortcuts: Preferences > Keyboard lists every command with its keys. Click a key to change it, + to add another, right-click one to remove it, or Reset. A key bound to two commands shows in the warning color. Your keys sync with your other devices (Keyboard shortcuts, under App in what syncs), and "This device only" keeps a command's keys to the device you're on.
 
 ### Changed
+- Branch builds can use online features again, one kind at a time: the Online Library, sign-in and sync, and album art and details lookup each start off and are turned on for that run only, in Preferences > Online Library, with Turn on for this run where they'd be, or with `--online scripts,sync,lookup`. Never saved, so every launch starts offline.
 - Scripts now see the function keys the app doesn't use: F5, F9, F10 and F11 reach a script once they're rebound away from their commands. Escape always stays the app's.
 - The player buttons' hover text shows their keyboard shortcut (Play/Pause (Space), Next (N), Fullscreen (F)...). Shortcuts no longer fire while a script control is waiting for a key to bind.
 
