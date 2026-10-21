@@ -80,7 +80,22 @@ fn set_tag(meta: &mut Meta, key: &str, value: &str) {
         "contentgroup" | "grouping" | "itunesgrouping" => text(&mut meta.grouping),
         "comment" | "comments" => text(&mut meta.comment),
         "compilation" | "itunescompilation" => meta.compilation |= value == "1" || value.eq_ignore_ascii_case("true"),
+        // Picard's names: its "track ID" is the recording's, and the
+        // track on the release is the "release track ID".
+        "musicbrainzalbumid" => musicbrainz_id(&mut meta.musicbrainz_release, value),
+        "musicbrainztrackid" | "musicbrainzrecordingid" => musicbrainz_id(&mut meta.musicbrainz_recording, value),
+        "musicbrainzreleasetrackid" => musicbrainz_id(&mut meta.musicbrainz_track, value),
         _ => {}
+    }
+}
+
+/// Fill `slot` with the MusicBrainz ID `value`, if it is one (a UUID, in
+/// lowercase) and the slot's empty.
+fn musicbrainz_id(slot: &mut Option<String>, value: &str) {
+    let is_uuid = value.len() == 36
+        && value.char_indices().all(|(i, c)| if matches!(i, 8 | 13 | 18 | 23) { c == '-' } else { c.is_ascii_hexdigit() });
+    if slot.is_none() && is_uuid {
+        *slot = Some(value.to_ascii_lowercase());
     }
 }
 
@@ -428,6 +443,10 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
             let value = tag.value.to_string();
             if tag.std_key.is_some() {
                 set_tag(&mut meta, &key, &value);
+            } else if let Some(name) = key.strip_prefix("TXXX:").filter(|name| name.to_ascii_lowercase().starts_with("musicbrainz")) {
+                // ID3's MusicBrainz IDs, as Picard spells them ("MusicBrainz
+                // Album Id"): symphonia only knows them in capitals.
+                set_tag(&mut meta, name, &value);
             }
             // Matroska's DURATION tag repeats what Length says.
             if key.eq_ignore_ascii_case("duration") {
@@ -657,6 +676,23 @@ mod tests {
         set_tag(&mut meta, "Artist", " A\0B\0\0 ");
         assert_eq!(meta.album.as_deref(), Some("KPM 155 Solo Instruments - Vol. 2"));
         assert_eq!(meta.artist.as_deref(), Some("A\0B"), "NULs between values stay, to split at");
+    }
+
+    #[test]
+    fn reads_musicbrainz_ids() {
+        let release = "8C3F2A11-0D7E-4B6A-9F00-1A2B3C4D5E6F";
+        let mut meta = Meta::default();
+        // A standard tag as symphonia names it, ID3's as Picard spells it,
+        // and ffmpeg's.
+        set_tag(&mut meta, &tag_name("MusicBrainzAlbumId"), release);
+        set_tag(&mut meta, "MusicBrainz Release Track Id", "11111111-2222-3333-4444-555555555555");
+        set_tag(&mut meta, "MUSICBRAINZ_TRACKID", "not an id");
+        set_tag(&mut meta, "musicbrainz_trackid", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        assert_eq!(meta.musicbrainz_release.as_deref(), Some("8c3f2a11-0d7e-4b6a-9f00-1a2b3c4d5e6f"));
+        assert_eq!(meta.musicbrainz_track.as_deref(), Some("11111111-2222-3333-4444-555555555555"));
+        assert_eq!(meta.musicbrainz_recording.as_deref(), Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"), "Picard's track ID is the recording's");
+        let facts = crate::fields::Facts { meta: Some(&meta), ..crate::fields::Facts::default() };
+        assert_eq!(facts.text(crate::fields::Field::MusicBrainzRelease).as_deref(), Some("8c3f2a11-0d7e-4b6a-9f00-1a2b3c4d5e6f"));
     }
 
     #[test]
