@@ -133,6 +133,14 @@ pub struct Meta {
     /// Hz.
     #[serde(rename = "sr", skip_serializing_if = "Option::is_none")]
     pub sample_rate: Option<u32>,
+    /// Its MusicBrainz IDs, where a tagger (Picard) wrote them: its
+    /// release (album), its recording, and its track on that release.
+    #[serde(rename = "mbr", skip_serializing_if = "Option::is_none")]
+    pub musicbrainz_release: Option<String>,
+    #[serde(rename = "mbc", skip_serializing_if = "Option::is_none")]
+    pub musicbrainz_recording: Option<String>,
+    #[serde(rename = "mbt", skip_serializing_if = "Option::is_none")]
+    pub musicbrainz_track: Option<String>,
     /// Which `META_VERSION` read it: one read by an older one is read
     /// again, for what it didn't read.
     #[serde(rename = "v", skip_serializing_if = "is_zero")]
@@ -141,8 +149,8 @@ pub struct Meta {
 
 /// The version of what's read of a song's file (`Meta::version`): 1 added
 /// its grouping, comment and sample rate; 2 trims the NULs some taggers
-/// leave at the end of a tag.
-pub const META_VERSION: u32 = 2;
+/// leave at the end of a tag; 3 added its MusicBrainz IDs.
+pub const META_VERSION: u32 = 3;
 
 fn is_zero(n: &u32) -> bool {
     *n == 0

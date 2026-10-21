@@ -328,6 +328,14 @@ impl App {
                             ui.add(egui::Label::new(value).wrap());
                             ui.end_row();
                         }
+                        // Its MusicBrainz IDs (in the rows above too), as links.
+                        for (kind, id) in [("release", &info.meta.musicbrainz_release), ("recording", &info.meta.musicbrainz_recording)] {
+                            if let Some(id) = id {
+                                ui.strong(format!("MusicBrainz {kind}"));
+                                ui.hyperlink_to("Open on MusicBrainz", format!("https://musicbrainz.org/{kind}/{id}"));
+                                ui.end_row();
+                            }
+                        }
                     });
                 });
             }
