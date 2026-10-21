@@ -63,6 +63,9 @@ pub fn main() -> Result<()> {
         println!();
     }
     let cli = Cli::parse();
+    for &kind in &cli.online {
+        build_info::set_online(kind, true);
+    }
     if let Some(dir) = &cli.config_dir
         && let Err(e) = config::set_config_dir(dir)
     {
@@ -130,6 +133,9 @@ pub fn main() -> Result<()> {
 
     applog::init(cli.console);
     log::info!("synththing v{} starting", build_info::describe());
+    if !cli.online.is_empty() {
+        log::info!("turned on for this run: {:?}", cli.online);
+    }
     match recopied {
         Some(Ok(done)) => log::info!("settings copied again: {done}"),
         Some(Err(e)) => log::warn!("couldn't copy the settings again: {e:#}"),

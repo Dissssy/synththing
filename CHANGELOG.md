@@ -15,6 +15,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Command palette: Ctrl+Shift+P lists what the app can do with its keyboard shortcut beside it. Type to filter, Up/Down and Enter (or a click) to run one, Esc to close.
 
 ### Changed
+- Branch builds can use online features again, one kind at a time: the Online Library, sign-in and sync, and album art and details lookup each start off and are turned on for that run only, in Preferences > Online Library, with Turn on for this run where they'd be, or with `--online scripts,sync,lookup`. Never saved, so every launch starts offline.
 - The player buttons' hover text shows their keyboard shortcut (Play/Pause (Space), Next (N), Fullscreen (F)...). Shortcuts no longer fire while a script control is waiting for a key to bind.
 
 ## 1.3.0 (2026-10-21)

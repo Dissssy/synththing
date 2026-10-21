@@ -33,6 +33,7 @@ use eframe::egui;
 
 use super::previews::{self, PreviewImage};
 use super::{info_icon, with_info, App};
+use crate::build_info::Online;
 use crate::config::LibraryServer;
 use crate::library::identity::Identity;
 use crate::library::{
@@ -210,7 +211,7 @@ pub struct LibraryState {
     /// Bumped by each search, so late results from an older one are dropped.
     generation: u64,
     searching: usize,
-    searched: bool,
+    pub(super) searched: bool,
     results: Vec<Found>,
     /// How many each server has in all, for "first 30 of 120".
     totals: HashMap<String, u64>,
@@ -998,9 +999,9 @@ impl App {
 
     /// The Online Library tab.
     pub(super) fn library_ui(&mut self, ui: &mut egui::Ui) {
-        if !crate::build_info::online_features() {
+        if !crate::build_info::online(Online::Scripts) {
             ui.add_space(8.0);
-            ui.label(crate::build_info::OFFLINE_NOTE);
+            self.online_ui(ui, Online::Scripts);
             return;
         }
         let servers = self.config.library.enabled_servers();
@@ -2205,10 +2206,19 @@ impl App {
 
     /// Preferences > Online Library: the servers in use, and the identity.
     pub(super) fn library_preferences_ui(&mut self, ui: &mut egui::Ui) {
-        if !crate::build_info::online_features() {
-            ui.label(crate::build_info::OFFLINE_NOTE);
-            return;
+        self.branch_online_ui(ui);
+        if self.online_ui(ui, Online::Scripts) {
+            self.servers_preferences_ui(ui);
         }
+        ui.add_space(6.0);
+        ui.strong("Your identity");
+        if self.online_ui(ui, Online::Sync) {
+            self.identity_ui(ui);
+        }
+    }
+
+    /// The library servers in use, the name to post as, and notifications.
+    fn servers_preferences_ui(&mut self, ui: &mut egui::Ui) {
         let before = (self.config.library.official, self.config.library.author_name.clone());
         let mut changed = false;
         with_info(
@@ -2295,10 +2305,6 @@ impl App {
                 self.status = format!("Couldn't save preferences: {e}");
             }
         }
-
-        ui.add_space(6.0);
-        ui.strong("Your identity");
-        self.identity_ui(ui);
     }
 
     /// The identity: its ID, made on request; export and import.
@@ -2416,12 +2422,12 @@ impl App {
     }
 }
 
-/// Why Publish (and Remix) can't be used: no server's turned on, or this is
-/// a branch build.
+/// Why Publish (and Remix) can't be used: no server's turned on, or the
+/// Online Library is off (a branch build's).
 fn no_server_hint() -> &'static str {
-    if crate::build_info::online_features() {
+    if crate::build_info::online(Online::Scripts) {
         "Turn on a library server first (Preferences > Online Library)"
     } else {
-        crate::build_info::OFFLINE_NOTE
+        "The Online Library is off in branch builds: turn it on in Preferences > Online Library."
     }
 }

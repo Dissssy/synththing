@@ -3,6 +3,8 @@
 //! (docs/design/release-channels.md). Built anywhere else, it's a stable
 //! build of Cargo.toml's version, with no commit.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 /// This build's version. A release's (or a local build's) is Cargo.toml's;
 /// a canary or branch build's is the next patch version as a prerelease,
 /// numbered by commits since the release (`0.7.1-nightly.12`), so it sorts
@@ -36,16 +38,58 @@ pub fn channel() -> Channel {
     }
 }
 
-/// Whether online features (the script and song library) are on: not in
-/// branch builds, which are for trying a feature, not for posting to the
-/// real servers. A library request from one fails before it's sent
-/// (`library::client`).
-pub fn online_features() -> bool {
-    !matches!(channel(), Channel::Branch(_))
+/// The kinds of online feature. A branch build is for trying a feature,
+/// not for talking to the real servers, so each starts off there and a
+/// tester turns on the ones the branch is about (`set_online`), for that
+/// run only. Feedback and update checks are always on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Online {
+    /// The Online Library: finding, installing, publishing and reporting
+    /// scripts, and its notifications.
+    Scripts,
+    /// The identity, sign-in, and syncing settings, playlists and songs.
+    Sync,
+    /// Album art and details from MusicBrainz, the Cover Art Archive and
+    /// the iTunes Store.
+    Lookup,
 }
 
-/// Said wherever an online feature would be, in a branch build.
-pub const OFFLINE_NOTE: &str = "Online features (the script and song library) are off in branch builds.";
+impl Online {
+    pub const ALL: [Online; 3] = [Self::Scripts, Self::Sync, Self::Lookup];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Scripts => "Online Library (scripts)",
+            Self::Sync => "Sign-in and sync",
+            Self::Lookup => "Album art and details lookup",
+        }
+    }
+
+    /// Said where it would be, while it's off.
+    pub fn off_note(self) -> &'static str {
+        match self {
+            Self::Scripts => "The Online Library is off in branch builds.",
+            Self::Sync => "Sign-in and sync are off in branch builds.",
+            Self::Lookup => "Looking albums up is off in branch builds.",
+        }
+    }
+}
+
+/// Which kinds a branch build's tester turned on, by `Online as usize`.
+/// Never saved: every run starts with them off.
+static TURNED_ON: [AtomicBool; Online::ALL.len()] = [const { AtomicBool::new(false) }; Online::ALL.len()];
+
+/// Whether `kind` is on: always, but in a branch build only once turned on.
+/// A library request for one that's off fails before it's sent
+/// (`library::client`).
+pub fn online(kind: Online) -> bool {
+    !matches!(channel(), Channel::Branch(_)) || TURNED_ON[kind as usize].load(Ordering::Relaxed)
+}
+
+/// Turn `kind` on or off for this run of a branch build.
+pub fn set_online(kind: Online, on: bool) {
+    TURNED_ON[kind as usize].store(on, Ordering::Relaxed);
+}
 
 /// The commit, shortened as git does, if known.
 pub fn short_commit() -> Option<&'static str> {
