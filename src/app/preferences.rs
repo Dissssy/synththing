@@ -355,6 +355,8 @@ impl App {
                     |ui| ui.checkbox(&mut past_articles, "Sort past a leading The, A or An"),
                 );
                 ui.separator();
+                self.lookup_preferences_ui(ui);
+                ui.separator();
                 self.rulesets_ui(ui);
                 ui.separator();
                 let loaded = self.assets.summary();

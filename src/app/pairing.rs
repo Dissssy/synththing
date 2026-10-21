@@ -56,6 +56,11 @@ impl Default for PairingState {
 }
 
 impl App {
+    /// This device's id (`Device::id`).
+    pub(super) fn device_id(&self) -> &str {
+        &self.pairing.device.id
+    }
+
     fn spawn_pairing(&self, job: impl FnOnce() -> Event + Send + 'static) {
         let tx = self.pairing.events.0.clone();
         std::thread::spawn(move || {

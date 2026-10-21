@@ -44,6 +44,7 @@ mod import;
 mod instance;
 mod layout;
 mod library;
+mod lookup;
 mod live;
 mod loader;
 mod lua_analysis;

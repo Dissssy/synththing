@@ -1,13 +1,17 @@
-//! Album art: the picture embedded in a song's file, read and scaled on a
-//! thread of its own and kept as a texture for each size it's drawn at
-//! (the most recently drawn ones, up to `KEPT`); an album without one (or
-//! of MIDI files) gets a tile of its own color with its initials, from its
-//! name, the way branch builds get their color.
+//! Album art: the picture embedded in a song's file, else its release's
+//! front cover from the Cover Art Archive (once looked up, `lookup`; kept
+//! in the config folder's `art`), read and scaled on threads of their own
+//! and kept as a texture for each size it's drawn at (the most recently
+//! drawn ones, up to `KEPT`); an album without one (or of MIDI files)
+//! gets a tile of its own color with its initials, from its name, the way
+//! branch builds get their color.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, SystemTime};
 
 use eframe::egui;
 
@@ -18,7 +22,27 @@ const KEPT: usize = 300;
 /// How many requests wait at most: scrolling past art drops the oldest.
 const WAITING: usize = 64;
 
-type Request = (PathBuf, u32);
+/// How many threads read art: one can wait on a download while another
+/// reads files.
+const READERS: usize = 2;
+/// How long a release found without a cover waits to be asked again.
+const NO_COVER_KEPT: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// Where an album's art comes from: a song's file, then its release.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Source {
+    pub file: Option<PathBuf>,
+    /// The release (and its group) at MusicBrainz.
+    pub release: Option<(String, Option<String>)>,
+}
+
+impl Source {
+    fn is_empty(&self) -> bool {
+        self.file.is_none() && self.release.is_none()
+    }
+}
+
+type Request = (Source, u32);
 
 enum Slot {
     Loading,
@@ -38,6 +62,8 @@ struct Kept {
 struct Queue {
     waiting: Mutex<Vec<Request>>,
     ready: Condvar,
+    /// Covers not kept yet may be downloaded (`AlbumArt::online`).
+    online: AtomicBool,
 }
 
 /// How many letters a tile without art shows, unless set otherwise.
@@ -55,14 +81,19 @@ pub struct AlbumArt {
 
 impl AlbumArt {
     /// Take in the art read since the last frame, and let go of what
-    /// hasn't been drawn in a while. Once a frame, before any `tile`.
-    pub fn frame(&mut self, ctx: &egui::Context) {
+    /// hasn't been drawn in a while. Once a frame, before any `tile`;
+    /// `online`: covers may be downloaded.
+    pub fn frame(&mut self, ctx: &egui::Context, online: bool) {
         self.frame += 1;
+        if self.queue.online.swap(online, Ordering::Relaxed) != online {
+            // (Those found missing may be there now.)
+            self.kept.retain(|_, k| !matches!(k.slot, Slot::Missing));
+        }
         if let Some(done) = &self.done {
             for (request, image) in done.try_iter() {
                 let slot = match image {
                     Some(image) => {
-                        let name = format!("album art {}@{}", request.0.display(), request.1);
+                        let name = format!("album art {:?}@{}", request.0, request.1);
                         Slot::Ready(ctx.load_texture(name, image, egui::TextureOptions::LINEAR))
                     }
                     None => Slot::Missing,
@@ -81,14 +112,14 @@ impl AlbumArt {
         }
     }
 
-    /// Draw the art of the album `name`, taken from the song at `from`
-    /// (none: the album's all MIDI), filling `rect`.
-    pub fn tile(&mut self, ui: &egui::Ui, rect: egui::Rect, from: Option<&Path>, name: &str) {
+    /// Draw the art of the album `name`, taken `from` a song of it and
+    /// its release (neither: the album's all MIDI), filling `rect`.
+    pub fn tile(&mut self, ui: &egui::Ui, rect: egui::Rect, from: &Source, name: &str) {
         let radius = 4.0;
-        if let Some(from) = from {
+        if !from.is_empty() {
             let pixels = rect.width().max(rect.height()) * ui.ctx().pixels_per_point();
             let size = SIZES.into_iter().find(|&s| s as f32 >= pixels).unwrap_or(SIZES[SIZES.len() - 1]);
-            let request = (from.to_path_buf(), size);
+            let request = (from.clone(), size);
             let frame = self.frame;
             let kept = match self.kept.get_mut(&request) {
                 Some(kept) => kept,
@@ -111,11 +142,12 @@ impl AlbumArt {
         if self.done.is_none() {
             let (send, done) = mpsc::channel();
             self.done = Some(done);
-            let queue = self.queue.clone();
-            let ctx = ctx.clone();
-            let started = std::thread::Builder::new().name("album art".into()).spawn(move || read_art_forever(&queue, &send, &ctx));
-            if let Err(e) = started {
-                log::warn!("couldn't start reading album art: {e}");
+            for _ in 0..READERS {
+                let (queue, send, ctx) = (self.queue.clone(), send.clone(), ctx.clone());
+                let started = std::thread::Builder::new().name("album art".into()).spawn(move || read_art_forever(&queue, &send, &ctx));
+                if let Err(e) = started {
+                    log::warn!("couldn't start reading album art: {e}");
+                }
             }
         }
         let mut waiting = self.queue.waiting.lock().unwrap_or_else(|e| e.into_inner());
@@ -143,7 +175,11 @@ fn read_art_forever(queue: &Queue, send: &mpsc::Sender<(Request, Option<egui::Co
                 waiting = queue.ready.wait(waiting).unwrap_or_else(|e| e.into_inner());
             }
         };
-        let image = embedded_picture(&request.0).and_then(|bytes| scaled(&bytes, request.1));
+        let (source, size) = &request;
+        let online = queue.online.load(Ordering::Relaxed);
+        let bytes = source.file.as_deref().and_then(embedded_picture);
+        let bytes = bytes.or_else(|| source.release.as_ref().and_then(|(release, group)| cover(release, group.as_deref(), online)));
+        let image = bytes.and_then(|bytes| scaled(&bytes, *size));
         if send.send((request, image)).is_err() {
             return;
         }
@@ -177,6 +213,60 @@ fn embedded_picture(path: &Path) -> Option<Box<[u8]>> {
     }
     let cover = visuals.iter().position(|v| v.usage == Some(StandardVisualKey::FrontCover)).unwrap_or(0);
     (!visuals.is_empty()).then(|| visuals.swap_remove(cover).data)
+}
+
+/// Where covers are kept, by release.
+fn covers_dir() -> Option<PathBuf> {
+    Some(crate::config::config_dir().ok()?.join("art"))
+}
+
+/// The front cover of `release` (else of its `group`) from the Cover Art
+/// Archive: kept, or downloaded if `online` (and kept, or noted missing).
+fn cover(release: &str, group: Option<&str>, online: bool) -> Option<Box<[u8]>> {
+    let dir = covers_dir()?;
+    let kept = dir.join(format!("{release}.jpg"));
+    if let Ok(bytes) = std::fs::read(&kept) {
+        return Some(bytes.into());
+    }
+    let none = dir.join(format!("{release}.none"));
+    let noted = std::fs::metadata(&none).and_then(|m| m.modified()).ok();
+    if !online || noted.is_some_and(|at| SystemTime::now().duration_since(at).unwrap_or_default() < NO_COVER_KEPT) {
+        return None;
+    }
+    let urls = std::iter::once(format!("https://coverartarchive.org/release/{release}/front-500"))
+        .chain(group.map(|g| format!("https://coverartarchive.org/release-group/{g}/front-500")));
+    let mut failed = false;
+    for url in urls {
+        match download(&url) {
+            Ok(Some(bytes)) => {
+                if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&kept, &bytes)) {
+                    log::warn!("couldn't keep the cover of {release}: {e}");
+                }
+                return Some(bytes.into());
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log::warn!("couldn't download {url}: {e}");
+                failed = true;
+            }
+        }
+    }
+    // (Not found anywhere: noted, so it isn't asked again for a while; a
+    // failed download is tried again next time it's drawn.)
+    if !failed && let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&none, b"")) {
+        log::warn!("couldn't note {release} has no cover: {e}");
+    }
+    None
+}
+
+/// The image at `url` (`None`: there's none, a 404).
+fn download(url: &str) -> Result<Option<Vec<u8>>, ureq::Error> {
+    let agent = format!("synththing/{} ( https://github.com/Dissssy/synththing )", crate::build_info::VERSION);
+    match ureq::get(url).header("User-Agent", &agent).call() {
+        Ok(mut response) => Ok(Some(response.body_mut().read_to_vec()?)),
+        Err(ureq::Error::StatusCode(404)) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// `bytes` (a JPEG or PNG) as a `size`-pixel square, cropped to fill it.

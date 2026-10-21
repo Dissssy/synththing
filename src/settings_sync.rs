@@ -117,6 +117,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("group_ignore", "Characters ignored when grouping", &["group_ignore"]),
             setting("sort_articles", "Sorting past a leading The, A or An", &["sort_with_articles"]),
             setting("cleanup_dismissed", "Dismissed clean-up suggestions", &["cleanup_dismissed"]),
+            setting("online_lookup", "Online album art and details", &["online_lookup", "lookup_device"]),
             PLAYLISTS,
             SONGS,
             STARRED_SONGS,

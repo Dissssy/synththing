@@ -72,6 +72,33 @@ pub struct Song {
     /// (`Field::RememberPosition`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<f64>,
+    /// What it was matched to at MusicBrainz (`lookup`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online: Option<Online>,
+}
+
+/// A song's match at MusicBrainz, or that its last one was wrong. Kept
+/// under short names: the synced library has one for most songs.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Online {
+    /// The release (album) it's on, if it's matched.
+    #[serde(rename = "r", skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
+    /// That release's group (every edition of the album).
+    #[serde(rename = "g", skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(rename = "c", skip_serializing_if = "Option::is_none")]
+    pub recording: Option<String>,
+    /// Who matched it: the lookup by itself, or the user.
+    #[serde(rename = "u", skip_serializing_if = "std::ops::Not::not")]
+    pub by_user: bool,
+    /// Releases it was matched to and isn't on (Wrong match).
+    #[serde(rename = "x", skip_serializing_if = "Vec::is_empty")]
+    pub rejected: Vec<String>,
+    /// When (Unix seconds).
+    #[serde(rename = "at")]
+    pub at: i64,
 }
 
 impl Song {
@@ -477,6 +504,23 @@ impl SongStore {
             self.save();
         }
         before
+    }
+
+    /// Set (`Some`) or drop (`None`) songs' matches at MusicBrainz, by
+    /// key; saved once.
+    pub fn set_online(&mut self, changes: Vec<(String, Option<Online>)>) {
+        let mut changed = false;
+        for (key, online) in changes {
+            if let Some(song) = self.songs.get_mut(&key)
+                && song.online != online
+            {
+                song.online = online;
+                changed = true;
+            }
+        }
+        if changed {
+            self.save();
+        }
     }
 
     /// Note where the song at `key` was left (`None`: from its start);

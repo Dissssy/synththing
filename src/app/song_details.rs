@@ -112,7 +112,10 @@ impl App {
                     ui.separator();
                     self.together_ui(ui, &details);
                 }
-                Tab::File => self.file_tab_ui(ui, &details.paths[0]),
+                Tab::File => {
+                    self.file_tab_ui(ui, &details.paths[0]);
+                    self.online_match_ui(ui, &details.paths[0]);
+                }
             }
             ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
