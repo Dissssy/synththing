@@ -92,7 +92,7 @@ impl Suggestion {
 /// Every suggestion for `store`'s songs (names grouped as by
 /// `fields::group_key`, past `ignore`), junk first, then splits.
 pub fn suggest(store: &SongStore, ignore: &str) -> Vec<Suggestion> {
-    let junk: Vec<String> = store.known().filter(|(_, song)| song_store::is_apple_double(&song.name)).map(|(key, _)| key.to_string()).collect();
+    let junk: Vec<String> = store.known().filter(|(key, song)| !store.is_blocked(key) && song_store::is_apple_double(&song.name)).map(|(key, _)| key.to_string()).collect();
     let mut texts: BTreeMap<(Field, String), Suggestion> = BTreeMap::new();
     // Each name's spellings (by group key), and how many songs each is on.
     let mut names: BTreeMap<String, (BTreeMap<String, usize>, BTreeSet<&str>)> = BTreeMap::new();
@@ -417,7 +417,9 @@ mod tests {
         ]);
         let suggestions = suggest(&store, "");
         assert_eq!(suggestions.len(), 1, "only the junk, not its details: {suggestions:?}");
-        assert_eq!((suggestions[0].kind, &suggestions[0].keys), (Kind::Junk, &vec![junk]));
+        assert_eq!((suggestions[0].kind, &suggestions[0].keys), (Kind::Junk, &vec![junk.clone()]));
+        store.remove(&store.path(&junk)).unwrap();
+        assert!(suggest(&store, "").is_empty(), "gone once removed");
     }
 
     #[test]
