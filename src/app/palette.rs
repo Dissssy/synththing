@@ -28,6 +28,36 @@ fn ranked(commands: impl IntoIterator<Item = Command>, query: &str) -> Vec<Comma
     scored.into_iter().map(|(_, c)| c).collect()
 }
 
+/// How tall the list gets before it scrolls.
+const LIST_HEIGHT: f32 = 320.0;
+
+/// The matching commands, each with its key on the right; the one
+/// clicked, if any. `scroll` brings the highlighted one into view.
+fn list_ui(ui: &mut egui::Ui, matches: &[Command], highlighted: usize, scroll: bool) -> Option<Command> {
+    let mut clicked = None;
+    // The modal is laid out within last frame's size, so without the
+    // minimum a list that grows back (after a backspace) would stay as
+    // short as it was.
+    egui::ScrollArea::vertical().max_height(LIST_HEIGHT).min_scrolled_height(LIST_HEIGHT).show(ui, |ui| {
+        for (n, &command) in matches.iter().enumerate() {
+            let row = ui.horizontal(|ui| {
+                let label = ui.selectable_label(n == highlighted, command.name());
+                if n == highlighted && scroll {
+                    label.scroll_to_me(None);
+                }
+                if let Some(key) = commands::shortcut_text(ui.ctx(), command) {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.weak(key));
+                }
+                label
+            });
+            if row.inner.clicked() {
+                clicked = Some(command);
+            }
+        }
+    });
+    clicked
+}
+
 impl App {
     pub(super) fn palette_ui(&mut self, ctx: &egui::Context, view: &EngineView) {
         let Some(palette) = &self.palette else { return };
@@ -69,23 +99,9 @@ impl App {
             if matches.is_empty() {
                 ui.weak("No command matches.");
             }
-            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                for (n, &command) in matches.iter().enumerate() {
-                    let row = ui.horizontal(|ui| {
-                        let label = ui.selectable_label(n == palette.highlighted, command.name());
-                        if n == palette.highlighted && (up || down) {
-                            label.scroll_to_me(None);
-                        }
-                        if let Some(key) = commands::shortcut_text(ui.ctx(), command) {
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.weak(key));
-                        }
-                        label
-                    });
-                    if row.inner.clicked() {
-                        chosen = Some(command);
-                    }
-                }
-            });
+            if let Some(command) = list_ui(ui, &matches, palette.highlighted, up || down) {
+                chosen = Some(command);
+            }
         });
         if let Some(command) = chosen {
             self.palette = None;
@@ -106,5 +122,34 @@ mod tests {
         assert_eq!(ranked(Command::ALL, "quit"), [Command::Quit]);
         assert_eq!(ranked(Command::ALL, "next")[0], Command::NextTrack);
         assert!(ranked(Command::ALL, "zzz").is_empty());
+    }
+
+    /// The modal's content height with `matches` listed, after a few
+    /// frames to settle.
+    fn listed_height(ctx: &egui::Context, matches: &[Command]) -> f32 {
+        let mut height = 0.0;
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::Modal::new(egui::Id::new("test_palette")).show(ui.ctx(), |ui| {
+                    list_ui(ui, matches, 0, false);
+                    height = ui.min_rect().height();
+                });
+            });
+            output.textures_delta.clear();
+        }
+        height
+    }
+
+    #[test]
+    fn list_grows_back() {
+        let ctx = egui::Context::default();
+        let all = listed_height(&ctx, &Command::ALL);
+        let few = listed_height(&ctx, &Command::ALL[..3]);
+        assert!(few < all / 2.0, "{few} {all}");
+        assert_eq!(listed_height(&ctx, &Command::ALL), all);
     }
 }
