@@ -279,6 +279,8 @@ pub struct App {
     songs_missing_only: bool,
     /// Songs asked to be removed from the library, waiting on Remove.
     remove_songs: Vec<PathBuf>,
+    /// Remove them from every device, not only this one.
+    remove_everywhere: bool,
     active_sf: Option<usize>,
     /// Selected rows of the Soundfonts list.
     soundfont_selection: Selection,
@@ -652,6 +654,7 @@ impl App {
             missing_info: None,
             songs_missing_only: false,
             remove_songs: Vec::new(),
+            remove_everywhere: false,
             active_sf: None,
             soundfont_selection: Selection::default(),
             tap,
@@ -2979,13 +2982,25 @@ impl App {
         };
         let mut close = false;
         let mut remove = false;
+        let synced = self.syncs_library();
+        let everywhere = &mut self.remove_everywhere;
         let modal = egui::Modal::new(egui::Id::new("remove_songs")).show(ctx, |ui| {
             ui.set_max_width(360.0);
             ui.heading("Remove from library?");
-            ui.label(format!(
-                "This deletes synththing's copy of {what} on this device. Playlists keep them, shown as unavailable here. \
-                 Your other devices keep theirs, and this one won't fetch them from them again."
-            ));
+            if synced {
+                ui.checkbox(everywhere, "Remove from all my devices");
+            }
+            if synced && *everywhere {
+                ui.label(format!(
+                    "This deletes synththing's copy of {what} on this device and on all your other devices. \
+                     Playlists keep them, shown as unavailable. Importing one again brings it back everywhere."
+                ));
+            } else {
+                ui.label(format!(
+                    "This deletes synththing's copy of {what} on this device. Playlists keep them, shown as unavailable here. \
+                     Your other devices keep theirs, and this one won't fetch them from them again."
+                ));
+            }
             ui.horizontal(|ui| {
                 remove = ui.button("Remove").clicked();
                 close = ui.button("Cancel").clicked();
@@ -2993,15 +3008,21 @@ impl App {
         });
         if remove {
             let paths = std::mem::take(&mut self.remove_songs);
+            let everywhere = synced && self.remove_everywhere;
             for path in &paths {
-                if let Err(e) = self.songs.remove(path) {
+                let removed = match self.songs.key(path) {
+                    Some(key) if everywhere => self.songs.remove_everywhere(&key),
+                    _ => self.songs.remove(path),
+                };
+                if let Err(e) = removed {
                     self.status = format!("Couldn't remove a song: {e:#}");
                 }
             }
             self.refresh_missing();
             self.song_list.clear_selection();
             if self.status.is_empty() || !self.status.starts_with("Couldn't") {
-                self.status = format!("Removed {what} from the library.");
+                let from = if everywhere { "all your devices" } else { "the library" };
+                self.status = format!("Removed {what} from {from}.");
             }
         } else if close || modal.should_close() {
             self.remove_songs.clear();
