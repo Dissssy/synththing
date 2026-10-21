@@ -2,7 +2,9 @@
 //! names (`song_title`), in columns of what's known of them (`View`,
 //! synced like the other settings): sorted by any of them, and grouped by
 //! one on the fly (or by tag, a song in each of its tags' groups), with a
-//! fuzzy search over the names, file names and tags.
+//! fuzzy search over the names, file names and tags, and filters
+//! (`type:mid`, `search.rs`): with only filters, the list stays sorted and
+//! grouped.
 //! Double-clicking a song plays it (and marks it as playing); rows can be
 //! selected several at a time and dragged out together (onto a playlist).
 //! The alien at the left of each row stars it, or unstars it.
@@ -19,6 +21,9 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use crate::fields::{self, Def, Field, Value};
+use crate::matching::Term;
+use crate::search::{Problem, Search};
+use crate::search_box::SearchBox;
 use crate::select_list::{self, Selection};
 use crate::together::{self, Member};
 
@@ -26,6 +31,9 @@ use crate::together::{self, Member};
 const MAX_SEARCH_RESULTS: usize = 200;
 /// Room at the end of each row for its own widgets (`trailing`).
 const TRAILING_WIDTH: f32 = 36.0;
+/// The least room the search box has beside the toolbar's buttons (else
+/// it goes under them).
+const MIN_SEARCH_WIDTH: f32 = 180.0;
 /// The least the name keeps: columns that don't fit beside it are left out.
 const MIN_NAME_WIDTH: f32 = 120.0;
 
@@ -163,11 +171,15 @@ pub struct View {
     pub descending: bool,
     /// A groupable column's key, `"tag"`, or empty for no groups.
     pub group: String,
+    /// What the search leaves out of the name, the columns, the file name
+    /// (`"file_name"`) and the tags (`"tag"`) it goes by.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unsearched: Vec<String>,
 }
 
 impl Default for View {
     fn default() -> Self {
-        Self { columns: vec!["artist".into(), "album".into(), "length".into()], sort: "name".into(), descending: false, group: String::new() }
+        Self { columns: vec!["artist".into(), "album".into(), "length".into()], sort: "name".into(), descending: false, group: String::new(), unsearched: Vec::new() }
     }
 }
 
@@ -201,6 +213,14 @@ pub struct Described {
 struct Entry {
     path: PathBuf,
     song: Described,
+    /// What the search matched: characters of the name, and of each value.
+    hits: Hits,
+}
+
+#[derive(Clone, Default)]
+struct Hits {
+    name: Vec<usize>,
+    values: Vec<Vec<usize>>,
 }
 
 impl Entry {
@@ -221,6 +241,10 @@ struct Built {
     items: Vec<Item>,
     /// What autoplay goes through, in order.
     queue: Vec<Queued>,
+    /// What's wrong with the query's filters.
+    problems: Vec<Problem>,
+    /// How many songs the query found.
+    found: usize,
 }
 
 enum Item {
@@ -237,8 +261,8 @@ pub struct SongList {
     active: Option<(PathBuf, Option<String>)>,
     /// The row of `active` in the rows as made (worked out once a time).
     active_row: Option<Option<usize>>,
-    /// Live text in the search box; empty means every song.
-    search_query: String,
+    /// The search box; empty means every song.
+    search: SearchBox,
     /// The row under the pointer as of the last `ui` call.
     hovered: Option<PathBuf>,
     /// Selected rows of what's listed (every song, or the search results).
@@ -262,6 +286,18 @@ pub struct Output {
     pub view_changed: bool,
     /// The song's note was clicked: star it (`true`) or unstar it.
     pub star: Option<(PathBuf, bool)>,
+    /// Save the search as a smart playlist (the query).
+    pub save_search: Option<String>,
+}
+
+/// Where the list's songs come from.
+pub trait Source {
+    /// The songs a query's filters keep, and the query parsed
+    /// (`search::parse`).
+    fn songs(&mut self, query: &str) -> (Vec<PathBuf>, Search);
+    /// A field's values (the tags' names for `Field::Tag`) in the songs
+    /// `query`'s filters keep, to complete a filter with.
+    fn values(&mut self, field: Field, query: &str) -> Vec<String>;
 }
 
 /// What a song sorts by for `value`: what it sorts as, else its text
@@ -432,8 +468,8 @@ impl SongList {
     }
 
     /// Draw the list (toolbar, search box, column headers, rows) into
-    /// `ui`, as `view` says. `songs` gives the songs to list, and
-    /// `describe` one's name, file name and the values of the columns
+    /// `ui`, as `view` says. `source` gives the songs a query's filters
+    /// keep, and the query parsed (`search.rs`), and `describe` one's name, file name and the values of the columns
     /// asked for; they're asked only when the rows are made again: when
     /// `revision` (which changes whenever the songs or what's said of them
     /// do, `ignore` included), the view, the search or the groups closed
@@ -446,7 +482,7 @@ impl SongList {
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        songs: &mut dyn FnMut() -> Vec<PathBuf>,
+        source: &mut dyn Source,
         revision: u64,
         view: &mut View,
         ignore: &str,
@@ -458,6 +494,19 @@ impl SongList {
     ) -> Output {
         let touch = select_list::touch(ui.ctx());
         let mut view_changed = false;
+        let mut save_search = false;
+        let mut search = |list: &mut Self, ui: &mut egui::Ui| {
+            let built = list.built.as_ref();
+            let problems = built.map_or(&[][..], |b| b.problems.as_slice());
+            let found = built.filter(|b| !b.query.trim().is_empty()).map(|b| b.found);
+            let output = list.search.ui(ui, problems, found, revision, &mut |field, others| source.values(field, others));
+            if output.changed {
+                list.selection.clear();
+                ui.ctx().request_repaint();
+            }
+            save_search = output.save;
+        };
+        let mut below = false;
         ui.horizontal(|ui| {
             // Fixed-size widgets first, then the text edit last with
             // `desired_width(INFINITY)` to soak up whatever's left, sizing it
@@ -468,15 +517,15 @@ impl SongList {
                 let button = crate::app::icon_button("sort-ascending");
                 egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| view_changed |= view_menu(ui, view, true));
             }
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.search_query)
-                    .hint_text("fuzzy search...")
-                    .desired_width(f32::INFINITY),
-            );
-            if response.changed() {
-                self.selection.clear();
+            // (On a line of its own when the buttons leave it too little.)
+            below = ui.available_width() < MIN_SEARCH_WIDTH;
+            if !below {
+                search(self, ui);
             }
         });
+        if below {
+            ui.horizontal(|ui| search(self, ui));
+        }
 
         // The columns that fit beside the name, and the one sorted by
         // (for touch, just that, on the second line).
@@ -506,28 +555,44 @@ impl SongList {
             keys.push(c.key);
             keys.len() - 1
         });
+        // (A search goes by the user's columns that don't fit too.)
+        if !self.search.query.trim().is_empty() {
+            for c in view.columns.iter().filter_map(|k| column(k)) {
+                if !keys.contains(&c.key) {
+                    keys.push(c.key);
+                }
+            }
+        }
 
         if !touch {
             view_changed |= self.header_ui(ui, view, &shown);
         }
 
-        let query = self.search_query.trim();
+        let query = self.search.query.as_str();
         let stale = self
             .built
             .as_ref()
             .is_none_or(|b| b.revision != revision || b.view != *view || b.keys != keys || b.query != query);
         if stale {
-            let songs = songs();
-            let (items, queue) = if query.is_empty() {
+            let (songs, search) = source.songs(query);
+            let text = search.text;
+            let mut found = songs.len();
+            let (items, queue) = if text.is_empty() {
                 self.sorted(&songs, view, &keys, sort_at, group_at, ignore, articles, describe)
             } else {
-                let found = ranked_matches(&songs, query, &keys, describe);
-                let queue = found.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false, plays: e.song.plays.clone() }).collect();
-                (found.into_iter().map(Item::Song).collect(), queue)
+                let searched: Vec<usize> = (0..keys.len())
+                    .filter(|&i| shown.iter().any(|c| c.key == keys[i]) || view.columns.iter().any(|k| k == keys[i]))
+                    .filter(|&i| !view.unsearched.iter().any(|k| k == keys[i]))
+                    .collect();
+                let (matches, total) = ranked_matches(&songs, &text, &keys, &searched, &view.unsearched, describe);
+                found = total;
+                let queue = matches.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false, plays: e.song.plays.clone() }).collect();
+                (matches.into_iter().map(Item::Song).collect(), queue)
             };
+            let empty = songs.is_empty() && query.trim().is_empty();
             let query = query.to_string();
             self.generation += 1;
-            self.built = Some(Built { revision, view: view.clone(), keys: keys.clone(), query, empty: songs.is_empty(), items, queue });
+            self.built = Some(Built { revision, view: view.clone(), keys: keys.clone(), query, empty, items, queue, problems: search.problems, found });
             self.active_row = None;
         }
         let built = self.built.as_ref().expect("the rows were just made");
@@ -580,7 +645,7 @@ impl SongList {
             if select_list::star(ui, entry.song.plays.starred) {
                 star = Some((entry.path.clone(), !entry.song.plays.starred));
             }
-            let text = egui::RichText::new(&entry.song.name);
+            let text = highlighted(ui, &entry.song.name, &entry.hits.name, false);
             let scroll = select_list::scrolls(row, active == Some(row.idx));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let size = egui::vec2(TRAILING_WIDTH, ui.available_height());
@@ -603,8 +668,9 @@ impl SongList {
                     select_list::two_lines(ui, entry.tags(), text, second.map(|v| v.text), scroll);
                     return;
                 }
-                for (c, value) in shown.iter().zip(&entry.song.values).rev() {
-                    cell(ui, c.width, egui::RichText::new(value.as_ref().map_or("", |v| v.text.as_str())).weak(), scroll);
+                let hits = |i: usize| entry.hits.values.get(i).map_or(&[][..], Vec::as_slice);
+                for (i, (c, value)) in shown.iter().zip(&entry.song.values).enumerate().rev() {
+                    cell(ui, c.width, highlighted(ui, value.as_ref().map_or("", |v| v.text.as_str()), hits(i), true), scroll);
                 }
                 select_list::chips(ui, entry.tags());
                 linked(ui);
@@ -617,6 +683,7 @@ impl SongList {
             delete: if output.delete { unique(self.selection.rows().iter().filter_map(|&i| path_of(i))) } else { Vec::new() },
             view_changed,
             star,
+            save_search: save_search.then(|| self.search.query.clone()),
         };
         if let Some(key) = toggle {
             if !self.collapsed.remove(&key) {
@@ -711,7 +778,7 @@ impl SongList {
         let by_tag = view.group == TAG;
         let mut sorting: Vec<Sorting> = Vec::with_capacity(songs.len());
         for path in songs {
-            let entry = Entry { song: describe(path, keys), path: path.clone() };
+            let entry = Entry { song: describe(path, keys), path: path.clone(), hits: Hits::default() };
             let order = match sort_at {
                 Some(i) => sort_value(entry.song.values[i].as_ref(), articles),
                 None => Some(Value { text: fields::sort_text(&entry.song.name, articles), ..Value::default() }),
@@ -914,79 +981,91 @@ pub struct DraggedFiles {
     pub label: String,
 }
 
-/// `songs` ranked against `query`, by their names, their original files'
-/// names or their tags, whichever matches best: the top matches.
-fn ranked_matches(songs: &[PathBuf], query: &str, keys: &[&str], describe: &mut dyn FnMut(&Path, &[&str]) -> Described) -> Vec<Entry> {
+/// `songs` ranked against the search's `terms`, each matched in the
+/// song's name, its original file's name, its tags or its values at
+/// `searched` (but not the file name or the tags when `unsearched` says),
+/// wherever it matches best: the top matches, and how many matched.
+fn ranked_matches(
+    songs: &[PathBuf],
+    terms: &[Term],
+    keys: &[&str],
+    searched: &[usize],
+    unsearched: &[String],
+    describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
+) -> (Vec<Entry>, usize) {
+    let skips = |key: &str| unsearched.iter().any(|k| k == key);
+    let (file_name, tags) = (!skips("file_name"), !skips("tag"));
     let mut scored: Vec<(i32, Entry)> = songs
         .iter()
         .filter_map(|path| {
             let song = describe(path, keys);
-            let tagged = song.tags.iter().filter_map(|(name, _)| fuzzy_score(name, query)).max();
-            let score = fuzzy_score(&song.name, query).max(fuzzy_score(&song.file_name, query)).max(tagged)?;
-            Some((score, Entry { song, path: path.clone() }))
+            let mut hits = Hits { name: Vec::new(), values: vec![Vec::new(); song.values.len()] };
+            let mut score = 0;
+            for term in terms {
+                // (Where it's found best: the name, a value, or else the
+                // file name or a tag, which aren't highlighted.)
+                let in_values = searched.iter().filter_map(|&i| Some((Some(i), term.find(&song.values.get(i)?.as_ref()?.text)?)));
+                let in_name = term.find(&song.name).map(|found| (None, found));
+                let elsewhere = file_name.then(|| term.find(&song.file_name)).flatten().into_iter();
+                let elsewhere = elsewhere.chain(song.tags.iter().filter(|_| tags).filter_map(|(name, _)| term.find(name)));
+                let best = in_name.into_iter().chain(in_values).max_by_key(|(_, (s, _))| *s);
+                let other = elsewhere.max_by_key(|(s, _)| *s);
+                match (best, other) {
+                    (Some((at, (s, found))), other) if other.as_ref().is_none_or(|(o, _)| s >= *o) => {
+                        score += s;
+                        match at {
+                            Some(i) => hits.values[i].extend(found),
+                            None => hits.name.extend(found),
+                        }
+                    }
+                    (_, Some((s, _))) => score += s,
+                    _ => return None,
+                }
+            }
+            Some((score, Entry { song, path: path.clone(), hits }))
         })
         .collect();
     scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.song.name.to_lowercase().cmp(&b.1.song.name.to_lowercase())));
+    let total = scored.len();
     scored.truncate(MAX_SEARCH_RESULTS);
-    scored.into_iter().map(|(_, entry)| entry).collect()
+    (scored.into_iter().map(|(_, entry)| entry).collect(), total)
 }
 
-/// Case-insensitive fuzzy match. A query with spaces is split into terms
-/// (e.g. "chrono corridor") and every term must independently subsequence-match
-/// `haystack`, this catches concatenated names like "ChronoTrigger/Corridor..."
-/// that contain no literal space. Returns `None` if any term fails to match,
-/// otherwise a score where higher is better.
-pub(crate) fn fuzzy_score(haystack: &str, needle: &str) -> Option<i32> {
-    let needle = needle.trim();
-    if needle.is_empty() {
-        return Some(0);
+/// `text` with the characters at `hits` (indices) picked out.
+fn highlighted(ui: &egui::Ui, text: &str, hits: &[usize], weak: bool) -> egui::WidgetText {
+    if hits.is_empty() {
+        let text = egui::RichText::new(text);
+        return if weak { text.weak() } else { text }.into();
     }
-    needle
-        .split_whitespace()
-        .map(|term| fuzzy_score_term(haystack, term))
-        .sum()
-}
-
-/// Single-term subsequence match: every character of `needle` must appear in
-/// `haystack` in order (not necessarily contiguous). Consecutive runs and
-/// matches at word boundaries score higher, so "zocv" ranks "overworld.mid"
-/// above a coincidental scatter match.
-fn fuzzy_score_term(haystack: &str, needle: &str) -> Option<i32> {
-    let hay: Vec<char> = haystack.chars().collect();
-    let hay_lower: Vec<char> = haystack.to_lowercase().chars().collect();
-
-    let mut score = 0i32;
-    let mut search_from = 0usize;
-    let mut prev_match: Option<usize> = None;
-
-    for needle_char in needle.to_lowercase().chars() {
-        let found = hay_lower[search_from..]
-            .iter()
-            .position(|&c| c == needle_char)
-            .map(|i| i + search_from)?;
-
-        score += 1;
-        if prev_match == Some(found.wrapping_sub(1)) {
-            score += 5; // consecutive characters
-        }
-        if found == 0 {
-            score += 8; // start of string
-        } else if matches!(hay[found - 1], ' ' | '_' | '-' | '.' | '/' | '\\') {
-            score += 4; // start of a word
-        }
-
-        prev_match = Some(found);
-        search_from = found + 1;
+    let visuals = ui.visuals();
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let color = if weak { visuals.weak_text_color() } else { visuals.text_color() };
+    let plain = egui::TextFormat { font_id: font.clone(), color, ..Default::default() };
+    let hit = egui::TextFormat { font_id: font, color: visuals.strong_text_color(), background: visuals.selection.bg_fill.gamma_multiply(0.5), ..Default::default() };
+    let mut job = egui::text::LayoutJob::default();
+    for (i, c) in text.chars().enumerate() {
+        let mut buf = [0; 4];
+        job.append(c.encode_utf8(&mut buf), 0.0, if hits.contains(&i) { hit.clone() } else { plain.clone() });
     }
-
-    // Mild penalty for longer haystacks, so tighter matches sort first.
-    score -= (hay.len() as i32) / 20;
-    Some(score)
+    job.into()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The same songs whatever the query.
+    struct Fixed(Vec<PathBuf>);
+
+    impl Source for Fixed {
+        fn songs(&mut self, query: &str) -> (Vec<PathBuf>, Search) {
+            (self.0.clone(), crate::search::parse(query, &Default::default()))
+        }
+
+        fn values(&mut self, _: Field, _: &str) -> Vec<String> {
+            Vec::new()
+        }
+    }
 
     /// Draws `list` for one frame of `songs`, grouped by artist, counting
     /// the songs described into `described`.
@@ -1003,7 +1082,7 @@ mod tests {
                 let values = keys.iter().map(|&k| (k == "artist").then(|| Value { text: format!("Artist {}", n % 3), ..Value::default() })).collect();
                 Described { name: format!("Song {n}"), file_name: String::new(), values, tags: Vec::new(), plays: Plays::default() }
             };
-            list.ui(ui, &mut || songs.to_vec(), revision, &mut view, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
+            list.ui(ui, &mut Fixed(songs.to_vec()), revision, &mut view, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
         });
         output.textures_delta.clear();
     }

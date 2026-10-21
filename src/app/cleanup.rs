@@ -79,14 +79,17 @@ impl App {
                             if ui.add(icon_button("x")).on_hover_text("Dismiss: leave it as it is").clicked() {
                                 dismiss.push(id.clone());
                             }
-                            let fixed = matches!(suggestion.kind, Kind::Compilation | Kind::Junk);
+                            let fixed = matches!(suggestion.kind, Kind::Compilation | Kind::Junk) || matches!(suggestion.what, What::Fields { .. });
                             if ui.add_enabled(fixed || !to.trim().is_empty(), icon_button("check")).on_hover_text("Apply").clicked() {
                                 apply.push(*i);
                             }
                             if suggestion.kind == Kind::Junk {
                                 ui.label("Remove from the library");
-                            } else if fixed {
+                            } else if suggestion.kind == Kind::Compilation {
                                 ui.label(format!("Mark a compilation, by {to}"));
+                            } else if fixed {
+                                let more = if songs > 1 { format!(", and {} more like it", songs - 1) } else { String::new() };
+                                ui.add(egui::Label::new(format!("{to}{more}")).truncate());
                             } else {
                                 ui.add(egui::TextEdit::singleline(to).desired_width(f32::INFINITY))
                                     .on_hover_text("What it'll be written as. Separate artists with semicolons.");
@@ -157,6 +160,11 @@ fn describe(suggestion: &Suggestion) -> (String, String) {
         What::Text { field, text } => (text.clone(), format!("{}: {text}", field.label())),
         What::Name { spellings } => (spellings.join(" / "), format!("One name spelled {} ways:\n{}", spellings.len(), spellings.join("\n"))),
         What::Album { name } => (name.clone(), format!("Album: {name}, by several artists with no album artist. Marked a compilation, it's by Various Artists.")),
+        What::Fields { from, set, .. } => {
+            let n = set.len();
+            let label = suggestion.kind.label();
+            (from.clone(), format!("{label}: {from}{}", if n > 1 { format!("\n(and {} more songs like it: see them with the info button)", n - 1) } else { String::new() }))
+        }
         What::AppleDouble => {
             let n = suggestion.keys.len();
             (

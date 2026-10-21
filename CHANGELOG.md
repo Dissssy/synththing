@@ -5,6 +5,12 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Search filters in Songs: type key:value terms beside (or instead of) your search, like `type:mid`, `artist:bonno`, `year:1990..1999`, `length:>3:00`, `added:30d`, `tag:chill`, `is:starred` or `has:album`, and put - in front of one to leave those songs out (`-type:mid`). With only filters, the list stays sorted and grouped. Hover the search box for all of them.
+- Three ways to match: as typed or in 'single quotes' fuzzily (`artist:'daft pk'`), in "double quotes" closely (the same past case, spacing and punctuation: `artist:"daft punk"`, or a phrase in the search), and after a ^ exactly (`artist:^"Daft Punk"`). Smart playlists can use "is like (fuzzy)" and "is exactly (case too)" rules, and their "is" sees past punctuation too.
+- The search looks in your Songs columns too (the ones you've picked, shown or not), and highlights what it matched. Preferences > Songs > Search looks in leaves out what it shouldn't.
+- The search box completes filters: their keys, then your artists, albums, genres, tags... (only those of the songs your other filters keep): Tab or a click puts one in, the arrows pick, and Alt switches it between fuzzy, close and exact. A filter that doesn't make sense (`year:soon`) is underlined, saying why on hover. It says how many songs it found, Ctrl+F or / goes to it and Esc empties it.
+- Lengths, sizes and dates the way you'd say them, in the search and in smart playlist rules: a length as 6:00, 1:02:30, 6m, 90s or 1h2m (a bare number is now minutes, not seconds), a size in MB or as 800kb or 1.2gb, added as 12h, 30d, 2w, 6mo or 1y ago, or in a year, month or day (`added:2026-10` is all of October). Numbers, lengths, sizes and dates take >, <, >=, <= and ranges, open-ended too (`length:3m..5m`, `track:..3`, `added:2026..`), and `year:90s` or `year:1990s` is a decade. A rule's value that doesn't make sense shows in the warning color.
+- Save a search as a smart playlist (the engine button beside it): its filters become the rules, and the editor says what couldn't be one.
 - Command palette: Ctrl+Shift+P lists what the app can do with its keyboard shortcut beside it. Type to filter, Up/Down and Enter (or a click) to run one, Esc to close.
 
 ### Changed

@@ -8,7 +8,7 @@ use eframe::egui;
 use super::{fit_width, App};
 use crate::commands::{self, Command};
 use crate::engine::EngineView;
-use crate::song_list::fuzzy_score;
+use crate::matching;
 
 #[derive(Default)]
 pub(super) struct Palette {
@@ -20,7 +20,7 @@ pub(super) struct Palette {
 /// an empty one.
 fn ranked(commands: impl IntoIterator<Item = Command>, query: &str) -> Vec<Command> {
     let mut scored: Vec<(i32, Command)> =
-        commands.into_iter().filter_map(|c| Some((fuzzy_score(c.name(), query)?, c))).collect();
+        commands.into_iter().filter_map(|c| Some((matching::fuzzy(c.name(), query)?.0, c))).collect();
     if !query.trim().is_empty() {
         // (Stable: ties keep the palette's order.)
         scored.sort_by_key(|(score, _)| -score);

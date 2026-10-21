@@ -146,6 +146,7 @@ impl App {
         let mut tile_letters = self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS);
         let mut group_ignore = self.config.group_ignore.clone();
         let mut past_articles = !self.config.sort_with_articles;
+        let mut unsearched = self.config.songs_view.unsearched.clone();
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
         let mut canary = self.config.canary_updates();
         let mut close_to_tray = self.config.close_to_tray.unwrap_or(false);
@@ -354,6 +355,29 @@ impl App {
                      (Song info) goes first.",
                     |ui| ui.checkbox(&mut past_articles, "Sort past a leading The, A or An"),
                 );
+                with_info(
+                    ui,
+                    "Searching Songs looks in each song's name, its file name, its tags and the list's \
+                     columns (the ones you've picked, shown or not). Untick what it shouldn't look in: \
+                     a filter (artist:...) still goes by it.",
+                    |ui| {
+                        egui::CollapsingHeader::new("Search looks in")
+                            .id_salt("preferences_searched")
+                            .show(ui, |ui| {
+                                let columns = crate::fields::columns().filter(|d| d.key != "file_name").map(|d| (d.key, d.label));
+                                for (key, label) in [("file_name", "File name"), ("tag", "Tags")].into_iter().chain(columns) {
+                                    let mut on = !unsearched.iter().any(|k| k == key);
+                                    if ui.checkbox(&mut on, label).changed() {
+                                        unsearched.retain(|k| k != key);
+                                        if !on {
+                                            unsearched.push(key.to_string());
+                                        }
+                                    }
+                                }
+                            })
+                            .header_response
+                    },
+                );
                 ui.separator();
                 self.rulesets_ui(ui);
                 ui.separator();
@@ -478,6 +502,7 @@ impl App {
             || tile_letters != self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS)
             || group_ignore != self.config.group_ignore
             || past_articles == self.config.sort_with_articles
+            || unsearched != self.config.songs_view.unsearched
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
             || canary != self.config.canary_updates()
             || (self.tray.is_some() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
@@ -524,6 +549,7 @@ impl App {
             self.config.tile_letters = Some(tile_letters).filter(|&n| n != crate::album_art::DEFAULT_LETTERS);
             self.config.group_ignore = group_ignore;
             self.config.sort_with_articles = !past_articles;
+            self.config.songs_view.unsearched = unsearched;
             if self.config.only_starred != only_starred {
                 self.config.only_starred = only_starred;
                 self.plan_upcoming();

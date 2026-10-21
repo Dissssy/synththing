@@ -49,6 +49,8 @@ pub(super) struct RulesEditor {
     rules: Rules,
     read_only: bool,
     preview: Option<(u64, Rules, String)>,
+    /// What of the search it was made from couldn't be a rule.
+    left_out: Vec<String>,
 }
 
 impl App {
@@ -107,7 +109,19 @@ impl App {
 
     fn open_rules_editor(&mut self, ctx: &egui::Context, editing: Editing, name: String, rules: Rules, builtin: bool) {
         let read_only = builtin || !rules_editable(ctx);
-        self.rules_editor = Some(RulesEditor { editing, name, rules, read_only, preview: None });
+        self.rules_editor = Some(RulesEditor { editing, name, rules, read_only, preview: None, left_out: Vec::new() });
+    }
+
+    /// Open a new smart playlist's rules made from the Songs search
+    /// `query`: its filters, saying what else it had (words to search for,
+    /// filters that didn't parse) that couldn't be a rule.
+    pub(super) fn smart_playlist_from_search(&mut self, ctx: &egui::Context, query: &str) {
+        let rules = Rules { seed: smart::new_seed(), ..crate::search::parse(query, self.songs.tags()).rules };
+        let name = self.unique_playlist_name("Smart playlist");
+        self.open_rules_editor(ctx, Editing::Playlist(None), name, rules, false);
+        if let Some(editor) = &mut self.rules_editor {
+            editor.left_out = crate::search::left_out(query, self.songs.tags()).into_iter().map(str::to_string).collect();
+        }
     }
 
     /// A playlist of the songs smart playlist `list` has now, which stays
@@ -138,6 +152,13 @@ impl App {
                 (true, true) => "New ruleset",
                 (true, false) => "Ruleset",
             });
+            if !editor.left_out.is_empty() {
+                let words = editor.left_out.join("  ");
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    format!("Not in the rules: {words}. Only filters (artist:..., type:..., year:...) can be rules: a word searched for has to say which field it's in."),
+                );
+            }
             ui.add_space(4.0);
             egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.6).show(ui, |ui| {
                 ui.add_enabled_ui(!editor.read_only, |ui| {
@@ -486,18 +507,36 @@ fn rule_ui(ui: &mut egui::Ui, rule: &mut Rule, tags: &BTreeMap<String, Tag>) {
         });
         return;
     }
-    let hint = match (rule.field, rule.op) {
-        (Field::Length, _) => "m:ss",
-        (Field::Size, _) => "MB",
-        (_, Op::Before | Op::After) => "2026-10-20",
-        (_, Op::InLast | Op::NotInLast) => "days",
-        _ => "",
+    let (hint, formats) = match (rule.field, rule.op) {
+        (_, Op::InLast | Op::NotInLast) => ("30d", "How long ago: 12h, 30d, 2w, 6mo or 1y (a bare number is days)"),
+        (Field::Imported, _) => ("2026-10", "A year, month or day: 2026, 2026-10 or 2026-10-20"),
+        (Field::Length, _) => ("6:00", "6:00, 1:02:30, 6m, 90s or 1h2m (a bare number is minutes)"),
+        (Field::Size, _) => ("MB", "MB, or with a unit: 800kb, 1.2gb"),
+        _ => ("", ""),
+    };
+    // (A value that doesn't parse shows so.)
+    let parses = |text: &str| match (kind, rule.op) {
+        (Kind::Date, Op::InLast | Op::NotInLast) => smart::parse_age(text).is_some(),
+        (Kind::Date, _) => smart::parse_period(text).is_some(),
+        (Kind::Number, _) => smart::parse(rule.field, text).is_some(),
+        _ => true,
     };
     let width = if kind == Kind::Text { 160.0 } else { 80.0 };
-    ui.add(egui::TextEdit::singleline(&mut rule.value).hint_text(hint).desired_width(width));
+    let value_ui = |ui: &mut egui::Ui, text: &mut String| {
+        let bad = !text.trim().is_empty() && !parses(text);
+        let mut edit = egui::TextEdit::singleline(text).hint_text(hint).desired_width(width);
+        if bad {
+            edit = edit.text_color(ui.visuals().warn_fg_color);
+        }
+        let response = ui.add(edit);
+        if !formats.is_empty() {
+            response.on_hover_text(if bad { format!("That isn't one. {formats}") } else { formats.to_string() });
+        }
+    };
+    value_ui(ui, &mut rule.value);
     if rule.op == Op::InRange {
         ui.label("to");
-        ui.add(egui::TextEdit::singleline(&mut rule.to).hint_text(hint).desired_width(width));
+        value_ui(ui, &mut rule.to);
     }
 }
 
