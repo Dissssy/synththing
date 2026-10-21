@@ -125,12 +125,11 @@ impl Groupings {
 
 /// What the views asked for this frame, done once they're drawn.
 enum Act {
-    /// Play these songs (each with whether it's starred) from the one at
-    /// the index.
-    Play(Vec<(PathBuf, bool)>, usize),
+    /// Play these songs from the one at the index.
+    Play(Vec<PathBuf>, usize),
     /// Play the playlist with this ID.
     PlayPlaylist(String),
-    Shuffle(Vec<(PathBuf, bool)>),
+    Shuffle(Vec<PathBuf>),
     Star(Vec<PathBuf>, bool),
     Info(PathBuf),
     /// Open group `key` of ruleset `id` (a playlist, by its ID, for
@@ -384,10 +383,10 @@ impl App {
         }
     }
 
-    /// The song files of `group` that are here (with whether each is
-    /// starred), in its order: what playing it plays.
-    fn playable(&self, group: &Group) -> Vec<(PathBuf, bool)> {
-        group.songs.iter().filter(|key| self.songs.has(key)).map(|key| (self.songs.path(key), self.songs.get_by_key(key).is_some_and(|s| s.tags.iter().any(|t| t == STARRED)))).collect()
+    /// The song files of `group` that are here, in its order: what
+    /// playing it plays.
+    fn playable(&self, group: &Group) -> Vec<PathBuf> {
+        group.songs.iter().filter(|key| self.songs.has(key)).map(|key| self.songs.path(key)).collect()
     }
 
     /// Where `group`'s art comes from: the first song of it here that
@@ -468,7 +467,7 @@ impl App {
         }
         let shown = self.groupings.view().shown.as_ref().map(|(_, s)| s.clone()).unwrap_or_default();
         if play_all {
-            let all: Vec<(PathBuf, bool)> = shown.iter().flat_map(|&i| self.playable(&groups[i])).collect();
+            let all: Vec<PathBuf> = shown.iter().flat_map(|&i| self.playable(&groups[i])).collect();
             act = Some(Act::Play(all, 0));
         }
 
@@ -678,7 +677,7 @@ impl App {
             heights.push(row);
         }
 
-        let playable: Vec<(PathBuf, bool)> = tracks.iter().filter(|t| t.here).map(|t| (t.path.clone(), t.starred)).collect();
+        let playable: Vec<PathBuf> = tracks.iter().filter(|t| t.here).map(|t| t.path.clone()).collect();
         let all_starred = tracks.iter().all(|t| t.starred);
         let length: f64 = tracks.iter().filter_map(|t| t.length).sum();
         let art_cache = &mut self.groupings.art;
@@ -748,7 +747,7 @@ impl App {
                     view.picked = Some(track.path.clone());
                 }
                 if output.play && track.here {
-                    let at = playable.iter().position(|(p, _)| *p == track.path).unwrap_or(0);
+                    let at = playable.iter().position(|p| *p == track.path).unwrap_or(0);
                     act = Some(Act::Play(playable.clone(), at));
                 }
                 if output.star {

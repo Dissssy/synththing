@@ -74,6 +74,7 @@ mod starter;
 mod startup;
 mod storage;
 mod theme;
+mod together;
 mod tray;
 mod typing;
 mod updater;

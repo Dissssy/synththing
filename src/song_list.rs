@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::fields::{self, Def, Field, Value};
 use crate::select_list::{self, Selection};
+use crate::together::{self, Member};
 
 /// How many ranked matches are shown for a query.
 const MAX_SEARCH_RESULTS: usize = 200;
@@ -83,12 +84,10 @@ impl Playing {
         Self { history: vec![at.path.clone()], at, tracks: None, upcoming: None, planned: 0 }
     }
 
-    /// Playing through `tracks` (each with whether it's starred, and
-    /// whether shuffling skips it) from the one at `start`, whatever
-    /// Autoplay is set to.
-    pub fn tracks(tracks: impl IntoIterator<Item = (PathBuf, bool, bool)>, start: usize) -> Option<Self> {
-        let tracks: Arc<[Queued]> =
-            tracks.into_iter().map(|(path, starred, skip_shuffle)| Queued { path, group: None, collapsed: false, starred, skip_shuffle }).collect();
+    /// Playing through `tracks` (each with how it plays) from the one at
+    /// `start`, whatever Autoplay is set to.
+    pub fn tracks(tracks: impl IntoIterator<Item = (PathBuf, Plays)>, start: usize) -> Option<Self> {
+        let tracks: Arc<[Queued]> = tracks.into_iter().map(|(path, plays)| Queued { path, group: None, collapsed: false, plays }).collect();
         let at = position(&tracks, start.min(tracks.len().checked_sub(1)?));
         Some(Self { tracks: Some(tracks), ..Self::new(at) })
     }
@@ -127,9 +126,18 @@ struct Queued {
     path: PathBuf,
     group: Option<String>,
     collapsed: bool,
-    starred: bool,
-    /// Shuffling passes over it (`Field::SkipShuffle`).
-    skip_shuffle: bool,
+    plays: Plays,
+}
+
+/// What of a song decides when it plays: whether it's starred, whether
+/// shuffling passes over it (`Field::SkipShuffle`), and the songs it plays
+/// together with (`SongStore::together_of`: the set's ID, and where in it
+/// it is).
+#[derive(Clone, Debug, Default)]
+pub struct Plays {
+    pub starred: bool,
+    pub skip_shuffle: bool,
+    pub together: Option<(String, usize)>,
 }
 
 /// Draws a row's right-click menu, given the songs it applies to (the
@@ -171,16 +179,14 @@ fn group_title(key: &str) -> Option<&'static str> {
 
 /// A song as the list shows it: its name, its original file's name, the
 /// values of the columns asked for, in order, its tags (names and
-/// colors), and whether it's starred.
+/// colors), and how it plays.
 #[derive(Clone)]
 pub struct Described {
     pub name: String,
     pub file_name: String,
     pub values: Vec<Option<Value>>,
     pub tags: Vec<(String, [u8; 3])>,
-    pub starred: bool,
-    /// Shuffling passes over it (`Field::SkipShuffle`).
-    pub skip_shuffle: bool,
+    pub plays: Plays,
 }
 
 #[derive(Clone)]
@@ -508,7 +514,7 @@ impl SongList {
                 self.sorted(&songs, view, &keys, sort_at, group_at, ignore, articles, describe)
             } else {
                 let found = ranked_matches(&songs, query, &keys, describe);
-                let queue = found.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false, starred: e.song.starred, skip_shuffle: e.song.skip_shuffle }).collect();
+                let queue = found.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false, plays: e.song.plays.clone() }).collect();
                 (found.into_iter().map(Item::Song).collect(), queue)
             };
             let query = query.to_string();
@@ -563,8 +569,8 @@ impl SongList {
                 row.response.dnd_set_drag_payload(DraggedFiles { paths, label });
             }
             row.response.context_menu(|ui| menu(ui, &rows()));
-            if select_list::star(ui, entry.song.starred) {
-                star = Some((entry.path.clone(), !entry.song.starred));
+            if select_list::star(ui, entry.song.plays.starred) {
+                star = Some((entry.path.clone(), !entry.song.plays.starred));
             }
             let text = egui::RichText::new(&entry.song.name);
             let scroll = select_list::scrolls(row, active == Some(row.idx));
@@ -735,7 +741,7 @@ impl SongList {
             }
         });
         if group_at.is_none() && !by_tag {
-            let queue = sorting.iter().map(|s| Queued { path: s.entry.path.clone(), group: None, collapsed: false, starred: s.entry.song.starred, skip_shuffle: s.entry.song.skip_shuffle }).collect();
+            let queue = sorting.iter().map(|s| Queued { path: s.entry.path.clone(), group: None, collapsed: false, plays: s.entry.song.plays.clone() }).collect();
             return (sorting.into_iter().map(|s| Item::Song(s.entry)).collect(), queue);
         }
         // Each group's header shows the best of its songs' spellings.
@@ -765,7 +771,7 @@ impl SongList {
             };
             let Item::Group { key, count, collapsed, .. } = &mut items[at] else { unreachable!("`current` is a group's header") };
             *count += 1;
-            queue.push(Queued { path: entry.path.clone(), group: Some(key.clone()), collapsed: *collapsed, starred: entry.song.starred, skip_shuffle: entry.song.skip_shuffle });
+            queue.push(Queued { path: entry.path.clone(), group: Some(key.clone()), collapsed: *collapsed, plays: entry.song.plays.clone() });
             if !*collapsed {
                 items.push(Item::Song(entry));
             }
@@ -813,8 +819,8 @@ fn scope(queue: &[Queued], group: &Option<String>, rules: Rules) -> Vec<usize> {
     (0..queue.len())
         .filter(|&i| rules.autoplay == Autoplay::All || queue[i].group == *group)
         .filter(|&i| !(rules.skip_collapsed && queue[i].collapsed))
-        .filter(|&i| !rules.only_starred || queue[i].starred)
-        .filter(|&i| !(rules.shuffle && queue[i].skip_shuffle))
+        .filter(|&i| !rules.only_starred || queue[i].plays.starred)
+        .filter(|&i| !(rules.shuffle && queue[i].plays.skip_shuffle))
         .collect()
 }
 
@@ -823,8 +829,9 @@ fn position(queue: &[Queued], i: usize) -> Position {
 }
 
 /// The song after `playing`'s in `queue` (see [`SongList::next`]): the
-/// next row down that hasn't played this pass (any of them, shuffling),
-/// going round to the top only when looping. `None` with autoplay off.
+/// next row down that hasn't played this pass (any of them, shuffling,
+/// songs that play together as one), going round to the top only when
+/// looping. `None` with autoplay off.
 fn next_in(queue: &[Queued], playing: &Playing, rules: Rules, random: u64) -> Option<(Position, bool)> {
     if rules.autoplay == Autoplay::Off || queue.is_empty() {
         return None;
@@ -833,9 +840,13 @@ fn next_in(queue: &[Queued], playing: &Playing, rules: Rules, random: u64) -> Op
     let rows = scope(queue, &group, rules);
     let played: HashSet<&Path> = playing.history.iter().map(PathBuf::as_path).collect();
     let fresh = |i: &&usize| !played.contains(queue[**i].path.as_path());
+    let members: Vec<Member> = queue.iter().map(|q| q.plays.together.as_ref().map(|(set, at)| (set.as_str(), *at))).collect();
     let next = if rules.shuffle {
         let unplayed: Vec<usize> = rows.iter().filter(fresh).copied().collect();
-        (!unplayed.is_empty()).then(|| unplayed[(random % unplayed.len() as u64) as usize])
+        here.and_then(|i| together::next_in_set(&members, &unplayed, i)).or_else(|| {
+            let unplayed = together::firsts(&members, &unplayed);
+            (!unplayed.is_empty()).then(|| unplayed[(random % unplayed.len() as u64) as usize])
+        })
     } else {
         let start = here.map_or(playing.at.at, |i| i + 1);
         rows.iter().filter(fresh).find(|&&i| i >= start).copied()
@@ -849,7 +860,7 @@ fn next_in(queue: &[Queued], playing: &Playing, rules: Rules, random: u64) -> Op
     // A new pass: from the top, or shuffled, anything but the song that
     // just finished (unless it's the only one).
     let i = if rules.shuffle {
-        let others: Vec<usize> = rows.iter().copied().filter(|&i| queue[i].path != playing.at.path).collect();
+        let others: Vec<usize> = together::firsts(&members, &rows).into_iter().filter(|&i| queue[i].path != playing.at.path).collect();
         if others.is_empty() { rows[0] } else { others[(random % others.len() as u64) as usize] }
     } else {
         rows[0]
@@ -973,7 +984,7 @@ mod tests {
                 *described += 1;
                 let n: usize = path.to_str().unwrap().parse().unwrap();
                 let values = keys.iter().map(|&k| (k == "artist").then(|| Value { text: format!("Artist {}", n % 3), ..Value::default() })).collect();
-                Described { name: format!("Song {n}"), file_name: String::new(), values, tags: Vec::new(), starred: false, skip_shuffle: false }
+                Described { name: format!("Song {n}"), file_name: String::new(), values, tags: Vec::new(), plays: Plays::default() }
             };
             list.ui(ui, &mut || songs.to_vec(), revision, &mut view, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
         });
@@ -1040,7 +1051,7 @@ mod tests {
             let (name, album, tags) = songs.iter().find(|(name, ..)| Path::new(name) == path).unwrap();
             let values = vec![album.map(|a| Value { text: a.to_string(), ..Value::default() })];
             let tags = tags.iter().map(|t| (t.to_string(), [0; 3])).collect();
-            Described { name: name.to_string(), file_name: name.to_string(), values, tags, starred: false, skip_shuffle: false }
+            Described { name: name.to_string(), file_name: name.to_string(), values, tags, plays: Plays::default() }
         };
         let view = View { group: group.into(), ..View::default() };
         let group_at = (group == "album").then_some(0);
@@ -1076,7 +1087,7 @@ mod tests {
         let mut describe = |path: &Path, _: &[&str]| {
             let (name, genre, _) = songs.iter().find(|(name, ..)| Path::new(name) == path).unwrap();
             let values = vec![genre.map(|a| Value { text: a.to_string(), ..Value::default() })];
-            Described { name: name.to_string(), file_name: name.to_string(), values, tags: Vec::new(), starred: false, skip_shuffle: false }
+            Described { name: name.to_string(), file_name: name.to_string(), values, tags: Vec::new(), plays: Plays::default() }
         };
         let view = View { group: "genre".into(), ..View::default() };
         let rows = shape(&SongList::default().sorted(&paths, &view, &["genre"], None, Some(0), "", false, &mut describe).0);
@@ -1099,7 +1110,7 @@ mod tests {
 
     /// A play order of (song, group, closed).
     fn queue(rows: &[(&str, Option<&str>, bool)]) -> Vec<Queued> {
-        rows.iter().map(|(p, g, c)| Queued { path: PathBuf::from(p), group: g.map(str::to_string), collapsed: *c, starred: false, skip_shuffle: false }).collect()
+        rows.iter().map(|(p, g, c)| Queued { path: PathBuf::from(p), group: g.map(str::to_string), collapsed: *c, plays: Plays::default() }).collect()
     }
 
     /// Playing `path` (in `group`, at row `at`), with `history` played before it this pass.
@@ -1159,7 +1170,7 @@ mod tests {
     #[test]
     fn autoplay_can_play_only_starred_songs() {
         let mut q = queue(&[("a", None, false), ("b", None, false), ("c", None, false), ("d", None, false)]);
-        q[2].starred = true;
+        q[2].plays.starred = true;
         let only = Rules { only_starred: true, ..rules(Autoplay::All, true) };
         // Picked by hand, "a" played; after it, only the starred ones.
         assert_eq!(next_path(&q, &playing("a", None, 0, &[]), only), Some(("c".into(), false)));
@@ -1169,7 +1180,7 @@ mod tests {
 
     #[test]
     fn an_album_plays_through_whatever_autoplay_says() {
-        let tracks = ["a", "b", "c"].map(|p| (PathBuf::from(p), p != "b", false));
+        let tracks = ["a", "b", "c"].map(|p| (PathBuf::from(p), Plays { starred: p != "b", ..Plays::default() }));
         let playing = Playing::tracks(tracks.clone(), 0).expect("there are tracks");
         let list = SongList::default();
         let next = list.next(&playing, rules(Autoplay::Off, false), 0).map(|(at, _)| at.path);
@@ -1180,7 +1191,7 @@ mod tests {
         assert!(list.next(&last, rules(Autoplay::Off, false), 0).is_none(), "it ends with the album");
         assert!(Playing::tracks([], 0).is_none());
         // Shuffling passes over a song that says to.
-        let tracks = ["a", "b", "c"].map(|p| (PathBuf::from(p), true, p == "b"));
+        let tracks = ["a", "b", "c"].map(|p| (PathBuf::from(p), Plays { starred: true, skip_shuffle: p == "b", ..Plays::default() }));
         let playing = Playing::tracks(tracks, 0).expect("there are tracks");
         let shuffled = Rules { shuffle: true, ..rules(Autoplay::Off, false) };
         for random in 0..4 {
@@ -1211,12 +1222,24 @@ mod tests {
     }
 
     #[test]
+    fn autoplay_shuffles_songs_together_as_one() {
+        let mut q = queue(&[("a", None, false), ("x1", None, false), ("x0", None, false)]);
+        q[1].plays.together = Some(("x".into(), 1));
+        q[2].plays.together = Some(("x".into(), 0));
+        let shuffle = Rules { shuffle: true, ..rules(Autoplay::All, false) };
+        for random in 0..6 {
+            assert_eq!(next_in(&q, &playing("a", None, 0, &["a"]), shuffle, random).map(|(at, _)| at.path), Some(PathBuf::from("x0")), "from its first");
+            assert_eq!(next_in(&q, &playing("x0", None, 2, &["x0"]), shuffle, random).map(|(at, _)| at.path), Some(PathBuf::from("x1")), "then in order");
+        }
+    }
+
+    #[test]
     fn the_playing_row_is_in_the_group_it_plays_in() {
         let songs: &[(&str, Option<&str>, &[&str])] = &[("a", None, &["rock", "chill"]), ("b", None, &["rock"])];
         let paths: Vec<PathBuf> = songs.iter().map(|(name, ..)| PathBuf::from(name)).collect();
         let mut describe = |path: &Path, _: &[&str]| {
             let (name, _, tags) = songs.iter().find(|(name, ..)| Path::new(name) == path).unwrap();
-            Described { name: name.to_string(), file_name: name.to_string(), values: vec![None], tags: tags.iter().map(|t| (t.to_string(), [0; 3])).collect(), starred: false, skip_shuffle: false }
+            Described { name: name.to_string(), file_name: name.to_string(), values: vec![None], tags: tags.iter().map(|t| (t.to_string(), [0; 3])).collect(), plays: Plays::default() }
         };
         let view = View { group: TAG.into(), ..View::default() };
         let (items, _) = SongList::default().sorted(&paths, &view, &["album"], None, None, "", false, &mut describe);

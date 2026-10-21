@@ -122,9 +122,18 @@ fn describe_song(cache: &mut SongInfoCache, naming: &Naming, store: &SongStore, 
     let song = naming.song(path, info.as_deref());
     let values = keys.iter().map(|&key| Field::by_key(key).and_then(|field| song.value(field))).collect();
     let tags = store.tags_of(path).into_iter().map(|(_, tag)| (tag.name.clone(), tag.color)).collect();
-    let starred = song.starred();
-    let skip_shuffle = song.flag(Field::SkipShuffle);
-    song_list::Described { name: naming.name(path, info.as_deref()), file_name: song.file_name.to_string(), values, tags, starred, skip_shuffle }
+    song_list::Described { name: naming.name(path, info.as_deref()), file_name: song.file_name.to_string(), values, tags, plays: plays(store, path) }
+}
+
+/// How the song at `path` plays (starred, skipped when shuffling, played
+/// together with others).
+fn plays(store: &SongStore, path: &Path) -> song_list::Plays {
+    let flag = |field| store.get(path).is_some_and(|s| crate::fields::Facts::of(s).flag(field));
+    song_list::Plays {
+        starred: store.is_starred(path),
+        skip_shuffle: flag(Field::SkipShuffle),
+        together: store.together_of(path).map(|(set, at)| (set.to_string(), at)),
+    }
 }
 
 /// The song at `path`'s name, by `naming`.
@@ -2720,6 +2729,7 @@ impl App {
         let mut save_copy = None;
         let mut remove = Vec::new();
         let mut tag = None;
+        let mut together: Option<(bool, Vec<PathBuf>)> = None;
         let store = &self.songs;
         let mut add_to: Option<(Option<usize>, Vec<PathBuf>)> = None;
         // With no dragging (touch), songs go onto playlists from their menu.
@@ -2754,6 +2764,12 @@ impl App {
             }
             if let Some(action) = tags::tags_menu(ui, store, paths) {
                 tag = Some((action, paths.to_vec()));
+            }
+            if paths.len() > 1 && ui.button("Play together").on_hover_text("Play them in this order, as one song when shuffling").clicked() {
+                together = Some((true, paths.to_vec()));
+            }
+            if paths.iter().any(|p| store.together_of(p).is_some()) && ui.button("Stop playing together").clicked() {
+                together = Some((false, paths.to_vec()));
             }
             if ui.button("Remove from library...").on_hover_text("Delete synththing's copy on this device").clicked() {
                 remove = paths.to_vec();
@@ -2811,6 +2827,15 @@ impl App {
         }
         if let Some((action, paths)) = tag {
             self.tag_songs(action, &paths);
+        }
+        if let Some((on, paths)) = together {
+            let keys: Vec<String> = paths.iter().filter_map(|p| self.songs.key(p)).collect();
+            if on {
+                self.songs.set_together(&crate::library::new_nonce(), keys);
+            } else {
+                self.songs.leave_together(&keys);
+            }
+            self.songs_changed();
         }
     }
 
