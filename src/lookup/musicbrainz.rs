@@ -11,15 +11,16 @@ use anyhow::{Context, Result};
 use musicbrainz_rs::MusicBrainzClient;
 use musicbrainz_rs::entity::artist_credit::ArtistCredit;
 use musicbrainz_rs::entity::genre::Genre;
+use musicbrainz_rs::entity::recording::Recording;
 use musicbrainz_rs::entity::release::{Release as Entity, ReleaseStatus};
-use musicbrainz_rs::entity::release_group::ReleaseGroupSecondaryType;
+use musicbrainz_rs::entity::release_group::{ReleaseGroupPrimaryType, ReleaseGroupSecondaryType};
 use musicbrainz_rs::entity::search::SearchResult;
 use musicbrainz_rs::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha2::Digest;
 
-use super::matching::{self, Album, Credit, Release, Track};
+use super::matching::{self, Album, Credit, Hit, HitRelease, Release, Track};
 
 /// How many search hits are looked at.
 const HITS: u8 = 10;
@@ -48,7 +49,12 @@ impl Cache {
         if SystemTime::now().duration_since(modified).unwrap_or_default() > KEPT {
             return None;
         }
-        serde_json::from_slice(&std::fs::read(&path).ok()?).ok()
+        self.get_any(kind, name)
+    }
+
+    /// What's kept under `name`, however old.
+    fn get_any<T: DeserializeOwned>(&self, kind: &str, name: &str) -> Option<T> {
+        serde_json::from_slice(&std::fs::read(self.path(kind, name)?).ok()?).ok()
     }
 
     fn put<T: Serialize>(&self, kind: &str, name: &str, value: &T) {
@@ -72,9 +78,10 @@ fn cache() -> Cache {
     Cache { dir: crate::config::config_dir().ok().map(|d| d.join("musicbrainz")) }
 }
 
-/// The release `id` as it was kept, if it was.
+/// The release `id` as it was kept, if it was (however long ago: it's
+/// asked for again when its match is refreshed, `lookup::REFRESH`).
 pub fn kept_release(id: &str) -> Option<Release> {
-    cache().get::<Entity>("release", id).map(|e| converted(&e))
+    cache().get_any::<Entity>("release", id).map(|e| converted(&e))
 }
 
 impl MusicBrainz {
@@ -100,6 +107,45 @@ impl MusicBrainz {
         let found: SearchResult<Entity> = Entity::search(query).limit(HITS).execute_with_client(&self.client).context("searching MusicBrainz")?;
         self.cache.put("search", &name, &found.entities);
         Ok(found.entities)
+    }
+
+    /// The hits of a search for recordings by `query`: kept, unless
+    /// `fresh`.
+    fn search_recordings(&mut self, query: String, fresh: bool) -> Result<Vec<Recording>> {
+        let name = crate::library::hex(&sha2::Sha256::digest(query.as_bytes())[..16]);
+        if !fresh && let Some(hits) = self.cache.get::<Vec<Recording>>("recording-search", &name) {
+            return Ok(hits);
+        }
+        self.wait_turn();
+        let found: SearchResult<Recording> = Recording::search(query).limit(HITS).execute_with_client(&self.client).context("searching MusicBrainz")?;
+        self.cache.put("recording-search", &name, &found.entities);
+        Ok(found.entities)
+    }
+
+    /// The release a song on no album (`album`'s one song) is on, with
+    /// the track it is, if it surely is one (`matching::pick_recording`).
+    pub fn recording(&mut self, album: &Album, fresh: bool) -> Result<Option<(Release, usize)>> {
+        let song = &album.songs[0];
+        let Some(artist) = &song.artist else { return Ok(None) };
+        let query = format!("recording:{} AND artist:{}", quoted(&song.title), quoted(matching::first_name(artist)));
+        let hits: Vec<Hit> = self
+            .search_recordings(query, fresh)?
+            .iter()
+            .map(hit)
+            .map(|mut h| {
+                h.releases.retain(|r| !album.rejected.contains(&r.id));
+                h
+            })
+            .collect();
+        let Some((i, release)) = matching::pick_recording(song, &hits) else { return Ok(None) };
+        let release = converted(&self.release(&release, fresh)?);
+        let track = release.tracks.iter().position(|t| t.recording.as_deref() == Some(hits[i].recording.as_str()));
+        Ok(track.map(|t| (release, t)))
+    }
+
+    /// The release `id` as MusicBrainz has it now (and kept).
+    pub fn fresh_release(&mut self, id: &str) -> Result<Release> {
+        Ok(converted(&self.release(id, true)?))
     }
 
     /// The release `id`, with its tracks and genres: kept, unless `fresh`.
@@ -181,6 +227,40 @@ fn credits(credits: &[ArtistCredit]) -> Vec<Credit> {
     credits.iter().map(|c| Credit { name: c.name.clone(), sort: c.artist.sort_name.clone() }).collect()
 }
 
+/// A recording a search found, as matching sees it.
+fn hit(recording: &Recording) -> Hit {
+    let releases = recording
+        .releases
+        .iter()
+        .flatten()
+        .map(|r| {
+            let group = r.release_group.as_ref();
+            let compilation = group.is_some_and(|g| g.secondary_types.contains(&ReleaseGroupSecondaryType::Compilation))
+                || r.artist_credit.iter().flatten().any(|c| c.artist.id == VARIOUS_ARTISTS);
+            let kind = match group.and_then(|g| g.primary_type.as_ref()) {
+                _ if compilation => 4,
+                Some(ReleaseGroupPrimaryType::Album) => 0,
+                Some(ReleaseGroupPrimaryType::Single) => 1,
+                Some(ReleaseGroupPrimaryType::Ep) => 2,
+                _ => 3,
+            };
+            HitRelease {
+                id: r.id.clone(),
+                official: r.status == Some(ReleaseStatus::Official),
+                kind,
+                date: r.date.as_ref().map(|d| d.0.clone()).filter(|d| !d.is_empty()),
+            }
+        })
+        .collect();
+    Hit {
+        recording: recording.id.clone(),
+        title: recording.title.clone(),
+        artists: recording.artist_credit.iter().flatten().map(|c| c.name.clone()).collect(),
+        length: recording.length.map(|ms| f64::from(ms) / 1000.0),
+        releases,
+    }
+}
+
 /// A release as matching sees it (its tracks only if they were asked
 /// for; a search hit's are left out, but counted as untitled ones).
 fn converted(entity: &Entity) -> Release {
@@ -245,6 +325,22 @@ mod tests {
         assert_eq!((release.group.as_deref(), release.artist.as_str(), release.official, release.front), (Some("g1"), "Nujabes", true, true));
         assert_eq!(release.tracks[0].recording.as_deref(), Some("c1"));
         assert_eq!(release.tracks[0].length, Some(175.0));
+    }
+
+    #[test]
+    fn recording_hits_read_as_they_come() {
+        let json = r#"{"id":"c1","title":"Feather","length":175000,"video":false,
+            "artist-credit":[{"name":"Nujabes","joinphrase":" feat. ","artist":{"id":"a1","name":"Nujabes","sort-name":"Nujabes"}},
+                {"name":"Cise Starr","artist":{"id":"a2","name":"Cise Starr","sort-name":"Starr, Cise"}}],
+            "releases":[{"id":"r1","title":"Modal Soul","status":"Official","date":"2005-11-11",
+                "release-group":{"id":"g1","title":"Modal Soul","primary-type":"Album","secondary-types":[]},
+                "media":[{"id":"m1","position":1,"track-count":14,"track":[{"id":"t1","number":"2","title":"Feather","length":175000}]}]},
+                {"id":"r2","title":"Hydeout Productions","status":"Official",
+                "release-group":{"id":"g2","title":"Hydeout Productions","primary-type":"Album","secondary-types":["Compilation"]}}]}"#;
+        let recording: Recording = serde_json::from_str(json).expect("a recording");
+        let hit = hit(&recording);
+        assert_eq!((hit.artists.as_slice(), hit.length), (["Nujabes".to_string(), "Cise Starr".to_string()].as_slice(), Some(175.0)));
+        assert_eq!(hit.releases.iter().map(|r| (r.id.as_str(), r.kind, r.official)).collect::<Vec<_>>(), [("r1", 0, true), ("r2", 4, true)]);
     }
 
     #[test]

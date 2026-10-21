@@ -4,6 +4,9 @@
 //! come from the Cover Art Archive (`album_art`). One the lookup isn't
 //! sure of, or doesn't find, is noted here (`Tried`, in `lookup.json`, on
 //! this device only) and tried again later.
+//! A song on no album is looked up by its recording instead
+//! (`matching::pick_recording`), and a match's release is asked for again
+//! every six months (`REFRESH`), for what's changed since.
 
 pub mod art;
 pub mod details;
@@ -25,6 +28,8 @@ use matching::{Album, Release, Verdict};
 const RETRY: i64 = 90 * 24 * 60 * 60;
 /// How long one whose lookup failed (offline, MusicBrainz busy) waits.
 const RETRY_FAILED: i64 = 60 * 60;
+/// How long a match goes before its release is asked for again.
+pub const REFRESH: i64 = 182 * 24 * 60 * 60;
 
 /// What a lookup made of an album.
 #[derive(Debug)]
@@ -63,19 +68,41 @@ fn is_midi(name: &str) -> bool {
 pub fn albums(store: &SongStore, ignore: &str) -> Vec<Album> {
     let mut albums: HashMap<String, Album> = HashMap::new();
     let mut artists: HashMap<String, Vec<String>> = HashMap::new();
+    let mut loose = Vec::new();
     for (key, song) in store.known() {
         if !store.has(key) || is_midi(&song.name) || store.is_blocked(key) {
             continue;
         }
         let facts = Facts::of(song);
+        let title = facts.text(Field::Title).map_or_else(|| song.name.clone(), |t| t.into_owned());
+        let artist = facts.text(Field::Artist).map(|a| a.into_owned());
+        let rejected = song.online.as_ref().map(|o| o.rejected.clone()).unwrap_or_default();
+        let ours = matching::Song {
+            key: key.to_string(),
+            title,
+            artist,
+            track: facts.number(Field::Track).map(|n| n as u32),
+            disc: facts.number(Field::Disc).map(|n| n as u32),
+            length: facts.number(Field::Length),
+        };
         let Some(name) = facts.text(Field::Album).filter(|n| !fields::group_key(n, ignore).is_empty()) else {
+            // (On no album: looked up by itself, if it says who it's by.)
+            if ours.artist.is_some() && facts.text(Field::Title).is_some() {
+                loose.push(Album {
+                    id: format!("song:{key}"),
+                    // (Its title, for the log.)
+                    name: ours.title.clone(),
+                    artist: ours.artist.clone(),
+                    songs: vec![ours],
+                    rejected,
+                    loose: true,
+                });
+            }
             continue;
         };
         let album_artist = facts.text(Field::AlbumArtist);
         let id = album_id(&name, album_artist.as_deref(), ignore);
-        let title = facts.text(Field::Title).map_or_else(|| song.name.clone(), |t| t.into_owned());
-        let artist = facts.text(Field::Artist).map(|a| a.into_owned());
-        if let Some(artist) = &artist {
+        if let Some(artist) = &ours.artist {
             artists.entry(id.clone()).or_default().push(artist.clone());
         }
         let album = albums.entry(id.clone()).or_insert_with(|| Album {
@@ -84,22 +111,14 @@ pub fn albums(store: &SongStore, ignore: &str) -> Vec<Album> {
             artist: album_artist.map(|a| a.into_owned()),
             songs: Vec::new(),
             rejected: Vec::new(),
+            loose: false,
         });
-        if let Some(online) = &song.online {
-            for rejected in &online.rejected {
-                if !album.rejected.contains(rejected) {
-                    album.rejected.push(rejected.clone());
-                }
+        for rejected in rejected {
+            if !album.rejected.contains(&rejected) {
+                album.rejected.push(rejected);
             }
         }
-        album.songs.push(matching::Song {
-            key: key.to_string(),
-            title,
-            artist,
-            track: facts.number(Field::Track).map(|n| n as u32),
-            disc: facts.number(Field::Disc).map(|n| n as u32),
-            length: facts.number(Field::Length),
-        });
+        album.songs.push(ours);
     }
     let mut albums: Vec<Album> = albums.into_values().collect();
     for album in &mut albums {
@@ -113,6 +132,9 @@ pub fn albums(store: &SongStore, ignore: &str) -> Vec<Album> {
         }
     }
     albums.sort_by(|a, b| b.songs.len().cmp(&a.songs.len()).then_with(|| a.id.cmp(&b.id)));
+    // (Songs on no album last.)
+    loose.sort_by(|a, b| a.id.cmp(&b.id));
+    albums.extend(loose);
     albums
 }
 
@@ -246,31 +268,48 @@ fn log_candidates(album: &Album, releases: &[Release], verdict: Verdict) -> Verd
     verdict
 }
 
-/// The lookup thread: an album at a time, asked for and answered.
+/// What the lookup thread is asked to do.
+pub enum Ask {
+    /// Look an album up, asking MusicBrainz anew (not what's kept) if
+    /// `fresh`.
+    Album(Album, bool),
+    /// Ask for a matched release again, for what's changed since.
+    Release(String),
+}
+
+/// What it did.
+pub enum Done {
+    Album(Album, Outcome),
+    Release(String, Result<Release, String>),
+}
+
+/// The lookup thread: an album (or release) at a time, asked for and
+/// answered.
 pub struct Worker {
-    /// An album, and whether to ask MusicBrainz again (not what's kept).
-    ask: mpsc::Sender<(Album, bool)>,
-    answers: mpsc::Receiver<(Album, Outcome)>,
-    /// The album being looked up.
+    ask: mpsc::Sender<Ask>,
+    answers: mpsc::Receiver<Done>,
+    /// What it's doing: the album (by id) being looked up, or the release.
     pub busy: Option<String>,
 }
 
 impl Worker {
     pub fn start() -> std::io::Result<Self> {
-        let (ask, asked) = mpsc::channel::<(Album, bool)>();
+        let (ask, asked) = mpsc::channel::<Ask>();
         let (answer, answers) = mpsc::channel();
         std::thread::Builder::new().name("online lookup".into()).spawn(move || {
             let mut musicbrainz = musicbrainz::MusicBrainz::new();
-            for (album, fresh) in asked {
-                let outcome = match musicbrainz.releases(&album, fresh) {
-                    Ok(releases) => match log_candidates(&album, &releases, matching::decide(&album, &releases)) {
-                        Verdict::Match(i, tracks) => Outcome::Matched(Box::new(releases[i].clone()), tracks),
-                        Verdict::Unsure(found) => Outcome::Unsure(found.into_iter().map(|i| releases[i].clone()).collect()),
-                        Verdict::NotFound => Outcome::NotFound,
-                    },
-                    Err(e) => Outcome::Failed(format!("{e:#}")),
+            for ask in asked {
+                let done = match ask {
+                    Ask::Album(album, fresh) => {
+                        let outcome = look_up(&mut musicbrainz, &album, fresh);
+                        Done::Album(album, outcome)
+                    }
+                    Ask::Release(id) => {
+                        let release = musicbrainz.fresh_release(&id).map_err(|e| format!("{e:#}"));
+                        Done::Release(id, release)
+                    }
                 };
-                if answer.send((album, outcome)).is_err() {
+                if answer.send(done).is_err() {
                     return;
                 }
             }
@@ -278,17 +317,39 @@ impl Worker {
         Ok(Self { ask, answers, busy: None })
     }
 
-    /// Look `album` up: from what's kept, unless `fresh`.
-    pub fn ask(&mut self, album: Album, fresh: bool) {
-        self.busy = Some(album.id.clone());
-        if self.ask.send((album, fresh)).is_err() {
+    pub fn ask(&mut self, ask: Ask) {
+        self.busy = Some(match &ask {
+            Ask::Album(album, _) => album.id.clone(),
+            Ask::Release(id) => format!("release:{id}"),
+        });
+        if self.ask.send(ask).is_err() {
             self.busy = None;
         }
     }
 
-    pub fn answer(&mut self) -> Option<(Album, Outcome)> {
+    pub fn answer(&mut self) -> Option<Done> {
         let answer = self.answers.try_recv().ok()?;
         self.busy = None;
         Some(answer)
+    }
+}
+
+/// What a lookup makes of `album`: a song on no album by its recording,
+/// else by its releases.
+fn look_up(musicbrainz: &mut musicbrainz::MusicBrainz, album: &Album, fresh: bool) -> Outcome {
+    if album.loose {
+        return match musicbrainz.recording(album, fresh) {
+            Ok(Some((release, track))) => Outcome::Matched(Box::new(release), vec![Some(track)]),
+            Ok(None) => Outcome::NotFound,
+            Err(e) => Outcome::Failed(format!("{e:#}")),
+        };
+    }
+    match musicbrainz.releases(album, fresh) {
+        Ok(releases) => match log_candidates(album, &releases, matching::decide(album, &releases)) {
+            Verdict::Match(i, tracks) => Outcome::Matched(Box::new(releases[i].clone()), tracks),
+            Verdict::Unsure(found) => Outcome::Unsure(found.into_iter().map(|i| releases[i].clone()).collect()),
+            Verdict::NotFound => Outcome::NotFound,
+        },
+        Err(e) => Outcome::Failed(format!("{e:#}")),
     }
 }
