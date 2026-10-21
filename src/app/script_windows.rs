@@ -521,7 +521,7 @@ impl App {
             if let Some(key) = pressed {
                 captured = true;
                 self.binding_capture = None;
-                let reserved = matches!(key, Binding::Key(k) if crate::visualizer::RESERVED_KEYS.contains(&k));
+                let reserved = matches!(key, Binding::Key(k) if crate::commands::reserved(k));
                 if !reserved {
                     let mut bindings = action.bindings.clone();
                     match slot {

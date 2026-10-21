@@ -225,12 +225,6 @@ impl DisplayMode {
     }
 }
 
-/// Keys the app always keeps for itself, never reported to a script:
-/// Escape (back to windowed), F5 (restart the script), F11 (toggle the
-/// dedicated visualizer fullscreen).
-pub const RESERVED_KEYS: [egui::Key; 5] =
-    [egui::Key::Escape, egui::Key::F5, egui::Key::F9, egui::Key::F10, egui::Key::F11];
-
 /// Mouse buttons a script can ask about, in `VisualizerInput`'s array order.
 pub const MOUSE_BUTTONS: [egui::PointerButton; 3] =
     [egui::PointerButton::Primary, egui::PointerButton::Secondary, egui::PointerButton::Middle];
@@ -256,7 +250,7 @@ pub struct Touch {
 /// One frame of pointer and keyboard input, as a visualizer script sees it.
 /// Mouse state only while the pointer is over the visualizer (or it has
 /// focus, so a drag that leaves it still ends); keys only while it has
-/// focus (clicked into, or in the dedicated fullscreen). `RESERVED_KEYS`
+/// focus (clicked into, or in the dedicated fullscreen). The app's reserved keys (`commands::reserved`)
 /// are never reported.
 #[derive(Clone, Debug, Default)]
 pub struct VisualizerInput {
@@ -720,10 +714,10 @@ fn gather_input(
             }
         }
         if focused {
-            input.keys_down = i.keys_down.iter().copied().filter(|k| !RESERVED_KEYS.contains(k)).collect();
+            input.keys_down = i.keys_down.iter().copied().filter(|k| !crate::commands::reserved(*k)).collect();
             for event in &i.events {
                 match event {
-                    egui::Event::Key { key, pressed, repeat, modifiers, .. } if !RESERVED_KEYS.contains(key) => {
+                    egui::Event::Key { key, pressed, repeat, modifiers, .. } if !crate::commands::reserved(*key) => {
                         if *pressed && !*repeat {
                             input.keys_pressed.push(*key);
                         } else if !*pressed {

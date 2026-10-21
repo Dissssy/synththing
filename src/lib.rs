@@ -28,6 +28,7 @@ mod channels;
 mod cleanup;
 mod cli;
 mod code_edit;
+mod commands;
 mod config;
 mod device;
 mod credits;

@@ -112,7 +112,7 @@ use crate::live::{LiveCommand, LiveNote};
 use crate::playlist::LoopMode;
 use crate::typing::TypingSpan;
 use crate::visualizer::{
-    ActiveNote, CursorRequest, NoteChange, NotesSnapshot, RESERVED_KEYS, StereoFrame, Visualizer,
+    ActiveNote, CursorRequest, NoteChange, NotesSnapshot, StereoFrame, Visualizer,
     VisualizerInput,
 };
 
@@ -3809,7 +3809,7 @@ fn parse_mouse_button(name: Option<&str>) -> mlua::Result<usize> {
 }
 
 /// A key by name, case-insensitively ("a", "space", "up", "enter", "f5",
-/// ...). `Ok(None)` for the app's reserved keys (Escape, F5, F11), which
+/// ...). `Ok(None)` for the app's reserved keys (`commands::reserved`), which
 /// scripts never see.
 fn parse_key(name: &str) -> mlua::Result<Option<egui::Key>> {
     let key = egui::Key::ALL
@@ -3822,7 +3822,7 @@ fn parse_key(name: &str) -> mlua::Result<Option<egui::Key>> {
                 "unknown key '{name}' (try e.g. \"a\", \"space\", \"up\", \"enter\")"
             ))
         })?;
-    Ok((!RESERVED_KEYS.contains(&key)).then_some(key))
+    Ok((!crate::commands::reserved(key)).then_some(key))
 }
 
 #[allow(clippy::too_many_arguments)]
