@@ -356,7 +356,7 @@ fn time_range(ui: &mut egui::Ui, start: &mut f64, stop: &mut f64, length: f64) -
     }
     let over = response.hover_pos().and_then(|p| under(p.x)).is_some();
     if over || response.dragged() {
-        ui.ctx().set_cursor_icon(if response.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
     let visuals = ui.visuals();
     let y = rect.center().y;
