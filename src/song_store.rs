@@ -124,6 +124,27 @@ pub struct Meta {
     /// Its album's a compilation (by various artists).
     #[serde(rename = "cp", default, skip_serializing_if = "std::ops::Not::not")]
     pub compilation: bool,
+    /// What it's grouped under (a work, a movement), and what it says of
+    /// itself.
+    #[serde(rename = "gr", skip_serializing_if = "Option::is_none")]
+    pub grouping: Option<String>,
+    #[serde(rename = "cm", skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    /// Hz.
+    #[serde(rename = "sr", skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<u32>,
+    /// Which `META_VERSION` read it: one read by an older one is read
+    /// again, for what it didn't read.
+    #[serde(rename = "v", skip_serializing_if = "is_zero")]
+    pub version: u32,
+}
+
+/// The version of what's read of a song's file (`Meta::version`): 1 added
+/// its grouping, comment and sample rate.
+pub const META_VERSION: u32 = 1;
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// A tag of the user's own.
@@ -239,7 +260,12 @@ impl SongStore {
                 continue;
             }
             let song = self.songs.entry(key).or_insert_with(|| Song::new(synced.name.clone()));
-            let mut learned = Song { meta: synced.meta.or_else(|| song.meta.clone()), ..synced };
+            // (What a newer version read is kept over an older one's.)
+            let meta = match (synced.meta, &song.meta) {
+                (Some(synced), Some(here)) if here.version > synced.version => Some(here.clone()),
+                (synced, here) => synced.or_else(|| here.clone()),
+            };
+            let mut learned = Song { meta, ..synced };
             // (One from before it was synced says 0.)
             if learned.imported == 0 || song.imported < learned.imported {
                 learned.imported = song.imported;
@@ -255,12 +281,13 @@ impl SongStore {
     }
 
     /// Note what the songs' files say of themselves, for those not known
-    /// yet (a device that read them first said it, for all of them).
-    /// Saved once, at the end: whether anything changed.
+    /// yet or read by an older version (a device that read them first
+    /// said it, for all of them). Saved once, at the end: whether anything
+    /// changed.
     pub fn note_meta(&mut self, metas: impl IntoIterator<Item = (String, Meta)>) -> bool {
         let mut changed = false;
         for (key, meta) in metas {
-            if let Some(song) = self.songs.get_mut(&key).filter(|s| s.meta.is_none()) {
+            if let Some(song) = self.songs.get_mut(&key).filter(|s| s.meta.as_ref().is_none_or(|m| m.version < meta.version)) {
                 song.meta = Some(meta);
                 changed = true;
             }
@@ -1028,6 +1055,22 @@ mod tests {
         assert_eq!(names(&store), ["Chill", "party"], "kept");
         store.remove_tag("b");
         assert_eq!(names(&SongStore::open(dir.clone())), ["party"], "deleted from the song too");
+    }
+
+    #[test]
+    fn a_newer_read_is_kept() {
+        let dir = temp_dir("meta-version");
+        let mut store = SongStore::open(dir.clone());
+        let stored = write_in(b"read", "Read.mp3", &dir).unwrap();
+        store.add(stored.clone());
+        let old = Meta { title: Some("Old".into()), ..Meta::default() };
+        assert!(store.note_meta([(stored.key.clone(), old.clone())]));
+        let new = Meta { title: Some("New".into()), version: META_VERSION, ..Meta::default() };
+        assert!(store.note_meta([(stored.key.clone(), new.clone())]), "read again by a newer version");
+        assert!(!store.note_meta([(stored.key.clone(), old.clone())]), "not by an older one");
+        let synced = Song { meta: Some(old), ..store.get_by_key(&stored.key).unwrap().clone() };
+        store.learn([(stored.key.clone(), synced)]);
+        assert_eq!(store.get_by_key(&stored.key).unwrap().meta, Some(new), "kept over an older version's, synced");
     }
 
     #[test]
