@@ -31,6 +31,10 @@
 //! A song removed here is blocked (`blocked.json`): this device doesn't
 //! fetch it from the others again (`song_sync.rs`), until it's unblocked
 //! or imported again.
+//!
+//! A song removed from every device (`removed.json`, synced) is forgotten
+//! on each: its file deleted, and what's known of it with it. It stays
+//! removed until a device imports it again.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -46,6 +50,7 @@ const INDEX: &str = "library.json";
 const BLOCKED: &str = "blocked.json";
 const TAGS: &str = "tags.json";
 const TOGETHER: &str = "together.json";
+const REMOVED: &str = "removed.json";
 
 /// The built-in tag starred songs have: hidden from the tag editor and
 /// the chips, it syncs like any other.
@@ -183,6 +188,14 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+/// A song removed from every device: what it was called, and when
+/// (Unix seconds).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Removed {
+    pub name: String,
+    pub at: i64,
+}
+
 /// A tag of the user's own.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Tag {
@@ -207,6 +220,8 @@ pub struct SongStore {
     present: BTreeSet<String>,
     /// The keys removed here, not to be fetched again.
     blocked: BTreeSet<String>,
+    /// The songs removed from every device, by key.
+    removed: BTreeMap<String, Removed>,
     /// The tags, by ID.
     tags: BTreeMap<String, Tag>,
     /// The songs that play together, by the set's ID: their keys, in order.
@@ -243,7 +258,18 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{TOGETHER}: {e}")).ok())
             .unwrap_or_default();
-        let mut store = Self { dir, songs, present, blocked, tags, together, revision: 0 };
+        let removed: BTreeMap<String, Removed> = std::fs::read_to_string(dir.join(REMOVED))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{REMOVED}: {e}")).ok())
+            .unwrap_or_default();
+        let mut store = Self { dir, songs, present, blocked, removed, tags, together, revision: 0 };
+        // (A file that couldn't be deleted when it was removed everywhere,
+        // or found again: it goes now.)
+        let leftover: Vec<String> = store.removed.keys().filter(|key| store.songs.contains_key(*key)).cloned().collect();
+        changed |= !leftover.is_empty();
+        for key in leftover {
+            store.forget(&key);
+        }
         if changed {
             store.save();
         }
@@ -271,6 +297,9 @@ impl SongStore {
         if self.blocked.remove(&stored.key) {
             self.save_blocked();
         }
+        if self.removed.remove(&stored.key).is_some() {
+            self.save_removed();
+        }
         self.present.insert(stored.key);
         self.save();
     }
@@ -278,7 +307,7 @@ impl SongStore {
     /// Note a song that isn't here (yet) by its key and name, unless it's
     /// known already.
     pub fn know(&mut self, key: &str, name: &str) {
-        if !is_key(key) || self.songs.contains_key(key) {
+        if !is_key(key) || self.songs.contains_key(key) || self.removed.contains_key(key) {
             return;
         }
         self.songs.insert(key.to_string(), Song::new(name.to_string()));
@@ -292,7 +321,7 @@ impl SongStore {
     pub fn learn(&mut self, songs: impl IntoIterator<Item = (String, Song)>) {
         let mut changed = false;
         for (key, synced) in songs {
-            if !is_key(&key) {
+            if !is_key(&key) || self.removed.contains_key(&key) {
                 continue;
             }
             let song = self.songs.entry(key).or_insert_with(|| Song::new(synced.name.clone()));
@@ -352,6 +381,75 @@ impl SongStore {
         self.blocked.insert(key);
         self.save_blocked();
         Ok(())
+    }
+
+    /// Delete the song `key` from the store (if it's here: it may have
+    /// been removed here already) and forget it, removing it from every
+    /// device (`removed`).
+    pub fn remove_everywhere(&mut self, key: &str) -> Result<()> {
+        if !is_key(key) {
+            return Ok(());
+        }
+        let key = key.to_string();
+        let path = self.path(&key);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("deleting {}", path.display())),
+        }
+        let name = self.songs.get(&key).map_or_else(|| key.clone(), |song| song.name.clone());
+        self.removed.insert(key.clone(), Removed { name, at: now() });
+        self.save_removed();
+        self.forget(&key);
+        self.save();
+        Ok(())
+    }
+
+    /// The songs removed from every device, by key.
+    pub fn removed(&self) -> &BTreeMap<String, Removed> {
+        &self.removed
+    }
+
+    pub fn is_removed(&self, key: &str) -> bool {
+        self.removed.contains_key(key)
+    }
+
+    /// Take the synced list of songs removed from every device, forgetting
+    /// those newly on it. Whether any song was forgotten.
+    pub fn set_removed(&mut self, removed: BTreeMap<String, Removed>) -> bool {
+        if removed == self.removed {
+            return false;
+        }
+        self.removed = removed.into_iter().filter(|(key, _)| is_key(key)).collect();
+        self.save_removed();
+        let gone: Vec<String> = self.removed.keys().filter(|key| self.songs.contains_key(*key)).cloned().collect();
+        for key in &gone {
+            self.forget(key);
+        }
+        if !gone.is_empty() {
+            self.save();
+        }
+        !gone.is_empty()
+    }
+
+    /// Delete the song `key`'s file and forget it: what's known of it, and
+    /// any set it plays together in (`removed`). A file that won't delete
+    /// stays, to go next time (`open`). Not saved.
+    fn forget(&mut self, key: &str) {
+        match std::fs::remove_file(self.path(key)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                log::warn!("couldn't delete {}: {e}", self.path(key).display());
+                return;
+            }
+        }
+        self.present.remove(key);
+        self.songs.remove(key);
+        if self.blocked.remove(key) {
+            self.save_blocked();
+        }
+        self.leave_together(&[key.to_string()]);
     }
 
     /// Delete the song `key`'s file, damaged, without blocking it: this
@@ -604,6 +702,16 @@ impl SongStore {
         let path = self.dir.join(TOGETHER);
         let written =
             std::fs::create_dir_all(&self.dir).and_then(|()| write_atomically(&path, serde_json::to_string_pretty(&self.together).unwrap_or_default().as_bytes()));
+        if let Err(e) = written {
+            log::warn!("couldn't save {}: {e}", path.display());
+        }
+    }
+
+    fn save_removed(&mut self) {
+        let _timing = crate::frame_timing::scope("song store save");
+        self.revision += 1;
+        let path = self.dir.join(REMOVED);
+        let written = std::fs::create_dir_all(&self.dir).and_then(|()| write_atomically(&path, serde_json::to_string(&self.removed).unwrap_or_default().as_bytes()));
         if let Err(e) = written {
             log::warn!("couldn't save {}: {e}", path.display());
         }

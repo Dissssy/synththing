@@ -5,8 +5,11 @@
 //!   tags, when it was first imported and what its file says of itself
 //!   (`song_store::Song`: songs are only ever added: a song removed on one
 //!   device stays in the others'), the tags themselves (`tag/<id>`), and
-//!   the songs that play together (`group/<id>`: their keys, in order).
-//!   Each device knows them all (`SongStore::learn`).
+//!   the songs that play together (`group/<id>`: their keys, in order),
+//!   and the songs removed from every device (`removed/<key>`: gone from
+//!   the library, until a device imports one again).
+//!   Each device knows them all (`SongStore::learn`), and forgets the
+//!   removed ones (`SongStore::set_removed`).
 //! - `transfers`: which songs each device wants (`want/<device>/<key>`)
 //!   and which are waiting on the relay (`ready/<key>`), and the devices
 //!   themselves (`device/<device>`: its name, and when it last said it's
@@ -35,7 +38,7 @@ use crate::library::client;
 use crate::library::identity::Identity;
 use crate::playlist::Library;
 use crate::settings_sync::Fields;
-use crate::song_store::{self, Song, SongStore, Tag};
+use crate::song_store::{self, Removed, Song, SongStore, Tag};
 
 /// The synced data's names on the server.
 pub const LIBRARY: &str = "library";
@@ -43,14 +46,19 @@ pub const TRANSFERS: &str = "transfers";
 
 const TAG: &str = "tag/";
 const GROUP: &str = "group/";
+const REMOVED: &str = "removed/";
 
 /// The library's leaves: those synced so far (`applied`), with what this
 /// device has of them, every song here, the tags, and the songs that play
-/// together. (A song only known
+/// together, and the songs removed from every device. (A song only known
 /// here, not here nor synced yet, waits for the synced library: its tags
 /// are there.)
 pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
-    let mut leaves: BTreeMap<String, Value> = applied.iter().filter(|(k, _)| !k.starts_with(TAG) && !k.starts_with(GROUP)).map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut leaves: BTreeMap<String, Value> = applied
+        .iter()
+        .filter(|(k, _)| !k.starts_with(TAG) && !k.starts_with(GROUP) && !k.starts_with(REMOVED) && !store.is_removed(k))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     for (key, song) in store.known() {
         if applied.contains_key(key) || store.has(key) {
             leaves.insert(key.to_string(), serde_json::to_value(song).unwrap_or_default());
@@ -62,16 +70,25 @@ pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> B
     for (id, keys) in store.together() {
         leaves.insert(format!("{GROUP}{id}"), serde_json::to_value(keys).unwrap_or_default());
     }
+    for (key, removed) in store.removed() {
+        leaves.insert(format!("{REMOVED}{key}"), serde_json::to_value(removed).unwrap_or_default());
+    }
     leaves
 }
 
 /// Take the synced library: every song's name, tags and what's known of
 /// it, the tags and the songs that play together (those gone from it
-/// deleted here).
-pub fn apply_library(store: &mut SongStore, fields: &Fields) {
+/// deleted here), and the songs removed from every device. Whether any
+/// song here was removed.
+pub fn apply_library(store: &mut SongStore, fields: &Fields) -> bool {
+    let removed: BTreeMap<String, Removed> =
+        fields.iter().filter_map(|(key, field)| Some((key.strip_prefix(REMOVED)?.to_string(), serde_json::from_value(field.value.clone()).ok()?))).collect();
+    let forgot = store.set_removed(removed);
     let mut songs = Vec::new();
     for (key, field) in fields {
-        if let Some(id) = key.strip_prefix(TAG) {
+        if key.starts_with(REMOVED) {
+            continue;
+        } else if let Some(id) = key.strip_prefix(TAG) {
             if let Ok(tag) = serde_json::from_value::<Tag>(field.value.clone()) {
                 store.set_tag(id, tag);
             }
@@ -92,6 +109,7 @@ pub fn apply_library(store: &mut SongStore, fields: &Fields) {
     for id in gone {
         store.set_together(&id, Vec::new());
     }
+    forgot
 }
 
 /// Which songs a device takes from the others: those in its playlists,
@@ -102,10 +120,11 @@ pub struct Wants {
     pub every: bool,
 }
 
-/// The songs this device wants: those it lacks and hasn't blocked, in a
+/// The songs this device wants: those it lacks and hasn't blocked (nor
+/// were removed from every device), in a
 /// playlist, starred, or anywhere in the library, as `wants` says.
 pub fn wanted(store: &SongStore, playlists: &Library, wants: Wants) -> BTreeSet<String> {
-    let lacks = |key: &str| song_store::is_key(key) && !store.has(key) && !store.is_blocked(key);
+    let lacks = |key: &str| song_store::is_key(key) && !store.has(key) && !store.is_blocked(key) && !store.is_removed(key);
     let known = store.known().filter(|(_, song)| wants.every || (wants.starred && song.tags.iter().any(|t| t == song_store::STARRED)));
     let listed = playlists.lists.iter().flat_map(|stored| &stored.playlist.entries).filter_map(|e| song_store::key_in(store.dir(), &e.path));
     known.map(|(key, _)| key).chain(listed).filter(|key| lacks(key)).map(str::to_string).collect()
@@ -535,6 +554,53 @@ mod tests {
         // Removed here: not wanted again.
         phone.remove(&song_store::path_of(&phone_dir, &song.key)).unwrap();
         assert!(wanted(&phone, &playlists, every).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_song_removed_everywhere_goes_from_every_device() {
+        let root = std::env::temp_dir().join(format!("synththing-song-removed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (desktop_dir, phone_dir) = (root.join("desktop"), root.join("phone"));
+        let fields = |leaves: &BTreeMap<String, Value>| leaves.iter().map(|(k, v)| (k.clone(), crate::settings_sync::Field { value: v.clone(), changed: 1 })).collect();
+        let mut desktop = SongStore::open(desktop_dir.clone());
+        let song = song_store::write_in(b"song", "Song.mid", &desktop_dir).unwrap();
+        desktop.add(song.clone());
+        let mut phone = SongStore::open(phone_dir.clone());
+        phone.add(song_store::write_in(b"song", "Song.mid", &phone_dir).unwrap());
+        let synced = library_leaves(&desktop, &BTreeMap::new());
+        apply_library(&mut phone, &fields(&synced));
+
+        // The desktop removes it everywhere: the library says so, and no
+        // longer has the song.
+        desktop.remove_everywhere(&song.key).unwrap();
+        let removed = library_leaves(&desktop, &synced);
+        assert!(!removed.contains_key(&song.key));
+        assert_eq!(removed[&format!("removed/{}", song.key)]["name"], "Song.mid");
+        // The phone forgets it, and doesn't want it back.
+        assert!(apply_library(&mut phone, &fields(&removed)));
+        assert!(!phone.has(&song.key) && !song_store::path_of(&phone_dir, &song.key).exists());
+        assert_eq!(phone.known().count(), 0);
+        assert_eq!(library_leaves(&phone, &removed), removed, "nothing new to say");
+        let (playlists, _) = Library::load(root.join("playlists"), phone_dir.clone());
+        phone.know(&song.key, "Song.mid");
+        assert!(wanted(&phone, &playlists, Wants { starred: false, every: true }).is_empty());
+        assert!(!apply_library(&mut phone, &fields(&removed)), "already gone");
+        // A song only removed here can be removed everywhere later.
+        let other = song_store::write_in(b"other", "Other.mid", &phone_dir).unwrap();
+        phone.add(other.clone());
+        phone.remove(&song_store::path_of(&phone_dir, &other.key)).unwrap();
+        phone.remove_everywhere(&other.key).unwrap();
+        assert!(phone.is_removed(&other.key) && !phone.is_blocked(&other.key));
+        assert_eq!(library_leaves(&phone, &removed)[&format!("removed/{}", other.key)]["name"], "Other.mid");
+
+        // Imported again, it's back, everywhere.
+        phone.add(song_store::write_in(b"song", "Again.mid", &phone_dir).unwrap());
+        let back = library_leaves(&phone, &removed);
+        assert!(back.contains_key(&song.key) && !back.contains_key(&format!("removed/{}", song.key)));
+        apply_library(&mut desktop, &fields(&back));
+        assert!(!desktop.is_removed(&song.key));
+        assert_eq!(wanted(&desktop, &playlists, Wants { starred: false, every: true }), BTreeSet::from([song.key.clone()]));
         let _ = std::fs::remove_dir_all(&root);
     }
 
