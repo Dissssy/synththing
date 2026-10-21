@@ -34,6 +34,9 @@ use crate::song_store::STARRED;
 const ARTISTS: &str = "artists";
 /// The user's playlists, the first of the Groupings (not a ruleset).
 pub(super) const PLAYLISTS: &str = "playlists";
+/// The songs that play together (`SongStore::together`), each set a group
+/// in its order, after the playlists while there are any (not a ruleset).
+pub(super) const TOGETHER: &str = "together";
 /// The ruleset shown first.
 const FIRST: &str = PLAYLISTS;
 
@@ -142,6 +145,11 @@ fn count(n: usize, what: &str) -> String {
     format!("{} {what}{}", thousands(n), if n == 1 { "" } else { "s" })
 }
 
+/// The songs that play together, shown like a ruleset's playlists.
+fn together_ruleset() -> Ruleset {
+    Ruleset { name: "Play together".into(), rules: Default::default() }
+}
+
 /// What a ruleset's playlists are of, one of them.
 fn what(ruleset: &Ruleset) -> &'static str {
     ruleset.rules.split.as_ref().map_or("playlist", |s| match s.by {
@@ -213,6 +221,12 @@ impl App {
                             if ui.add(chip).clicked() {
                                 pick = Some(PLAYLISTS.to_string());
                             }
+                            if !self.songs.together().is_empty() {
+                                let chip = egui::Button::selectable(self.groupings.shown() == TOGETHER, "Play together").corner_radius(12.0);
+                                if ui.add(chip).clicked() {
+                                    pick = Some(TOGETHER.to_string());
+                                }
+                            }
                             for (id, ruleset) in &rulesets {
                                 let chip = egui::Button::selectable(self.groupings.shown() == id, &ruleset.name).corner_radius(12.0);
                                 if ui.add(chip).clicked() {
@@ -267,15 +281,52 @@ impl App {
 
     /// The ruleset shown: its groups, or the one open.
     fn ruleset_ui(&mut self, ui: &mut egui::Ui) -> Option<Act> {
-        let rulesets = self.all_rulesets();
-        let (id, ruleset) = rulesets.iter().find(|(id, _)| id == self.groupings.shown()).or(rulesets.first()).cloned()?;
+        let (id, ruleset, what, groups) = if self.groupings.shown() == TOGETHER && !self.songs.together().is_empty() {
+            (TOGETHER.to_string(), together_ruleset(), "set", self.together_groups())
+        } else {
+            let rulesets = self.all_rulesets();
+            let (id, ruleset) = rulesets.iter().find(|(id, _)| id == self.groupings.shown()).or(rulesets.first()).cloned()?;
+            let groups = self.groups_of(&id, &ruleset.rules);
+            (id, ruleset.clone(), what(&ruleset), groups)
+        };
         self.groupings.shown = Some(id.clone());
-        let groups = self.groups_of(&id, &ruleset.rules);
         let open = self.groupings.view().open.clone().and_then(|key| groups.iter().find(|g| g.key == key).cloned());
         match open {
             Some(group) => self.group_page_ui(ui, &id, &ruleset, &group),
-            None => self.groups_ui(ui, &id, what(&ruleset), albums(&ruleset), self.songs.revision(), &groups),
+            None => self.groups_ui(ui, &id, what, albums(&ruleset), self.songs.revision(), &groups),
         }
+    }
+
+    /// The songs that play together as groups: each set titled by its
+    /// first song, the rest of it beneath.
+    fn together_groups(&mut self) -> Arc<Vec<Group>> {
+        let naming = naming(&self.config, &self.songs);
+        let cache = &mut self.song_info;
+        let mut groups: Vec<Group> = self
+            .songs
+            .together()
+            .iter()
+            .map(|(id, keys)| {
+                let names: Vec<String> = keys
+                    .iter()
+                    .map(|key| {
+                        let path = self.songs.path(key);
+                        let info = if self.songs.has(key) { cache.get(&path) } else { None };
+                        naming.name(&path, info.as_deref())
+                    })
+                    .collect();
+                Group {
+                    key: id.clone(),
+                    sort: fields::sort_text(&names[0], self.config.sort_with_articles),
+                    title: names[0].clone(),
+                    subtitle: Some(format!("then {}", names[1..].join(", "))),
+                    artists: Vec::new(),
+                    songs: keys.clone(),
+                }
+            })
+            .collect();
+        groups.sort_by(|a, b| a.sort.cmp(&b.sort));
+        Arc::new(groups)
     }
 
     /// The playlists: as tiles or rows (dropping songs there makes a new
@@ -374,6 +425,9 @@ impl App {
                 Some(stored) => (stored.playlist.name.clone(), true),
                 None => ("Playlists".into(), false),
             };
+        }
+        if id == TOGETHER {
+            return ("Play together".into(), self.groupings.views.get(id).is_some_and(|v| v.open.is_some()));
         }
         let open = self.groupings.views.get(id).and_then(|v| v.open.as_ref());
         let group = open.and_then(|key| self.ruleset_groups.get(id)?.2.iter().find(|g| &g.key == key));
@@ -589,7 +643,8 @@ impl App {
         let tracks: Vec<Track> = group
             .songs
             .iter()
-            .map(|key| {
+            .enumerate()
+            .map(|(i, key)| {
                 let path = self.songs.path(key);
                 let here = self.songs.has(key);
                 let info = if here { cache.get(&path) } else { None };
@@ -600,7 +655,8 @@ impl App {
                     artists: facts.items(Field::Artist).into_iter().map(|a| a.into_owned()).collect(),
                     album: text(Field::Album),
                     disc: facts.number(Field::Disc).map(|n| n as u32),
-                    number: facts.number(Field::Track).map(|n| n as u32),
+                    // (A set's songs by their place in it.)
+                    number: if id == TOGETHER { Some(i as u32 + 1) } else { facts.number(Field::Track).map(|n| n as u32) },
                     length: facts.number(Field::Length),
                     starred: facts.starred(),
                     here,
@@ -662,8 +718,11 @@ impl App {
             if !words.iter().all(|w| name.contains(w.as_str())) {
                 continue;
             }
-            // Albums under their discs, the rest under their albums.
-            let this = if albums {
+            // Albums under their discs, the rest under their albums (a set
+            // of songs that play together as it is).
+            let this = if id == TOGETHER {
+                None
+            } else if albums {
                 discs.then(|| format!("Disc {}", track.disc.unwrap_or(1)))
             } else {
                 Some(album_key(track).and_then(|k| best.get(&k).map(|b| b.to_string())).unwrap_or_else(|| "No album".into()))

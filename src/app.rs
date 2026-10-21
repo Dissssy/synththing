@@ -132,7 +132,7 @@ fn plays(store: &SongStore, path: &Path) -> song_list::Plays {
     song_list::Plays {
         starred: store.is_starred(path),
         skip_shuffle: flag(Field::SkipShuffle),
-        together: store.together_of(path).map(|(set, at)| (set.to_string(), at)),
+        together: store.together_of(path).map(|(set, at)| song_list::InSet { set: set.to_string(), at, of: store.together()[set].len() }),
     }
 }
 

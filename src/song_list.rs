@@ -131,13 +131,21 @@ struct Queued {
 
 /// What of a song decides when it plays: whether it's starred, whether
 /// shuffling passes over it (`Field::SkipShuffle`), and the songs it plays
-/// together with (`SongStore::together_of`: the set's ID, and where in it
-/// it is).
+/// together with (`SongStore::together_of`).
 #[derive(Clone, Debug, Default)]
 pub struct Plays {
     pub starred: bool,
     pub skip_shuffle: bool,
-    pub together: Option<(String, usize)>,
+    pub together: Option<InSet>,
+}
+
+/// Where a song is in the set it plays together with: the set's ID, its
+/// place in it, and how many songs it has.
+#[derive(Clone, Debug)]
+pub struct InSet {
+    pub set: String,
+    pub at: usize,
+    pub of: usize,
 }
 
 /// Draws a row's right-click menu, given the songs it applies to (the
@@ -580,7 +588,15 @@ impl SongList {
                     ui.set_width(TRAILING_WIDTH);
                     trailing(ui, &entry.path);
                 });
+                // (Linked, if it plays together with others.)
+                let linked = |ui: &mut egui::Ui| {
+                    if let Some(set) = &entry.song.plays.together {
+                        ui.label(egui::RichText::new(crate::app::icon("link")).weak())
+                            .on_hover_text(format!("Plays together with others: {} of {} (Song info > Options lists them)", set.at + 1, set.of));
+                    }
+                };
                 if touch {
+                    linked(ui);
                     // The name and the tags, and under them the value
                     // sorted by.
                     let second = shown.first().and(entry.song.values.first()).cloned().flatten();
@@ -591,6 +607,7 @@ impl SongList {
                     cell(ui, c.width, egui::RichText::new(value.as_ref().map_or("", |v| v.text.as_str())).weak(), scroll);
                 }
                 select_list::chips(ui, entry.tags());
+                linked(ui);
                 select_list::label(ui, text, None, scroll);
             });
         });
@@ -840,7 +857,7 @@ fn next_in(queue: &[Queued], playing: &Playing, rules: Rules, random: u64) -> Op
     let rows = scope(queue, &group, rules);
     let played: HashSet<&Path> = playing.history.iter().map(PathBuf::as_path).collect();
     let fresh = |i: &&usize| !played.contains(queue[**i].path.as_path());
-    let members: Vec<Member> = queue.iter().map(|q| q.plays.together.as_ref().map(|(set, at)| (set.as_str(), *at))).collect();
+    let members: Vec<Member> = queue.iter().map(|q| q.plays.together.as_ref().map(|t| (t.set.as_str(), t.at))).collect();
     let next = if rules.shuffle {
         let unplayed: Vec<usize> = rows.iter().filter(fresh).copied().collect();
         here.and_then(|i| together::next_in_set(&members, &unplayed, i)).or_else(|| {
@@ -1224,8 +1241,8 @@ mod tests {
     #[test]
     fn autoplay_shuffles_songs_together_as_one() {
         let mut q = queue(&[("a", None, false), ("x1", None, false), ("x0", None, false)]);
-        q[1].plays.together = Some(("x".into(), 1));
-        q[2].plays.together = Some(("x".into(), 0));
+        q[1].plays.together = Some(InSet { set: "x".into(), at: 1, of: 2 });
+        q[2].plays.together = Some(InSet { set: "x".into(), at: 0, of: 2 });
         let shuffle = Rules { shuffle: true, ..rules(Autoplay::All, false) };
         for random in 0..6 {
             assert_eq!(next_in(&q, &playing("a", None, 0, &["a"]), shuffle, random).map(|(at, _)| at.path), Some(PathBuf::from("x0")), "from its first");
