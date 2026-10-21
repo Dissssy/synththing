@@ -144,6 +144,8 @@ impl App {
         let mut skip_collapsed = self.config.autoplay_skip_collapsed;
         let mut only_starred = self.config.only_starred;
         let mut tile_letters = self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS);
+        let mut group_ignore = self.config.group_ignore.clone();
+        let mut past_articles = !self.config.sort_with_articles;
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
         let mut canary = self.config.canary_updates();
         let mut close_to_tray = self.config.close_to_tray.unwrap_or(false);
@@ -334,6 +336,24 @@ impl App {
                         label | ui.add(egui::Slider::new(&mut tile_letters, 1..=4))
                     },
                 );
+                with_info(
+                    ui,
+                    "Grouping by a name (the Songs list's groups, the playlists of Artists, Albums and \
+                     other rulesets) already sees past case, spacing, punctuation and symbols, so \
+                     \"<OST>\" and \"OST\" are one group, shown as its best spelling. These characters \
+                     are passed over too.",
+                    |ui| {
+                        let label = ui.label("Also ignore when grouping");
+                        label | ui.add(egui::TextEdit::singleline(&mut group_ignore).hint_text("e.g. ー").desired_width(80.0))
+                    },
+                );
+                with_info(
+                    ui,
+                    "Sorting by a name (the Songs list, smart playlists, Groupings) passes over a leading \
+                     \"The\", \"A\" or \"An\", so The Beatles are with the Bs. A song's own \"sort as\" \
+                     (Song info) goes first.",
+                    |ui| ui.checkbox(&mut past_articles, "Sort past a leading The, A or An"),
+                );
                 ui.separator();
                 self.rulesets_ui(ui);
                 ui.separator();
@@ -456,6 +476,8 @@ impl App {
             || skip_collapsed != self.config.autoplay_skip_collapsed
             || only_starred != self.config.only_starred
             || tile_letters != self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS)
+            || group_ignore != self.config.group_ignore
+            || past_articles == self.config.sort_with_articles
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
             || canary != self.config.canary_updates()
             || (self.tray.is_some() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
@@ -500,6 +522,8 @@ impl App {
             self.config.preload_on_hover = hover_preload;
             self.config.autoplay_skip_collapsed = skip_collapsed;
             self.config.tile_letters = Some(tile_letters).filter(|&n| n != crate::album_art::DEFAULT_LETTERS);
+            self.config.group_ignore = group_ignore;
+            self.config.sort_with_articles = !past_articles;
             if self.config.only_starred != only_starred {
                 self.config.only_starred = only_starred;
                 self.plan_upcoming();

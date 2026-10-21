@@ -24,86 +24,70 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::midi_notes::NoteList;
+use crate::song_store::Meta;
 
-/// A song's length (when it can be known without decoding it) and its
-/// details as label/value pairs, empty when the file has nothing to say.
+/// A song's details as label/value pairs, empty when the file has nothing
+/// to say, and what's read of it for its fields (`fields.rs`).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SongInfo {
-    pub length: Option<f64>,
+    /// What the file says of itself: its tags (an audio file's ID3,
+    /// Vorbis comments, ...; a MIDI file's first track name as its
+    /// title), its length (when it can be known without decoding it) and
+    /// its size.
+    pub meta: Meta,
     pub details: Vec<(String, String)>,
     /// A MIDI file's note count.
     pub notes: Option<usize>,
     /// A MIDI file's tempo at its start.
-    #[serde(default)]
     pub bpm: Option<f64>,
-    /// What its tags say it is, for its name (`song_title`).
-    #[serde(default)]
-    pub tags: Tags,
 }
 
-/// The tags a song's name can be made from: an audio file's (ID3, Vorbis
-/// comments, ...), or a MIDI file's first track name as its title.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Tags {
-    pub title: Option<String>,
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    pub album_artist: Option<String>,
-    pub composer: Option<String>,
-    pub genre: Option<String>,
-    pub track: Option<String>,
-    pub disc: Option<String>,
-    pub year: Option<String>,
-}
-
-impl Tags {
-    /// The tag `name` (as a title pattern writes it), if the song has it.
-    pub fn get(&self, name: &str) -> Option<&str> {
-        let tag = match name {
-            "title" => &self.title,
-            "artist" => &self.artist,
-            "album" => &self.album,
-            "album_artist" => &self.album_artist,
-            "composer" => &self.composer,
-            "genre" => &self.genre,
-            "track" => &self.track,
-            "disc" => &self.disc,
-            "year" => &self.year,
-            _ => return None,
-        };
-        tag.as_deref()
+/// Fill the tag `key` (symphonia's name for a standard tag, or ffmpeg's)
+/// names in `meta` with `value`, unless it's set already.
+fn set_tag(meta: &mut Meta, key: &str, value: &str) {
+    let key = key.to_ascii_lowercase().replace([' ', '_'], "");
+    let value = tag_text(value);
+    if value.is_empty() {
+        return;
     }
-
-    /// Fill the tag `key` (symphonia's name for a standard tag, or
-    /// ffmpeg's) names, with `value`, unless it's set already.
-    fn set(&mut self, key: &str, value: &str) {
-        let key = key.to_ascii_lowercase().replace([' ', '_'], "");
-        let slot = match key.as_str() {
-            "tracktitle" | "title" => &mut self.title,
-            "artist" => &mut self.artist,
-            "album" => &mut self.album,
-            "albumartist" => &mut self.album_artist,
-            "composer" => &mut self.composer,
-            "genre" => &mut self.genre,
-            "tracknumber" | "track" => &mut self.track,
-            "discnumber" | "disc" => &mut self.disc,
-            "date" | "year" | "releasedate" | "originaldate" => &mut self.year,
-            _ => return,
-        };
-        let value = value.trim();
-        if slot.is_some() || value.is_empty() {
-            return;
+    let text = |slot: &mut Option<String>| {
+        slot.get_or_insert_with(|| value.to_string());
+    };
+    // "3/12" is track 3 (or disc 3), "2003-05-01" is 2003.
+    let number = |slot: &mut Option<u32>| {
+        if slot.is_none() {
+            *slot = leading_number(value);
         }
-        let value = match key.as_str() {
-            // "3/12" is track 3 (or disc 3).
-            "tracknumber" | "track" | "discnumber" | "disc" => value.split('/').next().unwrap_or(value).trim(),
-            // "2003-05-01" is 2003.
-            "title" | "tracktitle" | "artist" | "album" | "albumartist" | "composer" | "genre" => value,
-            _ => value.get(..4).filter(|y| y.bytes().all(|b| b.is_ascii_digit())).unwrap_or(value),
-        };
-        *slot = Some(value.to_string());
+    };
+    match key.as_str() {
+        "tracktitle" | "title" => text(&mut meta.title),
+        "artist" => text(&mut meta.artist),
+        "album" => text(&mut meta.album),
+        "albumartist" => text(&mut meta.album_artist),
+        "composer" => text(&mut meta.composer),
+        "genre" => text(&mut meta.genre),
+        // (Symphonia's names, then ffmpeg's.)
+        "sorttracktitle" | "titlesort" | "sortname" => text(&mut meta.sort_title),
+        "sortalbum" | "albumsort" => text(&mut meta.sort_album),
+        "sortartist" | "artistsort" => text(&mut meta.sort_artist),
+        "sortalbumartist" | "albumartistsort" => text(&mut meta.sort_album_artist),
+        "sortcomposer" | "composersort" => text(&mut meta.sort_composer),
+        "tracknumber" | "track" => number(&mut meta.track),
+        "discnumber" | "disc" => number(&mut meta.disc),
+        "date" | "year" | "releasedate" | "originaldate" => number(&mut meta.year),
+        // (iTunes writes "1"; some taggers "true".)
+        "contentgroup" | "grouping" | "itunesgrouping" => text(&mut meta.grouping),
+        "comment" | "comments" => text(&mut meta.comment),
+        "compilation" | "itunescompilation" => meta.compilation |= value == "1" || value.eq_ignore_ascii_case("true"),
+        _ => {}
     }
+}
+
+/// A tag's text without the spacing, or the NULs some taggers leave, at
+/// its ends ("KPM 155 Solo Instruments - Vol. 2\0" is "... Vol. 2").
+fn tag_text(value: &str) -> &str {
+    value.trim_matches(|c: char| c.is_whitespace() || c == '\0')
 }
 
 /// A MIDI file with more notes than this is "very large": playing it is
@@ -113,25 +97,6 @@ pub const HEAVY_MIDI_NOTES: usize = 100_000;
 impl SongInfo {
     pub fn is_heavy(&self) -> bool {
         self.notes.is_some_and(|n| n > HEAVY_MIDI_NOTES)
-    }
-
-    /// What the library keeps of it (`song_store::Meta`), for a file of
-    /// `size` bytes.
-    pub fn meta(&self, size: u64) -> crate::song_store::Meta {
-        let t = &self.tags;
-        crate::song_store::Meta {
-            title: t.title.clone(),
-            artist: t.artist.clone(),
-            album: t.album.clone(),
-            album_artist: t.album_artist.clone(),
-            composer: t.composer.clone(),
-            genre: t.genre.clone(),
-            track: t.track.as_deref().and_then(leading_number),
-            disc: t.disc.as_deref().and_then(leading_number),
-            year: t.year.as_deref().and_then(leading_number),
-            length: self.length,
-            size,
-        }
     }
 }
 
@@ -372,7 +337,10 @@ pub fn read(path: &Path) -> Result<SongInfo, String> {
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"));
-    if is_midi { read_midi(path) } else { read_audio(path) }
+    let mut info = if is_midi { read_midi(path) } else { read_audio(path) }?;
+    info.meta.size = std::fs::metadata(path).map_or(0, |m| m.len());
+    info.meta.version = crate::song_store::META_VERSION;
+    Ok(info)
 }
 
 fn read_midi(path: &Path) -> Result<SongInfo, String> {
@@ -380,10 +348,10 @@ fn read_midi(path: &Path) -> Result<SongInfo, String> {
     let list = NoteList::from_smf(&bytes)?;
     let facts = list.facts();
     let mut details = Vec::new();
-    let mut tags = Tags::default();
+    let mut meta = Meta { length: Some(facts.end_time), ..Meta::default() };
     if let Some(title) = facts.track_names.first().filter(|n| !n.trim().is_empty()) {
         details.push(("Title".into(), title.clone()));
-        tags.title = Some(title.trim().to_string());
+        meta.title = Some(title.trim().to_string());
     }
     if let Some(copyright) = &facts.copyright {
         details.push(("Copyright".into(), copyright.clone()));
@@ -421,7 +389,7 @@ fn read_midi(path: &Path) -> Result<SongInfo, String> {
     if !named.is_empty() {
         details.push(("Track names".into(), named.join(", ")));
     }
-    Ok(SongInfo { length: Some(facts.end_time), details, notes: Some(list.note_count()), bpm, tags })
+    Ok(SongInfo { meta, details, notes: Some(list.note_count()), bpm })
 }
 
 fn read_audio(path: &Path) -> Result<SongInfo, String> {
@@ -450,7 +418,7 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
 
     // Tags can sit before the audio (ID3) or inside the container.
     let mut details: Vec<(String, String)> = Vec::new();
-    let mut song_tags = Tags::default();
+    let mut meta = Meta::default();
     let mut add_tags = |tags: &[symphonia::core::meta::Tag]| {
         for tag in tags {
             let key = match tag.std_key {
@@ -459,14 +427,15 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
             };
             let value = tag.value.to_string();
             if tag.std_key.is_some() {
-                song_tags.set(&key, &value);
+                set_tag(&mut meta, &key, &value);
             }
             // Matroska's DURATION tag repeats what Length says.
             if key.eq_ignore_ascii_case("duration") {
                 continue;
             }
-            if !value.trim().is_empty() && !details.iter().any(|(k, _)| *k == key) {
-                details.push((key, value.trim().to_string()));
+            let value = tag_text(&value);
+            if !value.is_empty() && !details.iter().any(|(k, _)| *k == key) {
+                details.push((key, value.to_string()));
             }
         }
     };
@@ -479,12 +448,11 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
         add_tags(revision.tags());
     }
 
-    let mut length = None;
     if let Some(track) = probed.format.default_track() {
         let params = &track.codec_params;
         // Frames count in the track's time base, which is only sometimes
         // one over the sample rate (Matroska counts in milliseconds).
-        length = match (params.n_frames, params.time_base, params.sample_rate) {
+        meta.length = match (params.n_frames, params.time_base, params.sample_rate) {
             (Some(frames), Some(time_base), _) => {
                 let time = time_base.calc_time(frames);
                 Some(time.seconds as f64 + time.frac)
@@ -492,7 +460,7 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
             (Some(frames), None, Some(rate)) if rate > 0 => Some(frames as f64 / f64::from(rate)),
             _ => None,
         };
-        if let Some(length) = length {
+        if let Some(length) = meta.length {
             details.push(("Length".into(), format_length(length)));
         }
         if let Some(codec) = symphonia::default::get_codecs().get_codec(params.codec) {
@@ -501,6 +469,7 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
             // Known to the container, but there's no decoder to name it (ffmpeg plays it).
             details.push(("Codec".into(), "Opus".into()));
         }
+        meta.sample_rate = params.sample_rate;
         if let Some(rate) = params.sample_rate {
             details.push(("Sample rate".into(), format!("{rate} Hz")));
         }
@@ -511,7 +480,7 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
             details.push(("Bits per sample".into(), bits.to_string()));
         }
     }
-    Ok(SongInfo { length, details, notes: None, bpm: None, tags: song_tags })
+    Ok(SongInfo { meta, details, notes: None, bpm: None })
 }
 
 /// What `ffmpeg -i <file>` (with no output) prints about it on stderr: the
@@ -539,8 +508,7 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
     let indent = |line: &str| line.len() - line.trim_start().len();
     let mut lines = log.lines().skip_while(|l| !l.starts_with("Input #0")).skip(1).peekable();
     let mut details: Vec<(String, String)> = Vec::new();
-    let mut tags = Tags::default();
-    let mut length = None;
+    let mut meta = Meta::default();
     let mut stream = None;
     while let Some(line) = lines.next() {
         let trimmed = line.trim();
@@ -551,15 +519,15 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
             // The container's tags; streams' own come later, indented deeper.
             while let Some(tag) = lines.next_if(|l| indent(l) > 2) {
                 if let Some((key, value)) = tag.split_once(':') {
-                    tags.set(key.trim(), value);
-                    let (key, value) = (ffmpeg_tag_name(key.trim()), value.trim());
+                    set_tag(&mut meta, key.trim(), value);
+                    let (key, value) = (ffmpeg_tag_name(key.trim()), tag_text(value));
                     if !value.is_empty() && !key.eq_ignore_ascii_case("duration") && !details.iter().any(|(k, _)| *k == key) {
                         details.push((key, value.to_string()));
                     }
                 }
             }
         } else if let Some(rest) = trimmed.strip_prefix("Duration: ") {
-            length = parse_ffmpeg_duration(rest.split(',').next().unwrap_or_default());
+            meta.length = parse_ffmpeg_duration(rest.split(',').next().unwrap_or_default());
         } else if stream.is_none()
             && trimmed.starts_with("Stream #")
             && let Some((_, audio)) = trimmed.split_once("Audio: ")
@@ -569,7 +537,7 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
     }
     let stream = stream?;
 
-    if let Some(length) = length {
+    if let Some(length) = meta.length {
         details.push(("Length".into(), format_length(length)));
     }
     // "wmav2 (a[1][0][0] / 0x0161), 44100 Hz, stereo, fltp, 128 kb/s"
@@ -580,6 +548,7 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
     let rest: Vec<&str> = parts.collect();
     let rate_at = rest.iter().position(|p| p.ends_with(" Hz"));
     if let Some(rate) = rate_at.map(|i| rest[i]) {
+        meta.sample_rate = rate.trim_end_matches(" Hz").parse().ok();
         details.push(("Sample rate".into(), rate.to_string()));
     }
     if let Some(layout) = rate_at.and_then(|i| rest.get(i + 1)) {
@@ -598,7 +567,7 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
         };
         details.push(("Bits per sample".into(), bits.to_string()));
     }
-    Some(SongInfo { length, details, notes: None, bpm: None, tags })
+    Some(SongInfo { meta, details, notes: None, bpm: None })
 }
 
 /// "00:03:21.45" -> 201.45 seconds (None for "N/A").
@@ -682,6 +651,15 @@ mod tests {
     }
 
     #[test]
+    fn tags_lose_trailing_nuls() {
+        let mut meta = Meta::default();
+        set_tag(&mut meta, "Album", "KPM 155 Solo Instruments - Vol. 2\0");
+        set_tag(&mut meta, "Artist", " A\0B\0\0 ");
+        assert_eq!(meta.album.as_deref(), Some("KPM 155 Solo Instruments - Vol. 2"));
+        assert_eq!(meta.artist.as_deref(), Some("A\0B"), "NULs between values stay, to split at");
+    }
+
+    #[test]
     fn reads_ffmpegs_description_of_a_file() {
         let log = "[aist#0:0/wmav2 @ 0000] Guessed Channel Layout: stereo
 Input #0, asf, from 'song.wma':
@@ -696,7 +674,8 @@ Input #0, asf, from 'song.wma':
 At least one output file must be specified
 ";
         let info = parse_ffmpeg_info(log).unwrap();
-        assert_eq!(info.length, Some(90.5));
+        assert_eq!(info.meta.length, Some(90.5));
+        assert_eq!(info.meta.sample_rate, Some(44100));
         let details: Vec<(&str, &str)> = info.details.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         assert_eq!(
             details,
@@ -713,7 +692,7 @@ At least one output file must be specified
 
         let flac = "Input #0, flac, from 'a.flac':\n  Duration: N/A\n  Stream #0:0: Audio: flac, 96000 Hz, 5.1, s32 (24 bit)\n";
         let info = parse_ffmpeg_info(flac).unwrap();
-        assert_eq!(info.length, None);
+        assert_eq!(info.meta.length, None);
         assert!(info.details.contains(&("Channels".into(), "5.1".into())));
         assert!(info.details.contains(&("Bits per sample".into(), "24".into())));
 
@@ -734,7 +713,7 @@ At least one output file must be specified
                 println!("{} -> {e}", path.display());
                 SongInfo::default()
             });
-            println!("{} -> {:?}", path.display(), info.length.map(format_length));
+            println!("{} -> {:?}", path.display(), info.meta.length.map(format_length));
             for (key, value) in &info.details {
                 println!("    {key}: {value}");
             }
@@ -780,10 +759,10 @@ At least one output file must be specified
             tries += 1;
         }
         let wav_info = cache.get(&wav_path).unwrap();
-        assert!((wav_info.length.unwrap() - 0.5).abs() < 1e-6, "{wav_info:?}");
+        assert!((wav_info.meta.length.unwrap() - 0.5).abs() < 1e-6, "{wav_info:?}");
         assert!(wav_info.details.iter().any(|(k, v)| k == "Sample rate" && v == "8000 Hz"), "{wav_info:?}");
         let mid_info = cache.get(&mid_path).unwrap();
-        assert!((mid_info.length.unwrap() - 0.5).abs() < 1e-9);
+        assert!((mid_info.meta.length.unwrap() - 0.5).abs() < 1e-9);
         assert!(mid_info.details.iter().any(|(k, v)| k == "Notes" && v == "1"), "{mid_info:?}");
         assert_eq!(mid_info.notes, Some(1));
         assert!(!mid_info.is_heavy());

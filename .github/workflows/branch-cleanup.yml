@@ -2,29 +2,45 @@
 # `branch-<name>` prerelease test-builds.yml made, and its tag. A branch
 # build that's still installed finds its release gone and offers to switch
 # channels (docs/design/release-channels.md).
+#
+# A test build still running when its branch is deleted would publish after
+# this ran. So this shares that build's concurrency group, which cancels the
+# build and runs once it has stopped. And rather than only the deleted
+# branch's release, every `branch-*` release whose branch is gone goes: one
+# left behind any other way goes with the next deleted branch, or by hand
+# (Actions > Branch cleanup > Run workflow).
 name: Branch cleanup
 
 on:
   delete:
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   cleanup:
-    if: github.event.ref_type == 'branch'
+    if: github.event_name == 'workflow_dispatch' || github.event.ref_type == 'branch'
+    # test-builds.yml's group for the deleted branch (its github.ref).
+    concurrency:
+      group: test-build-refs/heads/${{ github.event.ref || 'none' }}
+      cancel-in-progress: true
     runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
     env:
       GH_TOKEN: ${{ github.token }}
-      BRANCH: ${{ github.event.ref }}
     steps:
-      - name: Delete its test build
+      - name: Delete test builds whose branch is gone
+        # pipefail: a failed branch listing must not read as no branches.
+        shell: bash
         run: |
-          # The same name test-builds.yml gives it.
-          channel="branch-$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9._-' '-')"
-          if gh release view "$channel" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+          # The names test-builds.yml gives the branches there are.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/branches" --jq '.[].name' |
+            while IFS= read -r branch; do
+              printf 'branch-%s\n' "$(printf '%s' "$branch" | tr -c 'A-Za-z0-9._-' '-')"
+            done | sort -u > live
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName' |
+            grep '^branch-' | sort -u > releases || true
+          comm -23 releases live | while IFS= read -r channel; do
             gh release delete "$channel" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
             echo "Deleted $channel."
-          else
-            echo "No $channel release: nothing to do."
-          fi
+          done

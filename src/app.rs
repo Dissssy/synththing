@@ -35,7 +35,10 @@ mod recording;
 mod repair;
 mod script_windows;
 mod smart;
+mod song_details;
+mod cleanup;
 mod song_meta;
+mod song_options;
 mod song_names;
 mod storage;
 mod sprite_editor;
@@ -55,6 +58,7 @@ use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{DockArea, DockState, TabViewer};
 
 use crate::applog;
+use crate::commands::{self, Command};
 use crate::frame_timing;
 use crate::credits::{self, Contributors, ContributorsState};
 use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
@@ -71,6 +75,7 @@ use crate::lua_visualizer::{
     self, DebugVar, PlaybackRequest, SettingDescriptor, SettingKind, SettingValue,
 };
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
+use crate::fields::Field;
 use crate::song_info::{format_length, SongInfoCache};
 use crate::song_title::Naming;
 use crate::updater::{self, Track, UpdateState, Updater};
@@ -116,19 +121,20 @@ fn naming<'a>(config: &'a Config, songs: &'a SongStore) -> Naming<'a> {
 fn describe_song(cache: &mut SongInfoCache, naming: &Naming, store: &SongStore, path: &Path, keys: &[&str]) -> song_list::Described {
     let info = cache.get(path);
     let song = naming.song(path, info.as_deref());
-    let values = keys
-        .iter()
-        .map(|&key| match key {
-            "imported" => naming.imported(path).map(|secs| song_list::Value { text: song_list::date(secs), number: Some(secs as f64) }),
-            "file_name" => Some(song_list::Value { text: song.file_name.to_string(), number: None }),
-            // (One type whatever the case its files were named in.)
-            "file_extension" => song.field(key).map(|text| song_list::Value { text: text.to_lowercase(), number: None }),
-            key => song.field(key).map(|text| song_list::Value { text, number: song.number(key) }),
-        })
-        .collect();
+    let values = keys.iter().map(|&key| Field::by_key(key).and_then(|field| song.value(field))).collect();
     let tags = store.tags_of(path).into_iter().map(|(_, tag)| (tag.name.clone(), tag.color)).collect();
-    let starred = store.is_starred(path);
-    song_list::Described { name: naming.name(path, info.as_deref()), file_name: song.file_name.to_string(), values, tags, starred }
+    song_list::Described { name: naming.name(path, info.as_deref()), file_name: song.file_name.to_string(), values, tags, plays: plays(store, path) }
+}
+
+/// How the song at `path` plays (starred, skipped when shuffling, played
+/// together with others).
+fn plays(store: &SongStore, path: &Path) -> song_list::Plays {
+    let flag = |field| store.get(path).is_some_and(|s| crate::fields::Facts::of(s).flag(field));
+    song_list::Plays {
+        starred: store.is_starred(path),
+        skip_shuffle: flag(Field::SkipShuffle),
+        together: store.together_of(path).map(|(set, at)| song_list::InSet { set: set.to_string(), at, of: store.together()[set].len() }),
+    }
 }
 
 /// The song at `path`'s name, by `naming`.
@@ -225,6 +231,10 @@ pub struct App {
     rules_editor: Option<smart::RulesEditor>,
     /// The rulesets' playlists, as Preferences last showed them.
     ruleset_groups: smart::RulesetGroups,
+    /// What the rulesets leave out (`App::missing_info`), as last worked out.
+    missing_info: Option<(u64, Arc<Vec<smart::Missing>>)>,
+    /// The Songs list shows only the songs a ruleset leaves out.
+    songs_missing_only: bool,
     /// Songs asked to be removed from the library, waiting on Remove.
     remove_songs: Vec<PathBuf>,
     active_sf: Option<usize>,
@@ -344,8 +354,14 @@ pub struct App {
     editor_goto_line: Option<usize>,
     /// Lengths and details of songs in the lists, read in the background.
     song_info: SongInfoCache,
-    /// The song whose info modal is open.
-    song_info_open: Option<PathBuf>,
+    /// The songs whose details were asked for, to open next frame.
+    details_for: Option<Vec<PathBuf>>,
+    /// The song details open (`song_details.rs`).
+    song_details: Option<song_details::SongDetails>,
+    /// How to undo the last save of songs' details: each edit as it was.
+    last_edit: Option<Vec<(String, Field, Option<String>)>>,
+    /// The Clean up window, while it's open (`cleanup.rs`).
+    cleanup: Option<cleanup::CleanUp>,
     /// The Tags modal is open.
     tags_open: bool,
     /// The tag just made, to name in the Tags modal.
@@ -424,6 +440,18 @@ pub struct App {
     /// finished), so the "finished" that ends it advances exactly once, not
     /// again on a stale snapshot from before the next track loaded.
     advance_armed: bool,
+    /// The engine's song load count once the current song's loaded
+    /// (`EngineView::loads`): till then its view is another's.
+    song_loads: u64,
+    /// Where the current song is, and its length, while it plays: where
+    /// it was left, for a song that remembers that (`song_options.rs`).
+    playing_at: Option<(f64, f64)>,
+    /// The engine's generation (`EngineView::generation`) the current song
+    /// last got to its stop time in, so it's acted on once.
+    stopped_in: Option<u64>,
+    /// Where to start the song at this path once it's loaded, over its own
+    /// start: a preview from Song info's Options.
+    seek_on_load: Option<(PathBuf, f64)>,
     rng: Rng,
     /// Text being typed into the playlist rename box, while renaming.
     playlist_rename: Option<String>,
@@ -579,6 +607,8 @@ impl App {
             smart_seen: None,
             rules_editor: None,
             ruleset_groups: Default::default(),
+            missing_info: None,
+            songs_missing_only: false,
             remove_songs: Vec::new(),
             active_sf: None,
             soundfont_selection: Selection::default(),
@@ -635,7 +665,10 @@ impl App {
                 Ok(dir) => SongInfoCache::saved_in(dir.join("song-info.json")),
                 Err(_) => SongInfoCache::new(),
             },
-            song_info_open: None,
+            details_for: None,
+            song_details: None,
+            last_edit: None,
+            cleanup: None,
             tags_open: false,
             tag_to_name: None,
             playlist_selection: Selection::default(),
@@ -671,6 +704,10 @@ impl App {
             now_playing: None,
             listed: None,
             advance_armed: false,
+            song_loads: 0,
+            playing_at: None,
+            stopped_in: None,
+            seek_on_load: None,
             rng: Rng::from_time(),
             playlist_rename: None,
             confirm_delete_playlist: false,
@@ -846,6 +883,7 @@ impl App {
     /// Note what this session ends with, for the next one to start with
     /// (whatever Preferences > Playback says to remember), and save it.
     fn save_session(&mut self) {
+        self.remember_position();
         let remember = self.config.remember;
         let speed = self.shared.lock().map(|s| s.view.speed).unwrap_or(1.0);
         let session = crate::config::Session {
@@ -1423,12 +1461,16 @@ impl App {
             } else {
                 ("pause", palette_color(1), "Pause")
             };
+            let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::TogglePause));
             if ui.add(colored_icon_button(glyph, color)).on_hover_text(hover).clicked() {
                 self.send(AudioCommand::TogglePause);
             }
             if ui
                 .add(icon_button("skip-back"))
-                .on_hover_text("Previous: the previous playlist track, or this one from the start if it's been playing a few seconds")
+                .on_hover_text(format!(
+                    "Previous: the previous playlist track, or this one from the start if it's been playing a few seconds{}",
+                    commands::hint(ui.ctx(), Command::PreviousTrack)
+                ))
                 .clicked()
             {
                 self.previous_track(view.position);
@@ -1441,7 +1483,10 @@ impl App {
             }
             if ui
                 .add_enabled(self.has_next(), icon_button("skip-forward"))
-                .on_hover_text("Next: the next playlist track, or the next song autoplay plays")
+                .on_hover_text(format!(
+                    "Next: the next playlist track, or the next song autoplay plays{}",
+                    commands::hint(ui.ctx(), Command::NextTrack)
+                ))
                 .on_disabled_hover_text("Play something from a playlist, or from Songs with Autoplay on, to queue up a next track")
                 .clicked()
             {
@@ -1451,12 +1496,13 @@ impl App {
             ui.separator();
 
             let (glyph, hover) = if self.fullscreen { ("corners-in", "Exit fullscreen") } else { ("corners-out", "Fullscreen") };
+            let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::ToggleFullscreen));
             if ui.add(icon_button(glyph)).on_hover_text(hover).clicked() {
                 let ctx = ui.ctx().clone();
                 self.set_fullscreen(&ctx, !self.fullscreen);
             }
             let visualizer = self.is_open(Section::Visualizer);
-            if ui.add(icon_button("monitor-play").selected(visualizer)).on_hover_text("Visualizer").clicked() {
+            if ui.add(icon_button("monitor-play").selected(visualizer)).on_hover_text(format!("Visualizer{}", commands::hint(ui.ctx(), Command::ToggleVisualizer))).clicked() {
                 self.set_open(Section::Visualizer, !visualizer);
             }
             let playlists = self.is_open(Section::Groupings) && self.groupings.shown_id() == groupings::PLAYLISTS;
@@ -1519,7 +1565,7 @@ impl App {
                 .add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false))
                 .changed()
             {
-                self.send(AudioCommand::SetVolume(self.volume));
+                self.send_volume();
             }
             ui.monospace(format!("{:>3.0}%", self.volume * 100.0));
         });
@@ -2349,60 +2395,6 @@ impl App {
         );
     }
 
-    /// The song info modal: every detail read from one file.
-    fn song_info_ui(&mut self, ctx: &egui::Context) {
-        let Some(path) = self.song_info_open.clone() else {
-            return;
-        };
-        let info = self.song_info.get(&path);
-        let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("song_info")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 460.0));
-            ui.heading(self.song_title(&path));
-            // (A library song by the file it came from; one played from
-            // elsewhere by where it is.)
-            match self.songs.get(&path) {
-                Some(song) => ui.weak(&song.name),
-                None => ui.weak(path.display().to_string()),
-            };
-            ui.add_space(6.0);
-            match &info {
-                None => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.weak("Reading...");
-                    });
-                }
-                Some(info) if info.details.is_empty() => {
-                    ui.weak("Nothing to show for this file.");
-                }
-                Some(info) => {
-                    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                        egui::Grid::new("song_info_grid").num_columns(2).spacing([16.0, 4.0]).striped(true).show(
-                            ui,
-                            |ui| {
-                                for (key, value) in &info.details {
-                                    ui.strong(key);
-                                    ui.add(egui::Label::new(value).wrap());
-                                    ui.end_row();
-                                }
-                            },
-                        );
-                    });
-                }
-            }
-            ui.add_space(8.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if ui.button("Close").clicked() {
-                    close = true;
-                }
-            });
-        });
-        if close || response.should_close() {
-            self.song_info_open = None;
-        }
-    }
-
     /// The Rename script modal: a new name for the running script's file.
     fn rename_ui(&mut self, ctx: &egui::Context) {
         let Some(rename) = &mut self.rename else {
@@ -2514,7 +2506,8 @@ impl App {
             || self.credits_open
             || self.changelog.is_some()
             || self.welcome.open
-            || self.song_info_open.is_some()
+            || self.song_details.is_some()
+            || self.cleanup.is_some()
             || self.tags_open
             || self.recording.prompt_open
             || self.recording.window.is_some()
@@ -2684,7 +2677,8 @@ impl App {
     fn songs_revision(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (self.songs.revision(), self.song_info.revision(), &self.config.title_patterns, listed_song_extensions(&self.config)).hash(&mut hasher);
+        (self.songs.revision(), self.song_info.revision(), &self.config.title_patterns, &self.config.group_ignore, self.config.sort_with_articles, listed_song_extensions(&self.config))
+            .hash(&mut hasher);
         hasher.finish()
     }
 
@@ -2697,11 +2691,25 @@ impl App {
             return;
         }
         let extensions = listed_song_extensions(&self.config);
+        // Only the songs a ruleset leaves out, when asked.
+        let missing_only = self.songs_missing_only;
+        let (missing_revision, missing) = self.missing_info();
+        let any_missing = !missing.is_empty();
+        let only: Option<std::collections::HashSet<&str>> = missing_only.then(|| missing.iter().flat_map(|m| m.keys.iter().map(String::as_str)).collect());
+        let mut missing_clicked = false;
         // What the list's made from: it's made again when this changes.
-        let revision = self.songs_revision();
-        let selected = self.song_list.selected_one();
-        let mut info_for: Option<PathBuf> = None;
+        let revision = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (self.songs_revision(), missing_only.then_some(missing_revision)).hash(&mut hasher);
+            hasher.finish()
+        };
+        let selected = self.song_list.selected();
+        let mut info_for: Option<Vec<PathBuf>> = None;
         let mut info_clicked = false;
+        let can_undo = self.last_edit.is_some();
+        let mut undo_clicked = false;
+        let mut cleanup_clicked = false;
         let moving = self.songs_moving();
         let autoplay = self.autoplay;
         let mut autoplay_clicked = false;
@@ -2721,12 +2729,27 @@ impl App {
             }
             #[cfg(not(target_os = "android"))]
             if ui
-                .add_enabled(selected.is_some(), icon_button("info"))
-                .on_hover_text("Song info")
-                .on_disabled_hover_text("Song info: select a song")
+                .add_enabled(!selected.is_empty(), icon_button("info"))
+                .on_hover_text("Song info: see and edit its details (several songs' at once)")
+                .on_disabled_hover_text("Song info: select songs")
                 .clicked()
             {
                 info_clicked = true;
+            }
+            #[cfg(not(target_os = "android"))]
+            if ui.add(icon_button("broom")).on_hover_text("Clean up: suggestions for your songs' details, like splitting several artists").clicked() {
+                cleanup_clicked = true;
+            }
+            if can_undo && ui.add(icon_button("arrow-u-up-left")).on_hover_text("Undo the last edit of songs' details").clicked() {
+                undo_clicked = true;
+            }
+            if (any_missing || missing_only)
+                && ui
+                    .add(icon_button("warning-circle").selected(missing_only))
+                    .on_hover_text("Missing info: show only the songs a ruleset leaves out, as they don't say what it splits by (Preferences > Songs lists them)")
+                    .clicked()
+            {
+                missing_clicked = true;
             }
             sync::songs_moving_ui(ui, moving);
             autoplay_clicked |= autoplay::button_ui(ui, autoplay);
@@ -2740,6 +2763,7 @@ impl App {
         let mut save_copy = None;
         let mut remove = Vec::new();
         let mut tag = None;
+        let mut together: Option<(bool, Vec<PathBuf>)> = None;
         let store = &self.songs;
         let mut add_to: Option<(Option<usize>, Vec<PathBuf>)> = None;
         // With no dragging (touch), songs go onto playlists from their menu.
@@ -2769,13 +2793,17 @@ impl App {
             {
                 save_copy = Some(path.clone());
             }
-            if let [path] = paths
-                && ui.button("Song info").clicked()
-            {
-                info_for = Some(path.clone());
+            if ui.button("Song info").clicked() {
+                info_for = Some(paths.to_vec());
             }
             if let Some(action) = tags::tags_menu(ui, store, paths) {
                 tag = Some((action, paths.to_vec()));
+            }
+            if paths.len() > 1 && ui.button("Play together").on_hover_text("Play them in this order, as one song when shuffling").clicked() {
+                together = Some((true, paths.to_vec()));
+            }
+            if paths.iter().any(|p| store.together_of(p).is_some()) && ui.button("Stop playing together").clicked() {
+                together = Some((false, paths.to_vec()));
             }
             if ui.button("Remove from library...").on_hover_text("Delete synththing's copy on this device").clicked() {
                 remove = paths.to_vec();
@@ -2783,9 +2811,18 @@ impl App {
         };
         let output = self.song_list.ui(
             ui,
-            &mut || store.songs().map(|(path, _)| path).filter(|p| song_store::has_extension(p, extensions)).collect(),
+            &mut || {
+                store
+                    .songs()
+                    .map(|(path, _)| path)
+                    .filter(|p| song_store::has_extension(p, extensions))
+                    .filter(|p| only.as_ref().is_none_or(|only| song_store::key_in(store.dir(), p).is_some_and(|k| only.contains(k))))
+                    .collect()
+            },
             revision,
             &mut view,
+            &self.config.group_ignore,
+            self.config.sort_with_articles,
             &mut tools,
             &mut |path, keys| describe_song(&mut cache.borrow_mut(), &naming, &self.songs, path, keys),
             &mut |ui, path| song_info_widgets(ui, &mut cache.borrow_mut(), path, false),
@@ -2810,8 +2847,18 @@ impl App {
             self.set_autoplay(self.autoplay.cycle());
             toast::show(ui.ctx(), autoplay::text(self.autoplay));
         }
-        if let Some(path) = info_for.or(selected.filter(|_| info_clicked)) {
-            self.song_info_open = Some(path);
+        if undo_clicked {
+            self.undo_edit();
+        }
+        if cleanup_clicked {
+            self.cleanup = Some(Default::default());
+        }
+        if missing_clicked {
+            self.songs_missing_only = !missing_only;
+            toast::show(ui.ctx(), if missing_only { "Missing info: off" } else { "Missing info: only songs missing it" });
+        }
+        if let Some(paths) = info_for.or(info_clicked.then_some(selected)) {
+            self.details_for = Some(paths);
         }
         #[cfg(not(target_os = "android"))]
         if let Some(path) = save_copy {
@@ -2826,12 +2873,21 @@ impl App {
         if let Some((action, paths)) = tag {
             self.tag_songs(action, &paths);
         }
+        if let Some((on, paths)) = together {
+            let keys: Vec<String> = paths.iter().filter_map(|p| self.songs.key(p)).collect();
+            if on {
+                self.songs.set_together(&crate::library::new_nonce(), keys);
+            } else {
+                self.songs.leave_together(&keys);
+            }
+            self.songs_changed();
+        }
     }
 
     /// Save a copy of the library's song at `path`, under its own name.
     #[cfg(not(target_os = "android"))]
     fn save_song_copy(&mut self, path: &Path) {
-        let name = naming(&self.config, &self.songs).file_name(path).to_string();
+        let name = naming(&self.config, &self.songs).song(path, None).file_name.to_string();
         let Some(to) = rfd::FileDialog::new().set_file_name(&name).save_file() else { return };
         self.status = match std::fs::copy(path, &to) {
             Ok(_) => format!("Saved a copy as {}.", to.display()),
@@ -3127,7 +3183,7 @@ impl App {
                 }
                 tray_panel::Action::Volume(volume) => {
                     self.volume = volume.clamp(0.0, 1.0);
-                    self.send(AudioCommand::SetVolume(self.volume));
+                    self.send_volume();
                 }
                 tray_panel::Action::Soundfont(index) => self.activate_soundfont(index),
                 tray_panel::Action::Play(list, entry) => self.play_entry(list, entry),
@@ -3223,7 +3279,7 @@ impl App {
                 .iter()
                 .map(|entry| lua_visualizer::PlaylistEntryView {
                     name: title_of(&mut self.song_info, &naming, &entry.path),
-                    length: self.song_info.get(&entry.path).and_then(|info| info.length),
+                    length: self.song_info.get(&entry.path).and_then(|info| info.meta.length),
                     missing: entry.missing,
                 })
                 .collect();
@@ -3259,6 +3315,39 @@ impl App {
             self.plan_upcoming();
             self.plan_listed();
             self.save_playback_modes();
+        }
+    }
+
+    /// Carries out a command, whichever source it came from.
+    fn run_command(&mut self, ctx: &egui::Context, command: Command, view: &EngineView) {
+        match command {
+            Command::TogglePause => self.send(AudioCommand::TogglePause),
+            Command::SeekBack => self.send(AudioCommand::SeekRelative(-5.0)),
+            Command::SeekForward => self.send(AudioCommand::SeekRelative(5.0)),
+            Command::RestartSong => self.send(AudioCommand::Seek(0.0)),
+            Command::NextTrack => {
+                if self.has_next() {
+                    self.next_track();
+                }
+            }
+            Command::PreviousTrack => self.previous_track(view.position),
+            Command::ToggleVisualizer => self.set_open(Section::Visualizer, !self.is_open(Section::Visualizer)),
+            Command::ToggleFullscreen => self.set_fullscreen(ctx, !self.fullscreen),
+            Command::ExitFullscreen => {
+                self.dedicated = None;
+                self.set_fullscreen(ctx, false);
+            }
+            Command::DedicatedVisualizer => {
+                if self.dedicated.is_some() {
+                    self.exit_dedicated(ctx);
+                } else {
+                    self.enter_dedicated(ctx);
+                }
+            }
+            Command::RestartScript => self.restart_script(),
+            Command::ToggleRecording => self.toggle_recording(view),
+            Command::PauseRecording => self.toggle_recording_pause(),
+            Command::Quit => self.close_with(ctx, close::CloseAction::Quit),
         }
     }
 
@@ -3397,7 +3486,10 @@ impl App {
                 .on_hover_text("The script drawing the visualizer; open it for more scripts, a new one, and this one's file");
             if ui
                 .add(icon_button("arrow-clockwise"))
-                .on_hover_text("Restart: start the script over from scratch; its state resets, its settings stay (F5)")
+                .on_hover_text(format!(
+                    "Restart: start the script over from scratch; its state resets, its settings stay{}",
+                    commands::hint(ui.ctx(), Command::RestartScript)
+                ))
                 .clicked()
             {
                 self.restart_script();
@@ -3792,101 +3884,34 @@ impl eframe::App for App {
             self.fullscreen = actual;
         }
 
-        // App-wide keys, honored from anywhere: while typing, with the
-        // visualizer focused, in either fullscreen (scripts never see them,
-        // see visualizer::RESERVED_KEYS). Esc goes all the way back to
-        // windowed, F11 toggles the dedicated visualizer fullscreen, F5
-        // restarts the running script. Escape is only taken when there's a
-        // fullscreen to leave, so it still does its usual job elsewhere.
-        // Not while a modal is up: Escape closes the modal instead.
-        if !self.any_modal_open() {
+        // The keymap (commands.rs). Keys with a modifier and the function
+        // keys work from anywhere: while typing, with the visualizer
+        // focused, in either fullscreen (scripts never see the unmodified
+        // ones). Single keys pause while some widget (namely the Songs
+        // search box) has keyboard focus, so typing "v" there types a "v".
+        // Escape is only taken when there's a fullscreen to leave, so it
+        // still does its usual job elsewhere. All of it pauses while a
+        // modal is up (Escape closes the modal instead) or a binding is
+        // being captured.
+        if !self.any_modal_open() && self.binding_capture.is_none() {
+            let typing = ctx.memory(|m| m.focused().is_some());
             let in_fullscreen = self.fullscreen || self.dedicated.is_some();
-            let (escape, f11, f5, f9, f10) = ctx.input_mut(|i| {
-                (
-                    in_fullscreen && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::F11),
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::F5),
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::F9),
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::F10),
-                )
+            let has_next = self.has_next();
+            // Run outside `ctx.input_mut`: `send_viewport_cmd` (inside
+            // `set_fullscreen`) takes the lock that closure holds, and
+            // calling it from in there deadlocks.
+            let pressed = ctx.input_mut(|i| {
+                commands::pressed(i, typing, |command| match command {
+                    Command::ExitFullscreen => in_fullscreen,
+                    Command::NextTrack => has_next,
+                    _ => true,
+                })
             });
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)) {
-                self.close_with(&ctx, close::CloseAction::Quit);
-            }
-            if f9 {
-                self.toggle_recording(view);
-            }
-            if f10 {
-                self.toggle_recording_pause();
-            }
-            if escape {
-                self.dedicated = None;
-                self.set_fullscreen(&ctx, false);
-            }
-            if f11 {
-                if self.dedicated.is_some() {
-                    self.exit_dedicated(&ctx);
-                } else {
-                    self.enter_dedicated(&ctx);
-                }
-            }
-            if f5 {
-                self.restart_script();
+            for command in pressed {
+                self.run_command(&ctx, command, view);
             }
         }
         self.visualizer_output = ShowOutput::default();
-
-        // Single-key shortcuts are suspended whenever some widget (namely the
-        // Songs search box) has keyboard focus, so typing "v" there
-        // types a "v" instead of toggling the visualizer.
-        let typing = ctx.memory(|m| m.focused().is_some()) || self.any_modal_open() || self.binding_capture.is_some();
-        let mut toggle_fullscreen = false;
-        let mut toggle_visualizer = false;
-        let mut next = false;
-        let mut previous = false;
-        if !typing {
-            ctx.input(|input| {
-                if input.key_pressed(egui::Key::Space) {
-                    self.send(AudioCommand::TogglePause);
-                }
-                if input.key_pressed(egui::Key::ArrowLeft) {
-                    self.send(AudioCommand::SeekRelative(-5.0));
-                }
-                if input.key_pressed(egui::Key::ArrowRight) {
-                    self.send(AudioCommand::SeekRelative(5.0));
-                }
-                if input.key_pressed(egui::Key::R) {
-                    self.send(AudioCommand::Seek(0.0));
-                }
-                if input.key_pressed(egui::Key::V) {
-                    toggle_visualizer = true;
-                }
-                if input.key_pressed(egui::Key::N) {
-                    next = true;
-                }
-                if input.key_pressed(egui::Key::P) {
-                    previous = true;
-                }
-                if input.key_pressed(egui::Key::F) {
-                    toggle_fullscreen = true;
-                }
-            });
-        }
-        // `send_viewport_cmd` (inside `set_fullscreen`) takes the same lock
-        // `ctx.input` holds for the duration of its closure above, calling
-        // it from in there deadlocks, so it has to happen out here instead.
-        if toggle_fullscreen {
-            self.set_fullscreen(&ctx, !self.fullscreen);
-        }
-        if toggle_visualizer {
-            self.set_open(Section::Visualizer, !self.is_open(Section::Visualizer));
-        }
-        if next && self.has_next() {
-            self.next_track();
-        }
-        if previous {
-            self.previous_track(view.position);
-        }
 
         self.pause_for_preferences(view);
         self.handle_os_file_drops(&ctx);
@@ -3910,7 +3935,8 @@ impl eframe::App for App {
             self.rename_ui(&ctx);
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
-            self.song_info_ui(&ctx);
+            self.cleanup_ui(&ctx);
+            self.song_details_ui(&ctx);
             self.history_ui(&ctx);
             self.audio_import_ui(&ctx);
             self.status_toast_ui(&ctx);
@@ -3932,7 +3958,8 @@ impl eframe::App for App {
             self.changelog_ui(&ctx);
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
-            self.song_info_ui(&ctx);
+            self.cleanup_ui(&ctx);
+            self.song_details_ui(&ctx);
             self.history_ui(&ctx);
             self.layout_save_ui(&ctx);
             self.new_sprite_ui(&ctx);
@@ -4190,7 +4217,7 @@ fn inline_code_job(ui: &egui::Ui, prefix: &str, text: &str) -> egui::text::Layou
 fn length_text(info: Option<&crate::song_info::SongInfo>) -> String {
     match info {
         None => "...".to_string(),
-        Some(info) => info.length.map(format_length).unwrap_or_else(|| "--:--".to_string()),
+        Some(info) => info.meta.length.map(format_length).unwrap_or_else(|| "--:--".to_string()),
     }
 }
 

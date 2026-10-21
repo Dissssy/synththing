@@ -19,6 +19,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::together::{self, Member};
+
 #[derive(Clone, Debug)]
 pub struct PlaylistEntry {
     /// The song's file in the library.
@@ -254,10 +256,12 @@ impl NowPlaying {
 /// The entry to play after `current` in a list whose entries can each be
 /// played on to or not (`playable`: "Only play starred songs" leaves the
 /// others out), or `None` when playback should stop. `history` is this
-/// pass's already-played entries (only consulted when shuffling); `random`
-/// is any random number.
+/// pass's already-played entries and `members` the songs that play
+/// together (each entry's set, if it's in one; only consulted when
+/// shuffling); `random` is any random number.
 pub fn next_entry(
     playable: &[bool],
+    members: &[Member],
     current: usize,
     loop_mode: LoopMode,
     shuffle: bool,
@@ -272,6 +276,10 @@ pub fn next_entry(
         return rows.iter().copied().find(|&i| i > current).or_else(|| (loop_mode == LoopMode::All).then_some(rows[0]));
     }
     let unplayed: Vec<usize> = rows.iter().copied().filter(|i| !history.contains(i)).collect();
+    if let Some(i) = together::next_in_set(members, &unplayed, current) {
+        return Some(i);
+    }
+    let unplayed = together::firsts(members, &unplayed);
     if !unplayed.is_empty() {
         return Some(unplayed[(random % unplayed.len() as u64) as usize]);
     }
@@ -280,7 +288,7 @@ pub fn next_entry(
     }
     // New pass: anything but the track that just finished, so a reshuffle
     // never plays the same song twice in a row (unless it's the only one).
-    let others: Vec<usize> = rows.iter().copied().filter(|&i| i != current).collect();
+    let others: Vec<usize> = together::firsts(members, &rows).into_iter().filter(|&i| i != current).collect();
     if others.is_empty() {
         return Some(rows[0]);
     }
@@ -422,24 +430,24 @@ mod tests {
 
     #[test]
     fn sequential_next_stops_or_wraps() {
-        assert_eq!(next_entry(&[true; 3], 0, LoopMode::Off, false, &[], 0), Some(1));
-        assert_eq!(next_entry(&[true; 3], 2, LoopMode::Off, false, &[], 0), None);
-        assert_eq!(next_entry(&[true; 3], 2, LoopMode::All, false, &[], 0), Some(0));
-        assert_eq!(next_entry(&[true; 0], 0, LoopMode::All, false, &[], 0), None);
+        assert_eq!(next_entry(&[true; 3], &[None; 3], 0, LoopMode::Off, false, &[], 0), Some(1));
+        assert_eq!(next_entry(&[true; 3], &[None; 3], 2, LoopMode::Off, false, &[], 0), None);
+        assert_eq!(next_entry(&[true; 3], &[None; 3], 2, LoopMode::All, false, &[], 0), Some(0));
+        assert_eq!(next_entry(&[true; 0], &[None; 0], 0, LoopMode::All, false, &[], 0), None);
     }
 
     #[test]
     fn only_the_playable_entries_are_played_on_to() {
         let starred = [true, false, true, false];
-        assert_eq!(next_entry(&starred, 0, LoopMode::Off, false, &[], 0), Some(2));
-        assert_eq!(next_entry(&starred, 1, LoopMode::Off, false, &[], 0), Some(2), "after one picked by hand");
-        assert_eq!(next_entry(&starred, 2, LoopMode::Off, false, &[], 0), None);
-        assert_eq!(next_entry(&starred, 2, LoopMode::All, false, &[], 0), Some(0));
+        assert_eq!(next_entry(&starred, &[None; 3], 0, LoopMode::Off, false, &[], 0), Some(2));
+        assert_eq!(next_entry(&starred, &[None; 3], 1, LoopMode::Off, false, &[], 0), Some(2), "after one picked by hand");
+        assert_eq!(next_entry(&starred, &[None; 3], 2, LoopMode::Off, false, &[], 0), None);
+        assert_eq!(next_entry(&starred, &[None; 3], 2, LoopMode::All, false, &[], 0), Some(0));
         for r in 0..10 {
-            assert_eq!(next_entry(&starred, 0, LoopMode::Off, true, &[0], r), Some(2));
-            assert_eq!(next_entry(&starred, 2, LoopMode::All, true, &[0, 2], r), Some(0), "never the one just played");
+            assert_eq!(next_entry(&starred, &[None; 3], 0, LoopMode::Off, true, &[0], r), Some(2));
+            assert_eq!(next_entry(&starred, &[None; 3], 2, LoopMode::All, true, &[0, 2], r), Some(0), "never the one just played");
         }
-        assert_eq!(next_entry(&[false; 3], 0, LoopMode::All, true, &[], 0), None);
+        assert_eq!(next_entry(&[false; 3], &[None; 3], 0, LoopMode::All, true, &[], 0), None);
     }
 
     #[test]
@@ -447,7 +455,7 @@ mod tests {
         let mut rng = Rng(12345);
         let mut history = vec![0];
         let mut current = 0;
-        while let Some(next) = next_entry(&[true; 5], current, LoopMode::Off, true, &history, rng.next()) {
+        while let Some(next) = next_entry(&[true; 5], &[None; 5], current, LoopMode::Off, true, &history, rng.next()) {
             assert!(!history.contains(&next));
             history.push(next);
             current = next;
@@ -460,10 +468,21 @@ mod tests {
     #[test]
     fn shuffle_new_pass_never_repeats_the_last_track() {
         for r in 0..20 {
-            let next = next_entry(&[true; 3], 1, LoopMode::All, true, &[0, 2, 1], r).unwrap();
+            let next = next_entry(&[true; 3], &[None; 3], 1, LoopMode::All, true, &[0, 2, 1], r).unwrap();
             assert_ne!(next, 1);
         }
-        assert_eq!(next_entry(&[true; 1], 0, LoopMode::All, true, &[0], 7), Some(0));
+        assert_eq!(next_entry(&[true; 1], &[None; 1], 0, LoopMode::All, true, &[0], 7), Some(0));
+    }
+
+    #[test]
+    fn shuffle_plays_songs_together_in_order() {
+        let members = [None, Some(("x", 1)), None, Some(("x", 0))];
+        for r in 0..20 {
+            assert_ne!(next_entry(&[true; 4], &members, 0, LoopMode::Off, true, &[0], r), Some(1), "from its first");
+            assert_eq!(next_entry(&[true; 4], &members, 3, LoopMode::Off, true, &[0, 3], r), Some(1), "then the rest of it");
+            assert_ne!(next_entry(&[true; 4], &members, 1, LoopMode::All, true, &[0, 3, 2, 1], r), Some(1), "a new pass too");
+        }
+        assert_eq!(next_entry(&[true; 4], &members, 0, LoopMode::Off, false, &[0], 0), Some(1), "in the list's order, not shuffling");
     }
 
     #[test]

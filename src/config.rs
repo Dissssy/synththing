@@ -99,6 +99,18 @@ pub struct Config {
     /// works for a song (`song_title`; `None`: `song_title::DEFAULT_PATTERNS`).
     #[serde(default)]
     pub title_patterns: Option<Vec<String>>,
+    /// Preference: characters grouping by a name (the Songs list's groups,
+    /// rulesets' playlists) sees past, beside case, spacing, punctuation
+    /// and symbols (`fields::group_key`).
+    #[serde(default)]
+    pub group_ignore: String,
+    /// Preference: sort names with a leading "The", "A" or "An" as they
+    /// are (`fields::sort_text`); by default it's passed over.
+    #[serde(default)]
+    pub sort_with_articles: bool,
+    /// Clean-up suggestions dismissed (`cleanup::Suggestion::id`).
+    #[serde(default)]
+    pub cleanup_dismissed: std::collections::BTreeSet<String>,
     /// Preference: copy visualizer scripts' log() messages to the app's log.
     #[serde(default)]
     pub script_log_to_app: bool,

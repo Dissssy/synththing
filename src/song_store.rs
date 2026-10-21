@@ -24,6 +24,10 @@
 //! and size), read on the device that has it (`App::note_song_meta`) and
 //! synced, so every device can list and sort the songs it doesn't have.
 //!
+//! Songs can play together (`together.json`): an ordered set of them,
+//! by key, that shuffling treats as one and plays in order. A song is in
+//! at most one.
+//!
 //! A song removed here is blocked (`blocked.json`): this device doesn't
 //! fetch it from the others again (`song_sync.rs`), until it's unblocked
 //! or imported again.
@@ -36,9 +40,12 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::fields::{Edits, Field};
+
 const INDEX: &str = "library.json";
 const BLOCKED: &str = "blocked.json";
 const TAGS: &str = "tags.json";
+const TOGETHER: &str = "together.json";
 
 /// The built-in tag starred songs have: hidden from the tag editor and
 /// the chips, it syncs like any other.
@@ -58,16 +65,23 @@ pub struct Song {
     /// What its file says of itself, once a device that has it has read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
+    /// What the user says of it over that (`fields::Edits`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub edits: Edits,
+    /// Where it was left (seconds), for a song that remembers it
+    /// (`Field::RememberPosition`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<f64>,
 }
 
 impl Song {
     fn new(name: String) -> Self {
-        Self { name, imported: now(), tags: Vec::new(), meta: None }
+        Self { name, imported: now(), ..Self::default() }
     }
 }
 
-/// What a song's file says of itself: its tags (`song_info::Tags`), how
-/// long it is and its size. Kept under short names: the synced library has
+/// What a song's file says of itself (as `song_info` reads it): its tags,
+/// how long it is and its size; its fields as `fields::Facts` gives them. Kept under short names: the synced library has
 /// one for every song.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -96,25 +110,42 @@ pub struct Meta {
     /// Bytes.
     #[serde(rename = "s")]
     pub size: u64,
+    /// What its title, album, artist, album artist and composer sort as.
+    #[serde(rename = "st", skip_serializing_if = "Option::is_none")]
+    pub sort_title: Option<String>,
+    #[serde(rename = "sal", skip_serializing_if = "Option::is_none")]
+    pub sort_album: Option<String>,
+    #[serde(rename = "sar", skip_serializing_if = "Option::is_none")]
+    pub sort_artist: Option<String>,
+    #[serde(rename = "saa", skip_serializing_if = "Option::is_none")]
+    pub sort_album_artist: Option<String>,
+    #[serde(rename = "sc", skip_serializing_if = "Option::is_none")]
+    pub sort_composer: Option<String>,
+    /// Its album's a compilation (by various artists).
+    #[serde(rename = "cp", default, skip_serializing_if = "std::ops::Not::not")]
+    pub compilation: bool,
+    /// What it's grouped under (a work, a movement), and what it says of
+    /// itself.
+    #[serde(rename = "gr", skip_serializing_if = "Option::is_none")]
+    pub grouping: Option<String>,
+    #[serde(rename = "cm", skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    /// Hz.
+    #[serde(rename = "sr", skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<u32>,
+    /// Which `META_VERSION` read it: one read by an older one is read
+    /// again, for what it didn't read.
+    #[serde(rename = "v", skip_serializing_if = "is_zero")]
+    pub version: u32,
 }
 
-impl Meta {
-    /// The tag `name` (as a title pattern writes it), if the file has it.
-    pub fn tag(&self, name: &str) -> Option<String> {
-        let text = |t: &Option<String>| t.clone();
-        match name {
-            "title" => text(&self.title),
-            "artist" => text(&self.artist),
-            "album" => text(&self.album),
-            "album_artist" => text(&self.album_artist),
-            "composer" => text(&self.composer),
-            "genre" => text(&self.genre),
-            "track" => self.track.map(|n| n.to_string()),
-            "disc" => self.disc.map(|n| n.to_string()),
-            "year" => self.year.map(|n| n.to_string()),
-            _ => None,
-        }
-    }
+/// The version of what's read of a song's file (`Meta::version`): 1 added
+/// its grouping, comment and sample rate; 2 trims the NULs some taggers
+/// leave at the end of a tag.
+pub const META_VERSION: u32 = 2;
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// A tag of the user's own.
@@ -143,6 +174,8 @@ pub struct SongStore {
     blocked: BTreeSet<String>,
     /// The tags, by ID.
     tags: BTreeMap<String, Tag>,
+    /// The songs that play together, by the set's ID: their keys, in order.
+    together: BTreeMap<String, Vec<String>>,
     /// Counts the changes made (`revision`).
     revision: u64,
 }
@@ -171,7 +204,11 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{TAGS}: {e}")).ok())
             .unwrap_or_default();
-        let mut store = Self { dir, songs, present, blocked, tags, revision: 0 };
+        let together = std::fs::read_to_string(dir.join(TOGETHER))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{TOGETHER}: {e}")).ok())
+            .unwrap_or_default();
+        let mut store = Self { dir, songs, present, blocked, tags, together, revision: 0 };
         if changed {
             store.save();
         }
@@ -224,7 +261,12 @@ impl SongStore {
                 continue;
             }
             let song = self.songs.entry(key).or_insert_with(|| Song::new(synced.name.clone()));
-            let mut learned = Song { meta: synced.meta.or_else(|| song.meta.clone()), ..synced };
+            // (What a newer version read is kept over an older one's.)
+            let meta = match (synced.meta, &song.meta) {
+                (Some(synced), Some(here)) if here.version > synced.version => Some(here.clone()),
+                (synced, here) => synced.or_else(|| here.clone()),
+            };
+            let mut learned = Song { meta, ..synced };
             // (One from before it was synced says 0.)
             if learned.imported == 0 || song.imported < learned.imported {
                 learned.imported = song.imported;
@@ -240,12 +282,13 @@ impl SongStore {
     }
 
     /// Note what the songs' files say of themselves, for those not known
-    /// yet (a device that read them first said it, for all of them).
-    /// Saved once, at the end: whether anything changed.
+    /// yet or read by an older version (a device that read them first
+    /// said it, for all of them). Saved once, at the end: whether anything
+    /// changed.
     pub fn note_meta(&mut self, metas: impl IntoIterator<Item = (String, Meta)>) -> bool {
         let mut changed = false;
         for (key, meta) in metas {
-            if let Some(song) = self.songs.get_mut(&key).filter(|s| s.meta.is_none()) {
+            if let Some(song) = self.songs.get_mut(&key).filter(|s| s.meta.as_ref().is_none_or(|m| m.version < meta.version)) {
                 song.meta = Some(meta);
                 changed = true;
             }
@@ -360,6 +403,85 @@ impl SongStore {
         }
     }
 
+    /// The songs that play together, by the set's ID: their keys, in
+    /// order.
+    pub fn together(&self) -> &BTreeMap<String, Vec<String>> {
+        &self.together
+    }
+
+    /// The set the song at `path` plays together with, if it's in one:
+    /// its ID, and where in it the song is.
+    pub fn together_of(&self, path: &Path) -> Option<(&str, usize)> {
+        let key = self.key_of(path)?;
+        self.together.iter().find_map(|(id, keys)| Some((id.as_str(), keys.iter().position(|k| k == key)?)))
+    }
+
+    /// Make the songs `keys` (in order) play together as the set `id`,
+    /// taking them out of any other (a set left with fewer than two songs
+    /// is no more): fewer than two, and `id` is no more.
+    pub fn set_together(&mut self, id: &str, mut keys: Vec<String>) {
+        let mut seen = BTreeSet::new();
+        keys.retain(|k| seen.insert(k.clone()));
+        let mut changed = false;
+        for (_, songs) in self.together.iter_mut().filter(|(other, _)| other.as_str() != id) {
+            let before = songs.len();
+            songs.retain(|k| !seen.contains(k));
+            changed |= songs.len() != before;
+        }
+        let was = if keys.len() < 2 { self.together.remove(id) } else { self.together.insert(id.to_string(), keys.clone()) };
+        changed |= was.as_ref() != (keys.len() >= 2).then_some(&keys);
+        let before = self.together.len();
+        self.together.retain(|_, songs| songs.len() >= 2);
+        changed |= self.together.len() != before;
+        if changed {
+            self.save_together();
+        }
+    }
+
+    /// Take the songs at `keys` out of the sets they play together in.
+    pub fn leave_together(&mut self, keys: &[String]) {
+        let changes: Vec<(String, Vec<String>)> = self
+            .together
+            .iter()
+            .filter(|(_, songs)| songs.iter().any(|k| keys.contains(k)))
+            .map(|(id, songs)| (id.clone(), songs.iter().filter(|k| !keys.contains(k)).cloned().collect()))
+            .collect();
+        for (id, songs) in changes {
+            self.set_together(&id, songs);
+        }
+    }
+
+    /// Set (`Some`) or drop (`None`) edits of songs' fields, by key; saved
+    /// once. What each was before, to undo them with.
+    pub fn edit(&mut self, changes: Vec<(String, Field, Option<String>)>) -> Vec<(String, Field, Option<String>)> {
+        let mut before = Vec::new();
+        for (key, field, value) in changes {
+            let Some(song) = self.songs.get_mut(&key) else { continue };
+            let was = match value {
+                Some(value) => song.edits.insert(field, value.trim().to_string()),
+                None => song.edits.remove(&field),
+            };
+            if song.edits.get(&field) != was.as_ref() {
+                before.push((key, field, was));
+            }
+        }
+        if !before.is_empty() {
+            self.save();
+        }
+        before
+    }
+
+    /// Note where the song at `key` was left (`None`: from its start);
+    /// saved if it changed.
+    pub fn set_position(&mut self, key: &str, position: Option<f64>) {
+        if let Some(song) = self.songs.get_mut(key)
+            && song.position != position
+        {
+            song.position = position;
+            self.save();
+        }
+    }
+
     /// A number that changes whenever anything in the store does, so
     /// what's made from it (the Songs list) knows to be made again.
     pub fn revision(&self) -> u64 {
@@ -419,6 +541,17 @@ impl SongStore {
         self.revision += 1;
         let path = self.dir.join(TAGS);
         let written = std::fs::create_dir_all(&self.dir).and_then(|()| write_atomically(&path, serde_json::to_string_pretty(&self.tags).unwrap_or_default().as_bytes()));
+        if let Err(e) = written {
+            log::warn!("couldn't save {}: {e}", path.display());
+        }
+    }
+
+    fn save_together(&mut self) {
+        let _timing = crate::frame_timing::scope("song store save");
+        self.revision += 1;
+        let path = self.dir.join(TOGETHER);
+        let written =
+            std::fs::create_dir_all(&self.dir).and_then(|()| write_atomically(&path, serde_json::to_string_pretty(&self.together).unwrap_or_default().as_bytes()));
         if let Err(e) = written {
             log::warn!("couldn't save {}: {e}", path.display());
         }
@@ -731,7 +864,7 @@ pub fn import_old(folders: &[PathBuf], dir: &Path, playlists: &Path, extensions:
     done
 }
 
-/// Every file under `dir` (subfolders too) with one of `extensions`.
+/// Every file under `dir` (subfolders too) synththing [`takes`].
 pub fn songs_under(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut pending = vec![dir.to_path_buf()];
@@ -741,13 +874,25 @@ pub fn songs_under(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
             let path = entry.path();
             if entry.file_type().is_ok_and(|t| t.is_dir()) {
                 pending.push(path);
-            } else if has_extension(&path, extensions) {
+            } else if takes(&path, extensions) {
                 found.push(path);
             }
         }
     }
     found.sort();
     found
+}
+
+/// Whether synththing takes the file at `path`: one with one of
+/// `extensions`, and not one of macOS's AppleDouble files ("._Song.flac",
+/// the Finder's notes on "Song.flac" left on drives that can't hold them).
+pub fn takes(path: &Path, extensions: &[&str]) -> bool {
+    !path.file_name().is_some_and(|n| is_apple_double(&n.to_string_lossy())) && has_extension(path, extensions)
+}
+
+/// Whether a file named `name` is one of macOS's AppleDouble files.
+pub fn is_apple_double(name: &str) -> bool {
+    name.starts_with("._")
 }
 
 pub fn has_extension(path: &Path, extensions: &[&str]) -> bool {
@@ -832,6 +977,24 @@ mod tests {
     }
 
     #[test]
+    fn edits_are_kept_and_undone() {
+        let dir = temp_dir("edits");
+        let stored = write_in(b"edited", "song.mp3", &dir).unwrap();
+        let mut store = SongStore::open(dir.clone());
+        store.add(stored.clone());
+        let key = stored.key.clone();
+        let before = store.edit(vec![(key.clone(), Field::Artist, Some(" Nujabes ".into())), (key.clone(), Field::Year, Some("2005".into()))]);
+        assert_eq!(before, [(key.clone(), Field::Artist, None), (key.clone(), Field::Year, None)]);
+        assert_eq!(store.get_by_key(&key).unwrap().edits.get(&Field::Artist).map(String::as_str), Some("Nujabes"));
+        assert!(store.edit(vec![(key.clone(), Field::Artist, Some("Nujabes".into()))]).is_empty(), "no change, nothing to undo");
+        // Kept, and undone.
+        let mut store = SongStore::open(dir);
+        assert_eq!(store.get_by_key(&key).unwrap().edits.len(), 2);
+        store.edit(before);
+        assert!(store.get_by_key(&key).unwrap().edits.is_empty());
+    }
+
+    #[test]
     fn a_damaged_song_is_fetched_again() {
         let dir = temp_dir("damaged");
         let stored = write_in(b"whole", "song.mp3", &dir).unwrap();
@@ -905,6 +1068,44 @@ mod tests {
         assert_eq!(names(&store), ["Chill", "party"], "kept");
         store.remove_tag("b");
         assert_eq!(names(&SongStore::open(dir.clone())), ["party"], "deleted from the song too");
+    }
+
+    #[test]
+    fn a_newer_read_is_kept() {
+        let dir = temp_dir("meta-version");
+        let mut store = SongStore::open(dir.clone());
+        let stored = write_in(b"read", "Read.mp3", &dir).unwrap();
+        store.add(stored.clone());
+        let old = Meta { title: Some("Old".into()), ..Meta::default() };
+        assert!(store.note_meta([(stored.key.clone(), old.clone())]));
+        let new = Meta { title: Some("New".into()), version: META_VERSION, ..Meta::default() };
+        assert!(store.note_meta([(stored.key.clone(), new.clone())]), "read again by a newer version");
+        assert!(!store.note_meta([(stored.key.clone(), old.clone())]), "not by an older one");
+        let synced = Song { meta: Some(old), ..store.get_by_key(&stored.key).unwrap().clone() };
+        store.learn([(stored.key.clone(), synced)]);
+        assert_eq!(store.get_by_key(&stored.key).unwrap().meta, Some(new), "kept over an older version's, synced");
+    }
+
+    #[test]
+    fn together() {
+        let dir = temp_dir("together");
+        let mut store = SongStore::open(dir.clone());
+        let mut keys = Vec::new();
+        for name in ["a", "b", "c", "d"] {
+            let stored = write_in(name.as_bytes(), &format!("{name}.mid"), &dir).unwrap();
+            keys.push(stored.key.clone());
+            store.add(stored);
+        }
+        store.set_together("one", vec![keys[1].clone(), keys[0].clone(), keys[1].clone()]);
+        assert_eq!(store.together_of(&path_of(&dir, &keys[0])), Some(("one", 1)), "in order, each once");
+        store.set_together("two", vec![keys[0].clone(), keys[2].clone()]);
+        assert!(!store.together().contains_key("one"), "left with one song, it's no more");
+        assert_eq!(store.together_of(&path_of(&dir, &keys[2])), Some(("two", 1)));
+        let mut store = SongStore::open(dir.clone());
+        assert_eq!(store.together()["two"], [keys[0].clone(), keys[2].clone()], "kept");
+        store.leave_together(&keys[2..3]);
+        assert!(store.together().is_empty());
+        assert_eq!(store.together_of(&path_of(&dir, &keys[3])), None);
     }
 
     #[test]

@@ -64,6 +64,7 @@ impl App {
             // The list changed: what comes next may have too.
             self.plan_listed();
         }
+        self.song_options_tick(view);
         if self.has_next() && !self.recording.holds_advance() {
             if !view.finished {
                 self.advance_armed = true;
@@ -122,9 +123,12 @@ impl App {
     fn pick_next(&mut self, np: &NowPlaying) -> Option<usize> {
         let entries = self.playlists.lists.get(np.list).map_or(&[][..], |l| &l.playlist.entries[..]);
         let only_starred = self.config.only_starred;
-        let playable: Vec<bool> = entries.iter().map(|e| !only_starred || self.songs.is_starred(&e.path)).collect();
+        // (Shuffling passes over the songs that say to.)
+        let skips = |path: &std::path::Path| self.shuffle && self.songs.get(path).is_some_and(|s| crate::fields::Facts::of(s).flag(crate::fields::Field::SkipShuffle));
+        let playable: Vec<bool> = entries.iter().map(|e| (!only_starred || self.songs.is_starred(&e.path)) && !skips(&e.path)).collect();
+        let members: Vec<_> = entries.iter().map(|e| self.songs.together_of(&e.path)).collect();
         let random = self.rng.next();
-        playlist::next_entry(&playable, np.entry, self.loop_mode, self.shuffle, &np.history, random)
+        playlist::next_entry(&playable, &members, np.entry, self.loop_mode, self.shuffle, &np.history, random)
     }
 
     /// Decide now which entry follows the current one (randomly, if
@@ -680,14 +684,14 @@ impl App {
         let selection = &mut self.playlist_selection;
         let cache = &mut self.song_info;
         let naming = super::naming(&self.config, &self.songs);
-        let info_open = &mut self.song_info_open;
+        let info_open = &mut self.details_for;
         let store = &self.songs;
         let touch = select_list::touch(ui.ctx());
 
         // Total time from what's been read so far.
         let (mut total, mut unknown) = (0.0, 0usize);
         for entry in entries {
-            match cache.get(&entry.path).and_then(|i| i.length) {
+            match cache.get(&entry.path).and_then(|i| i.meta.length) {
                 Some(length) => total += length,
                 None => unknown += 1,
             }
@@ -719,7 +723,7 @@ impl App {
                     action = Some(RowAction::Play(idx));
                 }
                 if rows.len() == 1 && !entry.missing && ui.button("Song info").clicked() {
-                    *info_open = Some(entry.path.clone());
+                    *info_open = Some(vec![entry.path.clone()]);
                 }
                 if !smart && (is_midi_path(&entry.path) || rows.len() > 1) {
                     if ui
@@ -854,7 +858,7 @@ impl App {
         let cache = &mut self.song_info;
         let naming = super::naming(&self.config, &self.songs);
         let text = playlist::to_m3u(&stored.playlist, |p| {
-            (super::title_of(cache, &naming, p), cache.get(p).and_then(|i| i.length))
+            (super::title_of(cache, &naming, p), cache.get(p).and_then(|i| i.meta.length))
         });
         self.status = match std::fs::write(&path, text) {
             Ok(()) => format!("Exported to {}.", path.display()),

@@ -49,10 +49,10 @@ impl App {
         self.request_play(&at.path, None, None, false);
     }
 
-    /// Play through `tracks` (each with whether it's starred) from the one
-    /// at `start`: an album's or artist's songs, to their end, leaving any
-    /// playlist.
-    pub(super) fn play_tracks(&mut self, tracks: Vec<(std::path::PathBuf, bool)>, start: usize) {
+    /// Play through `tracks` from the one at `start`: an album's or
+    /// artist's songs, to their end, leaving any playlist.
+    pub(super) fn play_tracks(&mut self, tracks: Vec<std::path::PathBuf>, start: usize) {
+        let tracks: Vec<_> = tracks.into_iter().map(|path| (path.clone(), super::plays(&self.songs, &path))).collect();
         let Some(playing) = Playing::tracks(tracks, start) else { return };
         let path = playing.at.path.clone();
         self.now_playing = None;

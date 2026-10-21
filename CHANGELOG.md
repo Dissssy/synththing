@@ -4,12 +4,39 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- The player buttons' hover text shows their keyboard shortcut (Play/Pause (Space), Next (N), Fullscreen (F)...). Shortcuts no longer fire while a script control is waiting for a key to bind.
+
+## 1.3.0 (2026-10-21)
+
+### Added
+- Edit songs' details: Song info (a song's right-click menu, or the info button with songs selected) has a Details tab with the title, artist, album artist, album, composer, genre, track, disc and year to change, and the file's own details under File. Select several songs to change them all at once: a field they differ in says Mixed, and only the fields you change are written. Edits sync with the library and never touch the files; the arrow beside an edited field goes back to what the file says, and the undo button in the Songs toolbar takes back the last save.
+- Clean up (the broom in the Songs toolbar): suggestions for your songs' details. It splits several artists in one ("\"Perry Porter\"& Nujabes" at "&", ",", " x ", "feat." and "ft.") and genres ("Hip-Hop/Rap"), writes a name spelled two ways one way ("Kan R. Gao" and "Kan (Reives) Gao"), and tidies stray quotes, brackets and spacing. Apply one, change what it'll be written as first, apply them all, or dismiss the ones that are wrong ("Simon & Garfunkel"); dismissed ones stay dismissed on all your devices until you bring them back. They're made as edits, so the undo button takes them back too.
+- Playback options (Song info > Options): where a song starts and stops (drag either end of the bar over the song, or type "0:30"; buttons play from the start or just before the stop to hear them), its volume up or down (a slider, -100 to +100%), skip it when shuffling, and remember where it was left (it starts there next time, on any of your devices).
+- Play together: select songs in Songs and pick Play together from their menu, and shuffling plays them as one song, in that order (an album's sides, a medley, a song and its intro). Songs linked this way have a link beside their name in Songs, and Groupings has a Play together page of the sets (once there are any) to see each in order, play it, put it in another order or take songs out. Song info > Options lists the songs it plays together with, to put in another order or take one out. A song plays together with one set at most, and the sets sync with your library.
+- Missing info: Preferences > Songs lists the songs each ruleset leaves out because they don't say what it splits by (songs with no album aren't in By Album), with Edit them to fill it in for them all at once in Song info. The warning button in Songs, there while any are missing, shows only those songs.
+- More Songs list columns: Grouping, Comment, Bit rate and Sample rate. Grouping and Comment are read from the files' tags and can be changed in Song info, and the list can be grouped by Grouping or Sample rate. Songs already in the library are read once more for them, in the background.
+- Sorting past "The": names sort past a leading The, A or An (The Beatles with the Bs) in the Songs list, smart playlists and Groupings. Preferences > Songs can turn it off.
+- Sort as (Song info > Sorting): what a song's title, album, artist, album artist and composer sort as, read from the file's sort tags when it has them ("Beatles, The"). They're Songs list columns too.
+- Compilations: Song info has a Compilation box (ticked already for files tagged as one). A compilation's album is by Various Artists, and By Artist files it whole under them unless it has an album artist. Clean up suggests it for albums by several artists with no album artist.
+- Use composer as artist (Song info): the song's artist is its composer, for classical music filed under who wrote it.
+- Artists, album artists and composers are lists, split at semicolons: a song by "Perry Porter; Nujabes" is in both artists' groups and By Artist playlists, and an album by "Uyama Hiroto; Nujabes" says "Uyama Hiroto & Nujabes", each a link to their page. A comma or "&" doesn't split them by itself, since they can be part of a name; Clean up suggests those splits instead.
+
+## 1.2.0 (2026-10-21)
+
 ### Added
 - Smart playlists: + > Smart playlist... in Playlists makes a playlist of the songs that match your rules (artist contains, year in a range, added in the last 30 days, has a tag, starred...), all of them or any, optionally limited to some songs, minutes, hours, MB or GB picked at random, by title, by album, newest... It keeps up as songs come in, the same on all your devices (random picks too: Re-seed picks again, everywhere). Edit its rules from the playlist's sliders button, or keep a copy that stays as it is. On a phone the rules can be looked at, not edited yet.
 - Rulesets (Preferences > Songs): rules that make a playlist for each artist, album, genre, year, composer or tag of the songs they match. By Artist and By Album are built in, and you can make your own. They sync like your other settings.
 - Groupings (View > Groupings, or the playlist button in the controls; on a phone, Playlists and each ruleset are in the menu after Songs): your playlists, then the playlists each ruleset makes, By Album, By Artist and your own, picked along the top. Playlists moved here from their own tab: a playlist opens on its page to play and edit as before, + makes one, and dropping songs on them all makes a new one of them. Smart playlists have an engine in their tile's corner, and the engine is now smart playlists' icon everywhere (it was a sparkle). Show them as a grid of tiles or a list, search them, sort them by title, size or what's newest, or play them all. Open one for its page: its art, its artist (an album's links to them), play (it plays through to its end, whatever Autoplay is set to), shuffle, star them all, find in it, and its songs under their discs or albums. Each ruleset remembers where you were (search, sort, grid or list, what's open, how far you scrolled) until you close synththing.
 - Album art from the picture in the songs' files, read in the background. Anything without art gets a tile in a color of its own with its first letters: one to four of them (Preferences > Songs; four make a square).
 - A playlist remembers the song it was on: the fast-forward button beside Play continues from there.
+- Spellings of a name are one group: albums, artists and the Songs list's groups see past case, spacing, punctuation and symbols (and full-width letters), so "<OST>" and "OST", or "Justcore Extravaganza" and "JUSTCORE EXTRAVAGANZA", are one, shown as the spelling with mixed case (else the one most of its songs have). Preferences > Songs can name more characters to pass over.
+- An album is its name's songs, whoever each is by: a soundtrack with songs by several artists, or with its album artist spelled two ways, is one album (its artist line says Various Artists when its songs' artists differ and no album artist is set), its songs in track order.
+- Genres are lists: a song tagged "Avant-Garde, Electronic, Rock" (commas or semicolons) is in each of those genres, in By Genre rulesets, the Songs list's genre groups and genre rules. Genres tagged by their old ID3 numbers ("17", "(17)") show as their names (Rock).
+- More Songs list columns: Disc and Size. Song names can use every field ({disc}, {size}, {imported}...), and smart playlist rules can go by file type.
+
+### Changed
+- "Imported" is "Date added" everywhere, and the File column shows the name without its extension (Type has that).
 
 ## 1.1.0 (2026-10-20)
 

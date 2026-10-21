@@ -52,7 +52,8 @@ pub enum AudioCommand {
     EnableAllChannels,
     SoloChannel(u8),
     SetLoopEnabled(bool),
-    /// Output gain, 0.0..=1.0. Does not affect the visualizer tap.
+    /// Output gain, 0.0..=2.0 (a song's volume adjust can double the
+    /// slider's). Does not affect the visualizer tap.
     SetVolume(f32),
     /// Target cushion in milliseconds.
     SetBufferMs(u32),
@@ -341,7 +342,7 @@ impl AudioEngine {
             AudioCommand::EnableAllChannels => self.rerender(Engine::enable_all_channels),
             AudioCommand::SoloChannel(channel) => self.rerender(|engine| engine.solo_channel(channel)),
             AudioCommand::SetLoopEnabled(enabled) => self.engine.set_loop_enabled(enabled),
-            AudioCommand::SetVolume(volume) => self.volume = volume.clamp(0.0, 1.0),
+            AudioCommand::SetVolume(volume) => self.volume = volume.clamp(0.0, 2.0),
             AudioCommand::SetBufferMs(ms) => {
                 self.buffer_ms = ms.clamp(MIN_BUFFER_MS, MAX_BUFFER_MS);
             }

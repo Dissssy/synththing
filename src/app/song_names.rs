@@ -8,8 +8,10 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use super::{title_of, App};
-use crate::song_info::{SongInfo, Tags};
-use crate::song_title::{render, Song, DEFAULT_PATTERNS, FIELDS};
+use crate::fields::{Facts, FIELDS};
+use crate::song_info::SongInfo;
+use crate::song_store::Meta;
+use crate::song_title::{render, DEFAULT_PATTERNS};
 
 /// How many of your songs the preview shows, and for how long.
 const PREVIEW_SONGS: usize = 3;
@@ -21,7 +23,7 @@ impl App {
         ui.weak(format!(
             "Each song is named by the first of these it has every field of, or else by its file's name \
              (as it was before it was imported). Fields: {}.",
-            FIELDS.map(|f| format!("{{{f}}}")).join(", ")
+            FIELDS.iter().filter(|d| d.field.in_patterns()).map(|d| format!("{{{}}}", d.key)).collect::<Vec<_>>().join(", ")
         ));
         let mut patterns: Vec<String> =
             self.config.title_patterns.clone().unwrap_or_else(|| DEFAULT_PATTERNS.map(String::from).to_vec());
@@ -78,7 +80,7 @@ impl App {
         ui.add_space(4.0);
         egui::Frame::group(ui.style()).show(ui, |ui| {
             let info = example_info();
-            let example = Song { file_name: "harbour_lights.mid", info: Some(&info), meta: None };
+            let example = Facts { file_name: "harbour_lights.mid", meta: Some(&info.meta), info: Some(&info), imported: Some(1_760_000_000), tags: &[], edits: None };
             let named = patterns.iter().find_map(|p| render(p, &example)).unwrap_or_else(|| "harbour_lights".to_string());
             ui.horizontal_wrapped(|ui| {
                 ui.weak("A song with every field:");
@@ -91,7 +93,7 @@ impl App {
             let naming = super::naming(&self.config, &self.songs);
             for song in songs {
                 let name = title_of(&mut self.song_info, &naming, &song);
-                ui.label(name).on_hover_text(naming.file_name(&song));
+                ui.label(name).on_hover_text(naming.song(&song, None).file_name);
             }
         });
     }
@@ -121,16 +123,20 @@ impl App {
 }
 
 fn example_info() -> SongInfo {
-    let tags = Tags {
+    let meta = Meta {
         title: Some("Harbour Lights".into()),
         artist: Some("The Night Owls".into()),
         album: Some("Late Trains".into()),
         album_artist: Some("Various Artists".into()),
         composer: Some("Ada Moreau".into()),
         genre: Some("Jazz".into()),
-        track: Some("3".into()),
-        disc: None,
-        year: Some("2010".into()),
+        track: Some(3),
+        disc: Some(1),
+        year: Some(2010),
+        length: Some(203.0),
+        size: 48_213,
+        compilation: true,
+        ..Meta::default()
     };
-    SongInfo { length: Some(203.0), bpm: Some(92.0), notes: Some(4210), tags, ..SongInfo::default() }
+    SongInfo { meta, bpm: Some(92.0), notes: Some(4210), ..SongInfo::default() }
 }

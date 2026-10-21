@@ -13,7 +13,8 @@ use super::{fit_width, App};
 use crate::playlist::{Playlist, PlaylistEntry};
 use crate::select_list;
 use crate::settings_sync;
-use crate::smart::{self, Field, Group, Kind, Limit, Op, Order, Rule, Rules, Ruleset, Split, SplitBy, Unit};
+use crate::fields::{self, Field, Kind};
+use crate::smart::{self, Group, Limit, Op, Order, Rule, Rules, Ruleset, Split, SplitBy, Unit};
 use crate::song_store::Tag;
 
 /// Whether rules can be edited on a touch screen (they can always be
@@ -56,7 +57,7 @@ impl App {
     /// the song it's at (or letting go of the playlist, if that song's no
     /// longer on it).
     pub(super) fn refresh_smart(&mut self, force: bool) {
-        let revision = self.songs.revision();
+        let revision = self.groups_revision();
         if !force && self.smart_seen == Some(revision) {
             return;
         }
@@ -66,7 +67,7 @@ impl App {
         for (i, stored) in self.playlists.lists.iter_mut().enumerate() {
             let Some(rules) = &stored.playlist.smart else { continue };
             let entries: Vec<PlaylistEntry> = rules
-                .songs(&self.songs, now)
+                .songs(&self.songs, now, self.config.sort_with_articles)
                 .into_iter()
                 .map(|key| PlaylistEntry { path: self.songs.path(&key), soundfont: None, missing: !self.songs.has(&key) })
                 .collect();
@@ -121,10 +122,10 @@ impl App {
 
     /// The rules editor, while it's open.
     pub(super) fn rules_editor_ui(&mut self, ctx: &egui::Context) {
+        let revision = self.groups_revision();
         let Some(editor) = &mut self.rules_editor else { return };
-        let revision = self.songs.revision();
         if editor.preview.as_ref().is_none_or(|(seen, rules, _)| *seen != revision || *rules != editor.rules) {
-            editor.preview = Some((revision, editor.rules.clone(), summary(&editor.rules, &self.songs)));
+            editor.preview = Some((revision, editor.rules.clone(), summary(&editor.rules, &self.songs, &self.config.group_ignore, self.config.sort_with_articles)));
         }
         let ruleset = matches!(editor.editing, Editing::Ruleset(_));
         let new = matches!(editor.editing, Editing::Playlist(None) | Editing::Ruleset(None));
@@ -223,19 +224,86 @@ impl App {
         }
     }
 
+    /// What smart playlists and rulesets' playlists are worked out from
+    /// changes: the library, the characters grouping ignores, or how names
+    /// sort.
+    fn groups_revision(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (self.songs.revision(), &self.config.group_ignore, self.config.sort_with_articles).hash(&mut hasher);
+        hasher.finish()
+    }
+
     /// The playlists ruleset `id` (with `rules`) makes, worked out again
-    /// when the library or the rules change.
+    /// when the library, the rules or grouping change.
     pub(super) fn groups_of(&mut self, id: &str, rules: &Rules) -> Arc<Vec<Group>> {
-        let revision = self.songs.revision();
+        let revision = self.groups_revision();
         if let Some((seen, cached, groups)) = self.ruleset_groups.get(id)
             && *seen == revision
             && cached == rules
         {
             return groups.clone();
         }
-        let groups = Arc::new(rules.groups(&self.songs, settings_sync::now()));
+        let groups = Arc::new(rules.groups(&self.songs, settings_sync::now(), &self.config.group_ignore, self.config.sort_with_articles));
         self.ruleset_groups.insert(id.to_string(), (revision, rules.clone(), groups.clone()));
         groups
+    }
+
+    /// What each ruleset leaves out of its playlists for want of what it
+    /// splits by (`Rules::missing`), for those leaving any out, and the
+    /// revision it was worked out for: worked out again when the library
+    /// or the rulesets change.
+    pub(super) fn missing_info(&mut self) -> (u64, Arc<Vec<Missing>>) {
+        let revision = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (self.groups_revision(), serde_json::to_string(&self.config.rulesets).unwrap_or_default()).hash(&mut hasher);
+            hasher.finish()
+        };
+        if let Some((seen, missing)) = &self.missing_info
+            && *seen == revision
+        {
+            return (revision, missing.clone());
+        }
+        let now = settings_sync::now();
+        let missing: Vec<Missing> = self
+            .all_rulesets()
+            .into_iter()
+            .filter_map(|(_, ruleset)| {
+                let by = ruleset.rules.split.as_ref()?.by;
+                let keys = ruleset.rules.missing(&self.songs, now);
+                (!keys.is_empty()).then_some(Missing { name: ruleset.name, by, keys })
+            })
+            .collect();
+        let missing = Arc::new(missing);
+        self.missing_info = Some((revision, missing.clone()));
+        (revision, missing)
+    }
+
+    /// Preferences' Missing info: the songs each ruleset leaves out, to
+    /// fill in what they lack in Song info.
+    fn missing_ui(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
+        ui.strong("Missing info");
+        let (_, missing) = self.missing_info();
+        if missing.is_empty() {
+            ui.weak("Every song has what your rulesets split by.");
+            return;
+        }
+        ui.weak("Songs a ruleset leaves out, as they don't say what it splits by. The filter button in Songs shows only them.");
+        let mut edit = None;
+        for each in missing.iter() {
+            ui.horizontal(|ui| {
+                let n = each.keys.len();
+                ui.label(format!("{}: {n} song{} without {}", each.name, if n == 1 { "" } else { "s" }, lacking(each.by)));
+                if ui.button("Edit them").on_hover_text("Open them in Song info, to fill it in for them all at once").clicked() {
+                    edit = Some(each.keys.iter().map(|k| self.songs.path(k)).collect());
+                }
+            });
+        }
+        if edit.is_some() {
+            self.details_for = edit;
+        }
     }
 
     /// Every ruleset: the built-in ones, then the user's, by ID.
@@ -287,22 +355,44 @@ impl App {
             self.ruleset_groups.remove(&id);
             self.save_config();
         }
+        self.missing_ui(ui);
     }
 }
 
-/// The ruleset playlists last worked out, by ruleset ID: for which library
-/// revision and rules.
+/// What a ruleset leaves out for want of what it splits by: its name, what
+/// it splits by, and the songs (keys).
+pub(super) struct Missing {
+    pub name: String,
+    pub by: SplitBy,
+    pub keys: Vec<String>,
+}
+
+/// What a song a ruleset split `by` leaves out lacks: "an album".
+fn lacking(by: SplitBy) -> &'static str {
+    match by {
+        SplitBy::Artist => "an artist",
+        SplitBy::AlbumArtist => "an album artist or artist",
+        SplitBy::Album => "an album",
+        SplitBy::Composer => "a composer",
+        SplitBy::Genre => "a genre",
+        SplitBy::Year => "a year",
+        SplitBy::Tag => "a tag",
+    }
+}
+
+/// The ruleset playlists last worked out, by ruleset ID: for which
+/// revision (`App::groups_revision`) and rules.
 pub(super) type RulesetGroups = BTreeMap<String, (u64, Rules, Arc<Vec<Group>>)>;
 
 /// What `rules` come to in `store` now, in a line.
-fn summary(rules: &Rules, store: &crate::song_store::SongStore) -> String {
+fn summary(rules: &Rules, store: &crate::song_store::SongStore, ignore: &str, articles: bool) -> String {
     let now = settings_sync::now();
     if rules.split.is_some() {
-        let groups = rules.groups(store, now);
+        let groups = rules.groups(store, now, ignore, articles);
         let songs: usize = groups.iter().map(|g| g.songs.len()).sum();
         format!("{} playlist{}, {songs} songs in all", groups.len(), if groups.len() == 1 { "" } else { "s" })
     } else {
-        let songs = rules.songs(store, now).len();
+        let songs = rules.songs(store, now, articles).len();
         format!("{songs} song{} now", if songs == 1 { "" } else { "s" })
     }
 }
@@ -376,12 +466,12 @@ fn rules_ui(ui: &mut egui::Ui, rules: &mut Rules, tags: &BTreeMap<String, Tag>, 
 /// One rule: field, op and its values.
 fn rule_ui(ui: &mut egui::Ui, rule: &mut Rule, tags: &BTreeMap<String, Tag>) {
     let before = rule.field;
-    pick(ui, "field", &mut rule.field, &Field::ALL, |f| f.title());
+    pick(ui, "field", &mut rule.field, &fields::rule_fields(), Field::label);
     if rule.field.kind() != before.kind() {
         *rule = Rule::new(rule.field);
     }
     let kind = rule.field.kind();
-    pick(ui, "op", &mut rule.op, kind.ops(), |o| o.title());
+    pick(ui, "op", &mut rule.op, smart::ops(kind), |o| o.title());
     if rule.op.values() == 0 {
         return;
     }
@@ -398,6 +488,7 @@ fn rule_ui(ui: &mut egui::Ui, rule: &mut Rule, tags: &BTreeMap<String, Tag>) {
     }
     let hint = match (rule.field, rule.op) {
         (Field::Length, _) => "m:ss",
+        (Field::Size, _) => "MB",
         (_, Op::Before | Op::After) => "2026-10-20",
         (_, Op::InLast | Op::NotInLast) => "days",
         _ => "",

@@ -700,6 +700,11 @@ impl App {
                 if ui.add(drawer_item(ui, showing.as_deref() == Some(super::groupings::PLAYLISTS), "playlist", "Playlists")).clicked() {
                     ruleset = Some(super::groupings::PLAYLISTS.to_string());
                 }
+                if !self.songs.together().is_empty()
+                    && ui.add(drawer_item(ui, showing.as_deref() == Some(super::groupings::TOGETHER), "link", "Play together")).clicked()
+                {
+                    ruleset = Some(super::groupings::TOGETHER.to_string());
+                }
                 for (id, set) in self.all_rulesets() {
                     if ui.add(drawer_item(ui, showing.as_deref() == Some(id.as_str()), Page::Grouping.icon(), &set.name)).clicked() {
                         ruleset = Some(id);

@@ -4,7 +4,8 @@
 //! - `library`: every song in any device's library, by key, with its name,
 //!   tags, when it was first imported and what its file says of itself
 //!   (`song_store::Song`: songs are only ever added: a song removed on one
-//!   device stays in the others'), and the tags themselves (`tag/<id>`).
+//!   device stays in the others'), the tags themselves (`tag/<id>`), and
+//!   the songs that play together (`group/<id>`: their keys, in order).
 //!   Each device knows them all (`SongStore::learn`).
 //! - `transfers`: which songs each device wants (`want/<device>/<key>`)
 //!   and which are waiting on the relay (`ready/<key>`), and the devices
@@ -41,13 +42,15 @@ pub const LIBRARY: &str = "library";
 pub const TRANSFERS: &str = "transfers";
 
 const TAG: &str = "tag/";
+const GROUP: &str = "group/";
 
 /// The library's leaves: those synced so far (`applied`), with what this
-/// device has of them, every song here, and the tags. (A song only known
+/// device has of them, every song here, the tags, and the songs that play
+/// together. (A song only known
 /// here, not here nor synced yet, waits for the synced library: its tags
 /// are there.)
 pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
-    let mut leaves: BTreeMap<String, Value> = applied.iter().filter(|(k, _)| !k.starts_with(TAG)).map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut leaves: BTreeMap<String, Value> = applied.iter().filter(|(k, _)| !k.starts_with(TAG) && !k.starts_with(GROUP)).map(|(k, v)| (k.clone(), v.clone())).collect();
     for (key, song) in store.known() {
         if applied.contains_key(key) || store.has(key) {
             leaves.insert(key.to_string(), serde_json::to_value(song).unwrap_or_default());
@@ -56,17 +59,25 @@ pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> B
     for (id, tag) in store.tags() {
         leaves.insert(format!("{TAG}{id}"), serde_json::to_value(tag).unwrap_or_default());
     }
+    for (id, keys) in store.together() {
+        leaves.insert(format!("{GROUP}{id}"), serde_json::to_value(keys).unwrap_or_default());
+    }
     leaves
 }
 
 /// Take the synced library: every song's name, tags and what's known of
-/// it, and the tags (those gone from it deleted here).
+/// it, the tags and the songs that play together (those gone from it
+/// deleted here).
 pub fn apply_library(store: &mut SongStore, fields: &Fields) {
     let mut songs = Vec::new();
     for (key, field) in fields {
         if let Some(id) = key.strip_prefix(TAG) {
             if let Ok(tag) = serde_json::from_value::<Tag>(field.value.clone()) {
                 store.set_tag(id, tag);
+            }
+        } else if let Some(id) = key.strip_prefix(GROUP) {
+            if let Ok(keys) = serde_json::from_value::<Vec<String>>(field.value.clone()) {
+                store.set_together(id, keys);
             }
         } else if let Ok(song) = serde_json::from_value::<Song>(field.value.clone()) {
             songs.push((key.clone(), song));
@@ -76,6 +87,10 @@ pub fn apply_library(store: &mut SongStore, fields: &Fields) {
     let gone: Vec<String> = store.tags().keys().filter(|id| !fields.contains_key(&format!("{TAG}{id}"))).cloned().collect();
     for id in gone {
         store.remove_tag(&id);
+    }
+    let gone: Vec<String> = store.together().keys().filter(|id| !fields.contains_key(&format!("{GROUP}{id}"))).cloned().collect();
+    for id in gone {
+        store.set_together(&id, Vec::new());
     }
 }
 
@@ -463,6 +478,8 @@ mod tests {
         // The library goes around: the phone knows the song, and wants it.
         desktop.set_tag("t1", Tag { name: "Chill".into(), color: [1, 2, 3] });
         desktop.set_song_tags(&song.key, vec!["t1".into()]);
+        let elsewhere = format!("{}.mid", "b".repeat(64));
+        desktop.set_together("g1", vec![song.key.clone(), elsewhere.clone()]);
         let library = library_leaves(&desktop, &BTreeMap::new());
         assert_eq!(library[&song.key]["name"], "Song.mid");
         desktop.note_meta([(song.key.clone(), song_store::Meta { title: Some("Song".into()), track: Some(3), size: 4, ..Default::default() })]);
@@ -471,6 +488,7 @@ mod tests {
         let fields = library.iter().map(|(k, v)| (k.clone(), crate::settings_sync::Field { value: v.clone(), changed: 1 })).collect();
         apply_library(&mut phone, &fields);
         assert_eq!(phone.tags()["t1"].name, "Chill");
+        assert_eq!(phone.together()["g1"], [song.key.clone(), elsewhere], "play together");
         let known = phone.known().find(|(k, _)| *k == song.key).unwrap().1.clone();
         assert_eq!(known.tags, ["t1"]);
         assert_eq!(known.meta.unwrap().title.as_deref(), Some("Song"), "known without the file");
@@ -540,8 +558,10 @@ mod tests {
                 year: Some(1980 + i % 40),
                 length: Some(f64::from(120 + i % 300) + 0.25),
                 size: 4_000_000 + u64::from(i) * 977,
+                compilation: true,
+                ..Default::default()
             };
-            let song = Song { name: format!("{:02} Song number {i}.mp3", i % 14 + 1), imported: 1_790_000_000 + i64::from(i), tags: vec![song_store::STARRED.into()], meta: Some(meta) };
+            let song = Song { name: format!("{:02} Song number {i}.mp3", i % 14 + 1), imported: 1_790_000_000 + i64::from(i), tags: vec![song_store::STARRED.into()], meta: Some(meta), ..Song::default() };
             leaves.insert(key, crate::settings_sync::Field { value: serde_json::to_value(song).unwrap(), changed: 1_790_000_000 });
         }
         let plain = serde_json::to_vec(&leaves).unwrap();
