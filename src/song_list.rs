@@ -292,9 +292,9 @@ pub trait Source {
     /// The songs a query's filters keep, and the query parsed
     /// (`search::parse`).
     fn songs(&mut self, query: &str) -> (Vec<PathBuf>, Search);
-    /// A field's values (the tags' names for `Field::Tag`), to complete a
-    /// filter with.
-    fn values(&mut self, field: Field) -> Vec<String>;
+    /// A field's values (the tags' names for `Field::Tag`) in the songs
+    /// `query`'s filters keep, to complete a filter with.
+    fn values(&mut self, field: Field, query: &str) -> Vec<String>;
 }
 
 /// What a song sorts by for `value`: what it sorts as, else its text
@@ -505,7 +505,7 @@ impl SongList {
             let built = self.built.as_ref();
             let problems = built.map_or(&[][..], |b| b.problems.as_slice());
             let found = built.filter(|b| !b.query.trim().is_empty()).map(|b| b.found);
-            let output = self.search.ui(ui, problems, found, revision, &mut |field| source.values(field));
+            let output = self.search.ui(ui, problems, found, revision, &mut |field, others| source.values(field, others));
             if output.changed {
                 self.selection.clear();
                 ui.ctx().request_repaint();
@@ -1048,7 +1048,7 @@ mod tests {
             (self.0.clone(), crate::search::parse(query, &Default::default()))
         }
 
-        fn values(&mut self, _: Field) -> Vec<String> {
+        fn values(&mut self, _: Field, _: &str) -> Vec<String> {
             Vec::new()
         }
     }

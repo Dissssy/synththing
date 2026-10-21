@@ -20,9 +20,9 @@ pub struct SearchBox {
     mode: Option<Mode>,
     /// Whether Alt was down last frame (it switches `mode` when pressed).
     alt: bool,
-    /// A field's values to complete with, and the library revision they're
-    /// from.
-    values: Option<(Field, u64, Vec<String>)>,
+    /// A field's values to complete with, the rest of the query they're
+    /// for, and the library revision they're from.
+    values: Option<(Field, String, u64, Vec<String>)>,
 }
 
 /// What [`SearchBox::ui`] reports.
@@ -36,8 +36,16 @@ pub struct Output {
 impl SearchBox {
     /// Draw it (filling the rest of the row), `problems` and `found` (how
     /// many songs, when there's a query) from the query as last parsed,
-    /// `values` giving a field's values, as of library `revision`.
-    pub fn ui(&mut self, ui: &mut egui::Ui, problems: &[Problem], found: Option<usize>, revision: u64, values: &mut dyn FnMut(Field) -> Vec<String>) -> Output {
+    /// `values` giving a field's values in the songs a query keeps, as of
+    /// library `revision`.
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        problems: &[Problem],
+        found: Option<usize>,
+        revision: u64,
+        values: &mut dyn FnMut(Field, &str) -> Vec<String>,
+    ) -> Output {
         let id = ui.id().with("search");
         let ctx = ui.ctx().clone();
         let focused = ctx.memory(|m| m.has_focus(id));
@@ -167,14 +175,14 @@ impl SearchBox {
     }
 
     /// The completion at `cursor`, a field's values read once for each
-    /// library revision.
-    fn complete(&mut self, cursor: usize, mode: Mode, revision: u64, values: &mut dyn FnMut(Field) -> Vec<String>) -> Option<Completion> {
+    /// rest of the query and library revision.
+    fn complete(&mut self, cursor: usize, mode: Mode, revision: u64, values: &mut dyn FnMut(Field, &str) -> Vec<String>) -> Option<Completion> {
         let cache = &mut self.values;
-        search::complete(&self.query, cursor, mode, &mut |field| {
-            if cache.as_ref().is_none_or(|(f, r, _)| *f != field || *r != revision) {
-                *cache = Some((field, revision, values(field)));
+        search::complete(&self.query, cursor, mode, &mut |field, others| {
+            if cache.as_ref().is_none_or(|(f, o, r, _)| *f != field || o != others || *r != revision) {
+                *cache = Some((field, others.to_string(), revision, values(field, others)));
             }
-            cache.as_ref().map(|(_, _, v)| v.clone()).unwrap_or_default()
+            cache.as_ref().map(|(_, _, _, v)| v.clone()).unwrap_or_default()
         })
     }
 }
@@ -205,7 +213,7 @@ mod tests {
         let mut out = None;
         let mut output = ctx.run_ui(input, |ui| {
             ui.ctx().memory_mut(|m| m.request_focus(ui.id().with("search")));
-            let mut values = |field: Field| if field == Field::Artist { vec!["Daft Punk".to_string()] } else { Vec::new() };
+            let mut values = |field: Field, _: &str| if field == Field::Artist { vec!["Daft Punk".to_string()] } else { Vec::new() };
             out = Some(search.ui(ui, &[], Some(3), 0, &mut values));
         });
         output.textures_delta.clear();

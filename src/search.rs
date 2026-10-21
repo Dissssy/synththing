@@ -233,10 +233,12 @@ const MAX_OPTIONS: usize = 8;
 /// The completion for the term of `query` that ends at `cursor` (a byte
 /// index): a filter's key, or its value, written as `mode` says
 /// (`quoted`). `values` gives a field's values (the tags' names for
-/// `Field::Tag`).
-pub fn complete(query: &str, cursor: usize, mode: Mode, values: &mut dyn FnMut(Field) -> Vec<String>) -> Option<Completion> {
+/// `Field::Tag`) in the songs the rest of the query keeps (that's given
+/// it, without the term).
+pub fn complete(query: &str, cursor: usize, mode: Mode, values: &mut dyn FnMut(Field, &str) -> Vec<String>) -> Option<Completion> {
     let (start, term) = terms(query).into_iter().find(|(at, term)| *at < cursor && cursor == at + term.len())?;
     let at = start..cursor;
+    let others = format!("{}{}", &query[..start], &query[cursor..]);
     let (neg, term) = term.strip_prefix('-').map_or(("", term), |t| ("-", t));
     let ranked = |options: Vec<String>, typed: &str| -> Vec<String> {
         let mut scored: Vec<(i32, String)> =
@@ -263,7 +265,7 @@ pub fn complete(query: &str, cursor: usize, mode: Mode, values: &mut dyn FnMut(F
                 key => {
                     let field = field(key).filter(|f| matches!(f.kind(), Kind::Text | Kind::Tag))?;
                     let mode = if field == Field::Tag { Mode::Fuzzy } else { mode };
-                    ranked(values(field), typed).into_iter().map(|v| (v.clone(), keyed(&quoted(&v, mode)))).collect()
+                    ranked(values(field, &others), typed).into_iter().map(|v| (v.clone(), keyed(&quoted(&v, mode)))).collect()
                 }
             }
         }
@@ -428,11 +430,12 @@ mod tests {
 
     #[test]
     fn completing_keys_and_values() {
-        let mut values = |field: Field| match field {
+        let mut values = |field: Field, others: &str| match field {
+            Field::Artist if others.contains("album:") => vec!["Nujabes".to_string()],
             Field::Artist => vec!["Daft Punk".to_string(), "Nujabes".to_string()],
             _ => Vec::new(),
         };
-        let options = |q: &str, mode, values: &mut dyn FnMut(Field) -> Vec<String>| {
+        let options = |q: &str, mode, values: &mut dyn FnMut(Field, &str) -> Vec<String>| {
             complete(q, q.len(), mode, values).map(|c| (c.at, c.options.into_iter().map(|(_, i)| i).collect::<Vec<_>>()))
         };
         assert_eq!(options("zelda ar", Mode::Fuzzy, &mut values), Some((6..8, vec!["artist:".to_string()])));
@@ -440,6 +443,7 @@ mod tests {
         assert_eq!(options("artist:dp", Mode::Close, &mut values).unwrap().1, ["artist:\"Daft Punk\""]);
         assert_eq!(options("artist:dp", Mode::Exact, &mut values).unwrap().1, ["artist:^\"Daft Punk\""]);
         assert_eq!(options("artist:", Mode::Fuzzy, &mut values).unwrap().1.len(), 2);
+        assert_eq!(options("album:modal artist:", Mode::Fuzzy, &mut values).unwrap().1, ["artist:Nujabes"], "what the other filters keep");
         assert_eq!(options("zelda ", Mode::Fuzzy, &mut values), None, "nothing typed");
         assert_eq!(options("artist:Nujabes", Mode::Fuzzy, &mut values), None, "done");
     }

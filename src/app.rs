@@ -159,13 +159,17 @@ impl song_list::Source for Listed<'_> {
         (songs, search)
     }
 
-    fn values(&mut self, field: crate::fields::Field) -> Vec<String> {
+    fn values(&mut self, field: crate::fields::Field, query: &str) -> Vec<String> {
+        let rules = crate::search::parse(query, self.store.tags()).rules;
+        let matches = rules.matcher(crate::settings_sync::now());
+        let songs = self.store.songs().filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song)).map(|(_, song)| song);
         if field == crate::fields::Field::Tag {
-            return self.store.tags().values().map(|t| t.name.clone()).collect();
+            let used: std::collections::BTreeSet<&str> = songs.flat_map(|song| song.tags.iter().map(String::as_str)).collect();
+            return used.into_iter().filter_map(|id| self.store.tags().get(id)).map(|t| t.name.clone()).collect();
         }
         // (Each once, however it's spelled: as most songs spell it.)
         let mut spellings: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
-        for (_, song) in self.store.known() {
+        for song in songs {
             for value in crate::fields::Facts::of(song).items(field) {
                 spellings.entry(crate::fields::group_key(&value, "")).or_default().push(value.into_owned());
             }
