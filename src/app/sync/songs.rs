@@ -47,6 +47,8 @@ pub(super) enum Request {
     Moved(Moved),
     /// Forget a device (by ID): its wants, and it in the list.
     Forget(String),
+    /// Clear these songs from the library: no device has them.
+    Clear(Vec<String>),
     /// Sync, with this device's leaves (the job's `base` and `local`) put in.
     Sync(Box<Job>),
     /// A sync is done: take it in, with the songs as they are now noted
@@ -65,6 +67,8 @@ pub(super) enum Reply {
     Planned(Vec<Task>),
     /// The devices in the transfers, as of now.
     Devices(Vec<SyncedDevice>),
+    /// The songs in the library no device has (`song_sync::unheld`).
+    Unheld(Vec<String>),
     /// The blob's sync didn't start: it has no state (turned off meanwhile).
     Skipped(Blob),
     /// A sync was taken in: the server's revision now, and for the library,
@@ -135,6 +139,14 @@ impl Worker {
                     self.save(Blob::Transfers);
                     self.reply(Reply::Changed(Blob::Transfers));
                     self.reply(Reply::Devices(devices));
+                }
+            }
+            Request::Clear(keys) => {
+                let Some(state) = &mut self.library else { return };
+                let leaves = song_sync::clear(&state.applied, &keys);
+                if state.record_leaves(leaves, settings_sync::now()) {
+                    self.save(Blob::Library);
+                    self.reply(Reply::Changed(Blob::Library));
                 }
             }
             Request::Sync(mut job) => {
@@ -222,13 +234,16 @@ impl Worker {
         }
         let mut plan = song_sync::plan(&applied, &songs.device, &songs.store, &songs.wanted, &songs.busy, &songs.given);
         song_sync::note_device(&mut plan.leaves, &songs.device, &songs.device_name, now);
+        song_sync::note_have(&mut plan.leaves, &songs.device, &songs.store);
         let changed = state.record_leaves(plan.leaves, now);
         let devices = song_sync::devices(&state.fields);
+        let unheld = song_sync::unheld(&state.fields, &songs.device, &songs.store);
         if changed {
             self.save(Blob::Transfers);
             self.reply(Reply::Changed(Blob::Transfers));
         }
         self.reply(Reply::Devices(devices));
+        self.reply(Reply::Unheld(unheld));
         if plan.tasks.is_empty() || !songs.busy.is_empty() || songs.paused {
             return nothing;
         }

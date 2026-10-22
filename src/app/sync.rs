@@ -109,6 +109,8 @@ pub struct SyncState {
     device: Option<Device>,
     /// The devices syncing songs, as the transfers say.
     devices: Vec<song_sync::SyncedDevice>,
+    /// The songs in the library no device has, by key.
+    unheld: Vec<String>,
     /// Songs being moved through the relay, by key.
     busy: BTreeSet<String>,
     moves: (Sender<Moving>, Receiver<Moving>),
@@ -169,6 +171,7 @@ impl Default for SyncState {
             songs_dirty: false,
             device: None,
             devices: Vec::new(),
+            unheld: Vec::new(),
             busy: BTreeSet::new(),
             moves: mpsc::channel(),
             moves_paused: None,
@@ -644,6 +647,7 @@ impl App {
                 self.sync.songs_dirty = true;
             }
             songs::Reply::Devices(devices) => self.sync.devices = devices,
+            songs::Reply::Unheld(keys) => self.sync.unheld = keys,
             songs::Reply::Error(e) => self.sync.error = Some(e),
         }
     }
@@ -894,6 +898,7 @@ impl App {
             self.sync_choices_ui(ui);
             self.devices_ui(ui);
             self.blocked_songs_ui(ui);
+            self.unheld_songs_ui(ui);
             let mut debug = self.config.sync_debug;
             if ui.checkbox(&mut debug, "Show what each sync changed (for testing)").changed() {
                 self.config.sync_debug = debug;
@@ -1039,6 +1044,34 @@ impl App {
             if let Err(e) = self.songs.remove_everywhere(&key) {
                 self.status = format!("Couldn't remove a song: {e:#}");
             }
+            self.refresh_missing();
+        }
+    }
+
+    /// The songs in the library that no device has: they can be cleared
+    /// from it, on every device.
+    fn unheld_songs_ui(&mut self, ui: &mut egui::Ui) {
+        if self.sync.unheld.is_empty() || !self.syncing(Blob::Library) || !self.syncing(Blob::Transfers) {
+            return;
+        }
+        let mut clear = false;
+        let header = format!("Songs on none of your devices ({})", self.sync.unheld.len());
+        egui::CollapsingHeader::new(header).id_salt("sync_unheld").show(ui, |ui| {
+            ui.weak("Every device removed these, or only devices that are gone had them. Your library still lists them, as unavailable.");
+            clear = ui
+                .button("Clear them from your library")
+                .on_hover_text("Your other devices stop listing them too. Playlists keep them, as unavailable.")
+                .clicked();
+            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                for key in &self.sync.unheld {
+                    ui.label(self.songs.get_by_key(key).map_or(key.as_str(), |song| song.name.as_str()));
+                }
+            });
+        });
+        if clear {
+            let keys = std::mem::take(&mut self.sync.unheld);
+            self.songs.forget_absent(keys.iter().map(String::as_str));
+            self.ask_worker(songs::Request::Clear(keys));
             self.refresh_missing();
         }
     }
