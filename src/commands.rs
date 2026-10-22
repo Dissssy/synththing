@@ -239,6 +239,23 @@ pub fn display(ctx: &egui::Context, sequence: &[KeyboardShortcut]) -> String {
     sequence.iter().map(|s| ctx.format_shortcut(s)).collect::<Vec<_>>().join(" ")
 }
 
+/// Whether `key` is Shift, Ctrl, Alt or the Windows/Cmd key on its own:
+/// egui reports those as presses too, but they only ever hold a press's
+/// modifiers, never make one.
+pub fn is_modifier(key: Key) -> bool {
+    matches!(
+        key,
+        Key::ShiftLeft
+            | Key::ShiftRight
+            | Key::ControlLeft
+            | Key::ControlRight
+            | Key::AltLeft
+            | Key::AltRight
+            | Key::SuperLeft
+            | Key::SuperRight
+    )
+}
+
 /// A key pressed with `modifiers` as a press to bind: Ctrl on Windows and
 /// Linux, Cmd on a Mac, both as `Modifiers::COMMAND`.
 pub fn captured(modifiers: Modifiers, key: Key) -> KeyboardShortcut {
@@ -359,6 +376,9 @@ impl Keymap {
         let mut in_sequence = false;
         for (index, event) in input.events.iter().enumerate() {
             let egui::Event::Key { key, pressed: true, repeat, modifiers, .. } = *event else { continue };
+            if is_modifier(key) {
+                continue;
+            }
             if repeat && pending.is_some() {
                 // (A held first press repeating mustn't give up on it.)
                 taken.push(index);
@@ -533,6 +553,17 @@ mod tests {
         let raw = egui::RawInput { events: vec![key_event(Key::G, COMMAND)], ..Default::default() };
         let mut held = down.begin_pass(raw, false, 1.0, egui::InputOptions::default());
         keymap.pressed(&mut held, false, |_| true, &mut pending);
+        assert!(pending.is_some());
+        pending = None;
+
+        // Pressing Ctrl again for the next press doesn't give up on it.
+        keymap.pressed(&mut press(Key::G, COMMAND), false, |_| true, &mut pending);
+        let mut ctrl_r = input(vec![key_event(Key::ControlLeft, COMMAND), key_event(Key::R, COMMAND)]);
+        assert_eq!(keymap.pressed(&mut ctrl_r, false, |_| true, &mut pending), []);
+        assert!(pending.is_none(), "Ctrl+G Ctrl+R isn't bound, but it got as far as the R");
+        keymap.pressed(&mut press(Key::G, COMMAND), false, |_| true, &mut pending);
+        let mut ctrl = press(Key::ControlLeft, COMMAND);
+        keymap.pressed(&mut ctrl, false, |_| true, &mut pending);
         assert!(pending.is_some());
         pending = None;
 

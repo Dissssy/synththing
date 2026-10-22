@@ -69,7 +69,11 @@ impl App {
                     .events
                     .iter()
                     .filter_map(|event| match event {
-                        egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } => Some((*key, *modifiers)),
+                        egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. }
+                            if !commands::is_modifier(*key) =>
+                        {
+                            Some((*key, *modifiers))
+                        }
                         _ => None,
                     })
                     .collect();
