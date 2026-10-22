@@ -14,11 +14,13 @@ use crate::build_info;
 use crate::cleanup;
 use crate::fields::{Facts, Field};
 use crate::lookup::matching::{self, Album, Release};
-use crate::lookup::{self, Answer, Outcome, State, Tried, Worker, details};
+use crate::lookup::{self, Answer, Ask, Done, Outcome, State, Tried, Worker, details};
 use crate::song_store::Online;
 
 /// How long the lookup waits to look for work again, with none to do.
 const IDLE: Duration = Duration::from_secs(60);
+/// How long a release that couldn't be asked for again waits to be.
+const REFRESH_RETRY: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Default)]
 pub(super) struct LookupState {
@@ -37,6 +39,8 @@ pub(super) struct LookupState {
     kept: HashMap<String, Option<Release>>,
     /// The songs revision matched songs' blanks were last filled at.
     filled_at: Option<u64>,
+    /// Releases that couldn't be asked for again, and when to try again.
+    refresh_failed: HashMap<String, Instant>,
 }
 
 impl App {
@@ -69,8 +73,10 @@ impl App {
             }
         }
         let answer = self.lookup.worker.as_mut().and_then(Worker::answer);
-        if let Some((album, outcome)) = answer {
-            self.lookup_answered(&album, outcome);
+        match answer {
+            Some(Done::Album(album, outcome)) => self.lookup_answered(&album, outcome),
+            Some(Done::Release(id, release)) => self.release_refreshed(&id, release),
+            None => {}
         }
         if self.lookup.filled_at != Some(self.songs.revision()) {
             self.fill_blanks();
@@ -90,14 +96,55 @@ impl App {
         let refresh = self.lookup.refresh.pop().and_then(|id| albums.iter().find(|a| a.id == id)).cloned();
         let fresh = refresh.is_some();
         let next = refresh.or_else(|| albums.iter().find(|a| tried.get(&a.id).is_none_or(|t| t.due(now)) && lookup::wanted(&self.songs, a)).cloned());
-        match next {
-            Some(album) => {
-                log::info!("looking up {:?} by {:?} ({} songs{})", album.name, album.artist, album.songs.len(), if fresh { ", anew" } else { "" });
+        // (Then matches due for a refresh, the oldest first.)
+        let ask = next.map(|album| Ask::Album(album, fresh)).or_else(|| {
+            self.songs
+                .known()
+                .filter_map(|(_, s)| s.online.as_ref().filter(|o| now - o.at >= lookup::REFRESH).and_then(|o| Some((o.at, o.release.clone()?))))
+                .filter(|(_, release)| self.lookup.refresh_failed.get(release).is_none_or(|until| Instant::now() >= *until))
+                .min()
+                .map(|(_, release)| Ask::Release(release))
+        });
+        match ask {
+            Some(ask) => {
+                match &ask {
+                    Ask::Album(album, fresh) => {
+                        log::info!("looking up {:?} by {:?} ({} songs{})", album.name, album.artist, album.songs.len(), if *fresh { ", anew" } else { "" })
+                    }
+                    Ask::Release(id) => log::info!("asking for release {id} again"),
+                }
                 if let Some(worker) = &mut self.lookup.worker {
-                    worker.ask(album, fresh);
+                    worker.ask(ask);
                 }
             }
             None => self.lookup.idle_until = Some((revision, Instant::now() + IDLE)),
+        }
+    }
+
+    /// Take in a matched release as MusicBrainz has it now: its matches
+    /// are as of now.
+    fn release_refreshed(&mut self, id: &str, release: Result<Release, String>) {
+        match release {
+            Ok(release) => {
+                self.lookup.kept.insert(id.to_string(), Some(release));
+                let at = crate::settings_sync::now();
+                let changes = self
+                    .songs
+                    .known()
+                    .filter_map(|(key, song)| {
+                        let online = song.online.as_ref().filter(|o| o.release.as_deref() == Some(id))?;
+                        Some((key.to_string(), Some(Online { at, ..online.clone() })))
+                    })
+                    .collect();
+                self.songs.set_online(changes);
+                self.songs_changed();
+                self.lookup.error = None;
+            }
+            Err(e) => {
+                log::warn!("couldn't ask for release {id} again: {e}");
+                self.lookup.refresh_failed.insert(id.to_string(), Instant::now() + REFRESH_RETRY);
+                self.lookup.error = Some(e);
+            }
         }
     }
 
@@ -180,32 +227,42 @@ impl App {
         let busy = self.lookup.worker.as_ref().and_then(|w| w.busy.clone());
         self.lookup_albums();
         let albums = self.lookup.albums.as_ref().map(|(_, a)| a.as_slice()).unwrap_or_default();
-        let (mut matched, mut unsure, mut not_found, mut waiting) = (0, 0, 0, 0);
+        // (Albums, then songs on no album: matched, unsure, not found,
+        // to look up.)
+        let mut counts = [[0; 4]; 2];
         for album in albums {
-            if !lookup::wanted(&self.songs, album) {
-                matched += 1;
-                continue;
-            }
-            match tried.get(&album.id) {
-                Some(t) if !t.due(now) && matches!(t.found, Answer::Unsure(_)) => unsure += 1,
-                Some(t) if !t.due(now) && t.found == Answer::NotFound => not_found += 1,
-                _ => waiting += 1,
-            }
+            let counts = &mut counts[usize::from(album.loose)];
+            let at = if !lookup::wanted(&self.songs, album) {
+                0
+            } else {
+                match tried.get(&album.id) {
+                    Some(t) if !t.due(now) && matches!(t.found, Answer::Unsure(_)) => 1,
+                    Some(t) if !t.due(now) && t.found == Answer::NotFound => 2,
+                    _ => 3,
+                }
+            };
+            counts[at] += 1;
         }
-        let total = albums.len();
         let busy = busy.and_then(|id| albums.iter().find(|a| a.id == id)).map(|a| a.name.clone());
-        let mut review = false;
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!("{matched} of {total} albums matched, {unsure} unsure, {not_found} not found, {waiting} to look up."));
-            review = unsure > 0 && ui.button("Needs a look").on_hover_text("Pick the release each unsure album is, in Clean up").clicked();
-        });
-        if review {
+        let line = |name: &str, [matched, unsure, not_found, waiting]: [usize; 4]| {
+            let mut parts = vec![format!("{name}: {matched} of {} matched", matched + unsure + not_found + waiting)];
+            if unsure > 0 {
+                parts.push(format!("{unsure} unsure"));
+            }
+            parts.push(format!("{not_found} not found"));
+            parts.push(format!("{waiting} to look up"));
+            parts.join(", ")
+        };
+        ui.label(line("Albums", counts[0]));
+        ui.label(line("Songs on no album", counts[1]));
+        if counts[0][1] + counts[1][1] > 0 && ui.button("Needs a look").on_hover_text("Pick the release each unsure album or song is, in Clean up").clicked() {
             self.cleanup = Some(Default::default());
         }
         if let Some(name) = busy {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.weak(format!("Looking up {name}..."));
+                let text = format!("Looking up {name}...");
+                ui.add(egui::Label::new(egui::RichText::new(&text).weak()).truncate()).on_hover_text(text);
             });
         }
         if let Some(error) = &self.lookup.error {
@@ -218,18 +275,17 @@ impl App {
     /// and, on the device that looks albums up, to look its album up
     /// again, asking MusicBrainz anew.
     pub(super) fn online_match_ui(&mut self, ui: &mut egui::Ui, path: &std::path::Path) {
-        let Some(song) = self.songs.get(path) else {
+        let Some((key, song)) = self.songs.key(path).and_then(|k| Some((k.clone(), self.songs.get_by_key(&k)?))) else {
             return;
         };
-        let album = lookup::album_of(song, &self.config.group_ignore);
+        let album = lookup::album_of(&key, song, &self.config.group_ignore);
         let online = song.online.clone();
-        if self.looks_up()
-            && let Some(album) = album
-        {
+        if self.looks_up() {
             ui.add_space(4.0);
             let asked = self.lookup.refresh.contains(&album) || self.lookup.worker.as_ref().is_some_and(|w| w.busy.as_ref() == Some(&album));
+            let again = if album.starts_with("song:") { "Look it up again" } else { "Look up its album again" };
             let refresh = ui
-                .add_enabled(!asked, egui::Button::new(if asked { "Looking up..." } else { "Look up its album again" }))
+                .add_enabled(!asked, egui::Button::new(if asked { "Looking up..." } else { again }))
                 .on_hover_text("Ask MusicBrainz about its album again, rather than going by what was kept from last time");
             if refresh.clicked() {
                 self.lookup.refresh.push(album);

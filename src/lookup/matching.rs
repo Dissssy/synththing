@@ -5,6 +5,8 @@
 //! fits clearly better than any edition of another album that fits is
 //! taken without asking.
 
+use std::collections::HashSet;
+
 use strsim::normalized_levenshtein;
 
 /// One of the library's albums, as its songs say.
@@ -19,6 +21,8 @@ pub struct Album {
     pub songs: Vec<Song>,
     /// Releases it's been matched to and isn't (Wrong match).
     pub rejected: Vec<String>,
+    /// It's a song on no album (its one song), looked up by its recording.
+    pub loose: bool,
 }
 
 /// One of an album's songs.
@@ -298,6 +302,67 @@ pub fn decide(album: &Album, releases: &[Release]) -> Verdict {
     if rivals.is_empty() { Verdict::Match(best, fits[best].tracks.clone()) } else { Verdict::Unsure(std::iter::once(best).chain(rivals).collect()) }
 }
 
+/// A recording a search for a song found, with the releases it's on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Hit {
+    pub recording: String,
+    pub title: String,
+    /// Each artist credited.
+    pub artists: Vec<String>,
+    /// Seconds.
+    pub length: Option<f64>,
+    pub releases: Vec<HitRelease>,
+}
+
+/// A release a recording's on, as a search tells of it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HitRelease {
+    pub id: String,
+    pub official: bool,
+    /// What it is, those to take first first: an album (0), a single (1),
+    /// an EP (2), anything else (3), a compilation (`COMPILATION`).
+    pub kind: u8,
+    pub date: Option<String>,
+}
+
+/// A `HitRelease::kind`: a compilation, which a song on no album is only
+/// put on as picked.
+pub const COMPILATION: u8 = 4;
+
+/// Words that tell one version of a song from another.
+const VERSIONS: [&str; 10] = ["live", "remix", "mix", "acoustic", "instrumental", "demo", "edit", "cover", "karaoke", "version"];
+
+fn versions(title: &str) -> Vec<&'static str> {
+    let lower = title.to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).collect();
+    VERSIONS.iter().copied().filter(|v| words.contains(v)).collect()
+}
+
+/// Which of `hits` a song on no album might be, each with a release
+/// it's on, those to take first first: one named the same (the same
+/// version), by its artist, as long as it, on the first of its albums
+/// (else singles, EPs, then compilations) that's official. Stricter than
+/// an album's songs, which have each other.
+pub fn pick_recording<'h>(song: &Song, hits: &'h [Hit]) -> Vec<(usize, &'h HitRelease)> {
+    let Some(artist) = song.artist.as_deref() else { return Vec::new() };
+    let ours: Vec<&str> = artist.split([',', '&', ';', '/']).map(str::trim).filter(|n| !n.is_empty()).collect();
+    let fits = |hit: &Hit| {
+        similar(&song.title, &hit.title) >= 0.95
+            && versions(&song.title) == versions(&hit.title)
+            && hit.artists.iter().any(|a| ours.iter().any(|o| similar(o, a) >= 0.9))
+            && match (song.length, hit.length) {
+                (Some(a), Some(b)) => same_length(a, b),
+                _ => true,
+            }
+    };
+    let mut picked: Vec<(usize, &HitRelease)> =
+        hits.iter().enumerate().filter(|(_, hit)| fits(hit)).flat_map(|(i, hit)| hit.releases.iter().map(move |r| (i, r))).collect();
+    picked.sort_by_key(|(_, r)| (r.kind, !r.official, r.date.clone().unwrap_or_else(|| "9999".into())));
+    let mut seen = HashSet::new();
+    picked.retain(|(_, r)| seen.insert(&r.id));
+    picked
+}
+
 /// An album's name to search by: without its bracketed parts ("(Deluxe
 /// Edition)", "<OST>"), and what a soundtrack's called besides its game
 /// or film ("Original Soundtrack"); "<A Bird Story> OST" is "A Bird
@@ -403,7 +468,7 @@ mod tests {
     }
 
     fn album(songs: Vec<Song>) -> Album {
-        Album { id: "a".into(), name: "Modal Soul".into(), artist: Some("Nujabes".into()), songs, rejected: Vec::new() }
+        Album { id: "a".into(), name: "Modal Soul".into(), artist: Some("Nujabes".into()), songs, rejected: Vec::new(), loose: false }
     }
 
     #[test]
@@ -506,5 +571,23 @@ mod tests {
         assert_eq!(decide(&long, &releases), Verdict::NotFound, "same title, another song");
         let elsewhere = Album { name: "Spiritual State".into(), ..album(vec![song("Feather", 1, 175.0)]) };
         assert_eq!(decide(&elsewhere, &releases), Verdict::Unsure(vec![0]), "another album's song");
+    }
+
+    #[test]
+    fn a_loose_song_is_its_album_version() {
+        let ours = Song { key: "k".into(), title: "Feather".into(), artist: Some("Nujabes; Cise Starr".into()), length: Some(175.0), ..Song::default() };
+        let release = |id: &str, kind, date: &str| HitRelease { id: id.into(), official: true, kind, date: Some(date.into()) };
+        let hit = |recording: &str, title: &str, length| Hit {
+            recording: recording.into(),
+            title: title.into(),
+            artists: vec!["Nujabes".into(), "Cise Starr".into()],
+            length: Some(length),
+            releases: vec![release(&format!("{recording}-best-of"), 4, "2010"), release(&format!("{recording}-album"), 0, "2005")],
+        };
+        let hits = [hit("live", "Feather (live)", 176.0), hit("long", "Feather", 240.0), hit("c1", "Feather", 176.5)];
+        let picked = |song: &Song| pick_recording(song, &hits).into_iter().map(|(i, r)| (i, r.id.as_str())).collect::<Vec<_>>();
+        assert_eq!(picked(&ours), [(2, "c1-album"), (2, "c1-best-of")]);
+        assert_eq!(picked(&Song { artist: Some("Someone Else".into()), ..ours.clone() }), []);
+        assert_eq!(picked(&Song { artist: None, ..ours }), [], "no artist: too loose to tell");
     }
 }
