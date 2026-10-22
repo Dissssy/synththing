@@ -637,7 +637,7 @@ impl App {
             songs::Reply::Taken { blob, revision, library } => {
                 self.channel(blob).revision = revision;
                 if let Some(library) = library
-                    && song_sync::apply_library(&mut self.songs, &library)
+                    && song_sync::apply_library(&mut self.songs, library)
                 {
                     self.refresh_missing();
                 }

@@ -76,36 +76,59 @@ pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> B
     leaves
 }
 
+/// The synced library, read from its leaves (on the sync worker: reading
+/// every song takes longer than a frame once there are thousands).
+#[derive(Debug, Default)]
+pub struct SyncedLibrary {
+    removed: BTreeMap<String, Removed>,
+    tags: BTreeMap<String, Tag>,
+    together: BTreeMap<String, Vec<String>>,
+    songs: Vec<(String, Song)>,
+}
+
+/// Read the synced library from its leaves.
+pub fn read_library(fields: &Fields) -> SyncedLibrary {
+    let mut library = SyncedLibrary::default();
+    for (key, field) in fields {
+        let value = || field.value.clone();
+        if let Some(key) = key.strip_prefix(REMOVED) {
+            if let Ok(removed) = serde_json::from_value(value()) {
+                library.removed.insert(key.to_string(), removed);
+            }
+        } else if let Some(id) = key.strip_prefix(TAG) {
+            if let Ok(tag) = serde_json::from_value(value()) {
+                library.tags.insert(id.to_string(), tag);
+            }
+        } else if let Some(id) = key.strip_prefix(GROUP) {
+            if let Ok(keys) = serde_json::from_value(value()) {
+                library.together.insert(id.to_string(), keys);
+            }
+        } else if let Ok(song) = serde_json::from_value(value()) {
+            library.songs.push((key.clone(), song));
+        }
+    }
+    library
+}
+
 /// Take the synced library: every song's name, tags and what's known of
 /// it, the tags and the songs that play together (those gone from it
 /// deleted here), and the songs removed from every device. Whether any
 /// song here was removed.
-pub fn apply_library(store: &mut SongStore, fields: &Fields) -> bool {
-    let removed: BTreeMap<String, Removed> =
-        fields.iter().filter_map(|(key, field)| Some((key.strip_prefix(REMOVED)?.to_string(), serde_json::from_value(field.value.clone()).ok()?))).collect();
+pub fn apply_library(store: &mut SongStore, library: SyncedLibrary) -> bool {
+    let SyncedLibrary { removed, tags, together, songs } = library;
     let forgot = store.set_removed(removed);
-    let mut songs = Vec::new();
-    for (key, field) in fields {
-        if key.starts_with(REMOVED) {
-            continue;
-        } else if let Some(id) = key.strip_prefix(TAG) {
-            if let Ok(tag) = serde_json::from_value::<Tag>(field.value.clone()) {
-                store.set_tag(id, tag);
-            }
-        } else if let Some(id) = key.strip_prefix(GROUP) {
-            if let Ok(keys) = serde_json::from_value::<Vec<String>>(field.value.clone()) {
-                store.set_together(id, keys);
-            }
-        } else if let Ok(song) = serde_json::from_value::<Song>(field.value.clone()) {
-            songs.push((key.clone(), song));
-        }
+    for (id, tag) in &tags {
+        store.set_tag(id, tag.clone());
+    }
+    for (id, keys) in &together {
+        store.set_together(id, keys.clone());
     }
     store.learn(songs);
-    let gone: Vec<String> = store.tags().keys().filter(|id| !fields.contains_key(&format!("{TAG}{id}"))).cloned().collect();
+    let gone: Vec<String> = store.tags().keys().filter(|id| !tags.contains_key(*id)).cloned().collect();
     for id in gone {
         store.remove_tag(&id);
     }
-    let gone: Vec<String> = store.together().keys().filter(|id| !fields.contains_key(&format!("{GROUP}{id}"))).cloned().collect();
+    let gone: Vec<String> = store.together().keys().filter(|id| !together.contains_key(*id)).cloned().collect();
     for id in gone {
         store.set_together(&id, Vec::new());
     }
@@ -505,7 +528,7 @@ mod tests {
         let library = library_leaves(&desktop, &BTreeMap::new());
         assert_eq!(library[&song.key]["meta"], serde_json::json!({ "t": "Song", "n": 3, "s": 4 }), "short names");
         let fields = library.iter().map(|(k, v)| (k.clone(), crate::settings_sync::Field { value: v.clone(), changed: 1 })).collect();
-        apply_library(&mut phone, &fields);
+        apply_library(&mut phone, read_library(&fields));
         assert_eq!(phone.tags()["t1"].name, "Chill");
         assert_eq!(phone.together()["g1"], [song.key.clone(), elsewhere], "play together");
         let known = phone.known().find(|(k, _)| *k == song.key).unwrap().1.clone();
@@ -569,7 +592,7 @@ mod tests {
         let mut phone = SongStore::open(phone_dir.clone());
         phone.add(song_store::write_in(b"song", "Song.mid", &phone_dir).unwrap());
         let synced = library_leaves(&desktop, &BTreeMap::new());
-        apply_library(&mut phone, &fields(&synced));
+        apply_library(&mut phone, read_library(&fields(&synced)));
 
         // The desktop removes it everywhere: the library says so, and no
         // longer has the song.
@@ -578,14 +601,14 @@ mod tests {
         assert!(!removed.contains_key(&song.key));
         assert_eq!(removed[&format!("removed/{}", song.key)]["name"], "Song.mid");
         // The phone forgets it, and doesn't want it back.
-        assert!(apply_library(&mut phone, &fields(&removed)));
+        assert!(apply_library(&mut phone, read_library(&fields(&removed))));
         assert!(!phone.has(&song.key) && !song_store::path_of(&phone_dir, &song.key).exists());
         assert_eq!(phone.known().count(), 0);
         assert_eq!(library_leaves(&phone, &removed), removed, "nothing new to say");
         let (playlists, _) = Library::load(root.join("playlists"), phone_dir.clone());
         phone.know(&song.key, "Song.mid");
         assert!(wanted(&phone, &playlists, Wants { starred: false, every: true }).is_empty());
-        assert!(!apply_library(&mut phone, &fields(&removed)), "already gone");
+        assert!(!apply_library(&mut phone, read_library(&fields(&removed))), "already gone");
         // A song only removed here can be removed everywhere later.
         let other = song_store::write_in(b"other", "Other.mid", &phone_dir).unwrap();
         phone.add(other.clone());
@@ -598,7 +621,7 @@ mod tests {
         phone.add(song_store::write_in(b"song", "Again.mid", &phone_dir).unwrap());
         let back = library_leaves(&phone, &removed);
         assert!(back.contains_key(&song.key) && !back.contains_key(&format!("removed/{}", song.key)));
-        apply_library(&mut desktop, &fields(&back));
+        apply_library(&mut desktop, read_library(&fields(&back)));
         assert!(!desktop.is_removed(&song.key));
         assert_eq!(wanted(&desktop, &playlists, Wants { starred: false, every: true }), BTreeSet::from([song.key.clone()]));
         let _ = std::fs::remove_dir_all(&root);
