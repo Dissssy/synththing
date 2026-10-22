@@ -16,10 +16,12 @@ pub mod details;
 pub mod matching;
 mod musicbrainz;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
+use std::time::Instant;
 
+use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use crate::fields::{self, Facts, Field};
@@ -320,8 +322,22 @@ fn log_candidates(album: &Album, releases: &[Release], verdict: Verdict) -> Verd
     verdict
 }
 
+/// What the lookup thread works out its next ask from: a copy of the
+/// songs, and what the UI thread knows.
+pub struct Plan {
+    pub store: SongStore,
+    /// The albums tried and not matched (`State::tried`).
+    pub tried: BTreeMap<String, Tried>,
+    /// An album (by id) to look up first, asking MusicBrainz anew.
+    pub refresh: Option<String>,
+    /// Releases and artists (as "artist:{id}") that couldn't be asked
+    /// for, and when to try again.
+    pub failed: HashMap<String, Instant>,
+    pub ignore: String,
+}
+
 /// What the lookup thread is asked to do.
-pub enum Ask {
+enum Ask {
     /// Look an album up, asking MusicBrainz anew (not what's kept) if
     /// `fresh`.
     Album(Album, bool),
@@ -331,67 +347,207 @@ pub enum Ask {
     Artist(String),
 }
 
+impl Ask {
+    /// What it's about, for `Worker::busy`: the album's id, or the
+    /// release or artist.
+    fn id(&self) -> String {
+        match self {
+            Ask::Album(album, _) => album.id.clone(),
+            Ask::Release(id) => format!("release:{id}"),
+            Ask::Artist(id) => format!("artist:{id}"),
+        }
+    }
+}
+
+/// A matched song's fields as its release has them, to fill its blanks
+/// in from, if it's still matched to it and not filled in yet.
+pub struct Fill {
+    pub key: String,
+    pub release: String,
+    pub said: Vec<(Field, String)>,
+}
+
+/// What a plan came to.
+pub struct Planned {
+    /// The songs revision it was made at.
+    pub revision: u64,
+    /// The library's albums, as of then.
+    pub albums: Arc<Vec<Album>>,
+    /// Matched songs' blanks to fill in.
+    pub fills: Vec<Fill>,
+    /// What's being asked for now (`Ask::id`); `None`: nothing to do.
+    pub asking: Option<String>,
+}
+
 /// What it did.
 pub enum Done {
-    Album(Album, Outcome),
+    Planned(Planned),
+    /// An album looked up, and (if it matched) its songs' blanks to fill.
+    Album(Album, Outcome, Vec<Fill>),
     Release(String, Result<Release, String>),
     Artist(String, Result<artists::Artist, String>),
 }
 
-/// The lookup thread: an album (or release) at a time, asked for and
-/// answered.
+/// The lookup thread: given a copy of the songs, it works out what to
+/// ask for next (and the blanks to fill in) and asks for it, so none of
+/// that holds the window up.
 pub struct Worker {
-    ask: mpsc::Sender<Ask>,
+    plan: mpsc::Sender<Plan>,
     answers: mpsc::Receiver<Done>,
-    /// What it's doing: the album (by id) being looked up, or the release.
+    /// A plan's being worked out.
+    planning: bool,
+    /// What it's asking for: the album (by id) being looked up, or the
+    /// release or artist.
     pub busy: Option<String>,
 }
 
 impl Worker {
-    pub fn start() -> std::io::Result<Self> {
-        let (ask, asked) = mpsc::channel::<Ask>();
+    pub fn start(kept: Kept, repaint: egui::Context) -> std::io::Result<Self> {
+        let (plan, plans) = mpsc::channel::<Plan>();
         let (answer, answers) = mpsc::channel();
         std::thread::Builder::new().name("online lookup".into()).spawn(move || {
             let mut musicbrainz = musicbrainz::MusicBrainz::new();
-            for ask in asked {
+            let send = |done: Done| {
+                let sent = answer.send(done).is_ok();
+                repaint.request_repaint();
+                sent
+            };
+            for plan in plans {
+                let genres = details::Genres::of(&plan.store, &plan.ignore);
+                let fills = unfilled(&plan.store, &kept, &genres, &plan.ignore);
+                let albums = Arc::new(albums(&plan.store, &plan.ignore));
+                let ask = next(&plan, &kept, &albums);
+                let planned = Planned { revision: plan.store.revision(), albums: Arc::clone(&albums), fills, asking: ask.as_ref().map(Ask::id) };
+                if !send(Done::Planned(planned)) {
+                    return;
+                }
+                let Some(ask) = ask else { continue };
                 let done = match ask {
                     Ask::Album(album, fresh) => {
+                        log::info!("looking up {:?} by {:?} ({} songs{})", album.name, album.artist, album.songs.len(), if fresh { ", anew" } else { "" });
                         let outcome = look_up(&mut musicbrainz, &album, fresh);
-                        Done::Album(album, outcome)
+                        let fills = match &outcome {
+                            Outcome::Matched(release, tracks) => album_fills(&plan.store, &album, release, tracks, &genres, &plan.ignore),
+                            _ => Vec::new(),
+                        };
+                        Done::Album(album, outcome, fills)
                     }
                     Ask::Release(id) => {
+                        log::info!("asking for release {id} again");
                         let release = musicbrainz.fresh_release(&id).map_err(|e| format!("{e:#}"));
                         Done::Release(id, release)
                     }
                     Ask::Artist(id) => {
+                        log::info!("asking for artist {id}");
                         let artist = musicbrainz.artist(&id).map_err(|e| format!("{e:#}"));
                         Done::Artist(id, artist)
                     }
                 };
-                if answer.send(done).is_err() {
+                if !send(done) {
                     return;
                 }
             }
         })?;
-        Ok(Self { ask, answers, busy: None })
+        Ok(Self { plan, answers, planning: false, busy: None })
     }
 
-    pub fn ask(&mut self, ask: Ask) {
-        self.busy = Some(match &ask {
-            Ask::Album(album, _) => album.id.clone(),
-            Ask::Release(id) => format!("release:{id}"),
-            Ask::Artist(id) => format!("artist:{id}"),
-        });
-        if self.ask.send(ask).is_err() {
-            self.busy = None;
-        }
+    /// Work out what to do next, and do it.
+    pub fn plan(&mut self, plan: Plan) {
+        self.planning = self.plan.send(plan).is_ok();
+    }
+
+    /// It's planning or asking.
+    pub fn working(&self) -> bool {
+        self.planning || self.busy.is_some()
     }
 
     pub fn answer(&mut self) -> Option<Done> {
         let answer = self.answers.try_recv().ok()?;
-        self.busy = None;
+        match &answer {
+            Done::Planned(planned) => {
+                self.planning = false;
+                self.busy = planned.asking.clone();
+            }
+            _ => self.busy = None,
+        }
         Some(answer)
     }
+}
+
+/// `store`'s matched songs (by key), with their releases and
+/// recordings: those `wanted`.
+pub fn matched(store: &SongStore, wanted: impl Fn(&song_store::Online) -> bool) -> Vec<(String, String, Option<String>)> {
+    store
+        .known()
+        .filter_map(|(key, song)| {
+            let online = song.online.as_ref().filter(|o| wanted(o))?;
+            Some((key.to_string(), online.release.clone()?, online.recording.clone()))
+        })
+        .collect()
+}
+
+/// The fills for `store`'s matched songs not filled in yet (from their
+/// releases as `kept`).
+fn unfilled(store: &SongStore, kept: &Kept, genres: &details::Genres, ignore: &str) -> Vec<Fill> {
+    matched(store, |o| o.filled.is_none())
+        .into_iter()
+        .filter_map(|(key, release, recording)| {
+            let release = kept.release(&release)?;
+            let said = details::said(&release, details::track(&release, recording.as_deref()), genres, ignore);
+            Some(Fill { key, release: release.id.clone(), said })
+        })
+        .collect()
+}
+
+/// The fills for `album`'s songs just matched to `release` (each to its
+/// track, by index), but those already filled in from it.
+fn album_fills(store: &SongStore, album: &Album, release: &Release, tracks: &[Option<usize>], genres: &details::Genres, ignore: &str) -> Vec<Fill> {
+    album
+        .songs
+        .iter()
+        .zip(tracks)
+        .filter(|(song, _)| {
+            let online = store.get_by_key(&song.key).and_then(|s| s.online.as_ref());
+            !online.is_some_and(|o| o.release.as_ref() == Some(&release.id) && o.filled.is_some())
+        })
+        .map(|(song, track)| {
+            let recording = track.and_then(|t| release.tracks[t].recording.as_deref());
+            let said = details::said(release, details::track(release, recording), genres, ignore);
+            Fill { key: song.key.clone(), release: release.id.clone(), said }
+        })
+        .collect()
+}
+
+/// What to ask for next: the album to look up anew, else the next album
+/// due, then artists matched songs credit not asked for yet, then
+/// matches due for a refresh, the oldest first.
+fn next(plan: &Plan, kept: &Kept, albums: &[Album]) -> Option<Ask> {
+    let now = crate::settings_sync::now();
+    let not_failed = |id: &str| plan.failed.get(id).is_none_or(|until| Instant::now() >= *until);
+    if let Some(album) = plan.refresh.as_ref().and_then(|id| albums.iter().find(|a| a.id == *id)) {
+        return Some(Ask::Album(album.clone(), true));
+    }
+    let store = &plan.store;
+    albums
+        .iter()
+        .find(|a| plan.tried.get(&a.id).is_none_or(|t| t.due(now)) && wanted(store, a))
+        .map(|album| Ask::Album(album.clone(), false))
+        .or_else(|| {
+            let ids: BTreeSet<String> = matched(store, |_| true).into_iter().map(|(_, release, _)| release).collect();
+            let releases: Vec<Arc<Release>> = ids.iter().filter_map(|id| kept.release(id)).collect();
+            artists::credited(releases.iter().map(|r| &**r))
+                .into_iter()
+                .find(|id| kept.artist(id).is_none() && not_failed(&format!("artist:{id}")))
+                .map(|id| Ask::Artist(id.to_string()))
+        })
+        .or_else(|| {
+            store
+                .known()
+                .filter_map(|(_, s)| s.online.as_ref().filter(|o| now - o.at >= REFRESH).and_then(|o| Some((o.at, o.release.clone()?))))
+                .filter(|(_, release)| not_failed(release))
+                .min()
+                .map(|(_, release)| Ask::Release(release))
+        })
 }
 
 /// What a lookup makes of `album`: a song on no album by its recording,

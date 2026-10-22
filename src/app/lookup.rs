@@ -15,9 +15,9 @@ use super::App;
 use crate::build_info;
 use crate::cleanup;
 use crate::fields::{Facts, Field};
-use crate::lookup::artists::{self, Tied};
+use crate::lookup::artists::Tied;
 use crate::lookup::matching::{self, Album, Release};
-use crate::lookup::{self, Answer, Ask, Done, Kept, Outcome, State, Tried, Worker, details};
+use crate::lookup::{self, Answer, Done, Fill, Kept, Outcome, Plan, State, Tried, Worker, details};
 use crate::song_store::{Online, Song, SongStore};
 
 /// How long the lookup waits to look for work again, with none to do.
@@ -29,8 +29,9 @@ const REFRESH_RETRY: Duration = Duration::from_secs(60 * 60);
 pub(super) struct LookupState {
     worker: Option<Worker>,
     state: Option<State>,
-    /// The library's albums, as of a songs revision.
-    albums: Option<(u64, Vec<Album>)>,
+    /// The library's albums, as of a songs revision (as the lookup
+    /// thread last worked them out).
+    albums: Option<(u64, Arc<Vec<Album>>)>,
     /// When to look for work again, with none found.
     idle_until: Option<(u64, Instant)>,
     /// Why the last lookup failed.
@@ -39,14 +40,9 @@ pub(super) struct LookupState {
     refresh: Vec<String>,
     /// Releases and artists as the lookup kept them.
     pub kept: Kept,
-    /// The songs revision matched songs' blanks were last filled at.
-    filled_at: Option<u64>,
     /// Releases (and artists, as "artist:{id}") that couldn't be asked
     /// for, and when to try again.
     refresh_failed: HashMap<String, Instant>,
-    /// The artists matched songs credit who aren't kept, as of a songs
-    /// revision: to ask for.
-    artists_due: Option<(u64, Vec<String>)>,
     /// How many artists have been asked for (so Clean up's made anew).
     pub artists_asked: u64,
 }
@@ -57,21 +53,14 @@ impl App {
         build_info::online(build_info::Online::Lookup) && self.config.online_lookup && self.config.lookup_device.as_deref() == Some(self.device_id())
     }
 
-    /// Work out the library's albums again, if its songs changed.
-    fn lookup_albums(&mut self) {
-        let revision = self.songs.revision();
-        if self.lookup.albums.as_ref().is_none_or(|(r, _)| *r != revision) {
-            self.lookup.albums = Some((revision, lookup::albums(&self.songs, &self.config.group_ignore)));
-        }
-    }
-
-    /// Take in a lookup's answer, and start the next album's. Once a frame.
-    pub(super) fn lookup_tick(&mut self) {
+    /// Take in the lookup thread's answers, and have it plan the next
+    /// ask (from a copy of the songs) once it's done. Once a frame.
+    pub(super) fn lookup_tick(&mut self, ctx: &egui::Context) {
         if !self.looks_up() {
             return;
         }
         if self.lookup.worker.is_none() {
-            match Worker::start() {
+            match Worker::start(self.lookup.kept.clone(), ctx.clone()) {
                 Ok(worker) => self.lookup.worker = Some(worker),
                 Err(e) => {
                     log::warn!("couldn't start the online lookup: {e}");
@@ -80,85 +69,46 @@ impl App {
                 }
             }
         }
-        let answer = self.lookup.worker.as_mut().and_then(Worker::answer);
-        match answer {
-            Some(Done::Album(album, outcome)) => self.lookup_answered(&album, outcome),
-            Some(Done::Release(id, release)) => self.release_refreshed(&id, release),
-            Some(Done::Artist(id, Ok(artist))) => {
-                self.lookup.kept.keep_artist(artist);
-                if let Some((_, due)) = &mut self.lookup.artists_due {
-                    due.retain(|d| *d != id);
+        while let Some(answer) = self.lookup.worker.as_mut().and_then(Worker::answer) {
+            match answer {
+                Done::Planned(planned) => {
+                    self.fill_blanks(planned.fills);
+                    if planned.asking.is_none() {
+                        self.lookup.idle_until = Some((planned.revision, Instant::now() + IDLE));
+                    }
+                    self.lookup.albums = Some((planned.revision, planned.albums));
                 }
-                self.lookup.artists_asked += 1;
-                self.lookup.error = None;
+                Done::Album(album, outcome, fills) => self.lookup_answered(&album, outcome, fills),
+                Done::Release(id, release) => self.release_refreshed(&id, release),
+                Done::Artist(_, Ok(artist)) => {
+                    self.lookup.kept.keep_artist(artist);
+                    self.lookup.artists_asked += 1;
+                    self.lookup.error = None;
+                }
+                Done::Artist(id, Err(e)) => {
+                    log::warn!("couldn't ask for artist {id}: {e}");
+                    self.lookup.refresh_failed.insert(format!("artist:{id}"), Instant::now() + REFRESH_RETRY);
+                    self.lookup.error = Some(e);
+                }
             }
-            Some(Done::Artist(id, Err(e))) => {
-                log::warn!("couldn't ask for artist {id}: {e}");
-                self.lookup.refresh_failed.insert(format!("artist:{id}"), Instant::now() + REFRESH_RETRY);
-                self.lookup.error = Some(e);
-            }
-            None => {}
         }
-        if self.lookup.filled_at != Some(self.songs.revision()) {
-            self.fill_blanks();
-            self.lookup.filled_at = Some(self.songs.revision());
-        }
-        if self.lookup.worker.as_ref().is_some_and(|w| w.busy.is_some()) {
+        if self.lookup.worker.as_ref().is_some_and(Worker::working) {
             return;
         }
         let revision = self.songs.revision();
         if self.lookup.idle_until.is_some_and(|(r, until)| r == revision && Instant::now() < until) {
             return;
         }
-        let now = crate::settings_sync::now();
-        self.lookup_albums();
-        let tried = &self.lookup.state.get_or_insert_with(State::load).tried;
-        let albums = self.lookup.albums.as_ref().map(|(_, a)| a.as_slice()).unwrap_or_default();
-        let refresh = self.lookup.refresh.pop().and_then(|id| albums.iter().find(|a| a.id == id)).cloned();
-        let fresh = refresh.is_some();
-        let next = refresh.or_else(|| albums.iter().find(|a| tried.get(&a.id).is_none_or(|t| t.due(now)) && lookup::wanted(&self.songs, a)).cloned());
-        // (Then artists not asked for yet, then matches due for a
-        // refresh, the oldest first.)
-        let ask = next.map(|album| Ask::Album(album, fresh)).or_else(|| self.artist_due().map(Ask::Artist)).or_else(|| {
-            self.songs
-                .known()
-                .filter_map(|(_, s)| s.online.as_ref().filter(|o| now - o.at >= lookup::REFRESH).and_then(|o| Some((o.at, o.release.clone()?))))
-                .filter(|(_, release)| self.lookup.refresh_failed.get(release).is_none_or(|until| Instant::now() >= *until))
-                .min()
-                .map(|(_, release)| Ask::Release(release))
-        });
-        match ask {
-            Some(ask) => {
-                match &ask {
-                    Ask::Album(album, fresh) => {
-                        log::info!("looking up {:?} by {:?} ({} songs{})", album.name, album.artist, album.songs.len(), if *fresh { ", anew" } else { "" })
-                    }
-                    Ask::Release(id) => log::info!("asking for release {id} again"),
-                    Ask::Artist(id) => log::info!("asking for artist {id}"),
-                }
-                if let Some(worker) = &mut self.lookup.worker {
-                    worker.ask(ask);
-                }
-            }
-            None => self.lookup.idle_until = Some((revision, Instant::now() + IDLE)),
+        let plan = Plan {
+            store: self.songs.clone(),
+            tried: self.lookup.state.get_or_insert_with(State::load).tried.clone(),
+            refresh: self.lookup.refresh.pop(),
+            failed: self.lookup.refresh_failed.clone(),
+            ignore: self.config.group_ignore.clone(),
+        };
+        if let Some(worker) = &mut self.lookup.worker {
+            worker.plan(plan);
         }
-    }
-
-    /// An artist matched songs credit who isn't kept, to ask for (the
-    /// list worked out once for each songs revision).
-    fn artist_due(&mut self) -> Option<String> {
-        let revision = self.songs.revision();
-        if self.lookup.artists_due.as_ref().is_none_or(|(r, _)| *r != revision) {
-            let kept = &self.lookup.kept;
-            let ids: std::collections::BTreeSet<String> = matched(&self.songs, |_| true).into_iter().map(|(_, release, _)| release).collect();
-            let releases: Vec<Arc<Release>> = ids.iter().filter_map(|id| kept.release(id)).collect();
-            let due = artists::credited(releases.iter().map(|r| &**r)).into_iter().filter(|id| kept.artist(id).is_none()).map(str::to_string).collect();
-            self.lookup.artists_due = Some((revision, due));
-        }
-        let now = Instant::now();
-        let failed = &self.lookup.refresh_failed;
-        let (_, due) = self.lookup.artists_due.as_ref()?;
-        due.iter().find(|id| failed.get(&format!("artist:{id}")).is_none_or(|until| now >= *until)).cloned()
     }
 
     /// Take in a matched release as MusicBrainz has it now: its matches
@@ -188,7 +138,7 @@ impl App {
         }
     }
 
-    fn lookup_answered(&mut self, album: &Album, outcome: Outcome) {
+    fn lookup_answered(&mut self, album: &Album, outcome: Outcome, fills: Vec<Fill>) {
         let at = crate::settings_sync::now();
         let tried = match outcome {
             Outcome::Matched(release, tracks) => {
@@ -197,6 +147,7 @@ impl App {
                 self.lookup.kept.keep_release(*release);
                 self.songs.set_online(matches);
                 self.songs_changed();
+                self.fill_blanks(fills);
                 self.lookup.error = None;
                 None
             }
@@ -265,8 +216,8 @@ impl App {
         let now = crate::settings_sync::now();
         let tried = self.lookup.state.get_or_insert_with(State::load).tried.clone();
         let busy = self.lookup.worker.as_ref().and_then(|w| w.busy.clone());
-        self.lookup_albums();
-        let albums = self.lookup.albums.as_ref().map(|(_, a)| a.as_slice()).unwrap_or_default();
+        let albums = self.lookup.albums.as_ref().map(|(_, a)| Arc::clone(a)).unwrap_or_default();
+        let albums = albums.as_slice();
         // (Albums, then songs on no album: matched, unsure, not found,
         // to look up.)
         let mut counts = [[0; 4]; 2];
@@ -399,21 +350,19 @@ impl App {
         self.looks_up().then(|| self.lookup.state.get_or_insert_with(State::load).tried.clone())
     }
 
-    /// Fill in matched songs' blank fields from their releases (as kept),
-    /// once for each match.
-    fn fill_blanks(&mut self) {
-        let ignore = self.config.group_ignore.clone();
-        if !self.songs.known().any(|(_, s)| s.online.as_ref().is_some_and(|o| o.release.is_some() && o.filled.is_none())) {
-            return;
-        }
-        let genres = details::Genres::of(&self.songs, &ignore);
-        let mut fills = Vec::new();
-        for (key, release, recording) in matched(&self.songs, |o| o.filled.is_none()) {
-            let Some(release) = self.lookup.kept.release(&release) else { continue };
-            let Some(song) = self.songs.get_by_key(&key) else { continue };
-            let said = details::said(&release, details::track(&release, recording.as_deref()), &genres, &ignore);
-            fills.push((key, details::compare(&Facts::of(song), &said, &ignore).blank));
-        }
+    /// Fill in matched songs' blank fields from their releases (as the
+    /// lookup thread read them), for those still matched to them and not
+    /// filled in yet: once for each match.
+    fn fill_blanks(&mut self, fills: Vec<Fill>) {
+        let ignore = &self.config.group_ignore;
+        let fills: Vec<_> = fills
+            .into_iter()
+            .filter_map(|fill| {
+                let song = self.songs.get_by_key(&fill.key)?;
+                let unfilled = song.online.as_ref().is_some_and(|o| o.release.as_deref() == Some(fill.release.as_str()) && o.filled.is_none());
+                unfilled.then(|| (fill.key, details::compare(&Facts::of(song), &fill.said, ignore).blank))
+            })
+            .collect();
         if !fills.is_empty() {
             log::info!("filling in {} matched songs' blanks", fills.len());
             self.songs.fill(fills);
@@ -452,21 +401,9 @@ impl App {
     }
 }
 
-/// `store`'s matched songs (by key), with their releases and
-/// recordings: those `wanted`.
-fn matched(store: &SongStore, wanted: impl Fn(&Online) -> bool) -> Vec<(String, String, Option<String>)> {
-    store
-        .known()
-        .filter_map(|(key, song)| {
-            let online = song.online.as_ref().filter(|o| wanted(o))?;
-            Some((key.to_string(), online.release.clone()?, online.recording.clone()))
-        })
-        .collect()
-}
-
 /// `store`'s matched songs, with their releases as `kept` and recordings.
 fn matched_releases<'s>(store: &'s SongStore, kept: &Kept) -> Vec<(String, &'s Song, Arc<Release>, Option<String>)> {
-    matched(store, |_| true)
+    lookup::matched(store, |_| true)
         .into_iter()
         .filter_map(|(key, release, recording)| Some((key.clone(), store.get_by_key(&key)?, kept.release(&release)?, recording)))
         .collect()

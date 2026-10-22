@@ -3924,7 +3924,7 @@ impl App {
         frame_timing::time("poll_pairing", || self.poll_pairing());
         frame_timing::time("poll_notifications", || self.poll_notifications(ctx));
         frame_timing::time("poll_sync", || self.poll_sync());
-        frame_timing::time("lookup_tick", || self.lookup_tick());
+        frame_timing::time("lookup_tick", || self.lookup_tick(ctx));
         if self.songs_moving().is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
