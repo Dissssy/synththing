@@ -81,9 +81,12 @@ pub struct Release {
     pub discs: u32,
 }
 
-/// An artist credited, and what they sort as.
+/// An artist credited: who (their MusicBrainz id), the name they're
+/// credited as there, their own name, and what it sorts as.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Credit {
+    pub id: String,
+    pub credited: String,
     pub name: String,
     pub sort: String,
 }

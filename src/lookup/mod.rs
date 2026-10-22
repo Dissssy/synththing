@@ -6,9 +6,12 @@
 //! this device only) and tried again later.
 //! A song on no album is looked up by its recording instead
 //! (`matching::pick_recording`), and a match's release is asked for again
-//! every six months (`REFRESH`), for what's changed since.
+//! every six months (`REFRESH`), for what's changed since. Each artist
+//! matched songs credit is asked for once, for the names they go by
+//! (`artists`).
 
 pub mod art;
+pub mod artists;
 pub mod details;
 pub mod matching;
 mod musicbrainz;
@@ -202,6 +205,12 @@ pub fn kept_release(id: &str) -> Option<Release> {
     musicbrainz::kept_release(id)
 }
 
+/// The artist `id`, with their aliases, as MusicBrainz said when they
+/// were asked for (on this device).
+pub fn kept_artist(id: &str) -> Option<artists::Artist> {
+    musicbrainz::kept_artist(id)
+}
+
 /// An album the lookup tried and didn't match, when, and what it found.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Tried {
@@ -286,12 +295,15 @@ pub enum Ask {
     Album(Album, bool),
     /// Ask for a matched release again, for what's changed since.
     Release(String),
+    /// Ask for an artist (by id), for the names they go by.
+    Artist(String),
 }
 
 /// What it did.
 pub enum Done {
     Album(Album, Outcome),
     Release(String, Result<Release, String>),
+    Artist(String, Result<artists::Artist, String>),
 }
 
 /// The lookup thread: an album (or release) at a time, asked for and
@@ -319,6 +331,10 @@ impl Worker {
                         let release = musicbrainz.fresh_release(&id).map_err(|e| format!("{e:#}"));
                         Done::Release(id, release)
                     }
+                    Ask::Artist(id) => {
+                        let artist = musicbrainz.artist(&id).map_err(|e| format!("{e:#}"));
+                        Done::Artist(id, artist)
+                    }
                 };
                 if answer.send(done).is_err() {
                     return;
@@ -332,6 +348,7 @@ impl Worker {
         self.busy = Some(match &ask {
             Ask::Album(album, _) => album.id.clone(),
             Ask::Release(id) => format!("release:{id}"),
+            Ask::Artist(id) => format!("artist:{id}"),
         });
         if self.ask.send(ask).is_err() {
             self.busy = None;

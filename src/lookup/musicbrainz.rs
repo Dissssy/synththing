@@ -9,6 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use musicbrainz_rs::MusicBrainzClient;
+use musicbrainz_rs::entity::artist::Artist as ArtistEntity;
 use musicbrainz_rs::entity::artist_credit::ArtistCredit;
 use musicbrainz_rs::entity::genre::Genre;
 use musicbrainz_rs::entity::recording::Recording;
@@ -21,6 +22,7 @@ use serde::de::DeserializeOwned;
 use sha2::Digest;
 
 use super::Outcome;
+use super::artists::Artist;
 use super::matching::{self, Album, Credit, Hit, HitRelease, Release, Track};
 
 /// How many search hits are looked at.
@@ -83,6 +85,11 @@ fn cache() -> Cache {
 /// asked for again when its match is refreshed, `lookup::REFRESH`).
 pub fn kept_release(id: &str) -> Option<Release> {
     cache().get_any::<Entity>("release", id).map(|e| converted(&e))
+}
+
+/// The artist `id` as they were kept, if they were.
+pub fn kept_artist(id: &str) -> Option<Artist> {
+    cache().get_any::<ArtistEntity>("artist", id).map(|a| artist(&a))
 }
 
 impl MusicBrainz {
@@ -158,6 +165,14 @@ impl MusicBrainz {
         Ok(converted(&self.release(id, true)?))
     }
 
+    /// The artist `id`, with their aliases (and kept).
+    pub fn artist(&mut self, id: &str) -> Result<Artist> {
+        self.wait_turn();
+        let entity = ArtistEntity::fetch().id(id).with_aliases().execute_with_client(&self.client).with_context(|| format!("fetching artist {id}"))?;
+        self.cache.put("artist", id, &entity);
+        Ok(artist(&entity))
+    }
+
     /// The release `id`, with its tracks and genres: kept, unless `fresh`.
     fn release(&mut self, id: &str, fresh: bool) -> Result<Entity> {
         if !fresh && let Some(release) = self.cache.get::<Entity>("release", id) {
@@ -225,16 +240,23 @@ fn quoted(text: &str) -> String {
 }
 
 /// MusicBrainz's Various Artists.
-const VARIOUS_ARTISTS: &str = "89ad4ac3-39f7-470e-963a-56509c546377";
+pub(super) const VARIOUS_ARTISTS: &str = "89ad4ac3-39f7-470e-963a-56509c546377";
+
+fn artist(entity: &ArtistEntity) -> Artist {
+    Artist { id: entity.id.clone(), name: entity.name.clone(), aliases: entity.aliases.iter().flatten().map(|a| a.name.clone()).collect() }
+}
 
 /// A credit as it reads: each name, then its join phrase.
 fn credit(credits: &[ArtistCredit]) -> String {
     credits.iter().map(|c| format!("{}{}", c.name, c.joinphrase.as_deref().unwrap_or(""))).collect()
 }
 
-/// Each artist credited, by name.
+/// Each artist credited.
 fn credits(credits: &[ArtistCredit]) -> Vec<Credit> {
-    credits.iter().map(|c| Credit { name: c.name.clone(), sort: c.artist.sort_name.clone() }).collect()
+    credits
+        .iter()
+        .map(|c| Credit { id: c.artist.id.clone(), credited: c.name.clone(), name: c.artist.name.clone(), sort: c.artist.sort_name.clone() })
+        .collect()
 }
 
 /// A recording a search found, as matching sees it.
