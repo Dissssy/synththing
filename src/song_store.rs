@@ -39,7 +39,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -235,9 +234,7 @@ pub struct Stored {
 #[derive(Clone)]
 pub struct SongStore {
     dir: PathBuf,
-    /// (Shared with copies of the store, as `SongStore::clone` takes
-    /// them for work off the UI thread, until it's changed.)
-    songs: Arc<BTreeMap<String, Song>>,
+    songs: BTreeMap<String, Song>,
     /// The keys whose files are here.
     present: BTreeSet<String>,
     /// The keys removed here, not to be fetched again.
@@ -253,10 +250,6 @@ pub struct SongStore {
 }
 
 impl SongStore {
-    fn songs_mut(&mut self) -> &mut BTreeMap<String, Song> {
-        Arc::make_mut(&mut self.songs)
-    }
-
     /// The store in `dir`, as it is on disk.
     pub fn open(dir: PathBuf) -> Self {
         let mut songs: BTreeMap<String, Song> = std::fs::read_to_string(dir.join(INDEX))
@@ -288,7 +281,7 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{REMOVED}: {e}")).ok())
             .unwrap_or_default();
-        let mut store = Self { dir, songs: Arc::new(songs), present, blocked, removed, tags, together, revision: 0 };
+        let mut store = Self { dir, songs, present, blocked, removed, tags, together, revision: 0 };
         // (A file that couldn't be deleted when it was removed everywhere,
         // or found again: it goes now.)
         let leftover: Vec<String> = store.removed.keys().filter(|key| store.songs.contains_key(*key)).cloned().collect();
@@ -315,7 +308,7 @@ impl SongStore {
     /// Record a file now in the store (keeping what's known of it if it
     /// was already there), and save.
     pub fn add(&mut self, stored: Stored) {
-        let song = self.songs_mut().entry(stored.key.clone()).or_insert_with(|| Song::new(stored.name.clone()));
+        let song = self.songs.entry(stored.key.clone()).or_insert_with(|| Song::new(stored.name.clone()));
         // (Found on disk with nothing known of it: named after its key.)
         if song.name == stored.key {
             song.name = stored.name;
@@ -336,7 +329,7 @@ impl SongStore {
         if !is_key(key) || self.songs.contains_key(key) || self.removed.contains_key(key) {
             return;
         }
-        self.songs_mut().insert(key.to_string(), Song::new(name.to_string()));
+        self.songs.insert(key.to_string(), Song::new(name.to_string()));
         self.save();
     }
 
@@ -350,7 +343,7 @@ impl SongStore {
             if !is_key(&key) || self.removed.contains_key(&key) {
                 continue;
             }
-            let song = self.songs_mut().entry(key).or_insert_with(|| Song::new(synced.name.clone()));
+            let song = self.songs.entry(key).or_insert_with(|| Song::new(synced.name.clone()));
             // (What a newer version read is kept over an older one's.)
             let meta = match (synced.meta, &song.meta) {
                 (Some(synced), Some(here)) if here.version > synced.version => Some(here.clone()),
@@ -378,7 +371,7 @@ impl SongStore {
     pub fn note_meta(&mut self, metas: impl IntoIterator<Item = (String, Meta)>) -> bool {
         let mut changed = false;
         for (key, meta) in metas {
-            if let Some(song) = self.songs_mut().get_mut(&key).filter(|s| s.meta.as_ref().is_none_or(|m| m.version < meta.version)) {
+            if let Some(song) = self.songs.get_mut(&key).filter(|s| s.meta.as_ref().is_none_or(|m| m.version < meta.version)) {
                 song.meta = Some(meta);
                 changed = true;
             }
@@ -471,7 +464,7 @@ impl SongStore {
             }
         }
         self.present.remove(key);
-        self.songs_mut().remove(key);
+        self.songs.remove(key);
         if self.blocked.remove(key) {
             self.save_blocked();
         }
@@ -540,7 +533,7 @@ impl SongStore {
             self.save_tags();
         }
         let mut changed = false;
-        for song in self.songs_mut().values_mut() {
+        for song in self.songs.values_mut() {
             let before = song.tags.len();
             song.tags.retain(|t| t != id);
             changed |= song.tags.len() != before;
@@ -554,7 +547,7 @@ impl SongStore {
     pub fn set_song_tags(&mut self, key: &str, mut tags: Vec<String>) {
         tags.sort();
         tags.dedup();
-        if let Some(song) = self.songs_mut().get_mut(key)
+        if let Some(song) = self.songs.get_mut(key)
             && song.tags != tags
         {
             song.tags = tags;
@@ -615,7 +608,7 @@ impl SongStore {
     pub fn edit(&mut self, changes: Vec<(String, Field, Option<String>)>) -> Vec<(String, Field, Option<String>)> {
         let mut before = Vec::new();
         for (key, field, value) in changes {
-            let Some(song) = self.songs_mut().get_mut(&key) else { continue };
+            let Some(song) = self.songs.get_mut(&key) else { continue };
             let was = match value {
                 Some(value) => song.edits.insert(field, value.trim().to_string()),
                 None => song.edits.remove(&field),
@@ -639,7 +632,7 @@ impl SongStore {
     pub fn fill(&mut self, fills: Vec<(String, Vec<(Field, String)>)>) {
         let mut changed = false;
         for (key, fields) in fills {
-            let Some(song) = self.songs_mut().get_mut(&key) else { continue };
+            let Some(song) = self.songs.get_mut(&key) else { continue };
             let Some(online) = song.online.as_mut() else { continue };
             let filled = online.filled.get_or_insert_with(Vec::new);
             for (field, value) in fields {
@@ -660,7 +653,7 @@ impl SongStore {
     pub fn set_online(&mut self, changes: Vec<(String, Option<Online>)>) {
         let mut changed = false;
         for (key, online) in changes {
-            if let Some(song) = self.songs_mut().get_mut(&key)
+            if let Some(song) = self.songs.get_mut(&key)
                 && song.online != online
             {
                 song.online = online;
@@ -675,7 +668,7 @@ impl SongStore {
     /// Note where the song at `key` was left (`None`: from its start);
     /// saved if it changed.
     pub fn set_position(&mut self, key: &str, position: Option<f64>) {
-        if let Some(song) = self.songs_mut().get_mut(key)
+        if let Some(song) = self.songs.get_mut(key)
             && song.position != position
         {
             song.position = position;
@@ -731,7 +724,7 @@ impl SongStore {
         let _timing = crate::frame_timing::scope("song store save");
         self.revision += 1;
         let written = std::fs::create_dir_all(&self.dir)
-            .and_then(|()| write_atomically(&self.dir.join(INDEX), serde_json::to_string_pretty(&*self.songs).unwrap_or_default().as_bytes()));
+            .and_then(|()| write_atomically(&self.dir.join(INDEX), serde_json::to_string_pretty(&self.songs).unwrap_or_default().as_bytes()));
         if let Err(e) = written {
             log::warn!("couldn't save {}: {e}", self.dir.join(INDEX).display());
         }
