@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, SystemTime};
 
 use eframe::egui;
@@ -23,6 +23,24 @@ use crate::preview::{self, COLUMNS, FPS, FRAMES};
 /// How long making one preview here may take.
 const TIME_LIMIT: Duration = Duration::from_secs(60);
 
+/// A preview's images, decoded (slow: off the UI thread), to make a
+/// `PreviewImage` of.
+pub struct Decoded {
+    still: egui::ColorImage,
+    sheet: Option<egui::ColorImage>,
+}
+
+impl Decoded {
+    /// From the still's and the sheet's PNGs.
+    pub fn from_png(still: &[u8], sheet: Option<&[u8]>) -> Result<Self, String> {
+        let image = |bytes: &[u8]| {
+            let (w, h, rgba) = preview::decode_png(bytes)?;
+            Ok::<_, String>(egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba))
+        };
+        Ok(Self { still: image(still)?, sheet: sheet.map(image).transpose()? })
+    }
+}
+
 /// A preview, ready to draw.
 pub struct PreviewImage {
     still: egui::TextureHandle,
@@ -30,17 +48,11 @@ pub struct PreviewImage {
 }
 
 impl PreviewImage {
-    /// From the still's and the sheet's PNGs.
-    pub fn from_png(ctx: &egui::Context, name: &str, still: &[u8], sheet: Option<&[u8]>) -> Result<Self, String> {
-        let texture = |name: String, bytes: &[u8]| {
-            let (w, h, rgba) = preview::decode_png(bytes)?;
-            let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
-            Ok::<_, String>(ctx.load_texture(name, image, egui::TextureOptions::LINEAR))
-        };
-        Ok(Self {
-            still: texture(format!("{name}-still"), still)?,
-            sheet: sheet.map(|bytes| texture(format!("{name}-sheet"), bytes)).transpose()?,
-        })
+    pub fn new(ctx: &egui::Context, name: &str, decoded: Decoded) -> Self {
+        Self {
+            still: ctx.load_texture(format!("{name}-still"), decoded.still, egui::TextureOptions::LINEAR),
+            sheet: decoded.sheet.map(|sheet| ctx.load_texture(format!("{name}-sheet"), sheet, egui::TextureOptions::LINEAR)),
+        }
     }
 
     /// Draw it `width` wide: the animation, playing, or the still.
@@ -97,6 +109,8 @@ pub struct Card {
 /// Where a script's preview has got to.
 pub enum Shown<'a> {
     Ready(&'a PreviewImage),
+    /// Being read from the cache.
+    Loading,
     Making,
     Missing(String),
 }
@@ -108,6 +122,22 @@ pub enum Source {
     Made(PathBuf),
     /// The servers' own, for the same source.
     Servers(Vec<String>),
+}
+
+/// A preview being read from the cache, in the background (decoding a
+/// sheet takes tens of milliseconds on a phone).
+enum Loading {
+    Reading(mpsc::Receiver<Cached>),
+    /// It isn't there: to make (or fetch), then read again.
+    NotCached,
+}
+
+/// What's in the cache for a preview.
+enum Cached {
+    Image(Decoded),
+    /// There isn't one, and why.
+    Missing(String),
+    Nothing,
 }
 
 /// Previews being made, one at a time.
@@ -124,6 +154,7 @@ pub struct LocalPreviews {
     cards: HashMap<PathBuf, Card>,
     /// Loaded, by SHA-256 (an error: there isn't one, and why).
     images: HashMap<String, Result<PreviewImage, String>>,
+    loading: HashMap<String, Loading>,
     making: Option<Making>,
     /// The next to make, once the one under way is done (only the latest
     /// asked for: the one being looked at).
@@ -175,25 +206,7 @@ impl LocalPreviews {
     /// now from `source` if it isn't (or why it can't be).
     pub fn preview(&mut self, ctx: &egui::Context, script: &Path, sha256: &str, source: Result<Source, String>) -> Shown<'_> {
         self.poll(ctx);
-        if !self.images.contains_key(sha256)
-            && let Some(dir) = cache_dir()
-        {
-            let still = std::fs::read(cached(&dir, sha256, false));
-            // (What a script made here didn't draw. Android makes none:
-            // older builds there tried, and failed for every script.)
-            let missing = if cfg!(target_os = "android") {
-                Err(std::io::ErrorKind::NotFound.into())
-            } else {
-                std::fs::read_to_string(dir.join(format!("{sha256}.none")))
-            };
-            if let Ok(still) = still {
-                let sheet = std::fs::read(cached(&dir, sha256, true)).ok();
-                let image = PreviewImage::from_png(ctx, sha256, &still, sheet.as_deref());
-                self.images.insert(sha256.to_string(), image);
-            } else if let Ok(why) = missing {
-                self.images.insert(sha256.to_string(), Err(why));
-            }
-        }
+        self.receive(ctx);
         if self.images.contains_key(sha256) {
             return match &self.images[sha256] {
                 Ok(image) => Shown::Ready(image),
@@ -202,6 +215,14 @@ impl LocalPreviews {
         }
         if self.making.as_ref().is_some_and(|m| m.sha256 == sha256) {
             return Shown::Making;
+        }
+        match self.loading.get(sha256) {
+            Some(Loading::Reading(_)) => return Shown::Loading,
+            Some(Loading::NotCached) => {}
+            None => {
+                self.read(ctx, sha256);
+                return Shown::Loading;
+            }
         }
         let source = match source {
             Ok(source) => source,
@@ -213,6 +234,71 @@ impl LocalPreviews {
             self.start(ctx, sha256.to_string(), script.to_path_buf(), source);
         }
         Shown::Making
+    }
+
+    /// Read `sha256`'s preview from the cache, in the background.
+    fn read(&mut self, ctx: &egui::Context, sha256: &str) {
+        let Some(dir) = cache_dir() else {
+            self.loading.insert(sha256.to_string(), Loading::NotCached);
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        self.loading.insert(sha256.to_string(), Loading::Reading(rx));
+        let (ctx, sha256) = (ctx.clone(), sha256.to_string());
+        std::thread::spawn(move || {
+            let cached = match std::fs::read(cached(&dir, &sha256, false)) {
+                Ok(still) => {
+                    let sheet = std::fs::read(cached(&dir, &sha256, true)).ok();
+                    match Decoded::from_png(&still, sheet.as_deref()) {
+                        Ok(decoded) => Cached::Image(decoded),
+                        Err(e) => Cached::Missing(e),
+                    }
+                }
+                // (What a script made here didn't draw. Android makes none:
+                // older builds there tried, and failed for every script.)
+                Err(_) if cfg!(target_os = "android") => Cached::Nothing,
+                Err(_) => match std::fs::read_to_string(dir.join(format!("{sha256}.none"))) {
+                    Ok(why) => Cached::Missing(why),
+                    Err(_) => Cached::Nothing,
+                },
+            };
+            let _ = tx.send(cached);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Take in the previews read from the cache.
+    fn receive(&mut self, ctx: &egui::Context) {
+        let mut read = Vec::new();
+        for (sha256, loading) in &self.loading {
+            if let Loading::Reading(rx) = loading {
+                match rx.try_recv() {
+                    Ok(cached) => read.push((sha256.clone(), Some(cached))),
+                    Err(mpsc::TryRecvError::Disconnected) => read.push((sha256.clone(), None)),
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+            }
+        }
+        for (sha256, cached) in read {
+            match cached {
+                Some(Cached::Image(decoded)) => {
+                    self.loading.remove(&sha256);
+                    let image = PreviewImage::new(ctx, &sha256, decoded);
+                    self.images.insert(sha256, Ok(image));
+                }
+                Some(Cached::Missing(why)) => {
+                    self.loading.remove(&sha256);
+                    self.images.insert(sha256, Err(why));
+                }
+                Some(Cached::Nothing) => {
+                    self.loading.insert(sha256, Loading::NotCached);
+                }
+                None => {
+                    self.loading.remove(&sha256);
+                    self.images.insert(sha256, Err("Its preview didn't load.".to_string()));
+                }
+            }
+        }
     }
 
     fn start(&mut self, ctx: &egui::Context, sha256: String, script: PathBuf, source: Source) {
@@ -262,10 +348,12 @@ impl LocalPreviews {
         if !self.making.as_ref().is_some_and(|m| m.done.load(Ordering::Relaxed)) {
             return;
         }
-        if let Some(making) = self.making.take()
-            && let Some(why) = making.failed.lock().unwrap().take()
-        {
-            self.images.insert(making.sha256, Err(why));
+        if let Some(making) = self.making.take() {
+            // (Read from the cache again, now it's there.)
+            self.loading.remove(&making.sha256);
+            if let Some(why) = making.failed.lock().unwrap().take() {
+                self.images.insert(making.sha256, Err(why));
+            }
         }
         if let Some((sha256, script, source)) = self.waiting.take()
             && !self.images.contains_key(&sha256)
@@ -466,6 +554,7 @@ impl super::App {
             Shown::Ready(image) => {
                 image.ui(ui, width);
             }
+            Shown::Loading => placeholder_ui(ui, width, "Loading...", true),
             Shown::Making => placeholder_ui(ui, width, "Making its preview...", true),
             Shown::Missing(why) => placeholder_ui(ui, width, &why, false),
         }
