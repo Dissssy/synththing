@@ -4141,6 +4141,7 @@ impl eframe::App for App {
             log::warn!("recording lost on exit: {e:#}");
         }
         self.recording.wait_for_saves();
+        crate::song_store::flush();
         self.save_session();
         if serde_json::to_string(&self.dock).unwrap_or_default() != self.saved_layout_json {
             self.save_layout();

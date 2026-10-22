@@ -4,14 +4,16 @@
 //! longer than a frame once there are thousands. The app sends what
 //! changed and takes back what it has to act on (`App::poll_sync`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::{self, Receiver, Sender};
+
+use serde_json::Value;
 
 use super::{sync, Blob, Done, Job, Outcome};
 use crate::library::identity;
-use crate::settings_sync::{self, Fields, State};
+use crate::settings_sync::{self, State};
 use crate::song_store::SongStore;
-use crate::song_sync::{self, Moved, SyncedDevice, Task};
+use crate::song_sync::{self, Moved, SyncedDevice, SyncedLibrary, Task};
 
 /// The songs as the app has them, for the worker to go by.
 pub(super) struct Songs {
@@ -66,8 +68,9 @@ pub(super) enum Reply {
     /// The blob's sync didn't start: it has no state (turned off meanwhile).
     Skipped(Blob),
     /// A sync was taken in: the server's revision now, and for the library,
-    /// its leaves to apply to the songs.
-    Taken { blob: Blob, revision: i64, library: Option<Fields> },
+    /// its leaves to apply to the songs, read (only when they say more than
+    /// the songs here already do).
+    Taken { blob: Blob, revision: i64, library: Option<SyncedLibrary> },
     Error(String),
 }
 
@@ -243,10 +246,13 @@ impl Worker {
         let Some(state) = self.state(blob) else { return };
         let (result, _) = settings_sync::merge_where(&outcome.local, &state.fields, &outcome.merged, |_| true);
         let changed = result != outcome.merged;
-        state.applied = result.iter().map(|(k, f)| (k.clone(), f.value.clone())).collect();
+        let applied: BTreeMap<String, Value> = result.iter().map(|(k, f)| (k.clone(), f.value.clone())).collect();
+        // (The songs here are as `applied` says, just noted: with nothing
+        // new from the other devices, there's nothing to apply.)
+        let library = (blob == Blob::Library && applied != state.applied).then(|| song_sync::read_library(&result));
+        state.applied = applied;
         state.revision = outcome.revision;
         state.base = outcome.merged;
-        let library = (blob == Blob::Library).then(|| result.clone());
         state.fields = result;
         self.save(blob);
         if changed {
