@@ -775,9 +775,24 @@ fn run_later(job: Job) {
     let _ = writer().lock().unwrap_or_else(|p| p.into_inner()).send(job);
 }
 
+type Text = Box<dyn FnOnce() -> serde_json::Result<String> + Send>;
+
+/// The newest save of each file not written yet: a save made while an
+/// older one waits takes its place (adding songs one by one queues one
+/// write, not one copy of the library per song).
+fn pending() -> &'static Mutex<BTreeMap<PathBuf, Text>> {
+    static PENDING: OnceLock<Mutex<BTreeMap<PathBuf, Text>>> = OnceLock::new();
+    PENDING.get_or_init(Default::default)
+}
+
 /// Write what `text` makes to `path`, on the writer thread.
 fn write_later(path: PathBuf, text: impl FnOnce() -> serde_json::Result<String> + Send + 'static) {
+    let waiting = pending().lock().unwrap_or_else(|p| p.into_inner()).insert(path.clone(), Box::new(text)).is_some();
+    if waiting {
+        return;
+    }
     run_later(Box::new(move || {
+        let Some(text) = pending().lock().unwrap_or_else(|p| p.into_inner()).remove(&path) else { return };
         let written = match text() {
             Ok(text) => path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| write_atomically(&path, text.as_bytes())),
             Err(e) => Err(e.into()),
@@ -1175,6 +1190,17 @@ mod tests {
         // No leftovers.
         flush();
         assert_eq!(std::fs::read_dir(&store_dir).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn saves_one_after_another_end_with_the_newest() {
+        let dir = temp_dir("saves");
+        let mut store = SongStore::open(dir.clone());
+        let keys: Vec<String> = (0..50).map(|i| format!("{:064x}.mid", i)).collect();
+        for key in &keys {
+            store.know(key, key);
+        }
+        assert_eq!(SongStore::open(dir).known().count(), keys.len());
     }
 
     #[test]
