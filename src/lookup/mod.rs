@@ -18,7 +18,7 @@ mod musicbrainz;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 
 use serde::{Deserialize, Serialize};
 
@@ -199,16 +199,48 @@ pub fn matches(album: &Album, release: &Release, tracks: &[Option<usize>], by_us
         .collect()
 }
 
-/// The release `id`, with its tracks, as MusicBrainz said when it was
-/// last asked (on this device).
-pub fn kept_release(id: &str) -> Option<Release> {
-    musicbrainz::kept_release(id)
+/// What the lookup kept of MusicBrainz's answers on this device:
+/// releases (with their tracks) and artists (with their aliases), by id,
+/// as they were when last asked for (`None`: never). Read from disk as
+/// they're first wanted, and shared with work off the UI thread.
+#[derive(Clone, Default)]
+pub struct Kept(Arc<Mutex<KeptById>>);
+
+#[derive(Default)]
+struct KeptById {
+    releases: HashMap<String, Option<Arc<Release>>>,
+    artists: HashMap<String, Option<Arc<artists::Artist>>>,
 }
 
-/// The artist `id`, with their aliases, as MusicBrainz said when they
-/// were asked for (on this device).
-pub fn kept_artist(id: &str) -> Option<artists::Artist> {
-    musicbrainz::kept_artist(id)
+impl Kept {
+    fn lock(&self) -> MutexGuard<'_, KeptById> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub fn release(&self, id: &str) -> Option<Arc<Release>> {
+        if let Some(kept) = self.lock().releases.get(id) {
+            return kept.clone();
+        }
+        // (Read without holding the others up.)
+        let read = musicbrainz::kept_release(id).map(Arc::new);
+        self.lock().releases.entry(id.to_string()).or_insert(read).clone()
+    }
+
+    pub fn keep_release(&self, release: Release) {
+        self.lock().releases.insert(release.id.clone(), Some(Arc::new(release)));
+    }
+
+    pub fn artist(&self, id: &str) -> Option<Arc<artists::Artist>> {
+        if let Some(kept) = self.lock().artists.get(id) {
+            return kept.clone();
+        }
+        let read = musicbrainz::kept_artist(id).map(Arc::new);
+        self.lock().artists.entry(id.to_string()).or_insert(read).clone()
+    }
+
+    pub fn keep_artist(&self, artist: artists::Artist) {
+        self.lock().artists.insert(artist.id.clone(), Some(Arc::new(artist)));
+    }
 }
 
 /// An album the lookup tried and didn't match, when, and what it found.

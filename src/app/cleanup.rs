@@ -4,16 +4,21 @@
 //! editor's from the Songs toolbar, except for songs that aren't songs,
 //! which are offered removed from the library. On the device that looks
 //! albums up, the ones it wasn't sure of come first (Needs a look): pick
-//! the release each is, or none of them.
+//! the release each is, or none of them. The rows are worked out on a
+//! thread of their own (from a copy of the songs), so applying one
+//! doesn't hold the window up.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::mpsc;
 
 use eframe::egui;
 
-use super::lookup::{Reviewed, Unsure};
+use super::lookup::{self, Reviewed, Unsure};
 use super::{App, fit_width, icon_button};
 use crate::cleanup::{self, Kind, Suggestion, What};
+use crate::lookup::{Kept, Tried};
+use crate::song_store::SongStore;
 
 /// The Clean up window, while it's open.
 #[derive(Default)]
@@ -27,6 +32,27 @@ pub(super) struct CleanUp {
     unsure: Vec<Unsure>,
     /// The release picked for each (by its album's id), by index.
     picks: BTreeMap<String, usize>,
+    /// The rows being worked out, and what from.
+    working: Option<(u64, mpsc::Receiver<Rows>)>,
+}
+
+/// Clean up's rows.
+struct Rows {
+    suggestions: Vec<Suggestion>,
+    unsure: Vec<Unsure>,
+}
+
+impl Rows {
+    /// `store`'s rows: its offline suggestions, then those from what the
+    /// lookup `kept`; and, on the device that looks albums up (where it's
+    /// `tried` them), the albums it wasn't sure of.
+    fn of(store: &SongStore, kept: &Kept, tried: Option<&BTreeMap<String, Tried>>, ignore: &str) -> Self {
+        let mut suggestions = cleanup::suggest(store, ignore);
+        lookup::artist_suggestions(store, kept, &mut suggestions, ignore);
+        suggestions.extend(lookup::musicbrainz_suggestions(store, kept, ignore));
+        let unsure = tried.map(|tried| lookup::unsure_albums(store, kept, tried, ignore)).unwrap_or_default();
+        Self { suggestions, unsure }
+    }
 }
 
 impl App {
@@ -42,13 +68,31 @@ impl App {
     /// The Clean up modal, while it's open.
     pub(super) fn cleanup_ui(&mut self, ctx: &egui::Context) {
         let Some(mut cleanup) = self.cleanup.take() else { return };
+        if let Some((made_from, receive)) = &cleanup.working {
+            match receive.try_recv() {
+                Ok(rows) => {
+                    cleanup.suggestions = rows.suggestions;
+                    cleanup.unsure = rows.unsure;
+                    cleanup.made_from = Some(*made_from);
+                    cleanup.working = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => cleanup.working = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         let revision = self.cleanup_revision();
-        if cleanup.made_from != Some(revision) {
-            cleanup.suggestions = cleanup::suggest(&self.songs, &self.config.group_ignore);
-            self.artist_suggestions(&mut cleanup.suggestions);
-            cleanup.suggestions.extend(self.musicbrainz_suggestions());
-            cleanup.unsure = self.unsure_albums();
-            cleanup.made_from = Some(revision);
+        if cleanup.made_from != Some(revision) && cleanup.working.is_none() {
+            let (store, kept, tried, ignore) = (self.songs.clone(), self.lookup.kept.clone(), self.lookup_tried(), self.config.group_ignore.clone());
+            let (send, receive) = mpsc::channel();
+            let repaint = ctx.clone();
+            let spawned = std::thread::Builder::new().name("clean up".into()).spawn(move || {
+                let _ = send.send(Rows::of(&store, &kept, tried.as_ref(), &ignore));
+                repaint.request_repaint();
+            });
+            match spawned {
+                Ok(_) => cleanup.working = Some((revision, receive)),
+                Err(e) => log::warn!("couldn't work out Clean up's rows: {e}"),
+            }
         }
         let ignore = self.config.group_ignore.clone();
         let dismissed = &self.config.cleanup_dismissed;
@@ -66,7 +110,12 @@ impl App {
             ui.heading("Clean up");
             ui.weak("Suggestions from what your songs' details say. Nothing changes until you apply one, and the files themselves are never written.");
             ui.add_space(4.0);
-            if shown.is_empty() && cleanup.unsure.is_empty() {
+            if cleanup.made_from.is_none() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.weak("Looking through your songs...");
+                });
+            } else if shown.is_empty() && cleanup.unsure.is_empty() {
                 ui.label("Nothing to clean up.");
             }
             let row_height = ui.spacing().interact_size.y;
@@ -137,6 +186,11 @@ impl App {
             });
         });
         if let Some(reviewed) = reviewed {
+            // (Gone from the rows now, not once they're worked out again.)
+            let album = match &reviewed {
+                Reviewed::This(album, _) | Reviewed::NoneOf(album, _) => album.id.clone(),
+            };
+            cleanup.unsure.retain(|u| u.album.id != album);
             self.reviewed(reviewed);
         }
         // (Junk's removed, asked about first: `App::remove_songs_ui`.)
@@ -162,6 +216,11 @@ impl App {
                 self.songs_changed();
                 self.status = format!("Cleaned up {songs} song{}.", if songs == 1 { "" } else { "s" });
             }
+            let mut i = 0;
+            cleanup.suggestions.retain(|_| {
+                i += 1;
+                !apply.contains(&(i - 1))
+            });
         }
         if !dismiss.is_empty() || bring_back {
             if bring_back {
