@@ -417,7 +417,11 @@ impl Worker {
                 let fills = unfilled(&plan.store, &kept, &genres, &plan.ignore);
                 let albums = Arc::new(albums(&plan.store, &plan.ignore));
                 let ask = next(&plan, &kept, &albums);
-                let planned = Planned { revision: plan.store.revision(), albums: Arc::clone(&albums), fills, asking: ask.as_ref().map(Ask::id) };
+                let planned = Planned { revision: plan.store.revision(), albums, fills, asking: ask.as_ref().map(Ask::id) };
+                let ignore = plan.ignore;
+                // (The copy of the songs goes before the UI thread changes
+                // them, so it doesn't have to copy them for itself.)
+                drop(plan.store);
                 if !send(Done::Planned(planned)) {
                     return;
                 }
@@ -427,7 +431,7 @@ impl Worker {
                         log::info!("looking up {:?} by {:?} ({} songs{})", album.name, album.artist, album.songs.len(), if fresh { ", anew" } else { "" });
                         let outcome = look_up(&mut musicbrainz, &album, fresh);
                         let fills = match &outcome {
-                            Outcome::Matched(release, tracks) => album_fills(&plan.store, &album, release, tracks, &genres, &plan.ignore),
+                            Outcome::Matched(release, tracks) => album_fills(&album, release, tracks, &genres, &ignore),
                             _ => Vec::new(),
                         };
                         Done::Album(album, outcome, fills)
@@ -500,16 +504,13 @@ fn unfilled(store: &SongStore, kept: &Kept, genres: &details::Genres, ignore: &s
 }
 
 /// The fills for `album`'s songs just matched to `release` (each to its
-/// track, by index), but those already filled in from it.
-fn album_fills(store: &SongStore, album: &Album, release: &Release, tracks: &[Option<usize>], genres: &details::Genres, ignore: &str) -> Vec<Fill> {
+/// track, by index). Those already filled in from it are passed over as
+/// they're applied.
+fn album_fills(album: &Album, release: &Release, tracks: &[Option<usize>], genres: &details::Genres, ignore: &str) -> Vec<Fill> {
     album
         .songs
         .iter()
         .zip(tracks)
-        .filter(|(song, _)| {
-            let online = store.get_by_key(&song.key).and_then(|s| s.online.as_ref());
-            !online.is_some_and(|o| o.release.as_ref() == Some(&release.id) && o.filled.is_some())
-        })
         .map(|(song, track)| {
             let recording = track.and_then(|t| release.tracks[t].recording.as_deref());
             let said = details::said(release, details::track(release, recording), genres, ignore);
