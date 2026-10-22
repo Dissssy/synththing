@@ -388,18 +388,25 @@ impl Keymap {
             // Of the sequences this press carries on, the one with the most
             // modifiers held for it (Shift+Left over Left), then the
             // shortest (one that finishes over one that goes on).
-            let found = self
-                .bindings
-                .iter()
-                .filter(|(command, sequence)| {
+            let find = |modifiers: Modifiers| {
+                self.bindings
+                    .iter()
+                    .filter(|(command, sequence)| {
                     sequence.len() > presses.len()
                         && sequence.starts_with(presses)
                         && matches(&sequence[presses.len()], key, modifiers)
                         && (!presses.is_empty() || !typing || works_while_typing(&sequence[0]))
                         && (!repeat || sequence.len() == 1)
                         && available(*command)
-                })
-                .max_by_key(|(_, s)| (held(s[presses.len()].modifiers), std::cmp::Reverse(s.len())));
+                    })
+                    .max_by_key(|(_, s)| (held(s[presses.len()].modifiers), std::cmp::Reverse(s.len())))
+            };
+            // Ctrl still held from the press before (Ctrl+G, then R without
+            // letting go) counts as letting go, unless a binding uses it.
+            let still_held = presses.last().is_some_and(|p| p.modifiers.command) && modifiers.command;
+            let found = find(modifiers).or_else(|| {
+                still_held.then(|| find(Modifiers { command: false, ctrl: false, mac_cmd: false, ..modifiers })).flatten()
+            });
             match found {
                 Some((command, sequence)) if sequence.len() == presses.len() + 1 => {
                     in_sequence |= !presses.is_empty();
@@ -559,13 +566,21 @@ mod tests {
         // Pressing Ctrl again for the next press doesn't give up on it.
         keymap.pressed(&mut press(Key::G, COMMAND), false, |_| true, &mut pending);
         let mut ctrl_r = input(vec![key_event(Key::ControlLeft, COMMAND), key_event(Key::R, COMMAND)]);
-        assert_eq!(keymap.pressed(&mut ctrl_r, false, |_| true, &mut pending), []);
-        assert!(pending.is_none(), "Ctrl+G Ctrl+R isn't bound, but it got as far as the R");
+        assert_eq!(keymap.pressed(&mut ctrl_r, false, |_| true, &mut pending), [Command::GoTo(Section::Reference)]);
+        assert!(pending.is_none());
         keymap.pressed(&mut press(Key::G, COMMAND), false, |_| true, &mut pending);
         let mut ctrl = press(Key::ControlLeft, COMMAND);
         keymap.pressed(&mut ctrl, false, |_| true, &mut pending);
         assert!(pending.is_some());
         pending = None;
+
+        // ...unless Ctrl+G Ctrl+R is bound itself.
+        let mut bound = Keymap::default();
+        bound.bindings.push((Command::Quit, from_text("Ctrl+G Ctrl+R").unwrap()));
+        bound.pressed(&mut press(Key::G, COMMAND), false, |_| true, &mut pending);
+        assert_eq!(bound.pressed(&mut press(Key::R, COMMAND), false, |_| true, &mut pending), [Command::Quit]);
+        bound.pressed(&mut press(Key::G, COMMAND), false, |_| true, &mut pending);
+        assert_eq!(bound.pressed(&mut press(Key::R, Modifiers::NONE), false, |_| true, &mut pending), [Command::GoTo(Section::Reference)]);
 
         // Both presses in one frame work too.
         let mut both = input(vec![key_event(Key::G, COMMAND), key_event(Key::V, Modifiers::NONE)]);
