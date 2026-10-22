@@ -52,6 +52,7 @@ mod toast;
 mod tray_panel;
 mod tour;
 mod welcome;
+mod which_key;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -426,6 +427,8 @@ pub struct App {
     keymap: Arc<Keymap>,
     /// Preferences > Keyboard waiting for a key.
     keymap_capture: Option<keyboard::Capture>,
+    /// A key sequence underway (its first presses).
+    keymap_pending: Option<commands::Pending>,
     /// The script's Settings or Controls window, if open.
     script_window: Option<script_windows::ScriptWindow>,
     /// The category picked in each (Settings, Controls, Debug).
@@ -734,6 +737,7 @@ impl App {
             palette: None,
             keymap: Arc::default(),
             keymap_capture: None,
+            keymap_pending: None,
             script_window: None,
             script_window_tab: [0; 3],
             user_presets: None,
@@ -1004,7 +1008,20 @@ impl App {
         self.set_open(section, true);
         if let Some(path) = self.dock.find_tab(&section) {
             let _ = self.dock.set_active_tab(path);
+            self.dock.set_focused_node_and_surface(path.node_path());
         }
+    }
+
+    /// The open section `step` places from the one in front (the focused
+    /// tab), in `Section::ALL`'s order, round and round.
+    fn step_section(&mut self, step: isize) {
+        let open: Vec<Section> = Section::ALL.into_iter().filter(|&s| self.is_open(s)).collect();
+        let current = self.dock.find_active_focused().map(|(_, tab)| *tab);
+        let Some(at) = current.and_then(|c| open.iter().position(|&s| s == c)).or((!open.is_empty()).then_some(0)) else {
+            return;
+        };
+        let next = (at as isize + step).rem_euclid(open.len() as isize) as usize;
+        self.reveal_section(open[next]);
     }
 
     /// Show where `name` is documented in the Scripting Reference.
@@ -3427,6 +3444,9 @@ impl App {
             Command::PauseRecording => self.toggle_recording_pause(),
             Command::Quit => self.close_with(ctx, close::CloseAction::Quit),
             Command::CommandPalette => self.palette = Some(palette::Palette::default()),
+            Command::GoTo(section) => self.reveal_section(section),
+            Command::NextSection => self.step_section(1),
+            Command::PreviousSection => self.step_section(-1),
         }
     }
 
@@ -3446,6 +3466,9 @@ impl App {
         match command {
             Command::ExitFullscreen => self.fullscreen || self.dedicated.is_some(),
             Command::NextTrack => self.has_next(),
+            // (The mobile layout has pages, not tabs.)
+            Command::GoTo(section) => !self.mobile() && self.dedicated.is_none() && section != Section::Removed,
+            Command::NextSection | Command::PreviousSection => !self.mobile() && self.dedicated.is_none(),
             _ => true,
         }
     }
@@ -3998,15 +4021,19 @@ impl eframe::App for App {
             let typing = ctx.memory(|m| m.focused().is_some());
             let available: Vec<Command> = Command::ALL.into_iter().filter(|&c| self.command_available(c)).collect();
             let keymap = self.keymap.clone();
+            let mut pending = self.keymap_pending.take();
             // Run outside `ctx.input_mut`: `send_viewport_cmd` (inside
             // `set_fullscreen`) takes the lock that closure holds, and
             // calling it from in there deadlocks.
             let pressed = ctx.input_mut(|i| {
-                keymap.pressed(i, typing, |command| available.contains(&command))
+                keymap.pressed(i, typing, |command| available.contains(&command), &mut pending)
             });
+            self.keymap_pending = pending;
             for command in pressed {
                 self.run_command(&ctx, command, view);
             }
+        } else {
+            self.keymap_pending = None;
         }
         self.visualizer_output = ShowOutput::default();
 
@@ -4066,6 +4093,7 @@ impl eframe::App for App {
         }
         let windows = frame_timing::scope("windows");
         self.palette_ui(&ctx, view);
+        self.which_key_ui(&ctx);
         self.remove_songs_ui(&ctx);
         self.repair_ui(&ctx);
         self.tags_ui(&ctx);
