@@ -5,7 +5,8 @@
 //! albums it wasn't sure of, for Clean up's Needs a look rows; artists'
 //! names as MusicBrainz has them, for its Same name rows.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -14,10 +15,10 @@ use super::App;
 use crate::build_info;
 use crate::cleanup;
 use crate::fields::{Facts, Field};
-use crate::lookup::artists::{self, Artist, Tied};
+use crate::lookup::artists::{self, Tied};
 use crate::lookup::matching::{self, Album, Release};
-use crate::lookup::{self, Answer, Ask, Done, Outcome, State, Tried, Worker, details};
-use crate::song_store::Online;
+use crate::lookup::{self, Answer, Ask, Done, Kept, Outcome, State, Tried, Worker, details};
+use crate::song_store::{Online, Song, SongStore};
 
 /// How long the lookup waits to look for work again, with none to do.
 const IDLE: Duration = Duration::from_secs(60);
@@ -36,16 +37,16 @@ pub(super) struct LookupState {
     error: Option<String>,
     /// Albums (by id) to look up again first, asking MusicBrainz anew.
     refresh: Vec<String>,
-    /// Releases as the lookup kept them (`None`: not kept), by id, read
-    /// as they're needed.
-    kept: HashMap<String, Option<Release>>,
+    /// Releases and artists as the lookup kept them.
+    pub kept: Kept,
     /// The songs revision matched songs' blanks were last filled at.
     filled_at: Option<u64>,
     /// Releases (and artists, as "artist:{id}") that couldn't be asked
     /// for, and when to try again.
     refresh_failed: HashMap<String, Instant>,
-    /// Artists as the lookup kept them (`None`: not kept), by id.
-    artists: HashMap<String, Option<Artist>>,
+    /// The artists matched songs credit who aren't kept, as of a songs
+    /// revision: to ask for.
+    artists_due: Option<(u64, Vec<String>)>,
     /// How many artists have been asked for (so Clean up's made anew).
     pub artists_asked: u64,
 }
@@ -84,7 +85,10 @@ impl App {
             Some(Done::Album(album, outcome)) => self.lookup_answered(&album, outcome),
             Some(Done::Release(id, release)) => self.release_refreshed(&id, release),
             Some(Done::Artist(id, Ok(artist))) => {
-                self.lookup.artists.insert(id, Some(artist));
+                self.lookup.kept.keep_artist(artist);
+                if let Some((_, due)) = &mut self.lookup.artists_due {
+                    due.retain(|d| *d != id);
+                }
                 self.lookup.artists_asked += 1;
                 self.lookup.error = None;
             }
@@ -140,39 +144,21 @@ impl App {
         }
     }
 
-    /// An artist matched songs credit who isn't kept, to ask for.
+    /// An artist matched songs credit who isn't kept, to ask for (the
+    /// list worked out once for each songs revision).
     fn artist_due(&mut self) -> Option<String> {
-        let matched = self.matched_with(|_| true);
-        let kept = &self.lookup.kept;
-        let credited = artists::credited(matched.iter().filter_map(|(_, r, _)| kept.get(r)?.as_ref()));
-        let now = Instant::now();
-        credited
-            .into_iter()
-            .find(|id| {
-                self.lookup.artists.entry(id.to_string()).or_insert_with(|| lookup::kept_artist(id)).is_none()
-                    && self.lookup.refresh_failed.get(&format!("artist:{id}")).is_none_or(|until| now >= *until)
-            })
-            .map(str::to_string)
-    }
-
-    /// Clean up's Same name rows for artists tied to MusicBrainz
-    /// (`lookup::artists`), in place of the offline ones (in `suggestions`)
-    /// they overlap.
-    pub(super) fn artist_suggestions(&mut self, suggestions: &mut Vec<cleanup::Suggestion>) {
-        let ignore = self.config.group_ignore.clone();
-        let matched = self.matched_with(|_| true);
-        let mut tied = Tied::of(
-            matched.iter().filter_map(|(key, release, recording)| {
-                let release = self.lookup.kept.get(release)?.as_ref()?;
-                Some((self.songs.get_by_key(key)?, release, details::track(release, recording.as_deref())))
-            }),
-            &ignore,
-        );
-        for id in tied.own.keys() {
-            self.lookup.artists.entry(id.clone()).or_insert_with(|| lookup::kept_artist(id));
+        let revision = self.songs.revision();
+        if self.lookup.artists_due.as_ref().is_none_or(|(r, _)| *r != revision) {
+            let kept = &self.lookup.kept;
+            let ids: std::collections::BTreeSet<String> = matched(&self.songs, |_| true).into_iter().map(|(_, release, _)| release).collect();
+            let releases: Vec<Arc<Release>> = ids.iter().filter_map(|id| kept.release(id)).collect();
+            let due = artists::credited(releases.iter().map(|r| &**r)).into_iter().filter(|id| kept.artist(id).is_none()).map(str::to_string).collect();
+            self.lookup.artists_due = Some((revision, due));
         }
-        tied.add_aliases(self.lookup.artists.values().flatten(), &ignore);
-        tied.offer(&self.songs, suggestions, &ignore);
+        let now = Instant::now();
+        let failed = &self.lookup.refresh_failed;
+        let (_, due) = self.lookup.artists_due.as_ref()?;
+        due.iter().find(|id| failed.get(&format!("artist:{id}")).is_none_or(|until| now >= *until)).cloned()
     }
 
     /// Take in a matched release as MusicBrainz has it now: its matches
@@ -180,7 +166,7 @@ impl App {
     fn release_refreshed(&mut self, id: &str, release: Result<Release, String>) {
         match release {
             Ok(release) => {
-                self.lookup.kept.insert(id.to_string(), Some(release));
+                self.lookup.kept.keep_release(release);
                 let at = crate::settings_sync::now();
                 let changes = self
                     .songs
@@ -208,7 +194,7 @@ impl App {
             Outcome::Matched(release, tracks) => {
                 log::info!("{:?} is release {} ({:?})", album.name, release.id, release.title);
                 let matches = lookup::matches(album, &release, &tracks, false, &self.songs);
-                self.lookup.kept.insert(release.id.clone(), Some(*release));
+                self.lookup.kept.keep_release(*release);
                 self.songs.set_online(matches);
                 self.songs_changed();
                 self.lookup.error = None;
@@ -407,47 +393,10 @@ impl App {
         self.lookup.idle_until = None;
     }
 
-    /// The albums the lookup wasn't sure of (and still has to match),
-    /// with the releases kept for each: Clean up's Needs a look rows. None
-    /// on a device that doesn't look up.
-    pub(super) fn unsure_albums(&mut self) -> Vec<Unsure> {
-        if !self.looks_up() {
-            return Vec::new();
-        }
-        self.lookup_albums();
-        let albums = self.lookup.albums.as_ref().map(|(_, a)| a.as_slice()).unwrap_or_default();
-        let tried = &self.lookup.state.get_or_insert_with(State::load).tried;
-        let unsure: Vec<(&Album, &Vec<String>)> = albums
-            .iter()
-            .filter(|album| lookup::wanted(&self.songs, album))
-            .filter_map(|album| match &tried.get(&album.id)?.found {
-                Answer::Unsure(ids) => Some((album, ids)),
-                _ => None,
-            })
-            .collect();
-        keep_releases(&mut self.lookup.kept, unsure.iter().flat_map(|(_, ids)| ids.iter().map(String::as_str)));
-        unsure
-            .into_iter()
-            .filter_map(|(album, ids)| {
-                let releases: Vec<Release> = ids.iter().filter_map(|id| self.lookup.kept.get(id)?.clone()).collect();
-                (!releases.is_empty()).then(|| Unsure::new(album.clone(), releases))
-            })
-            .collect()
-    }
-
-    /// Matched songs (by key), with their releases (read into `kept`)
-    /// and recordings: those `wanted`.
-    fn matched_with(&mut self, wanted: impl Fn(&Online) -> bool) -> Vec<(String, String, Option<String>)> {
-        let matched: Vec<(String, String, Option<String>)> = self
-            .songs
-            .known()
-            .filter_map(|(key, song)| {
-                let online = song.online.as_ref().filter(|o| wanted(o))?;
-                Some((key.to_string(), online.release.clone()?, online.recording.clone()))
-            })
-            .collect();
-        keep_releases(&mut self.lookup.kept, matched.iter().map(|(_, r, _)| r.as_str()));
-        matched
+    /// What Clean up's rows from the lookup are made from, besides the
+    /// songs: what it's tried, on the device that looks albums up.
+    pub(super) fn lookup_tried(&mut self) -> Option<BTreeMap<String, Tried>> {
+        self.looks_up().then(|| self.lookup.state.get_or_insert_with(State::load).tried.clone())
     }
 
     /// Fill in matched songs' blank fields from their releases (as kept),
@@ -459,10 +408,10 @@ impl App {
         }
         let genres = details::Genres::of(&self.songs, &ignore);
         let mut fills = Vec::new();
-        for (key, release, recording) in self.matched_with(|o| o.filled.is_none()) {
-            let Some(release) = self.lookup.kept.get(&release).and_then(Option::as_ref) else { continue };
+        for (key, release, recording) in matched(&self.songs, |o| o.filled.is_none()) {
+            let Some(release) = self.lookup.kept.release(&release) else { continue };
             let Some(song) = self.songs.get_by_key(&key) else { continue };
-            let said = details::said(release, details::track(release, recording.as_deref()), &genres, &ignore);
+            let said = details::said(&release, details::track(&release, recording.as_deref()), &genres, &ignore);
             fills.push((key, details::compare(&Facts::of(song), &said, &ignore).blank));
         }
         if !fills.is_empty() {
@@ -470,26 +419,6 @@ impl App {
             self.songs.fill(fills);
             self.songs_changed();
         }
-    }
-
-    /// What MusicBrainz says otherwise of matched songs (their releases as
-    /// kept on this device), for Clean up.
-    pub(super) fn musicbrainz_suggestions(&mut self) -> Vec<cleanup::Suggestion> {
-        let ignore = self.config.group_ignore.clone();
-        let genres = details::Genres::of(&self.songs, &ignore);
-        let mut offers = Vec::new();
-        for (key, release, recording) in self.matched_with(|_| true) {
-            let Some(release) = self.lookup.kept.get(&release).and_then(Option::as_ref) else { continue };
-            let Some(song) = self.songs.get_by_key(&key) else { continue };
-            let facts = Facts::of(song);
-            let track = details::track(release, recording.as_deref());
-            let said = details::said(release, track, &genres, &ignore);
-            let compared = details::compare(&facts, &said, &ignore);
-            let title = facts.text(Field::Title).map_or_else(|| song.name.clone(), |t| t.into_owned());
-            let length = track.and_then(|t| Some((facts.number(Field::Length)?, t.length?)));
-            offers.push(cleanup::Offered { key, title, release: release.id.clone(), album: release.title.clone(), differs: compared.differs, length });
-        }
-        cleanup::from_musicbrainz(offers, details::LENGTH_LEEWAY)
     }
 
     /// Take what was picked for an unsure album.
@@ -523,13 +452,67 @@ impl App {
     }
 }
 
-/// Read the releases `ids` into `kept`, those not read yet.
-fn keep_releases<'i>(kept: &mut HashMap<String, Option<Release>>, ids: impl Iterator<Item = &'i str>) {
-    for id in ids {
-        if !kept.contains_key(id) {
-            kept.insert(id.to_string(), lookup::kept_release(id));
-        }
+/// `store`'s matched songs (by key), with their releases and
+/// recordings: those `wanted`.
+fn matched(store: &SongStore, wanted: impl Fn(&Online) -> bool) -> Vec<(String, String, Option<String>)> {
+    store
+        .known()
+        .filter_map(|(key, song)| {
+            let online = song.online.as_ref().filter(|o| wanted(o))?;
+            Some((key.to_string(), online.release.clone()?, online.recording.clone()))
+        })
+        .collect()
+}
+
+/// `store`'s matched songs, with their releases as `kept` and recordings.
+fn matched_releases<'s>(store: &'s SongStore, kept: &Kept) -> Vec<(String, &'s Song, Arc<Release>, Option<String>)> {
+    matched(store, |_| true)
+        .into_iter()
+        .filter_map(|(key, release, recording)| Some((key.clone(), store.get_by_key(&key)?, kept.release(&release)?, recording)))
+        .collect()
+}
+
+/// What MusicBrainz says otherwise of `store`'s matched songs (their
+/// releases as `kept` on this device), for Clean up.
+pub(super) fn musicbrainz_suggestions(store: &SongStore, kept: &Kept, ignore: &str) -> Vec<cleanup::Suggestion> {
+    let genres = details::Genres::of(store, ignore);
+    let mut offers = Vec::new();
+    for (key, song, release, recording) in matched_releases(store, kept) {
+        let facts = Facts::of(song);
+        let track = details::track(&release, recording.as_deref());
+        let said = details::said(&release, track, &genres, ignore);
+        let compared = details::compare(&facts, &said, ignore);
+        let title = facts.text(Field::Title).map_or_else(|| song.name.clone(), |t| t.into_owned());
+        let length = track.and_then(|t| Some((facts.number(Field::Length)?, t.length?)));
+        offers.push(cleanup::Offered { key, title, release: release.id.clone(), album: release.title.clone(), differs: compared.differs, length });
     }
+    cleanup::from_musicbrainz(offers, details::LENGTH_LEEWAY)
+}
+
+/// Clean up's Same name rows for artists tied to MusicBrainz
+/// (`lookup::artists`), in place of the offline ones (in `suggestions`)
+/// they overlap.
+pub(super) fn artist_suggestions(store: &SongStore, kept: &Kept, suggestions: &mut Vec<cleanup::Suggestion>, ignore: &str) {
+    let matched = matched_releases(store, kept);
+    let mut tied = Tied::of(matched.iter().map(|(_, song, release, recording)| (*song, &**release, details::track(release, recording.as_deref()))), ignore);
+    let artists: Vec<_> = tied.own.keys().filter_map(|id| kept.artist(id)).collect();
+    tied.add_aliases(artists.iter().map(|a| &**a), ignore);
+    tied.offer(store, suggestions, ignore);
+}
+
+/// The albums the lookup wasn't sure of (as it `tried` them) and still
+/// has to match, with the releases kept for each: Clean up's Needs a
+/// look rows.
+pub(super) fn unsure_albums(store: &SongStore, kept: &Kept, tried: &BTreeMap<String, Tried>, ignore: &str) -> Vec<Unsure> {
+    lookup::albums(store, ignore)
+        .into_iter()
+        .filter(|album| lookup::wanted(store, album))
+        .filter_map(|album| {
+            let Answer::Unsure(ids) = &tried.get(&album.id)?.found else { return None };
+            let releases: Vec<Release> = ids.iter().filter_map(|id| kept.release(id)).map(|r| (*r).clone()).collect();
+            (!releases.is_empty()).then(|| Unsure::new(album, releases))
+        })
+        .collect()
 }
 
 /// An album the lookup wasn't sure of, and the releases it might be.
