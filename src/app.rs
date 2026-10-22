@@ -4248,6 +4248,12 @@ fn fit_width(ui: &egui::Ui, width: f32) -> f32 {
     width.min(ui.ctx().content_rect().width() - 32.0).max(120.0)
 }
 
+/// Where a window may be: the screen, less the reach of its resize handles
+/// past its edges, so none of them is cut off by the screen's side.
+fn window_room(ctx: &egui::Context) -> egui::Rect {
+    ctx.content_rect().shrink(ctx.global_style().interaction.resize_grab_radius_corner)
+}
+
 /// A Phosphor icon by its name (`shield-check`, `SCROLL`), for text: the
 /// scroll if there's no such icon.
 pub fn icon(name: &str) -> &'static str {

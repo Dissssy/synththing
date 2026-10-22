@@ -105,6 +105,7 @@ impl App {
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
+            .constrain_to(super::window_room(ctx))
             .default_width(4.0 * (TILE + 12.0))
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().max_height(520.0).show(ui, |ui| {
