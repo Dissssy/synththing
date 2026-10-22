@@ -3940,7 +3940,7 @@ impl App {
         if !self.preferences_open {
             frame_timing::time("playlist_tick", || self.playlist_tick(&view));
         }
-        frame_timing::time("poll_library", || self.poll_library());
+        frame_timing::time("poll_library", || self.poll_library(ctx));
         frame_timing::time("poll_moderation", || self.poll_moderation());
         frame_timing::time("poll_feedback", || self.poll_feedback());
         frame_timing::time("poll_identity", || self.poll_identity());

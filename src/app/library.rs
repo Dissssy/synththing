@@ -69,7 +69,7 @@ enum Event {
     UpdateChecked(PathBuf, Box<Installed>, Result<Option<Box<Newer>>, String>),
     /// A script's preview: the server, its ID, the version it's of, and
     /// the still and the animation (PNGs).
-    Preview(String, String, u32, Result<(Vec<u8>, Option<Vec<u8>>), String>),
+    Preview(String, String, u32, Result<FetchedPreview, String>),
     /// One of a server's documents (EULA, privacy policy): the server, its
     /// slug, its Markdown.
     Document(String, String, Result<String, String>),
@@ -97,6 +97,10 @@ struct LibraryActions {
     report: Option<(String, String, String, u32)>,
 }
 
+/// A script's preview from its server: the still's and the sheet's PNGs,
+/// and them decoded.
+type FetchedPreview = (Vec<u8>, Option<Vec<u8>>, Result<previews::Decoded, String>);
+
 /// The selected script's preview, from its server.
 struct LibraryPreview {
     server: String,
@@ -113,7 +117,8 @@ enum PreviewState {
     /// It hasn't one (it didn't draw anything).
     None,
     Failed(String),
-    Ready { still: Vec<u8>, sheet: Option<Vec<u8>>, image: Option<Result<PreviewImage, String>> },
+    /// The PNGs (kept if it's installed), and the image.
+    Ready { still: Vec<u8>, sheet: Option<Vec<u8>>, image: Result<PreviewImage, String> },
 }
 
 /// A newer version found by an update check, and the installed version's
@@ -477,7 +482,7 @@ impl App {
     }
 
     /// Per frame: requests that finished.
-    pub(super) fn poll_library(&mut self) {
+    pub(super) fn poll_library(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.library.events.1.try_recv() {
             match event {
                 Event::Info(server, result) => self.library_info(server, result),
@@ -596,7 +601,11 @@ impl App {
                         && preview.version == version
                     {
                         preview.state = match result {
-                            Ok((still, sheet)) => PreviewState::Ready { still, sheet, image: None },
+                            Ok((still, sheet, decoded)) => {
+                                let name = format!("library-{server}-{id}-{version}");
+                                let image = decoded.map(|d| PreviewImage::new(ctx, &name, d));
+                                PreviewState::Ready { still, sheet, image }
+                            }
                             Err(e) => PreviewState::Failed(e),
                         };
                     }
@@ -803,7 +812,8 @@ impl App {
                 self.spawn_request(move || {
                     let result = client::preview(&server, &id, version, false).and_then(|still| {
                         let sheet = if animated { Some(client::preview(&server, &id, version, true)?) } else { None };
-                        Ok((still, sheet))
+                        let decoded = previews::Decoded::from_png(&still, sheet.as_deref());
+                        Ok((still, sheet, decoded))
                     });
                     Event::Preview(server, id, version, result)
                 });
@@ -826,20 +836,16 @@ impl App {
             ui.separator();
             return;
         };
-        match &mut preview.state {
+        match &preview.state {
             PreviewState::Loading => previews::placeholder_ui(ui, width, "Loading...", true),
             PreviewState::Pending => previews::placeholder_ui(ui, width, "The server is still making its preview.", false),
             PreviewState::None => previews::placeholder_ui(ui, width, "No preview.", false),
             PreviewState::Failed(e) => previews::placeholder_ui(ui, width, &format!("Couldn't get its preview: {e}"), false),
-            PreviewState::Ready { still, sheet, image } => {
-                let name = format!("library-{server}-{id}-{}", preview.version);
-                let image = image.get_or_insert_with(|| PreviewImage::from_png(ui.ctx(), &name, still, sheet.as_deref()));
-                match image {
-                    Ok(image) => {
-                        image.ui(ui, width);
-                    }
-                    Err(e) => previews::placeholder_ui(ui, width, &format!("Its preview didn't load: {e}"), false),
-                }
+            PreviewState::Ready { image: Ok(image), .. } => {
+                image.ui(ui, width);
+            }
+            PreviewState::Ready { image: Err(e), .. } => {
+                previews::placeholder_ui(ui, width, &format!("Its preview didn't load: {e}"), false)
             }
         }
         ui.separator();
