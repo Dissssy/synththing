@@ -5,6 +5,10 @@
 //! given the entry; [`label`] is the entry's text, cut to the width left
 //! for it with the full text on hover.
 //!
+//! The list in front (the one in the focused tab, [`set_keyboard`]) is
+//! also steered from the keys: [`steer`] moves its cursor row (Shift
+//! held grows the selection with it) or opens the row under it.
+//!
 //! For touch (the mobile layout, [`set_touch`]) rows are taller, a tap
 //! opens or plays a row, a long press brings up its menu, and dragging
 //! scrolls the list instead of dragging rows.
@@ -16,8 +20,10 @@ use eframe::egui;
 pub struct Selection {
     /// Sorted, no duplicates.
     rows: Vec<usize>,
-    /// The last plain or Ctrl click.
+    /// The last plain or Ctrl click, or plain cursor move.
     anchor: Option<usize>,
+    /// The row the keys move from: the last one clicked or moved to.
+    cursor: Option<usize>,
 }
 
 impl Selection {
@@ -40,6 +46,7 @@ impl Selection {
     pub fn clear(&mut self) {
         self.rows.clear();
         self.anchor = None;
+        self.cursor = None;
     }
 
     pub fn select_all(&mut self, len: usize) {
@@ -59,12 +66,27 @@ impl Selection {
         rows.sort_unstable();
         self.rows = rows;
         self.anchor = self.anchor.and_then(|i| positions.get(i).copied());
+        self.cursor = self.cursor.and_then(|i| positions.get(i).copied());
+    }
+
+    /// The cursor moved to row `idx` from the keys: it alone is selected,
+    /// or with `extend` (Shift held), the rows from the anchor to it.
+    fn move_to(&mut self, idx: usize, extend: bool) {
+        self.cursor = Some(idx);
+        match self.anchor {
+            Some(anchor) if extend => self.rows = (anchor.min(idx)..=anchor.max(idx)).collect(),
+            _ => {
+                self.rows = vec![idx];
+                self.anchor = Some(idx);
+            }
+        }
     }
 
     /// A click on row `idx`, by the modifier keys held: plain selects just
     /// it, Ctrl toggles it, Shift extends a range from the anchor (adding to
     /// the selection with Ctrl too).
     fn click(&mut self, idx: usize, modifiers: egui::Modifiers) {
+        self.cursor = Some(idx);
         if modifiers.shift
             && let Some(anchor) = self.anchor
         {
@@ -105,6 +127,77 @@ pub fn set_touch(ctx: &egui::Context, on: bool) {
 /// Whether lists are laid out for touch.
 pub fn touch(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp(touch_id())).unwrap_or(false)
+}
+
+/// A move from the keys, for the list in front.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Steer {
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+    First,
+    Last,
+    /// Open or play the cursor's row, as a double-click would.
+    Open,
+}
+
+fn keyboard_id() -> egui::Id {
+    egui::Id::new("select_list_keyboard")
+}
+
+fn steers_id() -> egui::Id {
+    egui::Id::new("select_list_steers")
+}
+
+/// Which list the keys steer this frame, by the `id_salt` it's shown with
+/// (or none). Called each frame before any [`steer`]: moves a list that
+/// wasn't shown last frame didn't take are dropped.
+pub fn set_keyboard(ctx: &egui::Context, list: Option<&'static str>) {
+    ctx.data_mut(|d| {
+        d.insert_temp(keyboard_id(), list.map(egui::Id::new));
+        d.remove::<Vec<(Steer, bool)>>(steers_id());
+    });
+}
+
+/// Steer the list in front, when it's next shown: with `extend` (Shift
+/// held) the selection grows with the cursor.
+pub fn steer(ctx: &egui::Context, steer: Steer, extend: bool) {
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<(Steer, bool)>>(steers_id()).push((steer, extend)));
+}
+
+/// Carry out `steers` on a list of `len` rows, with `page` rows in view:
+/// the row the cursor ends up on, if it moved. The first move starts on
+/// the `playing` row (else the first) when there's no cursor yet.
+fn apply(
+    selection: &mut Selection,
+    steers: &[(Steer, bool)],
+    len: usize,
+    page: usize,
+    playing: Option<usize>,
+    output: &mut ListOutput,
+) -> Option<usize> {
+    let last = len.checked_sub(1)?;
+    let mut moved = None;
+    for &(steer, extend) in steers {
+        let at = selection.cursor.map(|c| c.min(last));
+        let to = match (steer, at) {
+            (Steer::Open, _) => {
+                output.activated = at;
+                continue;
+            }
+            (Steer::First, _) => 0,
+            (Steer::Last, _) => last,
+            (_, None) => playing.unwrap_or(0).min(last),
+            (Steer::Up, Some(at)) => at.saturating_sub(1),
+            (Steer::Down, Some(at)) => (at + 1).min(last),
+            (Steer::PageUp, Some(at)) => at.saturating_sub(page),
+            (Steer::PageDown, Some(at)) => (at + page).min(last),
+        };
+        selection.move_to(to, extend);
+        moved = Some(to);
+    }
+    moved
 }
 
 /// One row, as its drawing closure sees it.
@@ -154,10 +247,32 @@ pub fn show<T>(
     let sense = if touch { egui::Sense::click() } else { egui::Sense::click_and_drag() };
     let modifiers = ui.input(|i| i.modifiers);
     let playing_color = crate::theme::playing_color(ui.ctx());
-    let scroll = egui::ScrollArea::vertical()
-        .id_salt(id)
-        .auto_shrink([false, false])
-        .show_rows(ui, row_height, items.len(), |ui, range| {
+
+    // The keys, when this is the list in front. Rows are drawn only where
+    // they're in view, so bringing the cursor's row into view is done by
+    // the offset, from where the list was scrolled to last frame.
+    let in_front = ui.ctx().data(|d| d.get_temp::<Option<egui::Id>>(keyboard_id())).flatten() == Some(id);
+    let steers = match in_front {
+        true => ui.ctx().data_mut(|d| d.remove_temp::<Vec<(Steer, bool)>>(steers_id())).unwrap_or_default(),
+        false => Vec::new(),
+    };
+    let view_id = id.with("view");
+    let (offset, height) = ui.ctx().data(|d| d.get_temp::<(f32, f32)>(view_id)).unwrap_or_default();
+    let pitch = row_height + ui.spacing().item_spacing.y;
+    let page = ((height / pitch) as usize).max(1);
+    let mut area = egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]);
+    if let Some(row) = apply(selection, &steers, items.len(), page, playing, &mut output) {
+        let top = row as f32 * pitch;
+        let shown = if top < offset {
+            top
+        } else if top + row_height > offset + height {
+            top + row_height - height
+        } else {
+            offset
+        };
+        area = area.vertical_scroll_offset(shown);
+    }
+    let scroll = area.show_rows(ui, row_height, items.len(), |ui, range| {
             for idx in range {
                 let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), row_height));
                 // Not focusable: a focused row would count as typing and turn the keys off.
@@ -217,9 +332,12 @@ pub fn show<T>(
             }
         });
 
-    // Keys, while the pointer is over the list and nothing's being typed.
+    ui.ctx().data_mut(|d| d.insert_temp(view_id, (scroll.state.offset.y, scroll.inner_rect.height())));
+
+    // Keys, while the list is in front or under the pointer, and nothing's
+    // being typed.
     let typing = ui.ctx().memory(|m| m.focused().is_some());
-    if !typing && ui.rect_contains_pointer(scroll.inner_rect) {
+    if !typing && (in_front || ui.rect_contains_pointer(scroll.inner_rect)) {
         let (select_all, delete) = ui.input_mut(|i| {
             (i.consume_key(egui::Modifiers::COMMAND, egui::Key::A), i.key_pressed(egui::Key::Delete))
         });
@@ -379,6 +497,29 @@ mod tests {
         clicks(&mut selection, &[(1, PLAIN), (3, CTRL)]);
         assert_eq!(selection.rows_for(3), vec![1, 3]);
         assert_eq!(selection.rows_for(2), vec![2]);
+    }
+
+    fn steers(selection: &mut Selection, steers: &[(Steer, bool)], playing: Option<usize>) -> (Vec<usize>, Option<usize>) {
+        let mut output = ListOutput::default();
+        apply(selection, steers, 10, 4, playing, &mut output);
+        (selection.rows().to_vec(), output.activated)
+    }
+
+    #[test]
+    fn keys_move_the_cursor() {
+        let mut selection = Selection::default();
+        assert_eq!(steers(&mut selection, &[(Steer::Down, false)], Some(6)), (vec![6], None), "starts on the playing row");
+        assert_eq!(steers(&mut selection, &[(Steer::Down, false), (Steer::Down, false)], None), (vec![8], None));
+        assert_eq!(steers(&mut selection, &[(Steer::PageDown, false)], None), (vec![9], None), "stops at the end");
+        assert_eq!(steers(&mut selection, &[(Steer::PageUp, false), (Steer::Open, false)], None), (vec![5], Some(5)));
+        assert_eq!(steers(&mut selection, &[(Steer::Up, true), (Steer::Up, true)], None), (vec![3, 4, 5], None), "Shift grows it");
+        assert_eq!(steers(&mut selection, &[(Steer::Down, true)], None), (vec![4, 5], None), "and shrinks it back");
+        assert_eq!(steers(&mut selection, &[(Steer::First, false)], None), (vec![0], None));
+        clicks(&mut selection, &[(7, PLAIN)]);
+        assert_eq!(steers(&mut selection, &[(Steer::Last, true)], None), (vec![7, 8, 9], None), "from the click");
+        let mut empty = Selection::default();
+        let mut output = ListOutput::default();
+        assert_eq!(apply(&mut empty, &[(Steer::Down, false)], 0, 4, None, &mut output), None);
     }
 
     #[test]

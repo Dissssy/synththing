@@ -429,6 +429,9 @@ pub struct App {
     keymap_capture: Option<keyboard::Capture>,
     /// A key sequence underway (its first presses).
     keymap_pending: Option<commands::Pending>,
+    /// The list the keys steer (`select_list::set_keyboard`): the one in
+    /// the tab in front.
+    keyboard_list: Option<&'static str>,
     /// The script's Settings or Controls window, if open.
     script_window: Option<script_windows::ScriptWindow>,
     /// The category picked in each (Settings, Controls, Debug).
@@ -738,6 +741,7 @@ impl App {
             keymap: Arc::default(),
             keymap_capture: None,
             keymap_pending: None,
+            keyboard_list: None,
             script_window: None,
             script_window_tab: [0; 3],
             user_presets: None,
@@ -3419,6 +3423,8 @@ impl App {
             Command::TogglePause => self.send(AudioCommand::TogglePause),
             Command::SeekBack => self.send(AudioCommand::SeekRelative(-5.0)),
             Command::SeekForward => self.send(AudioCommand::SeekRelative(5.0)),
+            Command::SeekBackLong => self.send(AudioCommand::SeekRelative(-30.0)),
+            Command::SeekForwardLong => self.send(AudioCommand::SeekRelative(30.0)),
             Command::RestartSong => self.send(AudioCommand::Seek(0.0)),
             Command::NextTrack => {
                 if self.has_next() {
@@ -3447,6 +3453,25 @@ impl App {
             Command::GoTo(section) => self.reveal_section(section),
             Command::NextSection => self.step_section(1),
             Command::PreviousSection => self.step_section(-1),
+            Command::Cursor(steer) => select_list::steer(ctx, steer, ctx.input(|i| i.modifiers.shift)),
+        }
+    }
+
+    /// The list in the tab (or page) in front, for the keys to steer.
+    fn find_keyboard_list(&mut self) -> Option<&'static str> {
+        if self.dedicated.is_some() {
+            return None;
+        }
+        let section = if self.mobile() {
+            self.mobile_list_section()?
+        } else {
+            *self.dock.find_active_focused()?.1
+        };
+        match section {
+            Section::Songs => Some("songs"),
+            Section::Groupings => Some("playlist_rows"),
+            Section::Soundfonts => Some("soundfonts"),
+            _ => None,
         }
     }
 
@@ -3469,6 +3494,7 @@ impl App {
             // (The mobile layout has pages, not tabs.)
             Command::GoTo(section) => !self.mobile() && self.dedicated.is_none() && section != Section::Removed,
             Command::NextSection | Command::PreviousSection => !self.mobile() && self.dedicated.is_none(),
+            Command::Cursor(_) => self.keyboard_list.is_some(),
             _ => true,
         }
     }
@@ -4017,6 +4043,8 @@ impl eframe::App for App {
         // modal is up (Escape closes the modal instead) or a binding is
         // being captured.
         self.sync_keymap(&ctx);
+        self.keyboard_list = self.find_keyboard_list();
+        select_list::set_keyboard(&ctx, self.keyboard_list);
         if !self.any_modal_open() && self.binding_capture.is_none() {
             let typing = ctx.memory(|m| m.focused().is_some());
             let available: Vec<Command> = Command::ALL.into_iter().filter(|&c| self.command_available(c)).collect();
