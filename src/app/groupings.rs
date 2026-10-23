@@ -944,7 +944,7 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
         ui.add_sized([24.0, rect.height()], egui::Label::new(egui::RichText::new(number).weak()));
         let scroll = track.here && (playing || response.contains_pointer());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(4.0);
+            ui.add_space(select_list::EDGE);
             if let Some((sooner, later)) = moves {
                 if ui.button(super::icon("x")).on_hover_text("Take it out").clicked() {
                     output.change = Some(Change::Out);
