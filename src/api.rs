@@ -2,7 +2,7 @@
 //! this computer can ask of the running app, for integrations people build
 //! themselves (home automation, notifications, game hooks). Off until it's
 //! turned on in Preferences > Integrations, and then only reachable from
-//! this computer.
+//! this computer, unless it's let in from the local network as well.
 //!
 //! Every app that uses it is given its own token (`Access`) with what it
 //! may do: read (the library, what's playing, the event stream) and
@@ -52,6 +52,8 @@ pub struct Settings {
     /// `None`: `DEFAULT_PORT`.
     pub port: Option<u16>,
     pub apps: Vec<Access>,
+    /// Listen on the local network too, not only this computer.
+    pub lan: bool,
     /// Show synththing in the system's media controls
     /// (`media_controls.rs`): `None` means yes.
     pub media_controls: Option<bool>,
@@ -100,6 +102,14 @@ pub enum Call {
     NowPlaying(Sender<NowPlaying>),
     /// A copy of the library and its playlists, to search.
     Library(Sender<Library>),
+    /// Play a song (by its key), or a playlist (by its ID) from the top or
+    /// from one of its songs: `Err` (with its status) if there's no such
+    /// song or playlist.
+    Play {
+        song: Option<String>,
+        playlist: Option<String>,
+        reply: Sender<Result<(), (u16, String)>>,
+    },
     /// A song a program sent (`program`, by its name), already in the
     /// store's folder, to add to the library: the song, and whether it's
     /// new to the library (only then is it marked as the program's).
@@ -213,9 +223,9 @@ struct Shared {
 }
 
 impl Server {
-    /// Listen on `port` on this computer only.
-    pub fn start(port: u16, apps: Vec<Access>, waker: egui::Context) -> Result<Server, String> {
-        let http = tiny_http::Server::http(("127.0.0.1", port)).map_err(|e| format!("couldn't listen on port {port}: {e}"))?;
+    /// Listen on `port`, on this computer only unless `lan`.
+    pub fn start(port: u16, lan: bool, apps: Vec<Access>, waker: egui::Context) -> Result<Server, String> {
+        let http = tiny_http::Server::http((if lan { "0.0.0.0" } else { "127.0.0.1" }, port)).map_err(|e| format!("couldn't listen on port {port}: {e}"))?;
         let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
         let http = Arc::new(http);
         let (tx, calls) = mpsc::channel();
@@ -358,6 +368,17 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 Ok(Err(why)) => error(409, why),
                 Err(reply) => reply,
             },
+        })),
+        (Method::Post, ["v1", "play"]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| {
+            let (song, playlist) = (query.get("song").cloned(), query.get("playlist").cloned());
+            if song.is_none() && playlist.is_none() {
+                return error(400, "say what to play: ?song=<key> or ?playlist=<id>");
+            }
+            match ask(shared, |reply| Call::Play { song, playlist, reply }) {
+                Ok(Ok(())) => Response::from_data(Vec::new()).with_status_code(204),
+                Ok(Err((status, why))) => error(status, why),
+                Err(reply) => reply,
+            }
         })),
         (Method::Get, ["v1", "now-playing"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::NowPlaying).map_or_else(|reply| reply, |now| json(200, &now))))
@@ -508,7 +529,7 @@ mod tests {
         reader.read = true;
         let (mut controller, control_token) = Access::new("controller");
         (controller.read, controller.control) = (false, true);
-        let server = Server::start(0, vec![reader, controller], egui::Context::default()).unwrap();
+        let server = Server::start(0, false, vec![reader, controller], egui::Context::default()).unwrap();
         (server, read_token, control_token)
     }
 
@@ -527,6 +548,8 @@ mod tests {
                     Call::Command(_, reply) => reply.send(Ok(())).unwrap(),
                     Call::NowPlaying(reply) => reply.send(NowPlaying::default()).unwrap(),
                     Call::Library(reply) => reply.send(library()).unwrap(),
+                    Call::Play { song: Some(song), reply, .. } if song == "missing" => reply.send(Err((404, "no such song".into()))).unwrap(),
+                    Call::Play { reply, .. } => reply.send(Ok(())).unwrap(),
                     Call::Add { .. } => unreachable!("no test adds songs here"),
                 }
             }
@@ -557,6 +580,17 @@ mod tests {
         assert_eq!(answering(&server, empty, post("play", &control_token)), 204);
         assert_eq!(answering(&server, empty, post("quit", &control_token)), 409);
         assert_eq!(answering(&server, empty, post("fly", &control_token)), 404);
+
+        let url = format!("http://{}/v1/play", server.addr());
+        let play = move |query: &str, token: &str| {
+            let (url, token) = (format!("{url}{query}"), format!("Bearer {token}"));
+            move || agent().post(url).header("Authorization", token).send_empty().unwrap().status().as_u16()
+        };
+        assert_eq!(answering(&server, empty, play("?song=abc", &read_token)), 403);
+        assert_eq!(answering(&server, empty, play("", &control_token)), 400);
+        assert_eq!(answering(&server, empty, play("?song=abc", &control_token)), 204);
+        assert_eq!(answering(&server, empty, play("?playlist=p1&song=abc", &control_token)), 204);
+        assert_eq!(answering(&server, empty, play("?song=missing", &control_token)), 404);
     }
 
     #[test]
@@ -615,7 +649,7 @@ mod tests {
         reader.control = true;
         let (mut adder, add_token) = Access::new("adder");
         adder.add_songs = true;
-        let server = Server::start(0, vec![reader, adder], egui::Context::default()).unwrap();
+        let server = Server::start(0, false, vec![reader, adder], egui::Context::default()).unwrap();
         let post = |query: &str, token: &str| {
             agent()
                 .post(format!("http://{}/v1/songs{query}", server.addr()))

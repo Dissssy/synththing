@@ -57,9 +57,11 @@ impl App {
         if !wanted {
             self.api.server = None;
             self.api.failed = None;
-        } else if self.api.server.as_ref().is_none_or(|s| s.addr().port() != port) && self.api.failed.as_ref().is_none_or(|(p, _)| *p != port) {
+        } else if self.api.server.as_ref().is_none_or(|s| s.addr().port() != port || s.addr().ip().is_loopback() == settings.lan)
+            && self.api.failed.as_ref().is_none_or(|(p, _)| *p != port)
+        {
             self.api.server = None;
-            match api::Server::start(port, settings.apps.clone(), ctx.clone()) {
+            match api::Server::start(port, settings.lan, settings.apps.clone(), ctx.clone()) {
                 Ok(server) => {
                     log::info!("api: listening on {}", server.addr());
                     self.api.server = Some(server);
@@ -84,6 +86,9 @@ impl App {
                 }
                 Call::NowPlaying(reply) => {
                     let _ = reply.send(self.api_now_playing(view));
+                }
+                Call::Play { song, playlist, reply } => {
+                    let _ = reply.send(self.api_play(song.as_deref(), playlist.as_deref()));
                 }
                 Call::Add { stored, program, reply } => {
                     let _ = reply.send(self.api_add(stored, &program));
@@ -111,6 +116,35 @@ impl App {
         }
         let song = self.songs.get_by_key(&key).ok_or("the song didn't stay in the library")?;
         Ok((SongInfo::of(&key, song, &self.songs), new))
+    }
+
+    /// `POST /v1/play`: playlist `playlist` (by its ID) from `song` or
+    /// from the top, or `song` (by its key) on its own, leaving any
+    /// playlist.
+    fn api_play(&mut self, song: Option<&str>, playlist: Option<&str>) -> Result<(), (u16, String)> {
+        let missing_song = || (404, "there's no song with that key in the library".to_string());
+        let Some(id) = playlist else {
+            let key = song.filter(|key| self.songs.has(key)).ok_or_else(missing_song)?;
+            self.play_path(self.songs.path(key));
+            return Ok(());
+        };
+        let list = self.playlists.lists.iter().position(|l| l.id == id).ok_or((404, "there's no playlist with that ID".to_string()))?;
+        let Some(key) = song else {
+            if self.playlists.lists[list].playlist.entries.is_empty() {
+                return Err((409, "that playlist is empty".into()));
+            }
+            self.play_playlist(list);
+            return Ok(());
+        };
+        let dir = self.songs.dir();
+        let entry = self.playlists.lists[list]
+            .playlist
+            .entries
+            .iter()
+            .position(|e| crate::song_store::key_in(dir, &e.path) == Some(key))
+            .ok_or((404, "that song isn't in that playlist".to_string()))?;
+        self.play_entry(list, entry);
+        Ok(())
     }
 
     /// Run `command` if it can run now.
@@ -292,6 +326,13 @@ impl App {
         }
         ui.add_space(4.0);
         ui.checkbox(&mut settings.on, "Let programs on this computer use the API");
+        ui.checkbox(&mut settings.lan, "Let devices on the local network in too").on_hover_text(
+            "Other computers and phones on your network can use it with a program's token. Tokens and everything else go unencrypted, \
+             so only turn this on in a network you trust",
+        );
+        if settings.lan {
+            ui.colored_label(ui.visuals().warn_fg_color, "Anyone on this network who gets a token can use it, and traffic isn't encrypted.");
+        }
         ui.horizontal(|ui| {
             ui.label("Port");
             let mut port = settings.port();
@@ -300,7 +341,12 @@ impl App {
         });
         match (&self.api.server, &self.api.failed) {
             (Some(server), _) => {
-                ui.weak(format!("Listening on http://{}", server.addr()));
+                let addr = server.addr();
+                if addr.ip().is_loopback() {
+                    ui.weak(format!("Listening on http://{addr}"));
+                } else {
+                    ui.weak(format!("Listening on http://localhost:{0} here, and on port {0} of this computer's network address", addr.port()));
+                }
             }
             (None, Some((_, why))) if settings.on => {
                 ui.colored_label(ui.visuals().error_fg_color, why);
@@ -373,7 +419,7 @@ impl App {
             self.api_preferences_closed();
         }
         if self.config.api != before {
-            if self.config.api.port() != before.port() {
+            if self.config.api.port() != before.port() || self.config.api.lan != before.lan {
                 self.api.failed = None;
             }
             self.save_config();

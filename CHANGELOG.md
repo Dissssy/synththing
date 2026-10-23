@@ -8,6 +8,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - A local API for your own integrations (Preferences > Integrations, desktop only, off by default): programs on this computer can see what's playing, search your songs and playlists, follow events (song changed, paused, seeked, library changed) and run any command the keyboard can, including new Play and Pause commands. Each program gets its own token, allowed to read, control or both. See docs/API.md.
 - synththing shows in your system's media controls: media keys, the volume overlay on Windows, Now Playing on macOS and MPRIS on Linux (so desktop widgets, KDE Connect and Home Assistant's MPRIS support see it too). Play, pause, skip, seek and volume work from there. On by default; Preferences > Integrations turns it off.
 - Programs can add songs to your library through the local API, only when you tick Add songs for them. Each song one adds is marked with its name on all your devices: search `addedby:name` to find them, and Preferences > Integrations can remove everything a program added in one go.
+- The local API can play a song or playlist (`POST /v1/play`), and can be let in from the local network as well as this computer (off by default; it's unencrypted, so only on a network you trust).
 
 ## 1.3.1 (2026-10-21)
 

@@ -1,12 +1,12 @@
 # Local API
 
-synththing can let programs on the same computer talk to it: see what's playing, search the library, follow what happens and run commands. Use it for your own integrations: home automation, notifications, stream overlays, game hooks. It's desktop only and off until you turn it on.
+synththing can let programs on the same computer (or, if you choose, your local network) talk to it: see what's playing, search the library, follow what happens and run commands. Use it for your own integrations: home automation, notifications, stream overlays, game hooks. It's desktop only and off until you turn it on.
 
 ## Turning it on
 
 Preferences > Integrations:
 
-1. Tick **Let programs on this computer use the API**. It listens on `127.0.0.1`, port 7340 unless you pick another. Nothing outside this computer can reach it.
+1. Tick **Let programs on this computer use the API**. It listens on `127.0.0.1`, port 7340 unless you pick another. Nothing outside this computer can reach it unless you also tick **Let devices on the local network in too**: then other computers and phones on your network can use it at this computer's address, with a token as always. It's plain HTTP, so tokens and everything else cross the network unencrypted: only turn it on in a network you trust.
 2. Type a name for your program and click **Add**. Copy the token it shows: only its hash is kept, so it isn't shown again (remove the program and add it again for a new one).
 3. Tick what that program may do: **Read** (the library, what's playing, events), **Control** (run commands) and **Add songs** (send songs into your library). Add songs is never on until you tick it.
 
@@ -20,11 +20,11 @@ Where a header can't be set (a browser's `EventSource`), add `?token=st_...` to 
 
 ## Requests
 
-Everything is JSON. Errors come back as `{"error": "..."}` with a status: 401 (no or unknown token), 403 (the token isn't allowed that), 404, 409 (the command can't run right now) or 503 (synththing didn't answer in time).
+Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (something's missing from the request), 401 (no or unknown token), 403 (the token isn't allowed that), 404, 409 (the command can't run right now) or 503 (synththing didn't answer in time).
 
 | Request | Needs | What it gives |
 | --- | --- | --- |
-| `GET /v1` | any token | `{"app", "version", "read", "control"}`: who you are to it |
+| `GET /v1` | any token | `{"app", "version", "read", "control", "add_songs"}`: who you are to it |
 | `GET /v1/now-playing` | read | What's playing (below) |
 | `GET /v1/songs?q=&offset=&limit=` | read | `{"total", "songs": [...]}`: the songs `q` finds, by file name, at most 500 at a time |
 | `GET /v1/songs/{key}` | read | One song |
@@ -32,6 +32,9 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 401 (n
 | `GET /v1/playlists` | read | `[{"id", "name", "smart", "songs": [keys]}]` |
 | `GET /v1/commands` | read | `[{"id", "name"}]`: every command there is |
 | `POST /v1/commands/{id}` | control | Runs it: 204 when it ran |
+| `POST /v1/play?song={key}` | control | Plays that song on its own, leaving any playlist: 204 |
+| `POST /v1/play?playlist={id}` | control | Plays that playlist from the top (anywhere, with Shuffle on): 204, or 409 if it's empty |
+| `POST /v1/play?playlist={id}&song={key}` | control | Plays that playlist from that song: 204, or 404 if the song isn't in it |
 | `GET /v1/events` | read | Server-Sent Events (below) |
 
 `q` works like the Songs search box: filters such as `artist:bonno`, `year:1990..1999`, `is:starred` or `tag:chill`, and any other words must each be in the title, artist, album or file name.
@@ -77,6 +80,7 @@ Separately from the API, synththing shows what's playing in the system's media c
 TOKEN=st_...
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7340/v1/now-playing
 curl -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7340/v1/commands/next_track
+curl -X POST -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:7340/v1/play?song=3f2a..."
 curl -N -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7340/v1/events
 curl -H "Authorization: Bearer $TOKEN" --data-binary @Song.mp3 "http://127.0.0.1:7340/v1/songs?name=Song.mp3"
 ```
