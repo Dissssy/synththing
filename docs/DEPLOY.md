@@ -1,12 +1,13 @@
-# Running a script library server
+# Running a server
 
-A synththing script library server is `synththing serve` (docs/cli.md; the design is in docs/SERVER.md): one program, one data folder, behind a reverse proxy for HTTPS. Two ways to run it: in Docker, or directly under systemd. The files for both are in `deploy/`.
+A synththing server is `synththing serve` (docs/cli.md; how it works is in docs/SERVER.md): it holds a script library, and, when turned on, signs devices in, syncs them and relays songs between them. It's one program, one data folder, behind a reverse proxy for HTTPS. Two ways to run it: in Docker, or directly under systemd. The files for both are in `deploy/`.
 
 Either way, its data folder holds:
 
 - `server.json`: its settings, written with defaults on first run. See `deploy/server.example.json` and docs/cli.md.
 - `server.key`: its signing key, made on first run. Back it up: apps remember a server's key, and warn when it changes.
-- `library.db`: the scripts (SQLite).
+- `library.db`: the scripts, and everything else it keeps (SQLite).
+- `relay/`: songs waiting to move between someone's devices (with `"sync": true`).
 
 Behind a reverse proxy, set `"behind_proxy": true` so upload limits see the client's address, not the proxy's, and set `contact` to an address for reports and takedown requests.
 
@@ -14,7 +15,7 @@ Behind a reverse proxy, set `"behind_proxy": true` so upload limits see the clie
 
 Two compose files, the same apart from where the image comes from:
 
-- `deploy/docker-compose.yml`: the published image, `ghcr.io/dissssy/synththing:latest` (built for each release).
+- `deploy/docker-compose.yml`: the published image, `ghcr.io/dissssy/synththing:latest`. It's from 0.4.1 and not kept up to date for now: release.yml's `docker` job is off until there's a lighter server-only build. Use the next one.
 - `deploy/docker-compose.build.yml`: built from this repository (`Dockerfile`; the first build compiles everything, several minutes).
 
 ```
@@ -92,9 +93,9 @@ The official server's sign-in links (`/pair#...`) open in the Android app once A
 2. In `server.json`: `"android_fingerprints": ["AB:CD:..."]`. Restart. `https://synththing.p51.nl/.well-known/assetlinks.json` should list it.
 3. Android checks it when the app is installed or updated. Until then (or without it) the link opens the server's page in the browser, whose Open in synththing button still hands it to the app.
 
-## Settings sync
+## Sync
 
-Signed-in apps keep their settings the same across devices through their authority (docs/SERVER.md, Sync). On the authority, add `"sync": true` to `server.json` and restart. It stores each identity's settings encrypted (the server can't read them), at most 16 blobs of 1 MB per identity.
+Signed-in apps keep their settings, playlists and songs the same across devices through their authority (docs/SERVER.md, Sync). On the authority, add `"sync": true` to `server.json` and restart. Everything is encrypted on the devices, so the server can't read it: at most 16 blobs of 1 MB per identity for settings and playlists, and songs either streamed straight between two open devices (kept nowhere) or left in `relay/` for up to 7 days, up to `relay_song_mb` each (250) and `relay_mb_per_identity` in all (2048). Behind nginx, the relay needs the `/api/v1/relay/` block below (no body size limit, no buffering, long timeouts); Caddy needs nothing extra.
 
 ## Feedback intake
 
@@ -148,6 +149,25 @@ Check it from anywhere with `curl https://scripts.example.org/api/v1/info`, then
 ## The official server
 
 synththing.p51.nl runs the systemd setup above, with the update timer, behind Caddy. It's the identity authority (with SendGrid mail, from synththing@p51.nl), and its publisher is the official one (the default), whose key `.github/workflows/scripts.yml` publishes the bundled scripts with (the `SYNTHTHING_PUBLISH_KEY` secret).
+
+Its front page is `deploy/website/index.html`, a plain-language tour of what the app does, copied to `/var/www/synththing/`. Caddy sends the server's own paths to it and serves the page for the rest:
+
+```
+synththing.p51.nl {
+    @server path /api/* /pair /.well-known/*
+    handle @server {
+        reverse_proxy localhost:7381
+    }
+    handle {
+        root * /var/www/synththing
+        file_server
+    }
+}
+```
+
+The update script keeps it at the newest release's copy once `/var/www/synththing` exists, so update the page in the repo when a release adds something worth telling people about.
+
+The docs are at `/docs/` beside it: this folder's Markdown, rendered by [mdBook](https://rust-lang.github.io/mdBook/) (`book.toml`, with `docs/SUMMARY.md` as the table of contents). Each release carries them as `synththing-docs.tar.gz`, and the update script unpacks the newest into `/var/www/synththing/docs/`. To see them locally: `mdbook serve --open`. A new page goes in `docs/SUMMARY.md` too.
 
 Its EULA and privacy policy are `deploy/official/eula.md` and `privacy.md`, copied to `/var/lib/synththing/` and listed in its `server.json`:
 

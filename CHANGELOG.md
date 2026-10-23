@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.5.0 (2026-10-23)
+
 ### Added
 - Doom, a new game visualizer (New > Games): plays the first maps of a Doom WAD you put in a `doom.lua.assets` folder next to it (shareware DOOM1.WAD or Freedoom), with the map's music on your soundfont, its sound effects, and fights with zombies, imps and demons.
 - Scripts can keep the cursor in the window for mouse look in any view, not just the dedicated fullscreen, and `mouse_delta()` is raw mouse motion while the visualizer has focus, so turning doesn't stop at the edge.

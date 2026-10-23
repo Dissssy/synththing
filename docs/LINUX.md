@@ -1,8 +1,8 @@
-# Porting synththing to Linux
+# synththing on Linux
 
-synththing has only ever been built and run on Windows. This file lists what's known (from reading the code and the CI build, not from running the app on Linux) about getting it going there: what should already work, what's likely to need changes, and what has to be decided. It's meant as a starting point for whoever does the port, person or AI: check each item off (or correct it) as it's actually tried.
+The desktop app is made and tested on Windows. On Linux, the server side is proven (the official server, synththing.p51.nl, is the Linux release build running `synththing serve` under systemd), but the app's window, sound and input haven't been reported tried there yet. This file lists what's known (from reading the code and the CI build) about getting the app going there: what should already work, what's likely to need changes, and what has to be decided. It's meant as a starting point for whoever does the port, person or AI: check each item off (or correct it) as it's actually tried.
 
-Status: it builds on Ubuntu and every test passes (CI's `linux` job, required since 0.3.2; on the first try only one test failed, one using Windows paths). From 0.3.3, each release has a Linux build too, `synththing-linux-x86_64`, built on Ubuntu 22.04. Nobody has opened the window or heard it play on Linux yet: download it, `chmod +x synththing-linux-x86_64`, run it, and work through section 3.
+Status: it builds on Ubuntu and every test passes (CI's `linux` job). Each release has a Linux build, `synththing-linux-x86_64`, built on Ubuntu 22.04 so it runs on distributions with an older glibc. To try the app: download it, `chmod +x synththing-linux-x86_64`, run it, and work through section 3.
 
 ## 1. Get it compiling
 
@@ -25,17 +25,7 @@ cargo test --lib
 | eframe / winit | xkbcommon, Wayland, X11 libraries, OpenGL | the window |
 | mlua (`vendored`) | a C compiler | builds Lua 5.4 from source |
 
-CI (`.github/workflows/ci.yml`) has a `linux` job doing this on every push to master, so it stays building. It runs:
-
-```yaml
-  linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev libwayland-dev
-      - run: cargo build
-      - run: cargo test --lib
-```
+CI (`.github/workflows/ci.yml`) has a `linux` job doing this (with the first five packages) on every push to master and every pull request, so it stays building. It runs on the self-hosted runner the `RUNNER` variable names (`deploy/ci-runner.compose.yml`), GitHub's `ubuntu-latest` without it.
 
 ## 2. Already handled in the code
 
@@ -46,6 +36,7 @@ These have non-Windows branches already (written blind, so still worth checking)
 - **Recording file names** (`recorder.rs`). `local_timestamp` uses UTC off Windows (no time zone lookup without another dependency); a crate like `time` or `chrono` with local offsets would fix it.
 - **Show in folder** (`app.rs`, `open_in_file_manager`). Uses `xdg-open` on the folder (it can't select the file the way Explorer does).
 - **The updater** (`updater.rs`). `ASSET_NAME` is per platform: on Linux it looks for `synththing-linux-x86_64` (attached to releases from 0.3.3), marks the download executable, and swaps it in with `self-replace` like on Windows. Untested on Linux so far.
+- **Media controls** (`media_controls.rs`). souvlaki speaks MPRIS over D-Bus (pure Rust, `zbus`), so desktop widgets, KDE Connect and Home Assistant's MPRIS support see what's playing and can control it.
 - **Folders.** `directories` gives `~/.config/synththing` for the config (scripts, playlists, themes, logs), with the song library in its `music` folder.
 - **Paths and file names.** Extensions are compared case-insensitively. Script renames reject names Windows wouldn't allow, which is stricter than Linux needs but harmless.
 
@@ -58,8 +49,8 @@ These have non-Windows branches already (written blind, so still worth checking)
 - **Extra windows.** The Themes window is a second OS window (an immediate egui viewport). If a backend can't do that, egui falls back to drawing it inside the main window, which still works.
 - **Audio latency.** The audio buffer (`buffer_ms`, a slider in the controls) was tuned on Windows. ALSA through PipeWire or PulseAudio may want a bigger default; the visuals already follow what's actually heard (`AudioRing` backlog), so only the latency changes.
 - **Game controllers.** gilrs reads `/dev/input/event*`, which needs the user in the `input` group or a udev rule on some distributions. No controller means no pad input, nothing worse.
-- **Keyboard.** F5, F9, F10 and F11 are the app's own keys (restart the script, recording, fullscreen). Some desktops take F11 or F10 for themselves.
-- **Fonts and text.** All fonts are built in (egui's, plus Monogram for scripts), so nothing depends on what's installed.
+- **Keyboard.** F5, F9, F10 and F11 are the app's keys by default (restart the script, recording, fullscreen). Some desktops take F11 or F10 for themselves; Preferences > Keyboard rebinds them.
+- **Fonts and text.** The main fonts are built in (egui's, Noto Sans JP and KR, Monogram for scripts); installed fonts (found with `fontdb`, `app/fonts.rs`) fill in other scripts' characters. A system with few fonts only shows rarer characters as boxes.
 - **The release build without a console.** `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` only matters on Windows. On Linux, launched from a desktop entry, stdout goes nowhere; `--console` still prints the log when run from a terminal.
 
 ## 4. Decisions for whoever ports it

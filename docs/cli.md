@@ -80,17 +80,17 @@ With `--check`, it only checks that the script runs: it compiles and plays a few
 
 `--soundfont` defaults to the first one in the app's Soundfonts list. Exit codes: `0` made it (or it checked out), `1` the script has an error, `2` something couldn't be loaded.
 
-## serve: run a script library server
+## serve: run a server
 
 ```
 synththing serve [--data DIR] [--bind ADDR]
 ```
 
-Runs a script library server (the design is in docs/SERVER.md): the app's Online Library tab browses, installs and publishes scripts on it once its address is added under Preferences > Online Library. It serves until stopped (Ctrl+C), printing a line per upload.
+Runs a server (how it works is in docs/SERVER.md, running one for real in docs/DEPLOY.md): a script library, which the app's Online Library tab browses, installs and publishes scripts on once its address is added under Preferences > Online Library, and, with `authority` and `sync`, sign-in, sync and the song relay for apps that use it as their authority. It serves until stopped (Ctrl+C), printing a line per upload.
 
 | Option | Default | |
 |---|---|---|
-| `--data` | `server` in the app's config folder | The folder it keeps everything in: `server.json` (its settings), `server.key` (its signing key), `email.pepper` (what email addresses are hashed with), `library.db` (the scripts), `previews/` and `soundfonts/` (what previews are made with). Made on first run, with default settings to edit. |
+| `--data` | `server` in the app's config folder | The folder it keeps everything in: `server.json` (its settings), `server.key` (its signing key), `email.pepper` (what email addresses are hashed with), `library.db` (the scripts and everything else it keeps), `previews/` and `soundfonts/` (what previews are made with), `relay/` (songs on their way between devices) and `intake.token` (with `intake`). Made on first run, with default settings to edit. |
 | `--bind` | `server.json`'s `bind` (127.0.0.1:7381) | The address and port to listen on. |
 
 `server.json`:
@@ -106,7 +106,10 @@ Runs a script library server (the design is in docs/SERVER.md): the app's Online
 - `threads`: request workers (4).
 - `check_uploads`: refuse uploads that don't run on this server's version (`preview --check`): they don't compile, or error in their first seconds (true). One whose check takes over 12 seconds is taken: slow isn't broken.
 - `previews`: make a preview of each upload (true), one at a time, each by `synththing preview` in a process of its own; at startup, any script's newest version without one is queued. They play the starter songs with TimGM6mb, downloaded into `soundfonts/` the first time, unless `preview_soundfont` names another.
-- `sync`: keep signed-in apps' synced settings, encrypted so only their devices can read them (false). Apps sync with their authority, so this is for an authority.
+- `sync`: keep signed-in apps' synced settings and playlists, and relay their songs between their devices, all encrypted so only their devices can read them (false). Apps sync with their authority, so this is for an authority.
+- `relay_song_mb`, `relay_mb_per_identity`: the biggest song the relay keeps for a device that isn't open (250), and how much it keeps per identity in all (2048; past it, the oldest go). Songs streamed straight between two open devices aren't kept, and have no limit.
+- `intake`: hand feedback out to the hourly intake run, with the token in `intake.token` (false; docs/DEPLOY.md, Feedback intake).
+- `android_fingerprints`: the SHA-256 fingerprints of the key the Android app is signed with, served in `/.well-known/assetlinks.json` so Android opens this server's sign-in links in the app (docs/DEPLOY.md).
 - `preview_seconds`: how long making one may take before it's stopped (120); the first frame it drew stays as the still.
 - `authorities`: the identity authorities whose rotation records it takes (their keys, hex): the official server's by default.
 - `authority`: this server is an identity authority itself (false): it issues rotations (an identity moving to a new key), and with `mail`, attaches recovery emails and recovers identities by them (docs/SERVER.md).
