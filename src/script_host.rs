@@ -119,6 +119,7 @@ enum Message {
     SetSong { path: PathBuf, id: String, notes: Arc<NoteList> },
     SetAppLog(bool),
     SetRecording(bool, Option<RecordingTake>),
+    SetStreaming(bool),
     /// Read the script's variables now and then, as far as the request
     /// opens them (the Debug window shows them), or stop (`None`).
     WatchState(Option<StateRequest>),
@@ -163,6 +164,7 @@ pub struct ScriptHost {
     app_log: bool,
     /// Whether a recording is running, and the take, as last sent.
     recording: (bool, Option<RecordingTake>),
+    streaming: bool,
     /// What of the script's variables is being watched, as last sent.
     watching_state: Option<StateRequest>,
 }
@@ -228,6 +230,7 @@ impl ScriptHost {
             pipe: Some(pipe),
             app_log: false,
             recording: (false, None),
+            streaming: false,
             watching_state: None,
         }
     }
@@ -386,6 +389,15 @@ impl ScriptHost {
         if (recording, take) != self.recording {
             self.recording = (recording, take);
             self.send(Message::SetRecording(recording, take));
+        }
+    }
+
+    /// Whether the visualizer's pictures are going out through the local API
+    /// (sent on a change).
+    pub fn set_streaming(&mut self, streaming: bool) {
+        if streaming != self.streaming {
+            self.streaming = streaming;
+            self.send(Message::SetStreaming(streaming));
         }
     }
 
@@ -624,6 +636,7 @@ fn handle(visualizer: &mut LuaVisualizer, message: Message) -> Option<FrameDone>
         }
         Message::SetAppLog(on) => visualizer.set_app_log(on),
         Message::SetRecording(on, take) => visualizer.set_recording(on, take),
+        Message::SetStreaming(on) => visualizer.set_streaming(on),
         Message::WatchState(_) => {} // (handled by the worker)
         Message::SetSetting { key, value } => visualizer.set_setting(&key, value),
         Message::SetActionBindings { index, bindings } => visualizer.set_action_bindings(index, bindings),

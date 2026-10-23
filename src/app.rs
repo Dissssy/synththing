@@ -3186,7 +3186,13 @@ impl App {
             panel.set_pads(self.pad_frame.clone());
             panel.set_mobile(self.mobile());
         }
-        let fixed_size = self.recording.frame_size();
+        // (A program watching through the API: drawn at the size it asked
+        // for, unless a recording has a size already.)
+        let watched = self.api_watched();
+        self.script.set_streaming(watched.is_some());
+        let recording_size = self.recording.frame_size();
+        let fixed_size = recording_size.or(watched.flatten());
+        lock_panel(&self.visualizer).set_off_screen(recording_size.is_none() && watched.flatten().is_some());
         let (hold, timestep) = self.pace_recording();
         self.visualizer_output = lock_panel(&self.visualizer).show(
             ui,
@@ -3201,6 +3207,9 @@ impl App {
             timestep,
         );
         self.feed_recording(ui);
+        if self.visualizer_output.rendered && watched.is_some() {
+            self.api_offer_frame();
+        }
         self.visualizer_drawn = true;
         let effects = lock_panel(&self.visualizer).take_effects();
         self.apply_script_effects(effects, playback);

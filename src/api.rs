@@ -41,6 +41,10 @@ const WORKERS: usize = 2;
 const MOST_STREAMS: usize = 32;
 /// How long a stream goes quiet before a keep-alive comment.
 const KEEP_ALIVE: Duration = Duration::from_secs(25);
+/// The visualizer stream's frame rate, unless it asks for another.
+const DEFAULT_FPS: u32 = 30;
+/// How long `frame.jpg` waits for the visualizer to draw one.
+const FRAME_WAIT: Duration = Duration::from_secs(3);
 /// How long a request waits for the app to answer.
 const APP_WAIT: Duration = Duration::from_secs(5);
 /// The events there are (`GET /v1/events?events=` picks among them).
@@ -412,6 +416,8 @@ struct Shared {
     waker: egui::Context,
     /// Each open stream, with the events it wants (`None`: all).
     streams: Mutex<Vec<(Option<Vec<String>>, Sender<String>)>>,
+    /// The visualizer's pictures, for whoever's watching them.
+    frames: Arc<crate::visualizer_stream::Frames>,
 }
 
 impl Server {
@@ -421,7 +427,7 @@ impl Server {
         let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
         let http = Arc::new(http);
         let (tx, calls) = mpsc::channel();
-        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default() });
+        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default(), frames: crate::visualizer_stream::Frames::new() });
         let threads = (0..WORKERS)
             .map(|_| {
                 let (http, shared) = (Arc::clone(&http), Arc::clone(&shared));
@@ -440,6 +446,11 @@ impl Server {
 
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// The visualizer's pictures, for the API's watchers.
+    pub fn frames(&self) -> &crate::visualizer_stream::Frames {
+        &self.shared.frames
     }
 
     /// The apps allowed in, as the preferences now have them.
@@ -568,8 +579,8 @@ fn ask<T>(shared: &Shared, call: impl FnOnce(Sender<T>) -> Call) -> Result<T, Re
 
 fn handle(shared: &Arc<Shared>, mut request: Request) {
     let url = request.url().to_string();
-    let (path, query) = url.split_once('?').unwrap_or((&url, ""));
-    let query = crate::library::server::parse_query(query);
+    let (path, raw_query) = url.split_once('?').unwrap_or((&url, ""));
+    let query = crate::library::server::parse_query(raw_query);
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
     let method = request.method().clone();
     if !shared.lan && !from_here(&request) {
@@ -601,6 +612,41 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 return;
             }
         },
+        (Method::Get, ["v1", "visualizer"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            // (A page OBS's Browser Source, or a browser, can show: the
+            // stream, with the same query, token and all.)
+            let query = raw_query.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
+            let page = format!(
+                "<!doctype html><meta charset=\"utf-8\"><title>synththing visualizer</title>\
+                 <style>html,body{{margin:0;height:100%;background:transparent;overflow:hidden}}\
+                 img{{width:100%;height:100%;object-fit:contain;display:block}}</style>\
+                 <img src=\"/v1/visualizer/stream?{query}\" alt=\"\">"
+            );
+            Response::from_data(page).with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap())
+        })),
+        (Method::Get, ["v1", "visualizer", "stream"]) => match needs(access.read, "read").map_or_else(|| watch_options(&query), Err) {
+            Err(reply) => Some(reply),
+            Ok((size, fps)) => {
+                video(shared, request, size, fps);
+                return;
+            }
+        },
+        (Method::Get, ["v1", "visualizer", "frame.jpg"]) => Some(needs(access.read, "read").unwrap_or_else(|| match watch_options(&query) {
+            Err(reply) => reply,
+            Ok((size, _)) => {
+                let watching = shared.frames.watch(size);
+                let seen = shared.frames.next(0, Duration::ZERO).map_or(0, |(_, count)| count);
+                shared.waker.request_repaint();
+                let frame = shared.frames.next(seen, FRAME_WAIT);
+                drop(watching);
+                match frame {
+                    Some((jpeg, _)) => Response::from_data(jpeg.to_vec())
+                        .with_header(Header::from_bytes("Content-Type", "image/jpeg").unwrap())
+                        .with_header(Header::from_bytes("Cache-Control", "no-cache").unwrap()),
+                    None => error(503, "the visualizer didn't draw a frame: is it showing?"),
+                }
+            }
+        })),
         (Method::Post, ["v1", "seek"]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| {
             match query.get("to").and_then(|t| t.parse::<f64>().ok()).filter(|t| t.is_finite() && *t >= 0.0) {
                 None => error(400, "say where to: ?to=<seconds>"),
@@ -985,6 +1031,62 @@ fn matching<'s>(store: &'s SongStore, query: &str) -> Vec<(String, &'s Song)> {
 
 /// `GET /v1/events`: keep the connection, on a thread of its own, and send
 /// it every event until it's closed.
+/// `?width=&height=&fps=` for the visualizer's pictures: the size to draw
+/// them at (both or neither), and how many a second at most.
+fn watch_options(query: &HashMap<String, String>) -> Result<(Option<(usize, usize)>, u32), Reply> {
+    let side = |name: &str| query.get(name).map(|v| v.parse::<u32>().map_err(|_| error(400, format!("?{name}= is a number of pixels"))));
+    let size = match (side("width").transpose()?, side("height").transpose()?) {
+        (Some(w), Some(h)) => Some(crate::recorder::Resolution::custom(w, h).size()),
+        (None, None) => None,
+        _ => return Err(error(400, "give both ?width= and ?height=, or neither")),
+    };
+    let fps = match query.get("fps") {
+        None => DEFAULT_FPS,
+        Some(fps) => fps.parse::<u32>().ok().filter(|f| (1..=60).contains(f)).ok_or_else(|| error(400, "?fps= is 1 to 60"))?,
+    };
+    Ok((size, fps))
+}
+
+/// Send the visualizer's pictures to `request` as they're drawn, as MJPEG
+/// (`multipart/x-mixed-replace`), until it goes.
+fn video(shared: &Arc<Shared>, request: Request, size: Option<(usize, usize)>, fps: u32) {
+    let shared = Arc::clone(shared);
+    let spawned = std::thread::Builder::new().name("api visualizer".into()).spawn(move || {
+        let watching = shared.frames.watch(size);
+        shared.waker.request_repaint();
+        let mut writer = request.into_writer();
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\nCache-Control: no-cache\r\n\
+                    Connection: close\r\n\r\n";
+        let mut ok = writer.write_all(head.as_bytes()).and_then(|()| writer.flush()).is_ok();
+        let (mut seen, gap) = (0, Duration::from_secs_f64(1.0 / fps as f64));
+        while ok {
+            let started = std::time::Instant::now();
+            // (Nothing new for a while: the visualizer isn't drawing. The
+            // connection's checked by sending the last picture again.)
+            let (jpeg, count) = match shared.frames.next(seen, KEEP_ALIVE) {
+                Some(frame) => frame,
+                None => match shared.frames.next(seen.saturating_sub(1), Duration::ZERO) {
+                    Some(frame) => frame,
+                    None => continue,
+                },
+            };
+            seen = count;
+            let part = format!("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", jpeg.len());
+            ok = writer
+                .write_all(part.as_bytes())
+                .and_then(|()| writer.write_all(&jpeg))
+                .and_then(|()| writer.write_all(b"\r\n"))
+                .and_then(|()| writer.flush())
+                .is_ok();
+            std::thread::sleep(gap.saturating_sub(started.elapsed()));
+        }
+        drop(watching);
+    });
+    if spawned.is_err() {
+        log::warn!("api: couldn't start a visualizer stream");
+    }
+}
+
 fn stream(shared: &Arc<Shared>, request: Request, wanted: Option<Vec<String>>) {
     let (tx, rx) = mpsc::channel::<String>();
     {
@@ -1137,6 +1239,12 @@ mod tests {
         assert_eq!(answering(&server, empty, set("scripts/abc/use", &read_token)), 403);
         assert_eq!(answering(&server, empty, set("scripts/abc/use", &control_token)), 204);
         assert_eq!(answering(&server, empty, set("scripts/missing/use", &control_token)), 404);
+        assert_eq!(get(&server, "/v1/visualizer/stream?width=640", &read_token).0, 400);
+        assert_eq!(get(&server, "/v1/visualizer/stream?fps=0", &read_token).0, 400);
+        assert_eq!(get(&server, "/v1/visualizer/frame.jpg", &control_token).0, 403);
+        let (status, page) = get(&server, "/v1/visualizer?width=640&height=360&token=x", &read_token);
+        assert_eq!(status, 200);
+        assert!(page.contains("/v1/visualizer/stream?width=640&amp;height=360&amp;token=x"), "{page}");
         assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &read_token)), 403);
         assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &control_token)), 204);
         assert_eq!(answering(&server, empty, set("queue/move?from=2", &control_token)), 400);

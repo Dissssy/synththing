@@ -438,6 +438,9 @@ pub struct VisualizerPanel {
     pads: PadFrame,
     /// Whether the app is in its mobile layout (`set_mobile`).
     mobile: bool,
+    /// Frames are drawn for a program watching through the local API, at
+    /// the size it asked for: the panel just says so (`set_off_screen`).
+    off_screen: bool,
     /// Fingers on the visualizer, and the egui pass they were last
     /// updated in (see `track_touches`).
     touches: Vec<Touch>,
@@ -460,6 +463,7 @@ impl VisualizerPanel {
             last_samples: Vec::new(),
             pads: PadFrame::default(),
             mobile: false,
+            off_screen: false,
             touches: Vec::new(),
             touch_pass: 0,
             effects: Effects::default(),
@@ -481,6 +485,20 @@ impl VisualizerPanel {
     /// Whether the app is in its mobile layout, for the next `show`.
     pub fn set_mobile(&mut self, mobile: bool) {
         self.mobile = mobile;
+    }
+
+    /// Whether frames are only for a program watching through the local
+    /// API, for the next `show`: the panel says so instead of showing them.
+    pub fn set_off_screen(&mut self, off_screen: bool) {
+        self.off_screen = off_screen;
+        if off_screen {
+            self.texture = None;
+        }
+    }
+
+    /// The last frame the script drew: its size and pixels (`0x00RRGGBB`).
+    pub fn last_frame(&self) -> (usize, usize, &[u32]) {
+        (self.width, self.height, &self.pixels)
     }
 
     /// Follow this frame's touch events: fingers that touch down on the
@@ -638,7 +656,12 @@ impl VisualizerPanel {
         if let Some(done) = done {
             self.accept(done, &ctx, rect);
         }
-        if let Some(texture) = &self.texture {
+        if self.off_screen {
+            let painter = ui.painter();
+            painter.rect_filled(panel_rect, 0.0, egui::Color32::BLACK);
+            let text = format!("Streaming at {} × {}", self.width, self.height);
+            painter.text(panel_rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(16.0), egui::Color32::GRAY);
+        } else if let Some(texture) = &self.texture {
             // Stretched to the whole allocated rect: the texture can be
             // smaller than the panel by design (see MAX_VISUALIZER_PIXELS).
             ui.painter().image(texture.id(), rect, uv, egui::Color32::WHITE);
@@ -668,6 +691,9 @@ impl VisualizerPanel {
         self.effects.live_commands.extend(effects.live_commands);
         self.effects.playback_requests.extend(effects.playback_requests);
 
+        if self.off_screen {
+            return;
+        }
         let image = done.image;
         // Nearest, not linear: when the buffer is downscaled from the panel
         // size, this is what keeps the upscale crisp/pixel-art rather than

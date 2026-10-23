@@ -88,6 +88,7 @@ mod tray;
 mod typing;
 mod updater;
 mod visualizer;
+mod visualizer_stream;
 mod watch;
 
 #[cfg(target_os = "android")]
