@@ -1,7 +1,9 @@
 //! The list the Songs, Soundfonts and Playlists panels share: rows of one
 //! height, click to open or play (leaving the selection be), Ctrl+click
-//! and Shift+click to select (Ctrl toggles, Shift extends a range), Ctrl+A to select all, and Delete reported to the list
-//! that owns the rows. Each list draws its own row contents with a closure
+//! and Shift+click to select (Ctrl toggles, Shift extends a range), Ctrl+A
+//! to select all, Esc (or the line under the list saying how many are
+//! selected) to select none, and Delete reported to the list that owns
+//! the rows. Each list draws its own row contents with a closure
 //! given the entry; [`label`] is the entry's text, cut to the width left
 //! for it with the full text on hover.
 //!
@@ -264,7 +266,13 @@ pub fn show<T>(
     let (offset, height) = ui.ctx().data(|d| d.get_temp::<(f32, f32)>(view_id)).unwrap_or_default();
     let pitch = row_height + ui.spacing().item_spacing.y;
     let page = ((height / pitch) as usize).max(1);
+    // While rows are selected, a line under the list says how many, with
+    // a button to clear them.
+    let footer = !selection.is_empty();
     let mut area = egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]);
+    if footer {
+        area = area.max_height(ui.available_height() - row_height - ui.spacing().item_spacing.y);
+    }
     if let Some(row) = apply(selection, &steers, items.len(), page, playing, &mut output) {
         let top = row as f32 * pitch;
         let shown = if top < offset {
@@ -344,15 +352,28 @@ pub fn show<T>(
 
     ui.ctx().data_mut(|d| d.insert_temp(view_id, (scroll.state.offset.y, scroll.inner_rect.height())));
 
+    if footer {
+        ui.horizontal(|ui| {
+            ui.set_height(row_height);
+            ui.weak(format!("{} selected", selection.len()));
+            if ui.small_button(crate::app::icon("x")).on_hover_text("Clear the selection (Esc)").clicked() {
+                selection.clear();
+            }
+        });
+    }
+
     // Keys, while the list is in front or under the pointer, and nothing's
     // being typed.
     let typing = ui.ctx().memory(|m| m.focused().is_some());
     if !typing && (in_front || ui.rect_contains_pointer(scroll.inner_rect)) {
-        let (select_all, delete) = ui.input_mut(|i| {
-            (i.consume_key(egui::Modifiers::COMMAND, egui::Key::A), i.key_pressed(egui::Key::Delete))
+        let (select_all, delete, escape) = ui.input_mut(|i| {
+            (i.consume_key(egui::Modifiers::COMMAND, egui::Key::A), i.key_pressed(egui::Key::Delete), i.key_pressed(egui::Key::Escape))
         });
         if select_all {
             selection.select_all(items.len());
+        }
+        if escape {
+            selection.clear();
         }
         output.delete = delete && !selection.is_empty();
     }

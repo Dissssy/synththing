@@ -704,9 +704,6 @@ impl App {
         if missing > 0 {
             summary.push_str(&format!(", {missing} missing"));
         }
-        if !selection.is_empty() {
-            summary.push_str(&format!(", {} selected", selection.len()));
-        }
         ui.weak(summary);
         ui.separator();
 
