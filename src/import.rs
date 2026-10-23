@@ -6,7 +6,7 @@
 //! [`start`] opens the platform's picker without waiting for it: on the
 //! desktop the file dialog, on another thread; on Android the system's
 //! document picker (`android.rs`), which copies the picked files itself.
-//! [`songs`] imports files already known (dropped on a playlist, or an
+//! [`songs`] imports files already known (dropped on the window, or an
 //! .m3u's). Either way the copies arrive later through [`take_finished`],
 //! which the app polls, with what to do with them ([`Then`]).
 
@@ -63,6 +63,8 @@ pub enum Then {
     Insert { list: usize, at: usize },
     /// Make a playlist of them called `name`.
     NewPlaylist { name: String },
+    /// Queue them: next (at the front), or at the end.
+    Queue { next: bool },
 }
 
 /// An import that's done: what it brought in, or why it failed.

@@ -158,6 +158,7 @@ impl App {
         let mut hover_preload = self.config.preload_on_hover;
         let mut skip_collapsed = self.config.autoplay_skip_collapsed;
         let mut only_starred = self.config.only_starred;
+        let mut dropped_songs = self.config.dropped_songs;
         let mut tile_letters = self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS);
         let mut group_ignore = self.config.group_ignore.clone();
         let mut past_articles = !self.config.sort_with_articles;
@@ -288,6 +289,22 @@ impl App {
                         super::icon(crate::select_list::STAR_ICON)
                     ),
                     |ui| ui.checkbox(&mut only_starred, "Only play starred songs"),
+                );
+                with_info(
+                    ui,
+                    "Songs dragged onto the window are always imported into the library. Then they're queued, \
+                     or, just importing, added to the playlist on screen if one is.",
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Dropped songs");
+                            egui::ComboBox::from_id_salt("dropped_songs").selected_text(dropped_songs.name()).show_ui(ui, |ui| {
+                                for choice in crate::config::DroppedSongs::ALL {
+                                    ui.selectable_value(&mut dropped_songs, choice, choice.name());
+                                }
+                            });
+                        })
+                        .response
+                    },
                 );
                 ui.add_space(6.0);
                 ui.strong("Start with what was set last time");
@@ -507,6 +524,7 @@ impl App {
             || hover_preload != self.config.preload_on_hover
             || skip_collapsed != self.config.autoplay_skip_collapsed
             || only_starred != self.config.only_starred
+            || dropped_songs != self.config.dropped_songs
             || tile_letters != self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS)
             || group_ignore != self.config.group_ignore
             || past_articles == self.config.sort_with_articles
@@ -552,6 +570,7 @@ impl App {
             self.config.preload_expiry_secs = expiry;
             self.config.preload_on_hover = hover_preload;
             self.config.autoplay_skip_collapsed = skip_collapsed;
+            self.config.dropped_songs = dropped_songs;
             self.config.tile_letters = Some(tile_letters).filter(|&n| n != crate::album_art::DEFAULT_LETTERS);
             self.config.group_ignore = group_ignore;
             self.config.sort_with_articles = !past_articles;

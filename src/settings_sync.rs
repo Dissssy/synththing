@@ -101,6 +101,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("remember", "What's remembered between launches", &["remember"]),
             setting("modes", "Loop, Shuffle and Autoplay", &["loop_mode", "shuffle", "autoplay"]),
             setting("only_starred", "Only play starred songs", &["only_starred"]),
+            setting("dropped_songs", "Where dropped songs go", &["dropped_songs"]),
             setting("heavy_midi", "Warning before a very large MIDI file", &["warn_heavy_midi"]),
             setting("channel_chips", "Channel chips", &["channel_chips"]),
             Setting { key: "volume", name: "Last volume (taken at the next launch)", paths: &["session/volume"], on: false },
