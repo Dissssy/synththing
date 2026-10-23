@@ -20,14 +20,14 @@ Where a header can't be set (a browser's `EventSource`), add `?token=st_...` to 
 
 ## Requests
 
-Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (something's missing from the request), 401 (no or unknown token), 403 (the token isn't allowed that), 404, 409 (the command can't run right now) or 503 (synththing didn't answer in time).
+Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (something's missing from the request), 401 (no or unknown token), 403 (the token isn't allowed that), 404, 409 (the command can't run right now), 413 (a song over 250 MB), 415 (a file synththing can't play), 500 (the song couldn't be stored) or 503 (synththing didn't answer within 5 seconds, is closing, or already has 32 event streams open).
 
 | Request | Needs | What it gives |
 | --- | --- | --- |
 | `GET /v1` | any token | `{"app", "version", "read", "control", "add_songs"}`: who you are to it |
 | `GET /v1/now-playing` | read | What's playing (below) |
-| `GET /v1/songs?q=&offset=&limit=` | read | `{"total", "songs": [...]}`: the songs `q` finds, by file name, at most 500 at a time |
-| `GET /v1/songs/{key}` | read | One song |
+| `GET /v1/songs?q=&offset=&limit=` | read | `{"total", "songs": [...]}`: the songs `q` finds, sorted by file name: `limit` of them (at most and by default 500) after skipping `offset` |
+| `GET /v1/songs/{key}` | read | One song, by the `key` the other requests give |
 | `POST /v1/songs?name=Song.mp3` | add songs | Adds the file sent as the body (up to 250 MB) to the library: 201 with the song if it's new, 200 if it was there already |
 | `GET /v1/playlists` | read | `[{"id", "name", "smart", "songs": [keys]}]` |
 | `GET /v1/commands` | read | `[{"id", "name"}]`: every command there is |
