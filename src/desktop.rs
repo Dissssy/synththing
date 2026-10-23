@@ -159,13 +159,22 @@ pub fn main() -> Result<()> {
         width: 256,
         height: 256,
     };
-    let options = eframe::NativeOptions {
+    #[cfg_attr(not(windows), expect(unused_mut))]
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(build_info::window_title())
             .with_inner_size(app.start_size())
             .with_icon(icon),
         ..Default::default()
     };
+    // DX12 on Windows, unless WGPU_BACKEND picks another: wgpu's own pick
+    // there, Vulkan, could hang the window for good while it was resized.
+    #[cfg(windows)]
+    if eframe::wgpu::Backends::from_env().is_none()
+        && let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup
+    {
+        setup.instance_descriptor.backends = eframe::wgpu::Backends::DX12;
+    }
     eframe::run_native(
         "synththing",
         options,
