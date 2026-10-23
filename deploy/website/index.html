@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="synththing is a free music player that plays everything, tidies your library, syncs to every device and puts on a light show.">
+<title>synththing</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&family=Figtree:wght@400;600&family=VT323&display=swap">
+<style>
+/* Layout: a dark "stage" hero with a live visualizer strip, then category bands, each a heading column beside a wrapping grid of feature tiles. */
+:root {
+  --bg: #f3f2f8; --surface: #ffffff; --fg: #1b1930; --muted: #5d5a78; --line: #dedbea;
+  --accent: #2f9e2a; --accent-ink: #0e3d0c; --glow: #5b3fd6;
+  --stage: #12101f; --stage-fg: #ecebf7; --stage-muted: #a8a4c6; --neon: #7dff5c;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "Figtree", "Segoe UI", system-ui, sans-serif;
+  --pixel: "VT323", ui-monospace, "Consolas", monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d0c17; --surface: #17152a; --fg: #ecebf7; --muted: #a8a4c6; --line: #2a2745;
+  --accent: #7dff5c; --accent-ink: #0d0c17; --glow: #9b85ff; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0d0c17; --surface: #17152a; --fg: #ecebf7; --muted: #a8a4c6; --line: #2a2745;
+  --accent: #7dff5c; --accent-ink: #0d0c17; --glow: #9b85ff; color-scheme: dark }
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--fg); font: 400 1rem/1.55 var(--body) }
+.wrap { max-width: 1100px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)) }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0 }
+
+.stage { background: var(--stage); color: var(--stage-fg) }
+.stage .wrap { padding-block: 56px 0; display: grid; gap: 20px }
+.tag { font-family: var(--pixel); font-size: 1.35rem; letter-spacing: .06em; color: var(--neon) }
+h1 { font-weight: 800; font-size: clamp(2.4rem, 7vw, 4.6rem); line-height: 1; letter-spacing: -.02em; max-width: 14ch }
+h1 em { font-style: normal; color: var(--neon) }
+.lede { font-size: 1.15rem; color: var(--stage-muted); max-width: 60ch; margin: 0 }
+.lede b { color: var(--stage-fg); font-weight: 600 }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 0; padding: 0; list-style: none }
+.chips li { font-family: var(--pixel); font-size: 1.15rem; border: 1px solid #39355c; border-radius: 4px; padding: 2px 10px; color: var(--stage-fg) }
+canvas { display: block; width: 100%; height: 120px; margin-top: 12px }
+
+nav { border-bottom: 1px solid var(--line); background: var(--surface) }
+nav .wrap { display: flex; gap: 6px 18px; flex-wrap: wrap; padding-block: 14px }
+nav a { color: var(--muted); text-decoration: none; font-weight: 600; font-size: .92rem }
+nav a:hover, nav a:focus-visible { color: var(--fg) }
+a:focus-visible { outline: 2px solid var(--glow); outline-offset: 2px }
+
+section { border-bottom: 1px solid var(--line) }
+section .wrap { padding-block: 52px; display: grid; grid-template-columns: minmax(0, 18rem) minmax(0, 1fr); gap: 28px 48px }
+@media (max-width: 760px) { section .wrap { grid-template-columns: minmax(0, 1fr); padding-block: 40px } }
+.head { display: grid; gap: 10px; align-content: start }
+.head .kicker { font-family: var(--pixel); font-size: 1.2rem; letter-spacing: .06em; color: var(--glow) }
+h2 { font-size: clamp(1.6rem, 3.4vw, 2.2rem); font-weight: 800; line-height: 1.08; letter-spacing: -.01em }
+.head p { margin: 0; color: var(--muted) }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15.5rem), 1fr)); gap: 14px }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: grid; gap: 6px; align-content: start; min-width: 0 }
+.tile h3 { font-size: 1.08rem; font-weight: 800; line-height: 1.2 }
+.tile p { margin: 0; color: var(--muted); font-size: .95rem }
+code { font-family: var(--pixel); font-size: 1.12em; background: var(--line); border-radius: 3px; padding: 0 4px; color: var(--fg) }
+
+.close { background: var(--stage); color: var(--stage-fg) }
+.close .wrap { padding-block: 56px; display: grid; gap: 14px }
+.close h2 { color: var(--stage-fg); max-width: 22ch }
+.close p { margin: 0; color: var(--stage-muted); max-width: 62ch }
+.close a.btn { justify-self: start; background: var(--neon); color: #0d0c17; font-weight: 600; text-decoration: none; padding: 12px 20px; border-radius: 8px }
+.fine { font-size: .85rem }
+.fine a { color: var(--stage-fg) }
+</style>
+<style>body{margin:0}img{max-width:100%}</style>
+</head>
+<body>
+
+<header class="stage">
+  <div class="wrap">
+    <div class="tag">SYNTHTHING 1.5</div>
+    <h1>Your whole music collection, <em>finally fun to use.</em></h1>
+    <p class="lede">synththing is a free music player that <b>plays everything</b> (MP3, FLAC, Opus, AAC, MIDI and more), <b>keeps your library tidy on its own</b>, <b>follows you to every device</b>, and puts on <b>a light show you can play along with</b> while it does.</p>
+    <ul class="chips" aria-label="Highlights">
+      <li>smart playlists</li><li>auto album art</li><li>encrypted device sync</li><li>phone app</li><li>OBS overlays</li><li>playable visualizers</li><li>100% keyboard</li>
+    </ul>
+    <canvas id="viz" aria-hidden="true"></canvas>
+  </div>
+</header>
+
+<nav aria-label="Categories"><div class="wrap">
+  <a href="#library">Library</a><a href="#find">Search</a><a href="#playlists">Playlists</a><a href="#tidy">Auto tidy</a><a href="#devices">Every device</a><a href="#show">Visualizers</a><a href="#stream">Streaming</a><a href="#midi">MIDI</a><a href="#control">Control</a><a href="#yours">Make it yours</a>
+</div></nav>
+
+<main>
+<section id="library"><div class="wrap">
+  <div class="head"><span class="kicker">YOUR MUSIC</span><h2>One library for everything you own</h2><p>Drop it in once and it just works, forever.</p></div>
+  <div class="grid">
+    <div class="tile"><h3>Plays every format</h3><p>MP3, FLAC, WAV, OGG, Opus, M4A/AAC/ALAC, AIFF, WMA and MIDI, side by side in one list. Songs start almost instantly.</p></div>
+    <div class="tile"><h3>Drag, drop, done</h3><p>Drop files or whole folders (subfolders too) onto the window. synththing keeps its own safe copy, so moving or renaming your originals never breaks a playlist.</p></div>
+    <div class="tile"><h3>Duplicates handled</h3><p>Every song is recognised by its contents, so the same track imported twice is still one song.</p></div>
+    <div class="tile"><h3>Columns your way</h3><p>Artist, album, length, year, genre, bit rate and more. Click to sort, right-click to choose columns or group by album, genre or tag.</p></div>
+    <div class="tile"><h3>Stars and tags</h3><p>Star your favourites with one click, label songs with your own coloured tags, and set shuffle to play only starred songs.</p></div>
+    <div class="tile"><h3>Album art everywhere</h3><p>Covers come from your files or online. Anything without art gets a tidy coloured tile of its own.</p></div>
+  </div>
+</div></section>
+
+<section id="find"><div class="wrap">
+  <div class="head"><span class="kicker">SEARCH</span><h2>Find any song in a second</h2><p>Type a few letters, or ask very specific questions.</p></div>
+  <div class="grid">
+    <div class="tile"><h3>Forgiving search</h3><p>Typos are fine: "daft pk" still finds Daft Punk, and matches light up in the list.</p></div>
+    <div class="tile"><h3>Power filters</h3><p>Ask for exactly what you mean: <code>year:90s</code>, <code>length:&gt;6:00</code>, <code>added:30d</code>, <code>is:starred</code>, <code>-type:mid</code>.</p></div>
+    <div class="tile"><h3>It finishes your sentence</h3><p>The search box suggests filters, then your actual artists, albums, genres and tags as you type.</p></div>
+    <div class="tile"><h3>Search becomes a playlist</h3><p>One click turns any search into a smart playlist that keeps itself up to date.</p></div>
+  </div>
+</div></section>
+
+<section id="playlists"><div class="wrap">
+  <div class="head"><span class="kicker">PLAYLISTS</span><h2>Playlists that build themselves</h2><p>Make the rules once; synththing keeps them filled.</p></div>
+  <div class="grid">
+    <div class="tile"><h3>Smart playlists</h3><p>"Everything from the 2000s I added this month that isn't MIDI." New songs join automatically.</p></div>
+    <div class="tile"><h3>A playlist for every artist</h3><p>Automatic pages for every artist, album, genre, year, composer or tag, with album covers, all browsable in Groupings.</p></div>
+    <div class="tile"><h3>Up next queue</h3><p>Play next or add to queue from any song, album, artist or playlist, then drag to reorder. Your playlist carries on afterwards.</p></div>
+    <div class="tile"><h3>Picks up where you left off</h3><p>Each playlist remembers the song it was on, and long songs can remember their position.</p></div>
+    <div class="tile"><h3>Keep tracks together</h3><p>Link an intro to its song, or a medley's parts, and shuffle always plays them as one.</p></div>
+    <div class="tile"><h3>Per-song fine tuning</h3><p>Trim a song's start and end, nudge its volume, or keep it out of shuffle.</p></div>
+  </div>
+</div></section>
+
+<section id="tidy"><div class="wrap">
+  <div class="head"><span class="kicker">AUTO TIDY</span><h2>A messy library that cleans itself</h2><p>Years of badly named downloads, sorted out quietly in the background.</p></div>
+  <div class="grid">
+    <div class="tile"><h3>Automatic matching</h3><p>synththing slowly works through your whole library, matches songs against MusicBrainz's huge music database, and fills in missing albums, years and genres.</p></div>
+    <div class="tile"><h3>Real album covers</h3><p>Pulls official covers from the Cover Art Archive, with iTunes art to choose from if you prefer another.</p></div>
+    <div class="tile"><h3>Clean-up suggestions</h3><p>The broom spots problems: "Artist &amp; Guest" split into two artists, names spelled two ways, track numbers stuck in titles, "(Official Video)" leftovers.</p></div>
+    <div class="tile"><h3>Reads file names</h3><p>Songs with no tags at all, like <code>34. Title - Artist</code>, get their details worked out from the name.</p></div>
+    <div class="tile"><h3>Edit many at once</h3><p>Select a whole album and fix its artist, year or genre in one go. Nothing is ever changed without your say-so.</p></div>
+    <div class="tile"><h3>Sorted like a record shop</h3><p>The Beatles file under B, compilations go under Various Artists, and classical can be filed by composer.</p></div>
+  </div>
+</div></section>
+
+<section id="devices"><div class="wrap">
+  <div class="head"><span class="kicker">EVERY DEVICE</span><h2>Your music follows you, privately</h2><p>Windows, plus Linux and Android builds that are still marked experimental.</p></div>
+  <div class="grid">
+    <div class="tile"><h3>Sign in with a QR code</h3><p>No passwords. Scan a code from your PC with your phone and it's you on both.</p></div>
+    <div class="tile"><h3>Songs travel by themselves</h3><p>Add a song on one device and it shows up on the others: your playlists, your starred songs, or your whole library.</p></div>
+    <div class="tile"><h3>End-to-end encrypted</h3><p>Everything is locked on your device before it leaves, so the server can't even tell which songs you have.</p></div>
+    <div class="tile"><h3>Everything stays in step</h3><p>Playlists, settings, themes, keyboard shortcuts and song details sync, with per-device choices for anything you want to keep separate.</p></div>
+    <div class="tile"><h3>A real phone app</h3><p>Plays in the background with lock screen and Bluetooth controls, and floats the visualizer in picture-in-picture when you switch apps.</p></div>
+    <div class="tile"><h3>Remove everywhere</h3><p>Delete a song from one device or from all of them at once. Your choice every time.</p></div>
+  </div>
+</div></section>
+
+<section id="show"><div class="wrap">
+  <div class="head"><span class="kicker">VISUALIZERS</span><h2>A light show you can play</h2><p>Every song comes with something to watch, and some you can play along with.</p></div>
+  <div class="grid">
+    <div class="tile"><h3>Built-in visualizers</h3><p>Waveform, spectrum, spectrogram, piano keyboard, disco, pulse, letters, a full dashboard, windowed or fullscreen.</p></div>
+    <div class="tile"><h3>Games that use your music</h3><p>A Guitar Hero style highway charted from any song, a platformer that runs to the notes, snake, and a piano you play with your keyboard. Game controllers work too.</p></div>
+    <div class="tile"><h3>Record it as a video</h3><p>Turn the visualizer and its sound into an MP4, from 720p to 4K, 30 or 60 fps, vertical for phones, for one song or a whole playlist.</p></div>
+    <div class="tile"><h3>Make your own</h3><p>Visualizers are small Lua scripts with a live-reloading editor and a built-in pixel-art sprite editor. No setup.</p></div>
+    <div class="tile"><h3>Share and download</h3><p>Browse scripts other people made, install them in one click, publish yours, and get their updates automatically.</p></div>
+  </div>
+</div></section>
+
+<section id="stream"><div class="wrap">
+  <div class="head"><span class="kicker">STREAMING</span><h2>Ready for your stream</h2><p>Show what you're listening to without screen capture tricks.</p></div>
+  <div class="grid">
+    <div class="tile"><h3>Straight into OBS</h3><p>Add the visualizer as a Browser Source. It's drawn at exactly the size your scene needs.</p></div>
+    <div class="tile"><h3>See-through overlays</h3><p>Visualizers can have transparent backgrounds, so they sit right on top of your game or camera.</p></div>
+    <div class="tile"><h3>Now playing card</h3><p>A pixel-art card with the title, artist, time and album cover, coloured to match the album.</p></div>
+    <div class="tile"><h3>Every language</h3><p>Japanese, Korean and Chinese song names show properly, in the same style as everything else.</p></div>
+  </div>
+</div></section>
+
+<section id="midi"><div class="wrap">
+  <div class="head"><span class="kicker">MIDI</span><h2>MIDI that sounds the way you want</h2><p>Where synththing started, and still the best place to play a .mid.</p></div>
+  <div class="grid">
+    <div class="tile"><h3>Any soundfont</h3><p>Play MIDI through any SoundFont you like and switch with a click. A song can keep a soundfont of its own.</p></div>
+    <div class="tile"><h3>Starter pack</h3><p>The first launch offers two soundfonts and four songs, so there's music playing within a minute.</p></div>
+    <div class="tile"><h3>Notes you can see</h3><p>Visualizers and games read the actual notes of a MIDI song, not just its sound.</p></div>
+  </div>
+</div></section>
+
+<section id="control"><div class="wrap">
+  <div class="head"><span class="kicker">CONTROL</span><h2>Control it from anywhere</h2><p>Your keyboard, your media keys, your phone, your smart home.</p></div>
+  <div class="grid">
+    <div class="tile"><h3>Media keys and system controls</h3><p>Works with keyboard media keys, Windows' volume overlay and Linux desktop widgets.</p></div>
+    <div class="tile"><h3>Never touch the mouse</h3><p>Every action has a shortcut, and a command palette (Ctrl+Shift+P) finds anything by name.</p></div>
+    <div class="tile"><h3>Your keys, everywhere</h3><p>Rebind any shortcut, chain keys like Ctrl+G then S, and your layout syncs to your other PCs.</p></div>
+    <div class="tile"><h3>Plugs into your setup</h3><p>A built-in local API lets home automation, Stream Deck style tools or your own scripts see and control what's playing, with permissions you tick per program.</p></div>
+  </div>
+</div></section>
+
+<section id="yours"><div class="wrap">
+  <div class="head"><span class="kicker">MAKE IT YOURS</span><h2>Looks the way you like</h2><p>Arrange it, theme it, and forget about upkeep.</p></div>
+  <div class="grid">
+    <div class="tile"><h3>Themes</h3><p>Dark, Light and a glossy Frutiger Aero, or build your own down to every colour, corner and shadow.</p></div>
+    <div class="tile"><h3>Move anything</h3><p>Every panel is a tab you can drag, split or pop out, with ready-made layouts for listening, watching or creating.</p></div>
+    <div class="tile"><h3>Updates itself</h3><p>One file, no installer. New versions are offered inside the app, and a guided tour shows you around on day one.</p></div>
+    <div class="tile"><h3>Free, for real</h3><p>No ads, no subscription, open source. Feedback goes straight from the app to the people building it.</p></div>
+  </div>
+</div></section>
+</main>
+
+<footer class="close"><div class="wrap">
+  <h2>Give your music collection a better home.</h2>
+  <p>Download the latest release, run it, and drop your music folder on the window. That's the whole setup.</p>
+  <a class="btn" href="https://github.com/Dissssy/synththing/releases/latest">Get synththing</a>
+  <p class="fine">Windows 10 and 11 (64-bit). Linux and Android builds are on the same page and still experimental. Source on <a href="https://github.com/Dissssy/synththing">GitHub</a>.</p>
+</div></footer>
+
+<script>
+(() => {
+  const c = document.getElementById('viz'), x = c.getContext('2d');
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let w, h, dpr;
+  function size() { dpr = devicePixelRatio || 1; w = c.clientWidth; h = c.clientHeight; c.width = w * dpr; c.height = h * dpr; x.setTransform(dpr, 0, 0, dpr, 0, 0) }
+  function draw(t) {
+    x.clearRect(0, 0, w, h);
+    const n = Math.max(24, Math.floor(w / 14)), bw = w / n;
+    for (let i = 0; i < n; i++) {
+      const f = i / n;
+      const v = 0.18 + 0.5 * Math.abs(Math.sin(t / 900 + i * 0.37) * Math.cos(t / 1300 - i * 0.11)) * (1 - f * 0.45) + 0.12 * Math.sin(t / 240 + i);
+      const bh = Math.max(4, Math.min(1, v) * h), cells = Math.floor(bh / 6);
+      for (let k = 0; k < cells; k++) {
+        x.fillStyle = k > cells - 2 ? '#7dff5c' : `hsl(${255 - k * 2}, 70%, ${38 + k * 1.5}%)`;
+        x.fillRect(i * bw + 1, h - (k + 1) * 6, bw - 3, 4);
+      }
+    }
+    if (!still) requestAnimationFrame(draw);
+  }
+  size(); addEventListener('resize', size); requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>
