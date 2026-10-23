@@ -39,6 +39,8 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `POST /v1/play?song={key}` | control | Plays that song on its own, leaving any playlist: 204 |
 | `POST /v1/play?playlist={id}` | control | Plays that playlist from the top (anywhere, with Shuffle on): 204, or 409 if it's empty |
 | `POST /v1/play?playlist={id}&song={key}` | control | Plays that playlist from that song: 204, or 404 if the song isn't in it |
+| `POST /v1/seek?to={seconds}` | control | Jumps to that point of the song: 204, or 409 if nothing's playing |
+| `POST /v1/volume?to={0..1}` | control | Sets the volume: 204 |
 | `GET /v1/events` | read | Server-Sent Events (below) |
 
 An album's art is its first song's: `GET /v1/songs/{first key}/art`. Covers that synththing hasn't downloaded yet are downloaded only when online lookups are on.
@@ -74,7 +76,7 @@ Every song a program adds that wasn't in your library yet is marked with that pr
 - `seeked`: the song jumped (a seek, or a loop back to the start): `{"position": 30.0}`.
 - `library_changed`: songs were added, removed or edited: `{}`. Ask `/v1/songs` again for the new state.
 
-A comment line (`: keep-alive`) comes every 25 seconds when nothing else does.
+Add `?events=now_playing,seeked` (any of the three, by name) for only those. A comment line (`: keep-alive`) comes every 25 seconds when nothing else does.
 
 ## System media controls
 
