@@ -81,6 +81,10 @@ pub struct Config {
     /// This device's own keys for commands, over `keymap`'s.
     #[serde(default)]
     pub local_keymap: crate::commands::Bindings,
+    /// The local app API (`api.rs`): on or off, its port and the programs
+    /// allowed in. Kept on this device.
+    #[serde(default)]
+    pub api: crate::api::Settings,
     /// Preference: which of the last session's settings to start with.
     #[serde(default)]
     pub remember: Remember,

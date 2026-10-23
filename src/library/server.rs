@@ -991,7 +991,7 @@ fn info(state: &State) -> Info {
 }
 
 /// `a=1&b=x%20y` to pairs (later ones win).
-fn parse_query(query: &str) -> HashMap<String, String> {
+pub(crate) fn parse_query(query: &str) -> HashMap<String, String> {
     query
         .split('&')
         .filter(|p| !p.is_empty())
