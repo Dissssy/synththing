@@ -164,7 +164,7 @@ synththing.p51.nl {
 }
 ```
 
-Update the page when a release adds something worth telling people about.
+The update script keeps it at the newest release's copy once `/var/www/synththing` exists, so update the page in the repo when a release adds something worth telling people about.
 
 Its EULA and privacy policy are `deploy/official/eula.md` and `privacy.md`, copied to `/var/lib/synththing/` and listed in its `server.json`:
 
