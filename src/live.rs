@@ -45,6 +45,10 @@ pub enum LiveCommand {
     Stop(u64),
     /// Release everything and cancel everything pending.
     StopAll,
+    /// A raw MIDI channel message (`midi_send`). The channel stops copying
+    /// the song's channel state until `StopAll`, so the script's program
+    /// changes and controllers stick.
+    Midi { channel: u8, command: u8, data1: u8, data2: u8 },
 }
 
 /// What the schedule tells the synthesizer to do.
@@ -114,6 +118,7 @@ impl Schedule {
                 self.pending.retain(|p| p.tag != tag);
                 self.end_where(|s| s.tag == tag, ops);
             }
+            LiveCommand::Midi { .. } => {}
             LiveCommand::StopAll => {
                 self.pending.clear();
                 self.sounding.clear();
@@ -187,6 +192,8 @@ pub struct LiveSynth {
     schedule: Schedule,
     /// Samples rendered since anything was sounding or pending.
     quiet: u64,
+    /// Channels `midi_send` took over, one bit each: not copied from the song.
+    owned: u16,
     ops: Vec<SynthOp>,
     scratch_l: Vec<f32>,
     scratch_r: Vec<f32>,
@@ -200,6 +207,7 @@ impl LiveSynth {
             synth,
             schedule: Schedule::new(sample_rate),
             quiet: u64::MAX,
+            owned: 0,
             ops: Vec::new(),
             scratch_l: Vec::new(),
             scratch_r: Vec::new(),
@@ -207,8 +215,22 @@ impl LiveSynth {
     }
 
     pub fn apply(&mut self, command: LiveCommand) {
-        if matches!(command, LiveCommand::Play(_)) {
-            self.quiet = 0;
+        match command {
+            LiveCommand::Play(_) => self.quiet = 0,
+            LiveCommand::Midi { channel, command, data1, data2 } => {
+                let channel = channel.min(15);
+                self.owned |= 1 << channel;
+                self.quiet = 0;
+                self.synth.process_midi_message(channel as i32, command as i32, data1 as i32, data2 as i32);
+                return;
+            }
+            LiveCommand::StopAll => {
+                if self.owned != 0 {
+                    self.owned = 0;
+                    self.synth.reset();
+                }
+            }
+            _ => {}
         }
         self.schedule.apply(command, &mut self.ops);
         self.run_ops();
@@ -229,7 +251,7 @@ impl LiveSynth {
     /// Render the next block into an interleaved stereo buffer, sounding
     /// like `song`'s channels.
     pub fn render(&mut self, song: &Synthesizer, out: &mut [f32]) {
-        self.synth.copy_channels_from(song);
+        self.synth.copy_channels_from(song, self.owned);
         let frames = out.len() / 2;
         self.schedule.advance(frames as u64, &mut self.ops);
         self.run_ops();

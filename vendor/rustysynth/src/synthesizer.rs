@@ -288,9 +288,13 @@ impl Synthesizer {
     /// LOCAL PATCH (synththing): take on another synthesizer's channel
     /// state (bank, program, volume, pan, pitch bend, ...), minus its
     /// sustain pedal, so notes played here sound like that synthesizer's
-    /// channels. Voices already sounding follow the new state.
-    pub fn copy_channels_from(&mut self, other: &Synthesizer) {
-        for (mine, theirs) in self.channels.iter_mut().zip(&other.channels) {
+    /// channels. Voices already sounding follow the new state. Channels
+    /// whose bit is set in `keep` are left as they are.
+    pub fn copy_channels_from(&mut self, other: &Synthesizer, keep: u16) {
+        for (i, (mine, theirs)) in self.channels.iter_mut().zip(&other.channels).enumerate() {
+            if keep & (1 << i) != 0 {
+                continue;
+            }
             *mine = theirs.clone();
             mine.set_hold_pedal(0);
         }

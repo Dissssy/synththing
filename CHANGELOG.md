@@ -5,6 +5,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Doom, a new game visualizer (New > Examples): plays the first maps of a Doom WAD you put in the `assets` folder next to it (shareware DOOM1.WAD or Freedoom), with the map's music on your soundfont.
+- Scripts can draw a whole palette image in one call (`blit`), read data files from the `assets` folder next to them (`read_asset`), and send raw MIDI messages to their synthesizer (`midi_send`).
 - The local API shows Shuffle, Loop and Autoplay with what's playing, and can set them (`POST /v1/modes`).
 - The local API lists your soundfonts and can switch which one MIDI songs play with (`GET /v1/soundfonts`, `POST /v1/soundfonts/{id}/use`). What's playing tells which soundfont a MIDI song plays with, and a `soundfonts_changed` event tells when the list or the one in use changes.
 - The local API can reorder the play queue (`POST /v1/queue/move`).

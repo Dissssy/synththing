@@ -147,6 +147,12 @@ function render(width, height)
 end
 ```
 
+```lua
+blit(pixels, width, height, palette, [x, y, w, h])   -- a whole palette-indexed image, stretched to w x h
+```
+
+`blit` draws a `width` by `height` image in one call, for scripts that render their own picture pixel by pixel (a software 3D renderer, an emulator) where thousands of `pixel` calls would be far too slow. `pixels` is a string of bytes or a list of numbers, one per pixel, row by row from the top-left, each a palette index from 0 to 255; `palette` is a list of up to 256 color tables, where `palette[1]` is the color of index 0 (Lua counting, like sprites), and missing entries are transparent. The image is stretched nearest-neighbor over `x, y, w, h` (the image's own size at the top-left by default), so a 320 x 200 picture can fill the whole visualizer. It's opaque unless the palette's colors say otherwise. `doom.lua` (New > Examples) draws its whole view with one `blit` a frame. Since 1.5.0.
+
 ### Moving and clipping
 
 ```lua
@@ -762,6 +768,12 @@ end
 
 Script notes play on a separate synthesizer from the song's, mixed in at the output with very little delay (tens of milliseconds, not the song's audio buffer), and they never cut off the song's notes or get cut off by them. They show up in `active_notes()` while they sound, with `source = "script"` (the song's own notes have `source = "song"`), so a visualizer lights up for them like for the song's, and one that only wants the score can skip them. Their sound is in the `left`/`right` samples `render()` gets, mixed with the song's (and on their own while the song is paused), so the waveform, `fft_left`/`fft_right`, the levels and `onset()` react to them too. They aren't in `notes_between` or `upcoming_notes`, which read the song file. Everything a script plays stops when it's reloaded or restarted, when another song loads, and when the visualizer is closed or hidden. A script holding notes with `note_on` should let go when it loses focus (`has_focus()`), since a key released while the visualizer didn't have focus never reports `"released"`.
 
+```lua
+midi_send(status, [data1], [data2]) -> bool   -- a raw MIDI channel message, e.g. midi_send(0xC0 | 3, 30) for a program change
+```
+
+`midi_send` sends one MIDI channel message (status `0x80` to `0xEF`: note off and on, controllers, program change, pitch bend, ...) straight to the script's synthesizer, for scripts that play whole scores themselves, with their own instruments. A channel it touches stops following the song's channel (its instrument, volume, ...) and keeps what the script set, until the script is reloaded or restarted. Channel 9 is drums. Notes sent this way don't show in `active_notes()`. Returns false (and does nothing) without a soundfont, like `play_note`. Since 1.5.0.
+
 ## Sequences
 
 ```lua
@@ -887,6 +899,14 @@ It's kept in `<script>.lua.store.json` next to the script, written within about 
 local best = store_get("best") or 0
 if score > best then store_set("best", score) end
 ```
+
+## Assets
+
+```lua
+read_asset(name) -> string or nil   -- the bytes of a file in the `assets` folder next to the script
+```
+
+A script can read data files it ships with (a game's levels, a sound bank) from the `assets` folder next to it (`visualizers\assets` in the config folder for most scripts). `name` is a plain file name, letters, digits, `.`, `_`, `-` and spaces: no folders, nothing outside `assets`, and nothing is ever written. It returns the whole file as a Lua string (binary is fine; read it with `string.unpack` and `string.byte`), or nil when there's no such file. Files over 256 MB are an error. `doom.lua` reads its WAD this way. Since 1.5.0.
 
 ## Testing scripts from the command line
 
