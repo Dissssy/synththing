@@ -53,6 +53,8 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `POST /v1/modes?shuffle=&loop=&autoplay=` | control | Sets any of them: `shuffle` `true` or `false`, `loop` `off`, `one` (this song) or `all` (the playlist), `autoplay` `off`, `group` or `all`: 204 |
 | `GET /v1/soundfonts` | read | `[{"id", "name", "size", "active"}]`: the Soundfonts list. `size` is in bytes (`null` if its file is missing), and `active` marks the one MIDI songs play with |
 | `POST /v1/soundfonts/{id}/use` | control | MIDI songs play with that soundfont from now on (the one playing switches live): 204, 404 if there's no such soundfont, or 409 if its file is missing |
+| `GET /v1/scripts` | read | `[{"id", "name", "active"}]`: the visualizer scripts, as the script picker lists them. `active` marks the one drawing |
+| `POST /v1/scripts/{id}/use` | control | The visualizer draws with that script from now on: 204, or 404 if there's no such script |
 | `GET /v1/queue` | read | The play queue (Up next): its songs, in the order they'll play |
 | `POST /v1/queue?song={key}` | control | Adds the song to the end of the queue (`&next=true`: to its front, to play next): 204 |
 | `POST /v1/queue?playlist={id}` | control | Adds the playlist's songs (shuffled while Shuffle is on), at the end or with `&next=true` at the front: 204, or 409 if it has no songs here |
@@ -98,6 +100,7 @@ Every song a program adds that wasn't in your library yet is marked with that pr
 - `playlists_changed`: a playlist was made, renamed, deleted or had songs added, removed or moved (here or by sync): `{}`. Ask `/v1/playlists` again.
 - `queue_changed`: songs were queued, played from the queue, moved or taken out: `{}`. Ask `/v1/queue` again.
 - `soundfonts_changed`: a soundfont was added, removed or put in use: `{}`. Ask `/v1/soundfonts` again.
+- `scripts_changed`: a script was added, removed or put in use: `{}`. Ask `/v1/scripts` again.
 
 Add `?events=now_playing,seeked` (any of them, by name) for only those. A comment line (`: keep-alive`) comes every 25 seconds when nothing else does.
 
