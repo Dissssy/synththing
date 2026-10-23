@@ -2,7 +2,9 @@
 # Keeps a systemd-run synththing server up to date (docs/DEPLOY.md): if the
 # newest GitHub release is newer than the installed binary, downloads its
 # Linux build, checks it against the SHA-256 GitHub publishes for it,
-# swaps it in and restarts the service. Run by synththing-update.timer;
+# swaps it in and restarts the service. Also keeps the front page in
+# WEBSITE (if that folder exists) at the newest release's
+# deploy/website/index.html. Run by synththing-update.timer;
 # safe to run by hand. Optional: without the timer, update by hand. Needs
 # curl and python3 (both standard on Ubuntu and Debian).
 set -eu
@@ -11,6 +13,7 @@ REPO="Dissssy/synththing"
 ASSET="synththing-linux-x86_64"
 BINARY="/opt/synththing/synththing"
 SERVICE="synththing"
+WEBSITE="/var/www/synththing"
 # (An admin's "update now", from the server: synththing-update.path.)
 rm -f /var/lib/synththing/update.request
 
@@ -27,6 +30,21 @@ digest = (asset.get("digest") or "").removeprefix("sha256:")
 print(release["tag_name"].lstrip("v"), asset["browser_download_url"], digest or "-")
 ' "$ASSET")
 EOF
+
+# The front page, as of the newest release (a failure here leaves the old
+# page and doesn't hold up the server's own update).
+if [ -d "$WEBSITE" ]; then
+    page=$(mktemp)
+    if curl -fsSL "https://raw.githubusercontent.com/$REPO/v$latest/deploy/website/index.html" -o "$page"; then
+        if ! cmp -s "$page" "$WEBSITE/index.html"; then
+            install -m 644 "$page" "$WEBSITE/index.html"
+            echo "front page updated to $latest"
+        fi
+    else
+        echo "no front page in $latest" >&2
+    fi
+    rm -f "$page"
+fi
 
 newest=$(printf '%s\n%s\n' "$installed" "$latest" | sort -V | tail -n 1)
 if [ "$installed" = "$latest" ] || [ "$newest" != "$latest" ]; then
