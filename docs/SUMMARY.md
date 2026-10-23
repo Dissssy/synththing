@@ -16,7 +16,7 @@
 # Servers
 
 - [Running a server](DEPLOY.md)
-- [Script library design](SERVER.md)
+- [How the server works](SERVER.md)
 
 # Maintaining
 

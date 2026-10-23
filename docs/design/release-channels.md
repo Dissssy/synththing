@@ -1,6 +1,6 @@
 # Release channels: canary (nightly) and branch builds
 
-Status: being built in #4 (tracked in #3). Updated as parts land: it describes what the code does.
+Status: built (#4, tracked in #3), steps 1 to 6 of the plan at the end; it describes what the code does. Android branch builds came later (#39, docs/ANDROID.md).
 
 ## Goal
 
@@ -21,7 +21,7 @@ Testers shouldn't need Rust, and trying a branch must never put their stable ins
 
 ### Runners
 
-The repo is public, so GitHub-hosted runners cost nothing; a self-hosted runner wouldn't save minutes. It would also be a security risk, since `ci.yml` runs on `pull_request` and a fork's PR would run its code on the runner's host (GitHub advises against self-hosted runners on public repos). And the existing self-hosted runner is Linux only, while the Windows exe would need cross-compiling (`cargo-xwin`) with the tray, `winresource` and `windows-sys` dependencies involved. Decision: stay on GitHub-hosted runners. If a self-hosted runner is ever used, only for Linux jobs triggered by pushes, never by `pull_request`.
+The repo is public, so GitHub-hosted runners cost nothing; a self-hosted runner wouldn't save minutes. It would also be a security risk, since `ci.yml` runs on `pull_request` and a fork's PR would run its code on the runner's host (GitHub advises against self-hosted runners on public repos). And the existing self-hosted runner is Linux only, while the Windows exe would need cross-compiling (`cargo-xwin`) with the tray, `winresource` and `windows-sys` dependencies involved. Decision at the time: stay on GitHub-hosted runners. Since then (#30), the Linux and Android jobs run on a self-hosted runner of our own (`deploy/ci-runner.compose.yml`, picked by the `RUNNER` repository variable), for speed and its caches; pull requests from forks still go to GitHub's runners, so a stranger's code never runs on it. The Windows jobs, and the Linux release and test builds pinned to ubuntu-22.04 for their glibc, stay on GitHub's.
 
 ### Backups vs. separate installs
 
