@@ -38,7 +38,7 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `POST /v1/playlists/{id}/rename?to={name}` | edit library | Renames it: 204 |
 | `DELETE /v1/playlists/{id}` | edit library | Deletes it (on all your devices, when your library syncs): 204 |
 | `POST /v1/playlists/{id}/songs/move?from={n}&to={m}` | edit library | Moves the song at place `from` so it ends up at place `to` (both from 0): 204, 404 past its end, or 409 for a smart playlist |
-| `GET /v1/songs/{key}/file` | download songs | The song's file, with its type, length and its name as imported (`Content-Disposition`), or 404 if it isn't on this computer |
+| `GET /v1/songs/{key}/file` | download songs | The song's file, with its type, length and its name as imported (`Content-Disposition`), or 404 if it isn't on this computer. A `Range: bytes=...` header gets just that part (206), so players can stream and seek it |
 | `GET /v1/songs/{key}/art` | read | The song's picture (its own, else its album's cover) as an image, or 404 |
 | `GET /v1/groupings` | read | `[{"id", "name", "split"}]`: the rulesets (By Artist, By Album and yours) |
 | `GET /v1/groupings/{id}` | read | `{"id", "name", "split", "groups": [{"id", "title", "subtitle", "songs": [keys]}]}`: the playlists it makes of the songs on this computer, as Groupings shows them |

@@ -750,7 +750,7 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             Some(reply) => Some(reply),
             None => match ask(shared, Call::Library) {
                 Err(reply) => Some(reply),
-                Ok(library) => match song_file(&library, key) {
+                Ok(library) => match song_file(&library, key, request.headers().iter().find(|h| h.field.equiv("Range")).map(|h| h.value.as_str())) {
                     Err(reply) => Some(reply),
                     Ok(file) => {
                         let _ = request.respond(file);
@@ -956,10 +956,27 @@ fn groups(library: &Library, by: SplitBy, q: &str) -> Reply {
 
 /// `GET /v1/songs/{key}/file`: the song's file as it's kept, named as it
 /// was imported.
-fn song_file(library: &Library, key: &str) -> Result<Response<std::fs::File>, Reply> {
+/// `GET /v1/songs/{key}/file`: the whole file, or the part `range` (the
+/// request's `Range` header) asks for, so players can seek in it.
+fn song_file(library: &Library, key: &str, range: Option<&str>) -> Result<Response<std::io::Take<std::fs::File>>, Reply> {
+    use std::io::Seek;
     let song = library.store.get_by_key(key).filter(|_| library.store.has(key)).ok_or_else(|| error(404, "there's no song with that key here"))?;
     let path = library.store.path(key);
-    let file = std::fs::File::open(&path).map_err(|e| error(500, format!("couldn't read the song: {e}")))?;
+    let mut file = std::fs::File::open(&path).map_err(|e| error(500, format!("couldn't read the song: {e}")))?;
+    let length = file.metadata().map_err(|e| error(500, format!("couldn't read the song: {e}")))?.len();
+    let part = match range.map(|r| byte_range(r, length)) {
+        None | Some(Ok(None)) => None,
+        Some(Ok(Some(part))) => Some(part),
+        Some(Err(())) => {
+            return Err(error(416, "that range isn't in the file").with_header(header("Content-Range", &format!("bytes */{length}"))));
+        }
+    };
+    let (status, start, end) = match part {
+        Some((start, end)) => (206, start, end),
+        None => (200, 0, length.saturating_sub(1)),
+    };
+    file.seek(std::io::SeekFrom::Start(start)).map_err(|e| error(500, format!("couldn't read the song: {e}")))?;
+    let size = if length == 0 { 0 } else { end - start + 1 };
     let extension = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
     let kind = match extension.as_str() {
         "mp3" => "audio/mpeg",
@@ -976,10 +993,39 @@ fn song_file(library: &Library, key: &str) -> Result<Response<std::fs::File>, Re
     let encoded: String =
         song.name.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
     // Never chunked, so the length is sent and clients can show progress.
-    Ok(Response::from_file(file)
+    let mut response = Response::new(tiny_http::StatusCode(status), Vec::new(), file.take(size), Some(size as usize), None)
         .with_chunked_threshold(usize::MAX)
-        .with_header(header("Content-Type", kind))
+        .with_header(header("Accept-Ranges", "bytes"))
+        .with_header(header("Content-Type", kind));
+    if status == 206 {
+        response.add_header(header("Content-Range", &format!("bytes {start}-{end}/{length}")));
+    }
+    Ok(response
         .with_header(header("Content-Disposition", &format!("attachment; filename=\"{plain}\"; filename*=UTF-8''{encoded}"))))
+}
+
+/// A `Range: bytes=...` header's one range, in a file `length` bytes long:
+/// the first and last byte, `None` to send all of it (no `bytes=` range, or
+/// several, which are allowed to be answered with the whole file), or `Err`
+/// if it's past the end.
+fn byte_range(header: &str, length: u64) -> Result<Option<(u64, u64)>, ()> {
+    let Some(spec) = header.trim().strip_prefix("bytes=") else { return Ok(None) };
+    if spec.contains(',') {
+        return Ok(None);
+    }
+    let Some((first, last)) = spec.trim().split_once('-') else { return Ok(None) };
+    let (first, last) = (first.trim(), last.trim());
+    let (start, end) = match (first.parse::<u64>(), last.parse::<u64>()) {
+        // The last `n` bytes.
+        (Err(_), Ok(n)) if first.is_empty() => (length.saturating_sub(n), length.saturating_sub(1)),
+        (Ok(start), Err(_)) if last.is_empty() => (start, length.saturating_sub(1)),
+        (Ok(start), Ok(end)) if start <= end => (start, end.min(length.saturating_sub(1))),
+        _ => return Ok(None),
+    };
+    if length == 0 || start >= length || (first.is_empty() && last == "0") {
+        return Err(());
+    }
+    Ok(Some((start, end)))
 }
 
 /// `GET /v1/songs/{key}/art`: the song's picture (its own, else its
@@ -1292,6 +1338,20 @@ mod tests {
         assert_eq!(answering(&server, empty, edit(false, "playlists/p1/songs/move?to=0", &edit_token)), 400);
         assert_eq!(answering(&server, empty, edit(true, "playlists/p1", &control_token)), 403);
         assert_eq!(answering(&server, empty, edit(true, "playlists/p1", &edit_token)), 204);
+    }
+
+    #[test]
+    fn byte_ranges_are_read_like_http_says() {
+        assert_eq!(byte_range("bytes=0-99", 1000), Ok(Some((0, 99))));
+        assert_eq!(byte_range("bytes=500-", 1000), Ok(Some((500, 999))));
+        assert_eq!(byte_range("bytes=-100", 1000), Ok(Some((900, 999))));
+        assert_eq!(byte_range("bytes=-5000", 1000), Ok(Some((0, 999))));
+        assert_eq!(byte_range("bytes=900-5000", 1000), Ok(Some((900, 999))));
+        assert_eq!(byte_range("bytes=1000-", 1000), Err(()));
+        assert_eq!(byte_range("bytes=-0", 1000), Err(()));
+        assert_eq!(byte_range("bytes=0-1,5-6", 1000), Ok(None));
+        assert_eq!(byte_range("bytes=9-1", 1000), Ok(None));
+        assert_eq!(byte_range("items=0-1", 1000), Ok(None));
     }
 
     #[test]
