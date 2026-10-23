@@ -49,6 +49,7 @@ mod lookup;
 mod live;
 mod loader;
 mod lua_analysis;
+mod lua_api;
 mod lua_completion;
 mod lua_docs;
 mod lua_highlight;

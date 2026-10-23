@@ -128,39 +128,8 @@ const BLANK_SCRIPT_TEMPLATE: &str = "\
 -- and the new stereo samples (flat, 1-indexed tables) since the last frame.
 --
 -- Draw with clear/line/rect/pixel; color tables take an optional `a` (0..1).
---   clear({r,g,b})  line(x0,y0,x1,y1,{r,g,b,a},[width])  rect(...)  pixel(x,y,{r,g,b,a})
---   set_clear_color({r,g,b,a})  what frames start from; a < 1 leaves trails
---   shift_frame(dx, dy)          scroll the kept frame by whole pixels
---   hsv(hue, s, v) / mix(color1, color2, t)  make colors (hue in degrees)
---   translate(dx, dy) / clip(x0, y0, x1, y1) / push_view() / pop_view()  move and limit drawing
---   circle(x,y,r,color)  triangle(x1,y1,x2,y2,x3,y3,color)  polygon(points,color)
---   rect_outline(x0,y0,x1,y1,color,[width])  circle_outline(x,y,r,color,[width])  just the edge
---   sprite_register({image = rows, palette = colors}) once, then sprite(id, x, y, scale)
---   text(x, y, string, color, height) / text_size(string, height)  pixel text
--- fft_left(left) / fft_right(right)     magnitude spectrum, computed in Rust
--- fft_bin(hz) / fft_band(spectrum, lo, hi)  find frequencies in a spectrum
--- level_left() / level_right() / onset() loudness, and whether a sound just started
--- peak_left() / peak_right()           this frame's loudest sample
--- history_left(seconds, [count])       the last few seconds of samples, oldest first
--- beat() / bar() / tempo()              musical timing from the MIDI file
--- notes_between(t0, t1)                 whole notes with start/stop times
--- active_notes() / upcoming_notes()     notes held now / changing soon
--- midi_channels() / channel_enabled(c)  the file's channels and their toggles
--- set_channel_enabled(c, enabled)       mute/unmute a channel from the script
--- channel_colors({ [c] = color, ... })   color the app's channel toggles to match
--- channel_program(c) / channel_name(c)  the instrument a channel plays, its track's name
--- play_note(key, {channel, velocity, duration})  play a note on the song's instruments
--- playback() / set_paused(p) / seek(t)  transport state and control
--- playlist() / play_track(i) / next_track()  the current playlist
--- store_get(key) / store_set(key, v)    data saved across restarts
--- FRAME / TIME                          frame count, seconds since start
--- log(message) / DT                     debug log, seconds since last frame
--- approach(current, target, rate)       smoothing, the same at any frame rate
--- mouse() / has_focus()                 the mouse over the visualizer (see Docs)
--- input_register(name, keys) / input(id) rebindable keys; typing_begin() for text
--- setting_bool/int/float/color/string/selection(key, ...)  user-editable values
--- settings_preset(name, {key = value, ...})  a named set of them to pick
--- recording() / recording_ready() / recording_done()  taking part in recordings
+-- Every function is in View > Scripting Reference; hover a name for its help,
+-- and Ctrl+click it for its part of the reference.
 
 function render(width, height, left, right)
     clear({ r = 16, g = 16, b = 24 })
@@ -173,10 +142,19 @@ end
 /// the one-time seed already happened, so a bundled default the user deletes
 /// stays deleted on later launches instead of quietly reappearing. "Restore
 /// default" (`bundled_default`) is the deliberate way to bring one back.
+/// Also keeps the Lua language server definitions there current
+/// (`lua_api::write_luals`), so the folder opened in an editor knows the API.
 pub fn scripts_dir() -> Result<PathBuf> {
     let dir = config_dir()?.join("visualizers");
     fs::create_dir_all(&dir)?;
     seed_bundled(&dir)?;
+    // The script API for editors with the Lua language server, once a run.
+    static LUALS: std::sync::Once = std::sync::Once::new();
+    LUALS.call_once(|| {
+        if let Err(e) = crate::lua_api::write_luals(&dir) {
+            log::warn!("couldn't write the Lua language server definitions: {e}");
+        }
+    });
     Ok(dir)
 }
 
@@ -1550,8 +1528,6 @@ pub struct ScriptOptions {
     pub assets: bool,
 }
 
-/// The `script_options` keys, for the error naming them.
-const SCRIPT_OPTIONS: &str = "start_paused, app_log, record_prepare, record_auto, transparent and assets";
 
 /// What a script can see of the app's playback beyond the engine: the
 /// loop and shuffle modes, and the current playlist (read-only).
@@ -2585,7 +2561,8 @@ fn compile(
                             }
                             (other, _) => {
                                 return Err(mlua::Error::runtime(format!(
-                                    "script_options: no option `{other}` (there are {SCRIPT_OPTIONS})"
+                                    "script_options: no option `{other}` (there are {})",
+                                    crate::lua_api::script_option_list()
                                 )));
                             }
                         }

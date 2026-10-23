@@ -15,7 +15,6 @@ use full_moon::tokenizer::TokenReference;
 use full_moon::visitors::Visitor;
 use full_moon::LuaVersion;
 
-use crate::lua_completion::HOST_API;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalKind {
@@ -124,23 +123,14 @@ impl Analysis {
     }
 }
 
-/// What a call to a host function returns, when it's a table we know.
+/// What a call to a host function returns, when it's a table we know
+/// (`lua_api`'s classes).
 pub fn shape_of_call(function: &str) -> Option<Shape> {
-    const PLAYBACK: &[&str] = &[
-        "position", "length", "speed", "paused", "finished", "loop_enabled", "generation", "song_name", "song_path",
-        "song_id",
-    ];
-    const TYPING: &[&str] = &["active", "done", "cancelled", "text", "cursor", "line", "column", "key"];
-    const ACTIVE: &[&str] = &["channel", "key", "velocity", "source"];
-    const UPCOMING: &[&str] = &["channel", "key", "velocity", "on", "seconds_until"];
-    const WHOLE: &[&str] = &["id", "channel", "key", "velocity", "start", "stop"];
-    match function {
-        "playback" => Some(Shape::Fields(PLAYBACK)),
-        "typing_state" => Some(Shape::Fields(TYPING)),
-        "active_notes" => Some(Shape::ListOf(ACTIVE)),
-        "upcoming_notes" => Some(Shape::ListOf(UPCOMING)),
-        "notes_between" => Some(Shape::ListOf(WHOLE)),
-        _ => None,
+    let ty = crate::lua_api::first_return(function)?;
+    let ty = ty.strip_suffix("|nil").unwrap_or(ty);
+    match ty.strip_suffix("[]") {
+        Some(element) => crate::lua_api::field_names(element).map(Shape::ListOf),
+        None => crate::lua_api::field_names(ty).map(Shape::Fields),
     }
 }
 
@@ -821,7 +811,7 @@ pub fn complete(analysis: &Analysis, text: &str, cursor: usize, forced: bool) ->
     let mut globals: Vec<&String> = analysis.script_globals.iter().collect();
     globals.sort();
     items.extend(globals.into_iter().map(|g| Item { label: g.clone(), kind: ItemKind::Local, detail: "global".into() }));
-    items.extend(HOST_API.iter().map(|&(label, detail)| Item {
+    items.extend(crate::lua_api::details().iter().map(|&(label, detail)| Item {
         label: label.to_string(),
         kind: ItemKind::Host,
         detail: detail.to_string(),
@@ -935,7 +925,7 @@ pub fn signature_at(analysis: &Analysis, text: &str, cursor: usize) -> Option<Si
     let (params, rest) = if let Some((library_name, member)) = name.split_once('.') {
         let detail = library(library_name)?.iter().find(|(n, _)| *n == member)?.1;
         lookup(detail)?
-    } else if let Some(&(_, detail)) = HOST_API.iter().chain(LUA_GLOBALS).find(|(n, _)| *n == name) {
+    } else if let Some(&(_, detail)) = crate::lua_api::details().iter().chain(LUA_GLOBALS).find(|(n, _)| *n == name) {
         lookup(detail)?
     } else {
         let byte = analysis.byte_index(cursor.min(analysis.char_starts.len()));
@@ -966,7 +956,7 @@ mod tests {
     use super::*;
 
     fn known() -> HashSet<String> {
-        known_globals(HOST_API.iter().map(|(n, _)| n.to_string()))
+        known_globals(crate::lua_api::ITEMS.iter().map(|i| i.name.to_string()))
     }
 
     fn messages(source: &str) -> Vec<String> {

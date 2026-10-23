@@ -24,6 +24,13 @@ function render(width, height, left, right)
 end
 ```
 
+<!-- api: render -->
+```lua
+render(width, height, left, right)   -- define this: called once per frame to draw it (since 0.1.1)
+                                     -- width: the frame's size in pixels; left: the new left samples since the last frame; right: the new right samples
+```
+<!-- /api -->
+
 `width`/`height` are the pixel buffer's current size (it resizes with the visualizer, don't assume a fixed size). `left`/`right` are the new stereo samples played since the last frame, as flat 1-indexed tables of numbers, empty while paused, which is normal, not an error.
 
 Anything a script keeps between frames goes in module-level locals (declared outside `render`), which last until the script is reloaded or restarted.
@@ -43,6 +50,8 @@ Scripts live in the `visualizers` folder of the app's config folder (`%APPDATA%\
 - Fullscreen (the corners, or F11): just the visualizer, filling the screen. The cog, gamepad and bug open the script's Settings, Controls and Debug windows.
 
 Live reload: editing a script in the Script Editor saves it and recompiles it on a fresh Lua VM as you type. Editing the file in another editor works too: when the running script's file changes on disk, the app loads the new version into the editor and visualizer, and the script list updates as files are added, removed or renamed in the folder. A script that fails to compile leaves whatever was running before still running; the error shows above the editor and in this script's log (Debug > Log) and stays until you fix it or revert. Restart restarts the version that's running, not the broken edit.
+
+Other editors: the scripts folder has the API's definitions for the Lua language server (LuaLS) in `.luals/synththing.lua`, and a `.luarc.json` pointing at them, so opening the folder in VS Code with the Lua extension (or Neovim, Zed, JetBrains and anything else with LuaLS) gives completion, hover help, signature help and type checks for every function here. The app keeps them matching its own version: after an update (or running another build) they're rewritten at the next start, so they never describe functions the app doesn't have; a `.luarc.json` of your own is left alone, so add `".luals"` to its `"workspace.library"` for the definitions to be found. For a live view next to the code, open the local API's visualizer page (see docs/API.md) in a browser, or in VS Code's Simple Browser.
 
 ## The editor
 
@@ -69,17 +78,21 @@ Live reload: editing a script in the Script Editor saves it and recompiles it on
 
 All color-table based:
 
+<!-- api: clear line rect pixel circle triangle polygon rect_outline circle_outline -->
 ```lua
-clear({r,g,b})
-line(x0, y0, x1, y1, {r,g,b,a}, [width])     -- width in pixels, 1 by default
-rect(x0, y0, x1, y1, {r,g,b,a})
-pixel(x, y, {r,g,b,a})
-circle(x, y, radius, {r,g,b,a})                -- filled
-triangle(x1, y1, x2, y2, x3, y3, {r,g,b,a})    -- filled
-polygon(points, {r,g,b,a})                     -- filled; points {x1, y1, x2, y2, ...} or {{x, y}, ...}
-rect_outline(x0, y0, x1, y1, {r,g,b,a}, [width])  -- just the edge, width inside the rectangle
-circle_outline(x, y, radius, {r,g,b,a}, [width])  -- just the edge, width inside the radius
+clear(color)                                   -- fill the whole frame (or the clip) with a color (since 0.1.1)
+line(x0, y0, x1, y1, color, [width])           -- draw a line; wider than 1 is a band with round ends (since 0.1.1)
+                                               -- width: pixels, 1 if not given
+rect(x0, y0, x1, y1, color)                    -- fill an axis-aligned rectangle (since 0.1.1)
+pixel(x, y, color)                             -- set one pixel (since 0.1.1)
+circle(x, y, radius, color)                    -- a filled circle (since 0.1.6)
+triangle(x1, y1, x2, y2, x3, y3, color)        -- a filled triangle (since 0.1.6)
+polygon(points, color)                         -- a filled polygon (even-odd: where it crosses itself is a hole) (since 0.1.6)
+                                               -- points: {x1, y1, x2, y2, ...} or {{x, y}, ...}
+rect_outline(x0, y0, x1, y1, color, [width])   -- just a rectangle's edge, inside it (since 0.7.0)
+circle_outline(x, y, radius, color, [width])   -- just a circle's edge, inside the radius (since 0.7.0)
 ```
+<!-- /api -->
 
 Shapes fill every pixel whose center is inside them, so edges are crisp (no anti-aliasing) and a translucent shape blends each pixel exactly once. `polygon` takes up to 4096 points, as a flat list of coordinates or a list of points (`{x, y}` or `{x = .., y = ..}`); a polygon that crosses itself leaves holes where it overlaps (the even-odd rule). For outlines, use `line`.
 
@@ -95,10 +108,14 @@ circle_outline(cx, cy, r, { r = 255, g = 255, b = 255, a = 0.4 })   -- a faint r
 
 `r`, `g` and `b` are 0 to 255 (values outside that are clamped, fractions are fine). `a` is opacity, 0.0 to 1.0, defaulting to 1.0. An opaque draw (`a = 1`) overwrites; a translucent one alpha-blends over what's already there. `clear` always overwrites regardless of `a`. Coordinates are buffer pixels, (0, 0) at the top left, and can be fractional.
 
+<!-- api: hsv mix -->
 ```lua
-hsv(hue, saturation, value, [a]) -> color   -- hue in degrees, the rest 0 to 1
-mix(color1, color2, t) -> color             -- t from 0 (color1) to 1 (color2)
+hsv(hue, saturation, value, [a]) -> color   -- a color from hue, saturation and value (since 0.6.0)
+                                            -- hue: degrees, wraps; saturation: 0 to 1; value: 0 to 1; a: 0 to 1
+mix(color1, color2, t) -> color             -- a color between two, alpha included (since 0.6.0)
+                                            -- t: 0 is color1, 1 is color2
 ```
+<!-- /api -->
 
 Two ways to make color tables without the arithmetic. `hsv` goes around the color wheel: hue 0 is red, 120 green, 240 blue, and it wraps (360 is red again, -120 is blue), so a hue that keeps counting up just keeps cycling; saturation 0 is gray and 1 the full color, value 0 is black and 1 the brightest (both clamped to 0 to 1). `mix` goes between two colors, `a` included (a color without one counts as opaque), with `t` clamped to 0 to 1: `mix(background, accent, 0.25)` is a quarter of the way to the accent, and `mix(c, { r = 255, g = 255, b = 255 }, 0.5)` a paler `c`. Both return a new table, `{r, g, b, a}`, with fractions left as they are. Since 0.6.0.
 
@@ -109,9 +126,11 @@ local glow = mix(channel_color, background, 0.6)       -- the same, faded toward
 
 The buffer is cleared to all-black before your `render()` runs, there's no double buffering, so anything you want visible this frame has to be drawn this frame, including whatever scrolling history your own script is keeping track of. Unless the script changes that:
 
+<!-- api: set_clear_color -->
 ```lua
-set_clear_color({r,g,b,a})   -- what each frame starts from; opaque black unless changed
+set_clear_color(color)   -- what each frame starts from, blended over the last one; a < 1 leaves trails, a = 0 keeps it (since 0.6.0)
 ```
+<!-- /api -->
 
 Before each `render()`, the clear color is blended over the frame drawn last time, so its `a` decides how much of that frame is left: `a = 1` (the default, with black) wipes it, as above; `{ r = 0, g = 0, b = 0, a = 0.1 }` fades it a tenth of the way to black, so whatever moves leaves a trail that dies away over a few dozen frames; and `a = 0` keeps it exactly, so a script can draw only what changed, adding to a picture over time. The color doesn't have to be black: a fade toward the background color keeps the trails the same tint as the background. A fade always reaches the color in the end, rather than leaving a faint glow behind.
 
@@ -132,9 +151,11 @@ script_options({ transparent = true })  -- once, at the top: see-through frames
 
 A frame is opaque unless the script asks for see-through ones. With `transparent`, each frame starts transparent instead of filled with the clear color, and whatever isn't drawn on shows what's behind it: in synththing, the panel; in OBS, the scene under it, through the local API's PNG frames (docs/API.md). Translucent drawing over nothing stays translucent, and `clear()` keeps its color's `a`, so `clear({ r = 0, g = 0, b = 0, a = 0.5 })` is a half see-through black backdrop. The clear color's `a` still means trails: it fades the last frame out by that much (its `r`, `g` and `b` don't matter), and the strip `shift_frame` uncovers is transparent. Where nothing can show through (a recording, a JPEG), see-through parts are shown over black, and in synththing too unless the See-through button above the visualizer is on, so a see-through script stays readable on every theme. FFT, Pulse, Keyboard, Letters and Dashboard have a Background opacity setting that uses this. Since 1.5.0.
 
+<!-- api: shift_frame -->
 ```lua
-shift_frame(dx, [dy])   -- move what's drawn so far by dx, dy whole pixels
+shift_frame(dx, [dy])   -- move what's drawn so far (the kept frame) by whole pixels, inside the clip (since 0.7.0)
 ```
+<!-- /api -->
 
 With the last frame kept (`a = 0`), `shift_frame` scrolls it: everything drawn so far moves `dx` pixels right (negative: left) and `dy` down (negative: up), rounded to whole pixels; what moves off the edge is gone, and the strip it uncovers is filled with the clear color. So a scrolling display (a spectrogram, a history graph, a ticker) draws only what's new each frame, at the edge it scrolls in from, instead of drawing its whole history again. Inside a `clip` it moves just that rectangle, leaving the rest. Anything drawn over the scrolling part each frame (labels, a cursor) scrolls along and smears, so draw those somewhere that isn't scrolled, or draw what's under them again first, as `spectrogram.lua` does with its frequency labels. When the frame changes size there's nothing kept to scroll, so draw everything afresh then. Since 0.7.0.
 
@@ -147,20 +168,25 @@ function render(width, height)
 end
 ```
 
+<!-- api: blit -->
 ```lua
-blit(pixels, width, height, palette, [x, y, w, h])   -- a whole palette-indexed image, stretched to w x h
+blit(pixels, width, height, palette, [x], [y], [w], [h])   -- a palette-indexed image in one call, stretched to w x h (since 1.6.0)
+                                                           -- pixels: palette indices 0-255, a string of bytes or a list
 ```
+<!-- /api -->
 
 `blit` draws a `width` by `height` image in one call, for scripts that render their own picture pixel by pixel (a software 3D renderer, an emulator) where thousands of `pixel` calls would be far too slow. `pixels` is a string of bytes or a list of numbers, one per pixel, row by row from the top-left, each a palette index from 0 to 255; `palette` is a list of up to 256 color tables, where `palette[1]` is the color of index 0 (Lua counting, like sprites), and missing entries are transparent. The image is stretched nearest-neighbor over `x, y, w, h` (the image's own size at the top-left by default), so a 320 x 200 picture can fill the whole visualizer. It's opaque unless the palette's colors say otherwise. `doom.lua` (a bundled game) draws its whole view with one `blit` a frame. Since 1.5.0.
 
 ### Moving and clipping
 
+<!-- api: translate clip push_view pop_view -->
 ```lua
-translate(dx, dy)           -- move everything drawn after this by dx, dy (adds up)
-clip(x0, y0, x1, y1)        -- draw only inside this rectangle; clip() to draw anywhere again
-push_view()                 -- save the current translate and clip
-pop_view()                  -- go back to the last saved ones
+translate(dx, dy)              -- move everything drawn after this; adds up, push_view/pop_view to undo (since 0.6.0)
+clip([x0], [y0], [x1], [y1])   -- draw only inside this rectangle (where it is after translate); clip() for anywhere (since 0.6.0)
+push_view()                    -- save the current translate and clip (since 0.6.0)
+pop_view()                     -- go back to the translate and clip push_view saved (since 0.6.0)
 ```
+<!-- /api -->
 
 These change where the drawing calls after them land, so a part of the picture can be drawn as if it had the window to itself. `translate` shifts every drawing call after it (shapes, lines, pixels, text, sprites) by `dx, dy` pixels, and calling it again adds to the shift. `clip` keeps everything drawn after it inside a rectangle, given like `rect`'s corners, and whatever falls outside isn't drawn at all; `clear()` fills only the rectangle while one is set. The rectangle is where it's given at the time, so after `translate(100, 50)`, `clip(0, 0, 200, 100)` is the 200 by 100 area starting at (100, 50). A new `clip` replaces the last one rather than narrowing it.
 
@@ -189,11 +215,14 @@ pop_view()
 
 ## Text
 
+<!-- api: text text_size FONT_HEIGHT -->
 ```lua
-text(x, y, string, {r,g,b,a}, [height]) -> width, height   -- draw, and get the size drawn
-text_size(string, [height]) -> width, height               -- measure only, draws nothing
-FONT_HEIGHT                                                 -- 12, the font's own line height
+text(x, y, text, color, [height]) -> width, height   -- draw pixel text (Monogram; Japanese, Korean and Chinese from Noto), and get the size drawn (since 0.1.5)
+                                                     -- height: line height in pixels, FONT_HEIGHT if not given
+text_size(text, [height]) -> width, height           -- measure text without drawing it (since 0.1.5)
+FONT_HEIGHT                                          -- 12, the pixel font's own line height; whole multiples stay crisp (since 0.1.5)
 ```
+<!-- /api -->
 
 Text uses the built-in Monogram pixel font, scaled with pure nearest-neighbor so its pixels stay crisp, square blocks. `height` is the height of one line in pixels (default `FONT_HEIGHT`), and the text fills the box from `y` to `y + height` per line: the line box includes room for accents above capitals and descenders below, with capitals taking rows 3 to 10 of the font's 12. Whole multiples of `FONT_HEIGHT` (12, 24, 36, ...) keep every font pixel exactly square; any other height works but some pixels come out a pixel wider or taller than others.
 
@@ -222,11 +251,14 @@ Characters the pixel font doesn't have (Japanese, Korean, Chinese) come from the
 
 ## Sprites
 
+<!-- api: sprite_register sprite sprite_size -->
 ```lua
-sprite_register({ image = rows, palette = colors }) -> id   -- once, outside render()
-sprite(id, x, y, [scale or options]) -> width, height      -- draw it; the size drawn
-sprite_size(id) -> width, height                            -- its size in sprite pixels
+sprite_register(sprite) -> id                  -- register a sprite once, outside render(); palette index 0 is transparent (since 0.1.8)
+sprite(id, x, y, [options]) -> width, height   -- draw a sprite, or part of one, optionally recolored; the size drawn (since 0.1.8)
+                                               -- options: a scale, or options
+sprite_size(id) -> width, height               -- a sprite's size in its own pixels (since 0.1.8)
 ```
+<!-- /api -->
 
 A sprite is a little pixel image the script hands over once; the app turns it into ready-to-draw colors right then, so drawing it later, at any size, is cheap. `image` is a list of rows, each a list of palette indices; `palette` is a list of color tables. Index 1 is the palette's first color (Lua counting), and 0 is transparent. Rows can be different lengths (a short row is transparent past its end); the sprite is as wide as its longest row. Palette colors can be translucent (`a` below 1), and those pixels blend.
 
@@ -272,9 +304,12 @@ The Sprite Editor tab (View > Sprite Editor, the "Sprite editing" layout, or Ctr
 
 Register sprites once, at the top level of the script (outside `render()`), and keep the ids: each call registers a new sprite, and a script can have at most 10,000. Sprites belong to the script and go away when it's reloaded or restarted, which re-registers them anyway.
 
+<!-- api: album_art -->
 ```lua
-album_art([size]) -> { sprite, width, height, color } or nil   -- the playing song's art
+album_art([size]) -> art   -- the playing song's art as a sprite, and the color it's mostly made of (since 1.5.0)
+                           -- size: at most this many pixels across
 ```
+<!-- /api -->
 
 `album_art` gives the playing song's art (its own picture, else its album's cover, as the app shows it) as a sprite to draw with `sprite`, at most `size` pixels across (its own size, up to 512, when left out), and `color`, the color it's mostly made of, bright enough to draw with on a dark background: a script can take on the colors of what's playing. It's nil while there's no song, while the art's still being read (a moment after a song starts), and for a song without any. Each size is scaled smoothly once per picture, so ask for the size you'll draw at, every frame; the ids stay the same from one song to the next. The art can be drawn with `scale`, `src` and flips, but not recolored (`palette`, `tint`). Since 1.5.0.
 
@@ -290,20 +325,24 @@ end
 
 ## Audio data
 
+<!-- api: fft_left fft_right -->
 ```lua
-fft_left(samples) -> spectrum
-fft_right(samples) -> spectrum
+fft_left(samples) -> spectrum    -- the left channel's magnitude spectrum (512 entries) (since 0.1.1)
+fft_right(samples) -> spectrum   -- the right channel's magnitude spectrum (since 0.1.1)
 ```
+<!-- /api -->
 
 Windowed magnitude spectrum of a channel's last 1024 samples (about 23 ms at 44.1 kHz, Hann window), computed in Rust so a script never has to do its own FFT (interpreted Lua doing a 1024-point FFT every frame would blow the frame budget by itself). Pass the `left`/`right` tables `render()` was given; the analyzer keeps its own internal sliding window, so calling it with an empty table (e.g. while paused) just returns the same spectrum as last time, not an error.
 
 The result is a table of 512 magnitudes. Entry `i` (1-based) is the frequency `(i - 1) * SAMPLE_RATE / 1024` Hz, so entries are about 43 Hz apart at 44.1 kHz, from 0 Hz up to half the sample rate. A full-volume sine wave reads about 1.0 at its frequency. It works on the last 1024 samples it's been given, keeping its own window from call to call, so call it every frame with that frame's `left` (or `right`): at 60 fps a frame brings 735 samples, so the first call returns an empty table and from the second on it's always 512 long.
 
+<!-- api: fft_bin fft_freq fft_band -->
 ```lua
-fft_bin(hz) -> entry                         -- the spectrum entry nearest hz
-fft_freq(entry) -> hz                        -- the frequency an entry is at
-fft_band(spectrum, lo_hz, hi_hz) -> peak, average   -- the entries from lo_hz to hi_hz
+fft_bin(hz) -> entry                                -- the spectrum entry nearest hz (1 to 512) (since 0.6.0)
+fft_freq(entry) -> hz                               -- the frequency a spectrum entry is at (since 0.6.0)
+fft_band(spectrum, lo_hz, hi_hz) -> peak, average   -- the peak and average of the spectrum entries in that range (since 0.6.0)
 ```
+<!-- /api -->
 
 These do the entry arithmetic above. `fft_bin` rounds to the nearest entry and stays in the spectrum (1 to 512), so its answer is always a valid index. `fft_band` looks at every entry from `fft_bin(lo_hz)` to `fft_bin(hi_hz)`, at least one, and gives the largest magnitude and the average: the peak for drawing a bar that covers a range of frequencies (one column of a log-scaled display, say), the average for how much is going on in a range overall (bass, mids, treble). With an empty spectrum (the first frame), it's 0, 0. Since 0.6.0.
 
@@ -314,13 +353,15 @@ local bass = select(2, fft_band(spectrum, 20, 250))   -- the average
 local bar = fft_band(spectrum, 1000, 1200)            -- the peak
 ```
 
+<!-- api: level_left level_right peak_left peak_right onset -->
 ```lua
-level_left() -> number     -- loudness of this frame's left samples (RMS)
-level_right() -> number    -- same for the right
-peak_left() -> number      -- this frame's loudest left sample, ignoring sign
-peak_right() -> number     -- same for the right
-onset() -> hit, strength   -- did a sound just start this frame?
+level_left() -> level      -- this frame's left loudness (RMS), 0 when silent (since 0.1.6)
+level_right() -> level     -- this frame's right loudness (RMS) (since 0.1.6)
+peak_left() -> peak        -- this frame's loudest left sample, ignoring sign (0 to 1 unless clipping) (since 0.6.0)
+peak_right() -> peak       -- this frame's loudest right sample (since 0.6.0)
+onset() -> hit, strength   -- whether a sound just started this frame, and how sharply (since 0.1.6)
 ```
+<!-- /api -->
 
 The levels are the root mean square of the samples `render()` got this frame: 0 for silence, about 0.71 for a full-volume sine wave, 0 while paused. They change quickly from frame to frame, so smooth them if you want a steady meter (`shown = approach(shown, level_left(), 13)`; see `approach` under Playback & timing).
 
@@ -328,10 +369,13 @@ The peaks are the largest sample this frame, ignoring sign: 0 for silence (and w
 
 `onset()` is true on a frame where the sound suddenly gets stronger (a drum hit, a note attack), worked out in Rust from how much the spectrum gained since the previous frame against the average of the last half second. After an onset, the next 80 ms can't be another, so one hit counts once. `strength` is that frame's gain in the spectrum: bigger means a sharper change, useful for comparing hits within a song rather than as an absolute number. It's meant for visuals reacting to the audio, not as a beat tracker: for MIDI, `notes_between` and `beat()` are exact. The detector starts running the first time a script calls `onset()`, so that first call (and the next few frames, while it builds up a history) returns false.
 
+<!-- api: history_left history_right -->
 ```lua
-history_left(seconds, [count]) -> samples   -- the last `seconds` of the left channel, oldest first
-history_right(seconds, [count]) -> samples  -- same for the right
+history_left(seconds, [count]) -> samples    -- the left channel's last seconds, oldest first (since 0.6.0)
+                                             -- seconds: up to 4; count: spread that many evenly over them
+history_right(seconds, [count]) -> samples   -- the same for the right channel (since 0.6.0)
 ```
+<!-- /api -->
 
 `left` and `right` only hold what played since the previous frame (735 samples at 60 fps), so a scope or a slow-scrolling trace needs more than one frame's worth. The app keeps the last 4 seconds of both channels, and these hand back a slice of it, so a script doesn't keep its own ring buffer. `seconds` goes up to 4 (more is treated as 4); before that much has played, the older part is silence (zeros), so the table is always the same length. While paused nothing new arrives, so it keeps returning the last samples heard.
 
@@ -349,20 +393,27 @@ Since 0.6.0.
 
 ## MIDI data
 
+<!-- api: notes_between active_notes upcoming_notes NOTE_LOOKAHEAD midi_channels channel_enabled set_channel_enabled channel_colors channel_program channel_name note_name note_freq freq_note -->
 ```lua
-notes_between(t0, t1) -> notes  -- whole notes sounding in [t0, t1): {id, channel, key, velocity, start, stop}
-active_notes() -> notes         -- held right now: {channel, key, velocity, source}
-upcoming_notes() -> notes       -- changing within NOTE_LOOKAHEAD: adds `on`, `seconds_until`
-midi_channels() -> channels     -- channels this file uses, sorted
-channel_enabled(c) -> bool      -- the GUI's per-channel toggle
-set_channel_enabled(c, bool)    -- a script can mute/unmute a channel too
-channel_colors(colors)          -- the colors you draw channels in, for the app's toggles
-channel_program(c, [seconds]) -> program, name  -- the instrument a channel plays
-channel_name(c) -> name         -- the name of the track a channel's notes are in, or nil
-note_name(key, [octave]) -> name  -- "C#4" (60 is middle C); octave false: "C#"
-note_freq(key) -> hz            -- a key's pitch: 69 (A4) is 440 Hz
-freq_note(hz) -> key            -- the key at a pitch, fractional; nil for 0 Hz or less
+notes_between(t0, t1) -> notes                         -- whole notes sounding in [t0, t1) (since 0.1.4)
+                                                       -- t0: song seconds; t1: song seconds
+active_notes() -> notes                                -- MIDI notes held right now (since 0.1.1)
+upcoming_notes() -> notes                              -- note on/off changes within NOTE_LOOKAHEAD (since 0.1.1)
+NOTE_LOOKAHEAD                                         -- song seconds upcoming_notes() looks ahead (since 0.1.1)
+midi_channels() -> channels                            -- the channels the current file uses, sorted (since 0.1.1)
+channel_enabled(channel) -> enabled                    -- whether a channel's toggle is on (since 0.1.1)
+set_channel_enabled(channel, enabled)                  -- mute or unmute a channel (since 0.1.1)
+channel_colors(colors)                                 -- the colors you draw channels in, for the app's channel toggles (since 0.5.1)
+                                                       -- colors: channel (0-15) to color; {} for the defaults
+channel_program(channel, [seconds]) -> program, name   -- the instrument a channel plays (General MIDI name; channel 9 is Drums) (since 0.6.0)
+                                                       -- seconds: song seconds, now if not given
+channel_name(channel) -> name                          -- the name of the track a channel's notes are in, or nil (since 0.6.0)
+note_name(key, [octave]) -> name                       -- "C#4" (60 is middle C, C4) (since 0.7.0)
+                                                       -- octave: false leaves the octave out
+note_freq(key) -> hz                                   -- a key's pitch (69, A4, is 440 Hz; fractional keys work) (since 0.7.0)
+freq_note(hz) -> key                                   -- the key at a pitch, fractional (nil for 0 Hz or less) (since 0.7.0)
 ```
+<!-- /api -->
 
 `notes_between` is the one to reach for when you want notes as whole things: each comes with its `start` and `stop` time (song seconds, the same clock as `playback().position`), so there's no pairing note-ons with note-offs yourself. It returns every note sounding at any point in the window, including ones that started before `t0` and are still held, in start order. The window can be any size, so a script can look further ahead than `NOTE_LOOKAHEAD` or read the whole song once (`notes_between(0, playback().length)`) to build a level up front. `id` is stable for as long as the song is loaded, so it works as a table key for tracking which notes you've already handled. Notes are read from the file itself, so they're all there whether or not a soundfont is loaded, and regardless of which channels are muted.
 
@@ -408,23 +459,32 @@ text(4, 4, note_name(key) .. string.format(" %+d cents", math.floor((key - math.
 
 ## Playback & timing
 
+<!-- api: playback set_paused seek set_speed script_options DT TIME FRAME SAMPLE_RATE -->
 ```lua
-playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, title, artist, album, song_path, song_id, song_loads, loop_mode, shuffle, recording, streaming}
-script_options({start_paused = true})  -- once, at the top: songs wait for the script to start them
-script_options({app_log = true})       -- its log() messages also go to the app's log
-set_paused(paused)  -- pause or resume playback
-seek(seconds)       -- jump to a position in the song (seek(0) restarts it)
-set_speed(speed)    -- playback speed, 1.0 is normal
-DT                  -- seconds since the previous render() call (0.0 on the first, at most 0.25)
-TIME                -- seconds since this script started (the sum of every frame's real length, never capped)
-FRAME               -- frames rendered since this script started (1 on the first)
-SAMPLE_RATE         -- the engine's sample rate, in Hz
-NOTE_LOOKAHEAD      -- song seconds upcoming_notes() looks ahead (4.0)
+playback() -> playback    -- what's playing and where, times in song seconds (since 0.1.1)
+set_paused(paused)        -- pause or resume playback (applied after this frame) (since 0.1.4)
+seek(seconds)             -- jump to a song position, seek(0) restarts (applied after this frame) (since 0.1.4)
+set_speed(speed)          -- playback speed (applied after this frame) (since 0.2.0)
+                          -- speed: 1.0 is normal
+script_options(options)   -- once, at the top: how the app treats this script (since 0.2.0)
+DT                        -- seconds since the previous render() call (0.0 on the first, at most 0.25) (since 0.1.1)
+TIME                      -- seconds since this script started, wall clock, uncapped (since 0.1.4)
+FRAME                     -- frames rendered since this script started (1 on the first) (since 0.1.4)
+SAMPLE_RATE               -- the engine's sample rate, in Hz (since 0.1.1)
 ```
+<!-- /api -->
 
 ```lua
-approach(current, target, rate, [rate_down]) -> value   -- current, moved toward target
+script_options({ start_paused = true })  -- once, at the top: songs wait for the script to start them
+script_options({ app_log = true })       -- its log() messages also go to the app's log
 ```
+
+<!-- api: approach -->
+```lua
+approach(current, target, rate, [rate_down]) -> value   -- smoothing by the second, the same at any frame rate (since 0.6.0)
+                                                        -- rate: per second; rate_down: per second, going down
+```
+<!-- /api -->
 
 For smoothing a value toward where it's heading (a meter following the loudness, a camera following a player) the same way at any frame rate. The usual way, `shown = shown + (target - shown) * 0.2`, moves a fifth of the way every frame, so it's twice as fast at 120 fps as at 60, and in a recording at 30 fps it's half as fast. `approach` goes by the second instead: `rate` is how quickly, and each second the gap shrinks to e^-rate of what it was (`rate = 5` covers about 63% of the way in a fifth of a second, 99% in a second); with `rate_down`, that's the rate while heading down instead, for meters that jump up and fall back slowly. It uses this frame's `DT`, so on the first frame (`DT` is 0) nothing moves. To turn a per-frame fraction `f` that looked right at 60 fps into a rate: `rate = -math.log(1 - f) * 60` (0.2 per frame is about 13.4). Since 0.6.0.
 
@@ -487,12 +547,17 @@ Check `playback().paused` before writing into a scrolling history buffer, otherw
 
 ## Recording
 
+<!-- api: recording recording_ready recording_done -->
 ```lua
-script_options({record_prepare = true})  -- recordings wait for the script before each song, and for it to end each take
-script_options({record_auto = true})     -- it can play itself: the Record window offers Auto
-recording() -> nil, or {phase, kind, mode}
-recording_ready()   -- done preparing: the video starts now
-recording_done()    -- this song's take is over (after an outro or a results screen, say)
+recording() -> recording   -- the recording the visualizer is part of, or nil (since 0.4.0)
+recording_ready()          -- with record_prepare: done preparing; the video starts with the next frame (since 0.4.0)
+recording_done()           -- with record_prepare: this song's take is over; the recording ends or the playlist moves on (since 0.4.0)
+```
+<!-- /api -->
+
+```lua
+script_options({ record_prepare = true })  -- recordings wait for the script before each song, and for it to end each take
+script_options({ record_auto = true })     -- it can play itself: the Record window offers Auto
 ```
 
 synththing > Record... opens the Record window: what to record (a song from the start, the one playing or another you choose, with its soundfont; this playlist from the start; or free), how (Live, or Render), the script, the video's size, frame rate and quality, and, for a script that can play itself, Auto or Manual. F9 starts a free recording straight away.
@@ -531,14 +596,16 @@ Render and `run-script --video` work the same way: the frames a script spends pr
 
 ## Playlist
 
+<!-- api: playlist play_track next_track previous_track set_loop set_shuffle -->
 ```lua
-playlist() -> {name, playing, current, entries} or nil
-play_track(index)   -- play the playlist's index-th song
-next_track()        -- the Next button
-previous_track()    -- the Previous button
-set_loop(mode)      -- "off", "one" or "all"
-set_shuffle(on)
+playlist() -> playlist   -- the current playlist, read-only, or nil (since 0.2.0)
+play_track(index)        -- play the current playlist's index-th song (since 0.2.0)
+next_track()             -- the Next button (since 0.2.0)
+previous_track()         -- the Previous button (since 0.2.0)
+set_loop(mode)           -- the Loop mode (since 0.2.0)
+set_shuffle(on)          -- shuffle the playlist or not (since 0.2.0)
 ```
+<!-- /api -->
 
 A script can see the current playlist and move between its songs, enough to draw its own player: a track list, next and previous buttons, a now-playing line. It's the playlist that's playing, or if none is, the one open in Groupings; nil when there isn't one. It's read-only: a script can't add, remove or reorder songs, or play anything that isn't in the playlist, so what it can play is always up to you.
 
@@ -561,13 +628,16 @@ end
 
 ## Musical timing
 
+<!-- api: beat time_at_beat bar tempo time_signature -->
 ```lua
-beat([seconds]) -> beats                  -- song position in beats (quarter notes), from 0
-time_at_beat(beat) -> seconds             -- when a beat falls, in song seconds
-bar([seconds]) -> bar, beat_in_bar        -- bar number (from 1) and beats into it (from 0)
-tempo([seconds]) -> bpm                   -- quarter notes per minute
-time_signature([seconds]) -> num, den     -- e.g. 3, 4 for 3/4
+beat([seconds]) -> beats                              -- song position in quarter notes from 0 (nil without a MIDI score) (since 0.1.6)
+                                                      -- seconds: song seconds, now if not given
+time_at_beat(beat) -> seconds                         -- when a beat falls, in song seconds (since 0.1.6)
+bar([seconds]) -> bar, beat_in_bar                    -- bar number from 1, beats into it from 0 (since 0.1.6)
+tempo([seconds]) -> bpm                               -- quarter notes per minute (since 0.1.6)
+time_signature([seconds]) -> numerator, denominator   -- the time signature (since 0.1.6)
 ```
+<!-- /api -->
 
 These read the MIDI file's own tempo changes and time signatures, so they're exact, and follow every change in the song. Each takes an optional song time in seconds and defaults to the current position. Beats are quarter notes, the MIDI convention, whatever the time signature: in 6/8, a bar is 3 beats long. A song with no tempo marking is 120 bpm in 4/4, as MIDI defines it.
 
@@ -588,18 +658,23 @@ For rhythm games, `time_at_beat` turns a beat into the song time to compare agai
 
 ## Input
 
+<!-- api: mouse mouse_delta scroll mouse_down mouse_pressed mouse_released touches has_focus display_mode is_mobile -->
 ```lua
-mouse() -> x, y               -- buffer pixels; nil, nil when not over the visualizer
-mouse_delta() -> dx, dy       -- movement since last frame, buffer pixels
-scroll() -> dx, dy            -- scrolling since last frame (positive y is up)
-mouse_down([button])          -- held; "left" (default), "right", "middle"
-mouse_pressed([button])       -- went down this frame
-mouse_released([button])      -- went up this frame
-touches() -> list             -- fingers on the visualizer, see Touch below
-has_focus() -> bool           -- whether keys come to this script
-display_mode() -> string      -- "window", "fullscreen", "dedicated", "mini" or "pip"
-is_mobile() -> bool           -- the app is in its mobile layout
+mouse() -> x, y                        -- the pointer in buffer pixels, or nil while it isn't over the visualizer (since 0.1.1)
+mouse_delta() -> dx, dy                -- pointer movement since last frame, in buffer pixels (raw motion while focused) (since 0.1.1)
+scroll() -> dx, dy                     -- scrolling since last frame (positive y is up) (since 0.1.1)
+mouse_down([button]) -> down           -- a mouse button is held right now (since 0.1.1)
+                                       -- button: "left" if not given
+mouse_pressed([button]) -> pressed     -- a mouse button went down this frame (since 0.1.1)
+                                       -- button: "left" if not given
+mouse_released([button]) -> released   -- a mouse button went up this frame (since 0.1.1)
+                                       -- button: "left" if not given
+touches() -> touches                   -- fingers on the visualizer, in buffer pixels (since 1.1.0)
+has_focus() -> focused                 -- whether keys go to this script (clicked into, or dedicated fullscreen) (since 0.1.1)
+display_mode() -> mode                 -- where the visualizer is showing ("mini" is the mini player, "pip" picture-in-picture) (since 0.1.1)
+is_mobile() -> mobile                  -- the app is in its mobile layout (a phone), so maybe draw something lighter (since 1.1.0)
 ```
+<!-- /api -->
 
 Mouse state is reported while the pointer is over the visualizer (and while it has focus, so a drag that wanders off still ends cleanly). Keys only while the visualizer has focus: click into it to give it focus, click anywhere else to take it back. While it has focus the app's own shortcuts (space to pause, arrows to seek, ...) are off, so those keys are the script's. An unknown button name is a script error that says so. `scroll()` arrives smoothed, a little per frame, so add it up rather than treating each frame as one notch.
 
@@ -628,23 +703,28 @@ end
 
 Touch also still works the mouse, as before, for scripts written for one: the first finger down moves `mouse()` and holds the left button, and `mouse()` goes back to nil when it lifts. A script that handles touch itself can ignore the mouse while `#touches() > 0`.
 
+<!-- api: set_cursor_visible set_cursor_locked -->
 ```lua
-set_cursor_visible(visible)   -- false: hide the system cursor over the visualizer
-set_cursor_locked(locked)     -- true: keep the cursor in the window while the visualizer has focus
+set_cursor_visible(visible)   -- hide the system cursor over the visualizer (draw your own) (since 0.1.1)
+set_cursor_locked(locked)     -- keep the cursor in the window while the visualizer has focus (since 0.1.1)
 ```
+<!-- /api -->
 
 Both stick until changed (or a different script loads). A hidden cursor only hides while it's over the visualizer, so draw your own there. Locking only takes effect while the visualizer has focus, in any view, and lets go whenever that stops (Escape, clicking elsewhere, switching windows), so a script can't trap the cursor. It keeps the cursor inside the window rather than pinning it in place, so use `mouse_delta()` for motion: while the visualizer has focus it's raw mouse motion, which keeps coming with the cursor at the window's edge (mouse look). In any view since 1.5.0, the dedicated fullscreen only before. See `input_demo.lua` (New > input_demo).
 
 ## Controls
 
+<!-- api: input_register input input_down input_value pad_axis gamepads -->
 ```lua
-input_register(name, default_keys [, {group, info}]) -> id   -- once, outside render()
-input(id) -> state       -- "pressed", "held", "released" or "up"
-input_down(id) -> bool   -- held: "pressed" or "held"
-input_value(id) -> 0..1  -- how far it's pressed: keys 0 or 1, triggers and sticks how far
-pad_axis(name) -> number -- a controller's stick or trigger, read directly
-gamepads() -> names      -- the connected controllers
+input_register(name, default_keys, [labels]) -> id   -- a rebindable control, once at the top (since 0.1.8)
+                                                     -- default_keys: a name or a list: keys, "pad_a"-style controller inputs or "mouse_left"-style buttons; labels: where it's listed in the Controls window, and its hover text
+input(id) -> state                                   -- the control's state this frame (since 0.1.8)
+input_down(id) -> down                               -- the control is held (pressed this frame or earlier) (since 0.1.8)
+input_value(id) -> value                             -- how far the control is pressed, 0 to 1 (keys 0 or 1, triggers and sticks how far) (since 0.3.1)
+pad_axis(name) -> value                              -- a stick (-1 to 1, y down) or trigger (0 to 1), read directly (since 0.2.1)
+gamepads() -> names                                  -- the connected game controllers (since 0.2.1)
 ```
+<!-- /api -->
 
 Keyboard and controller input come through actions: a script names each thing it can do ("jump", "left", "clear") and gives it default keys or controller buttons, and the user can rebind them in the Controls window (the Controls button above the visualizer: each binding is a button, click it to remove it or right-click it to bind something else in its place; + adds one, waiting for the key, button or click to bind, and Reset goes back to the script's). Bindings are saved per script, in `<script>.lua.controls.json` next to it.
 
@@ -697,12 +777,15 @@ end
 
 ## Typing
 
+<!-- api: text_typed typing_begin typing_state typing_end -->
 ```lua
-text_typed() -> string                          -- characters typed this frame
-typing_begin([text], [{max_length, multiline}]) -- start a typing span
-typing_state() -> {active, done, cancelled, text, cursor, line, column, key}
-typing_end() -> text                            -- stop it, returning the text
+text_typed() -> typed             -- the characters typed this frame, while focused (since 0.1.8)
+typing_begin([text], [options])   -- start a typing span: the app edits, you draw (since 0.1.8)
+                                  -- text: to start from
+typing_state() -> state           -- the typing span's text, cursor and whether it's done (since 0.1.8)
+typing_end() -> text              -- stop the typing span (since 0.1.8)
 ```
+<!-- /api -->
 
 `text_typed()` gives the characters typed this frame (already shifted, accented and so on, as the keyboard layout makes them), for a script that does its own editing. It's empty while the visualizer doesn't have focus.
 
@@ -738,13 +821,15 @@ See `terminal.lua` (New > terminal) for a full example: a command prompt with hi
 
 ## Playing notes
 
+<!-- api: play_note note_on note_off stop_notes notes_playable -->
 ```lua
-play_note(key, [options]) -> bool    -- options: channel, velocity, duration, delay
-note_on(key, [options]) -> bool      -- options: channel, velocity; held until note_off
-note_off(key, [channel])
-stop_notes()                         -- let go of everything, cancel every sequence
-notes_playable() -> bool             -- whether notes can play right now
+play_note(key, [options]) -> played   -- play a note on the song's instrument (MIDI only) (since 0.1.8)
+note_on(key, [options]) -> played     -- start a note held until note_off (MIDI only) (since 0.1.8)
+note_off(key, [channel])              -- release a note started with note_on (since 0.1.8)
+stop_notes()                          -- release every note the script is playing, cancel its sequences (since 0.1.8)
+notes_playable() -> playable          -- whether play_note works now (a MIDI song with a soundfont) (since 0.1.8)
 ```
+<!-- /api -->
 
 Whenever a soundfont is loaded, a script can play notes of its own, from the moment it starts. While a MIDI song is loaded, they're on the song's instruments: a note on channel 3 sounds like the song's channel 3 does at that moment (its instrument, volume, pan and pitch bend). Before a song is loaded (or with a plain audio file), they're on General MIDI's defaults: a piano on every channel, drums on channel 9 (the tenth). Without a soundfont there's nothing to play on, so these return false and do nothing; `notes_playable()` says which. Notes play whether the song is paused or not.
 
@@ -768,26 +853,35 @@ end
 
 Script notes play on a separate synthesizer from the song's, mixed in at the output with very little delay (tens of milliseconds, not the song's audio buffer), and they never cut off the song's notes or get cut off by them. They show up in `active_notes()` while they sound, with `source = "script"` (the song's own notes have `source = "song"`), so a visualizer lights up for them like for the song's, and one that only wants the score can skip them. Their sound is in the `left`/`right` samples `render()` gets, mixed with the song's (and on their own while the song is paused), so the waveform, `fft_left`/`fft_right`, the levels and `onset()` react to them too. They aren't in `notes_between` or `upcoming_notes`, which read the song file. Everything a script plays stops when it's reloaded or restarted, when another song loads, and when the visualizer is closed or hidden. A script holding notes with `note_on` should let go when it loses focus (`has_focus()`), since a key released while the visualizer didn't have focus never reports `"released"`.
 
+<!-- api: midi_send -->
 ```lua
-midi_send(status, [data1], [data2]) -> bool   -- a raw MIDI channel message, e.g. midi_send(0xC0 | 3, 30) for a program change
+midi_send(status, [data1], [data2]) -> sent   -- a raw MIDI channel message to the script's synthesizer (since 1.6.0)
+                                              -- status: e.g. 0xC0 | channel for a program change
 ```
+<!-- /api -->
 
 `midi_send` sends one MIDI channel message (status `0x80` to `0xEF`: note off and on, controllers, program change, pitch bend, ...) straight to the script's synthesizer, for scripts that play whole scores themselves, with their own instruments. A channel it touches stops following the song's channel (its instrument, volume, ...) and keeps what the script set, until the script is reloaded or restarted. Channel 9 is drums. Notes sent this way don't show in `active_notes()`. Returns false (and does nothing) without a soundfont, like `play_note`. Since 1.5.0.
 
+<!-- api: sound_register sound_play -->
 ```lua
-sound_register(samples, sample_rate) -> id      -- samples: a string of unsigned 8-bit samples (128 is silence), or a list of numbers -1 to 1
-sound_play(id, [{ volume = 1, pan = 0, speed = 1 }]) -> bool   -- pan -1 (left) to 1 (right); speed 2 plays it an octave up
+sound_register(samples, sample_rate) -> id   -- a sound effect (since 1.6.0)
+                                             -- samples: unsigned 8-bit samples (128 is silence), or numbers -1 to 1
+sound_play(id, [options]) -> played          -- play a registered sound effect (since 1.6.0)
 ```
+<!-- /api -->
 
 `sound_register` keeps a mono sound effect, sampled at `sample_rate` (1000 to 192000), and returns its id for `sound_play`; register each sound once, outside `render()` or the first time it's needed (at most 1000 per script, 8,000,000 samples each). A string of bytes is read as unsigned 8-bit samples, as in 8-bit WAV files and Doom's sounds, so data from `read_asset` can go straight in. `sound_play` starts it mixed in with the script's notes, as many times over as it's called; the copies play to the end and stop when the script's notes do. Returns false (and does nothing) without a soundfont, like `play_note`. Since 1.5.0.
 
 ## Sequences
 
+<!-- api: sequence_register sequence_play sequence_stop -->
 ```lua
-sequence_register(notes) -> id               -- once, outside render()
-sequence_play(id, [options]) -> handle       -- options: channel, transpose, tempo, delay
-sequence_stop(handle)
+sequence_register(notes) -> id           -- a sequence of notes, once at the top (since 0.1.8)
+                                         -- notes: in beats; a bare number is a key
+sequence_play(id, [options]) -> handle   -- play a sequence, at the song's tempo by default; nil when notes can't play (since 0.1.8)
+sequence_stop(handle)                    -- stop one sequence_play (since 0.1.8)
 ```
+<!-- /api -->
 
 A sequence is a little score a script registers once and plays whenever it likes: a fanfare, an arpeggio, a riff to answer the song with. Times are in beats, so the same sequence fits any tempo. `notes` is a list, and each entry is either a key number (a one-beat note) or a table:
 
@@ -816,10 +910,12 @@ See `keyboard.lua` (play along on the keyboard) for `note_on`/`note_off` in use.
 
 ## Logging
 
+<!-- api: log log_app -->
 ```lua
-log(message)
-log_app(message)   -- the same, and always copied to the app's log too
+log(message)       -- append to this script's log (identical repeats collapse) (since 0.1.1)
+log_app(message)   -- like log(), and also copied to the app's log (Help > Log...) (since 0.2.2)
 ```
+<!-- /api -->
 
 Appends to this script's log, in the Debug window (the Debug button above the visualizer, under Log), along with the script's own errors. Identical consecutive messages collapse into one entry with a count instead of flooding the pane, safe to call every single frame.
 
@@ -831,9 +927,11 @@ The Debug button above the visualizer opens the Debug window: the script's varia
 
 Variables shows the script's state live, a few times a second while it's on screen: its top-level locals (the `local`s outside any function that its functions use, which is where scripts usually keep their state) and the globals it made itself (not the app's functions or Lua's libraries). Functions aren't listed. A table shows how many entries it has; click it to open it, one level at a time, showing its first 50 entries (numbers first, then names) and a button for more. Only what's open is read, so a huge table costs nothing until it's opened. Nothing is read while the window is closed or on another category.
 
+<!-- api: debug_locals -->
 ```lua
-debug_locals([label])
+debug_locals([label])   -- snapshot the locals in scope right here, shown in the Debug window (since 0.1.1)
 ```
+<!-- /api -->
 
 Snapshots whatever local variables (and function parameters, Lua treats those the same way) are in scope at the exact point you call it, shown as a nested, expandable tree in the Debug window (the Debug button above the visualizer), under debug_locals(). Call it from wherever in your script you actually want visibility, inside a loop, after a specific branch, wherever, not just at the top level.
 
@@ -845,14 +943,22 @@ This only sees true locals and parameters at that spot: a module-level value dec
 
 A script can expose typed, user-editable values that show up as widgets in the Settings window (the Settings button above the visualizer). Call the matching function every frame, the first call each compile registers the descriptor (default/range/options); every call after that just returns the live value, so dragging a slider updates the running script immediately, with no recompile and without disturbing any history the script is keeping.
 
+<!-- api: setting_bool setting_int setting_float setting_color setting_string setting_selection -->
 ```lua
-setting_bool(key, default [, {group, info}]) -> bool
-setting_int(key, default, min, max [, {group, info}]) -> integer
-setting_float(key, default, min, max [, {group, info}]) -> number
-setting_color(key, default [, {group, info, alpha}]) -> {r,g,b[,a]}
-setting_string(key, default [, {group, info}]) -> string
-setting_selection(key, options, defaults, max_selections [, {group, info}]) -> selected
+setting_bool(key, default, [labels]) -> value                                     -- a checkbox in the Settings window (since 0.1.1)
+                                                                                  -- labels: where it's listed in the Settings window, and its hover text
+setting_int(key, default, min, max, [labels]) -> value                            -- a whole-number slider (since 0.1.1)
+                                                                                  -- labels: where it's listed in the Settings window, and its hover text
+setting_float(key, default, min, max, [labels]) -> value                          -- a slider (since 0.1.1)
+                                                                                  -- labels: where it's listed in the Settings window, and its hover text
+setting_color(key, default, [labels]) -> value                                    -- a color picker (since 0.1.1)
+                                                                                  -- labels: as for the others, and alpha = true to pick its opacity too
+setting_string(key, default, [labels]) -> value                                   -- a text box (since 0.1.1)
+                                                                                  -- labels: where it's listed in the Settings window, and its hover text
+setting_selection(key, options, defaults, max_selections, [labels]) -> selected   -- pick up to max_selections of a list; a pick past it drops the oldest (since 0.1.1)
+                                                                                  -- labels: where it's listed in the Settings window, and its hover text
 ```
+<!-- /api -->
 
 The Settings window is laid out like Preferences: the script's groups down the side, its settings beside them. The optional last argument is a table with either or both of `group`, the group it's listed under (anything without one goes under General, listed first), and `info`, a longer explanation shown on hover, with an (i) after its name. Only the call that gives it needs it: a later call without it (each frame, say) keeps what was given. Anything else in the table is an error. Controls take the same table (see Controls), in a Controls window of their own.
 
@@ -873,9 +979,12 @@ Values persist to `<script>.lua.settings.json` next to the script and are re-app
 
 ### Presets
 
+<!-- api: settings_preset -->
 ```lua
-settings_preset(name, { key = value, ... })
+settings_preset(name, values)   -- a named set of setting values, picked in the Settings window, once at the top (since 0.4.3)
+                                -- values: setting key to value
 ```
+<!-- /api -->
 
 A named set of setting values, offered at the top of the Settings window: picking it sets each setting it names (the rest stay as they are). Values are written as the settings take them: `true`, a number, a string, a color table `{ r, g, b }`, a list of option names for a selection; a value is made to fit its setting (clamped to an int's or float's range, unknown options dropped), and a key that isn't a setting is ignored. Call it once at the top; calling it again with the same name replaces that preset. The defaults in the `setting_*` calls stay the only defaults (Defaults, in the same list, puts every setting back to them).
 
@@ -893,10 +1002,13 @@ local bins = setting_int("bins", 36, 8, 96)
 
 ## Saved data
 
+<!-- api: store_get store_set -->
 ```lua
-store_get(key) -> value   -- nil if nothing's saved under key
-store_set(key, value)     -- save (nil deletes)
+store_get(key) -> value   -- the script's saved data, nil if none (since 0.1.4)
+store_set(key, value)     -- save script data across restarts (since 0.1.4)
+                          -- value: nil deletes
 ```
+<!-- /api -->
 
 The script's own saved state, for things like high scores and unlocks: values survive restarts, reloads and closing the app. Unlike settings, nothing here shows up for the user to edit; it belongs to the script. Values can be booleans, numbers, strings, or tables of those (nested up to 16 deep; a table with keys 1..n comes back as a list, anything else with string keys). Functions and the like can't be saved, and `store_set` says so.
 
@@ -909,10 +1021,13 @@ if score > best then store_set("best", score) end
 
 ## Assets
 
+<!-- api: read_asset list_assets -->
 ```lua
-read_asset(name) -> string or nil   -- the bytes of a file in the script's `<name>.lua.assets` folder
-list_assets() -> names              -- the files in it, sorted by name
+read_asset(name) -> contents   -- a file's bytes from the script's <name>.lua.assets folder (since 1.6.0)
+                               -- name: a plain file name
+list_assets() -> names         -- the files in the script's assets folder, sorted (since 1.6.0)
 ```
+<!-- /api -->
 
 A script can read data files it ships with (a game's levels, a sound bank) from its own assets folder: a folder next to it named after it, like its other files (`doom.lua.assets` for `doom.lua`), which moves along when the script is renamed. `name` is a plain file name, letters, digits, `.`, `_`, `-` and spaces: no folders, nothing outside that folder, and nothing is ever written. It returns the whole file as a Lua string (binary is fine; read it with `string.unpack` and `string.byte`), or nil when there's no such file. Files over 256 MB are an error. `list_assets()` lists the folder's files (empty when there is none), for letting the user pick one with a setting. `doom.lua` reads its WAD this way. Since 1.5.0.
 
@@ -965,6 +1080,164 @@ end
 Scripts run on a thread of their own, so a slow one never freezes the app: the window, menus and playback carry on, and the visualizer keeps showing the last frame the script finished. When one frame (or loading the script) has taken over a second, a notice in the visualizer's bottom-left corner says so, with a Stop button. Picking another script, applying an edit or restarting stops a script that busy first, rather than waiting for it.
 
 A watchdog stops a runaway script on its own: if one run of the script's code (its top level when it loads, or one `render()` call) goes on for more than 10 seconds (3 seconds in `run-script`), it's stopped with an error saying so. Stopped either way, `render()` isn't called again until the script is changed or restarted (F5). An endless loop ends up there, and so does far too much work in one frame. Time spent inside a single app function (one huge `notes_between`, say) counts, but can only be stopped once it returns.
+
+## Tables
+
+The tables functions take and give back, field by field (`?` is optional, `A|B` either, `X[]` a list of them). Colors are `Color` tables everywhere.
+
+<!-- api-types -->
+```lua
+Color            -- r, g and b 0 to 255 (clamped, fractions fine), a 0 to 1 (1 if not given)
+    r: number
+    g: number
+    b: number
+    a?: number
+
+Playback                           -- what's playing and where (playback()), times in song seconds
+    position: number
+    length: number
+    speed: number
+    paused: boolean
+    finished: boolean
+    loop_enabled: boolean
+    loop_mode: "off"|"one"|"all"
+    shuffle: boolean
+    generation: integer            -- goes up each time the position jumps: a seek, a loop, a new song
+    song_name: string|nil
+    title: string|nil              -- from the song's tags
+    artist: string|nil
+    album: string|nil
+    song_path: string|nil
+    song_id: string|nil
+    song_loads: integer            -- goes up each time a song is loaded, the same one again too
+    recording: boolean
+    streaming: boolean             -- the local API is streaming the visualizer
+
+Recording                            -- the recording a visualizer is part of (recording())
+    phase: "preparing"|"recording"
+    kind: "song"|"playlist"|"free"
+    mode: "auto"|"manual"
+
+Playlist                       -- the current playlist (playlist())
+    name: string
+    playing: boolean
+    current: integer|nil       -- the playing entry's index
+    entries: PlaylistEntry[]
+
+PlaylistEntry            -- a song in the playlist
+    name: string
+    length: number|nil   -- nil until it's been read
+    missing: boolean
+
+ActiveNote                    -- a note held right now (active_notes())
+    channel: integer
+    key: integer
+    velocity: integer
+    source: "song"|"script"
+
+UpcomingNote                -- a note on or off coming up (upcoming_notes())
+    channel: integer
+    key: integer
+    velocity: integer
+    on: boolean
+    seconds_until: number
+
+SongNote                -- a whole note of the song (notes_between()), times in song seconds
+    id: integer
+    channel: integer
+    key: integer
+    velocity: integer
+    start: number
+    stop: number
+
+AlbumArt              -- the playing song's art (album_art())
+    sprite: integer
+    width: integer
+    height: integer
+    color: Color      -- the color it's mostly made of
+
+SpriteImage              -- a sprite to register (sprite_register())
+    image: integer[][]   -- rows of palette indices, 0 transparent
+    palette: Color[]
+
+SpriteOptions                         -- how sprite() draws
+    scale?: number
+    flip_x?: boolean
+    flip_y?: boolean
+    src?: number[]                    -- {x, y, w, h}: part of the sprite
+    palette?: table<integer, Color>   -- palette index to a color to draw it in
+    tint?: Color                      -- drawn over every pixel
+
+Touch                   -- a finger on the visualizer (touches())
+    id: integer
+    x: number
+    y: number
+    dx: number
+    dy: number
+    force: number|nil
+    pressed: boolean
+    released: boolean
+
+TypingOptions              -- how typing_begin() edits
+    max_length?: integer
+    multiline?: boolean
+
+TypingState              -- the typing span (typing_state())
+    active: boolean
+    done: boolean
+    cancelled: boolean
+    text: string
+    cursor: integer
+    line: integer
+    column: integer
+    key: string|nil
+
+PlayNoteOptions          -- how play_note() plays
+    channel?: integer
+    velocity?: integer
+    duration?: number    -- seconds
+    delay?: number       -- seconds
+
+NoteOnOptions            -- how note_on() plays
+    channel?: integer
+    velocity?: integer
+
+SoundOptions          -- how sound_play() plays
+    volume?: number   -- 1 if not given
+    pan?: number      -- -1 (left) to 1 (right)
+    speed?: number    -- 2 plays an octave up
+
+SequenceNote             -- a note in a sequence (sequence_register()), in beats
+    key: integer
+    at?: number
+    length?: number
+    velocity?: integer
+    channel?: integer
+
+SequenceOptions           -- how sequence_play() plays
+    channel?: integer
+    transpose?: integer
+    tempo?: number        -- bpm; the song's if not given
+    delay?: number        -- seconds
+
+SettingLabels        -- where a setting or control is listed, and its hover text
+    group?: string   -- listed under General if not given
+    info?: string    -- a longer explanation, shown on hover
+
+ColorSettingLabels    -- SettingLabels, and whether the color's opacity is picked too
+    group?: string
+    info?: string
+    alpha?: boolean   -- the value has an `a`
+
+ScriptOptions                  -- how the app treats the script (script_options())
+    start_paused?: boolean     -- songs load paused, for the script to start them
+    app_log?: boolean          -- log() also goes to the app's log
+    record_prepare?: boolean   -- recordings wait for recording_ready() and recording_done()
+    record_auto?: boolean      -- it can play itself: the Record window offers Auto
+    transparent?: boolean      -- its frames can be see-through
+    assets?: boolean           -- it reads data files: its assets folder is made, with a button to open it
+```
+<!-- /api -->
 
 ## Example calls and results
 

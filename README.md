@@ -68,6 +68,8 @@ In the Songs, Groupings, Up next and Soundfonts lists: click to play or open (th
 
 Scripts are Lua files in `%APPDATA%\synththing\config\visualizers`. The bundled ones are copied there on first run, so they're yours to edit. Open View > Script Editor to edit the running script with live reload, syntax highlighting and help on every function; **New** starts a script from a template.
 
+Prefer your own editor? Open that folder in VS Code with the Lua extension (or Neovim, Zed, JetBrains: anything with the Lua language server). synththing keeps the API's definitions there, so you get completion, hover help and type checks for every function, and the app reloads a script each time you save it.
+
 The full scripting reference is [docs/scripting-reference.md](docs/scripting-reference.md), also built into the app (View > Scripting Reference). To check a script for errors without opening the app:
 
 ```

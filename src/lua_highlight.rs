@@ -4,7 +4,7 @@
 //! machinery than the problem needs; this one scans byte-at-a-time and
 //! never has to understand anything above the token level (no parsing, no
 //! scoping) to color comments/strings/numbers/keywords and, as a bonus,
-//! anything matching a known host function name (see `lua_completion`).
+//! anything matching a known host function name (see `lua_api`).
 
 use std::sync::Arc;
 
@@ -43,7 +43,7 @@ fn color_for(kind: Kind, visuals: &egui::Visuals) -> Color32 {
 /// The `TextEdit::layouter` callback: tokenizes `source` and returns a
 /// colored galley at `wrap_width`. Called every frame the editor is drawn
 /// (egui caches nothing here, so this has to stay cheap, a single linear
-/// scan plus one `HOST_API` lookup per identifier easily does).
+/// scan plus one host API lookup per identifier easily does).
 ///
 /// `error_line` (1-based), if any, is underlined in red on a faint red
 /// background: where the script's current error points. `font_size` in
