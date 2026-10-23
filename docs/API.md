@@ -8,7 +8,7 @@ Preferences > Integrations:
 
 1. Tick **Let programs on this computer use the API**. It listens on `127.0.0.1`, port 7340 unless you pick another. Nothing outside this computer can reach it unless you also tick **Let devices on the local network in too**: then other computers and phones on your network can use it at this computer's address, with a token as always. It's plain HTTP, so tokens and everything else cross the network unencrypted: only turn it on in a network you trust. While it's off, requests passed on by a proxy (with `Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host` or `X-Real-IP`) or addressed to any name but `localhost`, `127.0.0.1` or `[::1]` are turned away with 403, so a reverse proxy or a web page can't reach it on another's behalf.
 2. Type a name for your program and click **Add**. Copy the token it shows: only its hash is kept, so it isn't shown again (remove the program and add it again for a new one).
-3. Tick what that program may do: **Read** (the library, what's playing, events), **Control** (run commands) and **Add songs** (send songs into your library). Add songs is never on until you tick it.
+3. Tick what that program may do: **Read** (the library, what's playing, events), **Control** (run commands), **Edit library** (star, tag, and add songs to playlists or take them out) and **Add songs** (send songs into your library). Edit library and Add songs are never on until you tick them.
 
 Send the token with every request:
 
@@ -24,12 +24,16 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 
 | Request | Needs | What it gives |
 | --- | --- | --- |
-| `GET /v1` | any token | `{"app", "version", "read", "control", "add_songs"}`: who you are to it |
+| `GET /v1` | any token | `{"app", "version", "read", "control", "add_songs", "edit_library"}`: who you are to it |
 | `GET /v1/now-playing` | read | What's playing (below) |
 | `GET /v1/songs?q=&offset=&limit=` | read | `{"total", "songs": [...]}`: the songs `q` finds, sorted by file name: `limit` of them (at most and by default 500) after skipping `offset` |
 | `GET /v1/songs/{key}` | read | One song, by the `key` the other requests give |
 | `POST /v1/songs?name=Song.mp3` | add songs | Adds the file sent as the body (up to 250 MB) to the library: 201 with the song if it's new, 200 if it was there already |
 | `GET /v1/playlists` | read | `[{"id", "name", "smart", "songs": [keys]}]` |
+| `POST` / `DELETE /v1/songs/{key}/star` | edit library | Stars the song, or unstars it: 204 |
+| `POST` / `DELETE /v1/songs/{key}/tags?tag={name}` | edit library | Gives the song that tag, or takes it off: 204, or 404 if there's no such tag (tags are made in synththing) |
+| `GET /v1/tags` | read | `[{"name", "color"}]` |
+| `POST` / `DELETE /v1/playlists/{id}/songs?song={key}` | edit library | Adds the song to the end of the playlist, or takes it out (every time it's in it): 204, 404 if it isn't in it, 409 for a smart playlist |
 | `GET /v1/songs/{key}/art` | read | The song's picture (its own, else its album's cover) as an image, or 404 |
 | `GET /v1/groupings` | read | `[{"id", "name", "split"}]`: the rulesets (By Artist, By Album and yours) |
 | `GET /v1/groupings/{id}` | read | `{"id", "name", "split", "groups": [{"id", "title", "subtitle", "songs": [keys]}]}`: the playlists it makes of the songs on this computer, as Groupings shows them |

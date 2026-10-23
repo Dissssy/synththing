@@ -96,6 +96,9 @@ impl App {
                 Call::NowPlaying(reply) => {
                     let _ = reply.send(self.api_now_playing(view));
                 }
+                Call::Edit(edit, reply) => {
+                    let _ = reply.send(self.api_edit(edit));
+                }
                 Call::Set(set, reply) => {
                     let _ = reply.send(self.api_set(set, view));
                 }
@@ -163,6 +166,51 @@ impl App {
             .position(|e| crate::song_store::key_in(dir, &e.path) == Some(key))
             .ok_or((404, "that song isn't in that playlist".to_string()))?;
         self.play_entry(list, entry);
+        Ok(())
+    }
+
+    /// A change to the library a program asked for (its own permission:
+    /// `Access::edit_library`).
+    fn api_edit(&mut self, edit: api::Edit) -> Result<(), (u16, String)> {
+        let song =
+            |app: &App, key: &str| app.songs.has(key).then(|| app.songs.path(key)).ok_or((404, "there's no song with that key in the library".to_string()));
+        match edit {
+            api::Edit::Star { key, on } => {
+                let path = song(self, &key)?;
+                self.tag_songs(super::tags::TagAction::Set(crate::song_store::STARRED.into(), on), &[path]);
+            }
+            api::Edit::Tag { key, tag, on } => {
+                let path = song(self, &key)?;
+                let id = self.songs.tags().iter().find(|(_, t)| t.name.eq_ignore_ascii_case(&tag)).map(|(id, _)| id.clone());
+                let id = id.ok_or_else(|| (404, format!("there's no tag \"{tag}\" (make it in synththing first)")))?;
+                self.tag_songs(super::tags::TagAction::Set(id, on), &[path]);
+            }
+            api::Edit::Playlist { playlist, key, on } => {
+                let list = self.playlists.lists.iter().position(|l| l.id == playlist).ok_or((404, "there's no playlist with that ID".to_string()))?;
+                if self.playlists.lists[list].playlist.smart.is_some() {
+                    return Err((409, "that's a smart playlist: its rules pick its songs".into()));
+                }
+                let path = song(self, &key)?;
+                if on {
+                    let end = self.playlists.lists[list].playlist.entries.len();
+                    self.insert_songs(list, end, vec![path]);
+                } else {
+                    let dir = self.songs.dir();
+                    let at: Vec<usize> = self.playlists.lists[list]
+                        .playlist
+                        .entries
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, e)| crate::song_store::key_in(dir, &e.path) == Some(key.as_str()))
+                        .map(|(i, _)| i)
+                        .collect();
+                    if at.is_empty() {
+                        return Err((404, "that song isn't in that playlist".into()));
+                    }
+                    self.remove_entries(list, &at);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -406,6 +454,7 @@ impl App {
                 ui.label(&app.name);
                 ui.checkbox(&mut app.read, "Read").on_hover_text("See the library, what's playing, and events");
                 ui.checkbox(&mut app.control, "Control").on_hover_text("Run commands: play, pause, next track...");
+                ui.checkbox(&mut app.edit_library, "Edit library").on_hover_text("Star songs, tag them, and add songs to playlists or take them out");
                 ui.checkbox(&mut app.add_songs, "Add songs")
                     .on_hover_text("Send songs into your library. Each one is marked as this program's (search addedby:name)");
                 if ui.button("Remove").on_hover_text("Its token stops working. The songs it added stay").clicked() {

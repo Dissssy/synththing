@@ -84,6 +84,9 @@ pub struct Access {
     /// May add songs to the library (`POST /v1/songs`). Never on unless
     /// the user ticks it.
     pub add_songs: bool,
+    /// May change the library: star songs, tag them, add songs to
+    /// playlists and take them out. Never on unless the user ticks it.
+    pub edit_library: bool,
 }
 
 impl Access {
@@ -93,7 +96,14 @@ impl Access {
         let mut bytes = [0u8; 24];
         getrandom::fill(&mut bytes).expect("the OS's random numbers");
         let token = format!("st_{}", crate::library::hex(&bytes));
-        let access = Access { name: name.to_string(), token: crate::library::sha256_hex(token.as_bytes()), read: true, control: false, add_songs: false };
+        let access = Access {
+            name: name.to_string(),
+            token: crate::library::sha256_hex(token.as_bytes()),
+            read: true,
+            control: false,
+            add_songs: false,
+            edit_library: false,
+        };
         (access, token)
     }
 }
@@ -113,6 +123,8 @@ pub enum Call {
         playlist: Option<String>,
         reply: Sender<Result<(), (u16, String)>>,
     },
+    /// Change the library: `Err` (with its status) if it can't be.
+    Edit(Edit, Sender<Result<(), (u16, String)>>),
     /// Set where the song is or how loud it plays: `Err` (with its status)
     /// if it can't be now.
     Set(Set, Sender<Result<(), (u16, String)>>),
@@ -124,6 +136,18 @@ pub enum Call {
         program: String,
         reply: Sender<Result<(SongInfo, bool), String>>,
     },
+}
+
+/// A change to the library a program asks for (`Call::Edit`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Edit {
+    /// Star song `key` (`on`), or unstar it.
+    Star { key: String, on: bool },
+    /// Give song `key` the tag named `tag` (`on`), or take it off.
+    Tag { key: String, tag: String, on: bool },
+    /// Add song `key` to the end of playlist `playlist` (`on`), or take
+    /// every entry of it out.
+    Playlist { playlist: String, key: String, on: bool },
 }
 
 /// What `Call::Set` sets.
@@ -469,6 +493,7 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 "read": access.read,
                 "control": access.control,
                 "add_songs": access.add_songs,
+                "edit_library": access.edit_library,
             }),
         )),
         (Method::Get, ["v1", "events"]) => match needs(access.read, "read").map_or_else(|| wanted_events(&query), Err) {
@@ -531,6 +556,43 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
         (Method::Get, ["v1", "songs", key, "art"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| art(&library, key))))
         }
+        (Method::Post | Method::Delete, ["v1", "songs", key, "star"]) => {
+            let edit = Edit::Star { key: key.to_string(), on: method == Method::Post };
+            Some(needs(access.edit_library, "edit the library").unwrap_or_else(|| answered(ask(shared, |reply| Call::Edit(edit, reply)))))
+        }
+        (Method::Post | Method::Delete, ["v1", "songs", key, "tags"]) => {
+            Some(needs(access.edit_library, "edit the library").unwrap_or_else(|| match query.get("tag").map(|t| t.trim()).filter(|t| !t.is_empty()) {
+                None => error(400, "say which tag: ?tag=<name>"),
+                Some(tag) => {
+                    let edit = Edit::Tag { key: key.to_string(), tag: tag.to_string(), on: method == Method::Post };
+                    answered(ask(shared, |reply| Call::Edit(edit, reply)))
+                }
+            }))
+        }
+        (Method::Post | Method::Delete, ["v1", "playlists", id, "songs"]) => {
+            Some(needs(access.edit_library, "edit the library").unwrap_or_else(|| match query.get("song") {
+                None => error(400, "say which song: ?song=<key>"),
+                Some(key) => {
+                    let edit = Edit::Playlist { playlist: id.to_string(), key: key.clone(), on: method == Method::Post };
+                    answered(ask(shared, |reply| Call::Edit(edit, reply)))
+                }
+            }))
+        }
+        (Method::Get, ["v1", "tags"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            ask(shared, Call::Library).map_or_else(
+                |reply| reply,
+                |library| {
+                    let mut tags: Vec<_> = library
+                        .store
+                        .tags()
+                        .values()
+                        .map(|t| serde_json::json!({ "name": t.name, "color": format!("#{:02x}{:02x}{:02x}", t.color[0], t.color[1], t.color[2]) }))
+                        .collect();
+                    tags.sort_by_key(|t| t["name"].as_str().unwrap_or_default().to_lowercase());
+                    json(200, &tags)
+                },
+            )
+        })),
         (Method::Get, ["v1", "groupings"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
             ask(shared, Call::Library).map_or_else(
                 |reply| reply,
@@ -762,7 +824,7 @@ mod tests {
                     Call::Library(reply) => reply.send(library()).unwrap(),
                     Call::Play { song: Some(song), reply, .. } if song == "missing" => reply.send(Err((404, "no such song".into()))).unwrap(),
                     Call::Play { reply, .. } => reply.send(Ok(())).unwrap(),
-                    Call::Set(_, reply) => reply.send(Ok(())).unwrap(),
+                    Call::Set(_, reply) | Call::Edit(_, reply) => reply.send(Ok(())).unwrap(),
                     Call::Add { .. } => unreachable!("no test adds songs here"),
                 }
             }
@@ -824,6 +886,31 @@ mod tests {
         assert_eq!(answering(&server, empty, set("seek?to=-1", &control_token)), 400);
         assert_eq!(answering(&server, empty, set("volume?to=0.4", &control_token)), 204);
         assert_eq!(answering(&server, empty, set("volume?to=2", &control_token)), 400);
+
+        let url = format!("http://{}/v1/", server.addr());
+        let (mut editor, edit_token) = Access::new("editor");
+        editor.edit_library = true;
+        let mut apps = server.shared.apps.read().unwrap().clone();
+        apps.push(editor);
+        server.set_apps(&apps);
+        let edit = move |delete: bool, what: &str, token: &str| {
+            let (url, token) = (format!("{url}{what}"), format!("Bearer {token}"));
+            move || {
+                let request = if delete {
+                    agent().delete(url).header("Authorization", token).call()
+                } else {
+                    agent().post(url).header("Authorization", token).send_empty()
+                };
+                request.unwrap().status().as_u16()
+            }
+        };
+        assert_eq!(answering(&server, empty, edit(false, "songs/abc/star", &control_token)), 403);
+        assert_eq!(answering(&server, empty, edit(false, "songs/abc/star", &edit_token)), 204);
+        assert_eq!(answering(&server, empty, edit(true, "songs/abc/star", &edit_token)), 204);
+        assert_eq!(answering(&server, empty, edit(false, "songs/abc/tags", &edit_token)), 400);
+        assert_eq!(answering(&server, empty, edit(false, "songs/abc/tags?tag=chill", &edit_token)), 204);
+        assert_eq!(answering(&server, empty, edit(true, "playlists/p1/songs", &edit_token)), 400);
+        assert_eq!(answering(&server, empty, edit(true, "playlists/p1/songs?song=abc", &edit_token)), 204);
     }
 
     #[test]
