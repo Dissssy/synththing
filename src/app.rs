@@ -506,6 +506,10 @@ pub struct App {
     /// The song playing came from the queue: `now_playing` or `listed` is
     /// what it was queued after.
     playing_queued: bool,
+    /// The Up next tab's selected rows.
+    queue_selection: select_list::Selection,
+    /// The Up next tab's rows as last described, and what from (a hash).
+    queue_rows: Option<(u64, Vec<(PathBuf, song_list::Described)>)>,
     /// Becomes true once the current playlist track is seen playing (not
     /// finished), so the "finished" that ends it advances exactly once, not
     /// again on a stale snapshot from before the next track loaded.
@@ -785,6 +789,8 @@ impl App {
             listed: None,
             queue: Vec::new(),
             playing_queued: false,
+            queue_selection: Default::default(),
+            queue_rows: None,
             advance_armed: false,
             song_loads: 0,
             playing_at: None,
@@ -1773,6 +1779,7 @@ impl App {
                 section_checkbox(ui, Section::Songs);
                 section_checkbox(ui, Section::Groupings);
                 section_checkbox(ui, Section::Soundfonts);
+                section_checkbox(ui, Section::Queue);
                 ui.separator();
                 section_checkbox(ui, Section::Visualizer);
                 section_checkbox(ui, Section::Editor);
@@ -3510,6 +3517,7 @@ impl App {
             Section::Songs => Some("songs"),
             Section::Groupings => Some("playlist_rows"),
             Section::Soundfonts => Some("soundfonts"),
+            Section::Queue => Some("queue"),
             _ => None,
         }
     }
@@ -4272,6 +4280,7 @@ impl TabViewer for SectionTabs<'_> {
             Section::Songs => app.songs_ui(ui),
             Section::Groupings => app.groupings_ui(ui),
             Section::Soundfonts => app.soundfont_ui(ui),
+            Section::Queue => app.queue_ui(ui),
             Section::Visualizer => {
                 app.visualizer_preview_ui(ui, self.shared.notes.clone(), self.shared.view.clone());
             }
