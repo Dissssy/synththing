@@ -415,10 +415,23 @@ impl App {
         }
     }
 
-    /// Files dragged onto the window from the OS file manager: soundfonts
-    /// join the Soundfonts list; songs go into the playlist on screen (or
-    /// the first one just plays, when no playlist is showing).
+    /// Files dragged onto the window from the OS file manager: while they
+    /// hover, the whole window dims under "Drop music here to import"; once
+    /// dropped, soundfonts join the Soundfonts list and songs are imported
+    /// into the library (and added to the playlist on screen, if one is).
     pub(super) fn handle_os_file_drops(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            let screen = ctx.content_rect();
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("file_drop_dim")));
+            painter.rect_filled(screen, 0.0, egui::Color32::from_black_alpha(170));
+            painter.text(
+                screen.center(),
+                egui::Align2::CENTER_CENTER,
+                "Drop music here to import",
+                egui::FontId::proportional(28.0),
+                egui::Color32::WHITE,
+            );
+        }
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
                 .dropped_files
@@ -452,17 +465,16 @@ impl App {
         if songs.is_empty() {
             return;
         }
-        // Into the library first, for the playlist; just played from
-        // where it is, with none showing.
         let shown = self.groupings.shown_id() == super::groupings::PLAYLISTS && (self.mobile() || self.is_open(Section::Groupings));
-        match self.viewed_playlist.filter(|_| shown) {
+        let then = match self.viewed_playlist.filter(|_| shown) {
             Some(list) => {
                 let at = self.playlists.lists.get(list).map_or(0, |l| l.playlist.entries.len());
-                let files = songs.into_iter().map(|p| (p, None)).collect();
-                crate::import::songs(files, SONG_EXTENSIONS, crate::import::Then::Insert { list, at });
+                crate::import::Then::Insert { list, at }
             }
-            None => self.play_path(songs.swap_remove(0)),
-        }
+            None => crate::import::Then::Keep,
+        };
+        let files = songs.into_iter().map(|p| (p, None)).collect();
+        crate::import::songs(files, SONG_EXTENSIONS, then);
     }
 
     /// Imported songs (`paths`, the library's, each with its playlist
