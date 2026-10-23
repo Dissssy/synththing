@@ -50,9 +50,16 @@ pub struct Settings {
     /// `None`: `DEFAULT_PORT`.
     pub port: Option<u16>,
     pub apps: Vec<Access>,
+    /// Show synththing in the system's media controls
+    /// (`media_controls.rs`): `None` means yes.
+    pub media_controls: Option<bool>,
 }
 
 impl Settings {
+    pub fn media_controls(&self) -> bool {
+        self.media_controls.unwrap_or(true) && !cfg!(target_os = "android")
+    }
+
     pub fn port(&self) -> u16 {
         self.port.unwrap_or(DEFAULT_PORT)
     }

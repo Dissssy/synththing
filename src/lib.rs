@@ -55,6 +55,8 @@ mod lua_highlight;
 mod lua_visualizer;
 mod marquee;
 mod matching;
+#[cfg(not(target_os = "android"))]
+mod media_controls;
 mod midi_notes;
 mod offline;
 mod pixel_font;

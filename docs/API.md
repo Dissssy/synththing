@@ -62,6 +62,10 @@ Commands are the ones Preferences > Keyboard lists, by id: `play`, `pause`, `tog
 
 A comment line (`: keep-alive`) comes every 25 seconds when nothing else does.
 
+## System media controls
+
+Separately from the API, synththing shows what's playing in the system's media controls (on by default, Preferences > Integrations): MPRIS on Linux, the media overlay and media keys on Windows, Now Playing on macOS. Anything that already understands those (desktop widgets, KDE Connect, Home Assistant's MPRIS integrations) can see and control it without a token. Play, pause, next, previous, seek and volume work from there.
+
 ## Trying it
 
 ```sh

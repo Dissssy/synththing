@@ -3247,6 +3247,12 @@ impl App {
         self.tray = crate::tray::Tray::new(ctx);
     }
 
+    /// The main window's handle (an HWND on Windows), for the system's media
+    /// controls.
+    pub fn attach_window(&mut self, window: Option<usize>) {
+        self.api.window = window;
+    }
+
     /// Watch `flag`, raised when synththing is launched again here.
     pub fn listen_for_second_launch(&mut self, flag: Arc<std::sync::atomic::AtomicBool>) {
         self.second_launch = Some(flag);

@@ -1,11 +1,13 @@
-//! The local app API (`api.rs`) from the app's side: keeping the server
-//! running as the preferences say, answering its calls between frames,
-//! sending events while anything listens, and Preferences > Integrations.
+//! The local app API (`api.rs`) from the app's side, and the system's media
+//! controls (`media_controls.rs`), another way into the same core: keeping
+//! each running as the preferences say, carrying out what they ask between
+//! frames, telling them what changed, and Preferences > Integrations.
 
 use eframe::egui;
 
 use super::App;
 use crate::api::{self, Access, Call, NowPlaying, PlaylistInfo, PlaylistRef, SongInfo};
+use crate::commands::Command;
 use crate::engine::EngineView;
 
 /// The API's state in the app.
@@ -22,6 +24,13 @@ pub(super) struct ApiState {
     new_token: Option<(String, String)>,
     /// The name being typed for a new app.
     new_name: String,
+    /// The main window's handle (an HWND on Windows), for the media
+    /// controls.
+    pub(super) window: Option<usize>,
+    #[cfg(not(target_os = "android"))]
+    media: Option<crate::media_controls::MediaControls>,
+    /// Why the media controls couldn't start (not tried again this run).
+    media_failed: Option<String>,
 }
 
 /// What a `now_playing` event is sent for a change of.
@@ -62,19 +71,16 @@ impl App {
                 }
             }
         }
+        #[cfg(not(target_os = "android"))]
+        self.media_tick(ctx, view);
+        self.integration_changes(view);
         let Some(server) = &self.api.server else { return };
         server.set_apps(&self.config.api.apps);
         let calls: Vec<Call> = server.calls().collect();
         for call in calls {
             match call {
                 Call::Command(command, reply) => {
-                    let result = if self.command_available(command) {
-                        self.run_command(ctx, command, view);
-                        Ok(())
-                    } else {
-                        Err(format!("\"{}\" can't be done right now", command.name()))
-                    };
-                    let _ = reply.send(result);
+                    let _ = reply.send(self.api_run(ctx, command, view));
                 }
                 Call::NowPlaying(reply) => {
                     let _ = reply.send(self.api_now_playing(view));
@@ -84,15 +90,83 @@ impl App {
                 }
             }
         }
-        self.api_events(view);
     }
 
-    /// Send what changed since the last events, while a stream is open.
-    fn api_events(&mut self, view: &EngineView) {
-        if !self.api.server.as_ref().is_some_and(api::Server::listened_to) {
+    /// Run `command` if it can run now.
+    fn api_run(&mut self, ctx: &egui::Context, command: Command, view: &EngineView) -> Result<(), String> {
+        if !self.command_available(command) {
+            return Err(format!("\"{}\" can't be done right now", command.name()));
+        }
+        self.run_command(ctx, command, view);
+        Ok(())
+    }
+
+    /// The media controls as the preferences say, and what was pressed in
+    /// them carried out.
+    #[cfg(not(target_os = "android"))]
+    fn media_tick(&mut self, ctx: &egui::Context, view: &EngineView) {
+        use crate::audio::AudioCommand;
+        use crate::media_controls::{Control, MediaControls};
+        if !self.config.api.media_controls() {
+            self.api.media = None;
+        } else if self.api.media.is_none() && self.api.media_failed.is_none() {
+            match MediaControls::new(self.api.window, ctx.clone()) {
+                Ok(media) => {
+                    self.api.media = Some(media);
+                    // (Shown from scratch.)
+                    self.api.seen = None;
+                }
+                Err(e) => {
+                    log::warn!("media controls: {e}");
+                    self.api.media_failed = Some(e);
+                }
+            }
+        }
+        let Some(media) = &self.api.media else { return };
+        let controls: Vec<Control> = media.controls().collect();
+        for control in controls {
+            let command = match control {
+                Control::Play => Command::Play,
+                Control::Pause => Command::Pause,
+                Control::Toggle => Command::TogglePause,
+                Control::Next => Command::NextTrack,
+                Control::Previous => Command::PreviousTrack,
+                Control::Quit => Command::Quit,
+                Control::Seek { seconds, relative } => {
+                    self.send(if relative { AudioCommand::SeekRelative(seconds) } else { AudioCommand::Seek(seconds) });
+                    continue;
+                }
+                Control::Volume(volume) => {
+                    self.volume = volume;
+                    self.send_volume();
+                    continue;
+                }
+                Control::ShowWindow => {
+                    self.show_window(ctx);
+                    continue;
+                }
+            };
+            let _ = self.api_run(ctx, command, view);
+        }
+    }
+
+    /// Tell the event streams and the media controls what changed.
+    fn integration_changes(&mut self, view: &EngineView) {
+        let streams = self.api.server.as_ref().is_some_and(api::Server::listened_to);
+        #[cfg(not(target_os = "android"))]
+        let media = self.api.media.is_some();
+        #[cfg(target_os = "android")]
+        let media = false;
+        if !streams && !media {
             self.api.seen = None;
             return;
         }
+        self.api_events(view, streams);
+    }
+
+    /// Send what changed since last time: as events while a stream is
+    /// open (`streams`), and to the media controls.
+    fn api_events(&mut self, view: &EngineView, streams: bool) {
         let seen = Seen {
             has_song: self.current_song.is_some(),
             playlist: self.api_playlist().map(|p| p.id),
@@ -103,9 +177,17 @@ impl App {
         };
         let revision = self.songs.revision();
         let last = self.api.seen.replace((seen.clone(), view.generation, revision));
+        let changed = last.as_ref().is_none_or(|(s, g, _)| *s != seen || *g != view.generation);
+        #[cfg(not(target_os = "android"))]
+        if changed && self.api.media.is_some() {
+            let shown = self.media_shown(view);
+            if let Some(media) = &mut self.api.media {
+                media.show(&shown);
+            }
+        }
         let Some((last_seen, last_generation, last_revision)) = last else { return };
         let now = (seen != last_seen).then(|| self.api_now_playing(view));
-        let Some(server) = &self.api.server else { return };
+        let Some(server) = self.api.server.as_ref().filter(|_| streams) else { return };
         match now {
             Some(now) => server.event("now_playing", &now),
             None if view.generation != last_generation => server.event("seeked", &serde_json::json!({ "position": view.position })),
@@ -113,6 +195,24 @@ impl App {
         }
         if revision != last_revision {
             server.event("library_changed", &serde_json::json!({}));
+        }
+    }
+
+    /// What the media controls show.
+    #[cfg(not(target_os = "android"))]
+    fn media_shown(&mut self, view: &EngineView) -> crate::media_controls::Shown {
+        let title = self.current_title();
+        let facts = self.playing_facts();
+        let text = |field| facts.as_ref().and_then(|f| f.text(field)).map(|t| t.into_owned());
+        crate::media_controls::Shown {
+            artist: text(crate::fields::Field::Artist),
+            album: text(crate::fields::Field::Album),
+            title,
+            length: view.length,
+            position: view.position,
+            playing: !view.paused && !view.finished,
+            loaded: self.current_song.is_some() && (view.has_midi || view.has_audio_file),
+            volume: self.volume,
         }
     }
 
@@ -161,6 +261,14 @@ impl App {
              library, follow events and run commands. Each program gets its own token.",
         );
         ui.hyperlink_to("How to use it (docs/API.md)", "https://github.com/Dissssy/synththing/blob/master/docs/API.md");
+        ui.add_space(4.0);
+        let mut media = settings.media_controls();
+        ui.checkbox(&mut media, "Show synththing in the system's media controls")
+            .on_hover_text("Media keys, the volume overlay on Windows, Now Playing on macOS, MPRIS on Linux");
+        settings.media_controls = (!media).then_some(false);
+        if let Some(why) = self.api.media_failed.as_ref().filter(|_| media) {
+            ui.colored_label(ui.visuals().error_fg_color, format!("They couldn't be reached: {why}"));
+        }
         ui.add_space(4.0);
         ui.checkbox(&mut settings.on, "Let programs on this computer use the API");
         ui.horizontal(|ui| {
