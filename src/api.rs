@@ -214,6 +214,8 @@ pub struct Server {
 }
 
 struct Shared {
+    /// Let in from the local network, not only this computer.
+    lan: bool,
     apps: RwLock<Vec<Access>>,
     calls: Mutex<Sender<Call>>,
     /// Woken when a call comes in, so it's answered even while nothing's
@@ -229,7 +231,7 @@ impl Server {
         let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
         let http = Arc::new(http);
         let (tx, calls) = mpsc::channel();
-        let shared = Arc::new(Shared { apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default() });
+        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default() });
         let threads = (0..WORKERS)
             .map(|_| {
                 let (http, shared) = (Arc::clone(&http), Arc::clone(&shared));
@@ -318,6 +320,27 @@ fn access(shared: &Shared, request: &Request, query: &HashMap<String, String>) -
     shared.apps.read().unwrap_or_else(|p| p.into_inner()).iter().find(|a| a.token == hash).cloned()
 }
 
+/// Whether a request came from a program on this computer itself, not
+/// passed on by a proxy here (which could be letting in anyone) or sent by
+/// a web page that renamed itself to this computer's address: no proxy's
+/// headers, and addressed to this computer by name.
+fn from_here(request: &Request) -> bool {
+    const PROXIED: [&str; 4] = ["Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Real-IP"];
+    let headers = request.headers();
+    if headers.iter().any(|h| PROXIED.iter().any(|p| h.field.equiv(*p))) {
+        return false;
+    }
+    headers.iter().find(|h| h.field.equiv("Host")).is_some_and(|h| {
+        let host = h.value.as_str();
+        // (The port, if any, after the last colon outside brackets.)
+        let name = match host.rsplit_once(':') {
+            Some((name, port)) if !port.contains(']') => name,
+            _ => host,
+        };
+        ["localhost", "127.0.0.1", "[::1]"].iter().any(|n| name.eq_ignore_ascii_case(n))
+    })
+}
+
 /// Ask the app, and wait for its answer.
 fn ask<T>(shared: &Shared, call: impl FnOnce(Sender<T>) -> Call) -> Result<T, Reply> {
     let (tx, rx) = mpsc::channel();
@@ -334,6 +357,10 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
     let query = crate::library::server::parse_query(query);
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
     let method = request.method().clone();
+    if !shared.lan && !from_here(&request) {
+        let _ = request.respond(error(403, "only programs on this computer may use the API (Preferences > Integrations can let the local network in)"));
+        return;
+    }
     let Some(access) = access(shared, &request, &query) else {
         let _ = request.respond(error(401, "a token is needed: make one in Preferences > Integrations"));
         return;
@@ -562,6 +589,15 @@ mod tests {
     fn a_token_is_needed_and_its_permissions_hold() {
         let (server, read_token, control_token) = server();
         assert_eq!(get(&server, "/v1", "wrong").0, 401);
+        let addr = server.addr();
+        let sent = |header: &str, value: &str| {
+            let request = agent().get(format!("http://{addr}/v1")).header("Authorization", format!("Bearer {read_token}")).header(header, value);
+            request.call().unwrap().status().as_u16()
+        };
+        assert_eq!(sent("X-Forwarded-For", "203.0.113.9"), 403);
+        assert_eq!(sent("Forwarded", "for=203.0.113.9"), 403);
+        assert_eq!(sent("Host", "evil.example"), 403);
+        assert_eq!(sent("Host", "localhost:7340"), 200);
         let (status, body) = get(&server, "/v1", &read_token);
         assert_eq!(status, 200);
         assert!(body.contains("\"read\":true") && body.contains("\"control\":false"), "{body}");
