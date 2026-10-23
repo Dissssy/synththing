@@ -481,32 +481,44 @@ impl App {
                     |a| &mut a.add_songs,
                 ),
             ];
-            // (Every cell the size of an icon button, its contents in the
-            // middle, so the columns line up.)
-            const CELL: [f32; 2] = [28.0, 24.0];
-            egui::Grid::new("api_programs").striped(true).spacing([12.0, 6.0]).show(ui, |ui| {
+            // (Every cell the same small box with its contents in the
+            // middle, so the columns line up and stay narrow.)
+            let cell = egui::vec2(28.0, 24.0);
+            let any_added = settings.apps.iter().any(|app| added.contains_key(app.name.as_str()));
+            egui::Grid::new("api_programs").striped(true).spacing([6.0, 4.0]).min_col_width(cell.x).show(ui, |ui| {
                 ui.label("");
                 for (name, info, _) in &permissions {
-                    ui.add_sized(CELL, egui::Label::new(egui::RichText::new(super::icon(name)).size(16.0))).on_hover_text(*info);
+                    let (rect, response) = ui.allocate_exact_size(cell, egui::Sense::hover());
+                    let color = ui.visuals().text_color();
+                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, super::icon(name), egui::FontId::proportional(16.0), color);
+                    response.on_hover_text(*info);
                 }
                 ui.end_row();
                 for (i, app) in settings.apps.iter_mut().enumerate() {
-                    ui.label(&app.name);
-                    for (_, info, field) in &permissions {
-                        ui.add_sized(CELL, egui::Checkbox::without_text(field(app))).on_hover_text(*info);
-                    }
                     ui.horizontal(|ui| {
-                        if ui.add(super::icon_button("trash")).on_hover_text("Remove this program: its token stops working. The songs it added stay").clicked() {
-                            remove = Some(i);
-                        }
+                        ui.add_space(6.0);
+                        ui.label(&app.name);
+                    });
+                    for (_, info, field) in &permissions {
+                        let rect = ui.allocate_exact_size(cell, egui::Sense::hover()).0;
+                        ui.put(rect, egui::Checkbox::without_text(field(app))).on_hover_text(*info);
+                    }
+                    let rect = ui.allocate_exact_size(cell, egui::Sense::hover()).0;
+                    let trash = egui::Button::new(egui::RichText::new(super::icon("trash")).size(16.0)).frame(false);
+                    if ui.put(rect, trash).on_hover_text("Remove this program: its token stops working. The songs it added stay").clicked() {
+                        remove = Some(i);
+                    }
+                    if any_added {
+                        let rect = ui.allocate_exact_size(cell, egui::Sense::hover()).0;
                         if let Some(keys) = added.get(app.name.as_str()) {
                             let plural = if keys.len() == 1 { "" } else { "s" };
                             let hover = format!("Remove the {} song{plural} {} added...", keys.len(), app.name);
-                            if ui.add(super::icon_button("broom")).on_hover_text(hover).clicked() {
+                            let broom = egui::Button::new(egui::RichText::new(super::icon("broom")).size(16.0)).frame(false);
+                            if ui.put(rect, broom).on_hover_text(hover).clicked() {
                                 remove_songs = Some(keys.clone());
                             }
                         }
-                    });
+                    }
                     ui.end_row();
                 }
             });
