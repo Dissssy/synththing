@@ -57,6 +57,8 @@ pub struct FrameRequest {
     /// Seconds per frame for DT and TIME instead of the wall clock
     /// (recording).
     pub timestep: Option<f64>,
+    /// Wake the app when it's drawn (it's to be shown, not just streamed).
+    pub wake: bool,
 }
 
 /// A frame the script drew.
@@ -534,9 +536,9 @@ impl Worker {
             // A stop is for whatever was running when it was asked for.
             stop.store(false, Ordering::Relaxed);
             lock(&self.shared).busy_since = Some(Instant::now());
-            let frame_size = match &message {
-                Message::Frame(request) => Some((request.width, request.height)),
-                _ => None,
+            let (frame_size, wake) = match &message {
+                Message::Frame(request) => (Some((request.width, request.height)), request.wake),
+                _ => (None, true),
             };
             let outcome = panic::catch_unwind(AssertUnwindSafe(|| handle(&mut visualizer, message)));
             let done = match outcome {
@@ -559,7 +561,7 @@ impl Worker {
             if let Some(done) = done {
                 let _ = self.frames.send(done);
             }
-            if let Some(ctx) = self.repaint.get() {
+            if wake && let Some(ctx) = self.repaint.get() {
                 ctx.request_repaint();
             }
         }
@@ -642,7 +644,7 @@ fn handle(visualizer: &mut LuaVisualizer, message: Message) -> Option<FrameDone>
         Message::SetActionBindings { index, bindings } => visualizer.set_action_bindings(index, bindings),
         Message::ClearLog => visualizer.clear_log(),
         Message::Frame(request) => {
-            let FrameRequest { width, height, mut pixels, samples, notes, playback, input, transport, timestep } =
+            let FrameRequest { width, height, mut pixels, samples, notes, playback, input, transport, timestep, .. } =
                 *request;
             visualizer.set_transport(transport);
             visualizer.set_fixed_timestep(timestep);
@@ -674,6 +676,7 @@ mod tests {
             input: VisualizerInput::default(),
             transport: Transport::default(),
             timestep: None,
+            wake: true,
         }
     }
 

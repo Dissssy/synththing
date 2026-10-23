@@ -449,7 +449,7 @@ impl Server {
     }
 
     /// The visualizer's pictures, for the API's watchers.
-    pub fn frames(&self) -> &crate::visualizer_stream::Frames {
+    pub fn frames(&self) -> &Arc<crate::visualizer_stream::Frames> {
         &self.shared.frames
     }
 

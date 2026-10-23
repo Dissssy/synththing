@@ -627,7 +627,7 @@ impl VisualizerPanel {
         }
         self.frames.set_repaint_context(&ctx);
 
-        let done = self.step(tap, notes, playback, transport, (buf_w, buf_h), hold, timestep);
+        let done = self.step(tap, notes, playback, transport, (buf_w, buf_h), hold, timestep, true);
         let rendered = done.is_some();
         if let Some(done) = done {
             self.accept(done, Some((&ctx, rect)));
@@ -656,16 +656,14 @@ impl VisualizerPanel {
     /// input. Whether a new frame came in.
     pub fn run_unseen(
         &mut self,
-        ctx: &egui::Context,
         tap: &SampleTap,
         notes: &NotesSnapshot,
         playback: &EngineView,
         transport: Transport,
         size: Option<(usize, usize)>,
     ) -> bool {
-        self.frames.set_repaint_context(ctx);
         let size = size.unwrap_or((self.width, self.height));
-        let done = self.step(tap, notes, playback, transport, size, false, None);
+        let done = self.step(tap, notes, playback, transport, size, false, None, false);
         let rendered = done.is_some();
         if let Some(done) = done {
             self.accept(done, None);
@@ -679,7 +677,7 @@ impl VisualizerPanel {
     /// it's done, the last one staying up till then, so the window never
     /// waits on the script and a slow script only draws fewer frames. A
     /// recording (`timestep`) asks for its next frame only after taking the
-    /// last one, and waits for it.
+    /// last one, and waits for it. `wake`: wake the app when it's drawn.
     #[allow(clippy::too_many_arguments)]
     fn step(
         &mut self,
@@ -690,6 +688,7 @@ impl VisualizerPanel {
         (width, height): (usize, usize),
         hold: bool,
         timestep: Option<f64>,
+        wake: bool,
     ) -> Option<FrameDone> {
         let lockstep = timestep.is_some();
         let mut done = self.frames.take_frame(Duration::ZERO);
@@ -704,6 +703,7 @@ impl VisualizerPanel {
                 input: self.pending_input.take().unwrap_or_default(),
                 transport,
                 timestep,
+                wake,
             });
             if lockstep {
                 done = self.frames.take_frame(FRAME_WAIT);

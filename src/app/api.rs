@@ -3,15 +3,23 @@
 //! each running as the preferences say, carrying out what they ask between
 //! frames, telling them what changed, and Preferences > Integrations.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
 use eframe::egui;
 
 use super::App;
 use crate::api::{self, Access, Call, NowPlaying, PlaylistInfo, PlaylistRef, SongInfo};
+use crate::audio::PlaybackShared;
 use crate::commands::Command;
 use crate::engine::EngineView;
+use crate::lua_visualizer::Transport;
+use crate::visualizer::{SampleTap, VisualizerPanel};
+use crate::visualizer_stream::Frames;
 
 /// How soon after a call a frame looks at what it changed.
-const CALL_SETTLES: std::time::Duration = std::time::Duration::from_millis(30);
+const CALL_SETTLES: Duration = Duration::from_millis(30);
 
 /// The API's state in the app.
 #[derive(Default)]
@@ -33,6 +41,8 @@ pub(super) struct ApiState {
     soundfonts_seen: Option<u64>,
     /// The scripts and which is drawing, as last seen.
     scripts_seen: Option<u64>,
+    /// Drawing the visualizer off screen for whoever's watching it.
+    unseen: Option<Unseen>,
     /// A token just made, shown until Preferences close: (app name, token).
     new_token: Option<(String, String)>,
     /// The name being typed for a new app.
@@ -44,6 +54,66 @@ pub(super) struct ApiState {
     media: Option<crate::media_controls::MediaControls>,
     /// Why the media controls couldn't start (not tried again this run).
     media_failed: Option<String>,
+}
+
+/// How often the app looks in on the visualizer drawn off screen (passing
+/// it the playlist, carrying out what the script asked for).
+const UNSEEN_CHECKS: Duration = Duration::from_millis(100);
+
+/// The longest the visualizer drawn off screen waits between frames.
+const UNSEEN_FRAME: Duration = Duration::from_millis(16);
+
+/// The thread drawing the visualizer off screen (`api_stream_unseen`),
+/// until dropped.
+struct Unseen {
+    stop: Arc<AtomicBool>,
+    /// What the script sees of the app's playback, and a recording's
+    /// size if one's going, as the app last passed them.
+    plan: Arc<Mutex<Plan>>,
+}
+
+type Plan = (Transport, Option<(usize, usize)>);
+
+impl Unseen {
+    fn start(
+        frames: Arc<Frames>,
+        (panel, tap, shared): (Arc<Mutex<VisualizerPanel>>, SampleTap, Arc<Mutex<PlaybackShared>>),
+        plan: Plan,
+    ) -> Option<Self> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let plan = Arc::new(Mutex::new(plan));
+        let this = Self { stop: Arc::clone(&stop), plan: Arc::clone(&plan) };
+        let spawned = std::thread::Builder::new().name("visualizer off screen".into()).spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                let started = Instant::now();
+                let (transport, recording) = plan.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                let size = recording.or(frames.wanted().flatten());
+                let playback = shared.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                let mut panel = super::lock_panel(&panel);
+                if panel.run_unseen(&tap, &playback.notes, &playback.view, transport, size) {
+                    let (width, height, pixels) = panel.last_frame();
+                    if size.is_none_or(|size| size == (width, height)) {
+                        frames.offer(width, height, pixels);
+                    }
+                }
+                drop(panel);
+                std::thread::sleep(UNSEEN_FRAME.saturating_sub(started.elapsed()));
+            }
+        });
+        match spawned {
+            Ok(_) => Some(this),
+            Err(e) => {
+                log::warn!("visualizer stream: couldn't start drawing off screen: {e}");
+                None
+            }
+        }
+    }
+}
+
+impl Drop for Unseen {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
 /// What a `now_playing` event is sent for a change of.
@@ -752,31 +822,30 @@ impl App {
     }
 
     /// Keep the visualizer running for whoever's watching it while it isn't
-    /// on screen (its tab hidden, the window minimized or in the tray),
-    /// with no input, at the size asked for (a recording's, if one's on).
-    pub(super) fn api_stream_unseen(&mut self, ctx: &egui::Context) {
-        let Some(watched) = self.api_watched() else { return };
-        if self.recording.render.is_some() {
+    /// on screen (`on_screen`: it was drawn last frame): its tab hidden or
+    /// closed, the window minimized or in the tray. A thread of its own
+    /// draws it then, since the window itself only gets 10 frames a second
+    /// while minimized or hidden; the app passes it what it can't see for
+    /// itself and carries out what the script asks for.
+    pub(super) fn api_stream_unseen(&mut self, ctx: &egui::Context, on_screen: bool, view: &EngineView) {
+        let frames = self.api.server.as_ref().map(|server| Arc::clone(server.frames()));
+        let Some(frames) = frames.filter(|f| f.wanted().is_some() && !on_screen && self.recording.render.is_none())
+        else {
+            self.api.unseen = None;
             return;
-        }
-        let shared = self.shared.lock().unwrap().clone();
-        let transport = self.script_transport();
+        };
         self.script.set_streaming(true);
-        let size = self.recording.frame_size().or(watched);
-        let rendered = super::lock_panel(&self.visualizer).run_unseen(
-            ctx,
-            &self.tap,
-            &shared.notes,
-            &shared.view,
-            transport,
-            size,
-        );
-        if rendered {
-            self.api_offer_frame(size);
+        let plan = (self.script_transport(), self.recording.frame_size());
+        match &self.api.unseen {
+            Some(unseen) => *unseen.plan.lock().unwrap_or_else(|p| p.into_inner()) = plan,
+            None => {
+                let parts = (Arc::clone(&self.visualizer), self.tap.clone(), Arc::clone(&self.shared));
+                self.api.unseen = Unseen::start(frames, parts, plan);
+            }
         }
         let effects = super::lock_panel(&self.visualizer).take_effects();
-        self.apply_script_effects(effects, &shared.view);
-        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        self.apply_script_effects(effects, view);
+        ctx.request_repaint_after(UNSEEN_CHECKS);
     }
 
     /// The frame the visualizer just drew, to whoever's watching it, if

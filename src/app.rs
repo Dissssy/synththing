@@ -4022,9 +4022,8 @@ impl App {
         frame_timing::time("poll_sync", || self.poll_sync());
         frame_timing::time("lookup_tick", || self.lookup_tick(ctx));
         frame_timing::time("api_tick", || self.api_tick(ctx, &view));
-        if !(ui_ran && self.visualizer_was_drawn) {
-            frame_timing::time("api_stream_unseen", || self.api_stream_unseen(ctx));
-        }
+        let on_screen = ui_ran && self.visualizer_was_drawn;
+        frame_timing::time("api_stream_unseen", || self.api_stream_unseen(ctx, on_screen, &view));
         if self.songs_moving().is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
@@ -4623,15 +4622,39 @@ fn status_line_ui(
     open_log
 }
 
-/// The visualizer panel, locked for a moment (`App::visualizer`). It's only
-/// ever locked on the main thread, so finding it locked already means
-/// it's being locked twice in one go, which would freeze the app: that
-/// panics instead, so it can't happen quietly.
-pub(super) fn lock_panel(panel: &Mutex<VisualizerPanel>) -> std::sync::MutexGuard<'_, VisualizerPanel> {
-    match panel.try_lock() {
-        Ok(guard) => guard,
-        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-        Err(std::sync::TryLockError::WouldBlock) => panic!("the visualizer panel was locked twice at once"),
+/// The visualizer panel, locked for a moment (`App::visualizer`), by the
+/// main thread or the thread drawing it off screen for the local API
+/// (`api.rs`). Locking it again on a thread that holds it already would
+/// freeze the app: that panics instead, so it can't happen quietly.
+pub(super) fn lock_panel(panel: &Mutex<VisualizerPanel>) -> PanelGuard<'_> {
+    assert!(!HOLDING_PANEL.replace(true), "the visualizer panel was locked twice at once");
+    PanelGuard(panel.lock().unwrap_or_else(|p| p.into_inner()))
+}
+
+thread_local! {
+    /// Whether this thread has the visualizer panel locked (`lock_panel`).
+    static HOLDING_PANEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The visualizer panel while it's locked (`lock_panel`).
+pub(super) struct PanelGuard<'a>(std::sync::MutexGuard<'a, VisualizerPanel>);
+
+impl std::ops::Deref for PanelGuard<'_> {
+    type Target = VisualizerPanel;
+    fn deref(&self) -> &VisualizerPanel {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for PanelGuard<'_> {
+    fn deref_mut(&mut self) -> &mut VisualizerPanel {
+        &mut self.0
+    }
+}
+
+impl Drop for PanelGuard<'_> {
+    fn drop(&mut self) {
+        HOLDING_PANEL.set(false);
     }
 }
 
