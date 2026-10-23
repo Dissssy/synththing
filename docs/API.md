@@ -30,12 +30,18 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `GET /v1/songs/{key}` | read | One song, by the `key` the other requests give |
 | `POST /v1/songs?name=Song.mp3` | add songs | Adds the file sent as the body (up to 250 MB) to the library: 201 with the song if it's new, 200 if it was there already |
 | `GET /v1/playlists` | read | `[{"id", "name", "smart", "songs": [keys]}]` |
+| `GET /v1/songs/{key}/art` | read | The song's picture (its own, else its album's cover) as an image, or 404 |
+| `GET /v1/groupings` | read | `[{"id", "name", "split"}]`: the rulesets (By Artist, By Album and yours) |
+| `GET /v1/groupings/{id}` | read | `{"id", "name", "split", "groups": [{"key", "title", "subtitle", "songs": [keys]}]}`: the playlists it makes, as Groupings shows them |
+| `GET /v1/groups?split=album&q=` | read | `[{"key", "title", "subtitle", "songs"}]`: the songs `q` finds, split by `artist`, `album_artist`, `album`, `composer`, `genre`, `year` or `tag` |
 | `GET /v1/commands` | read | `[{"id", "name"}]`: every command there is |
 | `POST /v1/commands/{id}` | control | Runs it: 204 when it ran |
 | `POST /v1/play?song={key}` | control | Plays that song on its own, leaving any playlist: 204 |
 | `POST /v1/play?playlist={id}` | control | Plays that playlist from the top (anywhere, with Shuffle on): 204, or 409 if it's empty |
 | `POST /v1/play?playlist={id}&song={key}` | control | Plays that playlist from that song: 204, or 404 if the song isn't in it |
 | `GET /v1/events` | read | Server-Sent Events (below) |
+
+An album's art is its first song's: `GET /v1/songs/{first key}/art`. Covers that synththing hasn't downloaded yet are downloaded only when online lookups are on.
 
 `q` works like the Songs search box: filters such as `artist:bonno`, `year:1990..1999`, `is:starred` or `tag:chill`, and any other words must each be in the title, artist, album or file name.
 

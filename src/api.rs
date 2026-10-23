@@ -27,6 +27,7 @@ use tiny_http::{Header, Method, Request, Response};
 
 use crate::commands::Command;
 use crate::fields::{Facts, Field};
+use crate::smart::{Group, Order, Rules, Ruleset, Split, SplitBy};
 use crate::song_store::{self, Song, SongStore, Stored};
 
 /// The port it listens on unless it's given another.
@@ -146,6 +147,46 @@ pub struct PlaylistRef {
 pub struct Library {
     pub store: SongStore,
     pub playlists: Vec<PlaylistInfo>,
+    /// Every ruleset, by ID: the built-in ones, then the user's.
+    pub rulesets: Vec<(String, Ruleset)>,
+    /// How groups are told apart and sorted (`Config::group_ignore`,
+    /// `Config::sort_with_articles`).
+    pub group_ignore: String,
+    pub articles: bool,
+    /// Whether covers not kept yet may be downloaded.
+    pub online: bool,
+}
+
+impl Library {
+    fn groups(&self, rules: &Rules) -> Vec<Group> {
+        rules.groups(&self.store, crate::settings_sync::now(), &self.group_ignore, self.articles)
+    }
+}
+
+/// A ruleset as `GET /v1/groupings` lists it.
+#[derive(Serialize)]
+struct GroupingInfo<'a> {
+    id: &'a str,
+    name: &'a str,
+    /// What it splits its songs by.
+    split: Option<SplitBy>,
+}
+
+/// One of the playlists a ruleset makes.
+#[derive(Serialize)]
+struct GroupInfo {
+    key: String,
+    title: String,
+    /// An album's artist.
+    subtitle: Option<String>,
+    /// By key, in order.
+    songs: Vec<String>,
+}
+
+impl From<Group> for GroupInfo {
+    fn from(group: Group) -> Self {
+        GroupInfo { key: group.key, title: group.title, subtitle: group.subtitle, songs: group.songs }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -426,6 +467,36 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 },
             )
         })),
+        (Method::Get, ["v1", "songs", key, "art"]) => {
+            Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| art(&library, key))))
+        }
+        (Method::Get, ["v1", "groupings"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            ask(shared, Call::Library).map_or_else(
+                |reply| reply,
+                |library| {
+                    let list: Vec<_> =
+                        library.rulesets.iter().map(|(id, r)| GroupingInfo { id, name: &r.name, split: r.rules.split.as_ref().map(|s| s.by) }).collect();
+                    json(200, &list)
+                },
+            )
+        })),
+        (Method::Get, ["v1", "groupings", id]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            ask(shared, Call::Library).map_or_else(
+                |reply| reply,
+                |library| match library.rulesets.iter().find(|(i, _)| i == id) {
+                    Some((id, ruleset)) => {
+                        let groups: Vec<GroupInfo> = library.groups(&ruleset.rules).into_iter().map(GroupInfo::from).collect();
+                        let info = GroupingInfo { id, name: &ruleset.name, split: ruleset.rules.split.as_ref().map(|s| s.by) };
+                        json(200, &serde_json::json!({ "id": info.id, "name": info.name, "split": info.split, "groups": groups }))
+                    }
+                    None => error(404, format!("there's no grouping \"{id}\"")),
+                },
+            )
+        })),
+        (Method::Get, ["v1", "groups"]) => Some(needs(access.read, "read").unwrap_or_else(|| match split_by(&query) {
+            Err(reply) => reply,
+            Ok(by) => ask(shared, Call::Library).map_or_else(|reply| reply, |library| groups(&library, by, query.get("q").map_or("", String::as_str))),
+        })),
         (Method::Get, ["v1", "playlists"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| json(200, &library.playlists))))
         }
@@ -482,6 +553,53 @@ fn songs(store: &SongStore, query: &HashMap<String, String>) -> Reply {
     let total = found.len();
     let songs = found.into_iter().skip(offset).take(limit).map(|(key, song)| SongInfo::of(&key, song, store)).collect();
     json(200, &SongPage { total, songs })
+}
+
+/// `?split=` as what to split by: `artist`, `album_artist`, `album`,
+/// `composer`, `genre`, `year` or `tag`.
+fn split_by(query: &HashMap<String, String>) -> Result<SplitBy, Reply> {
+    let named = query.get("split").ok_or_else(|| error(400, "say what to split by: ?split=album"))?;
+    serde_json::from_value(serde_json::Value::String(named.clone()))
+        .map_err(|_| error(400, format!("can't split by \"{named}\": artist, album_artist, album, composer, genre, year or tag")))
+}
+
+/// `GET /v1/groups?split=&q=`: the songs `q` finds (as `/v1/songs` does),
+/// split as a ruleset splitting by `by` would, in album order in each.
+fn groups(library: &Library, by: SplitBy, q: &str) -> Reply {
+    let found: std::collections::HashSet<String> = matching(&library.store, q).into_iter().map(|(key, _)| key).collect();
+    let rules = Rules { split: Some(Split { by, min: 1 }), order: Order::Album, seed: 0, ..Rules::default() };
+    let groups: Vec<GroupInfo> = library
+        .groups(&rules)
+        .into_iter()
+        .filter_map(|mut group| {
+            group.songs.retain(|key| found.contains(key));
+            (!group.songs.is_empty()).then(|| group.into())
+        })
+        .collect();
+    json(200, &groups)
+}
+
+/// `GET /v1/songs/{key}/art`: the song's picture (its own, else its
+/// release's cover), as the app would show it for its album.
+fn art(library: &Library, key: &str) -> Reply {
+    let Some(song) = library.store.get_by_key(key) else { return error(404, "there's no song with that key") };
+    let source = crate::album_art::Source {
+        file: library.store.has(key).then(|| library.store.path(key)),
+        release: crate::lookup::release_of(song).map(|(release, group)| (release.to_string(), group.map(str::to_string))),
+        chosen: song.online.as_ref().and_then(|o| o.art.clone()),
+    };
+    match crate::album_art::picture(&source, library.online) {
+        Some(bytes) => {
+            let kind = match image::guess_format(&bytes) {
+                Ok(image::ImageFormat::Png) => "image/png",
+                Ok(image::ImageFormat::Gif) => "image/gif",
+                Ok(image::ImageFormat::WebP) => "image/webp",
+                _ => "image/jpeg",
+            };
+            Response::from_data(bytes.into_vec()).with_header(header("Content-Type", kind))
+        }
+        None => error(404, "that song has no art"),
+    }
 }
 
 /// The library's songs that `query` keeps: its filters, then each word of
@@ -550,6 +668,12 @@ mod tests {
         ureq::Agent::config_builder().http_status_as_error(false).build().into()
     }
 
+    /// A library with no songs, playlists or rulesets of its own.
+    fn no_library() -> Library {
+        let rulesets = crate::smart::builtin().map(|(id, r)| (id.to_string(), r)).into_iter().collect();
+        Library { store: SongStore::open(std::env::temp_dir()), playlists: Vec::new(), rulesets, group_ignore: String::new(), articles: false, online: false }
+    }
+
     /// A server on a free port with a reader's and a controller's tokens.
     fn server() -> (Server, String, String) {
         let (mut reader, read_token) = Access::new("reader");
@@ -611,7 +735,7 @@ mod tests {
             let (url, token) = (format!("{url}{id}"), format!("Bearer {token}"));
             move || agent().post(url).header("Authorization", token).send_empty().unwrap().status().as_u16()
         };
-        let empty = || Library { store: SongStore::open(std::env::temp_dir()), playlists: Vec::new() };
+        let empty = || Library { store: SongStore::open(std::env::temp_dir()), ..no_library() };
         assert_eq!(answering(&server, empty, post("play", &read_token)), 403);
         assert_eq!(answering(&server, empty, post("play", &control_token)), 204);
         assert_eq!(answering(&server, empty, post("quit", &control_token)), 409);
@@ -638,7 +762,7 @@ mod tests {
         store.add(song_store::write_in(b"one", "Alpha Theme.mid", &dir).unwrap());
         store.add(song_store::write_in(b"two", "Beta Theme.mid", &dir).unwrap());
         let (server, read_token, _) = server();
-        let library = move || Library { store: store.clone(), playlists: Vec::new() };
+        let library = move || Library { store: store.clone(), ..no_library() };
         let addr = server.addr();
         let search = move |q: &str| {
             let (url, token) = (format!("http://{addr}/v1/songs?q={q}"), format!("Bearer {read_token}"));
@@ -699,6 +823,30 @@ mod tests {
         assert_eq!(post("", &add_token), 400);
         assert_eq!(post("?name=notes.txt", &add_token), 415);
         assert_eq!(post("?name=..%2Fescape.mid", &add_token), 400);
+    }
+
+    #[test]
+    fn groupings_are_listed_and_split() {
+        let (server, read_token, _) = server();
+        let addr = server.addr();
+        let fetch = move |path: &str| {
+            let (url, token) = (format!("http://{addr}{path}"), format!("Bearer {read_token}"));
+            move || {
+                let mut response = agent().get(url).header("Authorization", token).call().unwrap();
+                (response.status().as_u16(), response.body_mut().read_to_string().unwrap())
+            }
+        };
+        let (status, body) = answering(&server, no_library, fetch("/v1/groupings"));
+        assert_eq!(status, 200);
+        assert!(body.contains("\"id\":\"albums\"") && body.contains("\"split\":\"album_artist\""), "{body}");
+        let (status, body) = answering(&server, no_library, fetch("/v1/groupings/albums"));
+        assert_eq!(status, 200);
+        assert!(body.contains("\"groups\":[]"), "{body}");
+        assert_eq!(answering(&server, no_library, fetch("/v1/groupings/nope")).0, 404);
+        assert_eq!(answering(&server, no_library, fetch("/v1/groups")).0, 400);
+        assert_eq!(answering(&server, no_library, fetch("/v1/groups?split=mood")).0, 400);
+        assert_eq!(answering(&server, no_library, fetch("/v1/groups?split=genre&q=x")), (200, "[]".to_string()));
+        assert_eq!(answering(&server, no_library, fetch("/v1/songs/nope/art")).0, 404);
     }
 
     #[test]
