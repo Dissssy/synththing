@@ -140,6 +140,17 @@ const READING_SPEED: f32 = 15.0;
 pub(super) const INFO_TOAST: &str = "info_toast";
 
 impl App {
+    /// The section the page shown is a list of, if it is one.
+    pub(super) fn mobile_list_section(&self) -> Option<crate::layout::Section> {
+        use crate::layout::Section;
+        match self.mobile_state.page {
+            Page::Songs => Some(Section::Songs),
+            Page::Grouping => Some(Section::Groupings),
+            Page::Soundfonts => Some(Section::Soundfonts),
+            _ => None,
+        }
+    }
+
     /// Whether the mobile layout is showing: always on Android, else as
     /// chosen (View > Mobile layout).
     pub(super) fn mobile(&self) -> bool {

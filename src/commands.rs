@@ -17,6 +17,7 @@ use std::sync::Arc;
 use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
 
 use crate::layout::Section;
+use crate::select_list::Steer;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -27,6 +28,8 @@ pub enum Command {
     Pause,
     SeekBack,
     SeekForward,
+    SeekBackLong,
+    SeekForwardLong,
     RestartSong,
     NextTrack,
     PreviousTrack,
@@ -45,11 +48,14 @@ pub enum Command {
     /// The next (or previous) open section, in `Section::ALL`'s order.
     NextSection,
     PreviousSection,
+    /// Move the cursor of the list in front (`select_list::steer`); with
+    /// Shift held, the selection grows with it.
+    Cursor(Steer),
 }
 
 impl Command {
     /// Every command, in the order the palette and Preferences list them.
-    pub const ALL: [Command; 27] = [
+    pub const ALL: [Command; 36] = [
         Self::TogglePause,
         Self::Play,
         Self::Pause,
@@ -57,6 +63,8 @@ impl Command {
         Self::PreviousTrack,
         Self::SeekBack,
         Self::SeekForward,
+        Self::SeekBackLong,
+        Self::SeekForwardLong,
         Self::RestartSong,
         Self::ToggleVisualizer,
         Self::ToggleFullscreen,
@@ -75,6 +83,13 @@ impl Command {
         Self::GoTo(Section::Library),
         Self::NextSection,
         Self::PreviousSection,
+        Self::Cursor(Steer::Up),
+        Self::Cursor(Steer::Down),
+        Self::Cursor(Steer::PageUp),
+        Self::Cursor(Steer::PageDown),
+        Self::Cursor(Steer::First),
+        Self::Cursor(Steer::Last),
+        Self::Cursor(Steer::Open),
         Self::CommandPalette,
         Self::Quit,
     ];
@@ -87,6 +102,8 @@ impl Command {
             Self::Pause => "pause",
             Self::SeekBack => "seek_back",
             Self::SeekForward => "seek_forward",
+            Self::SeekBackLong => "seek_back_long",
+            Self::SeekForwardLong => "seek_forward_long",
             Self::RestartSong => "restart_song",
             Self::NextTrack => "next_track",
             Self::PreviousTrack => "previous_track",
@@ -112,6 +129,15 @@ impl Command {
             },
             Self::NextSection => "next_section",
             Self::PreviousSection => "previous_section",
+            Self::Cursor(steer) => match steer {
+                Steer::Up => "cursor_up",
+                Steer::Down => "cursor_down",
+                Steer::PageUp => "cursor_page_up",
+                Steer::PageDown => "cursor_page_down",
+                Steer::First => "cursor_first",
+                Steer::Last => "cursor_last",
+                Steer::Open => "cursor_open",
+            },
         }
     }
 
@@ -127,6 +153,8 @@ impl Command {
             Self::Pause => "Pause",
             Self::SeekBack => "Seek back 5 seconds",
             Self::SeekForward => "Seek forward 5 seconds",
+            Self::SeekBackLong => "Seek back 30 seconds",
+            Self::SeekForwardLong => "Seek forward 30 seconds",
             Self::RestartSong => "Restart song",
             Self::NextTrack => "Next track",
             Self::PreviousTrack => "Previous track",
@@ -152,6 +180,15 @@ impl Command {
             },
             Self::NextSection => "Next tab",
             Self::PreviousSection => "Previous tab",
+            Self::Cursor(steer) => match steer {
+                Steer::Up => "List: up",
+                Steer::Down => "List: down",
+                Steer::PageUp => "List: page up",
+                Steer::PageDown => "List: page down",
+                Steer::First => "List: first row",
+                Steer::Last => "List: last row",
+                Steer::Open => "List: play or open row",
+            },
         }
     }
 }
@@ -174,6 +211,8 @@ const DEFAULTS: &[(Command, &[KeyboardShortcut])] = &[
     (Command::TogglePause, &[key(Key::Space)]),
     (Command::SeekBack, &[key(Key::ArrowLeft)]),
     (Command::SeekForward, &[key(Key::ArrowRight)]),
+    (Command::SeekBackLong, &[KeyboardShortcut::new(Modifiers::SHIFT, Key::ArrowLeft)]),
+    (Command::SeekForwardLong, &[KeyboardShortcut::new(Modifiers::SHIFT, Key::ArrowRight)]),
     (Command::RestartSong, &[key(Key::R)]),
     (Command::NextTrack, &[key(Key::N)]),
     (Command::PreviousTrack, &[key(Key::P)]),
@@ -194,6 +233,14 @@ const DEFAULTS: &[(Command, &[KeyboardShortcut])] = &[
     (Command::GoTo(Section::Library), &[GO, key(Key::L)]),
     (Command::NextSection, &[KeyboardShortcut::new(COMMAND, Key::Tab)]),
     (Command::PreviousSection, &[KeyboardShortcut::new(COMMAND_SHIFT, Key::Tab)]),
+    // (Shift held too extends the selection: these match with it.)
+    (Command::Cursor(Steer::Up), &[key(Key::ArrowUp)]),
+    (Command::Cursor(Steer::Down), &[key(Key::ArrowDown)]),
+    (Command::Cursor(Steer::PageUp), &[key(Key::PageUp)]),
+    (Command::Cursor(Steer::PageDown), &[key(Key::PageDown)]),
+    (Command::Cursor(Steer::First), &[key(Key::Home)]),
+    (Command::Cursor(Steer::Last), &[key(Key::End)]),
+    (Command::Cursor(Steer::Open), &[key(Key::Enter)]),
 ];
 
 const fn key(key: Key) -> KeyboardShortcut {
