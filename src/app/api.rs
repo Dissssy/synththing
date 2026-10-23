@@ -500,23 +500,22 @@ impl App {
                         ui.label(&app.name);
                     });
                     for (_, info, field) in &permissions {
-                        let rect = ui.allocate_exact_size(cell, egui::Sense::hover()).0;
-                        ui.put(rect, egui::Checkbox::without_text(field(app))).on_hover_text(*info);
+                        ui.add_sized(cell, egui::Checkbox::without_text(field(app))).on_hover_text(*info);
                     }
-                    let rect = ui.allocate_exact_size(cell, egui::Sense::hover()).0;
                     let trash = egui::Button::new(egui::RichText::new(super::icon("trash")).size(16.0)).frame(false);
-                    if ui.put(rect, trash).on_hover_text("Remove this program: its token stops working. The songs it added stay").clicked() {
+                    if ui.add_sized(cell, trash).on_hover_text("Remove this program: its token stops working. The songs it added stay").clicked() {
                         remove = Some(i);
                     }
                     if any_added {
-                        let rect = ui.allocate_exact_size(cell, egui::Sense::hover()).0;
                         if let Some(keys) = added.get(app.name.as_str()) {
                             let plural = if keys.len() == 1 { "" } else { "s" };
                             let hover = format!("Remove the {} song{plural} {} added...", keys.len(), app.name);
                             let broom = egui::Button::new(egui::RichText::new(super::icon("broom")).size(16.0)).frame(false);
-                            if ui.put(rect, broom).on_hover_text(hover).clicked() {
+                            if ui.add_sized(cell, broom).on_hover_text(hover).clicked() {
                                 remove_songs = Some(keys.clone());
                             }
+                        } else {
+                            ui.allocate_exact_size(cell, egui::Sense::hover());
                         }
                     }
                     ui.end_row();
