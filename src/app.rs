@@ -7,6 +7,7 @@
 //! around, split, float them out into windows. Closing a tab only hides that
 //! section; the View menu brings it back (see `layout.rs` for where).
 
+mod api;
 mod autoplay;
 mod branding;
 mod close;
@@ -97,7 +98,7 @@ const VISUALIZER_HEIGHT: usize = 320;
 /// else is decoded as plain audio (rodio/symphonia, or ffmpeg for what they
 /// can't, figure out the actual format themselves; this list is just what
 /// shows up in the picker).
-const SONG_EXTENSIONS: &[&str] = &[
+pub(crate) const SONG_EXTENSIONS: &[&str] = &[
     "mid", "midi", "wav", "mp3", "ogg", "oga", "opus", "flac", "m4a", "aac", "aif", "aiff", "caf", "mka", "mp2", "wma", "ac3",
 ];
 const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
@@ -583,6 +584,8 @@ pub struct App {
     tray_panel: tray_panel::TrayPanel,
     /// The window's hidden in the tray.
     hidden: bool,
+    /// The local app API's server and what it last told of.
+    api: api::ApiState,
     /// Quit was decided: the next close goes through.
     quitting: bool,
     /// A question closing asks first (the first close; a recording on).
@@ -811,6 +814,7 @@ impl App {
             second_launch: None,
             tray_panel: tray_panel::TrayPanel::new(picture),
             hidden: false,
+            api: api::ApiState::default(),
             quitting: false,
             close_prompt: None,
             set_aside: Vec::new(),
@@ -3247,6 +3251,12 @@ impl App {
         self.tray = crate::tray::Tray::new(ctx);
     }
 
+    /// The main window's handle (an HWND on Windows), for the system's media
+    /// controls.
+    pub fn attach_window(&mut self, window: Option<usize>) {
+        self.api.window = window;
+    }
+
     /// Watch `flag`, raised when synththing is launched again here.
     pub fn listen_for_second_launch(&mut self, flag: Arc<std::sync::atomic::AtomicBool>) {
         self.second_launch = Some(flag);
@@ -3421,6 +3431,11 @@ impl App {
     fn run_command(&mut self, ctx: &egui::Context, command: Command, view: &EngineView) {
         match command {
             Command::TogglePause => self.send(AudioCommand::TogglePause),
+            Command::Play | Command::Pause => {
+                if view.paused == (command == Command::Play) {
+                    self.send(AudioCommand::TogglePause);
+                }
+            }
             Command::SeekBack => self.send(AudioCommand::SeekRelative(-5.0)),
             Command::SeekForward => self.send(AudioCommand::SeekRelative(5.0)),
             Command::SeekBackLong => self.send(AudioCommand::SeekRelative(-30.0)),
@@ -3966,7 +3981,7 @@ impl App {
         if !self.preferences_open {
             frame_timing::time("playlist_tick", || self.playlist_tick(&view));
         }
-        frame_timing::time("poll_library", || self.poll_library());
+        frame_timing::time("poll_library", || self.poll_library(ctx));
         frame_timing::time("poll_moderation", || self.poll_moderation());
         frame_timing::time("poll_feedback", || self.poll_feedback());
         frame_timing::time("poll_identity", || self.poll_identity());
@@ -3974,6 +3989,7 @@ impl App {
         frame_timing::time("poll_notifications", || self.poll_notifications(ctx));
         frame_timing::time("poll_sync", || self.poll_sync());
         frame_timing::time("lookup_tick", || self.lookup_tick());
+        frame_timing::time("api_tick", || self.api_tick(ctx, &view));
         if self.songs_moving().is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
@@ -4303,6 +4319,12 @@ fn categories_body<S: AsRef<str>>(
 /// and dialogs set their width to.
 fn fit_width(ui: &egui::Ui, width: f32) -> f32 {
     width.min(ui.ctx().content_rect().width() - 32.0).max(120.0)
+}
+
+/// Where a window may be: the screen, less the reach of its resize handles
+/// past its edges, so none of them is cut off by the screen's side.
+fn window_room(ctx: &egui::Context) -> egui::Rect {
+    ctx.content_rect().shrink(ctx.global_style().interaction.resize_grab_radius_corner)
 }
 
 /// A Phosphor icon by its name (`shield-check`, `SCROLL`), for text: the

@@ -80,7 +80,7 @@ impl App {
         ui.add_space(4.0);
         egui::Frame::group(ui.style()).show(ui, |ui| {
             let info = example_info();
-            let example = Facts { file_name: "harbour_lights.mid", meta: Some(&info.meta), info: Some(&info), imported: Some(1_760_000_000), tags: &[], edits: None };
+            let example = Facts { file_name: "harbour_lights.mid", meta: Some(&info.meta), info: Some(&info), imported: Some(1_760_000_000), tags: &[], edits: None, added_by: None };
             let named = patterns.iter().find_map(|p| render(p, &example)).unwrap_or_else(|| "harbour_lights".to_string());
             ui.horizontal_wrapped(|ui| {
                 ui.weak("A song with every field:");

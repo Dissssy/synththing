@@ -28,6 +28,7 @@ pub const HELP: &str = "Search for words (fuzzy), \"a phrase\" (past case and pu
     \u{2003}length:>6m or >6:00 (a bare number is minutes), size:>1.2gb (bare: MB), year:90s\n\
     added:30d (12h, 2w, 6mo, 1y), added:2026-10 (that month), added:>=2026-01-01\n\
     tag:name  is:starred  has:album  (has: any text or number key)\n\
+    addedby:program  (songs a program added through the local API)\n\
     Tab completes, Alt switches it between fuzzy, close and exact.";
 
 /// The keys filters go by, and their fields.
@@ -47,6 +48,7 @@ pub const KEYS: &[(&str, Field)] = &[
     ("size", Field::Size),
     ("added", Field::Imported),
     ("tag", Field::Tag),
+    ("addedby", Field::AddedBy),
 ];
 
 /// The keys that aren't a field's.

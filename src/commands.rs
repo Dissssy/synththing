@@ -22,6 +22,10 @@ use crate::select_list::Steer;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
     TogglePause,
+    /// Play (or pause) whichever it's doing now: for the local API
+    /// (`api.rs`), where a toggle can't be relied on to land right.
+    Play,
+    Pause,
     SeekBack,
     SeekForward,
     SeekBackLong,
@@ -51,8 +55,10 @@ pub enum Command {
 
 impl Command {
     /// Every command, in the order the palette and Preferences list them.
-    pub const ALL: [Command; 34] = [
+    pub const ALL: [Command; 36] = [
         Self::TogglePause,
+        Self::Play,
+        Self::Pause,
         Self::NextTrack,
         Self::PreviousTrack,
         Self::SeekBack,
@@ -92,6 +98,8 @@ impl Command {
     pub fn id(self) -> &'static str {
         match self {
             Self::TogglePause => "toggle_pause",
+            Self::Play => "play",
+            Self::Pause => "pause",
             Self::SeekBack => "seek_back",
             Self::SeekForward => "seek_forward",
             Self::SeekBackLong => "seek_back_long",
@@ -133,9 +141,16 @@ impl Command {
         }
     }
 
+    /// The command the keymap calls `id`.
+    pub fn by_id(id: &str) -> Option<Command> {
+        Self::ALL.into_iter().find(|c| c.id() == id)
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Self::TogglePause => "Play/pause",
+            Self::Play => "Play",
+            Self::Pause => "Pause",
             Self::SeekBack => "Seek back 5 seconds",
             Self::SeekForward => "Seek forward 5 seconds",
             Self::SeekBackLong => "Seek back 30 seconds",
