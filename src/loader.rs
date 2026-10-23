@@ -475,6 +475,11 @@ pub fn probe_soundfont(path: &Path) -> Result<SoundFontProbe> {
         return Ok(SoundFontProbe::NotSoundFont);
     }
     match SoundFont::new(&mut bytes.as_slice()) {
+        // An SF3 parses, but its samples are compressed, and would play as
+        // loud noise: refuse it like one that doesn't parse.
+        Ok(soundfont) if soundfont.get_info().get_version().get_major() >= 3 => {
+            Ok(SoundFontProbe::Unplayable(describe_soundfont_error("version 3", &bytes)))
+        }
         Ok(soundfont) => Ok(SoundFontProbe::Playable(Arc::new(soundfont))),
         Err(err) => Ok(SoundFontProbe::Unplayable(describe_soundfont_error(&err.to_string(), &bytes))),
     }

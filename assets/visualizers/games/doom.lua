@@ -1,10 +1,11 @@
 -- Doom: plays the first maps of a Doom WAD you supply, in pure Lua.
 --
--- Put a WAD in the `assets` folder next to this script (the shareware
--- DOOM1.WAD, DOOM.WAD, or Freedoom's freedoom1.wad), then restart the
--- script (F5). Click into the visualizer to play: WASD / arrows to move,
--- mouse or Q/E... see the Controls window. E or Space opens doors and
--- flips switches. The map's music plays on the loaded soundfont.
+-- Put a WAD in this script's assets folder (the folder button above the
+-- visualizer opens it): the shareware DOOM1.WAD, DOOM.WAD, or Freedoom's
+-- freedoom1.wad. Then restart the script (F5) and click into the
+-- visualizer to play: WASD to move, the arrows or the mouse to turn, E or
+-- Space to open doors and flip switches (all rebindable in Controls). The
+-- map's music plays on the loaded soundfont.
 --
 -- A software renderer like the original: BSP front to back, textured
 -- walls, floors, ceilings and sky with Doom's light diminishing, and
@@ -23,23 +24,36 @@ local RW, CX, CY, PROJX, PROJ = W, W / 2, VIEWH / 2, W / 2, W / 2
 local NEAR = 4
 local TIC = 1 / 35
 
+script_options({ assets = true })
+
 local FORWARD = input_register("forward", { "w", "up", "pad_lstick_up", "pad_dpad_up" }, { group = "Move" })
 local BACK = input_register("back", { "s", "down", "pad_lstick_down", "pad_dpad_down" }, { group = "Move" })
 local STRAFE_L = input_register("strafe left", { "a", "pad_lstick_left" }, { group = "Move" })
 local STRAFE_R = input_register("strafe right", { "d", "pad_lstick_right" }, { group = "Move" })
-local TURN_L = input_register("turn left", { "left", "q", "pad_rstick_left", "pad_dpad_left" }, { group = "Move" })
+local TURN_L = input_register("turn left", { "left", "pad_rstick_left", "pad_dpad_left" }, { group = "Move" })
 local TURN_R = input_register("turn right", { "right", "pad_rstick_right", "pad_dpad_right" }, { group = "Move" })
 local WALK = input_register("walk", { "pad_lb" }, { group = "Move", info = "Hold to walk instead of run." })
 local USE = input_register("use", { "e", "space", "pad_a" }, { group = "Act", info = "Open doors, flip switches." })
 
 ---------------------------------------------------------------- WAD
 
-local WAD_NAMES = { "DOOM1.WAD", "DOOM.WAD", "doom1.wad", "doom.wad", "freedoom1.wad", "FREEDOOM1.WAD" }
-local wad, wad_name
-for _, name in ipairs(WAD_NAMES) do
-    wad = read_asset(name)
-    if wad then wad_name = name break end
+-- Every WAD in the assets folder, to pick from in Settings.
+local wads = {}
+for _, name in ipairs(list_assets()) do
+    if name:lower():match("%.wad$") then wads[#wads + 1] = name end
 end
+local WAD_INFO = { info = "The WAD to play, from this script's assets folder. Press F5 after changing it." }
+local function chosen_wad()
+    if #wads == 0 then return nil end
+    -- Doom or Freedoom before anything else (a PWAD alone has no graphics).
+    local default = wads[1]
+    for _, name in ipairs(wads) do
+        if name:lower():match("^doom") or name:lower():match("^freedoom") then default = name break end
+    end
+    return setting_selection("WAD", wads, { default }, 1, WAD_INFO)[1]
+end
+local wad_name = chosen_wad()
+local wad = wad_name and read_asset(wad_name)
 
 local lumps, by_name = {}, {}
 local function lump_name(s) return (s:gsub("%z.*", "")):upper() end
@@ -1123,12 +1137,24 @@ end
 
 function render(width, height)
     if not first_map then
-        clear({ r = 20, g = 0, b = 0 })
-        local lines = wad and ("No E1M1 or MAP01 in " .. wad_name)
-            or ("Put DOOM1.WAD (shareware), DOOM.WAD or freedoom1.wad in\nthe `assets` folder next to this script, then press F5.")
-        text(10, 10, lines, { r = 255, g = 200, b = 200 })
+        -- No WAD yet: say what to do, pointing at the folder button.
+        clear({ r = 24, g = 0, b = 0 })
+        local red, white, grey = { r = 230, g = 40, b = 30 }, { r = 255, g = 230, b = 210 }, { r = 200, g = 160, b = 150 }
+        local big = width >= 700 and 96 or 48
+        local tw = text_size("DOOM", big)
+        text((width - tw) / 2, height * 0.22, "DOOM", red, big)
+        local line = "No, I'm not kidding."
+        local lw = text_size(line, 24)
+        text((width - lw) / 2, height * 0.22 + big + 8, line, white, 24)
+        local how = wad and ("There's no E1M1 or MAP01 in " .. wad_name .. ".")
+            or "Put DOOM1.WAD (the free shareware one), DOOM.WAD or\nfreedoom1.wad in this script's assets folder, then press F5."
+        local hw = text_size(how, 12)
+        text((width - hw) / 2, height * 0.22 + big + 48, how, grey, 12)
+        text(8, 6, "^ The folder button up there opens it.", white, 12)
         return
     end
+
+    if chosen_wad() ~= wad_name then message, message_until = "Press F5 to load " .. chosen_wad(), leveltime + 1 end
 
     set_cursor_visible(not has_focus())
     set_cursor_locked(has_focus())

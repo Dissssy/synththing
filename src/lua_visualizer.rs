@@ -320,6 +320,7 @@ pub fn rename_script(old: &Path, new_name: &str) -> Result<PathBuf> {
         (sidecar_path(old), sidecar_path(&new)),
         (store_path(old), store_path(&new)),
         (controls_path(old), controls_path(&new)),
+        (assets_path(old), assets_path(&new)),
         (user_presets_path(old), user_presets_path(&new)),
         (crate::library::installed_path(old), crate::library::installed_path(&new)),
     ] {
@@ -1540,10 +1541,13 @@ pub struct ScriptOptions {
     /// of the clear color (whose alpha still fades the last frame), and
     /// `clear` keeps its color's alpha.
     pub transparent: bool,
+    /// It reads data files (`read_asset`): its assets folder is made, and
+    /// the bar above the visualizer has a button to open it.
+    pub assets: bool,
 }
 
 /// The `script_options` keys, for the error naming them.
-const SCRIPT_OPTIONS: &str = "start_paused, app_log, record_prepare, record_auto and transparent";
+const SCRIPT_OPTIONS: &str = "start_paused, app_log, record_prepare, record_auto, transparent and assets";
 
 /// What a script can see of the app's playback beyond the engine: the
 /// loop and shuffle modes, and the current playlist (read-only).
@@ -1638,6 +1642,14 @@ impl ScriptStore {
 fn store_path(script_path: &Path) -> PathBuf {
     let mut name = script_path.as_os_str().to_os_string();
     name.push(".store.json");
+    PathBuf::from(name)
+}
+
+/// `<script>.lua.assets`: a folder of the script's own data files, which
+/// it reads with `read_asset`.
+pub fn assets_path(script_path: &Path) -> PathBuf {
+    let mut name = script_path.as_os_str().to_os_string();
+    name.push(".assets");
     PathBuf::from(name)
 }
 
@@ -1837,6 +1849,8 @@ struct Compiled {
     cursor: Rc<RefCell<CursorRequest>>,
     playback_requests: Rc<RefCell<Vec<PlaybackRequest>>>,
     store: Rc<RefCell<ScriptStore>>,
+    /// The script's assets folder (`read_asset`), None for an unsaved script.
+    assets: Rc<RefCell<Option<PathBuf>>>,
     /// Sprites the script registered (`sprite_register`), per script.
     sprites: Rc<RefCell<Vec<Sprite>>>,
     /// Input actions (`input_register`) and their bindings.
@@ -2003,6 +2017,7 @@ impl LuaVisualizer {
         if let Some(compiled) = &self.compiled {
             compiled.store.borrow_mut().path = Some(store_path(&path));
             compiled.controls.borrow_mut().path = Some(controls_path(&path));
+            *compiled.assets.borrow_mut() = Some(assets_path(&path));
         }
         self.path = Some(path);
     }
@@ -2528,9 +2543,11 @@ fn compile(
     register_album_art(&lua, &sprites, song).map_err(|e| e.to_string())?;
     register_song_and_state(&lua, note_list, &playback_requests, &store, song).map_err(|e| e.to_string())?;
     let options: Rc<Cell<ScriptOptions>> = Rc::default();
+    let assets = Rc::new(RefCell::new(script_path.map(assets_path)));
     {
         let options = Rc::clone(&options);
         let log = Rc::clone(&log);
+        let assets = Rc::clone(&assets);
         lua.globals()
             .set(
                 "script_options",
@@ -2544,8 +2561,17 @@ fn compile(
                             ("record_prepare", Value::Boolean(on)) => set.record_prepare = on,
                             ("record_auto", Value::Boolean(on)) => set.record_auto = on,
                             ("transparent", Value::Boolean(on)) => set.transparent = on,
+                            ("assets", Value::Boolean(on)) => {
+                                set.assets = on;
+                                if let Some(dir) = assets.borrow().as_ref().filter(|_| on) {
+                                    fs::create_dir_all(dir).map_err(|e| {
+                                        mlua::Error::runtime(format!("script_options: making {}: {e}", dir.display()))
+                                    })?;
+                                }
+                            }
                             (
-                                name @ ("start_paused" | "app_log" | "record_prepare" | "record_auto" | "transparent"),
+                                name @ ("start_paused" | "app_log" | "record_prepare" | "record_auto" | "transparent"
+                                | "assets"),
                                 other,
                             ) => {
                                 return Err(mlua::Error::runtime(format!(
@@ -2571,7 +2597,7 @@ fn compile(
     register_timing_audio_shapes(&lua, note_list, playback, features, &commands).map_err(|e| e.to_string())?;
     register_color_helpers(&lua).map_err(|e| e.to_string())?;
     register_live_notes(&lua, notes, playback, note_list, live).map_err(|e| e.to_string())?;
-    register_assets(&lua, script_path).map_err(|e| e.to_string())?;
+    register_assets(&lua, &assets).map_err(|e| e.to_string())?;
 
     let host_globals: HashSet<String> = lua
         .globals()
@@ -2608,6 +2634,7 @@ fn compile(
         cursor,
         playback_requests,
         store,
+        assets,
         sprites,
         controls,
         typing,
@@ -3125,12 +3152,12 @@ fn register_song_and_state(
 /// `beat`, `time_at_beat`, `bar`, `tempo`, `time_signature`,
 /// `level_left`, `level_right`, `onset`, `circle`, `triangle`, `polygon`.
 /// `sprite_register`, `sprite`, `sprite_size`.
-/// `read_asset(name)`: a file's bytes, read only from the `assets` folder
-/// next to the script, by plain file name (no folders, nothing hidden), so
-/// a script gets the data it ships with (a game's levels, say) and nothing
-/// else on the computer.
-fn register_assets(lua: &Lua, script_path: Option<&Path>) -> mlua::Result<()> {
-    let folder = script_path.and_then(Path::parent).map(|dir| dir.join("assets"));
+/// `read_asset(name)`: a file's bytes, read only from the script's own
+/// assets folder (`assets_path`), by plain file name (no folders, nothing
+/// hidden), so a script gets the data it ships with (a game's levels, say)
+/// and nothing else on the computer.
+fn register_assets(lua: &Lua, folder: &Rc<RefCell<Option<PathBuf>>>) -> mlua::Result<()> {
+    let reads = Rc::clone(folder);
     lua.globals().set(
         "read_asset",
         lua.create_function(move |lua, name: String| {
@@ -3142,8 +3169,7 @@ fn register_assets(lua: &Lua, script_path: Option<&Path>) -> mlua::Result<()> {
                     "read_asset: `{name}` isn't a plain file name (letters, digits, . _ - and spaces)"
                 )));
             }
-            let Some(folder) = &folder else { return Ok(None) };
-            let path = folder.join(&name);
+            let Some(path) = reads.borrow().as_ref().map(|dir| dir.join(&name)) else { return Ok(None) };
             match fs::metadata(&path) {
                 Ok(meta) if meta.is_file() && meta.len() <= MAX_ASSET_BYTES => {}
                 Ok(meta) if meta.is_file() => {
@@ -3153,6 +3179,25 @@ fn register_assets(lua: &Lua, script_path: Option<&Path>) -> mlua::Result<()> {
             }
             let bytes = fs::read(&path).map_err(|e| mlua::Error::runtime(format!("read_asset: {name}: {e}")))?;
             lua.create_string(bytes).map(Some)
+        })?,
+    )?;
+    let folder = Rc::clone(folder);
+    lua.globals().set(
+        "list_assets",
+        lua.create_function(move |_, ()| {
+            let mut names: Vec<String> = folder
+                .borrow()
+                .as_ref()
+                .and_then(|dir| fs::read_dir(dir).ok())
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_ok_and(|t| t.is_file()))
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| !name.starts_with('.'))
+                .collect();
+            names.sort_by_key(|name| name.to_lowercase());
+            Ok(names)
         })?,
     )
 }
@@ -6004,7 +6049,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(".seeded"), "").unwrap();
         seed_bundled(&dir).unwrap();
-        assert_eq!(added(&dir), ["dashboard", "highway", "note_runner", "now_playing"]);
+        assert_eq!(added(&dir), ["dashboard", "doom", "highway", "note_runner", "now_playing"]);
         let _ = fs::remove_dir_all(&dir);
     }
 

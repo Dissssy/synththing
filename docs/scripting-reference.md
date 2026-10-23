@@ -151,7 +151,7 @@ end
 blit(pixels, width, height, palette, [x, y, w, h])   -- a whole palette-indexed image, stretched to w x h
 ```
 
-`blit` draws a `width` by `height` image in one call, for scripts that render their own picture pixel by pixel (a software 3D renderer, an emulator) where thousands of `pixel` calls would be far too slow. `pixels` is a string of bytes or a list of numbers, one per pixel, row by row from the top-left, each a palette index from 0 to 255; `palette` is a list of up to 256 color tables, where `palette[1]` is the color of index 0 (Lua counting, like sprites), and missing entries are transparent. The image is stretched nearest-neighbor over `x, y, w, h` (the image's own size at the top-left by default), so a 320 x 200 picture can fill the whole visualizer. It's opaque unless the palette's colors say otherwise. `doom.lua` (New > Examples) draws its whole view with one `blit` a frame. Since 1.5.0.
+`blit` draws a `width` by `height` image in one call, for scripts that render their own picture pixel by pixel (a software 3D renderer, an emulator) where thousands of `pixel` calls would be far too slow. `pixels` is a string of bytes or a list of numbers, one per pixel, row by row from the top-left, each a palette index from 0 to 255; `palette` is a list of up to 256 color tables, where `palette[1]` is the color of index 0 (Lua counting, like sprites), and missing entries are transparent. The image is stretched nearest-neighbor over `x, y, w, h` (the image's own size at the top-left by default), so a 320 x 200 picture can fill the whole visualizer. It's opaque unless the palette's colors say otherwise. `doom.lua` (New > Games) draws its whole view with one `blit` a frame. Since 1.5.0.
 
 ### Moving and clipping
 
@@ -630,10 +630,10 @@ Touch also still works the mouse, as before, for scripts written for one: the fi
 
 ```lua
 set_cursor_visible(visible)   -- false: hide the system cursor over the visualizer
-set_cursor_locked(locked)     -- true: keep the cursor on screen (dedicated only)
+set_cursor_locked(locked)     -- true: keep the cursor in the window while the visualizer has focus
 ```
 
-Both stick until changed (or a different script loads). A hidden cursor only hides while it's over the visualizer, so draw your own there. Locking only takes effect in the dedicated fullscreen while it has focus, and lets go whenever that stops (Escape, switching windows), so a script can't trap the cursor. It keeps the cursor inside the screen rather than pinning it in place, so use `mouse_delta()` for motion. See `input_demo.lua` (New > input_demo).
+Both stick until changed (or a different script loads). A hidden cursor only hides while it's over the visualizer, so draw your own there. Locking only takes effect while the visualizer has focus, in any view, and lets go whenever that stops (Escape, clicking elsewhere, switching windows), so a script can't trap the cursor. It keeps the cursor inside the window rather than pinning it in place, so use `mouse_delta()` for motion: while the visualizer has focus it's raw mouse motion, which keeps coming with the cursor at the window's edge (mouse look). In any view since 1.5.0, the dedicated fullscreen only before. See `input_demo.lua` (New > input_demo).
 
 ## Controls
 
@@ -663,7 +663,7 @@ An unknown name is a script error that says so, as is one of the app's reserved 
 
 For `input` and `input_down`, every controller input is on or off: a stick direction or a trigger counts as pressed once it's past halfway, with a little slack before it lets go so it doesn't flicker at the edge. That's what makes them interchangeable with keys (a "left" action can be the A key, the d-pad or the stick). Any connected controller counts: pressing A on either of two pads presses `pad_a`. Controllers work while synththing's window has focus (no need to click into the visualizer first), and like keys, they don't reach actions while a typing span is open.
 
-For smooth movement, `pad_axis` reads the sticks and triggers directly: `"lstick_x"`, `"lstick_y"`, `"rstick_x"`, `"rstick_y"` from -1 to 1 (x is right, y is down, like screen coordinates; a small wobble around the middle reads 0), and `"lt"`, `"rt"` from 0 (let go) to 1 (all the way). With several controllers it's the one pushed furthest. Axes aren't rebindable: they're the controller's own. `gamepads()` lists the connected controllers' names, empty when there are none. `gamepad_demo.lua` (New > Examples) shows all of it on a drawn controller.
+For smooth movement, `pad_axis` reads the sticks and triggers directly: `"lstick_x"`, `"lstick_y"`, `"rstick_x"`, `"rstick_y"` from -1 to 1 (x is right, y is down, like screen coordinates; a small wobble around the middle reads 0), and `"lt"`, `"rt"` from 0 (let go) to 1 (all the way). With several controllers it's the one pushed furthest. Axes aren't rebindable: they're the controller's own. `gamepads()` lists the connected controllers' names, empty when there are none. `gamepad_demo.lua` (New > Games) shows all of it on a drawn controller.
 
 ```lua
 local x = 100
@@ -903,10 +903,17 @@ if score > best then store_set("best", score) end
 ## Assets
 
 ```lua
-read_asset(name) -> string or nil   -- the bytes of a file in the `assets` folder next to the script
+read_asset(name) -> string or nil   -- the bytes of a file in the script's `<name>.lua.assets` folder
+list_assets() -> names              -- the files in it, sorted by name
 ```
 
-A script can read data files it ships with (a game's levels, a sound bank) from the `assets` folder next to it (`visualizers\assets` in the config folder for most scripts). `name` is a plain file name, letters, digits, `.`, `_`, `-` and spaces: no folders, nothing outside `assets`, and nothing is ever written. It returns the whole file as a Lua string (binary is fine; read it with `string.unpack` and `string.byte`), or nil when there's no such file. Files over 256 MB are an error. `doom.lua` reads its WAD this way. Since 1.5.0.
+A script can read data files it ships with (a game's levels, a sound bank) from its own assets folder: a folder next to it named after it, like its other files (`doom.lua.assets` for `doom.lua`), which moves along when the script is renamed. `name` is a plain file name, letters, digits, `.`, `_`, `-` and spaces: no folders, nothing outside that folder, and nothing is ever written. It returns the whole file as a Lua string (binary is fine; read it with `string.unpack` and `string.byte`), or nil when there's no such file. Files over 256 MB are an error. `list_assets()` lists the folder's files (empty when there is none), for letting the user pick one with a setting. `doom.lua` reads its WAD this way. Since 1.5.0.
+
+```lua
+script_options({ assets = true })  -- once, at the top
+```
+
+A script that reads assets says so with `script_options`: its assets folder is made if it isn't there yet, and the bar above the visualizer gets a button that opens it, so it's easy to put the files in. Since 1.5.0.
 
 ## Testing scripts from the command line
 
