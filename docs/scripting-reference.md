@@ -130,7 +130,7 @@ end
 script_options({ transparent = true })  -- once, at the top: see-through frames
 ```
 
-A frame is opaque unless the script asks for see-through ones. With `transparent`, each frame starts transparent instead of filled with the clear color, and whatever isn't drawn on shows what's behind it (in synththing, the panel). Translucent drawing over nothing stays translucent, and `clear()` keeps its color's `a`, so `clear({ r = 0, g = 0, b = 0, a = 0.5 })` is a half see-through black backdrop. The clear color's `a` still means trails: it fades the last frame out by that much (its `r`, `g` and `b` don't matter), and the strip `shift_frame` uncovers is transparent. Where nothing can show through (a recording, a JPEG), see-through parts are shown over black. Since 1.5.0.
+A frame is opaque unless the script asks for see-through ones. With `transparent`, each frame starts transparent instead of filled with the clear color, and whatever isn't drawn on shows what's behind it: in synththing, the panel; in OBS, the scene under it, through the local API's PNG frames (docs/API.md). Translucent drawing over nothing stays translucent, and `clear()` keeps its color's `a`, so `clear({ r = 0, g = 0, b = 0, a = 0.5 })` is a half see-through black backdrop. The clear color's `a` still means trails: it fades the last frame out by that much (its `r`, `g` and `b` don't matter), and the strip `shift_frame` uncovers is transparent. Where nothing can show through (a recording, a JPEG), see-through parts are shown over black. Since 1.5.0.
 
 ```lua
 shift_frame(dx, [dy])   -- move what's drawn so far by dx, dy whole pixels

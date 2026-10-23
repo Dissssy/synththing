@@ -1,5 +1,6 @@
 //! The visualizer's frames for the local API (`GET /v1/visualizer/...`):
-//! a stream of JPEG pictures that OBS, a browser or a media player can show.
+//! a stream of JPEG or PNG pictures that OBS, a browser or a media player
+//! can show (PNG keeps a see-through visualizer's transparency).
 //!
 //! The app offers each frame the visualizer draws (`Frames::offer`) while
 //! anyone's watching; a worker thread encodes it, and every watcher's
@@ -11,8 +12,31 @@ use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-/// How good the pictures are (0 to 100).
+/// How good the JPEG pictures are (0 to 100).
 const QUALITY: u8 = 85;
+
+/// What the pictures are encoded as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    Jpeg,
+    Png,
+}
+
+impl Format {
+    pub fn content_type(self) -> &'static str {
+        match self {
+            Format::Jpeg => "image/jpeg",
+            Format::Png => "image/png",
+        }
+    }
+
+    fn encode(self, width: usize, height: usize, pixels: &[u32]) -> Result<Vec<u8>, String> {
+        match self {
+            Format::Jpeg => jpeg(width, height, pixels).map_err(|e| e.to_string()),
+            Format::Png => png(width, height, pixels),
+        }
+    }
+}
 
 /// The newest picture, and who's watching.
 pub struct Frames {
@@ -25,13 +49,16 @@ pub struct Frames {
 
 #[derive(Default)]
 struct State {
-    /// The newest picture, and how many came before it.
-    jpeg: Option<Arc<Vec<u8>>>,
+    /// The newest picture in each format someone watches in (by
+    /// `Format as usize`), and how many frames came before it.
+    pictures: [Option<Arc<Vec<u8>>>; 2],
     count: u64,
-    /// Each watcher's size, if it asked for one, by when it came.
-    watchers: Vec<(u64, Option<(usize, usize)>)>,
+    /// Each watcher's size, if it asked for one, and format, by when it
+    /// came.
+    watchers: Vec<(u64, Option<(usize, usize)>, Format)>,
     next_watcher: u64,
 }
+
 
 /// Someone watching, for as long as it's kept.
 pub struct Watching {
@@ -41,7 +68,7 @@ pub struct Watching {
 
 impl Drop for Watching {
     fn drop(&mut self) {
-        self.frames.lock().watchers.retain(|(id, _)| *id != self.id);
+        self.frames.lock().watchers.retain(|(id, ..)| *id != self.id);
     }
 }
 
@@ -53,15 +80,22 @@ impl Frames {
         let spawned = std::thread::Builder::new().name("visualizer stream".into()).spawn(move || {
             for (width, height, pixels) in frames {
                 let Some(this) = weak.upgrade() else { return };
-                match encode(width, height, &pixels) {
-                    Ok(jpeg) => {
-                        let mut state = this.lock();
-                        state.jpeg = Some(Arc::new(jpeg));
-                        state.count += 1;
-                        this.changed.notify_all();
+                let watched: Vec<Format> = this.lock().watchers.iter().map(|w| w.2).collect();
+                let mut encoded = Vec::new();
+                for format in [Format::Jpeg, Format::Png] {
+                    if watched.contains(&format) {
+                        match format.encode(width, height, &pixels) {
+                            Ok(picture) => encoded.push((format, Arc::new(picture))),
+                            Err(e) => log::warn!("visualizer stream: couldn't encode a frame: {e}"),
+                        }
                     }
-                    Err(e) => log::warn!("visualizer stream: couldn't encode a frame: {e}"),
                 }
+                let mut state = this.lock();
+                for (format, picture) in encoded {
+                    state.pictures[format as usize] = Some(picture);
+                }
+                state.count += 1;
+                this.changed.notify_all();
             }
         });
         if spawned.is_err() {
@@ -74,12 +108,17 @@ impl Frames {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// Start watching, at `size` if given (the newest watcher's size wins).
-    pub fn watch(self: &Arc<Self>, size: Option<(usize, usize)>) -> Watching {
+    /// Start watching, at `size` if given (the newest watcher's size wins),
+    /// in `format`.
+    pub fn watch(self: &Arc<Self>, size: Option<(usize, usize)>, format: Format) -> Watching {
         let mut state = self.lock();
         let id = state.next_watcher;
         state.next_watcher += 1;
-        state.watchers.push((id, size));
+        state.watchers.push((id, size, format));
+        // (One from before, in a format no one watched since, is stale.)
+        if !state.watchers[..state.watchers.len() - 1].iter().any(|w| w.2 == format) {
+            state.pictures[format as usize] = None;
+        }
         Watching { frames: Arc::clone(self), id }
     }
 
@@ -87,7 +126,7 @@ impl Frames {
     /// for a size wants frames drawn at.
     pub fn wanted(&self) -> Option<Option<(usize, usize)>> {
         let state = self.lock();
-        (!state.watchers.is_empty()).then(|| state.watchers.iter().rev().find_map(|(_, size)| *size))
+        (!state.watchers.is_empty()).then(|| state.watchers.iter().rev().find_map(|(_, size, _)| *size))
     }
 
     /// A frame the visualizer drew, for the watchers (skipped while the
@@ -108,19 +147,34 @@ impl Frames {
         self.lock().count
     }
 
-    /// The first picture newer than the `seen`th (`None` within `wait`):
-    /// it, and how many have come so far.
-    pub fn next(&self, seen: u64, wait: Duration) -> Option<(Arc<Vec<u8>>, u64)> {
+    /// The first picture in `format` newer than the `seen`th frame (`None`
+    /// within `wait`): it, and how many frames have come so far.
+    pub fn next(&self, seen: u64, wait: Duration, format: Format) -> Option<(Arc<Vec<u8>>, u64)> {
         let state = self.lock();
         let (state, _) = self
             .changed
-            .wait_timeout_while(state, wait, |s| s.count <= seen || s.jpeg.is_none())
+            .wait_timeout_while(state, wait, |s| s.count <= seen || s.pictures[format as usize].is_none())
             .unwrap_or_else(|p| p.into_inner());
-        state.jpeg.clone().filter(|_| state.count > seen).map(|jpeg| (jpeg, state.count))
+        state.pictures[format as usize].clone().filter(|_| state.count > seen).map(|picture| (picture, state.count))
     }
 }
 
-fn encode(width: usize, height: usize, pixels: &[u32]) -> image::ImageResult<Vec<u8>> {
+/// PNG keeps the alpha (not premultiplied, like the pixels); quick to
+/// make, since a frame's sent once and gone.
+fn png(width: usize, height: usize, pixels: &[u32]) -> Result<Vec<u8>, String> {
+    let rgba: Vec<u8> = pixels.iter().flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8]).collect();
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, width as u32, height as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+    writer.write_image_data(&rgba).map_err(|e| e.to_string())?;
+    writer.finish().map_err(|e| e.to_string())?;
+    Ok(bytes)
+}
+
+fn jpeg(width: usize, height: usize, pixels: &[u32]) -> image::ImageResult<Vec<u8>> {
     let rgb: Vec<u8> = pixels
         .iter()
         .map(|&p| crate::lua_visualizer::over_black(p))
@@ -141,17 +195,25 @@ mod tests {
         let frames = Frames::new();
         assert_eq!(frames.wanted(), None);
         assert_eq!(frames.count(), 0);
-        let first = frames.watch(None);
+        let first = frames.watch(None, Format::Jpeg);
         assert_eq!(frames.wanted(), Some(None));
-        let sized = frames.watch(Some((64, 36)));
+        let sized = frames.watch(Some((64, 36)), Format::Png);
         assert_eq!(frames.wanted(), Some(Some((64, 36))));
         drop(sized);
         assert_eq!(frames.wanted(), Some(None));
 
-        frames.offer(4, 2, &[0x00ff0000; 8]);
-        let (jpeg, count) = frames.next(0, Duration::from_secs(5)).expect("a frame");
+        frames.offer(4, 2, &[0xffff0000; 8]);
+        let (jpeg, count) = frames.next(0, Duration::from_secs(5), Format::Jpeg).expect("a frame");
         assert_eq!(&jpeg[..2], &[0xff, 0xd8], "a JPEG");
-        assert!(frames.next(count, Duration::from_millis(50)).is_none(), "nothing newer yet");
+        assert!(frames.next(count, Duration::from_millis(50), Format::Jpeg).is_none(), "nothing newer yet");
+        assert!(frames.next(0, Duration::ZERO, Format::Png).is_none(), "no one watched in PNG");
+
+        let png = frames.watch(None, Format::Png);
+        frames.offer(4, 2, &[0x80ff0000; 8]);
+        let (picture, _) = frames.next(count, Duration::from_secs(5), Format::Png).expect("a frame");
+        let (width, height, rgba) = crate::preview::decode_png(&picture).unwrap();
+        assert_eq!((width, height, &rgba[..4]), (4, 2, &[255, 0, 0, 0x80][..]), "see-through, kept");
+        drop(png);
         drop(first);
         assert_eq!(frames.wanted(), None);
     }
