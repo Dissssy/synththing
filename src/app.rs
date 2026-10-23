@@ -3465,9 +3465,16 @@ impl App {
             Command::PauseRecording => self.toggle_recording_pause(),
             Command::Quit => self.close_with(ctx, close::CloseAction::Quit),
             Command::CommandPalette => self.palette = Some(palette::Palette::default()),
-            Command::GoTo(section) => self.reveal_section(section),
-            Command::NextSection => self.step_section(1),
-            Command::PreviousSection => self.step_section(-1),
+            Command::GoTo(_) | Command::NextSection | Command::PreviousSection => {
+                match command {
+                    Command::GoTo(section) => self.reveal_section(section),
+                    Command::NextSection => self.step_section(1),
+                    _ => self.step_section(-1),
+                }
+                // Off whatever has keyboard focus (a button Tab moved to),
+                // so the keys go to the tab's list.
+                ctx.memory_mut(|m| m.stop_text_input());
+            }
             Command::Cursor(steer) => select_list::steer(ctx, steer, ctx.input(|i| i.modifiers.shift)),
         }
     }
