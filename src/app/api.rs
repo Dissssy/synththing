@@ -29,6 +29,8 @@ pub(super) struct ApiState {
     /// What the play queue was when the last event told of it (a hash),
     /// while a stream is open.
     queue_seen: Option<u64>,
+    /// The Soundfonts list and which is in use, as last seen.
+    soundfonts_seen: Option<u64>,
     /// A token just made, shown until Preferences close: (app name, token).
     new_token: Option<(String, String)>,
     /// The name being typed for a new app.
@@ -54,6 +56,7 @@ struct Seen {
     speed: f64,
     volume: f32,
     modes: (bool, crate::playlist::LoopMode, crate::song_list::Autoplay),
+    soundfont: Option<String>,
     loads: u64,
 }
 
@@ -112,6 +115,9 @@ impl App {
                 Call::Queue(edit, reply) => {
                     let _ = reply.send(self.api_queue(edit));
                 }
+                Call::UseSoundfont(id, reply) => {
+                    let _ = reply.send(self.api_use_soundfont(&id));
+                }
                 Call::Play { song, playlist, reply } => {
                     let _ = reply.send(self.api_play(song.as_deref(), playlist.as_deref()));
                 }
@@ -127,6 +133,7 @@ impl App {
                         articles: self.config.sort_with_articles,
                         online: self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup),
                         queue: self.queue.iter().filter_map(|path| self.songs.key(path)).collect(),
+                        soundfonts: self.api_soundfonts(),
                     });
                 }
             }
@@ -361,6 +368,7 @@ impl App {
             speed: view.speed,
             volume: self.volume,
             modes: (self.shuffle, self.loop_mode, self.autoplay),
+            soundfont: self.api_soundfont().map(|s| s.id),
             loads: view.loads,
         };
         let revision = self.songs.revision();
@@ -379,6 +387,7 @@ impl App {
             // (Worked out afresh once one opens.)
             self.api.playlists_seen = None;
             self.api.queue_seen = None;
+            self.api.soundfonts_seen = None;
         }
         let Some(server) = self.api.server.as_ref().filter(|_| streams) else { return };
         match now {
@@ -409,6 +418,15 @@ impl App {
         };
         if self.api.queue_seen.replace(queue).is_some_and(|seen| seen != queue) {
             server.event("queue_changed", &serde_json::json!({}));
+        }
+        let soundfonts = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (&self.config.soundfonts, self.active_sf).hash(&mut hasher);
+            hasher.finish()
+        };
+        if self.api.soundfonts_seen.replace(soundfonts).is_some_and(|seen| seen != soundfonts) {
+            server.event("soundfonts_changed", &serde_json::json!({}));
         }
     }
 
@@ -452,7 +470,38 @@ impl App {
             shuffle: self.shuffle,
             loop_mode: api::loop_name(self.loop_mode),
             autoplay: api::autoplay_name(self.autoplay),
+            soundfont: self.api_soundfont(),
         }
+    }
+
+    /// The soundfont the MIDI song playing plays with.
+    fn api_soundfont(&self) -> Option<PlaylistRef> {
+        self.current_song.as_deref().filter(|path| super::is_midi_path(path))?;
+        let path = self.loaded_sf.as_deref()?;
+        Some(PlaylistRef { id: api::soundfont_id(path), name: crate::config::nice_name(path) })
+    }
+
+    fn api_soundfonts(&self) -> Vec<api::SoundfontInfo> {
+        self.config
+            .soundfonts
+            .iter()
+            .enumerate()
+            .map(|(i, path)| api::SoundfontInfo {
+                id: api::soundfont_id(path),
+                name: crate::config::nice_name(path),
+                size: std::fs::metadata(path).ok().map(|m| m.len()),
+                active: self.active_sf == Some(i),
+            })
+            .collect()
+    }
+
+    fn api_use_soundfont(&mut self, id: &str) -> Result<(), (u16, String)> {
+        let i = self.config.soundfonts.iter().position(|path| api::soundfont_id(path) == id).ok_or((404, "there's no such soundfont".to_string()))?;
+        if !self.config.soundfonts[i].exists() {
+            return Err((409, "its file is missing".into()));
+        }
+        self.activate_soundfont(i);
+        Ok(())
     }
 
     fn api_playlists(&self) -> Vec<PlaylistInfo> {

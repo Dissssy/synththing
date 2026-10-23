@@ -6,6 +6,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Added
 - The local API shows Shuffle, Loop and Autoplay with what's playing, and can set them (`POST /v1/modes`).
+- The local API lists your soundfonts and can switch which one MIDI songs play with (`GET /v1/soundfonts`, `POST /v1/soundfonts/{id}/use`). What's playing tells which soundfont a MIDI song plays with, and a `soundfonts_changed` event tells when the list or the one in use changes.
 - The local API gives songs' album art and your Groupings (each ruleset's playlists), and can group any search by artist, album, genre, year or tag.
 - The local API can seek to an exact point and set the volume (`POST /v1/seek`, `POST /v1/volume`), and an event stream can ask for only the events it wants.
 - Programs you allow to Edit library (a new permission, off until you tick it) can star songs, tag them, and add songs to playlists or take them out through the local API. A new `playlists_changed` event tells when any playlist changes.
