@@ -18,4 +18,6 @@ pre-release-replacements = [
   # src/lua_api.rs: what's new to scripts ships in this version (each entry's
   # `"next"`, after its section or `since:`; not the code that reads it).
   { file = "src/lua_api.rs", search = "([A-Z_]+, |since: )\"next\"", replace = "${1}\"{{version}}\"", min = 0 },
+  # ...and the reference generated from it says so too.
+  { file = "docs/scripting-reference.md", search = "\\(since next\\)", replace = "(since {{version}})", min = 0 },
 ]

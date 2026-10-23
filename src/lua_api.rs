@@ -146,7 +146,7 @@ pub const ITEMS: &[Item] = &[
     f("pop_view", DRAWING, "0.6.0", &[], &[], "go back to the translate and clip push_view saved"),
     f("hsv", DRAWING, "0.6.0", &[d("hue", "number", "degrees, wraps"), d("saturation", "number", "0 to 1"), d("value", "number", "0 to 1"), od("a", "number", "0 to 1")], &[p("color", COLOR)], "a color from hue, saturation and value"),
     f("mix", DRAWING, "0.6.0", &[p("color1", COLOR), p("color2", COLOR), d("t", "number", "0 is color1, 1 is color2")], &[p("color", COLOR)], "a color between two, alpha included"),
-    f("approach", DRAWING, "0.6.0", &[p("current", "number"), p("target", "number"), d("rate", "number", "per second"), od("rate_down", "number", "per second, going down")], &[p("value", "number")], "smoothing by the second, the same at any frame rate"),
+    f("approach", PLAYBACK, "0.6.0", &[p("current", "number"), p("target", "number"), d("rate", "number", "per second"), od("rate_down", "number", "per second, going down")], &[p("value", "number")], "smoothing by the second, the same at any frame rate"),
     // Text
     f("text", TEXT, "0.1.5", &[p("x", "number"), p("y", "number"), p("text", "string"), p("color", COLOR), od("height", "number", "line height in pixels, FONT_HEIGHT if not given")], SIZE, "draw pixel text (Monogram; Japanese, Korean and Chinese from Noto), and get the size drawn"),
     f("text_size", TEXT, "0.1.5", &[p("text", "string"), opt("height", "number")], SIZE, "measure text without drawing it"),
@@ -155,7 +155,7 @@ pub const ITEMS: &[Item] = &[
     f("sprite_register", SPRITES, "0.1.8", &[p("sprite", "SpriteImage")], &[p("id", "integer")], "register a sprite once, outside render(); palette index 0 is transparent"),
     f("sprite", SPRITES, "0.1.8", &[p("id", "integer"), p("x", "number"), p("y", "number"), od("options", "number|SpriteOptions", "a scale, or options")], SIZE, "draw a sprite, or part of one, optionally recolored; the size drawn"),
     f("sprite_size", SPRITES, "0.1.8", &[p("id", "integer")], SIZE, "a sprite's size in its own pixels"),
-    f("blit", SPRITES, "1.6.0", &[d("pixels", "string|integer[]", "palette indices 0-255, a string of bytes or a list"), p("width", "integer"), p("height", "integer"), p("palette", "Color[]"), opt("x", "number"), opt("y", "number"), opt("w", "number"), opt("h", "number")], &[], "a palette-indexed image in one call, stretched to w x h"),
+    f("blit", DRAWING, "1.6.0", &[d("pixels", "string|integer[]", "palette indices 0-255, a string of bytes or a list"), p("width", "integer"), p("height", "integer"), p("palette", "Color[]"), opt("x", "number"), opt("y", "number"), opt("w", "number"), opt("h", "number")], &[], "a palette-indexed image in one call, stretched to w x h"),
     f("album_art", SPRITES, "1.5.0", &[od("size", "integer", "at most this many pixels across")], &[p("art", "AlbumArt|nil")], "the playing song's art as a sprite, and the color it's mostly made of"),
     // Audio data
     f("fft_left", AUDIO, "0.1.1", &[p("samples", "number[]")], &[p("spectrum", "number[]")], "the left channel's magnitude spectrum (512 entries)"),
@@ -170,10 +170,10 @@ pub const ITEMS: &[Item] = &[
     f("onset", AUDIO, "0.1.6", &[], &[p("hit", "boolean"), p("strength", "number")], "whether a sound just started this frame, and how sharply"),
     f("history_left", AUDIO, "0.6.0", &[d("seconds", "number", "up to 4"), od("count", "integer", "spread that many evenly over them")], &[p("samples", "number[]")], "the left channel's last seconds, oldest first"),
     f("history_right", AUDIO, "0.6.0", &[p("seconds", "number"), opt("count", "integer")], &[p("samples", "number[]")], "the same for the right channel"),
-    f("note_name", AUDIO, "0.7.0", &[p("key", "number"), od("octave", "boolean", "false leaves the octave out")], &[p("name", "string")], "\"C#4\" (60 is middle C, C4)"),
-    f("note_freq", AUDIO, "0.7.0", &[p("key", "number")], &[p("hz", "number")], "a key's pitch (69, A4, is 440 Hz; fractional keys work)"),
-    f("freq_note", AUDIO, "0.7.0", &[p("hz", "number")], &[p("key", "number|nil")], "the key at a pitch, fractional (nil for 0 Hz or less)"),
-    c("SAMPLE_RATE", AUDIO, "0.1.1", "integer", "the engine's sample rate, in Hz"),
+    f("note_name", MIDI, "0.7.0", &[p("key", "number"), od("octave", "boolean", "false leaves the octave out")], &[p("name", "string")], "\"C#4\" (60 is middle C, C4)"),
+    f("note_freq", MIDI, "0.7.0", &[p("key", "number")], &[p("hz", "number")], "a key's pitch (69, A4, is 440 Hz; fractional keys work)"),
+    f("freq_note", MIDI, "0.7.0", &[p("hz", "number")], &[p("key", "number|nil")], "the key at a pitch, fractional (nil for 0 Hz or less)"),
+    c("SAMPLE_RATE", PLAYBACK, "0.1.1", "integer", "the engine's sample rate, in Hz"),
     // MIDI data
     f("active_notes", MIDI, "0.1.1", &[], &[p("notes", "ActiveNote[]")], "MIDI notes held right now"),
     f("upcoming_notes", MIDI, "0.1.1", &[], &[p("notes", "UpcomingNote[]")], "note on/off changes within NOTE_LOOKAHEAD"),
@@ -191,8 +191,8 @@ pub const ITEMS: &[Item] = &[
     f("seek", PLAYBACK, "0.1.4", &[p("seconds", "number")], &[], "jump to a song position, seek(0) restarts (applied after this frame)"),
     f("set_speed", PLAYBACK, "0.2.0", &[d("speed", "number", "1.0 is normal")], &[], "playback speed (applied after this frame)"),
     f("script_options", PLAYBACK, "0.2.0", &[p("options", "ScriptOptions")], &[], "once, at the top: how the app treats this script"),
-    f("display_mode", PLAYBACK, "0.1.1", &[], &[p("mode", "\"window\"|\"fullscreen\"|\"dedicated\"|\"mini\"|\"pip\"")], "where the visualizer is showing (\"mini\" is the mini player, \"pip\" picture-in-picture)"),
-    f("is_mobile", PLAYBACK, "1.1.0", &[], &[p("mobile", "boolean")], "the app is in its mobile layout (a phone), so maybe draw something lighter"),
+    f("display_mode", INPUT, "0.1.1", &[], &[p("mode", "\"window\"|\"fullscreen\"|\"dedicated\"|\"mini\"|\"pip\"")], "where the visualizer is showing (\"mini\" is the mini player, \"pip\" picture-in-picture)"),
+    f("is_mobile", INPUT, "1.1.0", &[], &[p("mobile", "boolean")], "the app is in its mobile layout (a phone), so maybe draw something lighter"),
     c("DT", PLAYBACK, "0.1.1", "number", "seconds since the previous render() call (0.0 on the first, at most 0.25)"),
     c("TIME", PLAYBACK, "0.1.4", "number", "seconds since this script started, wall clock, uncapped"),
     c("FRAME", PLAYBACK, "0.1.4", "integer", "frames rendered since this script started (1 on the first)"),
@@ -305,14 +305,14 @@ pub const CLASSES: &[Class] = &[
             p("loop_enabled", "boolean"),
             p("loop_mode", "\"off\"|\"one\"|\"all\""),
             p("shuffle", "boolean"),
-            d("generation", "integer", "goes up each time a song is loaded or reloaded"),
+            d("generation", "integer", "goes up each time the position jumps: a seek, a loop, a new song"),
             p("song_name", "string|nil"),
             d("title", "string|nil", "from the song's tags"),
             p("artist", "string|nil"),
             p("album", "string|nil"),
             p("song_path", "string|nil"),
             p("song_id", "string|nil"),
-            p("song_loads", "integer"),
+            d("song_loads", "integer", "goes up each time a song is loaded, the same one again too"),
             p("recording", "boolean"),
             d("streaming", "boolean", "the local API is streaming the visualizer"),
         ],
@@ -564,6 +564,130 @@ pub fn first_return(function: &str) -> Option<&'static str> {
     }
 }
 
+// --- the reference ----------------------------------------------------------
+
+/// The generated parts of docs/scripting-reference.md, made and checked
+/// by a test (`reference_lists_everything_and_is_current`).
+#[cfg(test)]
+mod reference {
+    use super::*;
+
+
+    /// How docs/scripting-reference.md marks a generated list of functions:
+    /// `<!-- api: rect line -->`, the list, then [`END`].
+    const MARK: &str = "<!-- api:";
+    /// The marker for the generated list of tables.
+    pub const TYPES_MARK: &str = "<!-- api-types -->";
+    const END: &str = "<!-- /api -->";
+
+    /// `since` as the reference says it: `"next"` stays `next` until
+    /// cargo-release writes the version in (release.toml), here too.
+    fn since_note(since: &str) -> String {
+        format!("(since {since})")
+    }
+
+    /// Lines of a code block, each `left   -- comment`, the comments lined
+    /// up; continuation comments (an empty left) under them.
+    fn aligned(rows: &[(String, String)]) -> String {
+        let column = rows.iter().map(|(left, _)| left.chars().count()).max().unwrap_or(0) + 3;
+        let mut out = String::new();
+        for (left, comment) in rows {
+            let pad = column - left.chars().count();
+            out.push_str(&format!("{left}{}-- {comment}\n", " ".repeat(pad)));
+        }
+        out
+    }
+
+    /// The generated code block for `names`, in that order.
+    fn api_block(names: &[&str]) -> Result<String, String> {
+        let mut rows = Vec::new();
+        for name in names {
+            let item = item(name).ok_or_else(|| format!("{name} isn't in lua_api::ITEMS"))?;
+            let left = match &item.kind {
+                Kind::Function { params, returns } if !returns.is_empty() => {
+                    format!("{}({}) -> {}", item.name, param_list(params), returns.iter().map(|r| r.name).collect::<Vec<_>>().join(", "))
+                }
+                Kind::Function { params, .. } | Kind::Callback { params } => format!("{}({})", item.name, param_list(params)),
+                Kind::Constant { .. } => item.name.to_string(),
+            };
+            rows.push((left, format!("{} {}", item.summary, since_note(item.since))));
+            let params = match &item.kind {
+                Kind::Function { params, .. } | Kind::Callback { params } => *params,
+                Kind::Constant { .. } => &[],
+            };
+            let docs: Vec<String> = params.iter().filter(|p| !p.doc.is_empty()).map(|p| format!("{}: {}", p.name, p.doc)).collect();
+            if !docs.is_empty() {
+                rows.push((String::new(), docs.join("; ")));
+            }
+        }
+        Ok(format!("```lua\n{}```\n", aligned(&rows)))
+    }
+
+    /// The generated code block of every table shape.
+    fn types_block() -> String {
+        let mut out = String::from("```lua\n");
+        for (i, class) in CLASSES.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            let mut rows = vec![(class.name.to_string(), class.summary.to_string())];
+            for field in class.fields {
+                let optional = if field.optional { "?" } else { "" };
+                rows.push((format!("    {}{optional}: {}", field.name, field.ty), field.doc.to_string()));
+            }
+            // Fields without a doc don't get an empty comment.
+            for line in aligned(&rows).lines() {
+                out.push_str(line.strip_suffix("-- ").unwrap_or(line).trim_end());
+                out.push('\n');
+            }
+        }
+        out.push_str("```\n");
+        out
+    }
+
+    /// docs/scripting-reference.md with its generated parts made again from
+    /// the table: each marked list of functions, and the tables. Errors for a
+    /// name that isn't an item, or a marker without its end.
+    pub fn update_reference(markdown: &str) -> Result<String, String> {
+        let mut out = String::new();
+        let mut lines = markdown.lines();
+        while let Some(line) = lines.next() {
+            out.push_str(line);
+            out.push('\n');
+            let trimmed = line.trim();
+            let block = if let Some(names) = trimmed.strip_prefix(MARK).and_then(|rest| rest.strip_suffix("-->")) {
+                api_block(&names.split_whitespace().collect::<Vec<_>>())?
+            } else if trimmed == TYPES_MARK {
+                types_block()
+            } else {
+                continue;
+            };
+            if !lines.any(|l| l.trim() == END) {
+                return Err(format!("`{trimmed}` has no `{END}` after it"));
+            }
+            out.push_str(&block);
+            out.push_str(END);
+            out.push('\n');
+        }
+        Ok(out)
+    }
+
+    /// The names each `<!-- api: ... -->` marker lists, with the `## ` section
+    /// it's in.
+    pub fn reference_markers(markdown: &str) -> Vec<(String, &str)> {
+        let mut section = String::new();
+        let mut found = Vec::new();
+        for line in markdown.lines() {
+            if let Some(title) = line.strip_prefix("## ") {
+                section = title.trim().to_string();
+            } else if let Some(names) = line.trim().strip_prefix(MARK).and_then(|rest| rest.strip_suffix("-->")) {
+                found.extend(names.split_whitespace().map(|name| (section.clone(), name)));
+            }
+        }
+        found
+    }
+}
+
 // --- LuaLS ------------------------------------------------------------------
 
 /// The LuaLS definitions: a `---@meta` file declaring every class,
@@ -736,6 +860,30 @@ mod tests {
         assert_eq!(search.find_iter(entries).count(), 2);
         let next_items = all_since().filter(|(_, since)| *since == "next").count();
         assert_eq!(search.find_iter(include_str!("lua_api.rs")).count(), next_items, "only entries match");
+    }
+
+    /// The reference's generated parts are current, and every function and
+    /// global is listed once, in its own section. With
+    /// SYNTHTHING_UPDATE_REFERENCE=1 set, this writes them instead.
+    #[test]
+    fn reference_lists_everything_and_is_current() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/scripting-reference.md");
+        let markdown = std::fs::read_to_string(&path).unwrap();
+        let updated = reference::update_reference(&markdown).unwrap();
+        if std::env::var_os("SYNTHTHING_UPDATE_REFERENCE").is_some() {
+            std::fs::write(&path, &updated).unwrap();
+        } else {
+            assert!(
+                updated == markdown,
+                "docs/scripting-reference.md is out of date with src/lua_api.rs: run `SYNTHTHING_UPDATE_REFERENCE=1 cargo test --lib reference_lists`"
+            );
+        }
+        let markers = reference::reference_markers(&updated);
+        for item in ITEMS.iter().filter(|i| i.deprecated.is_none()) {
+            let places: Vec<&String> = markers.iter().filter(|(_, n)| *n == item.name).map(|(s, _)| s).collect();
+            assert_eq!(places, [item.section], "{} should be listed once, under ## {}", item.name, item.section);
+        }
+        assert!(updated.contains(reference::TYPES_MARK), "the reference lists the tables");
     }
 
     #[test]
