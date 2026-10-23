@@ -87,6 +87,9 @@ impl App {
                 Call::NowPlaying(reply) => {
                     let _ = reply.send(self.api_now_playing(view));
                 }
+                Call::Set(set, reply) => {
+                    let _ = reply.send(self.api_set(set, view));
+                }
                 Call::Play { song, playlist, reply } => {
                     let _ = reply.send(self.api_play(song.as_deref(), playlist.as_deref()));
                 }
@@ -151,6 +154,20 @@ impl App {
             .position(|e| crate::song_store::key_in(dir, &e.path) == Some(key))
             .ok_or((404, "that song isn't in that playlist".to_string()))?;
         self.play_entry(list, entry);
+        Ok(())
+    }
+
+    /// `POST /v1/seek` and `/v1/volume`.
+    fn api_set(&mut self, set: api::Set, view: &EngineView) -> Result<(), (u16, String)> {
+        use crate::audio::AudioCommand;
+        match set {
+            api::Set::Position(_) if self.current_song.is_none() => return Err((409, "nothing's playing".into())),
+            api::Set::Position(to) => self.send(AudioCommand::Seek(if view.length > 0.0 { to.min(view.length) } else { to })),
+            api::Set::Volume(to) => {
+                self.volume = to;
+                self.send_volume();
+            }
+        }
         Ok(())
     }
 
