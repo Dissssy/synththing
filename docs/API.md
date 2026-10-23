@@ -61,9 +61,10 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `POST /v1/queue/move?from={n}&to={m}` | control | Moves the song at place `from` so it ends up at place `to` (both from 0): 204, or 404 past the queue's end |
 | `DELETE /v1/queue?at={n}` | control | Takes out the song at that place in the queue (from 0): 204, or 404 past its end |
 | `DELETE /v1/queue` | control | Clears the queue: 204 |
-| `GET /v1/visualizer/stream?width=&height=&fps=` | read | The visualizer, live, as MJPEG (below) |
+| `GET /v1/visualizer/stream?width=&height=&fps=&format=` | read | The visualizer, live, as MJPEG or PNG pictures (below) |
 | `GET /v1/visualizer/frame.jpg?width=&height=` | read | The visualizer's next picture, as a JPEG: 503 if it doesn't draw one within 3 seconds |
-| `GET /v1/visualizer?width=&height=&fps=&token=` | read | A page showing the stream, for OBS's Browser Source or a browser |
+| `GET /v1/visualizer/frame.png?width=&height=` | read | The same, as a PNG, see-through parts kept |
+| `GET /v1/visualizer?width=&height=&fps=&format=&token=` | read | A page showing the stream, for OBS's Browser Source or a browser |
 | `GET /v1/events` | read | Server-Sent Events (below) |
 
 An album's art is its first song's: `GET /v1/songs/{first key}/art`. Covers that synththing hasn't downloaded yet are downloaded only when online lookups are on.
@@ -109,9 +110,9 @@ Add `?events=now_playing,seeked` (any of them, by name) for only those. A commen
 
 ## The visualizer, live
 
-`/v1/visualizer/stream` sends the visualizer's pictures as they're drawn, as MJPEG (`multipart/x-mixed-replace`), at most `fps` a second (1 to 60, 30 if not given). With `width` and `height` (64 to 4096 each, made even), the script draws at exactly that size and synththing's own window just says it's streaming instead of showing it. Without them, you get whatever size it's showing at. A recording's size wins while one is going. Scripts can tell they're being watched: `playback().streaming` is true.
+`/v1/visualizer/stream` sends the visualizer's pictures as they're drawn, as MJPEG (`multipart/x-mixed-replace`), at most `fps` a second (1 to 60, 30 if not given). `format=png` sends PNG pictures instead of JPEG ones (`format=jpeg`, the default): bigger and slower to make, but a visualizer with see-through frames (`script_options({ transparent = true })`) stays see-through. JPEG shows those parts over black. With `width` and `height` (64 to 4096 each, made even), the script draws at exactly that size and synththing's own window just says it's streaming instead of showing it. Without them, you get whatever size it's showing at. A recording's size wins while one is going. Scripts can tell they're being watched: `playback().streaming` is true.
 
-In OBS, add a **Media Source**, untick Local File and give it `http://127.0.0.1:7340/v1/visualizer/stream?width=1920&height=1080&token=st_...`, or a **Browser Source** with `http://127.0.0.1:7340/v1/visualizer?width=1920&height=1080&token=st_...` and the same size. The visualizer keeps drawing while anything's watching, even with its tab hidden or synththing minimized or in the tray (it gets no mouse or keys then). Without `width` and `height` it keeps the size it last showed at.
+In OBS, add a **Media Source**, untick Local File and give it `http://127.0.0.1:7340/v1/visualizer/stream?width=1920&height=1080&token=st_...`, or a **Browser Source** with `http://127.0.0.1:7340/v1/visualizer?width=1920&height=1080&token=st_...` and the same size. For a see-through visualizer over the rest of the scene, use the Browser Source with `&format=png`. The visualizer keeps drawing while anything's watching, even with its tab hidden or synththing minimized or in the tray (it gets no mouse or keys then). Without `width` and `height` it keeps the size it last showed at.
 
 ## System media controls
 

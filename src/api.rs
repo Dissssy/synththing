@@ -32,6 +32,7 @@ use crate::commands::Command;
 use crate::fields::{Facts, Field};
 use crate::smart::{Group, Order, Rules, Ruleset, Split, SplitBy};
 use crate::song_store::{self, Song, SongStore, Stored};
+use crate::visualizer_stream::Format;
 
 /// The port it listens on unless it's given another.
 pub const DEFAULT_PORT: u16 = 7340;
@@ -628,27 +629,30 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
         })),
         (Method::Get, ["v1", "visualizer", "stream"]) => match needs(access.read, "read").map_or_else(|| watch_options(&query), Err) {
             Err(reply) => Some(reply),
-            Ok((size, fps)) => {
-                video(shared, request, size, fps);
+            Ok((size, fps, format)) => {
+                video(shared, request, size, fps, format);
                 return;
             }
         },
-        (Method::Get, ["v1", "visualizer", "frame.jpg"]) => Some(needs(access.read, "read").unwrap_or_else(|| match watch_options(&query) {
-            Err(reply) => reply,
-            Ok((size, _)) => {
-                let watching = shared.frames.watch(size);
-                let seen = shared.frames.count();
-                shared.waker.request_repaint();
-                let frame = shared.frames.next(seen, FRAME_WAIT);
-                drop(watching);
-                match frame {
-                    Some((jpeg, _)) => Response::from_data(jpeg.to_vec())
-                        .with_header(Header::from_bytes("Content-Type", "image/jpeg").unwrap())
-                        .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap()),
-                    None => error(503, "the visualizer didn't draw a frame in time"),
+        (Method::Get, ["v1", "visualizer", name @ ("frame.jpg" | "frame.png")]) => {
+            let format = if *name == "frame.png" { Format::Png } else { Format::Jpeg };
+            Some(needs(access.read, "read").unwrap_or_else(|| match watch_options(&query) {
+                Err(reply) => reply,
+                Ok((size, ..)) => {
+                    let watching = shared.frames.watch(size, format);
+                    let seen = shared.frames.count();
+                    shared.waker.request_repaint();
+                    let frame = shared.frames.next(seen, FRAME_WAIT, format);
+                    drop(watching);
+                    match frame {
+                        Some((picture, _)) => Response::from_data(picture.to_vec())
+                            .with_header(Header::from_bytes("Content-Type", format.content_type()).unwrap())
+                            .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap()),
+                        None => error(503, "the visualizer didn't draw a frame in time"),
+                    }
                 }
-            }
-        })),
+            }))
+        }
         (Method::Post, ["v1", "seek"]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| {
             match query.get("to").and_then(|t| t.parse::<f64>().ok()).filter(|t| t.is_finite() && *t >= 0.0) {
                 None => error(400, "say where to: ?to=<seconds>"),
@@ -1081,7 +1085,7 @@ fn matching<'s>(store: &'s SongStore, query: &str) -> Vec<(String, &'s Song)> {
 /// it every event until it's closed.
 /// `?width=&height=&fps=` for the visualizer's pictures: the size to draw
 /// them at (both or neither), and how many a second at most.
-fn watch_options(query: &HashMap<String, String>) -> Result<(Option<(usize, usize)>, u32), Reply> {
+fn watch_options(query: &HashMap<String, String>) -> Result<(Option<(usize, usize)>, u32, Format), Reply> {
     let side = |name: &str| query.get(name).map(|v| v.parse::<u32>().map_err(|_| error(400, format!("?{name}= is a number of pixels"))));
     let size = match (side("width").transpose()?, side("height").transpose()?) {
         (Some(w), Some(h)) => Some(crate::recorder::Resolution::custom(w, h).size()),
@@ -1092,15 +1096,21 @@ fn watch_options(query: &HashMap<String, String>) -> Result<(Option<(usize, usiz
         None => DEFAULT_FPS,
         Some(fps) => fps.parse::<u32>().ok().filter(|f| (1..=60).contains(f)).ok_or_else(|| error(400, "?fps= is 1 to 60"))?,
     };
-    Ok((size, fps))
+    let format = match query.get("format").map(String::as_str) {
+        None | Some("jpeg") => Format::Jpeg,
+        Some("png") => Format::Png,
+        Some(_) => return Err(error(400, "?format= is jpeg or png")),
+    };
+    Ok((size, fps, format))
 }
 
-/// Send the visualizer's pictures to `request` as they're drawn, as MJPEG
-/// (`multipart/x-mixed-replace`), until it goes.
-fn video(shared: &Arc<Shared>, request: Request, size: Option<(usize, usize)>, fps: u32) {
+/// Send the visualizer's pictures to `request` as they're drawn, in
+/// `format`, as `multipart/x-mixed-replace` (MJPEG, for JPEG), until it
+/// goes.
+fn video(shared: &Arc<Shared>, request: Request, size: Option<(usize, usize)>, fps: u32, format: Format) {
     let shared = Arc::clone(shared);
     let spawned = std::thread::Builder::new().name("api visualizer".into()).spawn(move || {
-        let watching = shared.frames.watch(size);
+        let watching = shared.frames.watch(size, format);
         shared.waker.request_repaint();
         let mut writer = request.into_writer();
         let head = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\nCache-Control: no-store\r\n\
@@ -1111,18 +1121,22 @@ fn video(shared: &Arc<Shared>, request: Request, size: Option<(usize, usize)>, f
             let started = std::time::Instant::now();
             // (Nothing new for a while: the visualizer isn't drawing. The
             // connection's checked by sending the last picture again.)
-            let (jpeg, count) = match shared.frames.next(seen, KEEP_ALIVE) {
+            let (picture, count) = match shared.frames.next(seen, KEEP_ALIVE, format) {
                 Some(frame) => frame,
-                None => match shared.frames.next(seen.saturating_sub(1), Duration::ZERO) {
+                None => match shared.frames.next(seen.saturating_sub(1), Duration::ZERO, format) {
                     Some(frame) => frame,
                     None => continue,
                 },
             };
             seen = count;
-            let part = format!("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", jpeg.len());
+            let part = format!(
+                "--frame\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n",
+                format.content_type(),
+                picture.len()
+            );
             ok = writer
                 .write_all(part.as_bytes())
-                .and_then(|()| writer.write_all(&jpeg))
+                .and_then(|()| writer.write_all(&picture))
                 .and_then(|()| writer.write_all(b"\r\n"))
                 .and_then(|()| writer.flush())
                 .is_ok();
@@ -1290,6 +1304,8 @@ mod tests {
         assert_eq!(get(&server, "/v1/visualizer/stream?width=640", &read_token).0, 400);
         assert_eq!(get(&server, "/v1/visualizer/stream?fps=0", &read_token).0, 400);
         assert_eq!(get(&server, "/v1/visualizer/frame.jpg", &control_token).0, 403);
+        assert_eq!(get(&server, "/v1/visualizer/frame.png", &control_token).0, 403);
+        assert_eq!(get(&server, "/v1/visualizer/stream?format=gif", &read_token).0, 400);
         let (status, page) = get(&server, "/v1/visualizer?width=640&height=360&token=x", &read_token);
         assert_eq!(status, 200);
         assert!(page.contains("/v1/visualizer/stream?width=640&amp;height=360&amp;token=x"), "{page}");
