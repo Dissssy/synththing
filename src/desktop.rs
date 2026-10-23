@@ -172,6 +172,7 @@ pub fn main() -> Result<()> {
         Box::new(|cc| {
             app::fonts::install(&cc.egui_ctx);
             app.attach_tray(&cc.egui_ctx);
+            app.attach_window(hwnd(cc));
             if let Some(guard) = &instance {
                 app.listen_for_second_launch(guard.listen(&cc.egui_ctx));
             }
@@ -184,4 +185,20 @@ pub fn main() -> Result<()> {
     // disconnect and exits. Keep the audio stream alive until then.
     drop(stream);
     Ok(())
+}
+
+/// The main window's HWND, which the system's media controls need on
+/// Windows.
+#[cfg(windows)]
+fn hwnd(cc: &eframe::CreationContext) -> Option<usize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match cc.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as usize),
+        _ => None,
+    }
+}
+
+#[cfg(not(windows))]
+fn hwnd(_cc: &eframe::CreationContext) -> Option<usize> {
+    None
 }

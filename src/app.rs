@@ -98,7 +98,7 @@ const VISUALIZER_HEIGHT: usize = 320;
 /// else is decoded as plain audio (rodio/symphonia, or ffmpeg for what they
 /// can't, figure out the actual format themselves; this list is just what
 /// shows up in the picker).
-const SONG_EXTENSIONS: &[&str] = &[
+pub(crate) const SONG_EXTENSIONS: &[&str] = &[
     "mid", "midi", "wav", "mp3", "ogg", "oga", "opus", "flac", "m4a", "aac", "aif", "aiff", "caf", "mka", "mp2", "wma", "ac3",
 ];
 const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
@@ -3245,6 +3245,12 @@ impl App {
     /// as eframe starts).
     pub fn attach_tray(&mut self, ctx: &egui::Context) {
         self.tray = crate::tray::Tray::new(ctx);
+    }
+
+    /// The main window's handle (an HWND on Windows), for the system's media
+    /// controls.
+    pub fn attach_window(&mut self, window: Option<usize>) {
+        self.api.window = window;
     }
 
     /// Watch `flag`, raised when synththing is launched again here.

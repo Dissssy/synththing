@@ -2,7 +2,7 @@
 //! this computer can ask of the running app, for integrations people build
 //! themselves (home automation, notifications, game hooks). Off until it's
 //! turned on in Preferences > Integrations, and then only reachable from
-//! this computer.
+//! this computer, unless it's let in from the local network as well.
 //!
 //! Every app that uses it is given its own token (`Access`) with what it
 //! may do: read (the library, what's playing, the event stream) and
@@ -14,7 +14,7 @@
 //! Events go out as Server-Sent Events to every open stream.
 
 use std::collections::HashMap;
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
 use std::net::SocketAddr;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
@@ -27,7 +27,7 @@ use tiny_http::{Header, Method, Request, Response};
 
 use crate::commands::Command;
 use crate::fields::{Facts, Field};
-use crate::song_store::{self, Song, SongStore};
+use crate::song_store::{self, Song, SongStore, Stored};
 
 /// The port it listens on unless it's given another.
 pub const DEFAULT_PORT: u16 = 7340;
@@ -41,6 +41,8 @@ const KEEP_ALIVE: Duration = Duration::from_secs(25);
 const APP_WAIT: Duration = Duration::from_secs(5);
 /// Songs in one page of a list, unless the request asks for fewer.
 const MOST_SONGS: usize = 500;
+/// The largest song a program can send (as the relay's limit).
+const LARGEST_SONG: usize = 250 << 20;
 
 /// The API's preferences (`Config::api`), kept on this device only.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -50,9 +52,18 @@ pub struct Settings {
     /// `None`: `DEFAULT_PORT`.
     pub port: Option<u16>,
     pub apps: Vec<Access>,
+    /// Listen on the local network too, not only this computer.
+    pub lan: bool,
+    /// Show synththing in the system's media controls
+    /// (`media_controls.rs`): `None` means yes.
+    pub media_controls: Option<bool>,
 }
 
 impl Settings {
+    pub fn media_controls(&self) -> bool {
+        self.media_controls.unwrap_or(true) && !cfg!(target_os = "android")
+    }
+
     pub fn port(&self) -> u16 {
         self.port.unwrap_or(DEFAULT_PORT)
     }
@@ -67,6 +78,9 @@ pub struct Access {
     pub token: String,
     pub read: bool,
     pub control: bool,
+    /// May add songs to the library (`POST /v1/songs`). Never on unless
+    /// the user ticks it.
+    pub add_songs: bool,
 }
 
 impl Access {
@@ -76,7 +90,7 @@ impl Access {
         let mut bytes = [0u8; 24];
         getrandom::fill(&mut bytes).expect("the OS's random numbers");
         let token = format!("st_{}", crate::library::hex(&bytes));
-        let access = Access { name: name.to_string(), token: crate::library::sha256_hex(token.as_bytes()), read: true, control: false };
+        let access = Access { name: name.to_string(), token: crate::library::sha256_hex(token.as_bytes()), read: true, control: false, add_songs: false };
         (access, token)
     }
 }
@@ -88,6 +102,22 @@ pub enum Call {
     NowPlaying(Sender<NowPlaying>),
     /// A copy of the library and its playlists, to search.
     Library(Sender<Library>),
+    /// Play a song (by its key), or a playlist (by its ID) from the top or
+    /// from one of its songs: `Err` (with its status) if there's no such
+    /// song or playlist.
+    Play {
+        song: Option<String>,
+        playlist: Option<String>,
+        reply: Sender<Result<(), (u16, String)>>,
+    },
+    /// A song a program sent (`program`, by its name), already in the
+    /// store's folder, to add to the library: the song, and whether it's
+    /// new to the library (only then is it marked as the program's).
+    Add {
+        stored: Stored,
+        program: String,
+        reply: Sender<Result<(SongInfo, bool), String>>,
+    },
 }
 
 /// What's playing, as `GET /v1/now-playing` and the `now_playing` event
@@ -147,6 +177,8 @@ pub struct SongInfo {
     pub tags: Vec<String>,
     /// When it came into the library (Unix seconds).
     pub imported: i64,
+    /// The program that added it through this API, if one did.
+    pub added_by: Option<String>,
 }
 
 impl SongInfo {
@@ -167,6 +199,7 @@ impl SongInfo {
             starred: facts.starred(),
             tags: song.tags.iter().filter_map(|id| store.tags().get(id)).map(|t| t.name.clone()).collect(),
             imported: song.imported,
+            added_by: song.added_by.clone(),
         }
     }
 }
@@ -181,6 +214,8 @@ pub struct Server {
 }
 
 struct Shared {
+    /// Let in from the local network, not only this computer.
+    lan: bool,
     apps: RwLock<Vec<Access>>,
     calls: Mutex<Sender<Call>>,
     /// Woken when a call comes in, so it's answered even while nothing's
@@ -190,13 +225,13 @@ struct Shared {
 }
 
 impl Server {
-    /// Listen on `port` on this computer only.
-    pub fn start(port: u16, apps: Vec<Access>, waker: egui::Context) -> Result<Server, String> {
-        let http = tiny_http::Server::http(("127.0.0.1", port)).map_err(|e| format!("couldn't listen on port {port}: {e}"))?;
+    /// Listen on `port`, on this computer only unless `lan`.
+    pub fn start(port: u16, lan: bool, apps: Vec<Access>, waker: egui::Context) -> Result<Server, String> {
+        let http = tiny_http::Server::http((if lan { "0.0.0.0" } else { "127.0.0.1" }, port)).map_err(|e| format!("couldn't listen on port {port}: {e}"))?;
         let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
         let http = Arc::new(http);
         let (tx, calls) = mpsc::channel();
-        let shared = Arc::new(Shared { apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default() });
+        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default() });
         let threads = (0..WORKERS)
             .map(|_| {
                 let (http, shared) = (Arc::clone(&http), Arc::clone(&shared));
@@ -285,6 +320,27 @@ fn access(shared: &Shared, request: &Request, query: &HashMap<String, String>) -
     shared.apps.read().unwrap_or_else(|p| p.into_inner()).iter().find(|a| a.token == hash).cloned()
 }
 
+/// Whether a request came from a program on this computer itself, not
+/// passed on by a proxy here (which could be letting in anyone) or sent by
+/// a web page that renamed itself to this computer's address: no proxy's
+/// headers, and addressed to this computer by name.
+fn from_here(request: &Request) -> bool {
+    const PROXIED: [&str; 4] = ["Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Real-IP"];
+    let headers = request.headers();
+    if headers.iter().any(|h| PROXIED.iter().any(|p| h.field.equiv(*p))) {
+        return false;
+    }
+    headers.iter().find(|h| h.field.equiv("Host")).is_some_and(|h| {
+        let host = h.value.as_str();
+        // (The port, if any, after the last colon outside brackets.)
+        let name = match host.rsplit_once(':') {
+            Some((name, port)) if !port.contains(']') => name,
+            _ => host,
+        };
+        ["localhost", "127.0.0.1", "[::1]"].iter().any(|n| name.eq_ignore_ascii_case(n))
+    })
+}
+
 /// Ask the app, and wait for its answer.
 fn ask<T>(shared: &Shared, call: impl FnOnce(Sender<T>) -> Call) -> Result<T, Reply> {
     let (tx, rx) = mpsc::channel();
@@ -295,12 +351,16 @@ fn ask<T>(shared: &Shared, call: impl FnOnce(Sender<T>) -> Call) -> Result<T, Re
     rx.recv_timeout(APP_WAIT).map_err(|_| error(503, "synththing didn't answer in time"))
 }
 
-fn handle(shared: &Arc<Shared>, request: Request) {
+fn handle(shared: &Arc<Shared>, mut request: Request) {
     let url = request.url().to_string();
     let (path, query) = url.split_once('?').unwrap_or((&url, ""));
     let query = crate::library::server::parse_query(query);
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
     let method = request.method().clone();
+    if !shared.lan && !from_here(&request) {
+        let _ = request.respond(error(403, "only programs on this computer may use the API (Preferences > Integrations can let the local network in)"));
+        return;
+    }
     let Some(access) = access(shared, &request, &query) else {
         let _ = request.respond(error(401, "a token is needed: make one in Preferences > Integrations"));
         return;
@@ -314,6 +374,7 @@ fn handle(shared: &Arc<Shared>, request: Request) {
                 "version": crate::build_info::VERSION,
                 "read": access.read,
                 "control": access.control,
+                "add_songs": access.add_songs,
             }),
         )),
         (Method::Get, ["v1", "events"]) => match needs(access.read, "read") {
@@ -335,12 +396,27 @@ fn handle(shared: &Arc<Shared>, request: Request) {
                 Err(reply) => reply,
             },
         })),
+        (Method::Post, ["v1", "play"]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| {
+            let (song, playlist) = (query.get("song").cloned(), query.get("playlist").cloned());
+            if song.is_none() && playlist.is_none() {
+                return error(400, "say what to play: ?song=<key> or ?playlist=<id>");
+            }
+            match ask(shared, |reply| Call::Play { song, playlist, reply }) {
+                Ok(Ok(())) => Response::from_data(Vec::new()).with_status_code(204),
+                Ok(Err((status, why))) => error(status, why),
+                Err(reply) => reply,
+            }
+        })),
         (Method::Get, ["v1", "now-playing"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::NowPlaying).map_or_else(|reply| reply, |now| json(200, &now))))
         }
         (Method::Get, ["v1", "songs"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| songs(&library.store, &query))))
         }
+        (Method::Post, ["v1", "songs"]) => Some(match needs(access.add_songs, "add songs") {
+            Some(reply) => reply,
+            None => add_song(shared, &mut request, &access, &query),
+        }),
         (Method::Get, ["v1", "songs", key]) => Some(needs(access.read, "read").unwrap_or_else(|| {
             ask(shared, Call::Library).map_or_else(
                 |reply| reply,
@@ -356,6 +432,37 @@ fn handle(shared: &Arc<Shared>, request: Request) {
         _ => None,
     };
     let _ = request.respond(reply.unwrap_or_else(|| error(404, "no such request (see docs/API.md)")));
+}
+
+/// `POST /v1/songs?name=<file name>`, the file as the body: into the
+/// store, then the library (`Call::Add`). 201 with the song if it's new to
+/// the library, 200 if it was there already.
+fn add_song(shared: &Shared, request: &mut Request, access: &Access, query: &HashMap<String, String>) -> Reply {
+    let Some(name) = query.get("name").map(|n| n.trim()).filter(|n| !n.is_empty() && !n.contains(['/', '\\'])) else {
+        return error(400, "say the song's file name: ?name=Song.mp3");
+    };
+    if !song_store::takes(std::path::Path::new(name), crate::app::SONG_EXTENSIONS) {
+        return error(415, format!("{name} isn't a file synththing can play"));
+    }
+    if request.body_length().is_some_and(|n| n > LARGEST_SONG) {
+        return error(413, "that song is too big (250 MB at most)");
+    }
+    let mut bytes = Vec::new();
+    match request.as_reader().take(LARGEST_SONG as u64 + 1).read_to_end(&mut bytes) {
+        Ok(_) if bytes.len() > LARGEST_SONG => return error(413, "that song is too big (250 MB at most)"),
+        Ok(_) if bytes.is_empty() => return error(400, "send the song's file as the body"),
+        Ok(_) => {}
+        Err(e) => return error(400, format!("couldn't read the song: {e}")),
+    }
+    let stored = match crate::config::music_dir().and_then(|dir| song_store::write_in(&bytes, name, &dir)) {
+        Ok(stored) => stored,
+        Err(e) => return error(500, format!("couldn't store the song: {e:#}")),
+    };
+    match ask(shared, |reply| Call::Add { stored, program: access.name.clone(), reply }) {
+        Ok(Ok((song, new))) => json(if new { 201 } else { 200 }, &song),
+        Ok(Err(why)) => error(503, why),
+        Err(reply) => reply,
+    }
 }
 
 #[derive(Serialize)]
@@ -449,7 +556,7 @@ mod tests {
         reader.read = true;
         let (mut controller, control_token) = Access::new("controller");
         (controller.read, controller.control) = (false, true);
-        let server = Server::start(0, vec![reader, controller], egui::Context::default()).unwrap();
+        let server = Server::start(0, false, vec![reader, controller], egui::Context::default()).unwrap();
         (server, read_token, control_token)
     }
 
@@ -468,6 +575,9 @@ mod tests {
                     Call::Command(_, reply) => reply.send(Ok(())).unwrap(),
                     Call::NowPlaying(reply) => reply.send(NowPlaying::default()).unwrap(),
                     Call::Library(reply) => reply.send(library()).unwrap(),
+                    Call::Play { song: Some(song), reply, .. } if song == "missing" => reply.send(Err((404, "no such song".into()))).unwrap(),
+                    Call::Play { reply, .. } => reply.send(Ok(())).unwrap(),
+                    Call::Add { .. } => unreachable!("no test adds songs here"),
                 }
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -479,6 +589,15 @@ mod tests {
     fn a_token_is_needed_and_its_permissions_hold() {
         let (server, read_token, control_token) = server();
         assert_eq!(get(&server, "/v1", "wrong").0, 401);
+        let addr = server.addr();
+        let sent = |header: &str, value: &str| {
+            let request = agent().get(format!("http://{addr}/v1")).header("Authorization", format!("Bearer {read_token}")).header(header, value);
+            request.call().unwrap().status().as_u16()
+        };
+        assert_eq!(sent("X-Forwarded-For", "203.0.113.9"), 403);
+        assert_eq!(sent("Forwarded", "for=203.0.113.9"), 403);
+        assert_eq!(sent("Host", "evil.example"), 403);
+        assert_eq!(sent("Host", "localhost:7340"), 200);
         let (status, body) = get(&server, "/v1", &read_token);
         assert_eq!(status, 200);
         assert!(body.contains("\"read\":true") && body.contains("\"control\":false"), "{body}");
@@ -497,6 +616,17 @@ mod tests {
         assert_eq!(answering(&server, empty, post("play", &control_token)), 204);
         assert_eq!(answering(&server, empty, post("quit", &control_token)), 409);
         assert_eq!(answering(&server, empty, post("fly", &control_token)), 404);
+
+        let url = format!("http://{}/v1/play", server.addr());
+        let play = move |query: &str, token: &str| {
+            let (url, token) = (format!("{url}{query}"), format!("Bearer {token}"));
+            move || agent().post(url).header("Authorization", token).send_empty().unwrap().status().as_u16()
+        };
+        assert_eq!(answering(&server, empty, play("?song=abc", &read_token)), 403);
+        assert_eq!(answering(&server, empty, play("", &control_token)), 400);
+        assert_eq!(answering(&server, empty, play("?song=abc", &control_token)), 204);
+        assert_eq!(answering(&server, empty, play("?playlist=p1&song=abc", &control_token)), 204);
+        assert_eq!(answering(&server, empty, play("?song=missing", &control_token)), 404);
     }
 
     #[test]
@@ -520,6 +650,55 @@ mod tests {
         assert_eq!(one["total"], 1);
         assert_eq!(one["songs"][0]["file_name"], "Beta Theme.mid");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn songs_a_program_added_are_found_by_it() {
+        let dir = std::env::temp_dir().join(format!("synththing-api-added-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = SongStore::open(dir.clone());
+        let mine = song_store::write_in(b"one", "Mine.mid", &dir).unwrap();
+        let sent = song_store::write_in(b"two", "Sent.mid", &dir).unwrap();
+        let sent_key = sent.key.clone();
+        store.add(mine);
+        store.add(sent);
+        store.set_added_by(&sent_key, "downloader");
+        let found = matching(&store, "addedby:downloader");
+        assert_eq!(found.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), [sent_key.as_str()]);
+        assert_eq!(matching(&store, "-addedby:downloader").len(), 1);
+        assert_eq!(SongInfo::of(&sent_key, found[0].1, &store).added_by.as_deref(), Some("downloader"));
+        // (Synced: another device learns who added it.)
+        let other = std::env::temp_dir().join(format!("synththing-api-added-other-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&other);
+        std::fs::create_dir_all(&other).unwrap();
+        let mut elsewhere = SongStore::open(other.clone());
+        elsewhere.learn(store.known().map(|(k, s)| (k.to_string(), s.clone())));
+        assert_eq!(elsewhere.get_by_key(&sent_key).unwrap().added_by.as_deref(), Some("downloader"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn adding_songs_needs_its_own_permission() {
+        let (mut reader, read_token) = Access::new("reader");
+        reader.control = true;
+        let (mut adder, add_token) = Access::new("adder");
+        adder.add_songs = true;
+        let server = Server::start(0, false, vec![reader, adder], egui::Context::default()).unwrap();
+        let post = |query: &str, token: &str| {
+            agent()
+                .post(format!("http://{}/v1/songs{query}", server.addr()))
+                .header("Authorization", format!("Bearer {token}"))
+                .send(&b"MThd"[..])
+                .unwrap()
+                .status()
+                .as_u16()
+        };
+        assert_eq!(post("?name=Song.mid", &read_token), 403);
+        assert_eq!(post("", &add_token), 400);
+        assert_eq!(post("?name=notes.txt", &add_token), 415);
+        assert_eq!(post("?name=..%2Fescape.mid", &add_token), 400);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use crate::fields::{Facts, Field};
 const POSITION_MARGIN: f64 = 5.0;
 
 impl App {
-    fn playing_facts(&self) -> Option<Facts<'_>> {
+    pub(super) fn playing_facts(&self) -> Option<Facts<'_>> {
         self.current_song.as_deref().and_then(|p| self.songs.get(p)).map(Facts::of)
     }
 
