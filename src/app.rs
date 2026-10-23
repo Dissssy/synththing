@@ -4233,6 +4233,7 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
         frame_timing::begin(ctx.input(|i| i.viewport().inner_rect).map(|r| r.size()));
         frame_timing::time("tick", || self.tick(ctx));
+        frame_timing::logic_done();
     }
 
     /// Last chance to save a layout change the once-a-second autosave

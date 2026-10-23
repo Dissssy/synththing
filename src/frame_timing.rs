@@ -19,6 +19,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::sync::{Mutex, Once};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -39,6 +40,35 @@ const STATS_WINDOW: Duration = Duration::from_secs(60);
 const STATS_BUCKET: Duration = Duration::from_secs(1);
 /// How late past its due time a frame has to come to be logged as stalled.
 const STALL: Duration = Duration::from_secs(1);
+
+/// How often the watchdog looks at the UI thread.
+const WATCH_EVERY: Duration = Duration::from_millis(500);
+
+/// What the UI thread is doing, for the watchdog: a frame that never ends
+/// (a hang) is never reported by `begin`, so another thread has to notice.
+static WATCH: Mutex<Option<Watch>> = Mutex::new(None);
+static WATCHDOG: Once = Once::new();
+
+struct Watch {
+    /// Since when it's been at `stage`.
+    since: Instant,
+    stage: Stage,
+    /// The section it last went into, in the app's code.
+    section: Option<&'static str>,
+    /// How soon the next frame is due, if the app asked for one: without
+    /// one, a long wait is just the app idle.
+    due: Option<Duration>,
+    /// How long it had been stuck at the last line about it.
+    logged: Duration,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Stage {
+    /// Between `begin` and `end`.
+    App,
+    /// After `end`: egui's painting, the GPU, the window system, or idle.
+    Outside,
+}
 
 thread_local! {
     static FRAME: RefCell<Frames> = RefCell::new(Frames::default());
@@ -143,6 +173,28 @@ pub fn begin(window: Option<egui::Vec2>) {
         f.start = Some(now);
         f.sections.clear();
     });
+    WATCHDOG.call_once(|| {
+        let spawned = std::thread::Builder::new().name("ui watchdog".into()).spawn(watchdog);
+        if let Err(e) = spawned {
+            log::warn!("couldn't start the UI watchdog: {e}");
+        }
+    });
+    // (The frame that was due is due still: a hang in it counts, till
+    // `logic_done` says whether the next is.)
+    let mut watch = WATCH.lock().unwrap();
+    let due = watch.as_ref().and_then(|w| w.due);
+    *watch = Some(Watch { since: Instant::now(), stage: Stage::App, section: None, due, logged: Duration::ZERO });
+}
+
+/// The app's logic for the frame is done, and has said (or not, by
+/// `expect_next_within`) when it wants the next one: the watchdog goes by
+/// that from now on. (Called whether or not the frame is drawn, so a
+/// hidden window's last tick, wanting nothing, turns the watchdog off.)
+pub fn logic_done() {
+    let due = FRAME.with_borrow(|f| f.due);
+    if let Some(watch) = WATCH.lock().unwrap().as_mut() {
+        watch.due = due;
+    }
 }
 
 /// The app wants the next frame within `time` (it asked egui for a
@@ -153,6 +205,9 @@ pub fn expect_next_within(time: Duration) {
 
 /// Closes the frame `begin` started.
 pub fn end() {
+    if let Some(watch) = WATCH.lock().unwrap().as_mut() {
+        (watch.since, watch.stage, watch.logged) = (Instant::now(), Stage::Outside, Duration::ZERO);
+    }
     FRAME.with_borrow_mut(|f| {
         f.last_end = Some(Instant::now());
         if let Some(start) = f.start.take() {
@@ -166,10 +221,13 @@ pub fn end() {
 
 /// Times a section of the frame until the returned guard drops.
 pub fn scope(name: &'static str) -> Scope {
-    let puffin_id = FRAME.with_borrow_mut(|f| {
+    let (puffin_id, in_frame) = FRAME.with_borrow_mut(|f| {
         f.open.push(Duration::ZERO);
-        puffin::are_scopes_on().then(|| f.puffin_id(name))
+        (puffin::are_scopes_on().then(|| f.puffin_id(name)), f.start.is_some())
     });
+    if in_frame && let Some(watch) = WATCH.lock().unwrap().as_mut() {
+        watch.section = Some(name);
+    }
     Scope {
         name,
         start: Instant::now(),
@@ -320,6 +378,36 @@ pub fn summary() -> Option<String> {
     })
 }
 
+/// Every `WATCH_EVERY`, logs a UI thread stuck (`Watch::stuck`).
+fn watchdog() {
+    loop {
+        std::thread::sleep(WATCH_EVERY);
+        if let Some(line) = WATCH.lock().unwrap().as_mut().and_then(|w| w.stuck(Instant::now())) {
+            log::warn!("{line}");
+        }
+    }
+}
+
+impl Watch {
+    /// A line saying the UI thread is stuck, well past when its next frame
+    /// was due, and where: in the app's code (the section it last went
+    /// into), or outside it. Again each time the stuck time doubles.
+    fn stuck(&mut self, now: Instant) -> Option<String> {
+        let due = self.due?;
+        let stuck = now - self.since;
+        if stuck < due + STALL || stuck < self.logged * 2 {
+            return None;
+        }
+        self.logged = stuck;
+        let place = match (self.stage, self.section) {
+            (Stage::App, Some(section)) => format!("in the app's code (last in {section})"),
+            (Stage::App, None) => "in the app's code".to_string(),
+            (Stage::Outside, _) => "outside the app's code (egui painting, the GPU or the window system)".to_string(),
+        };
+        Some(format!("UI stuck: no frame for {} ms, due within {} ms; {place}", ms(stuck), ms(due)))
+    }
+}
+
 fn ms(time: Duration) -> String {
     format!("{:.1}", time.as_secs_f64() * 1000.0)
 }
@@ -346,5 +434,21 @@ mod tests {
         // (Sleeps run long on a busy machine: the sections' times vary.)
         assert!(text.contains("\nsongs: average "), "{text}");
         assert!(text.contains("\negui painting: average "), "{text}");
+    }
+
+    #[test]
+    fn the_watchdog_tells_a_hang_from_idle() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut watch = Watch { since: start, stage: Stage::Outside, section: None, due: None, logged: Duration::ZERO };
+        assert_eq!(watch.stuck(at(10_000)), None, "nothing due: idle");
+        watch.due = Some(Duration::from_millis(200));
+        assert_eq!(watch.stuck(at(1_000)), None, "not late enough yet");
+        let line = watch.stuck(at(1_500)).unwrap();
+        assert!(line.starts_with("UI stuck: no frame for 1500.0 ms, due within 200.0 ms; outside"), "{line}");
+        assert_eq!(watch.stuck(at(2_500)), None, "said once till it doubles");
+        assert!(watch.stuck(at(3_000)).is_some(), "and again once it has");
+        (watch.stage, watch.section, watch.logged) = (Stage::App, Some("Songs"), Duration::ZERO);
+        assert!(watch.stuck(at(3_000)).unwrap().ends_with("in the app's code (last in Songs)"));
     }
 }

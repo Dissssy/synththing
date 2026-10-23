@@ -170,6 +170,10 @@ pub fn main() -> Result<()> {
         "synththing",
         options,
         Box::new(|cc| {
+            if let Some(render) = &cc.wgpu_render_state {
+                let info = render.adapter.get_info();
+                log::info!("graphics: {:?} on {} ({} {})", info.backend, info.name, info.driver, info.driver_info);
+            }
             app::fonts::install(&cc.egui_ctx);
             app.attach_tray(&cc.egui_ctx);
             app.attach_window(hwnd(cc));
