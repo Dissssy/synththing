@@ -612,7 +612,7 @@ impl SongList {
             let entry = match item {
                 Item::Group { label, key, count, collapsed } => {
                     let arrow = crate::app::icon(if *collapsed { "caret-right" } else { "caret-down" });
-                    let rect = ui.max_rect();
+                    let rect = row.response.rect;
                     ui.painter().rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
                     ui.painter().hline(rect.x_range(), rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
                     ui.label(egui::RichText::new(arrow).strong());

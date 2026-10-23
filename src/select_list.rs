@@ -114,6 +114,9 @@ impl Selection {
 
 /// The row height for touch: about a fingertip.
 const TOUCH_ROW_HEIGHT: f32 = 44.0;
+/// The room kept clear inside a row's ends, about as much as above and
+/// below its text (and clear of the selection's edge).
+pub const EDGE: f32 = 4.0;
 
 fn touch_id() -> egui::Id {
     egui::Id::new("select_list_touch")
@@ -229,7 +232,8 @@ pub struct ListOutput {
 
 /// Draw `items` as a scrolling list filling `ui`, each row's contents drawn
 /// left to right by `draw` on top of the row's own click-and-drag area
-/// (widgets it adds, such as buttons, take their clicks first). The row
+/// (widgets it adds, such as buttons, take their clicks first), clear of
+/// the row's right end by `EDGE`. The row
 /// `playing` is outlined and tinted in the theme's playing color, under
 /// any selection or hover.
 pub fn show<T>(
@@ -313,7 +317,7 @@ pub fn show<T>(
                 let row = Row { idx, response, selection };
                 let builder = egui::UiBuilder::new()
                     .id_salt(idx)
-                    .max_rect(rect)
+                    .max_rect(rect.with_max_x(rect.max.x - EDGE))
                     .layout(egui::Layout::left_to_right(egui::Align::Center));
                 ui.scope_builder(builder, |ui| {
                     // Selectable text would take the row's clicks and drags.
@@ -324,8 +328,7 @@ pub fn show<T>(
                         ui.visuals_mut().override_text_color = Some(playing_color);
                     }
                     if touch {
-                        // (Clear of the selection's edge.)
-                        ui.add_space(4.0);
+                        ui.add_space(EDGE);
                     }
                     draw(ui, &row, &items[idx]);
                 });
