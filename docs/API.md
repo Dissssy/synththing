@@ -32,8 +32,8 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `GET /v1/playlists` | read | `[{"id", "name", "smart", "songs": [keys]}]` |
 | `GET /v1/songs/{key}/art` | read | The song's picture (its own, else its album's cover) as an image, or 404 |
 | `GET /v1/groupings` | read | `[{"id", "name", "split"}]`: the rulesets (By Artist, By Album and yours) |
-| `GET /v1/groupings/{id}` | read | `{"id", "name", "split", "groups": [{"key", "title", "subtitle", "songs": [keys]}]}`: the playlists it makes, as Groupings shows them |
-| `GET /v1/groups?split=album&q=` | read | `[{"key", "title", "subtitle", "songs"}]`: the songs `q` finds, split by `artist`, `album_artist`, `album`, `composer`, `genre`, `year` or `tag` |
+| `GET /v1/groupings/{id}` | read | `{"id", "name", "split", "groups": [{"id", "title", "subtitle", "songs": [keys]}]}`: the playlists it makes of the songs on this computer, as Groupings shows them |
+| `GET /v1/groups?split=album&q=` | read | `[{"id", "title", "subtitle", "songs"}]`: the songs `q` finds, split by `artist`, `album_artist`, `album`, `composer`, `genre`, `year` or `tag` |
 | `GET /v1/commands` | read | `[{"id", "name"}]`: every command there is |
 | `POST /v1/commands/{id}` | control | Runs it: 204 when it ran |
 | `POST /v1/play?song={key}` | control | Plays that song on its own, leaving any playlist: 204 |

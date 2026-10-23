@@ -158,8 +158,18 @@ pub struct Library {
 }
 
 impl Library {
-    fn groups(&self, rules: &Rules) -> Vec<Group> {
-        rules.groups(&self.store, crate::settings_sync::now(), &self.group_ignore, self.articles)
+    /// The playlists `rules` make of the songs on this device (as
+    /// `/v1/songs` has them: a song known only from another device is
+    /// left out, and a playlist of none of these with it).
+    fn groups(&self, rules: &Rules) -> Vec<GroupInfo> {
+        let groups = rules.groups(&self.store, crate::settings_sync::now(), &self.group_ignore, self.articles);
+        groups
+            .into_iter()
+            .filter_map(|mut group| {
+                group.songs.retain(|key| self.store.has(key));
+                (!group.songs.is_empty()).then(|| group.into())
+            })
+            .collect()
     }
 }
 
@@ -175,7 +185,9 @@ struct GroupingInfo<'a> {
 /// One of the playlists a ruleset makes.
 #[derive(Serialize)]
 struct GroupInfo {
-    key: String,
+    /// What tells it apart from the ruleset's others, kept while its name
+    /// is (a hash of `Group::key`).
+    id: String,
     title: String,
     /// An album's artist.
     subtitle: Option<String>,
@@ -185,7 +197,8 @@ struct GroupInfo {
 
 impl From<Group> for GroupInfo {
     fn from(group: Group) -> Self {
-        GroupInfo { key: group.key, title: group.title, subtitle: group.subtitle, songs: group.songs }
+        let id = crate::library::sha256_hex(group.key.as_bytes())[..16].to_string();
+        GroupInfo { id, title: group.title, subtitle: group.subtitle, songs: group.songs }
     }
 }
 
@@ -344,7 +357,9 @@ fn header(name: &str, value: &str) -> Header {
 }
 
 fn json<T: Serialize>(status: u16, body: &T) -> Reply {
-    Response::from_data(serde_json::to_vec(body).unwrap_or_default()).with_status_code(status).with_header(header("Content-Type", "application/json"))
+    Response::from_data(serde_json::to_vec(body).unwrap_or_default())
+        .with_status_code(status)
+        .with_header(header("Content-Type", "application/json; charset=utf-8"))
 }
 
 fn error(status: u16, message: impl Into<String>) -> Reply {
@@ -485,7 +500,7 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 |reply| reply,
                 |library| match library.rulesets.iter().find(|(i, _)| i == id) {
                     Some((id, ruleset)) => {
-                        let groups: Vec<GroupInfo> = library.groups(&ruleset.rules).into_iter().map(GroupInfo::from).collect();
+                        let groups = library.groups(&ruleset.rules);
                         let info = GroupingInfo { id, name: &ruleset.name, split: ruleset.rules.split.as_ref().map(|s| s.by) };
                         json(200, &serde_json::json!({ "id": info.id, "name": info.name, "split": info.split, "groups": groups }))
                     }
@@ -573,7 +588,7 @@ fn groups(library: &Library, by: SplitBy, q: &str) -> Reply {
         .into_iter()
         .filter_map(|mut group| {
             group.songs.retain(|key| found.contains(key));
-            (!group.songs.is_empty()).then(|| group.into())
+            (!group.songs.is_empty()).then_some(group)
         })
         .collect();
     json(200, &groups)
