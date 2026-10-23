@@ -162,7 +162,7 @@ pub const ITEMS: &[Item] = &[
     f("fft_right", AUDIO, "0.1.1", &[p("samples", "number[]")], &[p("spectrum", "number[]")], "the right channel's magnitude spectrum"),
     f("fft_bin", AUDIO, "0.6.0", &[p("hz", "number")], &[p("entry", "integer")], "the spectrum entry nearest hz (1 to 512)"),
     f("fft_freq", AUDIO, "0.6.0", &[p("entry", "integer")], &[p("hz", "number")], "the frequency a spectrum entry is at"),
-    f("fft_band", AUDIO, "0.6.0", &[p("spectrum", "number[]"), p("lo_hz", "number"), p("hi_hz", "number")], &[p("peak", "number"), p("average", "number")], "of the spectrum entries in that range"),
+    f("fft_band", AUDIO, "0.6.0", &[p("spectrum", "number[]"), p("lo_hz", "number"), p("hi_hz", "number")], &[p("peak", "number"), p("average", "number")], "the peak and average of the spectrum entries in that range"),
     f("level_left", AUDIO, "0.1.6", &[], &[p("level", "number")], "this frame's left loudness (RMS), 0 when silent"),
     f("level_right", AUDIO, "0.1.6", &[], &[p("level", "number")], "this frame's right loudness (RMS)"),
     f("peak_left", AUDIO, "0.6.0", &[], &[p("peak", "number")], "this frame's loudest left sample, ignoring sign (0 to 1 unless clipping)"),
