@@ -1,8 +1,9 @@
-//! The script editor's background worker and host API table. Every edit
+//! The script editor's background worker. Every edit
 //! sends the source to [`CompletionWorker`], which analyzes it off the UI
 //! thread (`lua_analysis`: scopes, warnings, completions, signatures) and
 //! keeps the newest result; a stale one finishing late is dropped. Also
-//! hover/lookup info for a single identifier.
+//! hover/lookup info for a single identifier. The host API itself is
+//! `lua_api`.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,140 +12,12 @@ use std::thread;
 
 use crate::lua_analysis::{self, Analysis};
 
-/// name, one-line description, the single source of truth for both the
-/// suggestion list and hover lookups, and also consulted by `lua_highlight`
-/// to color host-function calls distinctly from ordinary identifiers.
-pub const HOST_API: &[(&str, &str)] = &[
-    ("clear", "clear({r,g,b}), fill the whole frame with a color"),
-    ("line", "line(x0,y0,x1,y1,{r,g,b,a},[width]), draw a line; wider than 1 is a band with round ends"),
-    ("rect", "rect(x0,y0,x1,y1,{r,g,b,a}), fill an axis-aligned rectangle"),
-    ("text", "text(x, y, string, {r,g,b,a}, [height]) -> width, height: pixel text (Monogram), height = line height in pixels"),
-    ("text_size", "text_size(string, [height]) -> width, height: measure text without drawing it"),
-    ("FONT_HEIGHT", "12, the pixel font's own line height; whole multiples stay crisp"),
-    ("sprite_register", "sprite_register({image = rows of palette indices, palette = colors}) -> id: register once, 0 is transparent"),
-    ("sprite", "sprite(id, x, y, [scale or {scale, flip_x, flip_y, src = {x, y, w, h}, palette = {[i] = color}, tint = color}]) -> width, height: draw a sprite, or part of one, optionally recolored"),
-    ("sprite_size", "sprite_size(id) -> width, height: a sprite's size in its own pixels"),
-    ("blit", "blit(pixels, width, height, palette, [x, y, w, h]): a palette-indexed image (string or list of 0-255) in one call, stretched to w x h"),
-    ("list_assets", "list_assets() -> names: the files in the script's assets folder, sorted"),
-    ("read_asset", "read_asset(name) -> string or nil: a file's bytes from the script's <name>.lua.assets folder"),
-    ("album_art", "album_art([size]) -> {sprite, width, height, color} or nil: the playing song's art as a sprite, at most size pixels across, and the color it's mostly made of"),
-    ("circle", "circle(x, y, radius, {r,g,b,a}): a filled circle"),
-    ("triangle", "triangle(x1, y1, x2, y2, x3, y3, {r,g,b,a}): a filled triangle"),
-    ("polygon", "polygon(points, {r,g,b,a}): a filled polygon; points {x1, y1, ...} or {{x, y}, ...}"),
-    ("translate", "translate(dx, dy): move everything drawn after this; adds up, push_view/pop_view to undo"),
-    ("clip", "clip(x0, y0, x1, y1): draw only inside this rectangle (where it is after translate); clip() for anywhere"),
-    ("push_view", "push_view(): save the current translate and clip"),
-    ("pop_view", "pop_view(): go back to the translate and clip push_view saved"),
-    ("note_name", "note_name(key, [octave]) -> name: \"C#4\" (60 is middle C, C4); octave false gives \"C#\""),
-    ("note_freq", "note_freq(key) -> Hz: a key's pitch (69, A4, is 440 Hz; fractional keys work)"),
-    ("freq_note", "freq_note(hz) -> key: the key at a pitch, fractional (nil for 0 or less)"),
-    ("approach", "approach(current, target, rate, [rate_down]) -> value: smoothing by the second, the same at any frame rate"),
-    ("hsv", "hsv(hue, saturation, value, [a]) -> color: hue in degrees (wraps), the rest 0 to 1"),
-    ("mix", "mix(color1, color2, t) -> color: from color1 (t = 0) to color2 (t = 1), alpha included"),
-    ("rect_outline", "rect_outline(x0,y0,x1,y1,{r,g,b,a},[width]): just the edge, inside the rectangle"),
-    ("circle_outline", "circle_outline(x,y,radius,{r,g,b,a},[width]): just the edge, inside the radius"),
-    ("shift_frame", "shift_frame(dx, [dy]): move what's drawn so far (the kept frame) by whole pixels, inside the clip"),
-    ("set_clear_color", "set_clear_color({r,g,b,a}): what each frame starts from, blended over the last one; a < 1 leaves trails, a = 0 keeps it"),
-    ("pixel", "pixel(x,y,{r,g,b,a}), set one pixel"),
-    ("fft_left", "fft_left(samples) -> spectrum, left channel's magnitude spectrum"),
-    ("fft_right", "fft_right(samples) -> spectrum, right channel's magnitude spectrum"),
-    ("beat", "beat([seconds]) -> beats: song position in quarter notes (nil without a MIDI score)"),
-    ("time_at_beat", "time_at_beat(beat) -> seconds: when a beat falls, in song seconds"),
-    ("bar", "bar([seconds]) -> bar, beat_in_bar: bar number from 1, beats into it from 0"),
-    ("tempo", "tempo([seconds]) -> bpm: quarter notes per minute"),
-    ("time_signature", "time_signature([seconds]) -> numerator, denominator"),
-    ("fft_bin", "fft_bin(hz) -> entry: the spectrum entry nearest hz (1 to 512)"),
-    ("fft_freq", "fft_freq(entry) -> hz: the frequency a spectrum entry is at"),
-    ("fft_band", "fft_band(spectrum, lo_hz, hi_hz) -> peak, average: of the entries in that range"),
-    ("level_left", "level_left() -> number: this frame's left loudness (RMS), 0 when silent"),
-    ("level_right", "level_right() -> number: this frame's right loudness (RMS)"),
-    ("peak_left", "peak_left() -> number: this frame's loudest left sample, ignoring sign (0 to 1 unless clipping)"),
-    ("peak_right", "peak_right() -> number: this frame's loudest right sample"),
-    ("onset", "onset() -> hit, strength: whether a sound just started this frame"),
-    ("history_left", "history_left(seconds, [count]) -> samples: the left channel's last seconds (up to 4), oldest first; count spreads that many evenly over them"),
-    ("history_right", "history_right(seconds, [count]) -> samples: the same for the right channel"),
-    ("notes_between", "notes_between(t0, t1) -> notes: whole notes sounding in the window, {id, channel, key, velocity, start, stop}"),
-    ("active_notes", "active_notes() -> notes, MIDI notes held right now: {channel, key, velocity, source (\"song\" or \"script\")}"),
-    ("upcoming_notes", "upcoming_notes() -> notes, note on/off changes within NOTE_LOOKAHEAD"),
-    ("midi_channels", "midi_channels() -> channels, channels the current file uses"),
-    ("channel_enabled", "channel_enabled(channel) -> bool, is this channel enabled"),
-    ("set_channel_enabled", "set_channel_enabled(channel, enabled), mute/unmute a channel"),
-    ("channel_program", "channel_program(c, [seconds]) -> program, name: the instrument channel c plays (General MIDI name; channel 9 is Drums)"),
-    ("channel_name", "channel_name(c) -> name: the name of the track channel c's notes are in, or nil"),
-    ("channel_colors", "channel_colors({ [channel] = color, ... }), color the app's channel toggles"),
-    ("playback", "playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, title, artist, album, song_path, song_id, song_loads, loop_mode, shuffle, recording, streaming}, times in song seconds"),
-    ("set_paused", "set_paused(paused): pause or resume playback (applied after this frame)"),
-    ("seek", "seek(seconds): jump to a song position, seek(0) restarts (applied after this frame)"),
-    ("script_options", "script_options({start_paused = true, app_log = true, record_prepare = true, record_auto = true, transparent = true}): once, at the top; songs load paused for the script to start, log() also goes to the app's log, recordings wait for recording_ready/recording_done, it can play itself when recorded, its frames can be see-through"),
-    ("recording", "recording() -> nil, or {phase = \"preparing\" | \"recording\", kind = \"song\" | \"playlist\" | \"free\", mode = \"auto\" | \"manual\"}: the recording the visualizer is part of"),
-    ("recording_ready", "recording_ready(): with record_prepare, done preparing; the video starts with the next frame"),
-    ("recording_done", "recording_done(): with record_prepare, this song's take is over; the recording ends or the playlist moves on"),
-    ("set_speed", "set_speed(speed): playback speed, 1.0 is normal (applied after this frame)"),
-    ("playlist", "playlist() -> {name, playing, current, entries = {{name, length, missing}, ...}} or nil: the current playlist, read-only"),
-    ("play_track", "play_track(index): play the current playlist's index-th song"),
-    ("next_track", "next_track(): the Next button"),
-    ("previous_track", "previous_track(): the Previous button"),
-    ("set_loop", "set_loop(mode): \"off\", \"one\" or \"all\""),
-    ("set_shuffle", "set_shuffle(on): shuffle the playlist or not"),
-    ("store_get", "store_get(key) -> value: the script's saved data, nil if none"),
-    ("store_set", "store_set(key, value): save script data across restarts (nil deletes)"),
-    ("log", "log(message), append to this script's log (identical repeats collapse)"),
-    ("log_app", "log_app(message), like log(), and also copied to the app's log (Help > Log...)"),
-    ("debug_locals", "debug_locals([label]), snapshot the locals in scope right here, shown in the Debug window"),
-    ("setting_bool", "setting_bool(key, default, [labels]) -> bool; labels: {group = \"...\", info = \"...\"}, where it's listed in the Settings window and its hover text"),
-    ("setting_int", "setting_int(key, default, min, max, [labels]) -> integer"),
-    ("setting_float", "setting_float(key, default, min, max, [labels]) -> number"),
-    ("setting_color", "setting_color(key, default, [labels]) -> {r,g,b} (labels.alpha = true: and a)"),
-    ("setting_string", "setting_string(key, default, [labels]) -> string"),
-    ("setting_selection", "setting_selection(key, options, defaults, max_selections, [labels]) -> selected"),
-    ("settings_preset", "settings_preset(name, {key = value, ...}): a named set of setting values, picked in the Settings window, once at the top"),
-    ("mouse", "mouse() -> x, y (buffer pixels), or nil while the pointer isn't over the visualizer"),
-    ("mouse_delta", "mouse_delta() -> dx, dy: pointer movement since last frame, in buffer pixels"),
-    ("scroll", "scroll() -> dx, dy: scrolling since last frame (positive y is up)"),
-    ("mouse_down", "mouse_down([button]) -> bool: held right now; \"left\" (default), \"right\", \"middle\""),
-    ("mouse_pressed", "mouse_pressed([button]) -> bool: went down this frame"),
-    ("mouse_released", "mouse_released([button]) -> bool: went up this frame"),
-    ("input_register", "input_register(name, default_keys, [labels]) -> id: a rebindable control (the Controls window; labels: {group = \"...\", info = \"...\"}), keys, \"pad_a\"-style controller inputs or \"mouse_left\"-style mouse buttons, once at the top"),
-    ("pad_axis", "pad_axis(name) -> number: \"lstick_x\", \"lstick_y\", \"rstick_x\", \"rstick_y\" (-1..1, y down) or \"lt\", \"rt\" (0..1)"),
-    ("gamepads", "gamepads() -> names: the connected game controllers"),
-    ("input", "input(id) -> \"pressed\", \"held\", \"released\" or \"up\": the action's state this frame"),
-    ("input_down", "input_down(id) -> bool: the action is held (pressed this frame or earlier)"),
-    ("input_value", "input_value(id) -> 0..1: how far the action is pressed (keys 0 or 1, triggers and stick directions how far)"),
-    ("text_typed", "text_typed() -> string: the characters typed this frame, while focused"),
-    ("typing_begin", "typing_begin([text], [{max_length, multiline}]): start a typing span; the app edits, you draw"),
-    ("typing_state", "typing_state() -> {active, done, cancelled, text, cursor, line, column, key}"),
-    ("typing_end", "typing_end() -> text: stop the typing span"),
-    ("midi_send", "midi_send(status, [data1], [data2]) -> bool: a raw MIDI channel message to the script's synthesizer"),
-    ("sound_register", "sound_register(samples, sample_rate) -> id: a sound effect, from 8-bit samples (a string) or numbers -1 to 1"),
-    ("sound_play", "sound_play(id, [{ volume, pan, speed }]) -> bool: play a registered sound effect"),
-    ("play_note", "play_note(key, [{channel, velocity, duration, delay}]) -> bool: play a note on the song's instrument (MIDI only)"),
-    ("note_on", "note_on(key, [{channel, velocity}]) -> bool: start a note held until note_off (MIDI only)"),
-    ("note_off", "note_off(key, [channel]): release a note started with note_on"),
-    ("stop_notes", "stop_notes(): release every note the script is playing, cancel its sequences"),
-    ("notes_playable", "notes_playable() -> bool: whether play_note works now (a MIDI song with a soundfont)"),
-    ("sequence_register", "sequence_register(notes) -> id: notes in beats, {key, at, length, velocity, channel} or key numbers; once, at the top"),
-    ("sequence_play", "sequence_play(id, [{channel, transpose, tempo, delay}]) -> handle or nil: play it, at the song's tempo by default"),
-    ("sequence_stop", "sequence_stop(handle): stop one sequence_play"),
-    ("has_focus", "has_focus() -> bool: whether keys go to this script (clicked into, or dedicated fullscreen)"),
-    ("display_mode", "display_mode() -> \"window\", \"fullscreen\", \"dedicated\", \"mini\" (the mini player) or \"pip\" (picture-in-picture)"),
-    ("is_mobile", "is_mobile() -> bool: the app is in its mobile layout (a phone), so maybe draw something lighter"),
-    ("touches", "touches() -> list of {id, x, y, dx, dy, force, pressed, released}: fingers on the visualizer, buffer pixels"),
-    ("set_cursor_visible", "set_cursor_visible(visible): hide the system cursor over the visualizer (draw your own)"),
-    ("set_cursor_locked", "set_cursor_locked(locked): keep the cursor in the window while the visualizer has focus"),
-    ("SAMPLE_RATE", "the engine's sample rate, in Hz"),
-    ("NOTE_LOOKAHEAD", "seconds upcoming_notes() looks ahead"),
-    ("DT", "seconds since the previous render() call (0.0 on the first, at most 0.25)"),
-    ("TIME", "seconds since this script started, wall clock, uncapped"),
-    ("FRAME", "frames rendered since this script started (1 on the first)"),
-    ("render", "render(width, height, left, right), define this; called once per frame"),
-];
-
 /// Hover/lookup info for a single identifier, by exact name match against
-/// [`HOST_API`]. Cheap enough (linear scan of ~20 entries) to call directly
+/// the host API (`lua_api::details`) and Lua's own globals. Cheap enough to call directly
 /// from the UI thread every frame the mouse is over the editor, no need to
 /// route this through [`CompletionWorker`].
 pub fn lookup(word: &str) -> Option<&'static str> {
-    HOST_API
+    crate::lua_api::details()
         .iter()
         .chain(lua_analysis::LUA_GLOBALS)
         .find(|&&(name, _)| name == word)
@@ -202,7 +75,7 @@ impl CompletionWorker {
 
     /// Every host function, for the Functions list.
     pub fn suggestions(&self) -> Vec<Suggestion> {
-        HOST_API
+        crate::lua_api::details()
             .iter()
             .map(|&(label, detail)| Suggestion { label: label.to_string(), detail: detail.to_string() })
             .collect()

@@ -66,14 +66,14 @@ mod tests {
 
     #[test]
     fn every_host_function_is_documented() {
-        for (name, _) in crate::lua_completion::HOST_API {
+        for name in crate::lua_api::ITEMS.iter().filter(|i| i.deprecated.is_none()).map(|i| i.name) {
             assert!(find(name).is_some(), "{name} isn't in docs/scripting-reference.md");
         }
         let (section, _) = find("rect").unwrap();
         assert_eq!(sections()[section].title, "Drawing");
         // The examples section comes after the API, so links go to each
         // function's own definition, not its example.
-        for (name, _) in crate::lua_completion::HOST_API {
+        for name in crate::lua_api::ITEMS.iter().filter(|i| i.deprecated.is_none()).map(|i| i.name) {
             let (section, _) = find(name).unwrap();
             assert_ne!(sections()[section].title, "Example calls and results", "{name}");
         }

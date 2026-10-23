@@ -120,7 +120,7 @@ fn bundled_upload(category: &str, file_name: &str, source: &str) -> Option<Uploa
 /// Lua's, not the script's own): most likely functions newer than this
 /// build, so its `min_app_version` can't be trusted.
 pub fn unknown_globals(source: &str) -> Vec<String> {
-    let known = crate::lua_analysis::known_globals(crate::lua_completion::HOST_API.iter().map(|(n, _)| n.to_string()));
+    let known = crate::lua_analysis::known_globals(crate::lua_api::ITEMS.iter().map(|i| i.name.to_string()));
     let analysis = crate::lua_analysis::analyze(source, &known);
     let mut unknown: Vec<String> = analysis
         .refs
@@ -1141,148 +1141,6 @@ pub fn file_stem_for(name: &str) -> String {
     if cleaned.is_empty() { "script".to_string() } else { cleaned }
 }
 
-/// The synththing version each host function (and global) first shipped
-/// in, for working out the oldest app a script runs on
-/// (`min_app_version`). A function added since the last release gets the
-/// version it will ship in, so scripts published from master in between
-/// aren't offered to apps that don't have it yet. A test makes sure every
-/// entry of `lua_completion::HOST_API` is here.
-pub const API_SINCE: &[(&str, &str)] = &[
-    ("clear", "0.1.1"),
-    ("line", "0.1.1"),
-    ("rect", "0.1.1"),
-    ("text", "0.1.5"),
-    ("text_size", "0.1.5"),
-    ("FONT_HEIGHT", "0.1.5"),
-    ("sprite_register", "0.1.8"),
-    ("sprite", "0.1.8"),
-    ("sprite_size", "0.1.8"),
-    ("album_art", "1.5.0"),
-    ("blit", "1.5.0"),
-    ("read_asset", "1.5.0"),
-    ("list_assets", "1.5.0"),
-    ("midi_send", "1.5.0"),
-    ("sound_register", "1.5.0"),
-    ("sound_play", "1.5.0"),
-    ("circle", "0.1.6"),
-    ("triangle", "0.1.6"),
-    ("polygon", "0.1.6"),
-    ("pixel", "0.1.1"),
-    ("set_clear_color", "0.6.0"),
-    ("hsv", "0.6.0"),
-    ("translate", "0.6.0"),
-    ("clip", "0.6.0"),
-    ("push_view", "0.6.0"),
-    ("pop_view", "0.6.0"),
-    ("mix", "0.6.0"),
-    ("approach", "0.6.0"),
-    ("note_name", "0.7.0"),
-    ("rect_outline", "0.7.0"),
-    ("shift_frame", "0.7.0"),
-    ("circle_outline", "0.7.0"),
-    ("note_freq", "0.7.0"),
-    ("freq_note", "0.7.0"),
-    ("fft_left", "0.1.1"),
-    ("fft_right", "0.1.1"),
-    ("fft_bin", "0.6.0"),
-    ("fft_freq", "0.6.0"),
-    ("fft_band", "0.6.0"),
-    ("beat", "0.1.6"),
-    ("time_at_beat", "0.1.6"),
-    ("bar", "0.1.6"),
-    ("tempo", "0.1.6"),
-    ("time_signature", "0.1.6"),
-    ("level_left", "0.1.6"),
-    ("level_right", "0.1.6"),
-    ("onset", "0.1.6"),
-    ("peak_left", "0.6.0"),
-    ("peak_right", "0.6.0"),
-    ("history_left", "0.6.0"),
-    ("history_right", "0.6.0"),
-    ("notes_between", "0.1.4"),
-    ("active_notes", "0.1.1"),
-    ("upcoming_notes", "0.1.1"),
-    ("midi_channels", "0.1.1"),
-    ("channel_enabled", "0.1.1"),
-    ("set_channel_enabled", "0.1.1"),
-    ("channel_colors", "0.5.1"),
-    ("channel_program", "0.6.0"),
-    ("channel_name", "0.6.0"),
-    ("playback", "0.1.1"),
-    ("set_paused", "0.1.4"),
-    ("seek", "0.1.4"),
-    ("script_options", "0.2.0"),
-    ("recording", "0.4.0"),
-    ("recording_ready", "0.4.0"),
-    ("recording_done", "0.4.0"),
-    ("set_speed", "0.2.0"),
-    ("playlist", "0.2.0"),
-    ("play_track", "0.2.0"),
-    ("next_track", "0.2.0"),
-    ("previous_track", "0.2.0"),
-    ("set_loop", "0.2.0"),
-    ("set_shuffle", "0.2.0"),
-    ("store_get", "0.1.4"),
-    ("store_set", "0.1.4"),
-    ("log", "0.1.1"),
-    ("log_app", "0.2.2"),
-    ("debug_locals", "0.1.1"),
-    ("setting_bool", "0.1.1"),
-    ("setting_int", "0.1.1"),
-    ("setting_float", "0.1.1"),
-    ("setting_color", "0.1.1"),
-    ("setting_string", "0.1.1"),
-    ("setting_selection", "0.1.1"),
-    ("settings_preset", "0.4.3"),
-    ("mouse", "0.1.1"),
-    ("mouse_delta", "0.1.1"),
-    ("scroll", "0.1.1"),
-    ("mouse_down", "0.1.1"),
-    ("mouse_pressed", "0.1.1"),
-    ("mouse_released", "0.1.1"),
-    ("input_register", "0.1.8"),
-    ("pad_axis", "0.2.1"),
-    ("gamepads", "0.2.1"),
-    ("input", "0.1.8"),
-    ("input_down", "0.1.8"),
-    ("input_value", "0.3.1"),
-    ("text_typed", "0.1.8"),
-    ("typing_begin", "0.1.8"),
-    ("typing_state", "0.1.8"),
-    ("typing_end", "0.1.8"),
-    ("play_note", "0.1.8"),
-    ("note_on", "0.1.8"),
-    ("note_off", "0.1.8"),
-    ("stop_notes", "0.1.8"),
-    ("notes_playable", "0.1.8"),
-    ("sequence_register", "0.1.8"),
-    ("sequence_play", "0.1.8"),
-    ("sequence_stop", "0.1.8"),
-    ("has_focus", "0.1.1"),
-    ("display_mode", "0.1.1"),
-    ("is_mobile", "1.1.0"),
-    ("touches", "1.1.0"),
-    ("set_cursor_visible", "0.1.1"),
-    ("set_cursor_locked", "0.1.1"),
-    ("SAMPLE_RATE", "0.1.1"),
-    ("NOTE_LOOKAHEAD", "0.1.1"),
-    ("DT", "0.1.1"),
-    ("TIME", "0.1.4"),
-    ("FRAME", "0.1.4"),
-    ("coroutine", "0.4.0"),
-];
-
-/// The same for `script_options` keys (set inside a table, so looked for
-/// by name).
-pub const OPTION_SINCE: &[(&str, &str)] = &[
-    ("start_paused", "0.2.0"),
-    ("app_log", "0.2.2"),
-    ("record_prepare", "0.4.0"),
-    ("record_auto", "0.4.0"),
-    ("transparent", "1.5.0"),
-    ("assets", "1.5.0"),
-];
-
 /// The oldest synththing version that has everything `source` uses: the
 /// host functions and globals it calls (not its own names, and not a local
 /// that happens to share a name), and the `script_options` keys it sets.
@@ -1290,40 +1148,39 @@ pub const OPTION_SINCE: &[(&str, &str)] = &[
 pub fn min_app_version(source: &str) -> String {
     let analysis = crate::lua_analysis::analyze(source, &Default::default());
     let mut min = semver::Version::new(0, 1, 1);
-    let mut bump = |version: &str| {
-        if let Ok(version) = semver::Version::parse(version)
+    let mut bump = |since: &str| {
+        if let Some(version) = crate::lua_api::version(since)
             && version > min
         {
             min = version;
         }
     };
     for r in analysis.refs.iter().filter(|r| r.local.is_none() && !analysis.script_globals.contains(&r.name)) {
-        if let Some((_, since)) = API_SINCE.iter().find(|(name, _)| *name == r.name) {
+        if let Some(since) = crate::lua_api::since(&r.name) {
             bump(since);
         }
     }
+    // script_options keys are set inside a table, so looked for by name.
     let words: std::collections::HashSet<&str> =
         source.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).collect();
-    for (key, since) in OPTION_SINCE {
-        if words.contains(key) {
-            bump(since);
+    for option in crate::lua_api::SCRIPT_OPTIONS {
+        if words.contains(option.key) {
+            bump(option.since);
         }
     }
     min.to_string()
 }
 
 /// The version this build runs scripts as: its own, or, a development
-/// build ahead of its version number, the newest function or option it
-/// has (`API_SINCE`, `OPTION_SINCE` name the release they'll ship in).
+/// build with functions not released yet (`lua_api`'s `"next"`), the
+/// release they'll ship in.
 pub fn supported_version() -> &'static str {
     static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     VERSION.get_or_init(|| {
-        API_SINCE
-            .iter()
-            .chain(OPTION_SINCE)
-            .map(|(_, since)| *since)
+        crate::lua_api::all_since()
+            .map(|(_, since)| since)
             .chain([crate::build_info::VERSION])
-            .filter_map(|v| semver::Version::parse(v).ok())
+            .filter_map(crate::lua_api::version)
             .max()
             .map_or_else(|| crate::build_info::VERSION.to_string(), |v| v.to_string())
     })
@@ -1549,13 +1406,6 @@ mod tests {
 
     #[test]
     fn minimum_app_versions() {
-        // Every host function has a version, and a sane one.
-        for (name, _) in crate::lua_completion::HOST_API.iter().filter(|(n, _)| *n != "render") {
-            assert!(API_SINCE.iter().any(|(n, _)| n == name), "{name} isn't in API_SINCE");
-        }
-        for (name, version) in API_SINCE.iter().chain(OPTION_SINCE) {
-            assert!(semver::Version::parse(version).is_ok(), "{name}: {version}");
-        }
         assert_eq!(min_app_version("function render() clear({ r = 0, g = 0, b = 0 }) end"), "0.1.1");
         assert_eq!(min_app_version("function render() local r = recording() end"), "0.4.0");
         assert_eq!(min_app_version("script_options({ app_log = true }) function render() end"), "0.2.2");
@@ -1566,8 +1416,9 @@ mod tests {
         assert_eq!(min_app_version("function seek() end function render() seek() end"), "0.1.1");
         assert!(runs_on("0.4.0", "0.4.1") && runs_on("0.4.0", "0.4.0") && !runs_on("0.4.1", "0.4.0"));
         // This build runs every script whose functions it has, released or not.
-        for (name, since) in API_SINCE.iter().chain(OPTION_SINCE) {
-            assert!(runs_on(since, supported_version()), "{name}");
+        for (name, since) in crate::lua_api::all_since() {
+            let supported = semver::Version::parse(supported_version()).unwrap();
+            assert!(crate::lua_api::version(since).is_some_and(|v| v <= supported), "{name}");
         }
         assert!(runs_on(crate::build_info::VERSION, supported_version()));
         // Names this build doesn't know (a newer function), but not the

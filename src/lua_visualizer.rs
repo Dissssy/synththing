@@ -173,10 +173,19 @@ end
 /// the one-time seed already happened, so a bundled default the user deletes
 /// stays deleted on later launches instead of quietly reappearing. "Restore
 /// default" (`bundled_default`) is the deliberate way to bring one back.
+/// Also keeps the Lua language server definitions there current
+/// (`lua_api::write_luals`), so the folder opened in an editor knows the API.
 pub fn scripts_dir() -> Result<PathBuf> {
     let dir = config_dir()?.join("visualizers");
     fs::create_dir_all(&dir)?;
     seed_bundled(&dir)?;
+    // The script API for editors with the Lua language server, once a run.
+    static LUALS: std::sync::Once = std::sync::Once::new();
+    LUALS.call_once(|| {
+        if let Err(e) = crate::lua_api::write_luals(&dir) {
+            log::warn!("couldn't write the Lua language server definitions: {e}");
+        }
+    });
     Ok(dir)
 }
 
@@ -1550,8 +1559,6 @@ pub struct ScriptOptions {
     pub assets: bool,
 }
 
-/// The `script_options` keys, for the error naming them.
-const SCRIPT_OPTIONS: &str = "start_paused, app_log, record_prepare, record_auto, transparent and assets";
 
 /// What a script can see of the app's playback beyond the engine: the
 /// loop and shuffle modes, and the current playlist (read-only).
@@ -2585,7 +2592,8 @@ fn compile(
                             }
                             (other, _) => {
                                 return Err(mlua::Error::runtime(format!(
-                                    "script_options: no option `{other}` (there are {SCRIPT_OPTIONS})"
+                                    "script_options: no option `{other}` (there are {})",
+                                    crate::lua_api::script_option_list()
                                 )));
                             }
                         }

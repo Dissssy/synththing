@@ -4,6 +4,12 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Write scripts in your favorite editor: the scripts folder now has the script API's definitions for the Lua language server, so VS Code's Lua extension (or Neovim, Zed, JetBrains) gives completion, hover help and type checks for every synththing function. Open the folder and go.
+
+### Fixed
+- Scripts using `blit`, `read_asset`, `list_assets`, `midi_send`, `sound_register`, `sound_play` or the `assets` option are no longer offered to 1.5.0, which doesn't have them (they came in 1.6.0).
+
 ## 1.6.0 (2026-10-23)
 
 ### Added

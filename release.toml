@@ -15,4 +15,7 @@ tag-message = "Release {{version}}"
 # fresh Unreleased heading above it for what comes next.
 pre-release-replacements = [
   { file = "CHANGELOG.md", search = "## Unreleased", replace = "## Unreleased\n\n## {{version}} ({{date}})", exactly = 1 },
+  # src/lua_api.rs: what's new to scripts ships in this version (each entry's
+  # `"next"`, after its section or `since:`; not the code that reads it).
+  { file = "src/lua_api.rs", search = "([A-Z_]+, |since: )\"next\"", replace = "${1}\"{{version}}\"", min = 0 },
 ]
