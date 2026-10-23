@@ -115,6 +115,14 @@ impl App {
                 Call::Queue(edit, reply) => {
                     let _ = reply.send(self.api_queue(edit));
                 }
+                Call::NewPlaylist(name, reply) => {
+                    let made = self.playlists.create(&name, Vec::new()).map_err(|e| (500, format!("couldn't make it: {e}")));
+                    let made = made.map(|i| {
+                        self.playlists_changed();
+                        PlaylistRef { id: self.playlists.lists[i].id.clone(), name }
+                    });
+                    let _ = reply.send(made);
+                }
                 Call::UseSoundfont(id, reply) => {
                     let _ = reply.send(self.api_use_soundfont(&id));
                 }
@@ -227,6 +235,7 @@ impl App {
     /// A change to the library a program asked for (its own permission:
     /// `Access::edit_library`).
     fn api_edit(&mut self, edit: api::Edit) -> Result<(), (u16, String)> {
+        let find = |app: &App, id: &str| app.playlists.lists.iter().position(|l| l.id == id).ok_or((404, "there's no playlist with that ID".to_string()));
         let song =
             |app: &App, key: &str| app.songs.has(key).then(|| app.songs.path(key)).ok_or((404, "there's no song with that key in the library".to_string()));
         match edit {
@@ -264,6 +273,29 @@ impl App {
                     }
                     self.remove_entries(list, &at);
                 }
+            }
+            api::Edit::Rename { playlist, name } => {
+                let list = find(self, &playlist)?;
+                self.playlists.lists[list].playlist.name = name;
+                self.save_playlist(list);
+            }
+            api::Edit::Delete { playlist } => {
+                let list = find(self, &playlist)?;
+                self.delete_playlist(list);
+            }
+            api::Edit::Move { playlist, from, to } => {
+                let list = find(self, &playlist)?;
+                if self.playlists.lists[list].playlist.smart.is_some() {
+                    return Err((409, "that's a smart playlist: its rules order its songs".into()));
+                }
+                let len = self.playlists.lists[list].playlist.entries.len();
+                if from >= len || to >= len {
+                    return Err((404, format!("that playlist has {len} songs")));
+                }
+                // (Just before the entry it's to take the place of, counted
+                // before the move.)
+                let before = if to > from { to + 1 } else { to };
+                self.move_entries(list, &[from], before);
             }
         }
         Ok(())
@@ -592,7 +624,7 @@ impl App {
             let permissions: [(&str, &str, fn(&mut Access) -> &mut bool); 5] = [
                 ("eye", "Read: see the library, what's playing, and events", |a| &mut a.read),
                 ("play-pause", "Control: run commands (play, pause, next track...)", |a| &mut a.control),
-                ("pencil-simple", "Edit library: star songs, tag them, and add songs to playlists or take them out", |a| &mut a.edit_library),
+                ("pencil-simple", "Edit library: star and tag songs; make, rename, delete and reorder playlists, and add songs to them or take them out", |a| &mut a.edit_library),
                 ("download-simple", "Download songs: copy songs' files out of your library", |a| &mut a.download_songs),
                 (
                     "music-notes-plus",
