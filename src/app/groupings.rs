@@ -906,11 +906,16 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
     let visuals = ui.style().interact_selectable(&response, picked);
     let playing_color = crate::theme::playing_color(ui.ctx());
     if playing && !picked && !response.hovered() {
-        ui.painter().rect(rect, visuals.corner_radius, playing_color.gamma_multiply(0.15), egui::Stroke::new(1.0, playing_color), egui::StrokeKind::Inside);
+        ui.painter().rect_filled(rect, visuals.corner_radius, playing_color.gamma_multiply(0.15));
     } else if picked || (track.here && response.hovered()) {
-        ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
+        let stroke = if playing { egui::Stroke::NONE } else { visuals.bg_stroke };
+        ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, stroke, egui::StrokeKind::Inside);
     } else if striped {
         ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+    }
+    if playing {
+        // Outlined, picked or not.
+        ui.painter().rect_stroke(rect, visuals.corner_radius, egui::Stroke::new(1.0, playing_color), egui::StrokeKind::Inside);
     }
     if response.drag_started() {
         response.dnd_set_drag_payload(DraggedFiles { paths: vec![track.path.clone()], label: track.name.clone() });

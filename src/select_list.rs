@@ -236,8 +236,8 @@ pub struct ListOutput {
 /// left to right by `draw` on top of the row's own click-and-drag area
 /// (widgets it adds, such as buttons, take their clicks first), clear of
 /// the row's right end by `EDGE`. The row
-/// `playing` is outlined and tinted in the theme's playing color, under
-/// any selection or hover.
+/// `playing` is outlined in the theme's playing color, over any
+/// selection or hover (tinted in it, without either).
 pub fn show<T>(
     ui: &mut egui::Ui,
     id_salt: impl egui::AsId,
@@ -306,27 +306,22 @@ pub fn show<T>(
                 }
 
                 let selected = selection.contains(idx);
-                let marked = playing == Some(idx) && !selected && !response.hovered();
+                let is_playing = playing == Some(idx);
+                let marked = is_playing && !selected && !response.hovered();
                 let visuals = ui.style().interact_selectable(&response, selected);
                 if marked {
-                    ui.painter().rect(
-                        rect,
-                        visuals.corner_radius,
-                        playing_color.gamma_multiply(0.15),
-                        egui::Stroke::new(1.0, playing_color),
-                        egui::StrokeKind::Inside,
-                    );
+                    ui.painter().rect_filled(rect, visuals.corner_radius, playing_color.gamma_multiply(0.15));
                 } else if selected || response.hovered() {
-                    ui.painter().rect(
-                        rect.expand(visuals.expansion),
-                        visuals.corner_radius,
-                        visuals.weak_bg_fill,
-                        visuals.bg_stroke,
-                        egui::StrokeKind::Inside,
-                    );
+                    // (The playing row's border goes over the selection's.)
+                    let stroke = if is_playing { egui::Stroke::NONE } else { visuals.bg_stroke };
+                    ui.painter().rect(rect.expand(visuals.expansion), visuals.corner_radius, visuals.weak_bg_fill, stroke, egui::StrokeKind::Inside);
                 } else if idx % 2 == 1 {
                     // Striped, to tell the rows apart.
                     ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+                }
+                if is_playing {
+                    // Outlined, selected or not.
+                    ui.painter().rect_stroke(rect, visuals.corner_radius, egui::Stroke::new(1.0, playing_color), egui::StrokeKind::Inside);
                 }
 
                 let row = Row { idx, response, selection };
