@@ -151,7 +151,7 @@ end
 blit(pixels, width, height, palette, [x, y, w, h])   -- a whole palette-indexed image, stretched to w x h
 ```
 
-`blit` draws a `width` by `height` image in one call, for scripts that render their own picture pixel by pixel (a software 3D renderer, an emulator) where thousands of `pixel` calls would be far too slow. `pixels` is a string of bytes or a list of numbers, one per pixel, row by row from the top-left, each a palette index from 0 to 255; `palette` is a list of up to 256 color tables, where `palette[1]` is the color of index 0 (Lua counting, like sprites), and missing entries are transparent. The image is stretched nearest-neighbor over `x, y, w, h` (the image's own size at the top-left by default), so a 320 x 200 picture can fill the whole visualizer. It's opaque unless the palette's colors say otherwise. `doom.lua` (New > Games) draws its whole view with one `blit` a frame. Since 1.5.0.
+`blit` draws a `width` by `height` image in one call, for scripts that render their own picture pixel by pixel (a software 3D renderer, an emulator) where thousands of `pixel` calls would be far too slow. `pixels` is a string of bytes or a list of numbers, one per pixel, row by row from the top-left, each a palette index from 0 to 255; `palette` is a list of up to 256 color tables, where `palette[1]` is the color of index 0 (Lua counting, like sprites), and missing entries are transparent. The image is stretched nearest-neighbor over `x, y, w, h` (the image's own size at the top-left by default), so a 320 x 200 picture can fill the whole visualizer. It's opaque unless the palette's colors say otherwise. `doom.lua` (a bundled game) draws its whole view with one `blit` a frame. Since 1.5.0.
 
 ### Moving and clipping
 
@@ -475,7 +475,7 @@ function render(width, height, left, right)
 end
 ```
 
-`script_options` only takes the options it knows (`start_paused`, `app_log`, `record_prepare`, `record_auto` and `transparent`, each true or false; see Logging for `app_log`, Recording for `record_prepare` and `record_auto`, and the clear color for `transparent`), and an unknown one is an error that says so, so a typo can't go unnoticed. Several can go in one call: `script_options({ start_paused = true, app_log = true })`.
+`script_options` only takes the options it knows (`start_paused`, `app_log`, `record_prepare`, `record_auto`, `transparent` and `assets`, each true or false; see Logging for `app_log`, Recording for `record_prepare` and `record_auto`, the clear color for `transparent`, and Assets for `assets`), and an unknown one is an error that says so, so a typo can't go unnoticed. Several can go in one call: `script_options({ start_paused = true, app_log = true })`.
 
 `TIME` and `FRAME` start over when the script is reloaded or restarted. `TIME` keeps counting while the visualizer isn't being drawn, unlike the sum of `DT`.
 
@@ -1083,6 +1083,7 @@ text_size("Score: 120", 24) --> 118, 24
 sprite_register({ image = { { 1, 1, 0 }, { 0, 1, 1 } }, palette = { red } }) --> 1   -- an id
 sprite(heart, 0, 0, 4) --> 12, 8                   -- the size drawn: 3 x 2 sprite pixels, times 4
 sprite_size(heart) --> 3, 2
+blit("\0\1\1\0", 2, 2, { black, white }, 0, 0, 64, 64)   -- a 2 x 2 checkerboard, stretched to 64 x 64
 ```
 
 Settings and saved data:
@@ -1106,6 +1107,18 @@ notes_playable() --> true          -- false with no soundfont
 play_note(60) --> true             -- false when notes can't play
 sequence_register({ 60, { key = 64, length = 0.5 } }) --> 1   -- an id
 sequence_play(riff) --> 1          -- a handle for sequence_stop; nil when notes can't play
+midi_send(0xC0, 30) --> true       -- channel 0 switched to program 30; false with no soundfont
+sound_register(read_asset("boom.raw"), 11025) --> 1   -- an id
+sound_play(boom, { volume = 0.5, pan = -1 }) --> true   -- false with no soundfont
+```
+
+Assets:
+
+```lua
+list_assets() --> { "DOOM1.WAD", "notes.txt" }   -- {} with no assets folder
+read_asset("notes.txt") --> "hello\n"
+read_asset("missing.txt") --> nil
+read_asset("../secret.txt")       -- an error: a plain file name only
 ```
 
 ## Bundled scripts, as reference
@@ -1129,6 +1142,7 @@ Games:
 - `highway.lua`, a Guitar Hero style game charted on the fly from any track of the song: chords, sustains, drums by kit piece, difficulties and practice speeds; songs load paused for it (`script_options`), it switches songs within the playlist (`next_track`), charts a bit per frame (coroutines), and takes part in recordings (`record_prepare`, `record_auto`: it can play itself)
 - `snake.lua`, one snake per channel hunting apples spawned by note-ons; apples are sprites, a text scoreboard, and a `player_channel` setting to steer one snake yourself with rebindable steering actions (best length saved with `store_set`); worth reading end to end
 - `note_runner.lua`, a platformer whose level is the music: notes are platforms, channels take turns being solid; rebindable controls, recolored player sprite (`palette`, `tint`), best scores per song (`song_id`)
+- `doom.lua`, Doom in pure Lua, playing the maps of a WAD you put in its assets folder (`script_options` assets, `read_asset`, `list_assets`, a WAD picker with `setting_selection`): a software renderer drawn with one `blit` a frame, mouse look (`set_cursor_locked`, `mouse_delta`), the map's music played on the soundfont (`midi_send`), the WAD's sound effects (`sound_register`, `sound_play`), and monsters, weapons and pickups
 
 Templates (New):
 
