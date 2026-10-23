@@ -10,7 +10,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Programs you allow to Edit library (a new permission, off until you tick it) can star songs, tag them, and add songs to playlists or take them out through the local API. A new `playlists_changed` event tells when any playlist changes.
 
 ### Changed
-- A single click plays a song again (and uses a soundfont, or plays a playlist's song); Ctrl+click and Shift+click select rows without playing them.
+- A single click plays a song again (and uses a soundfont, or plays a playlist's song), leaving the selection as it was; Ctrl+click and Shift+click select rows without playing them.
 
 ## 1.4.0 (2026-10-23)
 

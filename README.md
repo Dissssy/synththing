@@ -50,7 +50,7 @@ The View menu shows and hides each section; drag tabs around to arrange them how
 | F10 | Pause / resume the recording |
 | Esc | Back to windowed |
 
-In the Songs, Soundfonts and Playlists lists: click to play or open, Ctrl+click and Shift+click to select, Ctrl+A selects all, and drag the selection (from Songs onto a playlist, or within a playlist to reorder it). Delete removes the selection from a playlist or the soundfont list, or (asking first) from the library. Right-click a row for more.
+In the Songs, Soundfonts and Playlists lists: click to play or open (the selection stays as it is), Ctrl+click and Shift+click to select, Ctrl+A selects all, and drag the selection (from Songs onto a playlist, or within a playlist to reorder it). Delete removes the selection from a playlist or the soundfont list, or (asking first) from the library. Right-click a row for more.
 
 ## Visualizer scripts
 

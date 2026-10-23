@@ -1,5 +1,5 @@
 //! The list the Songs, Soundfonts and Playlists panels share: rows of one
-//! height, click to open or play (and select just that row), Ctrl+click
+//! height, click to open or play (leaving the selection be), Ctrl+click
 //! and Shift+click to select (Ctrl toggles, Shift extends a range), Ctrl+A to select all, and Delete reported to the list
 //! that owns the rows. Each list draws its own row contents with a closure
 //! given the entry; [`label`] is the entry's text, cut to the width left
@@ -281,12 +281,15 @@ pub fn show<T>(
                 let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), row_height));
                 // Not focusable: a focused row would count as typing and turn the keys off.
                 let response = ui.interact(rect, id.with(idx), sense - egui::Sense::FOCUSABLE);
-                // A double-click's second click doesn't play (or load) it again.
-                if response.clicked() && !response.double_clicked() {
+                // Playing and selecting are apart: a plain click plays and
+                // leaves the selection be. (A double-click's second click
+                // doesn't play, or load, it again.)
+                if response.clicked() {
                     if touch || !(modifiers.command || modifiers.shift) {
-                        output.activated = Some(idx);
-                    }
-                    if !touch {
+                        if !response.double_clicked() {
+                            output.activated = Some(idx);
+                        }
+                    } else {
                         selection.click(idx, modifiers);
                     }
                 }
