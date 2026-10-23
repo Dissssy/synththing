@@ -23,7 +23,7 @@ use eframe::egui;
 use crate::engine::EngineView;
 use crate::live::LiveCommand;
 use crate::lua_visualizer::{
-    self, Action, Binding, DebugSnapshot, LogEntry, LuaVisualizer, PerfSummary,
+    self, Action, Binding, DebugSnapshot, LogEntry, LuaVisualizer, OPAQUE_BLACK, PerfSummary,
     PlaybackRequest, RecordingTake, ScriptOptions, StateRequest, StateSnapshot, SettingDescriptor, SettingValue, SettingsPreset, Transport,
 };
 use crate::midi_notes::NoteList;
@@ -65,7 +65,8 @@ pub struct FrameRequest {
 pub struct FrameDone {
     pub width: usize,
     pub height: usize,
-    /// `0x00RRGGBB` (for recording).
+    /// `0xAARRGGBB`, not premultiplied: opaque unless the script's frames
+    /// are see-through (`script_options`).
     pub pixels: Vec<u32>,
     /// The same, ready for a texture: converted here, on the script
     /// thread, not on the app's.
@@ -77,7 +78,10 @@ pub struct FrameDone {
 
 impl FrameDone {
     fn new(width: usize, height: usize, pixels: Vec<u32>, samples: Vec<StereoFrame>, effects: Effects) -> Self {
-        let colors = pixels.iter().map(|&p| egui::Color32::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8)).collect();
+        let colors = pixels
+            .iter()
+            .map(|&p| egui::Color32::from_rgba_unmultiplied((p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8))
+            .collect();
         let image = egui::ColorImage::new([width, height], colors);
         Self { width, height, pixels, image, samples, effects }
     }
@@ -553,7 +557,7 @@ impl Worker {
                         .unwrap_or_default();
                     log::error!(target: "synththing::script", "the script thread hit a bug: {what}");
                     frame_size.map(|(width, height)| {
-                        FrameDone::new(width, height, vec![0; width * height], Vec::new(), Effects::default())
+                        FrameDone::new(width, height, vec![OPAQUE_BLACK; width * height], Vec::new(), Effects::default())
                     })
                 }
             };
@@ -695,8 +699,8 @@ mod tests {
         let done = draw(&mut pipe);
         assert!(pipe.ready_for_frame());
         assert_eq!((done.width, done.height, done.pixels.len()), (4, 3, 12));
-        assert_eq!(done.pixels[0], 0xffffff, "{:x?} {:?}", done.pixels, host.error());
-        assert_eq!(done.pixels[1], 0x112233);
+        assert_eq!(done.pixels[0], 0xFFFF_FFFF, "{:x?} {:?}", done.pixels, host.error());
+        assert_eq!(done.pixels[1], 0xFF11_2233);
         assert_eq!(done.effects.channel_requests, [(2, false)]);
         assert!(host.is_running());
         assert_eq!(host.error(), None);

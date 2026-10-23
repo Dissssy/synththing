@@ -287,7 +287,10 @@ fn render_songs(source: String, script: &Path, soundfont: &Path, out: Option<&Pa
 /// has, and how much it changed since `previous`. A blank frame (one
 /// colour, and the same as before) scores 0.
 fn score(pixels: &[u32], previous: Option<&[u32]>) -> f32 {
-    let luma = |p: u32| f64::from(((p >> 16) & 0xff) * 77 + ((p >> 8) & 0xff) * 150 + (p & 0xff) * 29) / 256.0;
+    let luma = |p: u32| {
+        let p = crate::lua_visualizer::over_black(p);
+        f64::from(((p >> 16) & 0xff) * 77 + ((p >> 8) & 0xff) * 150 + (p & 0xff) * 29) / 256.0
+    };
     let mut colours = [0u64; 64];
     let (mut sum, mut squares, mut moved, mut n) = (0.0, 0.0, 0.0, 0.0);
     for y in (0..HEIGHT).step_by(2) {
@@ -363,9 +366,14 @@ fn grid(frames: &[&Vec<u32>]) -> Vec<u32> {
     sheet
 }
 
-/// `pixels` (`0x00RRGGBB`) as a compressed PNG.
+/// `pixels` (`0xAARRGGBB`, see-through parts over black) as a compressed
+/// PNG.
 pub fn encode_png(pixels: &[u32], width: usize, height: usize) -> Result<Vec<u8>, String> {
-    let rgb: Vec<u8> = pixels.iter().flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8]).collect();
+    let rgb: Vec<u8> = pixels
+        .iter()
+        .map(|&p| crate::lua_visualizer::over_black(p))
+        .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, p as u8])
+        .collect();
     let mut bytes = Vec::new();
     let mut encoder = png::Encoder::new(&mut bytes, width as u32, height as u32);
     encoder.set_color(png::ColorType::Rgb);
@@ -424,9 +432,9 @@ mod tests {
 
     #[test]
     fn scores_and_windows() {
-        let blank = vec![0u32; WIDTH * HEIGHT];
+        let blank = vec![0xFF00_0000u32; WIDTH * HEIGHT];
         assert_eq!(score(&blank, None), 0.0);
-        let stripes: Vec<u32> = (0..WIDTH * HEIGHT).map(|i| if (i / 4) % 2 == 0 { 0xff8000 } else { 0x0020ff }).collect();
+        let stripes: Vec<u32> = (0..WIDTH * HEIGHT).map(|i| if (i / 4) % 2 == 0 { 0xFFFF_8000 } else { 0xFF00_20FF }).collect();
         let still = score(&stripes, Some(&stripes));
         assert!(still > 0.5, "{still}");
         // Motion counts.
@@ -438,7 +446,7 @@ mod tests {
 
     #[test]
     fn png_round_trip() {
-        let pixels: Vec<u32> = (0..12u32).map(|i| i * 0x10_2030).collect();
+        let pixels: Vec<u32> = (0..12u32).map(|i| 0xFF00_0000 | (i * 0x10_2030)).collect();
         let (w, h, rgba) = decode_png(&encode_png(&pixels, 4, 3).unwrap()).unwrap();
         assert_eq!((w, h), (4, 3));
         assert_eq!(&rgba[4..8], &[0x10, 0x20, 0x30, 255]);

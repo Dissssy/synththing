@@ -1272,6 +1272,7 @@ pub const OPTION_SINCE: &[(&str, &str)] = &[
     ("app_log", "0.2.2"),
     ("record_prepare", "0.4.0"),
     ("record_auto", "0.4.0"),
+    ("transparent", "1.5.0"),
 ];
 
 /// The oldest synththing version that has everything `source` uses: the

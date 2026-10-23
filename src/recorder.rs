@@ -374,7 +374,7 @@ impl Recorder {
 
     /// One visualizer frame: `dt` seconds passed, `samples` played, and
     /// `pixels` is the new picture if one was drawn (`width * height`,
-    /// `0x00RRGGBB`). A frame that's used is swapped out of `pixels` for a
+    /// `0xAARRGGBB`). A frame that's used is swapped out of `pixels` for a
     /// buffer of the same size with stale contents, so the caller must
     /// redraw it in full next time (visualizers do). Paused: nothing is
     /// recorded. An error means the encoder stopped; finish to clean up.
@@ -539,7 +539,8 @@ fn write_video(
         let repeats = match msg {
             VideoMsg::Frame(frame, repeats) => {
                 last.clear();
-                last.extend(frame.iter().flat_map(|p| p.to_le_bytes())); // B, G, R, 0: "bgr0"
+                // B, G, R, (ignored): "bgr0", see-through parts over black.
+                last.extend(frame.iter().flat_map(|&p| crate::lua_visualizer::over_black(p).to_le_bytes()));
                 let _ = returned.send(frame);
                 repeats
             }
