@@ -111,7 +111,6 @@ pub const CATEGORIES: &[Category] = &[
     Category {
         name: "Songs",
         settings: &[
-            setting("audio_files", "Show audio files", &["show_audio_files"]),
             setting("songs_view", "Columns, sorting and grouping", &["songs_view"]),
             setting("preload", "Preload songs on hover", &["preload_on_hover"]),
             setting("autoplay_collapsed", "Autoplay skips closed groups", &["autoplay_skip_collapsed"]),

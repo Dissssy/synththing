@@ -14,18 +14,24 @@ use crate::song_list;
 use crate::playlist::{NowPlaying, Rng};
 
 impl App {
-    /// Queue `songs`: next (at the front), or at the end.
-    pub(super) fn queue_songs(&mut self, ctx: &egui::Context, songs: Vec<PathBuf>, next: bool) {
-        if songs.is_empty() {
-            return;
-        }
+    /// Queue `songs` (shuffled while Shuffle is on): next (at the front),
+    /// or at the end.
+    pub(super) fn enqueue(&mut self, songs: Vec<PathBuf>, next: bool) {
         let songs = if self.shuffle { shuffled(songs, |p| self.songs.together_of(p).map(|(id, at)| (id.to_string(), at)), &mut self.rng) } else { songs };
-        let count = songs.len();
         if next {
             self.queue.splice(0..0, songs);
         } else {
             self.queue.extend(songs);
         }
+    }
+
+    /// Queue `songs`, as [`App::enqueue`], and say so.
+    pub(super) fn queue_songs(&mut self, ctx: &egui::Context, songs: Vec<PathBuf>, next: bool) {
+        if songs.is_empty() {
+            return;
+        }
+        let count = songs.len();
+        self.enqueue(songs, next);
         let what = if count == 1 { "1 song".to_string() } else { format!("{count} songs") };
         toast::show(ctx, if next { format!("Playing {what} next") } else { format!("Added {what} to the queue") });
     }

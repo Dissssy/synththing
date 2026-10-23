@@ -26,6 +26,9 @@ pub(super) struct ApiState {
     /// What the playlists were when the last event told of them (a hash
     /// of each one's ID, name and songs), while a stream is open.
     playlists_seen: Option<u64>,
+    /// What the play queue was when the last event told of it (a hash),
+    /// while a stream is open.
+    queue_seen: Option<u64>,
     /// A token just made, shown until Preferences close: (app name, token).
     new_token: Option<(String, String)>,
     /// The name being typed for a new app.
@@ -105,6 +108,9 @@ impl App {
                 Call::Set(set, reply) => {
                     let _ = reply.send(self.api_set(set, view));
                 }
+                Call::Queue(edit, reply) => {
+                    let _ = reply.send(self.api_queue(edit));
+                }
                 Call::Play { song, playlist, reply } => {
                     let _ = reply.send(self.api_play(song.as_deref(), playlist.as_deref()));
                 }
@@ -119,6 +125,7 @@ impl App {
                         group_ignore: self.config.group_ignore.clone(),
                         articles: self.config.sort_with_articles,
                         online: self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup),
+                        queue: self.queue.iter().filter_map(|path| self.songs.key(path)).collect(),
                     });
                 }
             }
@@ -169,6 +176,35 @@ impl App {
             .position(|e| crate::song_store::key_in(dir, &e.path) == Some(key))
             .ok_or((404, "that song isn't in that playlist".to_string()))?;
         self.play_entry(list, entry);
+        Ok(())
+    }
+
+    /// A change to the play queue a program asked for.
+    fn api_queue(&mut self, edit: api::QueueEdit) -> Result<(), (u16, String)> {
+        match edit {
+            api::QueueEdit::Add { song: Some(key), next, .. } => {
+                if !self.songs.has(&key) {
+                    return Err((404, "there's no song with that key in the library".into()));
+                }
+                self.enqueue(vec![self.songs.path(&key)], next);
+            }
+            api::QueueEdit::Add { playlist: Some(id), next, .. } => {
+                let list = self.playlists.lists.iter().find(|l| l.id == id).ok_or((404, "there's no playlist with that ID".to_string()))?;
+                let songs: Vec<_> = list.playlist.entries.iter().filter(|e| !e.missing).map(|e| e.path.clone()).collect();
+                if songs.is_empty() {
+                    return Err((409, "that playlist has no songs here".into()));
+                }
+                self.enqueue(songs, next);
+            }
+            api::QueueEdit::Add { .. } => return Err((400, "say what to queue".into())),
+            api::QueueEdit::Remove(at) => {
+                if at >= self.queue.len() {
+                    return Err((404, format!("the queue has {} songs", self.queue.len())));
+                }
+                self.queue.remove(at);
+            }
+            api::QueueEdit::Clear => self.queue.clear(),
+        }
         Ok(())
     }
 
@@ -329,6 +365,7 @@ impl App {
         if !streams {
             // (Worked out afresh once one opens.)
             self.api.playlists_seen = None;
+            self.api.queue_seen = None;
         }
         let Some(server) = self.api.server.as_ref().filter(|_| streams) else { return };
         match now {
@@ -350,6 +387,15 @@ impl App {
         };
         if self.api.playlists_seen.replace(playlists).is_some_and(|seen| seen != playlists) {
             server.event("playlists_changed", &serde_json::json!({}));
+        }
+        let queue = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            self.queue.hash(&mut hasher);
+            hasher.finish()
+        };
+        if self.api.queue_seen.replace(queue).is_some_and(|seen| seen != queue) {
+            server.event("queue_changed", &serde_json::json!({}));
         }
     }
 

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use eframe::egui;
 
 use super::{
-    is_midi_path, listed_song_extensions, song_info_widgets, App, DraggedSoundfont, PREVIOUS_RESTARTS_AFTER_SECS,
+    is_midi_path, song_info_widgets, App, DraggedSoundfont, PREVIOUS_RESTARTS_AFTER_SECS,
     SONG_EXTENSIONS,
 };
 use crate::audio::AudioCommand;
@@ -455,7 +455,7 @@ impl App {
             if has_ext(&path, &["sf2", "sf3"]) {
                 soundfonts.push(path);
             } else if path.is_dir() {
-                songs.extend(crate::song_store::songs_under(&path, listed_song_extensions(&self.config)));
+                songs.extend(crate::song_store::songs_under(&path, SONG_EXTENSIONS));
             } else if has_ext(&path, SONG_EXTENSIONS) {
                 songs.push(path);
             }

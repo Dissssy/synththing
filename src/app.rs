@@ -213,10 +213,6 @@ fn start_old_import(dir: PathBuf) -> std::sync::mpsc::Receiver<song_store::OldIm
     rx
 }
 
-fn listed_song_extensions(config: &Config) -> &'static [&'static str] {
-    if config.show_audio_files { SONG_EXTENSIONS } else { MIDI_EXTENSIONS }
-}
-
 /// "Previous" restarts the current track instead of going back a track
 /// once it's been playing longer than this, the usual player behavior.
 const PREVIOUS_RESTARTS_AFTER_SECS: f64 = 3.0;
@@ -2782,7 +2778,7 @@ impl App {
     fn songs_revision(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (self.songs.revision(), self.song_info.revision(), &self.config.title_patterns, &self.config.group_ignore, self.config.sort_with_articles, listed_song_extensions(&self.config))
+        (self.songs.revision(), self.song_info.revision(), &self.config.title_patterns, &self.config.group_ignore, self.config.sort_with_articles)
             .hash(&mut hasher);
         hasher.finish()
     }
@@ -2795,7 +2791,7 @@ impl App {
             });
             return;
         }
-        let extensions = listed_song_extensions(&self.config);
+        let extensions = SONG_EXTENSIONS;
         // Only the songs a ruleset leaves out, when asked.
         let missing_only = self.songs_missing_only;
         let (missing_revision, missing) = self.missing_info();
@@ -2819,8 +2815,6 @@ impl App {
         let autoplay = self.autoplay;
         let mut autoplay_clicked = false;
         let mut tools = |ui: &mut egui::Ui| {
-            // Every type it can play: audio files with audio files off
-            // bring an offer to turn them on (`audio_import_ui`).
             if ui.add(icon_button("plus")).on_hover_text("Import songs: copy them into synththing's library").clicked() {
                 crate::import::start(crate::import::Kind::Songs, SONG_EXTENSIONS);
             }
@@ -3145,11 +3139,7 @@ impl App {
                     self.add_to_library(stored);
                     let plural = if n == 1 { "" } else { "s" };
                     self.status = format!("Imported {n} song{plural}.");
-                    self.after_import(ctx, done.then, paths.clone(), soundfonts);
-                    let audio: Vec<PathBuf> = paths.into_iter().filter(|p| !is_midi_path(p)).collect();
-                    if !audio.is_empty() && !self.config.show_audio_files {
-                        self.offer_audio_files(audio);
-                    }
+                    self.after_import(ctx, done.then, paths, soundfonts);
                 }
                 crate::import::Kind::Soundfonts => self.add_soundfonts(imported.soundfonts),
             }
@@ -4139,7 +4129,6 @@ impl eframe::App for App {
             self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);
             self.history_ui(&ctx);
-            self.audio_import_ui(&ctx);
             self.status_toast_ui(&ctx);
         } else {
             egui::Panel::top("top_bar").show(ui, |ui| frame_timing::time("top bar", || self.top_bar_ui(ui)));
