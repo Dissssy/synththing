@@ -449,7 +449,7 @@ impl Server {
     }
 
     /// The visualizer's pictures, for the API's watchers.
-    pub fn frames(&self) -> &crate::visualizer_stream::Frames {
+    pub fn frames(&self) -> &Arc<crate::visualizer_stream::Frames> {
         &self.shared.frames
     }
 
@@ -622,7 +622,9 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                  img{{width:100%;height:100%;object-fit:contain;display:block}}</style>\
                  <img src=\"/v1/visualizer/stream?{query}\" alt=\"\">"
             );
-            Response::from_data(page).with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap())
+            Response::from_data(page)
+                .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap())
+                .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap())
         })),
         (Method::Get, ["v1", "visualizer", "stream"]) => match needs(access.read, "read").map_or_else(|| watch_options(&query), Err) {
             Err(reply) => Some(reply),
@@ -642,8 +644,8 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 match frame {
                     Some((jpeg, _)) => Response::from_data(jpeg.to_vec())
                         .with_header(Header::from_bytes("Content-Type", "image/jpeg").unwrap())
-                        .with_header(Header::from_bytes("Cache-Control", "no-cache").unwrap()),
-                    None => error(503, "the visualizer didn't draw a frame: is it showing?"),
+                        .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap()),
+                    None => error(503, "the visualizer didn't draw a frame in time"),
                 }
             }
         })),
@@ -1101,7 +1103,7 @@ fn video(shared: &Arc<Shared>, request: Request, size: Option<(usize, usize)>, f
         let watching = shared.frames.watch(size);
         shared.waker.request_repaint();
         let mut writer = request.into_writer();
-        let head = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\nCache-Control: no-cache\r\n\
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\nCache-Control: no-store\r\n\
                     Connection: close\r\n\r\n";
         let mut ok = writer.write_all(head.as_bytes()).and_then(|()| writer.flush()).is_ok();
         let (mut seen, gap) = (shared.frames.count(), Duration::from_secs_f64(1.0 / fps as f64));
