@@ -38,7 +38,7 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `POST /v1/playlists/{id}/rename?to={name}` | edit library | Renames it: 204 |
 | `DELETE /v1/playlists/{id}` | edit library | Deletes it (on all your devices, when your library syncs): 204 |
 | `POST /v1/playlists/{id}/songs/move?from={n}&to={m}` | edit library | Moves the song at place `from` so it ends up at place `to` (both from 0): 204, 404 past its end, or 409 for a smart playlist |
-| `GET /v1/songs/{key}/file` | download songs | The song's file, with its type, length and its name as imported (`Content-Disposition`), or 404 if it isn't on this computer |
+| `GET /v1/songs/{key}/file` | download songs | The song's file, with its type, length and its name as imported (`Content-Disposition`), or 404 if it isn't on this computer. A `Range: bytes=...` header gets just that part (206), so players can stream and seek it |
 | `GET /v1/songs/{key}/art` | read | The song's picture (its own, else its album's cover) as an image, or 404 |
 | `GET /v1/groupings` | read | `[{"id", "name", "split"}]`: the rulesets (By Artist, By Album and yours) |
 | `GET /v1/groupings/{id}` | read | `{"id", "name", "split", "groups": [{"id", "title", "subtitle", "songs": [keys]}]}`: the playlists it makes of the songs on this computer, as Groupings shows them |
@@ -61,6 +61,9 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `POST /v1/queue/move?from={n}&to={m}` | control | Moves the song at place `from` so it ends up at place `to` (both from 0): 204, or 404 past the queue's end |
 | `DELETE /v1/queue?at={n}` | control | Takes out the song at that place in the queue (from 0): 204, or 404 past its end |
 | `DELETE /v1/queue` | control | Clears the queue: 204 |
+| `GET /v1/visualizer/stream?width=&height=&fps=` | read | The visualizer, live, as MJPEG (below) |
+| `GET /v1/visualizer/frame.jpg?width=&height=` | read | The visualizer's next picture, as a JPEG: 503 if it doesn't draw one within 3 seconds |
+| `GET /v1/visualizer?width=&height=&fps=&token=` | read | A page showing the stream, for OBS's Browser Source or a browser |
 | `GET /v1/events` | read | Server-Sent Events (below) |
 
 An album's art is its first song's: `GET /v1/songs/{first key}/art`. Covers that synththing hasn't downloaded yet are downloaded only when online lookups are on.
@@ -103,6 +106,12 @@ Every song a program adds that wasn't in your library yet is marked with that pr
 - `scripts_changed`: a script was added, removed or put in use: `{}`. Ask `/v1/scripts` again.
 
 Add `?events=now_playing,seeked` (any of them, by name) for only those. A comment line (`: keep-alive`) comes every 25 seconds when nothing else does.
+
+## The visualizer, live
+
+`/v1/visualizer/stream` sends the visualizer's pictures as they're drawn, as MJPEG (`multipart/x-mixed-replace`), at most `fps` a second (1 to 60, 30 if not given). With `width` and `height` (64 to 4096 each, made even), the script draws at exactly that size and synththing's own window just says it's streaming instead of showing it. Without them, you get whatever size it's showing at. A recording's size wins while one is going. Scripts can tell they're being watched: `playback().streaming` is true.
+
+In OBS, add a **Media Source**, untick Local File and give it `http://127.0.0.1:7340/v1/visualizer/stream?width=1920&height=1080&token=st_...`, or a **Browser Source** with `http://127.0.0.1:7340/v1/visualizer?width=1920&height=1080&token=st_...` and the same size. The visualizer has to be showing somewhere in synththing (its tab open, or the dedicated window) for pictures to come.
 
 ## System media controls
 

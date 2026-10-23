@@ -1438,6 +1438,9 @@ struct SongIdentity {
     loads: u64,
     /// The visualizer is being recorded to a video (`playback().recording`).
     recording: bool,
+    /// The visualizer's pictures are going out through the local API
+    /// (`playback().streaming`).
+    streaming: bool,
     /// The recording the script is part of (`recording()`).
     take: Option<RecordingTake>,
 }
@@ -2004,6 +2007,12 @@ impl LuaVisualizer {
         let mut song = self.song.borrow_mut();
         song.recording = recording;
         song.take = take;
+    }
+
+    /// Whether the visualizer's pictures are going out through the local
+    /// API (`playback().streaming`).
+    pub fn set_streaming(&mut self, streaming: bool) {
+        self.song.borrow_mut().streaming = streaming;
     }
 
     /// What the running script asked for with `script_options`.
@@ -4071,6 +4080,7 @@ fn register_globals(
             t.raw_set("song_id", song.id.clone())?;
             t.raw_set("song_loads", song.loads)?;
             t.raw_set("recording", song.recording)?;
+            t.raw_set("streaming", song.streaming)?;
             t.raw_set(
                 "loop_mode",
                 match song.transport.loop_mode {
@@ -5883,6 +5893,13 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         frame(&mut visualizer, &sample_playback());
         assert_eq!(last_log(&visualizer), "false");
         visualizer.set_recording(true, None);
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "true");
+        // playback().streaming follows set_streaming.
+        visualizer.set_source("function render() log(tostring(playback().streaming)) end".into());
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "false");
+        visualizer.set_streaming(true);
         frame(&mut visualizer, &sample_playback());
         assert_eq!(last_log(&visualizer), "true");
         // recording(): nil outside a recording, else what it asks.

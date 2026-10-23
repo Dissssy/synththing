@@ -68,7 +68,7 @@ pub const HOST_API: &[(&str, &str)] = &[
     ("channel_program", "channel_program(c, [seconds]) -> program, name: the instrument channel c plays (General MIDI name; channel 9 is Drums)"),
     ("channel_name", "channel_name(c) -> name: the name of the track channel c's notes are in, or nil"),
     ("channel_colors", "channel_colors({ [channel] = color, ... }), color the app's channel toggles"),
-    ("playback", "playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id, song_loads, loop_mode, shuffle, recording}, times in song seconds"),
+    ("playback", "playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id, song_loads, loop_mode, shuffle, recording, streaming}, times in song seconds"),
     ("set_paused", "set_paused(paused): pause or resume playback (applied after this frame)"),
     ("seek", "seek(seconds): jump to a song position, seek(0) restarts (applied after this frame)"),
     ("script_options", "script_options({start_paused = true, app_log = true, record_prepare = true, record_auto = true}): once, at the top; songs load paused for the script to start, log() also goes to the app's log, recordings wait for recording_ready/recording_done, it can play itself when recorded"),

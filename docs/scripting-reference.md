@@ -379,7 +379,7 @@ text(4, 4, note_name(key) .. string.format(" %+d cents", math.floor((key - math.
 ## Playback & timing
 
 ```lua
-playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id, song_loads, loop_mode, shuffle, recording}
+playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id, song_loads, loop_mode, shuffle, recording, streaming}
 script_options({start_paused = true})  -- once, at the top: songs wait for the script to start them
 script_options({app_log = true})       -- its log() messages also go to the app's log
 set_paused(paused)  -- pause or resume playback
@@ -419,6 +419,8 @@ Everything a script sees follows what's being heard, not what's been prepared: t
 `set_paused` and `seek` are carried out by the app right after the frame, and show up in `playback()` from the next frame on (along with a new `generation` for a seek). Unpausing a song that has finished starts it over. Like `set_channel_enabled`, they're meant for things like pausing a game when the player dies, or a "retry this section" practice loop.
 
 `recording` is true while the visualizer is being recorded to a video (and not paused), in the app or with `run-script --video`: hide a "press start" hint, a cursor or a debug overlay from the video, say. See Recording for more a script can do about it.
+
+`streaming` is true while a program is watching the visualizer through the local API (`/v1/visualizer`, for OBS or a browser, say). It can draw at a size the program asked for, so go by `W` and `H` as always. Since 1.5.0.
 
 `song_loads` goes up by one every time a song is loaded, including the same song clicked again (which `song_id` can't tell apart). Compare it with the previous frame's to know a song just started over from the top, say to go back to a game's menu. Everything about the song changes in the same frame: from the frame `song_loads` goes up, `playback()` (`length`, `position`, `song_id`, ...) and the note functions (`notes_between` and the rest) all describe the new song, so reading `notes_between(0, playback().length)` right then gets all of it.
 

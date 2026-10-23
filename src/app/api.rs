@@ -745,6 +745,24 @@ impl App {
         }
     }
 
+    /// Whether a program's watching the visualizer through the API, and the
+    /// size it wants frames drawn at, if it asked for one.
+    pub(super) fn api_watched(&self) -> Option<Option<(usize, usize)>> {
+        self.api.server.as_ref()?.frames().wanted()
+    }
+
+    /// The frame the visualizer just drew, to whoever's watching it, if
+    /// it's the size frames are drawn at now (one asked for before a size
+    /// change can still come in at the old one).
+    pub(super) fn api_offer_frame(&self, size: Option<(usize, usize)>) {
+        let Some(server) = &self.api.server else { return };
+        let panel = super::lock_panel(&self.visualizer);
+        let (width, height, pixels) = panel.last_frame();
+        if size.is_none_or(|size| size == (width, height)) {
+            server.frames().offer(width, height, pixels);
+        }
+    }
+
     /// Preferences closed: a new token isn't shown again.
     pub(super) fn api_preferences_closed(&mut self) {
         self.api.new_token = None;

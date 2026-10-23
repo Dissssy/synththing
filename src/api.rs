@@ -41,6 +41,10 @@ const WORKERS: usize = 2;
 const MOST_STREAMS: usize = 32;
 /// How long a stream goes quiet before a keep-alive comment.
 const KEEP_ALIVE: Duration = Duration::from_secs(25);
+/// The visualizer stream's frame rate, unless it asks for another.
+const DEFAULT_FPS: u32 = 30;
+/// How long `frame.jpg` waits for the visualizer to draw one.
+const FRAME_WAIT: Duration = Duration::from_secs(3);
 /// How long a request waits for the app to answer.
 const APP_WAIT: Duration = Duration::from_secs(5);
 /// The events there are (`GET /v1/events?events=` picks among them).
@@ -412,6 +416,8 @@ struct Shared {
     waker: egui::Context,
     /// Each open stream, with the events it wants (`None`: all).
     streams: Mutex<Vec<(Option<Vec<String>>, Sender<String>)>>,
+    /// The visualizer's pictures, for whoever's watching them.
+    frames: Arc<crate::visualizer_stream::Frames>,
 }
 
 impl Server {
@@ -421,7 +427,7 @@ impl Server {
         let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
         let http = Arc::new(http);
         let (tx, calls) = mpsc::channel();
-        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default() });
+        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default(), frames: crate::visualizer_stream::Frames::new() });
         let threads = (0..WORKERS)
             .map(|_| {
                 let (http, shared) = (Arc::clone(&http), Arc::clone(&shared));
@@ -440,6 +446,11 @@ impl Server {
 
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// The visualizer's pictures, for the API's watchers.
+    pub fn frames(&self) -> &crate::visualizer_stream::Frames {
+        &self.shared.frames
     }
 
     /// The apps allowed in, as the preferences now have them.
@@ -568,8 +579,8 @@ fn ask<T>(shared: &Shared, call: impl FnOnce(Sender<T>) -> Call) -> Result<T, Re
 
 fn handle(shared: &Arc<Shared>, mut request: Request) {
     let url = request.url().to_string();
-    let (path, query) = url.split_once('?').unwrap_or((&url, ""));
-    let query = crate::library::server::parse_query(query);
+    let (path, raw_query) = url.split_once('?').unwrap_or((&url, ""));
+    let query = crate::library::server::parse_query(raw_query);
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
     let method = request.method().clone();
     if !shared.lan && !from_here(&request) {
@@ -601,6 +612,41 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 return;
             }
         },
+        (Method::Get, ["v1", "visualizer"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            // (A page OBS's Browser Source, or a browser, can show: the
+            // stream, with the same query, token and all.)
+            let query = raw_query.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
+            let page = format!(
+                "<!doctype html><meta charset=\"utf-8\"><title>synththing visualizer</title>\
+                 <style>html,body{{margin:0;height:100%;background:transparent;overflow:hidden}}\
+                 img{{width:100%;height:100%;object-fit:contain;display:block}}</style>\
+                 <img src=\"/v1/visualizer/stream?{query}\" alt=\"\">"
+            );
+            Response::from_data(page).with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap())
+        })),
+        (Method::Get, ["v1", "visualizer", "stream"]) => match needs(access.read, "read").map_or_else(|| watch_options(&query), Err) {
+            Err(reply) => Some(reply),
+            Ok((size, fps)) => {
+                video(shared, request, size, fps);
+                return;
+            }
+        },
+        (Method::Get, ["v1", "visualizer", "frame.jpg"]) => Some(needs(access.read, "read").unwrap_or_else(|| match watch_options(&query) {
+            Err(reply) => reply,
+            Ok((size, _)) => {
+                let watching = shared.frames.watch(size);
+                let seen = shared.frames.count();
+                shared.waker.request_repaint();
+                let frame = shared.frames.next(seen, FRAME_WAIT);
+                drop(watching);
+                match frame {
+                    Some((jpeg, _)) => Response::from_data(jpeg.to_vec())
+                        .with_header(Header::from_bytes("Content-Type", "image/jpeg").unwrap())
+                        .with_header(Header::from_bytes("Cache-Control", "no-cache").unwrap()),
+                    None => error(503, "the visualizer didn't draw a frame: is it showing?"),
+                }
+            }
+        })),
         (Method::Post, ["v1", "seek"]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| {
             match query.get("to").and_then(|t| t.parse::<f64>().ok()).filter(|t| t.is_finite() && *t >= 0.0) {
                 None => error(400, "say where to: ?to=<seconds>"),
@@ -704,7 +750,7 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             Some(reply) => Some(reply),
             None => match ask(shared, Call::Library) {
                 Err(reply) => Some(reply),
-                Ok(library) => match song_file(&library, key) {
+                Ok(library) => match song_file(&library, key, request.headers().iter().find(|h| h.field.equiv("Range")).map(|h| h.value.as_str())) {
                     Err(reply) => Some(reply),
                     Ok(file) => {
                         let _ = request.respond(file);
@@ -910,10 +956,27 @@ fn groups(library: &Library, by: SplitBy, q: &str) -> Reply {
 
 /// `GET /v1/songs/{key}/file`: the song's file as it's kept, named as it
 /// was imported.
-fn song_file(library: &Library, key: &str) -> Result<Response<std::fs::File>, Reply> {
+/// `GET /v1/songs/{key}/file`: the whole file, or the part `range` (the
+/// request's `Range` header) asks for, so players can seek in it.
+fn song_file(library: &Library, key: &str, range: Option<&str>) -> Result<Response<std::io::Take<std::fs::File>>, Reply> {
+    use std::io::Seek;
     let song = library.store.get_by_key(key).filter(|_| library.store.has(key)).ok_or_else(|| error(404, "there's no song with that key here"))?;
     let path = library.store.path(key);
-    let file = std::fs::File::open(&path).map_err(|e| error(500, format!("couldn't read the song: {e}")))?;
+    let mut file = std::fs::File::open(&path).map_err(|e| error(500, format!("couldn't read the song: {e}")))?;
+    let length = file.metadata().map_err(|e| error(500, format!("couldn't read the song: {e}")))?.len();
+    let part = match range.map(|r| byte_range(r, length)) {
+        None | Some(Ok(None)) => None,
+        Some(Ok(Some(part))) => Some(part),
+        Some(Err(())) => {
+            return Err(error(416, "that range isn't in the file").with_header(header("Content-Range", &format!("bytes */{length}"))));
+        }
+    };
+    let (status, start, end) = match part {
+        Some((start, end)) => (206, start, end),
+        None => (200, 0, length.saturating_sub(1)),
+    };
+    file.seek(std::io::SeekFrom::Start(start)).map_err(|e| error(500, format!("couldn't read the song: {e}")))?;
+    let size = if length == 0 { 0 } else { end - start + 1 };
     let extension = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
     let kind = match extension.as_str() {
         "mp3" => "audio/mpeg",
@@ -930,10 +993,39 @@ fn song_file(library: &Library, key: &str) -> Result<Response<std::fs::File>, Re
     let encoded: String =
         song.name.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
     // Never chunked, so the length is sent and clients can show progress.
-    Ok(Response::from_file(file)
+    let mut response = Response::new(tiny_http::StatusCode(status), Vec::new(), file.take(size), Some(size as usize), None)
         .with_chunked_threshold(usize::MAX)
-        .with_header(header("Content-Type", kind))
+        .with_header(header("Accept-Ranges", "bytes"))
+        .with_header(header("Content-Type", kind));
+    if status == 206 {
+        response.add_header(header("Content-Range", &format!("bytes {start}-{end}/{length}")));
+    }
+    Ok(response
         .with_header(header("Content-Disposition", &format!("attachment; filename=\"{plain}\"; filename*=UTF-8''{encoded}"))))
+}
+
+/// A `Range: bytes=...` header's one range, in a file `length` bytes long:
+/// the first and last byte, `None` to send all of it (no `bytes=` range, or
+/// several, which are allowed to be answered with the whole file), or `Err`
+/// if it's past the end.
+fn byte_range(header: &str, length: u64) -> Result<Option<(u64, u64)>, ()> {
+    let Some(spec) = header.trim().strip_prefix("bytes=") else { return Ok(None) };
+    if spec.contains(',') {
+        return Ok(None);
+    }
+    let Some((first, last)) = spec.trim().split_once('-') else { return Ok(None) };
+    let (first, last) = (first.trim(), last.trim());
+    let (start, end) = match (first.parse::<u64>(), last.parse::<u64>()) {
+        // The last `n` bytes.
+        (Err(_), Ok(n)) if first.is_empty() => (length.saturating_sub(n), length.saturating_sub(1)),
+        (Ok(start), Err(_)) if last.is_empty() => (start, length.saturating_sub(1)),
+        (Ok(start), Ok(end)) if start <= end => (start, end.min(length.saturating_sub(1))),
+        _ => return Ok(None),
+    };
+    if length == 0 || start >= length || (first.is_empty() && last == "0") {
+        return Err(());
+    }
+    Ok(Some((start, end)))
 }
 
 /// `GET /v1/songs/{key}/art`: the song's picture (its own, else its
@@ -985,6 +1077,62 @@ fn matching<'s>(store: &'s SongStore, query: &str) -> Vec<(String, &'s Song)> {
 
 /// `GET /v1/events`: keep the connection, on a thread of its own, and send
 /// it every event until it's closed.
+/// `?width=&height=&fps=` for the visualizer's pictures: the size to draw
+/// them at (both or neither), and how many a second at most.
+fn watch_options(query: &HashMap<String, String>) -> Result<(Option<(usize, usize)>, u32), Reply> {
+    let side = |name: &str| query.get(name).map(|v| v.parse::<u32>().map_err(|_| error(400, format!("?{name}= is a number of pixels"))));
+    let size = match (side("width").transpose()?, side("height").transpose()?) {
+        (Some(w), Some(h)) => Some(crate::recorder::Resolution::custom(w, h).size()),
+        (None, None) => None,
+        _ => return Err(error(400, "give both ?width= and ?height=, or neither")),
+    };
+    let fps = match query.get("fps") {
+        None => DEFAULT_FPS,
+        Some(fps) => fps.parse::<u32>().ok().filter(|f| (1..=60).contains(f)).ok_or_else(|| error(400, "?fps= is 1 to 60"))?,
+    };
+    Ok((size, fps))
+}
+
+/// Send the visualizer's pictures to `request` as they're drawn, as MJPEG
+/// (`multipart/x-mixed-replace`), until it goes.
+fn video(shared: &Arc<Shared>, request: Request, size: Option<(usize, usize)>, fps: u32) {
+    let shared = Arc::clone(shared);
+    let spawned = std::thread::Builder::new().name("api visualizer".into()).spawn(move || {
+        let watching = shared.frames.watch(size);
+        shared.waker.request_repaint();
+        let mut writer = request.into_writer();
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\nCache-Control: no-cache\r\n\
+                    Connection: close\r\n\r\n";
+        let mut ok = writer.write_all(head.as_bytes()).and_then(|()| writer.flush()).is_ok();
+        let (mut seen, gap) = (shared.frames.count(), Duration::from_secs_f64(1.0 / fps as f64));
+        while ok {
+            let started = std::time::Instant::now();
+            // (Nothing new for a while: the visualizer isn't drawing. The
+            // connection's checked by sending the last picture again.)
+            let (jpeg, count) = match shared.frames.next(seen, KEEP_ALIVE) {
+                Some(frame) => frame,
+                None => match shared.frames.next(seen.saturating_sub(1), Duration::ZERO) {
+                    Some(frame) => frame,
+                    None => continue,
+                },
+            };
+            seen = count;
+            let part = format!("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", jpeg.len());
+            ok = writer
+                .write_all(part.as_bytes())
+                .and_then(|()| writer.write_all(&jpeg))
+                .and_then(|()| writer.write_all(b"\r\n"))
+                .and_then(|()| writer.flush())
+                .is_ok();
+            std::thread::sleep(gap.saturating_sub(started.elapsed()));
+        }
+        drop(watching);
+    });
+    if spawned.is_err() {
+        log::warn!("api: couldn't start a visualizer stream");
+    }
+}
+
 fn stream(shared: &Arc<Shared>, request: Request, wanted: Option<Vec<String>>) {
     let (tx, rx) = mpsc::channel::<String>();
     {
@@ -1137,6 +1285,12 @@ mod tests {
         assert_eq!(answering(&server, empty, set("scripts/abc/use", &read_token)), 403);
         assert_eq!(answering(&server, empty, set("scripts/abc/use", &control_token)), 204);
         assert_eq!(answering(&server, empty, set("scripts/missing/use", &control_token)), 404);
+        assert_eq!(get(&server, "/v1/visualizer/stream?width=640", &read_token).0, 400);
+        assert_eq!(get(&server, "/v1/visualizer/stream?fps=0", &read_token).0, 400);
+        assert_eq!(get(&server, "/v1/visualizer/frame.jpg", &control_token).0, 403);
+        let (status, page) = get(&server, "/v1/visualizer?width=640&height=360&token=x", &read_token);
+        assert_eq!(status, 200);
+        assert!(page.contains("/v1/visualizer/stream?width=640&amp;height=360&amp;token=x"), "{page}");
         assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &read_token)), 403);
         assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &control_token)), 204);
         assert_eq!(answering(&server, empty, set("queue/move?from=2", &control_token)), 400);
@@ -1184,6 +1338,20 @@ mod tests {
         assert_eq!(answering(&server, empty, edit(false, "playlists/p1/songs/move?to=0", &edit_token)), 400);
         assert_eq!(answering(&server, empty, edit(true, "playlists/p1", &control_token)), 403);
         assert_eq!(answering(&server, empty, edit(true, "playlists/p1", &edit_token)), 204);
+    }
+
+    #[test]
+    fn byte_ranges_are_read_like_http_says() {
+        assert_eq!(byte_range("bytes=0-99", 1000), Ok(Some((0, 99))));
+        assert_eq!(byte_range("bytes=500-", 1000), Ok(Some((500, 999))));
+        assert_eq!(byte_range("bytes=-100", 1000), Ok(Some((900, 999))));
+        assert_eq!(byte_range("bytes=-5000", 1000), Ok(Some((0, 999))));
+        assert_eq!(byte_range("bytes=900-5000", 1000), Ok(Some((900, 999))));
+        assert_eq!(byte_range("bytes=1000-", 1000), Err(()));
+        assert_eq!(byte_range("bytes=-0", 1000), Err(()));
+        assert_eq!(byte_range("bytes=0-1,5-6", 1000), Ok(None));
+        assert_eq!(byte_range("bytes=9-1", 1000), Ok(None));
+        assert_eq!(byte_range("items=0-1", 1000), Ok(None));
     }
 
     #[test]
