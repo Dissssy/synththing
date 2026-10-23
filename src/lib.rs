@@ -17,6 +17,7 @@
 #![cfg_attr(target_os = "android", allow(dead_code))]
 
 mod album_art;
+mod api;
 mod app;
 #[cfg(any(target_os = "android", test))]
 mod android_id;
@@ -54,6 +55,8 @@ mod lua_highlight;
 mod lua_visualizer;
 mod marquee;
 mod matching;
+#[cfg(not(target_os = "android"))]
+mod media_controls;
 mod midi_notes;
 mod offline;
 mod pixel_font;

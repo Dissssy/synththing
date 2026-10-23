@@ -239,7 +239,7 @@ impl App {
         }
     }
 
-    fn save_config(&mut self) {
+    pub(super) fn save_config(&mut self) {
         if let Err(e) = self.config.save() {
             log::warn!("saving the config: {e}");
         }

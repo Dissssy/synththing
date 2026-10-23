@@ -60,6 +60,7 @@ const LOCAL: &[&str] = &[
     "ui_scale",
     "sync_debug",
     "local_keymap",
+    "api",
 ];
 
 /// A setting a device can choose not to sync: one or more leaves.

@@ -18,12 +18,17 @@ const MOST: usize = 50;
 pub(super) struct Overflow {
     looked: f64,
     noted: HashSet<egui::Id>,
+    /// The page the frame before was drawn on: what's looked at.
+    drawn: &'static str,
 }
 
 impl Overflow {
-    /// Look at what was drawn last frame, on `page`, and log what ran off
-    /// the screen (that wasn't noted before).
-    pub(super) fn check(&mut self, ctx: &egui::Context, page: &str) {
+    /// Look at what was drawn last frame, and log what ran off the screen
+    /// (that wasn't noted before). `page` is the one this frame draws: the
+    /// widgets looked at are the last frame's, so they're logged under the
+    /// page they were on (not the one a tap just went to).
+    pub(super) fn check(&mut self, ctx: &egui::Context, page: &'static str) {
+        let page = std::mem::replace(&mut self.drawn, page);
         let now = ctx.input(|i| i.time);
         if now - self.looked < EVERY || self.noted.len() >= MOST {
             return;

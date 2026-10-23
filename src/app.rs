@@ -7,6 +7,7 @@
 //! around, split, float them out into windows. Closing a tab only hides that
 //! section; the View menu brings it back (see `layout.rs` for where).
 
+mod api;
 mod autoplay;
 mod branding;
 mod close;
@@ -52,6 +53,7 @@ mod toast;
 mod tray_panel;
 mod tour;
 mod welcome;
+mod which_key;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -96,7 +98,7 @@ const VISUALIZER_HEIGHT: usize = 320;
 /// else is decoded as plain audio (rodio/symphonia, or ffmpeg for what they
 /// can't, figure out the actual format themselves; this list is just what
 /// shows up in the picker).
-const SONG_EXTENSIONS: &[&str] = &[
+pub(crate) const SONG_EXTENSIONS: &[&str] = &[
     "mid", "midi", "wav", "mp3", "ogg", "oga", "opus", "flac", "m4a", "aac", "aif", "aiff", "caf", "mka", "mp2", "wma", "ac3",
 ];
 const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
@@ -426,6 +428,11 @@ pub struct App {
     keymap: Arc<Keymap>,
     /// Preferences > Keyboard waiting for a key.
     keymap_capture: Option<keyboard::Capture>,
+    /// A key sequence underway (its first presses).
+    keymap_pending: Option<commands::Pending>,
+    /// The list the keys steer (`select_list::set_keyboard`): the one in
+    /// the tab in front.
+    keyboard_list: Option<&'static str>,
     /// The script's Settings or Controls window, if open.
     script_window: Option<script_windows::ScriptWindow>,
     /// The category picked in each (Settings, Controls, Debug).
@@ -577,6 +584,8 @@ pub struct App {
     tray_panel: tray_panel::TrayPanel,
     /// The window's hidden in the tray.
     hidden: bool,
+    /// The local app API's server and what it last told of.
+    api: api::ApiState,
     /// Quit was decided: the next close goes through.
     quitting: bool,
     /// A question closing asks first (the first close; a recording on).
@@ -734,6 +743,8 @@ impl App {
             palette: None,
             keymap: Arc::default(),
             keymap_capture: None,
+            keymap_pending: None,
+            keyboard_list: None,
             script_window: None,
             script_window_tab: [0; 3],
             user_presets: None,
@@ -803,6 +814,7 @@ impl App {
             second_launch: None,
             tray_panel: tray_panel::TrayPanel::new(picture),
             hidden: false,
+            api: api::ApiState::default(),
             quitting: false,
             close_prompt: None,
             set_aside: Vec::new(),
@@ -1004,7 +1016,20 @@ impl App {
         self.set_open(section, true);
         if let Some(path) = self.dock.find_tab(&section) {
             let _ = self.dock.set_active_tab(path);
+            self.dock.set_focused_node_and_surface(path.node_path());
         }
+    }
+
+    /// The open section `step` places from the one in front (the focused
+    /// tab), in `Section::ALL`'s order, round and round.
+    fn step_section(&mut self, step: isize) {
+        let open: Vec<Section> = Section::ALL.into_iter().filter(|&s| self.is_open(s)).collect();
+        let current = self.dock.find_active_focused().map(|(_, tab)| *tab);
+        let Some(at) = current.and_then(|c| open.iter().position(|&s| s == c)).or((!open.is_empty()).then_some(0)) else {
+            return;
+        };
+        let next = (at as isize + step).rem_euclid(open.len() as isize) as usize;
+        self.reveal_section(open[next]);
     }
 
     /// Show where `name` is documented in the Scripting Reference.
@@ -3226,6 +3251,12 @@ impl App {
         self.tray = crate::tray::Tray::new(ctx);
     }
 
+    /// The main window's handle (an HWND on Windows), for the system's media
+    /// controls.
+    pub fn attach_window(&mut self, window: Option<usize>) {
+        self.api.window = window;
+    }
+
     /// Watch `flag`, raised when synththing is launched again here.
     pub fn listen_for_second_launch(&mut self, flag: Arc<std::sync::atomic::AtomicBool>) {
         self.second_launch = Some(flag);
@@ -3400,8 +3431,15 @@ impl App {
     fn run_command(&mut self, ctx: &egui::Context, command: Command, view: &EngineView) {
         match command {
             Command::TogglePause => self.send(AudioCommand::TogglePause),
+            Command::Play | Command::Pause => {
+                if view.paused == (command == Command::Play) {
+                    self.send(AudioCommand::TogglePause);
+                }
+            }
             Command::SeekBack => self.send(AudioCommand::SeekRelative(-5.0)),
             Command::SeekForward => self.send(AudioCommand::SeekRelative(5.0)),
+            Command::SeekBackLong => self.send(AudioCommand::SeekRelative(-30.0)),
+            Command::SeekForwardLong => self.send(AudioCommand::SeekRelative(30.0)),
             Command::RestartSong => self.send(AudioCommand::Seek(0.0)),
             Command::NextTrack => {
                 if self.has_next() {
@@ -3427,6 +3465,35 @@ impl App {
             Command::PauseRecording => self.toggle_recording_pause(),
             Command::Quit => self.close_with(ctx, close::CloseAction::Quit),
             Command::CommandPalette => self.palette = Some(palette::Palette::default()),
+            Command::GoTo(_) | Command::NextSection | Command::PreviousSection => {
+                match command {
+                    Command::GoTo(section) => self.reveal_section(section),
+                    Command::NextSection => self.step_section(1),
+                    _ => self.step_section(-1),
+                }
+                // Off whatever has keyboard focus (a button Tab moved to),
+                // so the keys go to the tab's list.
+                ctx.memory_mut(|m| m.stop_text_input());
+            }
+            Command::Cursor(steer) => select_list::steer(ctx, steer, ctx.input(|i| i.modifiers.shift)),
+        }
+    }
+
+    /// The list in the tab (or page) in front, for the keys to steer.
+    fn find_keyboard_list(&mut self) -> Option<&'static str> {
+        if self.dedicated.is_some() {
+            return None;
+        }
+        let section = if self.mobile() {
+            self.mobile_list_section()?
+        } else {
+            *self.dock.find_active_focused()?.1
+        };
+        match section {
+            Section::Songs => Some("songs"),
+            Section::Groupings => Some("playlist_rows"),
+            Section::Soundfonts => Some("soundfonts"),
+            _ => None,
         }
     }
 
@@ -3446,6 +3513,10 @@ impl App {
         match command {
             Command::ExitFullscreen => self.fullscreen || self.dedicated.is_some(),
             Command::NextTrack => self.has_next(),
+            // (The mobile layout has pages, not tabs.)
+            Command::GoTo(section) => !self.mobile() && self.dedicated.is_none() && section != Section::Removed,
+            Command::NextSection | Command::PreviousSection => !self.mobile() && self.dedicated.is_none(),
+            Command::Cursor(_) => self.keyboard_list.is_some(),
             _ => true,
         }
     }
@@ -3917,14 +3988,15 @@ impl App {
         if !self.preferences_open {
             frame_timing::time("playlist_tick", || self.playlist_tick(&view));
         }
-        frame_timing::time("poll_library", || self.poll_library());
+        frame_timing::time("poll_library", || self.poll_library(ctx));
         frame_timing::time("poll_moderation", || self.poll_moderation());
         frame_timing::time("poll_feedback", || self.poll_feedback());
         frame_timing::time("poll_identity", || self.poll_identity());
         frame_timing::time("poll_pairing", || self.poll_pairing());
         frame_timing::time("poll_notifications", || self.poll_notifications(ctx));
         frame_timing::time("poll_sync", || self.poll_sync());
-        frame_timing::time("lookup_tick", || self.lookup_tick(ctx));
+        frame_timing::time("lookup_tick", || self.lookup_tick());
+        frame_timing::time("api_tick", || self.api_tick(ctx, &view));
         if self.songs_moving().is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
@@ -3994,19 +4066,25 @@ impl eframe::App for App {
         // modal is up (Escape closes the modal instead) or a binding is
         // being captured.
         self.sync_keymap(&ctx);
+        self.keyboard_list = self.find_keyboard_list();
+        select_list::set_keyboard(&ctx, self.keyboard_list);
         if !self.any_modal_open() && self.binding_capture.is_none() {
             let typing = ctx.memory(|m| m.focused().is_some());
             let available: Vec<Command> = Command::ALL.into_iter().filter(|&c| self.command_available(c)).collect();
             let keymap = self.keymap.clone();
+            let mut pending = self.keymap_pending.take();
             // Run outside `ctx.input_mut`: `send_viewport_cmd` (inside
             // `set_fullscreen`) takes the lock that closure holds, and
             // calling it from in there deadlocks.
             let pressed = ctx.input_mut(|i| {
-                keymap.pressed(i, typing, |command| available.contains(&command))
+                keymap.pressed(i, typing, |command| available.contains(&command), &mut pending)
             });
+            self.keymap_pending = pending;
             for command in pressed {
                 self.run_command(&ctx, command, view);
             }
+        } else {
+            self.keymap_pending = None;
         }
         self.visualizer_output = ShowOutput::default();
 
@@ -4066,6 +4144,7 @@ impl eframe::App for App {
         }
         let windows = frame_timing::scope("windows");
         self.palette_ui(&ctx, view);
+        self.which_key_ui(&ctx);
         self.remove_songs_ui(&ctx);
         self.repair_ui(&ctx);
         self.tags_ui(&ctx);
@@ -4247,6 +4326,12 @@ fn categories_body<S: AsRef<str>>(
 /// and dialogs set their width to.
 fn fit_width(ui: &egui::Ui, width: f32) -> f32 {
     width.min(ui.ctx().content_rect().width() - 32.0).max(120.0)
+}
+
+/// Where a window may be: the screen, less the reach of its resize handles
+/// past its edges, so none of them is cut off by the screen's side.
+fn window_room(ctx: &egui::Context) -> egui::Rect {
+    ctx.content_rect().shrink(ctx.global_style().interaction.resize_grab_radius_corner)
 }
 
 /// A Phosphor icon by its name (`shield-check`, `SCROLL`), for text: the

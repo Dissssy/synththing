@@ -140,6 +140,17 @@ const READING_SPEED: f32 = 15.0;
 pub(super) const INFO_TOAST: &str = "info_toast";
 
 impl App {
+    /// The section the page shown is a list of, if it is one.
+    pub(super) fn mobile_list_section(&self) -> Option<crate::layout::Section> {
+        use crate::layout::Section;
+        match self.mobile_state.page {
+            Page::Songs => Some(Section::Songs),
+            Page::Grouping => Some(Section::Groupings),
+            Page::Soundfonts => Some(Section::Soundfonts),
+            _ => None,
+        }
+    }
+
     /// Whether the mobile layout is showing: always on Android, else as
     /// chosen (View > Mobile layout).
     pub(super) fn mobile(&self) -> bool {
@@ -263,59 +274,65 @@ impl App {
     fn mobile_top_bar_ui(&mut self, ui: &mut egui::Ui) {
         let library_details = self.mobile_state.page == Page::Library && self.library_details_open();
         let grouping = (self.mobile_state.page == Page::Grouping).then(|| self.grouping_title());
-        ui.horizontal(|ui| {
-            // In a Preferences section or a library pick's details: back to
-            // the list instead.
-            let state = &mut self.mobile_state;
-            match state.pref_section.filter(|_| state.page == Page::Preferences) {
-                Some(section) => {
-                    if ui.add(big_icon_button("arrow-left", 36.0)).on_hover_text("Back").clicked() {
-                        if state.editing_themes {
-                            state.editing_themes = false;
-                        } else {
-                            state.pref_section = None;
-                        }
+        // Notifications and feedback first, so the rest (a long title cut
+        // short) gets only the room they leave.
+        let row = egui::vec2(ui.available_width(), 36.0);
+        ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            self.notifications_button_ui(ui);
+            self.feedback_button_ui(ui);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| self.mobile_top_bar_left_ui(ui, library_details, grouping));
+        });
+    }
+
+    /// The top bar's menu (or back) button and the page's name.
+    fn mobile_top_bar_left_ui(&mut self, ui: &mut egui::Ui, library_details: bool, grouping: Option<(String, bool)>) {
+        // In a Preferences section or a library pick's details: back to
+        // the list instead.
+        let state = &mut self.mobile_state;
+        match state.pref_section.filter(|_| state.page == Page::Preferences) {
+            Some(section) => {
+                if ui.add(big_icon_button("arrow-left", 36.0)).on_hover_text("Back").clicked() {
+                    if state.editing_themes {
+                        state.editing_themes = false;
+                    } else {
+                        state.pref_section = None;
                     }
-                    ui.heading(if state.editing_themes { "Themes" } else { section.title() });
                 }
-                None if let Some((title, true)) = &grouping => {
-                    if ui.add(big_icon_button("arrow-left", 36.0)).on_hover_text("Back").clicked() {
-                        self.grouping_back();
-                    }
-                    ui.add(egui::Label::new(egui::RichText::new(title).heading()).truncate());
+                ui.heading(if state.editing_themes { "Themes" } else { section.title() });
+            }
+            None if let Some((title, true)) = &grouping => {
+                if ui.add(big_icon_button("arrow-left", 36.0)).on_hover_text("Back").clicked() {
+                    self.grouping_back();
                 }
-                None if library_details => {
-                    if ui.add(big_icon_button("arrow-left", 36.0)).on_hover_text("Back").clicked() {
-                        self.library_close_details();
-                    }
-                    ui.heading(Page::Library.title());
+                ui.add(egui::Label::new(egui::RichText::new(title).heading()).truncate());
+            }
+            None if library_details => {
+                if ui.add(big_icon_button("arrow-left", 36.0)).on_hover_text("Back").clicked() {
+                    self.library_close_details();
                 }
-                None => {
-                    if ui.add(big_icon_button("list", 36.0)).on_hover_text("Menu").clicked() {
-                        self.mobile_state.drawer_open = true;
+                ui.heading(Page::Library.title());
+            }
+            None => {
+                if ui.add(big_icon_button("list", 36.0)).on_hover_text("Menu").clicked() {
+                    self.mobile_state.drawer_open = true;
+                }
+                // Now playing is the app's home: its name, as the
+                // wordmark.
+                match self.mobile_state.page {
+                    Page::NowPlaying => self.mobile_wordmark_ui(ui),
+                    Page::Grouping => {
+                        let title = grouping.as_ref().map_or(Page::Grouping.title(), |(t, _)| t.as_str());
+                        ui.add(egui::Label::new(egui::RichText::new(title).heading()).truncate());
                     }
-                    // Now playing is the app's home: its name, as the
-                    // wordmark.
-                    match self.mobile_state.page {
-                        Page::NowPlaying => self.mobile_wordmark_ui(ui),
-                        Page::Grouping => {
-                            let title = grouping.as_ref().map_or(Page::Grouping.title(), |(t, _)| t.as_str());
-                            ui.add(egui::Label::new(egui::RichText::new(title).heading()).truncate());
-                        }
-                        Page::Changelog if self.mobile_state.changelog_since.is_some() => {
-                            ui.heading("What's new");
-                        }
-                        page => {
-                            ui.heading(page.title());
-                        }
+                    Page::Changelog if self.mobile_state.changelog_since.is_some() => {
+                        ui.heading("What's new");
+                    }
+                    page => {
+                        ui.heading(page.title());
                     }
                 }
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.notifications_button_ui(ui);
-                self.feedback_button_ui(ui);
-            });
-        });
+        }
     }
 
     /// Back (Android's back, Escape on the desktop), a step at a time: a

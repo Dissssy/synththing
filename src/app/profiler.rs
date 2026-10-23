@@ -21,12 +21,13 @@ pub(super) fn window(ctx: &egui::Context) {
         return;
     }
     let screen = ctx.content_rect();
+    let room = super::window_room(ctx);
     let mut open = true;
     egui::Window::new("Profiler")
         .open(&mut open)
         .default_size([(screen.width() - 32.0).min(1024.0), (screen.height() * 0.6).min(600.0)])
-        .max_size(screen.size() - egui::vec2(16.0, 16.0))
-        .constrain(true)
+        .max_size(room.size())
+        .constrain_to(room)
         // (Scrolling sideways inside it: its toolbar is wider than a phone.)
         .show(ctx, |ui| {
             egui::ScrollArea::horizontal().show(ui, puffin_egui::profiler_ui);

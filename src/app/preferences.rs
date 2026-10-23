@@ -22,11 +22,12 @@ pub(super) enum PrefTab {
     Updates,
     App,
     Keyboard,
+    Integrations,
     Recording,
 }
 
 impl PrefTab {
-    const ALL: [PrefTab; 9] = [
+    const ALL: [PrefTab; 10] = [
         Self::Appearance,
         Self::Playback,
         Self::Songs,
@@ -35,6 +36,7 @@ impl PrefTab {
         Self::Updates,
         Self::App,
         Self::Keyboard,
+        Self::Integrations,
         Self::Recording,
     ];
 
@@ -42,7 +44,7 @@ impl PrefTab {
     pub(super) fn available() -> Vec<PrefTab> {
         Self::ALL
             .into_iter()
-            .filter(|tab| !(cfg!(target_os = "android") && matches!(tab, Self::Recording | Self::Keyboard)))
+            .filter(|tab| !(cfg!(target_os = "android") && matches!(tab, Self::Recording | Self::Keyboard | Self::Integrations)))
             .collect()
     }
 
@@ -56,6 +58,7 @@ impl PrefTab {
             Self::Updates => "Updates",
             Self::App => "App",
             Self::Keyboard => "Keyboard",
+            Self::Integrations => "Integrations",
             Self::Recording => "Recording",
         }
     }
@@ -70,6 +73,7 @@ impl PrefTab {
             Self::Updates => "arrows-clockwise",
             Self::App => "app-window",
             Self::Keyboard => "keyboard",
+            Self::Integrations => "plugs-connected",
             Self::Recording => "record",
         }
     }
@@ -85,6 +89,7 @@ impl PrefTab {
             Self::Updates => "Checking for updates, canary builds",
             Self::App => "Tray, welcome and starter pack",
             Self::Keyboard => "Keyboard shortcuts",
+            Self::Integrations => "Letting other programs control synththing",
             Self::Recording => "Video size, quality, ffmpeg",
         }
     }
@@ -129,6 +134,7 @@ impl App {
         if close || jump.is_some() || response.should_close() {
             self.preferences_open = false;
             self.keymap_capture = None;
+            self.api_preferences_closed();
         }
         if let Some(jump) = jump {
             self.preference_jump(jump);
@@ -502,6 +508,7 @@ impl App {
                 }
             }
             PrefTab::Keyboard => self.keyboard_preferences_ui(ui),
+            PrefTab::Integrations => self.api_preferences_ui(ui),
             PrefTab::Recording => self.recording_preferences_ui(ui),
         }
 

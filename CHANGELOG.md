@@ -4,6 +4,18 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- The local API gives songs' album art and your Groupings (each ruleset's playlists), and can group any search by artist, album, genre, year or tag.
+- The local API can seek to an exact point and set the volume (`POST /v1/seek`, `POST /v1/volume`), and an event stream can ask for only the events it wants.
+
+## 1.4.0 (2026-10-23)
+
+### Added
+- A local API for your own integrations (Preferences > Integrations, desktop only, off by default): programs on this computer can see what's playing, search your songs and playlists, follow events (song changed, paused, seeked, library changed) and run any command the keyboard can, including new Play and Pause commands. Each program gets its own token, allowed to read, control or both. See docs/API.md.
+- synththing shows in your system's media controls: media keys, the volume overlay on Windows, Now Playing on macOS and MPRIS on Linux (so desktop widgets, KDE Connect and Home Assistant's MPRIS support see it too). Play, pause, skip, seek and volume work from there. On by default; Preferences > Integrations turns it off.
+- Programs can add songs to your library through the local API, only when you tick Add songs for them. Each song one adds is marked with its name on all your devices: search `addedby:name` to find them, and Preferences > Integrations can remove everything a program added in one go.
+- The local API can play a song or playlist (`POST /v1/play`), and can be let in from the local network as well as this computer (off by default; it's unencrypted, so only on a network you trust). While it's off, requests through a proxy or from web pages are turned away.
+
 ## 1.3.1 (2026-10-21)
 
 ### Added
@@ -16,6 +28,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Remove songs from all your devices: with your song library syncing, removing songs offers "Remove from all my devices", and your other devices delete them too. A song you'd only removed from one device can go everywhere from the sync settings' "Songs removed from this device" list. Importing a song again brings it back everywhere.
 - Command palette: Ctrl+Shift+P lists what the app can do with its keyboard shortcut beside it. Type to filter, Up/Down and Enter (or a click) to run one, Esc to close.
 - Change the keyboard shortcuts: Preferences > Keyboard lists every command with its keys. Click a key to change it, + to add another, right-click one to remove it, or Reset. A key bound to two commands shows in the warning color. Your keys sync with your other devices (Keyboard shortcuts, under App in what syncs), and "This device only" keeps a command's keys to the device you're on.
+- Key sequences: a command's keys can be up to three presses one after another. Ctrl+G then a letter goes to a tab (S Songs, G Groupings, F Soundfonts, V Visualizer, E Script Editor, R Scripting Reference, P Sprite Editor, L Online Library), and Ctrl+Tab and Ctrl+Shift+Tab step through the open tabs. Holding Ctrl through the letter works too. A moment into a sequence, a panel at the bottom lists what can follow; Esc cancels. Set your own in Preferences > Keyboard by pressing the keys one after another.
+- Lists from the keyboard: in the tab in front (Songs, Groupings or Soundfonts), Up/Down move through the rows, Page Up/Down and Home/End jump, Shift held selects as it goes, and Enter plays or opens the row. Ctrl+A and Delete work there too, not just under the pointer. Shift+Left/Right seek 30 seconds.
 
 ### Changed
 - Branch builds can use online features again, one kind at a time: the Online Library, sign-in and sync, and album art and details lookup each start off and are turned on for that run only, in Preferences > Online Library, with Turn on for this run where they'd be, or with `--online scripts,sync,lookup`. Never saved, so every launch starts offline.

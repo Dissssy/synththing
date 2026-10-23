@@ -82,6 +82,12 @@ pub struct Song {
     /// What it was matched to at MusicBrainz (`lookup`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub online: Option<Online>,
+    /// The program that brought it into the library through the local API
+    /// (`api.rs`), by the name it was given there; `None` for songs the
+    /// user imported. Synced, so its songs can be found and removed
+    /// everywhere.
+    #[serde(rename = "by", default, skip_serializing_if = "Option::is_none")]
+    pub added_by: Option<String>,
 }
 
 /// A song's match at MusicBrainz, or that its last one was wrong. Kept
@@ -386,6 +392,14 @@ impl SongStore {
             self.save();
         }
         changed
+    }
+
+    /// Note that `program` brought the song `key` in through the local API.
+    pub fn set_added_by(&mut self, key: &str, program: &str) {
+        if let Some(song) = Arc::make_mut(&mut self.songs).get_mut(key) {
+            song.added_by = Some(program.to_string());
+            self.save();
+        }
     }
 
     /// Whether the song at `path` is starred.
