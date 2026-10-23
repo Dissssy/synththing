@@ -84,7 +84,8 @@ impl App {
     /// The Up next tab: the queue's songs, shown as the Songs list shows
     /// songs (its columns, without its search or sorting). A click plays
     /// one now (taking it out); right-click to move songs to the top or
-    /// take them out, and Delete takes the selected ones out.
+    /// take them out, and Delete takes the selected ones out. Songs drag
+    /// in from Songs (or anywhere songs drag from), and rows drag to move.
     pub(super) fn queue_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let count = self.queue.len();
@@ -140,6 +141,15 @@ impl App {
         }
         if !output.delete.is_empty() {
             act = Some(Act::Out(output.delete));
+        }
+        if let Some((paths, at)) = output.insert {
+            let at = at.min(self.queue.len());
+            self.queue.splice(at..at, paths);
+        }
+        if let Some((rows, before)) = output.moved {
+            let order = crate::playlist::order_after_move(self.queue.len(), &rows, before);
+            let mut old: Vec<Option<PathBuf>> = std::mem::take(&mut self.queue).into_iter().map(Some).collect();
+            self.queue = order.iter().filter_map(|&i| old[i].take()).collect();
         }
         if let Some((path, on)) = output.star {
             self.tag_songs(super::tags::TagAction::Set(crate::song_store::STARRED.into(), on), &[path]);

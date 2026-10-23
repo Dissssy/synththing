@@ -4754,6 +4754,8 @@ fn drag_ghost_ui(ctx: &egui::Context) {
         format!("SoundFont: {}", nice_name(&sf.0))
     } else if let Some(entry) = DragAndDrop::payload::<playlist_panel::DraggedEntry>(ctx) {
         entry.label.clone()
+    } else if let Some(rows) = DragAndDrop::payload::<song_list::DraggedRows>(ctx) {
+        rows.label.clone()
     } else {
         return;
     };

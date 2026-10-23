@@ -477,12 +477,29 @@ pub struct OrderedOutput {
     pub delete: Vec<usize>,
     /// The song's star was clicked: star it (`true`) or unstar it.
     pub star: Option<(PathBuf, bool)>,
+    /// Songs dragged in were dropped before this row (or after the last,
+    /// below them).
+    pub insert: Option<(Vec<PathBuf>, usize)>,
+    /// Rows dragged were dropped before this one (or after the last).
+    pub moved: Option<(Vec<usize>, usize)>,
+}
+
+/// Drag-and-drop payload for rows of an ordered list ([`ordered_ui`])
+/// being moved within it: the selection if the dragged row is part of it,
+/// else just that row.
+pub struct DraggedRows {
+    /// The list's `id_salt`.
+    pub list: &'static str,
+    pub rows: Vec<usize>,
+    /// What's being dragged, for the label following the pointer.
+    pub label: String,
 }
 
 /// `songs` (described by [`column_keys`]) in their own order, shown as the
 /// Songs list shows songs, with its columns but without its search,
 /// sorting or groups: the play queue. `menu` is a row's right-click menu,
-/// given the rows it's for.
+/// given the rows it's for. Rows drag to move them, and songs dragged in
+/// (from Songs) drop between them, or anywhere below them for the end.
 pub fn ordered_ui(
     ui: &mut egui::Ui,
     id_salt: &'static str,
@@ -512,17 +529,65 @@ pub fn ordered_ui(
         header_cells(ui, rect, &shown, |_, label| egui::RichText::new(label).strong());
     }
     let mut star = None;
+    let mut insert = None;
+    let mut moved = None;
     let hits = Hits::default();
+    let area = ui.max_rect();
+    let ctx = ui.ctx().clone();
+    let released = ui.input(|i| i.pointer.any_released());
     let output = select_list::show(ui, id_salt, songs, selection, None, |ui, row, (path, song)| {
+        if row.response.drag_started() {
+            let rows = row.rows();
+            let label = match rows.len() {
+                1 => song.name.clone(),
+                n => format!("{} and {} more", song.name, n - 1),
+            };
+            row.response.dnd_set_drag_payload(DraggedRows { list: id_salt, rows, label });
+        }
+        // Dropped onto this row: before it in its top half, else after it.
+        if row.response.contains_pointer() {
+            let rect = row.response.rect;
+            let above = ui.input(|i| i.pointer.hover_pos()).is_none_or(|p| p.y < rect.center().y);
+            let at = if above { row.idx } else { row.idx + 1 };
+            let line = if above { rect.top() } else { rect.bottom() };
+            let stroke = egui::Stroke::new(2.0, ui.visuals().selection.stroke.color);
+            if egui::DragAndDrop::has_payload_of_type::<DraggedFiles>(&ctx) {
+                ui.painter().hline(rect.x_range(), line, stroke);
+                if released && let Some(files) = egui::DragAndDrop::take_payload::<DraggedFiles>(&ctx) {
+                    insert = Some((files.paths.clone(), at));
+                }
+            } else if let Some(dragged) = egui::DragAndDrop::payload::<DraggedRows>(&ctx)
+                && dragged.list == id_salt
+            {
+                ui.painter().hline(rect.x_range(), line, stroke);
+                if released {
+                    egui::DragAndDrop::clear_payload(&ctx);
+                    moved = Some((dragged.rows.clone(), at));
+                }
+            }
+        }
         row.response.context_menu(|ui| menu(ui, &row.rows()));
         if song_row(ui, path, song, &hits, &shown, select_list::scrolls(row, false), touch, trailing) {
             star = Some((path.clone(), !song.plays.starred));
         }
     });
+    // Released anywhere else over the list: at the end.
+    if released && insert.is_none() && moved.is_none() && ui.rect_contains_pointer(area) {
+        if let Some(files) = egui::DragAndDrop::take_payload::<DraggedFiles>(&ctx) {
+            insert = Some((files.paths.clone(), songs.len()));
+        } else if let Some(dragged) = egui::DragAndDrop::payload::<DraggedRows>(&ctx)
+            && dragged.list == id_salt
+        {
+            egui::DragAndDrop::clear_payload(&ctx);
+            moved = Some((dragged.rows.clone(), songs.len()));
+        }
+    }
     OrderedOutput {
         play: output.activated,
         delete: if output.delete { selection.rows().to_vec() } else { Vec::new() },
         star,
+        insert,
+        moved,
     }
 }
 
