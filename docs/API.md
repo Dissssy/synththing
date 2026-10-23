@@ -34,7 +34,7 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `POST` / `DELETE /v1/songs/{key}/tags?tag={name}` | edit library | Gives the song that tag, or takes it off: 204, or 404 if there's no such tag (tags are made in synththing) |
 | `GET /v1/tags` | read | `[{"name", "color"}]` |
 | `POST` / `DELETE /v1/playlists/{id}/songs?song={key}` | edit library | Adds the song to the end of the playlist, or takes it out (every time it's in it): 204, 404 if it isn't in it, 409 for a smart playlist |
-| `GET /v1/songs/{key}/file` | download songs | The song's file, with its type and its name as imported (`Content-Disposition`), or 404 if it isn't on this computer |
+| `GET /v1/songs/{key}/file` | download songs | The song's file, with its type, length and its name as imported (`Content-Disposition`), or 404 if it isn't on this computer |
 | `GET /v1/songs/{key}/art` | read | The song's picture (its own, else its album's cover) as an image, or 404 |
 | `GET /v1/groupings` | read | `[{"id", "name", "split"}]`: the rulesets (By Artist, By Album and yours) |
 | `GET /v1/groupings/{id}` | read | `{"id", "name", "split", "groups": [{"id", "title", "subtitle", "songs": [keys]}]}`: the playlists it makes of the songs on this computer, as Groupings shows them |

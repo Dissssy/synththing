@@ -736,12 +736,16 @@ fn song_file(library: &Library, key: &str) -> Result<Response<std::fs::File>, Re
         "mid" | "midi" => "audio/midi",
         _ => "application/octet-stream",
     };
-    // (RFC 6266's filename*, for names past ASCII.)
+    // (RFC 6266's filename*, for names past ASCII, after a plain one for
+    // clients that only read that.)
+    let plain: String = song.name.chars().map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' { c } else { '_' }).collect();
     let encoded: String =
         song.name.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
+    // Never chunked, so the length is sent and clients can show progress.
     Ok(Response::from_file(file)
+        .with_chunked_threshold(usize::MAX)
         .with_header(header("Content-Type", kind))
-        .with_header(header("Content-Disposition", &format!("attachment; filename*=UTF-8''{encoded}"))))
+        .with_header(header("Content-Disposition", &format!("attachment; filename=\"{plain}\"; filename*=UTF-8''{encoded}"))))
 }
 
 /// `GET /v1/songs/{key}/art`: the song's picture (its own, else its
@@ -1031,7 +1035,7 @@ mod tests {
         assert_eq!(answering(&server, &library, fetch(&key, &read_token)).0, 403);
         let (status, disposition, body) = answering(&server, &library, fetch(&key, &fetch_token));
         assert_eq!((status, body.as_slice()), (200, &b"MThd tune"[..]));
-        assert_eq!(disposition.as_deref(), Some("attachment; filename*=UTF-8''%C3%9Cberture.mid"));
+        assert_eq!(disposition.as_deref(), Some("attachment; filename=\"_berture.mid\"; filename*=UTF-8''%C3%9Cberture.mid"));
         assert_eq!(answering(&server, &library, fetch("nope", &fetch_token)).0, 404);
         let _ = std::fs::remove_dir_all(&dir);
     }
