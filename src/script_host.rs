@@ -24,7 +24,7 @@ use crate::engine::EngineView;
 use crate::live::LiveCommand;
 use crate::lua_visualizer::{
     self, Action, Binding, DebugSnapshot, LogEntry, LuaVisualizer, OPAQUE_BLACK, PerfSummary,
-    PlaybackRequest, RecordingTake, ScriptOptions, StateRequest, StateSnapshot, SettingDescriptor, SettingValue, SettingsPreset, Transport,
+    PlaybackRequest, RecordingTake, ScriptOptions, SongTags, StateRequest, StateSnapshot, SettingDescriptor, SettingValue, SettingsPreset, Transport,
 };
 use crate::midi_notes::NoteList;
 use crate::visualizer::{CursorRequest, NotesSnapshot, StereoFrame, Visualizer, VisualizerInput};
@@ -122,7 +122,8 @@ enum Message {
     SetSource { source: String, save_error: Option<String> },
     Restart,
     Rename { new_name: String, reply: Sender<Result<PathBuf, String>> },
-    SetSong { path: PathBuf, id: String, notes: Arc<NoteList> },
+    SetSong { path: PathBuf, id: String, notes: Arc<NoteList>, tags: SongTags },
+    SetArt { path: PathBuf, art: Option<Arc<crate::album_art::ScriptArt>> },
     SetAppLog(bool),
     SetRecording(bool, Option<RecordingTake>),
     SetStreaming(bool),
@@ -376,9 +377,14 @@ impl ScriptHost {
         self.path = Some(path);
     }
 
-    /// The song now playing: its file, id and notes.
-    pub fn set_song(&self, path: PathBuf, id: String, notes: Arc<NoteList>) {
-        self.send(Message::SetSong { path, id, notes });
+    /// The song now playing: its file, id, notes and tags.
+    pub fn set_song(&self, path: PathBuf, id: String, notes: Arc<NoteList>, tags: SongTags) {
+        self.send(Message::SetSong { path, id, notes, tags });
+    }
+
+    /// The art of the song at `path`, once read (`album_art()`).
+    pub fn set_art(&self, path: PathBuf, art: Option<Arc<crate::album_art::ScriptArt>>) {
+        self.send(Message::SetArt { path, art });
     }
 
     /// The "copy script logs to the app log" preference (sent on a change).
@@ -636,10 +642,11 @@ fn handle(visualizer: &mut LuaVisualizer, message: Message) -> Option<FrameDone>
             };
             let _ = reply.send(result);
         }
-        Message::SetSong { path, id, notes } => {
+        Message::SetSong { path, id, notes, tags } => {
             visualizer.set_note_list(notes);
-            visualizer.set_song(Some(&path), Some(id));
+            visualizer.set_song(Some(&path), Some(id), tags);
         }
+        Message::SetArt { path, art } => visualizer.set_art(&path, art),
         Message::SetAppLog(on) => visualizer.set_app_log(on),
         Message::SetRecording(on, take) => visualizer.set_recording(on, take),
         Message::SetStreaming(on) => visualizer.set_streaming(on),

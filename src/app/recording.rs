@@ -385,9 +385,14 @@ impl App {
             RecordKind::Song => draft
                 .song
                 .iter()
-                .map(|path| RenderSong {
-                    path: path.clone(),
-                    soundfont: draft.soundfont.clone().or_else(|| self.soundfont_for(path, None)),
+                .map(|path| {
+                    let (tags, art) = self.script_song(path);
+                    RenderSong {
+                        path: path.clone(),
+                        soundfont: draft.soundfont.clone().or_else(|| self.soundfont_for(path, None)),
+                        tags,
+                        art,
+                    }
                 })
                 .collect(),
             RecordKind::Playlist => {
@@ -398,9 +403,14 @@ impl App {
                             .entries
                             .iter()
                             .filter(|e| e.path.exists())
-                            .map(|e| RenderSong {
-                                path: e.path.clone(),
-                                soundfont: self.soundfont_for(&e.path, e.soundfont.as_deref()),
+                            .map(|e| {
+                                let (tags, art) = self.script_song(&e.path);
+                                RenderSong {
+                                    path: e.path.clone(),
+                                    soundfont: self.soundfont_for(&e.path, e.soundfont.as_deref()),
+                                    tags,
+                                    art,
+                                }
                             })
                             .collect()
                     })

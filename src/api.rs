@@ -1038,11 +1038,7 @@ fn byte_range(header: &str, length: u64) -> Result<Option<(u64, u64)>, ()> {
 /// release's cover), as the app would show it for its album.
 fn art(library: &Library, key: &str) -> Reply {
     let Some(song) = library.store.get_by_key(key) else { return error(404, "there's no song with that key") };
-    let source = crate::album_art::Source {
-        file: library.store.has(key).then(|| library.store.path(key)),
-        release: crate::lookup::release_of(song).map(|(release, group)| (release.to_string(), group.map(str::to_string))),
-        chosen: song.online.as_ref().and_then(|o| o.art.clone()),
-    };
+    let source = crate::album_art::Source::of_song(library.store.has(key).then(|| library.store.path(key)), Some(song));
     match crate::album_art::picture(&source, library.online) {
         Some(bytes) => {
             let kind = match image::guess_format(&bytes) {

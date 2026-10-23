@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use crate::config::nice_name;
 use crate::engine::{Engine, EngineView};
 use crate::loader::{self, SoundFontProbe};
-use crate::lua_visualizer::{LuaVisualizer, PlaybackRequest, RecordKind, RecordPhase, RecordingTake};
+use crate::lua_visualizer::{LuaVisualizer, PlaybackRequest, RecordKind, RecordPhase, RecordingTake, SongTags};
 use crate::recorder::{Format, Recorder};
 use crate::visualizer::{DisplayMode, StereoFrame, Visualizer, VisualizerInput};
 
@@ -121,15 +121,20 @@ impl Stage {
     }
 
     /// Load `song` (with `soundfont`, for MIDI; else the first of
-    /// `fallback_soundfonts` that exists), starting `paused` or not.
+    /// `fallback_soundfonts` that exists), starting `paused` or not, with
+    /// its `tags` and its art from `art` (not downloaded) for the script.
+    #[allow(clippy::too_many_arguments)]
     pub fn load_song(
         &mut self,
         song: &Path,
+        tags: SongTags,
+        art: &crate::album_art::Source,
         soundfont: Option<&Path>,
         fallback_soundfonts: &[PathBuf],
         paused: bool,
     ) -> Result<(), String> {
         let name = nice_name(song);
+        self.visualizer.set_art(song, crate::album_art::for_script(art, false).map(Arc::new));
         let is_midi = song
             .extension()
             .and_then(|e| e.to_str())
@@ -138,7 +143,7 @@ impl Stage {
             let audio =
                 loader::load_audio_file(song).map_err(|e| format!("couldn't read {}: {e}", song.display()))?;
             audio.wait_complete();
-            self.visualizer.set_song(Some(song), Some(audio.song_id.clone()));
+            self.visualizer.set_song(Some(song), Some(audio.song_id.clone()), tags);
             self.engine.load_audio_file(audio, name, paused);
             return Ok(());
         }
@@ -160,7 +165,7 @@ impl Stage {
         let midi = loader::load_midi(song).map_err(|e| format!("couldn't read {}: {e}", song.display()))?;
         self.engine.load_midi(midi.file, name, paused);
         self.visualizer.set_note_list(midi.notes);
-        self.visualizer.set_song(Some(song), Some(midi.song_id));
+        self.visualizer.set_song(Some(song), Some(midi.song_id), tags);
         Ok(())
     }
 }
@@ -170,6 +175,9 @@ impl Stage {
 pub struct RenderSong {
     pub path: PathBuf,
     pub soundfont: Option<PathBuf>,
+    /// For the script (`playback()`, `album_art()`).
+    pub tags: SongTags,
+    pub art: crate::album_art::Source,
 }
 
 /// What to render.
@@ -297,7 +305,7 @@ fn render(job: RenderJob, ffmpeg: &Path, status: &Mutex<RenderStatus>, stop: &At
 
     'songs: for (index, song) in job.songs.iter().enumerate() {
         // Prepared: it waits for the script; otherwise it plays from the top.
-        stage.load_song(&song.path, song.soundfont.as_deref(), &job.fallback_soundfonts, prepared)?;
+        stage.load_song(&song.path, song.tags.clone(), &song.art, song.soundfont.as_deref(), &job.fallback_soundfonts, prepared)?;
         let mut take = RecordingTake {
             phase: if prepared { RecordPhase::Preparing } else { RecordPhase::Recording },
             kind: job.kind,
@@ -439,6 +447,8 @@ mod tests {
         let song = RenderSong {
             path: starter.join("songs/Canon in D.mid"),
             soundfont: Some(starter.join("soundfonts/TimGM6mb.sf2")),
+            tags: SongTags::default(),
+            art: Default::default(),
         };
         let job = RenderJob {
             script,

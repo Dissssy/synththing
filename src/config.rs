@@ -130,6 +130,11 @@ pub struct Config {
     /// Preference: copy visualizer scripts' log() messages to the app's log.
     #[serde(default)]
     pub script_log_to_app: bool,
+    /// See-through visualizers show what's behind them in the app (the
+    /// visualizer's See-through button); off, they're shown over black.
+    /// What goes out through the local API keeps its transparency either way.
+    #[serde(default)]
+    pub visualizer_see_through: bool,
     /// Experimental preference: start loading a song when the pointer rests
     /// on it, so clicking it plays sooner.
     #[serde(default)]

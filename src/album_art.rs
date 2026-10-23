@@ -45,10 +45,81 @@ impl Source {
         self.file.is_none() && self.release.is_none() && self.chosen.is_none()
     }
 
+    /// A song's art: its file (when it's here), then its release and the
+    /// art chosen for it, if it's in the library.
+    pub fn of_song(file: Option<PathBuf>, song: Option<&crate::song_store::Song>) -> Self {
+        let Some(song) = song else { return Self { file, ..Self::default() } };
+        Self {
+            file,
+            release: crate::lookup::release_of(song).map(|(release, group)| (release.to_string(), group.map(str::to_string))),
+            chosen: song.online.as_ref().and_then(|o| o.art.clone()),
+        }
+    }
+
     /// Only the picture at `url` (Choose art's choices).
     pub fn url(url: &str) -> Self {
         Self { chosen: Some(Art::Url(url.to_string())), ..Self::default() }
     }
+}
+
+/// The playing song's art for visualizer scripts (`album_art()`): decoded,
+/// no bigger than `SCRIPT_ART` across, and the color it's mostly made of.
+pub struct ScriptArt {
+    pub image: image::RgbaImage,
+    /// `0xFFRRGGBB`: the picture's most colorful common color, made bright
+    /// enough to draw with ("album colors").
+    pub color: u32,
+}
+
+/// The largest side of art handed to scripts.
+const SCRIPT_ART: u32 = 512;
+
+/// The art `source` gives, for scripts (see `ScriptArt`).
+pub fn for_script(source: &Source, online: bool) -> Option<ScriptArt> {
+    let bytes = picture(source, online)?;
+    let mut image = image::load_from_memory(&bytes).ok()?.into_rgba8();
+    if image.width().max(image.height()) > SCRIPT_ART {
+        image = image::DynamicImage::ImageRgba8(image).thumbnail(SCRIPT_ART, SCRIPT_ART).into_rgba8();
+    }
+    let color = accent(&image);
+    Some(ScriptArt { image, color })
+}
+
+/// The color a picture's mostly made of, favoring colorful pixels over
+/// greys: the average of the hue (in twelve slices) that has the most
+/// color, brightened so it shows on a dark background. (An average of the
+/// whole picture would mix its colors to grey.)
+fn accent(image: &image::RgbaImage) -> u32 {
+    const SLICES: usize = 12;
+    let mut slices = [([0.0f64; 3], 0.0f64); SLICES];
+    for pixel in image.pixels().step_by(3) {
+        let [r, g, b, _] = pixel.0.map(f64::from);
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let chroma = max - min;
+        let weight = (chroma / 255.0).powi(2) * (max / 255.0) + 1e-6;
+        let hue = if chroma == 0.0 {
+            0.0
+        } else if max == r {
+            ((g - b) / chroma).rem_euclid(6.0)
+        } else if max == g {
+            (b - r) / chroma + 2.0
+        } else {
+            (r - g) / chroma + 4.0
+        };
+        let slice = &mut slices[((hue / 6.0 * SLICES as f64) as usize).min(SLICES - 1)];
+        for (total, value) in slice.0.iter_mut().zip([r, g, b]) {
+            *total += value * weight;
+        }
+        slice.1 += weight;
+    }
+    let (sum, weight) = slices.into_iter().fold(([0.0; 3], 0.0), |best, slice| if slice.1 > best.1 { slice } else { best });
+    let mut color = sum.map(|total| total / weight.max(1e-12));
+    let brightest = color.iter().copied().fold(1.0, f64::max);
+    if brightest < 200.0 {
+        color = color.map(|c| c * 200.0 / brightest);
+    }
+    let [r, g, b] = color.map(|c| c.round().clamp(0.0, 255.0) as u32);
+    0xFF00_0000 | (r << 16) | (g << 8) | b
 }
 
 type Request = (Source, u32);
@@ -372,6 +443,19 @@ fn generated_tile(painter: &egui::Painter, rect: egui::Rect, name: &str, radius:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The color most of a picture is, not the grey all its colors make.
+    #[test]
+    fn accent_is_the_main_color() {
+        let mut image = image::RgbaImage::from_pixel(10, 10, image::Rgba([240, 30, 30, 255]));
+        for x in 0..10 {
+            image.put_pixel(x, 0, image::Rgba([30, 30, 240, 255]));
+            image.put_pixel(x, 1, image::Rgba([30, 240, 30, 255]));
+        }
+        assert_eq!(accent(&image), 0xFFF0_1E1E);
+        let dark = image::RgbaImage::from_pixel(4, 4, image::Rgba([60, 10, 10, 255]));
+        assert_eq!(accent(&dark), 0xFFC8_2121, "brightened");
+    }
 
     #[test]
     fn initials_skip_punctuation() {

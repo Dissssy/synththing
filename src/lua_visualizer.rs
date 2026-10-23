@@ -1426,11 +1426,24 @@ impl SampleHistory {
     }
 }
 
+/// The playing song's tags, for `playback()`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SongTags {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+}
+
 /// Which song is loaded, for `playback()`.
 #[derive(Clone, Default)]
 struct SongIdentity {
     path: Option<String>,
     id: Option<String>,
+    tags: SongTags,
+    /// Its art (`album_art()`), once read; art read for the song after it,
+    /// which can come in before it does, waits in `next_art`.
+    art: Option<Arc<crate::album_art::ScriptArt>>,
+    next_art: Option<(String, Option<Arc<crate::album_art::ScriptArt>>)>,
     /// The app's playlist and transport modes, refreshed each frame.
     transport: Transport,
     /// Songs loaded so far (`playback().song_loads`), the same one again
@@ -1996,13 +2009,28 @@ impl LuaVisualizer {
         }
     }
 
-    /// The current song's file and id (`loader::song_id`), for
-    /// `playback().song_path` / `song_id`.
-    pub fn set_song(&mut self, path: Option<&Path>, id: Option<String>) {
+    /// The current song's file, id (`loader::song_id`) and tags, for
+    /// `playback()`.
+    pub fn set_song(&mut self, path: Option<&Path>, id: Option<String>, tags: SongTags) {
         let mut song = self.song.borrow_mut();
         song.path = path.map(|p| p.display().to_string());
         song.id = id;
+        song.tags = tags;
         song.loads += 1;
+        let next = song.next_art.take();
+        song.art = next.filter(|(path, _)| song.path.as_ref() == Some(path)).and_then(|(_, art)| art);
+    }
+
+    /// The art of the song at `path` (`album_art()`), read since it was
+    /// sent: kept for it if it's not the current song yet.
+    pub fn set_art(&mut self, path: &Path, art: Option<Arc<crate::album_art::ScriptArt>>) {
+        let mut song = self.song.borrow_mut();
+        let path = path.display().to_string();
+        if song.path.as_ref() == Some(&path) {
+            song.art = art;
+        } else {
+            song.next_art = Some((path, art));
+        }
     }
 
     /// Whether the visualizer is being recorded (`playback().recording`),
@@ -2478,6 +2506,7 @@ fn compile(
     let store = Rc::new(RefCell::new(ScriptStore::load(script_path)));
     let sprites: Rc<RefCell<Vec<Sprite>>> = Rc::default();
     register_sprites(&lua, &sprites, &commands).map_err(|e| e.to_string())?;
+    register_album_art(&lua, &sprites, song).map_err(|e| e.to_string())?;
     register_song_and_state(&lua, note_list, &playback_requests, &store, song).map_err(|e| e.to_string())?;
     let options: Rc<Cell<ScriptOptions>> = Rc::default();
     {
@@ -3133,6 +3162,72 @@ fn register_sprites(
 /// The colors for one draw of `sprite`, from an options table's `palette`
 /// (`{[index] = color, ...}`, replacing just those entries) and `tint` (a
 /// color every entry is multiplied by), or `None` for its own colors.
+/// `album_art([size])`: the playing song's art as a sprite, at most `size`
+/// pixels across (its own size, up to 512, by default), and the color it's
+/// mostly made of. Each size is made once per picture; a new picture
+/// takes over the same sprite ids.
+fn register_album_art(lua: &Lua, sprites: &Rc<RefCell<Vec<Sprite>>>, song: &Rc<RefCell<SongIdentity>>) -> mlua::Result<()> {
+    type Made = (Option<Arc<crate::album_art::ScriptArt>>, HashMap<u32, (usize, u32, u32)>);
+    let made: Rc<RefCell<Made>> = Rc::default();
+    let (sprites, song) = (Rc::clone(sprites), Rc::clone(song));
+    lua.globals().set(
+        "album_art",
+        lua.create_function(move |lua, size: Option<f64>| {
+            let Some(art) = song.borrow().art.clone() else { return Ok(Value::Nil) };
+            let full = art.image.width().max(art.image.height());
+            let size = match size {
+                None => full,
+                Some(size) if size.is_finite() && size >= 1.0 => (size.round() as u32).min(full),
+                Some(_) => return Err(mlua::Error::runtime("album_art: size is a number of pixels, 1 or more")),
+            };
+            let mut made = made.borrow_mut();
+            if !made.0.as_ref().is_some_and(|m| Arc::ptr_eq(m, &art)) {
+                made.0 = Some(Arc::clone(&art));
+                for slot in made.1.values_mut() {
+                    slot.1 = 0; // (made again below when asked for)
+                }
+            }
+            let mut sprites = sprites.borrow_mut();
+            let (id, width, height) = match made.1.get(&size).copied().filter(|slot| slot.1 > 0) {
+                Some(slot) => slot,
+                None => {
+                    let image = if size == full {
+                        art.image.clone()
+                    } else {
+                        image::imageops::thumbnail(&art.image, size * art.image.width() / full, size * art.image.height() / full)
+                    };
+                    let (width, height) = image.dimensions();
+                    let sprite = Sprite {
+                        width: width as usize,
+                        height: height as usize,
+                        pixels: image.pixels().map(|p| u32::from_be_bytes([p[3], p[0], p[1], p[2]])).collect(),
+                        indices: Vec::new(),
+                        palette: Vec::new(),
+                    };
+                    let id = match made.1.get(&size) {
+                        Some(&(id, ..)) => {
+                            sprites[id - 1] = sprite;
+                            id
+                        }
+                        None => {
+                            sprites.push(sprite);
+                            sprites.len()
+                        }
+                    };
+                    made.1.insert(size, (id, width, height));
+                    (id, width, height)
+                }
+            };
+            let t = lua.create_table_with_capacity(0, 4)?;
+            t.raw_set("sprite", id)?;
+            t.raw_set("width", width)?;
+            t.raw_set("height", height)?;
+            t.raw_set("color", rgb_to_table(lua, [(art.color >> 16) as u8, (art.color >> 8) as u8, art.color as u8])?)?;
+            Ok(Value::Table(t))
+        })?,
+    )
+}
+
 fn sprite_colors(options: &Table, sprite: &Sprite) -> mlua::Result<Option<Rc<[u32]>>> {
     let swaps: Option<Table> = options
         .get::<Option<Table>>("palette")
@@ -3142,6 +3237,9 @@ fn sprite_colors(options: &Table, sprite: &Sprite) -> mlua::Result<Option<Rc<[u3
         .map_err(|_| mlua::Error::runtime("sprite: tint is a color table"))?;
     if swaps.is_none() && tint.is_none() {
         return Ok(None);
+    }
+    if sprite.palette.is_empty() {
+        return Err(mlua::Error::runtime("sprite: album art has no palette to recolor or tint"));
     }
     let mut colors = sprite.palette.clone();
     if let Some(swaps) = swaps {
@@ -4076,7 +4174,7 @@ fn register_globals(
         lua.create_function(move |lua, ()| {
             let view = view.borrow();
             let song = song.borrow();
-            let t = lua.create_table_with_capacity(0, 13)?;
+            let t = lua.create_table_with_capacity(0, 19)?;
             t.raw_set("position", view.position)?;
             t.raw_set("length", view.length)?;
             t.raw_set("speed", view.speed)?;
@@ -4085,6 +4183,9 @@ fn register_globals(
             t.raw_set("loop_enabled", view.loop_enabled)?;
             t.raw_set("generation", view.generation)?;
             t.raw_set("song_name", view.track_name.clone())?;
+            t.raw_set("title", song.tags.title.clone())?;
+            t.raw_set("artist", song.tags.artist.clone())?;
+            t.raw_set("album", song.tags.album.clone())?;
             t.raw_set("song_path", song.path.clone())?;
             t.raw_set("song_id", song.id.clone())?;
             t.raw_set("song_loads", song.loads)?;
@@ -5501,6 +5602,12 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         }
     }
 
+    fn frame_with_error(visualizer: &mut LuaVisualizer, wanted: &str) {
+        let mut buffer = vec![0u32; 4];
+        visualizer.render(&mut buffer, 4, 1, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        assert!(visualizer.error().is_some_and(|e| e.contains(wanted)), "{:?}", visualizer.error());
+    }
+
     fn last_log(visualizer: &LuaVisualizer) -> String {
         visualizer.log_entries().last().map(|e| e.message.clone()).unwrap_or_default()
     }
@@ -5754,7 +5861,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(".seeded"), "").unwrap();
         seed_bundled(&dir).unwrap();
-        assert_eq!(added(&dir), ["dashboard", "highway", "note_runner"]);
+        assert_eq!(added(&dir), ["dashboard", "highway", "note_runner", "now_playing"]);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -5948,8 +6055,8 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         frame(&mut visualizer, &sample_playback());
         assert_eq!(last_log(&visualizer), "0");
         // The same song twice still counts twice.
-        visualizer.set_song(Some(Path::new("a.mid")), Some("x".into()));
-        visualizer.set_song(Some(Path::new("a.mid")), Some("x".into()));
+        visualizer.set_song(Some(Path::new("a.mid")), Some("x".into()), SongTags::default());
+        visualizer.set_song(Some(Path::new("a.mid")), Some("x".into()), SongTags::default());
         frame(&mut visualizer, &sample_playback());
         assert_eq!(last_log(&visualizer), "2");
         // playback().recording follows set_recording.
@@ -6410,6 +6517,41 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         assert!(draw(&format!("line(0, 0, 1, 1, {white}, 0)")).contains("width must be more than 0"));
     }
 
+    /// Scripts see the song's tags, and its art as a sprite at the size they
+    /// ask for, once it's read (art read early waits for its song).
+    #[test]
+    fn songs_tags_and_art() {
+        let script = "function render()
+            local p, art = playback(), album_art(2)
+            log(tostring(p.title) .. '|' .. tostring(p.artist) .. '|' .. tostring(p.album) .. '|' ..
+                (art and (art.sprite .. ' ' .. art.width .. 'x' .. art.height .. ' ' .. art.color.r) or 'none'))
+            if art then sprite(art.sprite, 0, 0) end
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let mut buffer = vec![0u32; 4];
+        let mut frame = |visualizer: &mut LuaVisualizer| {
+            visualizer.render(&mut buffer, 4, 1, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+            assert_eq!(visualizer.error(), None);
+            (last_log(visualizer), buffer.clone())
+        };
+        assert_eq!(frame(&mut visualizer).0, "nil|nil|nil|none");
+
+        let art = crate::album_art::ScriptArt { image: image::RgbaImage::from_pixel(4, 4, image::Rgba([250, 0, 0, 255])), color: 0xFFFA_0000 };
+        let path = Path::new("song.mp3");
+        visualizer.set_art(path, Some(Arc::new(art)));
+        let tags = SongTags { title: Some("Enemy".into()), artist: Some("Imagine Dragons".into()), album: None };
+        visualizer.set_song(Some(path), Some("id".into()), tags);
+        let (log, pixels) = frame(&mut visualizer);
+        assert_eq!(log, "Enemy|Imagine Dragons|nil|1 2x2 250");
+        assert_eq!(&pixels[..3], &[0xFFFA_0000, 0xFFFA_0000, OPAQUE_BLACK], "drawn at 2x2");
+
+        visualizer.set_song(Some(Path::new("next.mid")), None, SongTags::default());
+        assert_eq!(frame(&mut visualizer).0, "nil|nil|nil|none", "the next song's art isn't read yet");
+        visualizer.set_source("function render() sprite(album_art().sprite, 0, 0, { tint = { r = 1, g = 1, b = 1 } }) end".to_string());
+        visualizer.set_art(Path::new("next.mid"), Some(Arc::new(crate::album_art::ScriptArt { image: image::RgbaImage::new(1, 1), color: 0 })));
+        frame_with_error(&mut visualizer, "album art has no palette");
+    }
+
     /// Frames are opaque, unless the script opts into see-through ones:
     /// those start transparent, `clear` keeps its alpha, translucent
     /// drawing over nothing stays translucent, and the clear color's alpha
@@ -6645,7 +6787,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
         frame(&mut visualizer, &sample_playback());
         assert_eq!(last_log(&visualizer), "test|nil|nil");
-        visualizer.set_song(Some(Path::new("C:/music/song.mid")), Some(crate::loader::song_id(b"MThd")));
+        visualizer.set_song(Some(Path::new("C:/music/song.mid")), Some(crate::loader::song_id(b"MThd")), SongTags::default());
         frame(&mut visualizer, &sample_playback());
         // The id is the start of the file's SHA-256, so the same bytes
         // always give the same id, wherever the file is.

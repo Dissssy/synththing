@@ -93,7 +93,8 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
     }
     if let Some(song) = &args.song {
         let paused = stage.visualizer.options().start_paused;
-        stage.load_song(song, args.soundfont.as_deref(), &config.soundfonts, paused)?;
+        let art = crate::album_art::Source::of_song(Some(song.clone()), None);
+        stage.load_song(song, Default::default(), &art, args.soundfont.as_deref(), &config.soundfonts, paused)?;
     }
     if args.start > 0.0 {
         stage.engine.seek(args.start);

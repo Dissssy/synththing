@@ -57,7 +57,7 @@ mod welcome;
 mod which_key;
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -197,6 +197,9 @@ fn title_of(cache: &mut SongInfoCache, naming: &Naming, path: &Path) -> String {
 /// imported into the library's folder under their own names) and the
 /// playlists naming them, on a thread of its own: its result comes back
 /// on the returned channel.
+/// A song's art read for the script: the song's file, and its art.
+type ScriptArtRead = (PathBuf, Option<Arc<crate::album_art::ScriptArt>>);
+
 fn start_old_import(dir: PathBuf) -> std::sync::mpsc::Receiver<song_store::OldImport> {
     let folders: Vec<PathBuf> = if cfg!(target_os = "android") {
         vec![dir.clone()]
@@ -555,9 +558,12 @@ pub struct App {
     gamepads: crate::gamepad::Gamepads,
     pad_frame: crate::gamepad::PadFrame,
     /// Songs sent to the audio thread, and the latest one waiting to reach
-    /// the script: (its load number, path, notes, id).
+    /// the script: (its load number, path, notes, id, tags).
     loads_sent: u64,
-    pending_script_song: Option<(u64, PathBuf, Arc<crate::midi_notes::NoteList>, String)>,
+    pending_script_song: Option<(u64, PathBuf, Arc<crate::midi_notes::NoteList>, String, lua_visualizer::SongTags)>,
+    /// Songs' art read for the script (`album_art()`), on threads of
+    /// their own: the sending side for them, and what they've read.
+    script_art: (mpsc::Sender<ScriptArtRead>, mpsc::Receiver<ScriptArtRead>),
     /// The song playing's notes (its tempo map, for the transport's accent),
     /// as of when the audio thread reported it loaded.
     song_notes: Option<Arc<crate::midi_notes::NoteList>>,
@@ -810,6 +816,7 @@ impl App {
             pad_frame: crate::gamepad::PadFrame::default(),
             loads_sent: 0,
             pending_script_song: None,
+            script_art: mpsc::channel(),
             song_notes: None,
             accent: None,
             docs_target: None,
@@ -3185,6 +3192,7 @@ impl App {
             let mut panel = lock_panel(&self.visualizer);
             panel.set_pads(self.pad_frame.clone());
             panel.set_mobile(self.mobile());
+            panel.set_see_through(self.config.visualizer_see_through);
         }
         // (A program watching through the API: drawn at the size it asked
         // for, unless a recording has a size already.)
@@ -3264,7 +3272,31 @@ impl App {
     /// (`sync_script_song`).
     pub(super) fn song_for_script(&mut self, path: &Path, notes: Arc<crate::midi_notes::NoteList>, id: String) {
         self.loads_sent += 1;
-        self.pending_script_song = Some((self.loads_sent, path.to_path_buf(), notes, id));
+        let (tags, art) = self.script_song(path);
+        self.pending_script_song = Some((self.loads_sent, path.to_path_buf(), notes, id, tags));
+        let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
+        let (sender, path) = (self.script_art.0.clone(), path.to_path_buf());
+        let spawned = std::thread::Builder::new().name("script art".into()).spawn(move || {
+            let art = crate::album_art::for_script(&art, online).map(Arc::new);
+            let _ = sender.send((path, art));
+        });
+        if let Err(e) = spawned {
+            log::warn!("couldn't start reading art for the script: {e}");
+        }
+    }
+
+    /// What a script's told of the song at `path` (`playback()`): its
+    /// tags, and where its art comes from (`album_art()`).
+    pub(super) fn script_song(&self, path: &Path) -> (lua_visualizer::SongTags, crate::album_art::Source) {
+        let song = self.songs.get(path);
+        let facts = song.map(crate::fields::Facts::of);
+        let text = |field| facts.as_ref().and_then(|f| f.text(field)).map(|t| t.into_owned());
+        let tags = lua_visualizer::SongTags {
+            title: text(crate::fields::Field::Title),
+            artist: text(crate::fields::Field::Artist),
+            album: text(crate::fields::Field::Album),
+        };
+        (tags, crate::album_art::Source::of_song(Some(path.to_path_buf()), song))
     }
 
     /// Put synththing's icon in the tray. Once the window exists (desktop.rs,
@@ -3382,10 +3414,13 @@ impl App {
     /// Hand the script the song the audio thread now reports as loaded.
     fn sync_script_song(&mut self, view: &EngineView) {
         if self.pending_script_song.as_ref().is_some_and(|(target, ..)| view.loads >= *target)
-            && let Some((_, path, notes, id)) = self.pending_script_song.take()
+            && let Some((_, path, notes, id, tags)) = self.pending_script_song.take()
         {
             self.song_notes = Some(Arc::clone(&notes));
-            self.script.set_song(path, id, notes);
+            self.script.set_song(path, id, notes, tags);
+        }
+        while let Ok((path, art)) = self.script_art.1.try_recv() {
+            self.script.set_art(path, art);
         }
     }
 
@@ -3697,6 +3732,21 @@ impl App {
                 if fullscreen.clicked() {
                     let ctx = ui.ctx().clone();
                     self.enter_dedicated(&ctx);
+                }
+                let see_through = self.config.visualizer_see_through;
+                if ui
+                    .add(icon_button("checkerboard").selected(see_through))
+                    .on_hover_text(
+                        "See-through: show what's behind a visualizer with see-through parts, instead of black. \
+                         The local API's PNG stream keeps them see-through either way.",
+                    )
+                    .clicked()
+                {
+                    self.config.visualizer_see_through = !see_through;
+                    toast::show(ui.ctx(), if see_through { "See-through: off" } else { "See-through: on" });
+                    if let Err(e) = self.config.save() {
+                        self.status = format!("Couldn't save the preferences: {e}");
+                    }
                 }
             }
             ui.separator();
