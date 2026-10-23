@@ -158,6 +158,8 @@ pub enum QueueEdit {
     Add { song: Option<String>, playlist: Option<String>, next: bool },
     /// Take out the song at this place in the queue.
     Remove(usize),
+    /// Move the song at `from` so it ends up at `to`.
+    Move { from: usize, to: usize },
     Clear,
 }
 
@@ -651,6 +653,12 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             };
             answered(ask(shared, |reply| Call::Queue(edit, reply)))
         })),
+        (Method::Post, ["v1", "queue", "move"]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| {
+            match (query.get("from").and_then(|v| v.parse().ok()), query.get("to").and_then(|v| v.parse().ok())) {
+                (Some(from), Some(to)) => answered(ask(shared, |reply| Call::Queue(QueueEdit::Move { from, to }, reply))),
+                _ => error(400, "say which song and where to, as places in the queue from 0: ?from=3&to=0"),
+            }
+        })),
         (Method::Get, ["v1", "now-playing"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::NowPlaying).map_or_else(|reply| reply, |now| json(200, &now))))
         }
@@ -1061,6 +1069,9 @@ mod tests {
         assert_eq!(answering(&server, empty, set("soundfonts/abc/use", &read_token)), 403);
         assert_eq!(answering(&server, empty, set("soundfonts/abc/use", &control_token)), 204);
         assert_eq!(answering(&server, empty, set("soundfonts/missing/use", &control_token)), 404);
+        assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &read_token)), 403);
+        assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &control_token)), 204);
+        assert_eq!(answering(&server, empty, set("queue/move?from=2", &control_token)), 400);
 
         let url = format!("http://{}/v1/", server.addr());
         let (mut editor, edit_token) = Access::new("editor");

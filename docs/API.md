@@ -52,6 +52,7 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `GET /v1/queue` | read | The play queue (Up next): its songs, in the order they'll play |
 | `POST /v1/queue?song={key}` | control | Adds the song to the end of the queue (`&next=true`: to its front, to play next): 204 |
 | `POST /v1/queue?playlist={id}` | control | Adds the playlist's songs (shuffled while Shuffle is on), at the end or with `&next=true` at the front: 204, or 409 if it has no songs here |
+| `POST /v1/queue/move?from={n}&to={m}` | control | Moves the song at place `from` so it ends up at place `to` (both from 0): 204, or 404 past the queue's end |
 | `DELETE /v1/queue?at={n}` | control | Takes out the song at that place in the queue (from 0): 204, or 404 past its end |
 | `DELETE /v1/queue` | control | Clears the queue: 204 |
 | `GET /v1/events` | read | Server-Sent Events (below) |
