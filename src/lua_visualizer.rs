@@ -509,8 +509,8 @@ pub enum SettingValue {
     Bool(bool),
     Int(i64),
     Float(f64),
-    /// Plain RGB, no alpha, draw-call alpha is a separate, per-call concern.
-    Color([u8; 3]),
+    /// RGBA; alpha is 255 unless the setting has `alpha = true`.
+    Color([u8; 4]),
     String(String),
     /// Selected option labels, oldest-selected first, that order is what
     /// lets a new pick past `max_selections` evict the oldest one rather
@@ -523,7 +523,8 @@ pub enum SettingKind {
     Bool,
     Int { min: i64, max: i64 },
     Float { min: f64, max: f64 },
-    Color,
+    /// `alpha`: the user picks how opaque it is too.
+    Color { alpha: bool },
     String,
     Selection { options: Vec<String>, max_selections: usize },
 }
@@ -554,9 +555,9 @@ pub fn setting_from_json(kind: &SettingKind, value: &serde_json::Value) -> Optio
         SettingKind::Bool => SettingValue::Bool(value.as_bool()?),
         SettingKind::Int { min, max } => SettingValue::Int(value.as_i64().or_else(|| value.as_f64().map(|f| f.round() as i64))?.clamp(*min, *max)),
         SettingKind::Float { min, max } => SettingValue::Float(value.as_f64()?.clamp(*min, *max)),
-        SettingKind::Color => {
-            let channel = |c: &str| value.get(c).and_then(serde_json::Value::as_f64).map(|v| v.clamp(0.0, 255.0) as u8);
-            SettingValue::Color([channel("r")?, channel("g")?, channel("b")?])
+        SettingKind::Color { alpha } => {
+            let [r, g, b, a] = color_from_json(value)?;
+            SettingValue::Color([r, g, b, if *alpha { a } else { 255 }])
         }
         SettingKind::String => SettingValue::String(value.as_str()?.to_string()),
         SettingKind::Selection { options, max_selections } => {
@@ -602,7 +603,8 @@ pub fn preset_line(name: &str, descriptors: &[SettingDescriptor]) -> String {
         SettingValue::Bool(b) => b.to_string(),
         SettingValue::Int(i) => i.to_string(),
         SettingValue::Float(f) => format!("{f}"),
-        SettingValue::Color([r, g, b]) => format!("{{ r = {r}, g = {g}, b = {b} }}"),
+        SettingValue::Color([r, g, b, 255]) => format!("{{ r = {r}, g = {g}, b = {b} }}"),
+        SettingValue::Color([r, g, b, a]) => format!("{{ r = {r}, g = {g}, b = {b}, a = {} }}", alpha_fraction(*a)),
         SettingValue::String(s) => lua_string(s),
         SettingValue::Selection(items) => {
             format!("{{ {} }}", items.iter().map(|s| lua_string(s)).collect::<Vec<_>>().join(", "))
@@ -666,6 +668,10 @@ fn item_labels(function: &str, table: Option<Table>) -> mlua::Result<Option<Item
     let mut labels = ItemLabels::default();
     for pair in table.pairs::<String, Value>() {
         let (key, value) = pair?;
+        // setting_color's own flag, read there.
+        if function == "setting_color" && key == "alpha" {
+            continue;
+        }
         let text = match value {
             Value::String(s) => s.to_str()?.trim().to_string(),
             other => {
@@ -681,7 +687,8 @@ fn item_labels(function: &str, table: Option<Table>) -> mlua::Result<Option<Item
             "info" => labels.info = text,
             other => {
                 return Err(mlua::Error::runtime(format!(
-                    "{function}: no option `{other}` (there are group and info)"
+                    "{function}: no option `{other}` (there are {})",
+                    if function == "setting_color" { "group, info and alpha" } else { "group and info" }
                 )));
             }
         }
@@ -775,26 +782,16 @@ impl SettingsStore {
         initial
     }
 
-    fn get_or_register_color(&mut self, key: &str, default: [u8; 3]) -> [u8; 3] {
-        #[derive(Deserialize)]
-        struct ColorJson {
-            r: u8,
-            g: u8,
-            b: u8,
-        }
-
+    fn get_or_register_color(&mut self, key: &str, default: [u8; 4], alpha: bool) -> [u8; 4] {
+        let opaque = |[r, g, b, a]: [u8; 4]| [r, g, b, if alpha { a } else { 255 }];
+        let default = opaque(default);
         if let Some(SettingValue::Color(v)) = self.find(key).map(|d| &d.value) {
             return *v;
         }
-        let initial = self
-            .pending
-            .get(key)
-            .and_then(|v| serde_json::from_value::<ColorJson>(v.clone()).ok())
-            .map(|c| [c.r, c.g, c.b])
-            .unwrap_or(default);
+        let initial = self.pending.get(key).and_then(color_from_json).map(opaque).unwrap_or(default);
         self.descriptors.push(SettingDescriptor {
             key: key.to_string(),
-            kind: SettingKind::Color,
+            kind: SettingKind::Color { alpha },
             value: SettingValue::Color(initial),
             default: SettingValue::Color(default),
             labels: ItemLabels::default(),
@@ -898,12 +895,27 @@ fn save_sidecar(script_path: &Path, store: &SettingsStore) {
     }
 }
 
+/// A color as the settings file keeps it: `r`, `g`, `b` bytes and `a` from
+/// 0 to 1 (like a script's color tables), opaque when there's none.
+fn color_from_json(value: &serde_json::Value) -> Option<[u8; 4]> {
+    let channel = |c: &str| value.get(c).and_then(serde_json::Value::as_f64);
+    let byte = |v: f64| v.clamp(0.0, 255.0) as u8;
+    let a = channel("a").map_or(255, |a| (a.clamp(0.0, 1.0) * 255.0).round() as u8);
+    Some([byte(channel("r")?), byte(channel("g")?), byte(channel("b")?), a])
+}
+
+/// An alpha byte as a script's `a`, 0 to 1, rounded to 3 places.
+fn alpha_fraction(a: u8) -> f64 {
+    (a as f64 / 255.0 * 1000.0).round() / 1000.0
+}
+
 pub fn setting_value_to_json(v: &SettingValue) -> serde_json::Value {
     match v {
         SettingValue::Bool(b) => serde_json::Value::Bool(*b),
         SettingValue::Int(i) => serde_json::Value::from(*i),
         SettingValue::Float(f) => serde_json::Value::from(*f),
-        SettingValue::Color([r, g, b]) => serde_json::json!({ "r": r, "g": g, "b": b }),
+        SettingValue::Color([r, g, b, 255]) => serde_json::json!({ "r": r, "g": g, "b": b }),
+        SettingValue::Color([r, g, b, a]) => serde_json::json!({ "r": r, "g": g, "b": b, "a": alpha_fraction(*a) }),
         SettingValue::String(s) => serde_json::Value::String(s.clone()),
         SettingValue::Selection(items) => serde_json::Value::from(items.clone()),
     }
@@ -4018,7 +4030,9 @@ fn register_globals(
                 let color = table_to_color(&color)?;
                 let height = text_height(height)?;
                 let mut cmds = cmds.borrow_mut();
-                pixel_font::layout(&text, x, y, height, |x0, y0, x1, y1| {
+                pixel_font::layout(&text, x, y, height, |x0, y0, x1, y1, coverage| {
+                    let alpha = ((color >> 24) as f32 * coverage).round() as u32;
+                    let color = (alpha << 24) | (color & 0x00FF_FFFF);
                     cmds.push(DrawCommand::Rect { x0, y0, x1, y1, color });
                 });
                 Ok(pixel_font::measure(&text, height))
@@ -4276,12 +4290,21 @@ fn register_globals(
     globals.set(
         "setting_color",
         lua.create_function(move |lua, (key, default, labels): (String, Table, Option<Table>)| {
+            // `alpha` sits with the labels: { alpha = true, group = "Colors" }.
+            let alpha = match &labels {
+                Some(t) => t.get::<Option<bool>>("alpha")?.unwrap_or(false),
+                None => false,
+            };
             let labels = item_labels("setting_color", labels)?;
-            let default = table_to_rgb(&default)?;
+            let default = table_to_rgba(&default)?;
             let mut store = store.borrow_mut();
-            let value = store.get_or_register_color(&key, default);
+            let [r, g, b, a] = store.get_or_register_color(&key, default, alpha);
             store.label(&key, labels);
-            rgb_to_table(lua, value)
+            let t = rgb_to_table(lua, [r, g, b])?;
+            if alpha {
+                t.raw_set("a", alpha_fraction(a))?;
+            }
+            Ok(t)
         })?,
     )?;
 
@@ -4313,10 +4336,7 @@ fn register_globals(
                     Value::Integer(i) => serde_json::Value::from(i),
                     Value::Number(n) => serde_json::Value::from(n),
                     Value::String(s) => serde_json::Value::String(s.to_str()?.to_string()),
-                    Value::Table(t) if t.contains_key("r")? => {
-                        let [r, g, b] = table_to_rgb(&t)?;
-                        serde_json::json!({ "r": r, "g": g, "b": b })
-                    }
+                    Value::Table(t) if t.contains_key("r")? => setting_value_to_json(&SettingValue::Color(table_to_rgba(&t)?)),
                     Value::Table(t) => serde_json::Value::from(table_to_strings(&t)?),
                     other => {
                         return Err(mlua::Error::runtime(format!(
@@ -4505,6 +4525,13 @@ fn table_to_rgb(t: &Table) -> mlua::Result<[u8; 3]> {
     let b: f32 = t.get("b")?;
     let byte = |v: f32| v.clamp(0.0, 255.0) as u8;
     Ok([byte(r), byte(g), byte(b)])
+}
+
+/// A color table with an optional `a` (0 to 1, opaque when left out).
+fn table_to_rgba(t: &Table) -> mlua::Result<[u8; 4]> {
+    let [r, g, b] = table_to_rgb(t)?;
+    let a: Option<f32> = t.get("a")?;
+    Ok([r, g, b, (a.unwrap_or(1.0).clamp(0.0, 1.0) * 255.0).round() as u8])
 }
 
 fn rgb_to_table(lua: &Lua, [r, g, b]: [u8; 3]) -> mlua::Result<Table> {
@@ -7038,7 +7065,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::Bool)));
         assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::Int { .. })));
         assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::Float { .. })));
-        assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::Color)));
+        assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::Color { .. })));
         assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::String)));
         assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::Selection { .. })));
     }
@@ -7068,6 +7095,31 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
             .map(|d| d.value)
             .unwrap();
         assert!(matches!(value, SettingValue::Bool(true)));
+    }
+
+    /// A color setting with `alpha = true` keeps and gives back its opacity,
+    /// and one without stays opaque, whatever it's given.
+    #[test]
+    fn color_settings_with_alpha() {
+        let source = "function render()\n\
+                        local card = setting_color('card', { r = 1, g = 2, b = 3, a = 0.5 }, { alpha = true, group = 'Colors' })\n\
+                        local tint = setting_color('tint', { r = 1, g = 2, b = 3, a = 0.5 })\n\
+                        assert(card.a == 0.502 and tint.a == nil, tostring(card.a))\n\
+                      end\n";
+        let mut visualizer = LuaVisualizer::new(source.to_string(), None, 44_100);
+        let mut buffer = vec![0u32; 16 * 16];
+        visualizer.render(&mut buffer, 16, 16, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        assert_eq!(visualizer.error(), None);
+        let settings = visualizer.settings();
+        let card = settings.iter().find(|d| d.key == "card").unwrap();
+        let tint = settings.iter().find(|d| d.key == "tint").unwrap();
+        assert_eq!(card.value, SettingValue::Color([1, 2, 3, 128]));
+        assert_eq!(tint.value, SettingValue::Color([1, 2, 3, 255]));
+        let json = setting_value_to_json(&card.value);
+        assert_eq!(json, serde_json::json!({ "r": 1, "g": 2, "b": 3, "a": 0.502 }));
+        assert_eq!(setting_from_json(&card.kind, &json), Some(card.value.clone()));
+        assert_eq!(setting_from_json(&tint.kind, &json), Some(SettingValue::Color([1, 2, 3, 255])));
+        assert_eq!(setting_value_to_json(&tint.value), serde_json::json!({ "r": 1, "g": 2, "b": 3 }));
     }
 
     /// `settings_preset` offers presets (the same name again replaces one),

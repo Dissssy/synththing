@@ -12,6 +12,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Song downloads from the local API answer `Range` requests, so a player can stream a song and seek in it.
 - The local API streams the visualizer live as MJPEG (`/v1/visualizer/stream`, or a page for OBS's Browser Source at `/v1/visualizer`), drawn at the size the program asks for, and gives single pictures (`/v1/visualizer/frame.jpg`). Scripts see `playback().streaming`. It keeps drawing while watched with its tab hidden or the window minimized, and OBS's Browser Source no longer shows an old copy of the page.
 - Now playing, a new visualizer for stream overlays: a pixel-art card with the song's title, artist, time and album art, in the album's colors, see-through around it. In OBS, add a Browser Source with the local API's visualizer page and `&format=png`.
+- Script text draws Japanese, Korean and Chinese with the built-in Noto fonts, instead of `?`.
+- Script color settings can let you pick their opacity too (`alpha = true`); Now playing's card background does.
 - Scripts can read the playing song's title, artist and album (`playback()`), and draw its album art (`album_art()`, which also gives the color it's mostly made of).
 - FFT, Pulse, Keyboard, Letters and Dashboard have a Background opacity setting: below 1 the background is see-through, for OBS.
 - The See-through button above the visualizer shows see-through visualizers' transparency in the app; off (the default), they're shown over black, so they stay readable on every theme.

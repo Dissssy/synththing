@@ -5894,6 +5894,7 @@ dependencies = [
 name = "synththing"
 version = "1.4.0"
 dependencies = [
+ "ab_glyph_rasterizer",
  "android-activity",
  "anyhow",
  "argon2",

@@ -7,8 +7,9 @@
 -- With "Album colors" on, the border, bar and shadow take on the color the
 -- album art is mostly made of (album_art().color), easing over when the
 -- song changes. A title too long for the card scrolls, fading out at the
--- edges: the text is clipped, then the card's background is drawn over its
--- ends in thin slices, each more opaque toward the edge.
+-- edges: the text is drawn clipped to thin slices, each fainter toward the
+-- edge. The background can be see-through too (its color's alpha), so
+-- every shape is one polygon that covers each pixel once.
 --
 -- Everything is laid out on a grid of "card pixels" (CARD_W by CARD_H),
 -- scaled by whole steps to fill the frame, so the pixel art stays crisp.
@@ -51,16 +52,35 @@ local function clock(seconds)
     return string.format("%02d:%02d", seconds // 60, seconds % 60)
 end
 
--- The card's shape: a rectangle with its corners cut in two pixel steps.
+-- The card's shape: a rectangle with its corners cut in two pixel steps,
+-- as a flat list of points for polygon().
+local function stairs(x0, y0, x1, y1, u)
+    return {
+        x0 + 2 * u, y0, x1 - 2 * u, y0, x1 - 2 * u, y0 + u, x1 - u, y0 + u,
+        x1 - u, y0 + 2 * u, x1, y0 + 2 * u, x1, y1 - 2 * u, x1 - u, y1 - 2 * u,
+        x1 - u, y1 - u, x1 - 2 * u, y1 - u, x1 - 2 * u, y1, x0 + 2 * u, y1,
+        x0 + 2 * u, y1 - u, x0 + u, y1 - u, x0 + u, y1 - 2 * u, x0, y1 - 2 * u,
+        x0, y0 + 2 * u, x0 + u, y0 + 2 * u, x0 + u, y0 + u, x0 + 2 * u, y0 + u,
+    }
+end
+
 local function chunky(x0, y0, x1, y1, u, color)
-    rect(x0 + 2 * u, y0, x1 - 2 * u, y1, color)
-    rect(x0 + u, y0 + u, x1 - u, y1 - u, color)
-    rect(x0, y0 + 2 * u, x1, y1 - 2 * u, color)
+    polygon(stairs(x0, y0, x1, y1, u), color)
+end
+
+-- What's in one of the shapes but not both: the two outlines joined into
+-- one polygon, which the even-odd rule leaves a hole in where they overlap.
+local function either(a, b, color)
+    local points = {}
+    for _, list in ipairs({ a, { a[1], a[2] }, b, { b[1], b[2] } }) do
+        for _, v in ipairs(list) do points[#points + 1] = v end
+    end
+    polygon(points, color)
 end
 
 -- `str` in the box from x0 to x1, scrolling when it's too long, with its
--- ends faded into `background`.
-local function marquee(str, x0, y, x1, h, u, color, background)
+-- ends faded out.
+local function marquee(str, x0, y, x1, h, u, color)
     local w = text_size(str, h)
     push_view()
     clip(x0, y, x1, y + h)
@@ -71,21 +91,29 @@ local function marquee(str, x0, y, x1, h, u, color, background)
     end
     local loop = w + SCROLL_GAP * u
     local offset = (TIME * SCROLL_SPEED * u) % loop
-    text(x0 - offset, y, str, color, h)
-    text(x0 - offset + loop, y, str, color, h)
-    -- The fade: slices of the background, more opaque toward each edge.
-    local slice = FADE_W * u / FADE_SLICES
+    local function draw(alpha)
+        local c = { r = color.r, g = color.g, b = color.b, a = (color.a or 1) * alpha }
+        text(x0 - offset, y, str, c, h)
+        text(x0 - offset + loop, y, str, c, h)
+    end
+    -- The middle as it is, then slices at each end, fainter toward the edge.
+    local fade = FADE_W * u
+    local slice = fade / FADE_SLICES
+    clip(x0 + fade, y, x1 - fade, y + h)
+    draw(1)
     for i = 0, FADE_SLICES - 1 do
-        local a = 1 - i / FADE_SLICES
-        local c = { r = background.r, g = background.g, b = background.b, a = a }
-        rect(x0 + i * slice, y, x0 + (i + 1) * slice, y + h, c)
-        rect(x1 - (i + 1) * slice, y, x1 - i * slice, y + h, c)
+        local alpha = (i + 0.5) / FADE_SLICES
+        clip(x0 + i * slice, y, x0 + (i + 1) * slice, y + h)
+        draw(alpha)
+        clip(x1 - (i + 1) * slice, y, x1 - i * slice, y + h)
+        draw(alpha)
     end
     pop_view()
 end
 
 function render(width, height)
-    local background = setting_color("background", { r = 58, g = 40, b = 40 }, { group = "Colors" })
+    local background = setting_color("background", { r = 58, g = 40, b = 40 },
+        { group = "Colors", alpha = true, info = "Its alpha makes the card see-through, for OBS over the rest of your scene" })
     local text_color = setting_color("text", { r = 245, g = 238, b = 228 }, { group = "Colors" })
     local accent_setting = setting_color("accent", { r = 235, g = 40, b = 40 },
         { group = "Colors", info = "The border, bar and shadow, unless Album colors is on and the song has art" })
@@ -113,13 +141,19 @@ function render(width, height)
     end
     local accent = shown
     local shadow = mix(accent, { r = 0, g = 0, b = 30 }, 0.55)
-    local muted = mix(text_color, background, 0.4)
-    local track = mix(text_color, background, 0.6)
+    -- Mixed with the background's color, not its see-through.
+    local solid = { r = background.r, g = background.g, b = background.b }
+    local muted = mix(text_color, solid, 0.4)
+    local track = mix(text_color, solid, 0.6)
 
-    -- Shadow, border, inside.
-    chunky(x0 + 4 * u, y0 + 4 * u, x1 + 4 * u, y1 + 4 * u, u, shadow)
-    chunky(x0, y0, x1, y1, u, accent)
-    chunky(x0 + BORDER * u, y0 + BORDER * u, x1 - BORDER * u, y1 - BORDER * u, u, background)
+    -- Shadow (only where the card isn't), border, inside. The shadow is as
+    -- far off as the border is wide, so the part of the card it leaves
+    -- uncovered is all under the border, drawn over it.
+    local card = stairs(x0, y0, x1, y1, u)
+    local inside = stairs(x0 + BORDER * u, y0 + BORDER * u, x1 - BORDER * u, y1 - BORDER * u, u)
+    either(stairs(x0 + BORDER * u, y0 + BORDER * u, x1 + BORDER * u, y1 + BORDER * u, u), card, shadow)
+    either(card, inside, accent)
+    polygon(inside, background)
 
     -- Two notes over the top-right corner, bobbing with the sound.
     local bob = math.sin(TIME * 3) * u + math.min(level_left(), 1) * 3 * u
@@ -148,8 +182,8 @@ function render(width, height)
     local loaded = p.song_name ~= nil
     local title = loaded and (p.title or p.song_name) or "Nothing playing"
     local artist = loaded and (p.artist or p.album or "") or ""
-    marquee(title, left, y0 + 7 * u, text_right, line, u, text_color, background)
-    marquee(artist, left, y0 + 21 * u, text_right, line, u, muted, background)
+    marquee(title, left, y0 + 7 * u, text_right, line, u, text_color)
+    marquee(artist, left, y0 + 21 * u, text_right, line, u, muted)
 
     local small = math.max(FONT_HEIGHT, math.floor(line * 0.75))
     local times_y = y0 + 37 * u
@@ -158,8 +192,7 @@ function render(width, height)
     text(text_right - text_size(total, small), times_y, total, text_color, small)
 
     local bar_y0, bar_y1 = y0 + 52 * u, y0 + 60 * u
-    chunky(left, bar_y0, text_right, bar_y1, u, track)
-    chunky(left + u, bar_y0 + u, text_right - u, bar_y1 - u, u, background)
+    either(stairs(left, bar_y0, text_right, bar_y1, u), stairs(left + u, bar_y0 + u, text_right - u, bar_y1 - u, u), track)
     local fraction = (loaded and p.length > 0) and math.max(0, math.min(1, p.position / p.length)) or 0
     local fill_x = left + u + (text_right - left - 2 * u) * fraction
     if fill_x > left + 3 * u then

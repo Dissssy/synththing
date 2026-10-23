@@ -59,6 +59,7 @@ mod matching;
 mod media_controls;
 mod midi_notes;
 mod offline;
+mod bundled_fonts;
 mod pixel_font;
 mod playlist;
 mod playlist_sync;

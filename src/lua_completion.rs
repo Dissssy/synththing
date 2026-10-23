@@ -91,7 +91,7 @@ pub const HOST_API: &[(&str, &str)] = &[
     ("setting_bool", "setting_bool(key, default, [labels]) -> bool; labels: {group = \"...\", info = \"...\"}, where it's listed in the Settings window and its hover text"),
     ("setting_int", "setting_int(key, default, min, max, [labels]) -> integer"),
     ("setting_float", "setting_float(key, default, min, max, [labels]) -> number"),
-    ("setting_color", "setting_color(key, default, [labels]) -> {r,g,b}"),
+    ("setting_color", "setting_color(key, default, [labels]) -> {r,g,b} (labels.alpha = true: and a)"),
     ("setting_string", "setting_string(key, default, [labels]) -> string"),
     ("setting_selection", "setting_selection(key, options, defaults, max_selections, [labels]) -> selected"),
     ("settings_preset", "settings_preset(name, {key = value, ...}): a named set of setting values, picked in the Settings window, once at the top"),

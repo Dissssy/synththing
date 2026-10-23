@@ -3981,10 +3981,18 @@ fn settings_row_ui(ui: &mut egui::Ui, d: &SettingDescriptor, changed: &mut Optio
                 *changed = Some((d.key.clone(), SettingValue::Float(v)));
             }
         }
-        (SettingKind::Color, SettingValue::Color(rgb)) => {
-            let mut rgb = *rgb;
-            if ui.color_edit_button_srgb(&mut rgb).changed() {
-                *changed = Some((d.key.clone(), SettingValue::Color(rgb)));
+        (SettingKind::Color { alpha }, SettingValue::Color(rgba)) => {
+            let mut rgba = *rgba;
+            let edited = if *alpha {
+                ui.color_edit_button_srgba_unmultiplied(&mut rgba).changed()
+            } else {
+                let mut rgb = [rgba[0], rgba[1], rgba[2]];
+                let edited = ui.color_edit_button_srgb(&mut rgb).changed();
+                rgba = [rgb[0], rgb[1], rgb[2], 255];
+                edited
+            };
+            if edited {
+                *changed = Some((d.key.clone(), SettingValue::Color(rgba)));
             }
         }
         (SettingKind::String, SettingValue::String(s)) => {

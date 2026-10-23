@@ -212,6 +212,8 @@ end
 
 Text is drawn as rects, so it alpha-blends and clips at the edges exactly like `rect`.
 
+Characters the pixel font doesn't have (Japanese, Korean, Chinese) come from the Noto Sans fonts built into synththing instead: smooth rather than pixelated, drawn at the text's size on the same baseline, each about two characters wide (`text_size` measures them). Since 1.5.0; before, they were `?`.
+
 ## Sprites
 
 ```lua
@@ -828,7 +830,7 @@ A script can expose typed, user-editable values that show up as widgets in the S
 setting_bool(key, default [, {group, info}]) -> bool
 setting_int(key, default, min, max [, {group, info}]) -> integer
 setting_float(key, default, min, max [, {group, info}]) -> number
-setting_color(key, default [, {group, info}]) -> {r,g,b}
+setting_color(key, default [, {group, info, alpha}]) -> {r,g,b[,a]}
 setting_string(key, default [, {group, info}]) -> string
 setting_selection(key, options, defaults, max_selections [, {group, info}]) -> selected
 ```
@@ -838,6 +840,12 @@ The Settings window is laid out like Preferences: the script's groups down the s
 ```lua
 local speed = setting_float("speed", 1, 0.25, 4, { group = "Motion", info = "How fast the bars fall, in screens per second." })
 local accent = setting_color("accent", { r = 51, g = 204, b = 255 }, { group = "Colors" })
+```
+
+A color setting with `alpha = true` in that table lets the user pick its opacity too, and gives back `a` (0 to 1) along with `r`, `g` and `b`; the default can have an `a` (1 if not). Without it, a color is opaque and has no `a`. Since 1.5.0.
+
+```lua
+local card = setting_color("card", { r = 58, g = 40, b = 40, a = 0.8 }, { alpha = true, group = "Colors" })
 ```
 
 A selection picks up to `max_selections` of a fixed option list; a pick past the cap evicts whichever option was selected longest ago, so there's no disabled-checkbox state to design around.
