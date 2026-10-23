@@ -46,6 +46,7 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `POST /v1/play?playlist={id}&song={key}` | control | Plays that playlist from that song: 204, or 404 if the song isn't in it |
 | `POST /v1/seek?to={seconds}` | control | Jumps to that point of the song: 204, or 409 if nothing's playing |
 | `POST /v1/volume?to={0..1}` | control | Sets the volume: 204 |
+| `POST /v1/modes?shuffle=&loop=&autoplay=` | control | Sets any of them: `shuffle` `true` or `false`, `loop` `off`, `one` (this song) or `all` (the playlist), `autoplay` `off`, `group` or `all`: 204 |
 | `GET /v1/queue` | read | The play queue (Up next): its songs, in the order they'll play |
 | `POST /v1/queue?song={key}` | control | Adds the song to the end of the queue (`&next=true`: to its front, to play next): 204 |
 | `POST /v1/queue?playlist={id}` | control | Adds the playlist's songs (shuffled while Shuffle is on), at the end or with `&next=true` at the front: 204, or 409 if it has no songs here |
@@ -69,7 +70,8 @@ What's playing:
 
 ```json
 {"song": {...}, "playlist": {"id": "...", "name": "Mornings"}, "paused": false,
- "position": 12.5, "length": 84.2, "speed": 1.0, "volume": 0.8}
+ "position": 12.5, "length": 84.2, "speed": 1.0, "volume": 0.8,
+ "shuffle": false, "loop": "off", "autoplay": "all"}
 ```
 
 Commands are the ones Preferences > Keyboard lists, by id: `play`, `pause`, `toggle_pause`, `next_track`, `previous_track`, `seek_back`, `seek_forward`, `restart_song`, `toggle_visualizer`, `toggle_fullscreen`, `go_to_songs` and so on. `GET /v1/commands` has them all.
@@ -82,7 +84,7 @@ Every song a program adds that wasn't in your library yet is marked with that pr
 
 `GET /v1/events` keeps the connection open and sends:
 
-- `now_playing`: the song, playlist, pause, speed or volume changed. Its data is what's playing, as above.
+- `now_playing`: the song, playlist, pause, speed, volume, Shuffle, Loop or Autoplay changed. Its data is what's playing, as above.
 - `seeked`: the song jumped (a seek, or a loop back to the start): `{"position": 30.0}`.
 - `library_changed`: songs were added, removed or edited: `{}`. Ask `/v1/songs` again for the new state.
 - `playlists_changed`: a playlist was made, renamed, deleted or had songs added, removed or moved (here or by sync): `{}`. Ask `/v1/playlists` again.

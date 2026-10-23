@@ -53,6 +53,7 @@ struct Seen {
     paused: bool,
     speed: f64,
     volume: f32,
+    modes: (bool, crate::playlist::LoopMode, crate::song_list::Autoplay),
     loads: u64,
 }
 
@@ -263,6 +264,17 @@ impl App {
                 self.volume = to;
                 self.send_volume();
             }
+            api::Set::Modes { shuffle, loop_mode, autoplay } => {
+                if let Some(on) = shuffle {
+                    self.set_shuffle(on);
+                }
+                if let Some(mode) = loop_mode {
+                    self.set_loop_mode(mode);
+                }
+                if let Some(mode) = autoplay.filter(|&mode| mode != self.autoplay) {
+                    self.set_autoplay(mode);
+                }
+            }
         }
         Ok(())
     }
@@ -348,6 +360,7 @@ impl App {
             paused: view.paused,
             speed: view.speed,
             volume: self.volume,
+            modes: (self.shuffle, self.loop_mode, self.autoplay),
             loads: view.loads,
         };
         let revision = self.songs.revision();
@@ -436,6 +449,9 @@ impl App {
             length: view.length,
             speed: view.speed,
             volume: self.volume,
+            shuffle: self.shuffle,
+            loop_mode: api::loop_name(self.loop_mode),
+            autoplay: api::autoplay_name(self.autoplay),
         }
     }
 

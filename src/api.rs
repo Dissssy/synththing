@@ -25,6 +25,9 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 use tiny_http::{Header, Method, Request, Response};
 
+use crate::playlist::LoopMode;
+use crate::song_list::Autoplay;
+
 use crate::commands::Command;
 use crate::fields::{Facts, Field};
 use crate::smart::{Group, Order, Rules, Ruleset, Split, SplitBy};
@@ -174,6 +177,26 @@ pub enum Set {
     Position(f64),
     /// 0 to 1.
     Volume(f32),
+    /// Shuffle, Loop and Autoplay: the ones given.
+    Modes { shuffle: Option<bool>, loop_mode: Option<LoopMode>, autoplay: Option<Autoplay> },
+}
+
+/// Loop as the API names it.
+pub fn loop_name(mode: LoopMode) -> &'static str {
+    match mode {
+        LoopMode::Off => "off",
+        LoopMode::One => "one",
+        LoopMode::All => "all",
+    }
+}
+
+/// Autoplay as the API names it.
+pub fn autoplay_name(mode: Autoplay) -> &'static str {
+    match mode {
+        Autoplay::Off => "off",
+        Autoplay::Group => "group",
+        Autoplay::All => "all",
+    }
 }
 
 /// What's playing, as `GET /v1/now-playing` and the `now_playing` event
@@ -190,6 +213,13 @@ pub struct NowPlaying {
     pub speed: f64,
     /// 0 to 1.
     pub volume: f32,
+    pub shuffle: bool,
+    /// `off`, `one` (this song) or `all` (the playlist).
+    #[serde(rename = "loop")]
+    pub loop_mode: &'static str,
+    /// What a song played from a list plays on through: `off`, `group` or
+    /// `all`.
+    pub autoplay: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -533,6 +563,20 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             match query.get("to").and_then(|t| t.parse::<f32>().ok()).filter(|t| (0.0..=1.0).contains(t)) {
                 None => error(400, "say how loud, from 0 to 1: ?to=0.5"),
                 Some(to) => answered(ask(shared, |reply| Call::Set(Set::Volume(to), reply))),
+            }
+        })),
+        (Method::Post, ["v1", "modes"]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| {
+            let shuffle = query.get("shuffle").map(|v| v.parse::<bool>().map_err(|_| "shuffle is true or false"));
+            let loop_mode = query.get("loop").map(|v| {
+                [LoopMode::Off, LoopMode::One, LoopMode::All].into_iter().find(|m| loop_name(*m) == v).ok_or("loop is off, one or all")
+            });
+            let autoplay = query.get("autoplay").map(|v| {
+                [Autoplay::Off, Autoplay::Group, Autoplay::All].into_iter().find(|m| autoplay_name(*m) == v).ok_or("autoplay is off, group or all")
+            });
+            match (shuffle.transpose(), loop_mode.transpose(), autoplay.transpose()) {
+                (Err(why), _, _) | (_, Err(why), _) | (_, _, Err(why)) => error(400, why),
+                (Ok(None), Ok(None), Ok(None)) => error(400, "say what to set: ?shuffle=, ?loop= or ?autoplay="),
+                (Ok(shuffle), Ok(loop_mode), Ok(autoplay)) => answered(ask(shared, |reply| Call::Set(Set::Modes { shuffle, loop_mode, autoplay }, reply))),
             }
         })),
         (Method::Get, ["v1", "commands"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
@@ -977,6 +1021,11 @@ mod tests {
         assert_eq!(answering(&server, empty, set("seek?to=-1", &control_token)), 400);
         assert_eq!(answering(&server, empty, set("volume?to=0.4", &control_token)), 204);
         assert_eq!(answering(&server, empty, set("volume?to=2", &control_token)), 400);
+        assert_eq!(answering(&server, empty, set("modes?shuffle=true", &read_token)), 403);
+        assert_eq!(answering(&server, empty, set("modes?shuffle=true&loop=all&autoplay=group", &control_token)), 204);
+        assert_eq!(answering(&server, empty, set("modes", &control_token)), 400);
+        assert_eq!(answering(&server, empty, set("modes?loop=twice", &control_token)), 400);
+        assert_eq!(answering(&server, empty, set("modes?shuffle=yes", &control_token)), 400);
 
         let url = format!("http://{}/v1/", server.addr());
         let (mut editor, edit_token) = Access::new("editor");
