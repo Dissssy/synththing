@@ -8,6 +8,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - The local API gives songs' album art and your Groupings (each ruleset's playlists), and can group any search by artist, album, genre, year or tag.
 - The local API can seek to an exact point and set the volume (`POST /v1/seek`, `POST /v1/volume`), and an event stream can ask for only the events it wants.
 - Programs you allow to Edit library (a new permission, off until you tick it) can star songs, tag them, and add songs to playlists or take them out through the local API. A new `playlists_changed` event tells when any playlist changes.
+- Programs you allow to Download songs (a new permission, off until you tick it) can copy songs' files out of your library through the local API.
 
 ## 1.4.0 (2026-10-23)
 

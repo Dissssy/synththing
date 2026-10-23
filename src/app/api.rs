@@ -474,6 +474,7 @@ impl App {
                 ui.checkbox(&mut app.read, "Read").on_hover_text("See the library, what's playing, and events");
                 ui.checkbox(&mut app.control, "Control").on_hover_text("Run commands: play, pause, next track...");
                 ui.checkbox(&mut app.edit_library, "Edit library").on_hover_text("Star songs, tag them, and add songs to playlists or take them out");
+                ui.checkbox(&mut app.download_songs, "Download songs").on_hover_text("Copy songs' files out of your library");
                 ui.checkbox(&mut app.add_songs, "Add songs")
                     .on_hover_text("Send songs into your library. Each one is marked as this program's (search addedby:name)");
                 if ui.button("Remove").on_hover_text("Its token stops working. The songs it added stay").clicked() {

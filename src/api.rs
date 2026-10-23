@@ -87,6 +87,9 @@ pub struct Access {
     /// May change the library: star songs, tag them, add songs to
     /// playlists and take them out. Never on unless the user ticks it.
     pub edit_library: bool,
+    /// May download songs' files (`GET /v1/songs/{key}/file`). Never on
+    /// unless the user ticks it.
+    pub download_songs: bool,
 }
 
 impl Access {
@@ -103,6 +106,7 @@ impl Access {
             control: false,
             add_songs: false,
             edit_library: false,
+            download_songs: false,
         };
         (access, token)
     }
@@ -494,6 +498,7 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 "control": access.control,
                 "add_songs": access.add_songs,
                 "edit_library": access.edit_library,
+                "download_songs": access.download_songs,
             }),
         )),
         (Method::Get, ["v1", "events"]) => match needs(access.read, "read").map_or_else(|| wanted_events(&query), Err) {
@@ -553,6 +558,19 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 },
             )
         })),
+        (Method::Get, ["v1", "songs", key, "file"]) => match needs(access.download_songs, "download songs") {
+            Some(reply) => Some(reply),
+            None => match ask(shared, Call::Library) {
+                Err(reply) => Some(reply),
+                Ok(library) => match song_file(&library, key) {
+                    Err(reply) => Some(reply),
+                    Ok(file) => {
+                        let _ = request.respond(file);
+                        return;
+                    }
+                },
+            },
+        },
         (Method::Get, ["v1", "songs", key, "art"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| art(&library, key))))
         }
@@ -700,6 +718,30 @@ fn groups(library: &Library, by: SplitBy, q: &str) -> Reply {
         })
         .collect();
     json(200, &groups)
+}
+
+/// `GET /v1/songs/{key}/file`: the song's file as it's kept, named as it
+/// was imported.
+fn song_file(library: &Library, key: &str) -> Result<Response<std::fs::File>, Reply> {
+    let song = library.store.get_by_key(key).filter(|_| library.store.has(key)).ok_or_else(|| error(404, "there's no song with that key here"))?;
+    let path = library.store.path(key);
+    let file = std::fs::File::open(&path).map_err(|e| error(500, format!("couldn't read the song: {e}")))?;
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+    let kind = match extension.as_str() {
+        "mp3" => "audio/mpeg",
+        "flac" => "audio/flac",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "wav" => "audio/wav",
+        "m4a" | "mp4" | "aac" => "audio/mp4",
+        "mid" | "midi" => "audio/midi",
+        _ => "application/octet-stream",
+    };
+    // (RFC 6266's filename*, for names past ASCII.)
+    let encoded: String =
+        song.name.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
+    Ok(Response::from_file(file)
+        .with_header(header("Content-Type", kind))
+        .with_header(header("Content-Disposition", &format!("attachment; filename*=UTF-8''{encoded}"))))
 }
 
 /// `GET /v1/songs/{key}/art`: the song's picture (its own, else its
@@ -961,6 +1003,37 @@ mod tests {
         assert_eq!(elsewhere.get_by_key(&sent_key).unwrap().added_by.as_deref(), Some("downloader"));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn songs_are_downloaded_only_with_their_permission() {
+        let dir = std::env::temp_dir().join(format!("synththing-api-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = SongStore::open(dir.clone());
+        let stored = song_store::write_in(b"MThd tune", "Überture.mid", &dir).unwrap();
+        let key = stored.key.clone();
+        store.add(stored);
+        let (reader, read_token) = Access::new("reader");
+        let (mut fetcher, fetch_token) = Access::new("fetcher");
+        fetcher.download_songs = true;
+        let server = Server::start(0, false, vec![reader, fetcher], egui::Context::default()).unwrap();
+        let library = move || Library { store: store.clone(), ..no_library() };
+        let addr = server.addr();
+        let fetch = move |key: &str, token: &str| {
+            let (url, token) = (format!("http://{addr}/v1/songs/{key}/file"), format!("Bearer {token}"));
+            move || {
+                let mut response = agent().get(url).header("Authorization", token).call().unwrap();
+                let disposition = response.headers().get("Content-Disposition").map(|v| v.to_str().unwrap().to_string());
+                (response.status().as_u16(), disposition, response.body_mut().read_to_vec().unwrap())
+            }
+        };
+        assert_eq!(answering(&server, &library, fetch(&key, &read_token)).0, 403);
+        let (status, disposition, body) = answering(&server, &library, fetch(&key, &fetch_token));
+        assert_eq!((status, body.as_slice()), (200, &b"MThd tune"[..]));
+        assert_eq!(disposition.as_deref(), Some("attachment; filename*=UTF-8''%C3%9Cberture.mid"));
+        assert_eq!(answering(&server, &library, fetch("nope", &fetch_token)).0, 404);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
