@@ -14,6 +14,17 @@
     follows it to your other devices. Left out of the 1.0.0 song library
     on purpose; pick it up only when asked.
 
+[M][.] Run scripts from an external editor (only if someone asks for
+    more external dev tool support; Ethan 2026-10-23): a
+    `POST /v1/scripts/run` taking the script's source in the body (and a
+    name for errors and settings), run as a temporary script without
+    touching disk, behind its own "Run scripts" permission, off until
+    ticked. Not a path to any file: a program with Control could then load
+    arbitrary files, parse errors could echo their contents, and
+    read_asset would follow the script's folder. An editor plugin's Run
+    button would send the editor's text; its preview is the existing
+    /v1/visualizer page. Editor support itself (LuaLS definitions) is done.
+
 [S][.] Chinese text style (only if it comes up): Noto Sans JP is the
     bundled font for Han characters (app/fonts.rs). Chinese-only characters
     it lacks come from whatever CJK font is installed, so their style can
