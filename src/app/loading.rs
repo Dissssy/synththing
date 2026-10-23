@@ -38,6 +38,8 @@ pub(super) struct PendingPlay {
     /// Failing to load moves on to the next playlist track (auto-advance,
     /// Next) rather than just reporting it (a click on that track).
     skip_on_failure: bool,
+    /// From the play queue: failing to load moves on.
+    queued: bool,
 }
 
 fn song_kind(path: &Path) -> AssetKind {
@@ -68,17 +70,28 @@ impl App {
         entry: Option<NowPlaying>,
         skip_on_failure: bool,
     ) {
-        let now = Instant::now();
-        self.assets.request(path, song_kind(path), Priority::Now, now);
         let soundfont = self.soundfont_for(path, soundfont_override);
-        if let Some(sf) = &soundfont
+        self.request(PendingPlay { path: path.to_path_buf(), soundfont, entry, skip_on_failure, queued: false });
+    }
+
+    /// Play `path` from the play queue (see `queue.rs`): as `request_play`,
+    /// but what it was queued after stays, to carry on after the queue.
+    pub(super) fn request_queued(&mut self, path: &Path) {
+        let soundfont = self.soundfont_for(path, None);
+        self.request(PendingPlay { path: path.to_path_buf(), soundfont, entry: None, skip_on_failure: true, queued: true });
+    }
+
+    fn request(&mut self, pending: PendingPlay) {
+        let now = Instant::now();
+        self.assets.request(&pending.path, song_kind(&pending.path), Priority::Now, now);
+        if let Some(sf) = &pending.soundfont
             && self.loaded_sf.as_ref() != Some(sf)
         {
             self.assets.request(sf, AssetKind::SoundFont, Priority::Now, now);
         }
-        self.pending_play = Some(PendingPlay { path: path.to_path_buf(), soundfont, entry, skip_on_failure });
+        self.status = format!("Loading {}...", self.song_title(&pending.path));
+        self.pending_play = Some(pending);
         self.advance_armed = false;
-        self.status = format!("Loading {}...", self.song_title(path));
         self.poll_pending_play();
     }
 
@@ -155,6 +168,7 @@ impl App {
             return;
         };
         let path = pending.path.clone();
+        let queued = pending.queued;
         let song = match self.assets.get(&path).cloned() {
             None => {
                 self.assets.request(&path, song_kind(&path), Priority::Now, Instant::now());
@@ -240,6 +254,7 @@ impl App {
         self.remember_position();
         self.song_loads = loads;
         self.current_song = Some(path);
+        self.playing_queued = queued;
         self.song_options_loaded();
         self.advance_armed = false;
         self.skips_in_a_row = 0;
@@ -251,6 +266,11 @@ impl App {
             return;
         };
         self.status = format!("Failed to read '{}': {error}", self.song_title(&pending.path));
+        if pending.queued {
+            // (On to the next queued song, or back to what it was queued after.)
+            self.next_track();
+            return;
+        }
         let Some(np) = pending.entry else {
             if pending.skip_on_failure && self.listed.is_some() {
                 self.skips_in_a_row += 1;
@@ -333,6 +353,9 @@ impl App {
     fn upcoming_song(&self) -> Option<(PathBuf, Option<PathBuf>)> {
         if self.loop_mode == LoopMode::One {
             return None;
+        }
+        if let Some(path) = self.queue.first() {
+            return Some((path.clone(), self.soundfont_for(path, None)));
         }
         if let Some(playing) = &self.listed {
             let (at, _) = playing.upcoming.as_ref()?;

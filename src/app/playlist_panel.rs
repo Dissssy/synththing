@@ -46,6 +46,8 @@ enum RowDrop {
 /// The `Vec` ones apply to the selection when used on a selected row.
 enum RowAction {
     Play(usize),
+    /// Queue these songs: next, or at the end.
+    Queue(Vec<PathBuf>, bool),
     Remove(Vec<usize>),
     ClearSoundfont(Vec<usize>),
     UseCurrentSoundfont(Vec<usize>),
@@ -101,7 +103,7 @@ impl App {
     /// Make `np` the current playlist position and start loading its song
     /// (it plays once loaded; see `loading.rs`). Also decides what comes
     /// after it, so that can preload meanwhile.
-    fn start_now_playing(&mut self, np: NowPlaying, skip_on_failure: bool) {
+    pub(super) fn start_now_playing(&mut self, np: NowPlaying, skip_on_failure: bool) {
         let Some(entry) = self
             .playlists
             .lists
@@ -144,10 +146,13 @@ impl App {
         }
     }
 
-    /// Advance to the next playlist entry (the one already planned, see
-    /// `plan_upcoming`). One that fails to load is skipped, at most one pass
-    /// through the list (see `loading.rs`).
+    /// Advance to the next queued song, else the next playlist entry (the
+    /// one already planned, see `plan_upcoming`). One that fails to load is
+    /// skipped, at most one pass through the list (see `loading.rs`).
     pub(super) fn next_track(&mut self) {
+        if self.play_queued() {
+            return;
+        }
         if self.listed.is_some() {
             self.listed_next();
             return;
@@ -186,6 +191,9 @@ impl App {
     /// (or there's no playlist / nothing before it), else go back one.
     pub(super) fn previous_track(&mut self, position: f64) {
         let restart = position > PREVIOUS_RESTARTS_AFTER_SECS;
+        if !restart && self.back_from_queue() {
+            return;
+        }
         if self.listed.is_some() {
             if restart || !self.listed_previous() {
                 self.send(AudioCommand::Seek(0.0));
@@ -400,7 +408,7 @@ impl App {
 
         // Changing the override of the entry that's playing right now
         // swaps its soundfont live, same as picking one in the list does.
-        let playing_this = self.now_playing.as_ref().is_some_and(|np| np.list == list && np.entry == idx)
+        let playing_this = self.playing_entry().is_some_and(|np| np.list == list && np.entry == idx)
             && self.pending_play.is_none();
         if playing_this {
             self.refresh_playing_soundfont(soundfont.as_deref());
@@ -527,6 +535,7 @@ impl App {
         }
         match action {
             Some(RowAction::Play(idx)) => self.play_entry(list, idx),
+            Some(RowAction::Queue(paths, next)) => self.queue_songs(ui.ctx(), paths, next),
             Some(RowAction::Remove(rows)) => self.remove_entries(list, &rows),
             Some(RowAction::Tag(tag, paths)) => self.tag_songs(tag, &paths),
             Some(RowAction::ClearSoundfont(rows)) => self.set_entries_soundfont(list, &rows, None),
@@ -587,6 +596,10 @@ impl App {
             let empty = self.playlists.lists[list].playlist.entries.is_empty();
             if ui.add_enabled(!empty, super::icon_button("play")).on_hover_text("Play it from the top").clicked() {
                 self.play_playlist(list);
+            }
+            if ui.add_enabled(!empty, super::icon_button("list-plus")).on_hover_text("Add its songs to the queue").clicked() {
+                let paths = self.playlists.lists[list].playlist.entries.iter().filter(|e| !e.missing).map(|e| e.path.clone()).collect();
+                self.queue_songs(ui.ctx(), paths, false);
             }
             // Where it was left, unless that's playing now.
             let stored = &self.playlists.lists[list];
@@ -679,7 +692,7 @@ impl App {
         // (A smart playlist's songs are its rules': not moved, dropped on
         // or removed by hand, nor given soundfonts.)
         let smart = self.playlists.lists[list].playlist.smart.is_some();
-        let playing = self.now_playing.as_ref().filter(|np| np.list == list).map(|np| np.entry);
+        let playing = self.playing_entry().filter(|np| np.list == list).map(|np| np.entry);
         let selected_sf = self.active_sf.and_then(|i| self.config.soundfonts.get(i)).is_some();
         let selection = &mut self.playlist_selection;
         let cache = &mut self.song_info;
@@ -719,8 +732,14 @@ impl App {
             row.response.context_menu(|ui| {
                 let rows = row.rows();
                 let count = if rows.len() > 1 { format!(" ({})", rows.len()) } else { String::new() };
+                let paths: Vec<PathBuf> = rows.iter().filter_map(|&i| entries.get(i)).filter(|e| !e.missing).map(|e| e.path.clone()).collect();
                 if ui.button("Play").clicked() {
                     action = Some(RowAction::Play(idx));
+                }
+                if !paths.is_empty()
+                    && let Some(next) = super::queue::menu(ui)
+                {
+                    action = Some(RowAction::Queue(paths.clone(), next));
                 }
                 if rows.len() == 1 && !entry.missing && ui.button("Song info").clicked() {
                     *info_open = Some(vec![entry.path.clone()]);
@@ -736,7 +755,6 @@ impl App {
                         action = Some(RowAction::ClearSoundfont(rows.clone()));
                     }
                 }
-                let paths: Vec<PathBuf> = rows.iter().filter_map(|&i| entries.get(i)).filter(|e| !e.missing).map(|e| e.path.clone()).collect();
                 if !paths.is_empty()
                     && let Some(tag) = super::tags::tags_menu(ui, store, &paths)
                 {

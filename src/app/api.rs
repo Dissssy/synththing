@@ -372,7 +372,7 @@ impl App {
     }
 
     fn api_playlist(&self) -> Option<PlaylistRef> {
-        let np = self.now_playing.as_ref()?;
+        let np = self.playing_entry()?;
         let list = self.playlists.lists.get(np.list)?;
         Some(PlaylistRef { id: list.id.clone(), name: list.playlist.name.clone() })
     }
