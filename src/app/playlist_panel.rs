@@ -352,7 +352,7 @@ impl App {
     }
 
     /// Remove several entries (highest first, so indices stay valid).
-    fn remove_entries(&mut self, list: usize, indices: &[usize]) {
+    pub(super) fn remove_entries(&mut self, list: usize, indices: &[usize]) {
         let mut indices = indices.to_vec();
         indices.sort_unstable_by(|a, b| b.cmp(a));
         indices.dedup();
