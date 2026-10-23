@@ -13,6 +13,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - A play queue: right-click songs (or an album, artist or playlist) for Play next or Add to queue, and the Up next button by Shuffle opens the Up next tab (View > Up next, or G then U): the queue with the Songs list's columns, where a click plays a song now, songs drag in from Songs and Groupings, rows drag to reorder, and right-click moves songs to the top or takes them out. Queued songs play after the one playing, then the playlist or list it was playing from carries on. A playlist's or album's songs go in in order, or shuffled while Shuffle is on.
 
 ### Changed
+- Preferences > Integrations shows programs as a table: one row per program, a column per permission (hover an icon for what it allows).
 - Audio files (MP3, FLAC, OGG and the rest) are always songs now, alongside MIDI: the Show audio files setting is gone.
 - A single click plays a song again (and uses a soundfont, or plays a playlist's song), leaving the selection as it was; Ctrl+click and Shift+click select rows without playing them. While rows are selected, a line under the list says how many, with a button to clear them; Esc clears them too.
 
