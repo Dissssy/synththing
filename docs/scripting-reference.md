@@ -774,6 +774,13 @@ midi_send(status, [data1], [data2]) -> bool   -- a raw MIDI channel message, e.g
 
 `midi_send` sends one MIDI channel message (status `0x80` to `0xEF`: note off and on, controllers, program change, pitch bend, ...) straight to the script's synthesizer, for scripts that play whole scores themselves, with their own instruments. A channel it touches stops following the song's channel (its instrument, volume, ...) and keeps what the script set, until the script is reloaded or restarted. Channel 9 is drums. Notes sent this way don't show in `active_notes()`. Returns false (and does nothing) without a soundfont, like `play_note`. Since 1.5.0.
 
+```lua
+sound_register(samples, sample_rate) -> id      -- samples: a string of unsigned 8-bit samples (128 is silence), or a list of numbers -1 to 1
+sound_play(id, [{ volume = 1, pan = 0, speed = 1 }]) -> bool   -- pan -1 (left) to 1 (right); speed 2 plays it an octave up
+```
+
+`sound_register` keeps a mono sound effect, sampled at `sample_rate` (1000 to 192000), and returns its id for `sound_play`; register each sound once, outside `render()` or the first time it's needed (at most 1000 per script, 8,000,000 samples each). A string of bytes is read as unsigned 8-bit samples, as in 8-bit WAV files and Doom's sounds, so data from `read_asset` can go straight in. `sound_play` starts it mixed in with the script's notes, as many times over as it's called; the copies play to the end and stop when the script's notes do. Returns false (and does nothing) without a soundfont, like `play_note`. Since 1.5.0.
+
 ## Sequences
 
 ```lua

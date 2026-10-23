@@ -5,10 +5,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
-- Doom, a new game visualizer (New > Games): plays the first maps of a Doom WAD you put in a `doom.lua.assets` folder next to it (shareware DOOM1.WAD or Freedoom), with the map's music on your soundfont.
+- Doom, a new game visualizer (New > Games): plays the first maps of a Doom WAD you put in a `doom.lua.assets` folder next to it (shareware DOOM1.WAD or Freedoom), with the map's music on your soundfont, its sound effects, and fights with zombies, imps and demons.
 - Scripts can keep the cursor in the window for mouse look in any view, not just the dedicated fullscreen, and `mouse_delta()` is raw mouse motion while the visualizer has focus, so turning doesn't stop at the edge.
 - SF3 soundfonts (compressed samples, like GZDoom's) are refused with a tip to convert them, instead of playing as loud noise.
-- Scripts can draw a whole palette image in one call (`blit`), read and list data files in a `<script>.lua.assets` folder next to them (`read_asset`, `list_assets`, and `script_options({ assets = true })` for a button that opens it), and send raw MIDI messages to their synthesizer (`midi_send`).
+- Scripts can draw a whole palette image in one call (`blit`), read and list data files in a `<script>.lua.assets` folder next to them (`read_asset`, `list_assets`, and `script_options({ assets = true })` for a button that opens it), send raw MIDI messages to their synthesizer (`midi_send`), and play sound effects from samples (`sound_register`, `sound_play`).
 - The local API shows Shuffle, Loop and Autoplay with what's playing, and can set them (`POST /v1/modes`).
 - The local API lists your soundfonts and can switch which one MIDI songs play with (`GET /v1/soundfonts`, `POST /v1/soundfonts/{id}/use`). What's playing tells which soundfont a MIDI song plays with, and a `soundfonts_changed` event tells when the list or the one in use changes.
 - The local API can reorder the play queue (`POST /v1/queue/move`).

@@ -1162,6 +1162,8 @@ pub const API_SINCE: &[(&str, &str)] = &[
     ("read_asset", "1.5.0"),
     ("list_assets", "1.5.0"),
     ("midi_send", "1.5.0"),
+    ("sound_register", "1.5.0"),
+    ("sound_play", "1.5.0"),
     ("circle", "0.1.6"),
     ("triangle", "0.1.6"),
     ("polygon", "0.1.6"),

@@ -108,7 +108,7 @@ use crate::midi_notes::NoteList;
 use crate::pixel_font;
 use crate::spectrum::{self, OnsetDetector, SpectrumAnalyzer};
 use crate::gamepad::{AXIS_NAMES, PadInput};
-use crate::live::{LiveCommand, LiveNote};
+use crate::live::{LiveCommand, LiveNote, Sound};
 use crate::playlist::LoopMode;
 use crate::typing::TypingSpan;
 use crate::visualizer::{
@@ -462,6 +462,10 @@ fn tint_color(color: u32, tint: u32) -> u32 {
 /// `set_watchdog_limit` says otherwise.
 /// The most pixels one `blit` may draw from (about 4K).
 const MAX_BLIT_PIXELS: usize = 3840 * 2160;
+/// The longest sound `sound_register` takes (about 3 minutes at 44.1 kHz)
+/// and how many a script may register.
+const MAX_SOUND_SAMPLES: usize = 8_000_000;
+const MAX_SOUNDS: usize = 1000;
 /// The biggest file `read_asset` reads.
 const MAX_ASSET_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -2755,6 +2759,66 @@ fn register_live_notes(
     {
         let playable = playable.clone();
         globals.set("notes_playable", lua.create_function(move |_, ()| Ok(playable()))?)?;
+    }
+
+    let sounds: Rc<RefCell<Vec<Arc<Sound>>>> = Rc::default();
+    {
+        let sounds = Rc::clone(&sounds);
+        globals.set(
+            "sound_register",
+            lua.create_function(move |_, (data, sample_rate): (Value, u32)| {
+                if !(1000..=192_000).contains(&sample_rate) {
+                    return Err(mlua::Error::runtime("sound_register: sample_rate is 1000 to 192000"));
+                }
+                let samples: Vec<f32> = match data {
+                    // Unsigned 8-bit, as in WAV files and Doom's sounds.
+                    Value::String(bytes) => bytes.as_bytes().iter().map(|&b| (b as f32 - 128.0) / 128.0).collect(),
+                    Value::Table(t) => t.sequence_values::<f32>().map(|v| v.map(|v| v.clamp(-1.0, 1.0))).collect::<mlua::Result<_>>()?,
+                    other => {
+                        return Err(mlua::Error::runtime(format!(
+                            "sound_register: samples are a string of 8-bit samples or a list of numbers, not a {}",
+                            other.type_name()
+                        )));
+                    }
+                };
+                if samples.len() > MAX_SOUND_SAMPLES {
+                    return Err(mlua::Error::runtime(format!("sound_register: at most {MAX_SOUND_SAMPLES} samples")));
+                }
+                let mut sounds = sounds.borrow_mut();
+                if sounds.len() >= MAX_SOUNDS {
+                    return Err(mlua::Error::runtime(format!(
+                        "sound_register: at most {MAX_SOUNDS} sounds per script (register them once, outside render())"
+                    )));
+                }
+                sounds.push(Arc::new(Sound { samples, sample_rate }));
+                Ok(sounds.len())
+            })?,
+        )?;
+    }
+    {
+        let (playable, live, sounds) = (playable.clone(), Rc::clone(live), Rc::clone(&sounds));
+        globals.set(
+            "sound_play",
+            lua.create_function(move |_, (id, options): (usize, Option<Table>)| {
+                let Some(sound) = id.checked_sub(1).and_then(|i| sounds.borrow().get(i).cloned()) else {
+                    return Err(mlua::Error::runtime(format!("sound_play: no sound with id {id}")));
+                };
+                if !playable() {
+                    return Ok(false);
+                }
+                let (mut volume, mut pan, mut speed) = (1.0, 0.0, 1.0);
+                if let Some(o) = options {
+                    volume = o.get::<Option<f32>>("volume")?.unwrap_or(volume);
+                    pan = o.get::<Option<f32>>("pan")?.unwrap_or(pan);
+                    speed = o.get::<Option<f32>>("speed")?.unwrap_or(speed);
+                }
+                if !(volume.is_finite() && pan.is_finite() && speed.is_finite()) {
+                    return Err(mlua::Error::runtime("sound_play: volume, pan and speed are numbers"));
+                }
+                live.borrow_mut().commands.push(LiveCommand::Sound { sound, volume, pan, speed });
+                Ok(true)
+            })?,
+        )?;
     }
 
     {

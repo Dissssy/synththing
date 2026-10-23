@@ -10,7 +10,9 @@
 -- A software renderer like the original: BSP front to back, textured
 -- walls, floors, ceilings and sky with Doom's light diminishing, and
 -- things drawn as sprites. Doors, lifts, moving floors, switches and
--- exits work; monsters stand still and there's no shooting.
+-- exits work. Fire with the left mouse button or F (2 and 3 pick the pistol
+-- and shotgun): zombies, imps and demons wake, chase and fight back, with
+-- Doom's own sound effects, pickups and a live status bar.
 
 local floor, min, max, abs = math.floor, math.min, math.max, math.abs
 local sin, cos, atan, pi = math.sin, math.cos, math.atan, math.pi
@@ -33,7 +35,10 @@ local STRAFE_R = input_register("strafe right", { "d", "pad_lstick_right" }, { g
 local TURN_L = input_register("turn left", { "left", "pad_rstick_left", "pad_dpad_left" }, { group = "Move" })
 local TURN_R = input_register("turn right", { "right", "pad_rstick_right", "pad_dpad_right" }, { group = "Move" })
 local WALK = input_register("walk", { "pad_lb" }, { group = "Move", info = "Hold to walk instead of run." })
-local USE = input_register("use", { "e", "space", "pad_a" }, { group = "Act", info = "Open doors, flip switches." })
+local USE = input_register("use", { "e", "space", "pad_a" }, { group = "Act", info = "Open doors, flip switches; after dying, start the map again." })
+local FIRE = input_register("fire", { "mouse_left", "f", "pad_rt" }, { group = "Act" })
+local PISTOL = input_register("pistol", { "2", "pad_x" }, { group = "Act" })
+local SHOTGUN = input_register("shotgun", { "3", "pad_y" }, { group = "Act" })
 
 ---------------------------------------------------------------- WAD
 
@@ -81,12 +86,18 @@ end
 
 -- Palette and the 34 colormaps. Pixel values everywhere below are palette
 -- index + 1, so a colormap table maps them straight to a palette index.
-local palette, cmaps = {}, {}
+-- PLAYPAL holds 14 palettes: 0 normal, 1-8 redder with damage, 9-12
+-- gold for pickups, 13 the radiation suit.
+local palettes, cmaps = {}, {}
 if wad then
     local pal = lump("PLAYPAL")
-    for i = 0, 255 do
-        local r, g, b = sbyte(pal, i * 3 + 1, i * 3 + 3)
-        palette[i + 1] = { r = r, g = g, b = b }
+    for k = 0, #pal // 768 - 1 do
+        local t = {}
+        for i = 0, 255 do
+            local r, g, b = sbyte(pal, k * 768 + i * 3 + 1, k * 768 + i * 3 + 3)
+            t[i + 1] = { r = r, g = g, b = b }
+        end
+        palettes[k] = t
     end
     local cm = lump("COLORMAP")
     for level = 0, 33 do
@@ -376,11 +387,56 @@ local function music_tick(dt)
     end
 end
 
+---------------------------------------------------------------- sound effects
+
+-- Doom's DS* lumps, registered the first time each plays.
+local sound_ids = {}
+local function sfx_id(name)
+    local id = sound_ids[name]
+    if id ~= nil then return id end
+    id = false
+    local d = lump("DS" .. name)
+    if d and #d > 40 and sunpack("<I2", d, 1) == 3 then
+        local rate, count = sunpack("<I2I4", d, 3)
+        -- DMX sounds pad 16 samples at each end.
+        id = sound_register(ssub(d, 9 + 16, 8 + count - 16), rate)
+    end
+    sound_ids[name] = id
+    return id
+end
+
 ---------------------------------------------------------------- the map
 
 local map -- vertexes, lines, sides, sectors, segs, subsectors, nodes, things
 local player = { x = 0, y = 0, z = 0, angle = 0, momx = 0, momy = 0, momz = 0, viewh = 41, dvh = 0, bob = 0 }
 local map_name, message, message_until, leveltime = nil, nil, 0, 0
+local status_dirty = true -- the status bar needs drawing again
+
+-- What the player carries, from a pistol start.
+local function pistol_start()
+    player.health, player.armor, player.armortype = 100, 0, 0
+    player.ammo = { bullets = 50, shells = 0 }
+    player.weapons = { pistol = true }
+    player.weapon, player.keys, player.dead = "pistol", {}, false
+    player.damagecount, player.bonuscount, player.attack, player.wtics = 0, 0, false, 0
+    player.wframe, player.wstep, player.flash, player.refire, player.lower = "A", 0, -100, false, 0
+end
+pistol_start()
+
+-- Sounds come from where things are: quieter far away, panned by angle (s_sound.c).
+local function sound(name, x, y)
+    local id = sfx_id(name)
+    if not id then return end
+    local volume, pan = 1, 0
+    if x then
+        local dx, dy = x - player.x, y - player.y
+        local dist = math.sqrt(dx * dx + dy * dy)
+        if dist > 1200 then return end
+        volume = dist < 200 and 1 or (1200 - dist) / 1000
+        pan = dist < 1 and 0 or -sin(atan(dy, dx) - player.angle) * 0.75
+    end
+    sound_play(id, { volume = volume * 0.7, pan = pan })
+end
 
 local function point_in_subsector(x, y)
     local nodes = map.nodes
@@ -416,6 +472,51 @@ local THING_SPRITES = {
     [60] = "GOR4A", [61] = "GOR3A", [62] = "GOR5A", [63] = "GOR1A", [73] = "HDB1A", [74] = "HDB2A",
     [75] = "HDB3A", [76] = "HDB4A", [77] = "HDB5A", [78] = "HDB6A", [79] = "POB1A", [80] = "POB2A", [81] = "BRS1A",
 }
+-- Monsters: hit points, speed (units per chase step), radius, pain chance
+-- out of 256, how they attack, their sounds and their frames.
+local MONSTERS = {
+    [3004] = { spr = "POSS", hp = 20, speed = 8, radius = 20, pain = 200, shots = 1, shotsnd = "PISTOL", drop = 2007,
+        sight = { "POSIT1", "POSIT2", "POSIT3" }, active = "POSACT", painsnd = "POPAIN", death = { "PODTH1", "PODTH2", "PODTH3" },
+        attackf = "EFE", painf = "G", deathf = "HIJKL" },
+    [9] = { spr = "SPOS", hp = 30, speed = 8, radius = 20, pain = 170, shots = 3, shotsnd = "SHOTGN", drop = 2001,
+        sight = { "POSIT1", "POSIT2", "POSIT3" }, active = "POSACT", painsnd = "POPAIN", death = { "PODTH1", "PODTH2", "PODTH3" },
+        attackf = "EFE", painf = "G", deathf = "HIJKL" },
+    [3001] = { spr = "TROO", hp = 60, speed = 8, radius = 20, pain = 200, missile = true, melee = 3,
+        sight = { "BGSIT1", "BGSIT2" }, active = "BGACT", painsnd = "POPAIN", death = { "BGDTH1", "BGDTH2" },
+        attackf = "EFG", painf = "H", deathf = "IJKLM" },
+    [3002] = { spr = "SARG", hp = 150, speed = 10, radius = 30, pain = 180, melee = 4, meleesnd = "SGTATK",
+        sight = { "SGTSIT" }, active = "DMACT", painsnd = "DMPAIN", death = { "SGTDTH" },
+        attackf = "EFG", painf = "H", deathf = "IJKLMN" },
+}
+MONSTERS[58] = MONSTERS[3002]
+
+-- Pickups: what they give and what Doom says.
+local ITEMS = {
+    [2011] = { health = 10, max = 100, msg = "Picked up a stimpack." },
+    [2012] = { health = 25, max = 100, msg = "Picked up a medikit." },
+    [2014] = { health = 1, max = 200, msg = "Picked up a health bonus.", bonus = true },
+    [2013] = { health = 100, max = 200, msg = "Supercharge!", sound = "GETPOW" },
+    [2015] = { armorbonus = 1, msg = "Picked up an armor bonus.", bonus = true },
+    [2018] = { armor = 100, armortype = 1, msg = "Picked up the armor." },
+    [2019] = { armor = 200, armortype = 2, msg = "Picked up the MegaArmor!" },
+    [2007] = { bullets = 10, msg = "Picked up a clip." },
+    [2048] = { bullets = 50, msg = "Picked up a box of bullets." },
+    [2008] = { shells = 4, msg = "Picked up 4 shotgun shells." },
+    [2049] = { shells = 20, msg = "Picked up a box of shotgun shells." },
+    [8] = { bullets = 10, shells = 4, msg = "Picked up a backpack full of ammo!" },
+    [2001] = { weapon = "shotgun", shells = 8, msg = "You got the shotgun!", sound = "WPNUP" },
+    [2002] = { bullets = 20, msg = "You got the chaingun!", sound = "WPNUP" },
+    [5] = { key = "blue", msg = "Picked up a blue keycard." }, [40] = { key = "blue", msg = "Picked up a blue skull key." },
+    [6] = { key = "yellow", msg = "Picked up a yellow keycard." }, [39] = { key = "yellow", msg = "Picked up a yellow skull key." },
+    [13] = { key = "red", msg = "Picked up a red keycard." }, [38] = { key = "red", msg = "Picked up a red skull key." },
+}
+
+-- Things the player and monsters bump into, by radius.
+local SOLID = { [2035] = 10, [2028] = 16, [30] = 16, [31] = 16, [32] = 16, [33] = 16, [36] = 16, [37] = 16,
+    [41] = 16, [42] = 16, [43] = 16, [44] = 16, [45] = 16, [46] = 16, [47] = 16, [48] = 16, [54] = 32,
+    [55] = 16, [56] = 16, [57] = 16, [70] = 10, [85] = 16, [86] = 16, [35] = 16, [25] = 16, [26] = 16,
+    [27] = 16, [28] = 16, [29] = 16 }
+
 local CEILING_THINGS = { [49] = true, [50] = true, [51] = true, [52] = true, [53] = true, [59] = true,
     [60] = true, [61] = true, [62] = true, [63] = true, [73] = true, [74] = true, [75] = true, [76] = true,
     [77] = true, [78] = true }
@@ -493,11 +594,23 @@ local function load_map(name)
         if kind == 1 then
             player.x, player.y, player.angle = x, y, angle * pi / 180
         elseif THING_SPRITES[kind] and flags & 16 == 0 and flags & 2 ~= 0 then
-            local s = sector_at(x, y)
-            table.insert(m.things, { x = x, y = y, angle = angle, sprite = THING_SPRITES[kind],
-                sector = s, ceiling = CEILING_THINGS[kind] })
+            local spr = THING_SPRITES[kind]
+            local th = { x = x, y = y, angle = angle, kind = kind, spr = spr:sub(1, 4), frame = spr:sub(5, 5),
+                sector = sector_at(x, y), ceiling = CEILING_THINGS[kind], radius = SOLID[kind], deaf = flags & 8 ~= 0 }
+            local info = MONSTERS[kind]
+            if info then
+                th.info, th.hp, th.radius, th.state, th.tics, th.reaction = info, info.hp, info.radius, "idle", 0, 8
+                th.z = th.sector.floorh
+                th.dir, th.movecount = 0, 0
+            elseif kind == 2035 then
+                th.hp = 20
+            end
+            th.item = ITEMS[kind]
+            table.insert(m.things, th)
         end
     end
+    if player.dead then pistol_start() end
+    player.keys, status_dirty = {}, true
     local s = sector_at(player.x, player.y)
     player.z, player.momx, player.momy, player.momz, player.viewh, player.dvh = s.floorh, 0, 0, 0, 41, 0
     map_name = name
@@ -537,6 +650,21 @@ local function next_floor(s)
     return h == math.huge and s.floorh or h
 end
 
+-- Where a sector's sounds come from: the middle of its lines.
+local function sector_sound(s, name)
+    if not s.sx then
+        local x, y = 0, 0
+        for _, l in ipairs(s.lines) do x, y = x + l.v1.x + l.v2.x, y + l.v1.y + l.v2.y end
+        s.sx, s.sy = x / (2 * #s.lines), y / (2 * #s.lines)
+    end
+    sound(name, s.sx, s.sy)
+end
+
+local function door_sound(m)
+    local fast = m.speed > 2
+    sector_sound(m.sector, m.dir == 1 and (fast and "BDOPN" or "DOROPN") or (fast and "BDCLS" or "DORCLS"))
+end
+
 -- One mover per sector at a time, as in Doom.
 local function door(sector, kind, speed)
     local m = sector.mover
@@ -544,6 +672,8 @@ local function door(sector, kind, speed)
         -- Using a door that's moving again sends it the other way.
         if m.door and kind == "raise" then
             m.dir = (m.dir == -1) and 1 or -1
+            m.top = m.top or lowest_ceiling(sector) - 4
+            door_sound(m)
             return true
         end
         return false
@@ -552,6 +682,7 @@ local function door(sector, kind, speed)
     if kind == "close" then m.dir = -1 else m.dir = 1 m.top = lowest_ceiling(sector) - 4 end
     sector.mover = m
     movers[#movers + 1] = m
+    door_sound(m)
     return true
 end
 
@@ -560,6 +691,7 @@ local function lift(sector, speed)
     local m = { lift = true, sector = sector, low = lowest_floor(sector), high = sector.floorh, dir = -1, speed = speed or 4, wait = 0 }
     sector.mover = m
     movers[#movers + 1] = m
+    sector_sound(sector, "PSTART")
     return true
 end
 
@@ -586,7 +718,7 @@ local function run_movers()
         if m.door then
             if m.wait > 0 then
                 m.wait = m.wait - 1
-                if m.wait == 0 then m.dir = -1 end
+                if m.wait == 0 then m.dir = -1 door_sound(m) end
             elseif m.dir == 1 then
                 s.ceilh = min(m.top, s.ceilh + m.speed)
                 if s.ceilh >= m.top then
@@ -597,6 +729,7 @@ local function run_movers()
                 if player_sector() == s and next_h < player.z + 56 then
                     m.dir = 1 -- something's in the way: back up
                     m.top = m.top or lowest_ceiling(s) - 4
+                    door_sound(m)
                 else
                     s.ceilh = next_h
                     if s.ceilh <= s.floorh then done = true end
@@ -605,18 +738,19 @@ local function run_movers()
         elseif m.lift then
             if m.wait > 0 then
                 m.wait = m.wait - 1
-                if m.wait == 0 then m.dir = 1 end
+                if m.wait == 0 then m.dir = 1 sector_sound(s, "PSTART") end
             elseif m.dir == -1 then
                 s.floorh = max(m.low, s.floorh - m.speed)
-                if s.floorh <= m.low then m.wait, m.dir = 105, 0 end
+                if s.floorh <= m.low then m.wait, m.dir = 105, 0 sector_sound(s, "PSTOP") end
             elseif m.dir == 1 then
                 s.floorh = min(m.high, s.floorh + m.speed)
-                if s.floorh >= m.high then done = true end
+                if s.floorh >= m.high then done = true sector_sound(s, "PSTOP") end
             end
         elseif m.floor then
             if s.floorh < m.target then s.floorh = min(m.target, s.floorh + m.speed)
             else s.floorh = max(m.target, s.floorh - m.speed) end
-            if s.floorh == m.target then done = true end
+            if s.floorh == m.target then done = true sector_sound(s, "PSTOP")
+            elseif leveltime % 8 == 0 then sector_sound(s, "STNMOV") end
         end
         if done then s.mover = nil else keep[#keep + 1] = m end
     end
@@ -660,7 +794,8 @@ local function next_map()
     message, message_until = name, leveltime + 105
 end
 
-local function flip_switch(line)
+local function flip_switch(line, exit)
+    sound(exit and "SWTCHX" or "SWTCHN", (line.v1.x + line.v2.x) / 2, (line.v1.y + line.v2.y) / 2)
     local side = line.right
     for _, key in ipairs({ "upper", "mid", "lower" }) do
         local name = side[key]
@@ -674,7 +809,7 @@ local function activate(line, how)
     if not spec or spec[3] ~= how then return false end
     local action, arg, _, repeatable, fast = spec[1], spec[2], spec[3], spec[4], spec[5]
     if action == "exit" then
-        if how == "S" then flip_switch(line) end
+        if how == "S" then flip_switch(line, true) end
         next_map()
         return true
     end
@@ -696,60 +831,109 @@ local function line_side(l, x, y)
     return (x - l.v1.x) * (l.v2.y - l.v1.y) - (y - l.v1.y) * (l.v2.x - l.v1.x)
 end
 
--- The nearest line a 64-unit line from the player crosses, and what's
--- past it, as P_UseLines does: a special line is used; a solid one stops.
-local function use_lines()
-    local x1, y1 = player.x, player.y
-    local x2, y2 = x1 + cos(player.angle) * 64, y1 + sin(player.angle) * 64
+-- Every line the segment from (x1, y1) to (x2, y2) crosses, nearest
+-- first, each with how far along the segment (0 to 1) it is.
+local function crossings(x1, y1, x2, y2)
     local hits = {}
+    local lx0, lx1, ly0, ly1 = min(x1, x2), max(x1, x2), min(y1, y2), max(y1, y2)
     for _, l in pairs(map.lines) do
-        local s1, s2 = line_side(l, x1, y1), line_side(l, x2, y2)
-        if (s1 > 0) ~= (s2 > 0) then
-            local ax, ay, bx, by = l.v1.x, l.v1.y, l.v2.x, l.v2.y
-            local d1 = (ax - x1) * (y2 - y1) - (ay - y1) * (x2 - x1)
-            local d2 = (bx - x1) * (y2 - y1) - (by - y1) * (x2 - x1)
-            if (d1 > 0) ~= (d2 > 0) or d1 == 0 or d2 == 0 then
-                hits[#hits + 1] = { l, s1 / (s1 - s2) }
+        if l.maxx >= lx0 and l.minx <= lx1 and l.maxy >= ly0 and l.miny <= ly1 then
+            local s1, s2 = line_side(l, x1, y1), line_side(l, x2, y2)
+            if (s1 > 0) ~= (s2 > 0) then
+                local ax, ay, bx, by = l.v1.x, l.v1.y, l.v2.x, l.v2.y
+                local d1 = (ax - x1) * (y2 - y1) - (ay - y1) * (x2 - x1)
+                local d2 = (bx - x1) * (y2 - y1) - (by - y1) * (x2 - x1)
+                if (d1 > 0) ~= (d2 > 0) or d1 == 0 or d2 == 0 then
+                    hits[#hits + 1] = { l, s1 / (s1 - s2) }
+                end
             end
         end
     end
     table.sort(hits, function(a, b) return a[2] < b[2] end)
-    for _, hit in ipairs(hits) do
+    return hits
+end
+
+-- The opening a two-sided line leaves: its bottom and top, or nil if solid.
+local function opening(l)
+    if not l.back then return nil end
+    local bottom, top = max(l.front.floorh, l.back.floorh), min(l.front.ceilh, l.back.ceilh)
+    if top <= bottom then return nil end
+    return bottom, top
+end
+
+-- Whether an eye at (x1, y1, z1) sees (x2, y2, z2): every line between
+-- leaves a gap at the height the sight line passes it (P_CheckSight).
+local function sight(x1, y1, z1, x2, y2, z2)
+    for _, hit in ipairs(crossings(x1, y1, x2, y2)) do
+        local bottom, top = opening(hit[1])
+        if not bottom then return false end
+        local z = z1 + (z2 - z1) * hit[2]
+        if z <= bottom or z >= top then return false end
+    end
+    return true
+end
+
+local LOCKS = { [26] = "blue", [32] = "blue", [27] = "yellow", [34] = "yellow", [28] = "red", [33] = "red" }
+
+-- The nearest line a 64-unit line from the player crosses, and what's
+-- past it, as P_UseLines does: a special line is used; a solid one stops.
+local function use_lines()
+    local x1, y1 = player.x, player.y
+    for _, hit in ipairs(crossings(x1, y1, x1 + cos(player.angle) * 64, y1 + sin(player.angle) * 64)) do
         local l = hit[1]
         if l.special ~= 0 then
             local spec = SPECIALS[l.special]
-            if spec and spec[3] ~= "W" and line_side(l, x1, y1) > 0 then activate(l, spec[3]) end
+            if spec and spec[3] ~= "W" and line_side(l, x1, y1) > 0 then
+                local lock = LOCKS[l.special]
+                if lock and not player.keys[lock] then
+                    message, message_until = "You need a " .. lock .. " key to open this door", leveltime + 70
+                    sound("OOF")
+                elseif not activate(l, spec[3]) and spec[3] == "S" then
+                    sound("OOF")
+                end
+            end
             return
         end
-        if not l.back or min(l.front.ceilh, l.back.ceilh) <= max(l.front.floorh, l.back.floorh) then return end
+        if not opening(l) then sound("OOF") return end
     end
 end
 
 ---------------------------------------------------------------- movement
 
-local RADIUS = 16
+player.radius = 16
 
--- Whether the player can stand at (x, y): P_CheckPosition with a box.
-local function check_position(x, y)
+-- Whether `mo` (the player or a monster) can stand at (x, y):
+-- P_CheckPosition with a box, against lines and solid things. Returns
+-- false and the line in the way, if it's a line.
+local function check_position(mo, x, y)
+    local r = mo.radius
     local s = sector_at(x, y)
     local fz, cz = s.floorh, s.ceilh
-    local x0, x1, y0, y1 = x - RADIUS, x + RADIUS, y - RADIUS, y + RADIUS
+    local x0, x1, y0, y1 = x - r, x + r, y - r, y + r
+    local monster = mo ~= player
     for _, l in pairs(map.lines) do
         if l.maxx > x0 and l.minx < x1 and l.maxy > y0 and l.miny < y1 then
             local a = line_side(l, x0, y0) > 0
             if a ~= (line_side(l, x1, y0) > 0) or a ~= (line_side(l, x0, y1) > 0) or a ~= (line_side(l, x1, y1) > 0) then
-                if not l.back or l.flags & 1 ~= 0 then return false end
+                if not l.back or l.flags & 1 ~= 0 or (monster and l.flags & 2 ~= 0) then return false, l end
                 fz = max(fz, l.front.floorh, l.back.floorh)
                 cz = min(cz, l.front.ceilh, l.back.ceilh)
+                if cz - fz < 56 or cz - mo.z < 56 or fz - mo.z > 24 then return false, l end
             end
         end
     end
-    if cz - fz < 56 or cz - player.z < 56 or fz - player.z > 24 then return false end
+    for _, th in ipairs(map.things) do
+        if th ~= mo and th.radius and not th.dying then
+            local reach = th.radius + r
+            if abs(th.x - x) < reach and abs(th.y - y) < reach then return false end
+        end
+    end
+    if monster and not player.dead and abs(player.x - x) < r + 16 and abs(player.y - y) < r + 16 then return false end
     return true
 end
 
 local function try_move(x, y)
-    if not check_position(x, y) then return false end
+    if not check_position(player, x, y) then return false end
     local ox, oy = player.x, player.y
     player.x, player.y = x, y
     for _, l in pairs(map.lines) do
@@ -765,8 +949,403 @@ local function try_move(x, y)
     return true
 end
 
+---------------------------------------------------------------- combat
+
+local function rnd(n) return math.random(0, n - 1) end
+
+-- A short-lived sprite (a bullet puff, blood, an explosion) at an exact height.
+local function spawn_fx(spr, frames, x, y, z, tics, bright)
+    table.insert(map.things, { x = x, y = y, fz = z, angle = 0, spr = spr, frame = frames:sub(1, 1), frames = frames,
+        fi = 1, ftics = tics, tics = tics, fx = true, bright = bright, sector = sector_at(x, y) })
+end
+
+local function damage_player(amount)
+    if player.dead then return end
+    if player.armortype > 0 then
+        local saved = player.armortype == 1 and amount // 3 or amount // 2
+        if player.armor <= saved then saved, player.armortype = player.armor, 0 end
+        player.armor, amount = player.armor - saved, amount - saved
+    end
+    player.health = player.health - amount
+    player.damagecount = min(100, player.damagecount + amount)
+    if player.health <= 0 then
+        sound(player.health < -50 and "PDIEHI" or "PLDETH")
+        player.health, player.dead = 0, true
+    else
+        sound("PLPAIN")
+    end
+    status_dirty = true
+end
+
+local function kill_thing(th)
+    th.dying, th.state, th.bright = true, "dying", false
+    local info = th.info
+    if info then
+        th.frames, th.fi, th.ftics, th.tics, th.frame = info.deathf, 1, 5, 5, info.deathf:sub(1, 1)
+        sound(info.death[rnd(#info.death) + 1], th.x, th.y)
+        if info.drop then
+            local spr = THING_SPRITES[info.drop]
+            table.insert(map.things, { x = th.x, y = th.y, angle = 0, kind = info.drop, spr = spr:sub(1, 4),
+                frame = spr:sub(5, 5), sector = th.sector, item = ITEMS[info.drop], dropped = true })
+        end
+    else
+        -- A barrel: it goes up, hurting what's near (A_Explode at its third frame).
+        th.spr, th.frames, th.fi, th.ftics, th.tics, th.frame, th.bright = "BEXP", "ABCDE", 1, 5, 5, "A", true
+        th.fx, th.explode = true, true
+        sound("BAREXP", th.x, th.y)
+    end
+end
+
+local function damage_thing(th, amount)
+    if not th.hp or th.dying then return end
+    th.hp = th.hp - amount
+    if th.hp <= 0 then kill_thing(th) return end
+    local info = th.info
+    if info then
+        if th.state == "idle" then th.state, th.tics = "chase", 0 end
+        if rnd(256) < info.pain then
+            th.state, th.tics, th.frame, th.bright = "pain", 6, info.painf, false
+            sound(info.painsnd, th.x, th.y)
+        end
+    end
+end
+
+-- 128 units of blast, less with distance, to what the explosion can see.
+local function explode(th)
+    local function hurt(x, y, z, apply)
+        local dist = max(abs(x - th.x), abs(y - th.y))
+        if dist < 128 and sight(th.x, th.y, th.sector.floorh + 16, x, y, z + 16) then apply(128 - floor(dist)) end
+    end
+    hurt(player.x, player.y, player.z, damage_player)
+    for _, o in ipairs(map.things) do
+        if o ~= th and o.hp and not o.dying then hurt(o.x, o.y, o.sector.floorh, function(d) damage_thing(o, d) end) end
+    end
+end
+
+-- Gunfire wakes the monsters it can reach through open lines (P_NoiseAlert):
+-- two sound-blocking lines stop it.
+local function noise_alert()
+    local start = sector_at(player.x, player.y)
+    local seen, queue, i = { [start] = 0 }, { start }, 1
+    while queue[i] do
+        local s = queue[i]
+        i = i + 1
+        for _, l in ipairs(s.lines) do
+            local other = l.front == s and l.back or l.front
+            if other and opening(l) and seen[other] == nil then
+                local blocks = seen[s] + ((l.flags & 64 ~= 0) and 1 or 0)
+                if blocks < 2 then seen[other], queue[#queue + 1] = blocks, other end
+            end
+        end
+    end
+    for _, th in ipairs(map.things) do
+        if th.info and th.state == "idle" and seen[th.sector] then th.alerted = true end
+    end
+end
+
+-- A bullet from the player: the nearest shootable thing along the line,
+-- unless a solid wall comes first (Doom aims up and down by itself).
+local function player_shoot(spread)
+    local a = player.angle + spread
+    local dx, dy, range = cos(a), sin(a), 2048
+    local x1, y1 = player.x, player.y
+    local wall = 1
+    for _, hit in ipairs(crossings(x1, y1, x1 + dx * range, y1 + dy * range)) do
+        if not opening(hit[1]) then wall = hit[2] break end
+    end
+    local best, best_along
+    for _, th in ipairs(map.things) do
+        if th.hp and not th.dying then
+            local ox, oy = th.x - x1, th.y - y1
+            local along = ox * dx + oy * dy
+            if along > 0 and along < wall * range and abs(ox * dy - oy * dx) < (th.radius or 20)
+                and (not best_along or along < best_along) then
+                best, best_along = th, along
+            end
+        end
+    end
+    if best then
+        local d = best_along - 10
+        if best.info then
+            spawn_fx("BLUD", "CBA", x1 + dx * d, y1 + dy * d, best.sector.floorh + 24 + rnd(16), 8)
+        else
+            spawn_fx("PUFF", "ABCD", x1 + dx * d, y1 + dy * d, best.sector.floorh + 16, 4, true)
+        end
+        damage_thing(best, 5 * (rnd(3) + 1))
+    elseif wall < 1 then
+        local d = wall * range - 4
+        spawn_fx("PUFF", "ABCD", x1 + dx * d, y1 + dy * d, player.z + 32 + rnd(16), 4, true)
+    end
+end
+
+-- Each weapon's frames (frame, tics), and which one fires.
+local WEAPONS = {
+    pistol = { ammo = "bullets", pellets = 1, spr = "PISG", sound = "PISTOL", flash = { "PISFA0", 7 },
+        frames = { { "A", 4 }, { "B", 6, fire = true }, { "C", 4 }, { "B", 5 } } },
+    shotgun = { ammo = "shells", pellets = 7, spr = "SHTG", sound = "SHOTGN", flash = { "SHTFA0", 4, "SHTFB0", 3 },
+        frames = { { "A", 3 }, { "A", 7, fire = true }, { "B", 5 }, { "C", 5 }, { "D", 4 }, { "C", 5 }, { "B", 5 },
+            { "A", 3 }, { "A", 7 } } },
+}
+
+local function fire_weapon(w)
+    player.ammo[w.ammo] = player.ammo[w.ammo] - 1
+    player.flash = leveltime
+    sound(w.sound)
+    noise_alert()
+    for _ = 1, w.pellets do
+        -- The first pistol shot goes straight; the rest spread a little.
+        local spread = (w.pellets > 1 or player.refire) and (math.random() - math.random()) * pi / 32 or 0
+        player_shoot(spread)
+    end
+    status_dirty = true
+end
+
+local function weapon_tic()
+    if not player.attack and not player.dead then
+        if input(PISTOL) == "pressed" then player.weapon = "pistol" status_dirty = true end
+        if input(SHOTGUN) == "pressed" and player.weapons.shotgun then player.weapon = "shotgun" status_dirty = true end
+    end
+    local w = WEAPONS[player.weapon]
+    if player.attack then
+        player.wtics = player.wtics - 1
+        if player.wtics > 0 then return end
+        player.wstep = player.wstep + 1
+        local f = w.frames[player.wstep]
+        if f then
+            player.wframe, player.wtics = f[1], f[2]
+            if f.fire then fire_weapon(w) end
+            return
+        end
+        player.attack, player.wframe = false, "A"
+        player.refire = input_down(FIRE)
+    else
+        player.refire = false
+    end
+    if player.dead or not input_down(FIRE) then return end
+    if player.ammo[w.ammo] < 1 then
+        -- Out of ammo: switch to whatever still has some.
+        for name, other in pairs(WEAPONS) do
+            if player.weapons[name] and player.ammo[other.ammo] > 0 then player.weapon = name status_dirty = true end
+        end
+        return
+    end
+    player.attack, player.wstep, player.wtics = true, 0, 1
+    player.refire = player.refire or false
+end
+
+local MAX_AMMO = { bullets = 200, shells = 50 }
+
+local function give(it, dropped)
+    local took = it.bonus or false
+    if it.health and player.health < it.max then player.health, took = min(it.max, player.health + it.health), true end
+    if it.armorbonus then
+        player.armor = min(200, player.armor + 1)
+        if player.armortype == 0 then player.armortype = 1 end
+    end
+    if it.armor and player.armor < it.armor then player.armor, player.armortype, took = it.armor, it.armortype, true end
+    for _, ammo in ipairs({ "bullets", "shells" }) do
+        if it[ammo] and player.ammo[ammo] < MAX_AMMO[ammo] then
+            local amount = dropped and it[ammo] // 2 or it[ammo]
+            player.ammo[ammo], took = min(MAX_AMMO[ammo], player.ammo[ammo] + amount), true
+        end
+    end
+    if it.weapon and not player.weapons[it.weapon] then
+        player.weapons[it.weapon], player.weapon, took = true, it.weapon, true
+    end
+    if it.key then player.keys[it.key], took = true, true end
+    return took
+end
+
+local function pickups()
+    for _, th in ipairs(map.things) do
+        local it = th.item
+        if it and not th.remove and abs(th.x - player.x) < 36 and abs(th.y - player.y) < 36
+            and abs(th.sector.floorh - player.z) <= 24 and give(it, th.dropped) then
+            th.remove = true
+            message, message_until = it.msg, leveltime + 70
+            sound(it.sound or "ITEMUP")
+            player.bonuscount, status_dirty = 6, true
+        end
+    end
+end
+
+---------------------------------------------------------------- monsters
+
+local DIRS = {}
+for i = 0, 7 do DIRS[i] = { cos(i * pi / 4), sin(i * pi / 4) } end
+
+local function try_walk(m, dir)
+    local d = DIRS[dir]
+    local nx, ny = m.x + d[1] * m.info.speed, m.y + d[2] * m.info.speed
+    local ok, line = check_position(m, nx, ny)
+    if ok then
+        m.x, m.y, m.sector = nx, ny, sector_at(nx, ny)
+        m.z, m.angle = m.sector.floorh, dir * 45
+        return true
+    end
+    -- Monsters open the plain doors they walk into (P_Move).
+    if line and line.special == 1 and line.back then door(line.back, "raise", 2) end
+    return false
+end
+
+-- Head for the player, or around whatever's in the way (P_NewChaseDir, simplified).
+local function new_chase_dir(m)
+    local want = floor((math.deg(atan(player.y - m.y, player.x - m.x)) + 22.5) % 360 / 45)
+    for _, turn in ipairs({ 0, 1, 7, 2, 6, rnd(8), 3, 5, 4 }) do
+        local dir = (want + turn) % 8
+        if try_walk(m, dir) then m.dir, m.movecount = dir, rnd(16) return end
+    end
+end
+
+local function eye_sees_player(m)
+    return sight(m.x, m.y, m.sector.floorh + 40, player.x, player.y, player.z + 41)
+end
+
+local function monster_attack(m)
+    local info = m.info
+    local dx, dy = player.x - m.x, player.y - m.y
+    local dist = math.sqrt(dx * dx + dy * dy)
+    m.angle = math.deg(atan(dy, dx))
+    if info.melee and dist < 64 + m.radius then
+        sound(info.meleesnd or "CLAW", m.x, m.y)
+        damage_player(info.melee * (rnd(info.melee == 3 and 8 or 10) + 1))
+    elseif info.shots then
+        sound(info.shotsnd, m.x, m.y)
+        if eye_sees_player(m) then
+            -- Each shot strays up to 22.5 degrees; it hits if that's within the player's width.
+            local width = atan(16, max(1, dist))
+            for _ = 1, info.shots do
+                if abs((math.random() - math.random()) * pi / 8) < width then damage_player(3 * (rnd(5) + 1)) end
+            end
+        end
+    elseif info.missile then
+        local z, speed = m.sector.floorh + 32, 10
+        local d = max(1, dist)
+        table.insert(map.things, { x = m.x, y = m.y, fz = z, angle = 0, spr = "BAL1", frame = "A", frames = "AB",
+            fi = 1, ftics = 4, tics = 4, bright = true, missile = true, momx = dx / d * speed, momy = dy / d * speed,
+            momz = (player.z + 32 - z) / (d / speed), sector = m.sector })
+        sound("FIRSHT", m.x, m.y)
+    end
+end
+
+local function monster_tic(m)
+    local info = m.info
+    if m.state == "idle" then
+        if leveltime % 4 ~= 0 or player.dead then return end
+        local dx, dy = player.x - m.x, player.y - m.y
+        local ahead = cos(math.rad(m.angle)) * dx + sin(math.rad(m.angle)) * dy > 0
+        if (m.alerted and not m.deaf) or (ahead and eye_sees_player(m)) then
+            m.state, m.tics = "chase", 0
+            sound(info.sight[rnd(#info.sight) + 1], m.x, m.y)
+        end
+        return
+    end
+    m.tics = m.tics - 1
+    if m.tics > 0 then return end
+    if m.state == "attack" then
+        m.astep = m.astep + 1
+        local frames = info.attackf
+        if m.astep <= #frames then
+            m.frame, m.tics = frames:sub(m.astep, m.astep), 8
+            m.bright = info.shots ~= nil and m.astep == 2
+            if m.astep == 2 then monster_attack(m) end
+            return
+        end
+    end
+    -- Chasing: a step (and a walk frame) every 4 tics.
+    m.state, m.tics, m.bright = "chase", 4, false
+    m.walk = (m.walk or 0) % 4 + 1
+    m.frame = ("ABCD"):sub(m.walk, m.walk)
+    if player.dead then return end
+    if m.reaction > 0 then m.reaction = m.reaction - 1 end
+    -- After an attack, a new direction before anything else.
+    if m.justattacked then
+        m.justattacked = false
+        new_chase_dir(m)
+        return
+    end
+    local dx, dy = player.x - m.x, player.y - m.y
+    local dist = math.sqrt(dx * dx + dy * dy)
+    local attack = false
+    if info.melee and dist < 64 + m.radius and eye_sees_player(m) then
+        attack = true
+    elseif (info.shots or info.missile) and m.reaction == 0 and m.movecount <= 0 and eye_sees_player(m) then
+        -- P_CheckMissileRange: the nearer the player, the likelier a shot.
+        local d = dist - 64 - (info.melee and 0 or 128)
+        attack = rnd(256) >= min(200, max(0, d))
+    end
+    if attack then
+        m.state, m.astep, m.tics, m.justattacked = "attack", 0, 1, true
+        return
+    end
+    m.movecount = m.movecount - 1
+    if m.movecount < 0 or not try_walk(m, m.dir) then new_chase_dir(m) end
+    if rnd(256) < 3 then sound(info.active, m.x, m.y) end
+end
+
+local function missile_tic(th)
+    local nx, ny, nz = th.x + th.momx, th.y + th.momy, th.fz + th.momz
+    local hit = false
+    for _, c in ipairs(crossings(th.x, th.y, nx, ny)) do
+        local bottom, top = opening(c[1])
+        if not bottom or nz < bottom or nz + 8 > top then hit = true break end
+    end
+    local s = sector_at(nx, ny)
+    if not hit and (nz < s.floorh or nz + 8 > s.ceilh) then hit = true end
+    if not hit and not player.dead and abs(player.x - nx) < 22 and abs(player.y - ny) < 22
+        and nz > player.z - 8 and nz < player.z + 56 then
+        damage_player(3 * (rnd(8) + 1))
+        hit = true
+    end
+    if hit then
+        th.missile, th.fx, th.frames, th.fi, th.ftics, th.tics, th.frame = false, true, "CDE", 1, 6, 6, "C"
+        sound("FIRXPL", th.x, th.y)
+        return
+    end
+    th.x, th.y, th.fz, th.sector = nx, ny, nz, s
+end
+
+-- Frame-by-frame animation: effects vanish at the end, the dead lie still.
+local function animate(th)
+    th.tics = th.tics - 1
+    if th.tics > 0 then return end
+    th.fi = th.fi + 1
+    if th.explode and th.fi == 3 then explode(th) end
+    if th.fi > #th.frames then
+        if th.fx and not th.missile then th.remove = true end
+        th.frames = nil
+        return
+    end
+    th.frame, th.tics = th.frames:sub(th.fi, th.fi), th.ftics
+end
+
+local function things_tic()
+    local removed = false
+    for _, th in ipairs(map.things) do
+        if th.missile then missile_tic(th)
+        elseif th.info and not th.dying then monster_tic(th) end
+        if th.frames and (th.dying or th.fx) then animate(th) end
+        removed = removed or th.remove
+    end
+    if removed then
+        local keep = {}
+        for _, th in ipairs(map.things) do if not th.remove then keep[#keep + 1] = th end end
+        map.things = keep
+    end
+end
+
 local turn_held = 0
 local function player_tic(turn_mouse)
+    if player.damagecount > 0 then player.damagecount = player.damagecount - 1 end
+    if player.bonuscount > 0 then player.bonuscount = player.bonuscount - 1 end
+    weapon_tic()
+    if player.dead then
+        -- Down on the floor, looking up, until Use starts the map again.
+        player.viewh, player.momx, player.momy, player.bob = max(6, player.viewh - 1), 0, 0, 0
+        player.lower = min(96, player.lower + 6)
+        return
+    end
+    pickups()
     local run = not input_down(WALK)
     local fwd = (input_value(FORWARD) - input_value(BACK)) * (run and 50 or 25)
     local side = (input_value(STRAFE_R) - input_value(STRAFE_L)) * (run and 40 or 24)
@@ -1012,7 +1591,7 @@ local function render_node(n)
 end
 
 local function sprite_for(thing)
-    local prefix, frame = thing.sprite:sub(1, 4), thing.sprite:sub(5, 5)
+    local prefix, frame = thing.spr, thing.frame
     local angle = math.deg(atan(thing.y - vy, thing.x - vx))
     local rot = floor(((angle - thing.angle + 202.5) % 360) / 45) + 1
     return sprite_frames[prefix .. frame .. rot] or sprite_frames[prefix .. frame .. "0"]
@@ -1029,12 +1608,12 @@ local function draw_things()
                 local tx = dx * sa - dy * ca
                 local scale, xscale = PROJ / tz, PROJX / tz
                 local x1 = CX + (tx - (frame.flip and (p.w - p.lo) or p.lo)) * xscale
-                local z = th.ceiling and (th.sector.ceilh - p.to) or th.sector.floorh
+                local z = th.fz or (th.ceiling and th.sector.ceilh - p.to) or th.sector.floorh
                 local ytop = CY - (z + p.to - vz) * scale
                 local xs, xe = max(0, math.ceil(x1 - 0.5)), min(RW - 1, math.ceil(x1 + p.w * xscale - 0.5) - 1)
                 local ys, ye = max(0, math.ceil(ytop - 0.5)), min(VIEWH - 1, math.ceil(ytop + p.h * scale - 0.5) - 1)
                 local j = floor(2560 / tz)
-                local cm = scalelight[light_of(th.sector, 0)][j > 47 and 47 or j]
+                local cm = th.bright and cmaps[0] or scalelight[light_of(th.sector, 0)][j > 47 and 47 or j]
                 for x = xs, xe do
                     local c = floor((x + 0.5 - x1) / xscale)
                     if frame.flip then c = p.w - 1 - c end
@@ -1073,23 +1652,55 @@ local function draw_patch(name, x, y, cm, buf, bw, bh)
     end
 end
 
-local function draw_number(n, right, y, percent)
+-- Right-aligned digits: the big red STTNUM or the small yellow STYSNUM.
+local function draw_number(n, right, y, font, width, percent)
     local s = tostring(n)
     local x = right
     for i = #s, 1, -1 do
-        x = x - 14
-        draw_patch("STTNUM" .. s:sub(i, i), x, y, cmaps[0], sb, W, BARH)
+        x = x - width
+        draw_patch(font .. s:sub(i, i), x, y, cmaps[0], sb, W, BARH)
     end
     if percent then draw_patch("STTPRCNT", right, y, cmaps[0], sb, W, BARH) end
 end
 
+-- The face (st_stuff.c): five levels of pain, glancing about, a grimace
+-- when hurt badly.
+local face_look, face_until = 1, 0
+local function face()
+    if player.dead then return "STFDEAD0" end
+    local pain = (100 - min(100, player.health)) * 5 // 101
+    if player.damagecount > 20 then return "STFOUCH" .. pain end
+    if leveltime >= face_until then face_look, face_until = rnd(3), leveltime + 17 + rnd(18) end
+    return "STFST" .. pain .. face_look
+end
+
+local KEY_SLOTS = { blue = 0, yellow = 1, red = 2 }
+local shown_face
 local function draw_status_bar()
+    local f = face()
+    if not status_dirty and f == shown_face then return end
+    status_dirty, shown_face = false, f
     draw_patch("STBAR", 0, 0, cmaps[0], sb, W, BARH)
     draw_patch("STARMS", 104, 0, cmaps[0], sb, W, BARH)
-    draw_number(50, 44, 3)
-    draw_number(100, 90, 3, true)
-    draw_number(0, 221, 3, true)
-    draw_patch("STFST01", 143, 0, cmaps[0], sb, W, BARH)
+    local w = WEAPONS[player.weapon]
+    draw_number(player.ammo[w.ammo], 44, 3, "STTNUM", 14)
+    draw_number(player.health, 90, 3, "STTNUM", 14, true)
+    draw_number(player.armor, 221, 3, "STTNUM", 14, true)
+    -- Arms: 2 to 7, yellow for the ones carried.
+    for i = 0, 5 do
+        local have = i == 0 or (i == 1 and player.weapons.shotgun)
+        draw_patch((have and "STYSNUM" or "STGNUM") .. (i + 2), 111 + (i % 3) * 12, 4 + (i // 3) * 10, cmaps[0], sb, W, BARH)
+    end
+    draw_patch(f, 143, 0, cmaps[0], sb, W, BARH)
+    for key, slot in pairs(KEY_SLOTS) do
+        if player.keys[key] then draw_patch("STKEYS" .. slot, 239, 3 + slot * 10, cmaps[0], sb, W, BARH) end
+    end
+    -- Ammo counts and maximums, bullets then shells.
+    for i, kind in ipairs({ "bullets", "shells" }) do
+        local y = i == 1 and 5 or 11
+        draw_number(player.ammo[kind], 288, y, "STYSNUM", 4)
+        draw_number(MAX_AMMO[kind], 314, y, "STYSNUM", 4)
+    end
 end
 
 local function render_view()
@@ -1106,19 +1717,25 @@ local function render_view()
     open_columns = RW
     render_node(map.node_count - 1)
     draw_things()
-    -- The pistol, bobbing as Doom's does.
-    local wb = player.bob * cos(leveltime * 2 * pi / 40)
-    local wy = player.bob * abs(sin(leveltime * 2 * pi / 40))
-    local p = patch("PISGA0")
-    if p then
-        local cm = scalelight[light_of(sector_at(vx, vy), 0)][47]
-        draw_patch("PISGA0", floor(1 + wb), floor(32 + wy + CY - 100 + 0.5), cm, fb, RW, VIEWH)
+    -- The weapon, bobbing as Doom's does (held still while firing), lit
+    -- up by its muzzle flash.
+    local w = WEAPONS[player.weapon]
+    local wb, wy = 0, 0
+    if not player.attack then
+        wb = player.bob * cos(leveltime * 2 * pi / 40)
+        wy = player.bob * abs(sin(leveltime * 2 * pi / 40))
     end
+    local x, y = floor(1 + wb), floor(32 + wy + player.lower + CY - 100 + 0.5)
+    local since, flash = leveltime - player.flash, nil
+    local fl = w.flash
+    if since < fl[2] then flash = fl[1] elseif fl[3] and since < fl[2] + fl[4] then flash = fl[3] end
+    local cm = flash and cmaps[0] or scalelight[light_of(sector_at(vx, vy), 0)][47]
+    draw_patch(w.spr .. player.wframe .. "0", x, y, cm, fb, RW, VIEWH)
+    if flash then draw_patch(flash, x, y, cmaps[0], fb, RW, VIEWH) end
 end
 
 ---------------------------------------------------------------- main
 
-local status_drawn = false
 local tic_time = 0
 local first_map
 if wad then
@@ -1171,14 +1788,23 @@ function render(width, height)
         player_tic(turn_mouse)
         turn_mouse = 0
         run_movers()
+        things_tic()
     end
-    if input(USE) == "pressed" then use_lines() end
+    if input(USE) == "pressed" then
+        if not player.dead then use_lines()
+        elseif player.lower >= 96 then movers = {} load_map(map_name) end
+    end
     if turn_mouse ~= 0 then player.angle = player.angle + turn_mouse end
     advance_flats()
     music_tick(DT)
 
     render_view()
-    if not status_drawn then draw_status_bar() status_drawn = true end
+    draw_status_bar()
+    -- Red when hurt, gold on a pickup (st_stuff.c's palette choice).
+    local pal = 0
+    if player.damagecount > 0 then pal = min(8, (player.damagecount + 7) // 8)
+    elseif player.bonuscount > 0 then pal = 8 + min(4, (player.bonuscount + 7) // 8) end
+    local palette = palettes[pal] or palettes[0]
 
     -- Doom's 320x200 is shown 4:3, letterboxed.
     local w, h = width, width * 3 / 4

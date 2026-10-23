@@ -115,6 +115,8 @@ pub const HOST_API: &[(&str, &str)] = &[
     ("typing_state", "typing_state() -> {active, done, cancelled, text, cursor, line, column, key}"),
     ("typing_end", "typing_end() -> text: stop the typing span"),
     ("midi_send", "midi_send(status, [data1], [data2]) -> bool: a raw MIDI channel message to the script's synthesizer"),
+    ("sound_register", "sound_register(samples, sample_rate) -> id: a sound effect, from 8-bit samples (a string) or numbers -1 to 1"),
+    ("sound_play", "sound_play(id, [{ volume, pan, speed }]) -> bool: play a registered sound effect"),
     ("play_note", "play_note(key, [{channel, velocity, duration, delay}]) -> bool: play a note on the song's instrument (MIDI only)"),
     ("note_on", "note_on(key, [{channel, velocity}]) -> bool: start a note held until note_off (MIDI only)"),
     ("note_off", "note_off(key, [channel]): release a note started with note_on"),
