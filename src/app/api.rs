@@ -211,6 +211,14 @@ impl App {
                 }
                 self.queue.remove(at);
             }
+            api::QueueEdit::Move { from, to } => {
+                let len = self.queue.len();
+                if from >= len || to >= len {
+                    return Err((404, format!("the queue has {len} songs")));
+                }
+                let song = self.queue.remove(from);
+                self.queue.insert(to, song);
+            }
             api::QueueEdit::Clear => self.queue.clear(),
         }
         Ok(())
