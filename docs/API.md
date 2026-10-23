@@ -46,6 +46,11 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `POST /v1/play?playlist={id}&song={key}` | control | Plays that playlist from that song: 204, or 404 if the song isn't in it |
 | `POST /v1/seek?to={seconds}` | control | Jumps to that point of the song: 204, or 409 if nothing's playing |
 | `POST /v1/volume?to={0..1}` | control | Sets the volume: 204 |
+| `GET /v1/queue` | read | The play queue (Up next): its songs, in the order they'll play |
+| `POST /v1/queue?song={key}` | control | Adds the song to the end of the queue (`&next=true`: to its front, to play next): 204 |
+| `POST /v1/queue?playlist={id}` | control | Adds the playlist's songs (shuffled while Shuffle is on), at the end or with `&next=true` at the front: 204, or 409 if it has no songs here |
+| `DELETE /v1/queue?at={n}` | control | Takes out the song at that place in the queue (from 0): 204, or 404 past its end |
+| `DELETE /v1/queue` | control | Clears the queue: 204 |
 | `GET /v1/events` | read | Server-Sent Events (below) |
 
 An album's art is its first song's: `GET /v1/songs/{first key}/art`. Covers that synththing hasn't downloaded yet are downloaded only when online lookups are on.
@@ -81,6 +86,7 @@ Every song a program adds that wasn't in your library yet is marked with that pr
 - `seeked`: the song jumped (a seek, or a loop back to the start): `{"position": 30.0}`.
 - `library_changed`: songs were added, removed or edited: `{}`. Ask `/v1/songs` again for the new state.
 - `playlists_changed`: a playlist was made, renamed, deleted or had songs added, removed or moved (here or by sync): `{}`. Ask `/v1/playlists` again.
+- `queue_changed`: songs were queued, played from the queue, moved or taken out: `{}`. Ask `/v1/queue` again.
 
 Add `?events=now_playing,seeked` (any of them, by name) for only those. A comment line (`: keep-alive`) comes every 25 seconds when nothing else does.
 

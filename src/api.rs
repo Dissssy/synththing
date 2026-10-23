@@ -41,7 +41,7 @@ const KEEP_ALIVE: Duration = Duration::from_secs(25);
 /// How long a request waits for the app to answer.
 const APP_WAIT: Duration = Duration::from_secs(5);
 /// The events there are (`GET /v1/events?events=` picks among them).
-const EVENTS: [&str; 4] = ["now_playing", "seeked", "library_changed", "playlists_changed"];
+const EVENTS: [&str; 5] = ["now_playing", "seeked", "library_changed", "playlists_changed", "queue_changed"];
 /// Songs in one page of a list, unless the request asks for fewer.
 const MOST_SONGS: usize = 500;
 /// The largest song a program can send (as the relay's limit).
@@ -132,6 +132,8 @@ pub enum Call {
     /// Set where the song is or how loud it plays: `Err` (with its status)
     /// if it can't be now.
     Set(Set, Sender<Result<(), (u16, String)>>),
+    /// Change the play queue: `Err` (with its status) if it can't be.
+    Queue(QueueEdit, Sender<Result<(), (u16, String)>>),
     /// A song a program sent (`program`, by its name), already in the
     /// store's folder, to add to the library: the song, and whether it's
     /// new to the library (only then is it marked as the program's).
@@ -140,6 +142,17 @@ pub enum Call {
         program: String,
         reply: Sender<Result<(SongInfo, bool), String>>,
     },
+}
+
+/// A change to the play queue a program asks for (`Call::Queue`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum QueueEdit {
+    /// Queue a song (by its key) or a playlist's songs (by its ID): next,
+    /// or at the end.
+    Add { song: Option<String>, playlist: Option<String>, next: bool },
+    /// Take out the song at this place in the queue.
+    Remove(usize),
+    Clear,
 }
 
 /// A change to the library a program asks for (`Call::Edit`).
@@ -197,6 +210,8 @@ pub struct Library {
     pub articles: bool,
     /// Whether covers not kept yet may be downloaded.
     pub online: bool,
+    /// The play queue's songs, by key, in order.
+    pub queue: Vec<String>,
 }
 
 impl Library {
@@ -539,6 +554,35 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             }
             answered(ask(shared, |reply| Call::Play { song, playlist, reply }))
         })),
+        (Method::Get, ["v1", "queue"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            ask(shared, Call::Library).map_or_else(
+                |reply| reply,
+                |library| {
+                    let songs: Vec<SongInfo> = library.queue.iter().filter_map(|key| Some(SongInfo::of(key, library.store.get_by_key(key)?, &library.store))).collect();
+                    json(200, &songs)
+                },
+            )
+        })),
+        (Method::Post, ["v1", "queue"]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| {
+            let (song, playlist) = (query.get("song").cloned(), query.get("playlist").cloned());
+            if song.is_none() == playlist.is_none() {
+                return error(400, "say what to queue: ?song=<key> or ?playlist=<id>");
+            }
+            let next = match query.get("next").map(String::as_str) {
+                None | Some("false") => false,
+                Some("true") => true,
+                Some(_) => return error(400, "?next= is true or false"),
+            };
+            answered(ask(shared, |reply| Call::Queue(QueueEdit::Add { song, playlist, next }, reply)))
+        })),
+        (Method::Delete, ["v1", "queue"]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| {
+            let edit = match query.get("at").map(|at| at.parse::<usize>()) {
+                None => QueueEdit::Clear,
+                Some(Ok(at)) => QueueEdit::Remove(at),
+                Some(Err(_)) => return error(400, "?at= is a place in the queue, from 0"),
+            };
+            answered(ask(shared, |reply| Call::Queue(edit, reply)))
+        })),
         (Method::Get, ["v1", "now-playing"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::NowPlaying).map_or_else(|reply| reply, |now| json(200, &now))))
         }
@@ -840,7 +884,7 @@ mod tests {
     /// A library with no songs, playlists or rulesets of its own.
     fn no_library() -> Library {
         let rulesets = crate::smart::builtin().map(|(id, r)| (id.to_string(), r)).into_iter().collect();
-        Library { store: SongStore::open(std::env::temp_dir()), playlists: Vec::new(), rulesets, group_ignore: String::new(), articles: false, online: false }
+        Library { store: SongStore::open(std::env::temp_dir()), playlists: Vec::new(), rulesets, group_ignore: String::new(), articles: false, online: false, queue: Vec::new() }
     }
 
     /// A server on a free port with a reader's and a controller's tokens.
@@ -870,7 +914,8 @@ mod tests {
                     Call::Library(reply) => reply.send(library()).unwrap(),
                     Call::Play { song: Some(song), reply, .. } if song == "missing" => reply.send(Err((404, "no such song".into()))).unwrap(),
                     Call::Play { reply, .. } => reply.send(Ok(())).unwrap(),
-                    Call::Set(_, reply) | Call::Edit(_, reply) => reply.send(Ok(())).unwrap(),
+                    Call::Queue(QueueEdit::Remove(at), reply) if at > 0 => reply.send(Err((404, "not that many".into()))).unwrap(),
+                    Call::Set(_, reply) | Call::Edit(_, reply) | Call::Queue(_, reply) => reply.send(Ok(())).unwrap(),
                     Call::Add { .. } => unreachable!("no test adds songs here"),
                 }
             }
@@ -953,6 +998,16 @@ mod tests {
         assert_eq!(answering(&server, empty, edit(false, "songs/abc/star", &control_token)), 403);
         assert_eq!(answering(&server, empty, edit(false, "songs/abc/star", &edit_token)), 204);
         assert_eq!(answering(&server, empty, edit(true, "songs/abc/star", &edit_token)), 204);
+
+        assert_eq!(answering(&server, empty, edit(false, "queue?song=abc", &read_token)), 403);
+        assert_eq!(answering(&server, empty, edit(false, "queue", &control_token)), 400);
+        assert_eq!(answering(&server, empty, edit(false, "queue?song=abc&playlist=p1", &control_token)), 400);
+        assert_eq!(answering(&server, empty, edit(false, "queue?song=abc&next=maybe", &control_token)), 400);
+        assert_eq!(answering(&server, empty, edit(false, "queue?playlist=p1&next=true", &control_token)), 204);
+        assert_eq!(answering(&server, empty, edit(true, "queue?at=0", &control_token)), 204);
+        assert_eq!(answering(&server, empty, edit(true, "queue?at=3", &control_token)), 404);
+        assert_eq!(answering(&server, empty, edit(true, "queue?at=first", &control_token)), 400);
+        assert_eq!(answering(&server, empty, edit(true, "queue", &control_token)), 204);
         assert_eq!(answering(&server, empty, edit(false, "songs/abc/tags", &edit_token)), 400);
         assert_eq!(answering(&server, empty, edit(false, "songs/abc/tags?tag=chill", &edit_token)), 204);
         assert_eq!(answering(&server, empty, edit(true, "playlists/p1/songs", &edit_token)), 400);
