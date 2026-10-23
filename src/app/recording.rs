@@ -27,7 +27,6 @@ use eframe::egui::TextureHandle;
 
 use eframe::egui;
 
-#[cfg(not(target_os = "android"))]
 use super::{is_midi_path, open_in_file_manager, App};
 use crate::config::nice_name;
 use crate::audio::AudioCommand;
