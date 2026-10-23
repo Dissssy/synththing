@@ -169,7 +169,6 @@ impl App {
         let mut beat_pulse = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE) * 100.0;
         let mut pulse_length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH) * 100.0;
         let mut script_log = self.config.script_log_to_app;
-        let mut audio_files = self.config.show_audio_files;
         let mut channel_chips = self.config.channel_chips;
         let mut buffer_ms = self.buffer_ms;
         let mut remember = self.config.remember;
@@ -307,16 +306,6 @@ impl App {
                 }
             }
             PrefTab::Songs => {
-                with_info(
-                    ui,
-                    "synththing is built around MIDI. Audio files play, and visualizers that only \
-                     use the sound (waveform, spectrum) work with them, but there are no notes in \
-                     them: channel muting, per-song soundfonts, and visualizers and games that read \
-                     the notes don't do anything with them. Off: only MIDI files are listed, and \
-                     adding a folder adds only its MIDI files (an audio file dragged in by itself is \
-                     still added).",
-                    |ui| ui.checkbox(&mut audio_files, "Show audio files (MP3, WAV, OGG, FLAC, ...)"),
-                );
                 // (No pointer to rest on a touch screen.)
                 if !cfg!(target_os = "android") {
                     with_info(
@@ -529,7 +518,6 @@ impl App {
             || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
             || (pulse_length / 100.0 - self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH)).abs() > 1e-4
             || script_log != self.config.script_log_to_app
-            || audio_files != self.config.show_audio_files
             || channel_chips != self.config.channel_chips
             || buffer_ms != self.buffer_ms
             || remember != self.config.remember
@@ -549,7 +537,6 @@ impl App {
             }
             self.config.buffer_ms = (buffer_ms != DEFAULT_BUFFER_MS).then_some(buffer_ms);
             self.config.channel_chips = channel_chips;
-            self.config.show_audio_files = audio_files;
             self.config.script_log_to_app = script_log;
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
             self.config.beat_pulse = Some(beat_pulse / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE).abs() > 1e-4);
