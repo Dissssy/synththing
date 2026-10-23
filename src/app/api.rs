@@ -468,25 +468,45 @@ impl App {
         }
         let mut remove = None;
         let mut remove_songs = None;
-        for (i, app) in settings.apps.iter_mut().enumerate() {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(&app.name);
-                ui.checkbox(&mut app.read, "Read").on_hover_text("See the library, what's playing, and events");
-                ui.checkbox(&mut app.control, "Control").on_hover_text("Run commands: play, pause, next track...");
-                ui.checkbox(&mut app.edit_library, "Edit library").on_hover_text("Star songs, tag them, and add songs to playlists or take them out");
-                ui.checkbox(&mut app.download_songs, "Download songs").on_hover_text("Copy songs' files out of your library");
-                ui.checkbox(&mut app.add_songs, "Add songs")
-                    .on_hover_text("Send songs into your library. Each one is marked as this program's (search addedby:name)");
-                if ui.button("Remove").on_hover_text("Its token stops working. The songs it added stay").clicked() {
-                    remove = Some(i);
+        if !settings.apps.is_empty() {
+            // (Programs down the side, what each may do across the top.)
+            let permissions: [(&str, &str, fn(&mut Access) -> &mut bool); 5] = [
+                ("eye", "Read: see the library, what's playing, and events", |a| &mut a.read),
+                ("play-pause", "Control: run commands (play, pause, next track...)", |a| &mut a.control),
+                ("pencil-simple", "Edit library: star songs, tag them, and add songs to playlists or take them out", |a| &mut a.edit_library),
+                ("download-simple", "Download songs: copy songs' files out of your library", |a| &mut a.download_songs),
+                (
+                    "music-notes-plus",
+                    "Add songs: send songs into your library. Each one is marked as this program's (search addedby:name)",
+                    |a| &mut a.add_songs,
+                ),
+            ];
+            egui::Grid::new("api_programs").striped(true).spacing([12.0, 6.0]).show(ui, |ui| {
+                ui.label("");
+                for (name, info, _) in &permissions {
+                    ui.vertical_centered(|ui| ui.label(egui::RichText::new(super::icon(name)).size(16.0)).on_hover_text(*info));
+                }
+                ui.end_row();
+                for (i, app) in settings.apps.iter_mut().enumerate() {
+                    ui.label(&app.name);
+                    for (_, info, field) in &permissions {
+                        ui.vertical_centered(|ui| ui.add(egui::Checkbox::without_text(field(app))).on_hover_text(*info));
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.add(super::icon_button("trash")).on_hover_text("Remove this program: its token stops working. The songs it added stay").clicked() {
+                            remove = Some(i);
+                        }
+                        if let Some(keys) = added.get(app.name.as_str()) {
+                            let plural = if keys.len() == 1 { "" } else { "s" };
+                            let hover = format!("Remove the {} song{plural} {} added...", keys.len(), app.name);
+                            if ui.add(super::icon_button("broom")).on_hover_text(hover).clicked() {
+                                remove_songs = Some(keys.clone());
+                            }
+                        }
+                    });
+                    ui.end_row();
                 }
             });
-            if let Some(keys) = added.get(app.name.as_str()) {
-                let plural = if keys.len() == 1 { "" } else { "s" };
-                if ui.button(format!("Remove the {} song{plural} {} added...", keys.len(), app.name)).clicked() {
-                    remove_songs = Some(keys.clone());
-                }
-            }
         }
         let remove_songs: Option<Vec<std::path::PathBuf>> = remove_songs.map(|keys| keys.iter().map(|k| self.songs.path(k)).collect());
         if let Some(i) = remove {
