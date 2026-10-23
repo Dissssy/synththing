@@ -137,6 +137,8 @@ pub enum Call {
     Set(Set, Sender<Result<(), (u16, String)>>),
     /// Change the play queue: `Err` (with its status) if it can't be.
     Queue(QueueEdit, Sender<Result<(), (u16, String)>>),
+    /// Make a playlist with this name: it, or `Err` (with its status).
+    NewPlaylist(String, Sender<Result<PlaylistRef, (u16, String)>>),
     /// Use the soundfont with this ID: `Err` (with its status) if it can't
     /// be.
     UseSoundfont(String, Sender<Result<(), (u16, String)>>),
@@ -173,6 +175,13 @@ pub enum Edit {
     /// Add song `key` to the end of playlist `playlist` (`on`), or take
     /// every entry of it out.
     Playlist { playlist: String, key: String, on: bool },
+    /// Rename playlist `playlist`.
+    Rename { playlist: String, name: String },
+    /// Delete playlist `playlist`.
+    Delete { playlist: String },
+    /// Move the entry at `from` of playlist `playlist` so it ends up at
+    /// `to`.
+    Move { playlist: String, from: usize, to: usize },
 }
 
 /// What `Call::Set` sets.
@@ -707,6 +716,38 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 }
             }))
         }
+        (Method::Post, ["v1", "playlists"]) => Some(needs(access.edit_library, "edit the library").unwrap_or_else(|| {
+            match query.get("name").map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
+                None => error(400, "say what to call it: ?name="),
+                Some(name) => match ask(shared, |reply| Call::NewPlaylist(name, reply)) {
+                    Ok(Ok(made)) => json(201, &made),
+                    Ok(Err((status, why))) => error(status, why),
+                    Err(reply) => reply,
+                },
+            }
+        })),
+        (Method::Delete, ["v1", "playlists", id]) => Some(needs(access.edit_library, "edit the library").unwrap_or_else(|| {
+            let edit = Edit::Delete { playlist: id.to_string() };
+            answered(ask(shared, |reply| Call::Edit(edit, reply)))
+        })),
+        (Method::Post, ["v1", "playlists", id, "rename"]) => Some(needs(access.edit_library, "edit the library").unwrap_or_else(|| {
+            match query.get("to").map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
+                None => error(400, "say the new name: ?to="),
+                Some(name) => {
+                    let edit = Edit::Rename { playlist: id.to_string(), name };
+                    answered(ask(shared, |reply| Call::Edit(edit, reply)))
+                }
+            }
+        })),
+        (Method::Post, ["v1", "playlists", id, "songs", "move"]) => Some(needs(access.edit_library, "edit the library").unwrap_or_else(|| {
+            match (query.get("from").and_then(|v| v.parse().ok()), query.get("to").and_then(|v| v.parse().ok())) {
+                (Some(from), Some(to)) => {
+                    let edit = Edit::Move { playlist: id.to_string(), from, to };
+                    answered(ask(shared, |reply| Call::Edit(edit, reply)))
+                }
+                _ => error(400, "say which song and where to, as places in the playlist from 0: ?from=3&to=0"),
+            }
+        })),
         (Method::Post | Method::Delete, ["v1", "playlists", id, "songs"]) => {
             Some(needs(access.edit_library, "edit the library").unwrap_or_else(|| match query.get("song") {
                 None => error(400, "say which song: ?song=<key>"),
@@ -998,6 +1039,7 @@ mod tests {
                     Call::Play { song: Some(song), reply, .. } if song == "missing" => reply.send(Err((404, "no such song".into()))).unwrap(),
                     Call::Play { reply, .. } => reply.send(Ok(())).unwrap(),
                     Call::Queue(QueueEdit::Remove(at), reply) if at > 0 => reply.send(Err((404, "not that many".into()))).unwrap(),
+                    Call::NewPlaylist(name, reply) => reply.send(Ok(PlaylistRef { id: "new".into(), name })).unwrap(),
                     Call::UseSoundfont(id, reply) if id == "missing" => reply.send(Err((404, "no such soundfont".into()))).unwrap(),
                     Call::Set(_, reply) | Call::Edit(_, reply) | Call::Queue(_, reply) | Call::UseSoundfont(_, reply) => reply.send(Ok(())).unwrap(),
                     Call::Add { .. } => unreachable!("no test adds songs here"),
@@ -1107,6 +1149,15 @@ mod tests {
         assert_eq!(answering(&server, empty, edit(false, "songs/abc/tags?tag=chill", &edit_token)), 204);
         assert_eq!(answering(&server, empty, edit(true, "playlists/p1/songs", &edit_token)), 400);
         assert_eq!(answering(&server, empty, edit(true, "playlists/p1/songs?song=abc", &edit_token)), 204);
+        assert_eq!(answering(&server, empty, edit(false, "playlists?name=Mornings", &control_token)), 403);
+        assert_eq!(answering(&server, empty, edit(false, "playlists?name=Mornings", &edit_token)), 201);
+        assert_eq!(answering(&server, empty, edit(false, "playlists?name=%20", &edit_token)), 400);
+        assert_eq!(answering(&server, empty, edit(false, "playlists/p1/rename?to=Evenings", &edit_token)), 204);
+        assert_eq!(answering(&server, empty, edit(false, "playlists/p1/rename", &edit_token)), 400);
+        assert_eq!(answering(&server, empty, edit(false, "playlists/p1/songs/move?from=2&to=0", &edit_token)), 204);
+        assert_eq!(answering(&server, empty, edit(false, "playlists/p1/songs/move?to=0", &edit_token)), 400);
+        assert_eq!(answering(&server, empty, edit(true, "playlists/p1", &control_token)), 403);
+        assert_eq!(answering(&server, empty, edit(true, "playlists/p1", &edit_token)), 204);
     }
 
     #[test]

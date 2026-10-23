@@ -241,7 +241,7 @@ impl App {
         }
     }
 
-    fn delete_playlist(&mut self, list: usize) {
+    pub(super) fn delete_playlist(&mut self, list: usize) {
         let name = self.playlists.lists.get(list).map(|l| l.playlist.name.clone()).unwrap_or_default();
         if let Err(e) = self.playlists.delete(list) {
             self.status = format!("Couldn't delete playlist: {e}");
@@ -334,7 +334,7 @@ impl App {
 
     /// Move the entries at `indices` (keeping their order) to sit together
     /// just before position `before` of the current list.
-    fn move_entries(&mut self, list: usize, indices: &[usize], before: usize) {
+    pub(super) fn move_entries(&mut self, list: usize, indices: &[usize], before: usize) {
         let Some(stored) = self.playlists.lists.get_mut(list) else {
             return;
         };
