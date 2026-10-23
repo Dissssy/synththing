@@ -94,7 +94,14 @@ impl App {
                     let _ = reply.send(self.api_add(stored, &program));
                 }
                 Call::Library(reply) => {
-                    let _ = reply.send(api::Library { store: self.songs.clone(), playlists: self.api_playlists() });
+                    let _ = reply.send(api::Library {
+                        store: self.songs.clone(),
+                        playlists: self.api_playlists(),
+                        rulesets: self.all_rulesets(),
+                        group_ignore: self.config.group_ignore.clone(),
+                        articles: self.config.sort_with_articles,
+                        online: self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup),
+                    });
                 }
             }
         }

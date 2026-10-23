@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- The local API gives songs' album art and your Groupings (each ruleset's playlists), and can group any search by artist, album, genre, year or tag.
+
 ## 1.4.0 (2026-10-23)
 
 ### Added

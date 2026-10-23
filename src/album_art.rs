@@ -185,23 +185,27 @@ fn read_art_forever(queue: &Queue, send: &mpsc::Sender<(Request, Option<egui::Co
             }
         };
         let (source, size) = &request;
-        let online = queue.online.load(Ordering::Relaxed);
-        let bytes = match &source.chosen {
-            // (Asked for by the user: downloaded whatever `online` says, if
-            // online lookups are on in this build.)
-            Some(Art::Url(url)) => picture_at(url),
-            Some(Art::Files) => source.file.as_deref().and_then(embedded_picture),
-            None => source
-                .file
-                .as_deref()
-                .and_then(embedded_picture)
-                .or_else(|| source.release.as_ref().and_then(|(release, group)| cover(release, group.as_deref(), online))),
-        };
-        let image = bytes.and_then(|bytes| scaled(&bytes, *size));
+        let image = picture(source, queue.online.load(Ordering::Relaxed)).and_then(|bytes| scaled(&bytes, *size));
         if send.send((request, image)).is_err() {
             return;
         }
         ctx.request_repaint();
+    }
+}
+
+/// The picture (a JPEG or PNG, as kept) `source` gives, if any: covers
+/// not kept yet are downloaded only if `online`.
+pub fn picture(source: &Source, online: bool) -> Option<Box<[u8]>> {
+    match &source.chosen {
+        // (Asked for by the user: downloaded whatever `online` says, if
+        // online lookups are on in this build.)
+        Some(Art::Url(url)) => picture_at(url),
+        Some(Art::Files) => source.file.as_deref().and_then(embedded_picture),
+        None => source
+            .file
+            .as_deref()
+            .and_then(embedded_picture)
+            .or_else(|| source.release.as_ref().and_then(|(release, group)| cover(release, group.as_deref(), online))),
     }
 }
 
