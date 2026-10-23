@@ -635,7 +635,7 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             Err(reply) => reply,
             Ok((size, _)) => {
                 let watching = shared.frames.watch(size);
-                let seen = shared.frames.next(0, Duration::ZERO).map_or(0, |(_, count)| count);
+                let seen = shared.frames.count();
                 shared.waker.request_repaint();
                 let frame = shared.frames.next(seen, FRAME_WAIT);
                 drop(watching);
@@ -1058,7 +1058,7 @@ fn video(shared: &Arc<Shared>, request: Request, size: Option<(usize, usize)>, f
         let head = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\nCache-Control: no-cache\r\n\
                     Connection: close\r\n\r\n";
         let mut ok = writer.write_all(head.as_bytes()).and_then(|()| writer.flush()).is_ok();
-        let (mut seen, gap) = (0, Duration::from_secs_f64(1.0 / fps as f64));
+        let (mut seen, gap) = (shared.frames.count(), Duration::from_secs_f64(1.0 / fps as f64));
         while ok {
             let started = std::time::Instant::now();
             // (Nothing new for a while: the visualizer isn't drawing. The

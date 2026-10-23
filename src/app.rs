@@ -3208,7 +3208,7 @@ impl App {
         );
         self.feed_recording(ui);
         if self.visualizer_output.rendered && watched.is_some() {
-            self.api_offer_frame();
+            self.api_offer_frame(fixed_size);
         }
         self.visualizer_drawn = true;
         let effects = lock_panel(&self.visualizer).take_effects();
