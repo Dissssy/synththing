@@ -111,9 +111,6 @@ pub(super) struct Mobile {
     /// it, and its shape.
     #[cfg(target_os = "android")]
     picture_in_picture: Option<(bool, crate::config::MiniPlayerShape)>,
-    /// Audio files just imported with audio files turned off: whether to
-    /// turn them on (`audio_import_ui`).
-    audio_import: Option<Vec<std::path::PathBuf>>,
     /// The status last seen (`None` before the first frame), and the one
     /// being shown, since when (`status_toast_ui`).
     seen_status: Option<String>,
@@ -404,56 +401,6 @@ impl App {
                 }
             }
         });
-    }
-
-    /// Ask whether to turn audio files on, for `files`: just imported,
-    /// with them off.
-    pub(super) fn offer_audio_files(&mut self, files: Vec<std::path::PathBuf>) {
-        self.mobile_state.audio_import = Some(files);
-    }
-
-    /// Audio files were imported with audio files turned off: turn them on
-    /// (and they're in the library), or not (and they go again).
-    pub(super) fn audio_import_ui(&mut self, ctx: &egui::Context) {
-        let Some(files) = self.mobile_state.audio_import.clone() else { return };
-        let names: Vec<String> = files.iter().map(|f| self.song_title(f)).collect();
-        let mut answer = None;
-        egui::Modal::new(egui::Id::new("audio_import")).show(ctx, |ui| {
-            ui.set_width(super::fit_width(ui, 420.0));
-            ui.heading("Play audio files too?");
-            ui.add_space(4.0);
-            ui.label(format!(
-                "{} {} audio, not MIDI. synththing plays audio files once they're turned on (Preferences > \
-                 Songs > Show audio files), which lists them with your songs.",
-                names.join(", "),
-                if names.len() == 1 { "is" } else { "are" },
-            ));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button("Turn them on").clicked() {
-                    answer = Some(true);
-                }
-                if ui.button("No, don't import them").clicked() {
-                    answer = Some(false);
-                }
-            });
-        });
-        let Some(on) = answer else { return };
-        let files = self.mobile_state.audio_import.take().unwrap_or_default();
-        if on {
-            self.config.show_audio_files = true;
-            self.status = match self.config.save() {
-                Ok(()) => "Audio files turned on.".to_string(),
-                Err(e) => format!("Couldn't save preferences: {e}"),
-            };
-        } else {
-            for file in &files {
-                if let Err(e) = self.songs.remove(file) {
-                    log::warn!("couldn't remove {}: {e:#}", file.display());
-                }
-            }
-            self.status = format!("Removed {} audio file{}.", files.len(), if files.len() == 1 { "" } else { "s" });
-        }
     }
 
     /// The mobile layout has no status line: what gets done or fails shows
