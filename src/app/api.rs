@@ -481,16 +481,19 @@ impl App {
                     |a| &mut a.add_songs,
                 ),
             ];
+            // (Every cell the size of an icon button, its contents in the
+            // middle, so the columns line up.)
+            const CELL: [f32; 2] = [28.0, 24.0];
             egui::Grid::new("api_programs").striped(true).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label("");
                 for (name, info, _) in &permissions {
-                    ui.vertical_centered(|ui| ui.label(egui::RichText::new(super::icon(name)).size(16.0)).on_hover_text(*info));
+                    ui.add_sized(CELL, egui::Label::new(egui::RichText::new(super::icon(name)).size(16.0))).on_hover_text(*info);
                 }
                 ui.end_row();
                 for (i, app) in settings.apps.iter_mut().enumerate() {
                     ui.label(&app.name);
                     for (_, info, field) in &permissions {
-                        ui.vertical_centered(|ui| ui.add(egui::Checkbox::without_text(field(app))).on_hover_text(*info));
+                        ui.add_sized(CELL, egui::Checkbox::without_text(field(app))).on_hover_text(*info);
                     }
                     ui.horizontal(|ui| {
                         if ui.add(super::icon_button("trash")).on_hover_text("Remove this program: its token stops working. The songs it added stay").clicked() {
