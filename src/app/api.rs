@@ -10,6 +10,9 @@ use crate::api::{self, Access, Call, NowPlaying, PlaylistInfo, PlaylistRef, Song
 use crate::commands::Command;
 use crate::engine::EngineView;
 
+/// How soon after a call a frame looks at what it changed.
+const CALL_SETTLES: std::time::Duration = std::time::Duration::from_millis(30);
+
 /// The API's state in the app.
 #[derive(Default)]
 pub(super) struct ApiState {
@@ -79,6 +82,12 @@ impl App {
         let Some(server) = &self.api.server else { return };
         server.set_apps(&self.config.api.apps);
         let calls: Vec<Call> = server.calls().collect();
+        // (What a call changed lands in the engine's view a little later:
+        // a frame then tells of it, even with nothing being drawn, before
+        // another call can change it again.)
+        if !calls.is_empty() {
+            ctx.request_repaint_after(CALL_SETTLES);
+        }
         for call in calls {
             match call {
                 Call::Command(command, reply) => {
