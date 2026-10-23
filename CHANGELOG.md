@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.6.0 (2026-10-23)
+
 ## 1.5.0 (2026-10-23)
 
 ### Added
