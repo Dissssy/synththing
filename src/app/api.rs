@@ -27,7 +27,10 @@ pub(super) struct ApiState {
 /// What a `now_playing` event is sent for a change of.
 #[derive(Clone, PartialEq)]
 struct Seen {
-    song: Option<String>,
+    /// Whether a song's loaded: which one is told by `loads`, which only
+    /// moves once it has (the song before its length and position are in
+    /// would be sent with the last one's).
+    has_song: bool,
     playlist: Option<String>,
     paused: bool,
     speed: f64,
@@ -91,7 +94,7 @@ impl App {
             return;
         }
         let seen = Seen {
-            song: self.current_song.as_deref().and_then(|p| self.songs.key(p)),
+            has_song: self.current_song.is_some(),
             playlist: self.api_playlist().map(|p| p.id),
             paused: view.paused,
             speed: view.speed,
