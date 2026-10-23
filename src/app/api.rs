@@ -31,6 +31,8 @@ pub(super) struct ApiState {
     queue_seen: Option<u64>,
     /// The Soundfonts list and which is in use, as last seen.
     soundfonts_seen: Option<u64>,
+    /// The scripts and which is drawing, as last seen.
+    scripts_seen: Option<u64>,
     /// A token just made, shown until Preferences close: (app name, token).
     new_token: Option<(String, String)>,
     /// The name being typed for a new app.
@@ -123,6 +125,16 @@ impl App {
                     });
                     let _ = reply.send(made);
                 }
+                Call::UseScript(id, reply) => {
+                    let found = self.available_scripts.iter().position(|path| api::file_id(path) == id);
+                    let _ = reply.send(match found {
+                        Some(i) => {
+                            self.load_script(i);
+                            Ok(())
+                        }
+                        None => Err((404, "there's no such script".to_string())),
+                    });
+                }
                 Call::UseSoundfont(id, reply) => {
                     let _ = reply.send(self.api_use_soundfont(&id));
                 }
@@ -142,6 +154,16 @@ impl App {
                         online: self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup),
                         queue: self.queue.iter().filter_map(|path| self.songs.key(path)).collect(),
                         soundfonts: self.api_soundfonts(),
+                        scripts: self
+                            .available_scripts
+                            .iter()
+                            .enumerate()
+                            .map(|(i, path)| api::ScriptInfo {
+                                id: api::file_id(path),
+                                name: crate::lua_visualizer::display_name(path),
+                                active: self.active_script == Some(i),
+                            })
+                            .collect(),
                     });
                 }
             }
@@ -428,6 +450,7 @@ impl App {
             self.api.playlists_seen = None;
             self.api.queue_seen = None;
             self.api.soundfonts_seen = None;
+            self.api.scripts_seen = None;
         }
         let Some(server) = self.api.server.as_ref().filter(|_| streams) else { return };
         match now {
@@ -467,6 +490,15 @@ impl App {
         };
         if self.api.soundfonts_seen.replace(soundfonts).is_some_and(|seen| seen != soundfonts) {
             server.event("soundfonts_changed", &serde_json::json!({}));
+        }
+        let scripts = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (&self.available_scripts, self.active_script).hash(&mut hasher);
+            hasher.finish()
+        };
+        if self.api.scripts_seen.replace(scripts).is_some_and(|seen| seen != scripts) {
+            server.event("scripts_changed", &serde_json::json!({}));
         }
     }
 
@@ -518,7 +550,7 @@ impl App {
     fn api_soundfont(&self) -> Option<PlaylistRef> {
         self.current_song.as_deref().filter(|path| super::is_midi_path(path))?;
         let path = self.loaded_sf.as_deref()?;
-        Some(PlaylistRef { id: api::soundfont_id(path), name: crate::config::nice_name(path) })
+        Some(PlaylistRef { id: api::file_id(path), name: crate::config::nice_name(path) })
     }
 
     fn api_soundfonts(&self) -> Vec<api::SoundfontInfo> {
@@ -527,7 +559,7 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, path)| api::SoundfontInfo {
-                id: api::soundfont_id(path),
+                id: api::file_id(path),
                 name: crate::config::nice_name(path),
                 size: std::fs::metadata(path).ok().map(|m| m.len()),
                 active: self.active_sf == Some(i),
@@ -536,7 +568,7 @@ impl App {
     }
 
     fn api_use_soundfont(&mut self, id: &str) -> Result<(), (u16, String)> {
-        let i = self.config.soundfonts.iter().position(|path| api::soundfont_id(path) == id).ok_or((404, "there's no such soundfont".to_string()))?;
+        let i = self.config.soundfonts.iter().position(|path| api::file_id(path) == id).ok_or((404, "there's no such soundfont".to_string()))?;
         if !self.config.soundfonts[i].exists() {
             return Err((409, "its file is missing".into()));
         }

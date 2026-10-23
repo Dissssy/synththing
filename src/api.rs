@@ -44,7 +44,7 @@ const KEEP_ALIVE: Duration = Duration::from_secs(25);
 /// How long a request waits for the app to answer.
 const APP_WAIT: Duration = Duration::from_secs(5);
 /// The events there are (`GET /v1/events?events=` picks among them).
-const EVENTS: [&str; 6] = ["now_playing", "seeked", "library_changed", "playlists_changed", "queue_changed", "soundfonts_changed"];
+const EVENTS: [&str; 7] = ["now_playing", "seeked", "library_changed", "playlists_changed", "queue_changed", "soundfonts_changed", "scripts_changed"];
 /// Songs in one page of a list, unless the request asks for fewer.
 const MOST_SONGS: usize = 500;
 /// The largest song a program can send (as the relay's limit).
@@ -142,6 +142,9 @@ pub enum Call {
     /// Use the soundfont with this ID: `Err` (with its status) if it can't
     /// be.
     UseSoundfont(String, Sender<Result<(), (u16, String)>>),
+    /// Draw the visualizer with the script with this ID: `Err` (with its
+    /// status) if it can't be.
+    UseScript(String, Sender<Result<(), (u16, String)>>),
     /// A song a program sent (`program`, by its name), already in the
     /// store's folder, to add to the library: the song, and whether it's
     /// new to the library (only then is it marked as the program's).
@@ -250,8 +253,17 @@ pub struct SoundfontInfo {
     pub active: bool,
 }
 
-/// A soundfont's ID: the same for its file every time.
-pub fn soundfont_id(path: &std::path::Path) -> String {
+/// A visualizer script in the script picker, as `GET /v1/scripts` gives it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ScriptInfo {
+    pub id: String,
+    pub name: String,
+    /// Whether it's the one drawing the visualizer.
+    pub active: bool,
+}
+
+/// A soundfont's or script's ID: the same for its file every time.
+pub fn file_id(path: &std::path::Path) -> String {
     use sha2::Digest;
     crate::library::hex(&sha2::Sha256::digest(path.to_string_lossy().as_bytes())[..8])
 }
@@ -277,6 +289,7 @@ pub struct Library {
     /// The play queue's songs, by key, in order.
     pub queue: Vec<String>,
     pub soundfonts: Vec<SoundfontInfo>,
+    pub scripts: Vec<ScriptInfo>,
 }
 
 impl Library {
@@ -806,6 +819,13 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             let id = id.to_string();
             Some(needs(access.control, "control synththing").unwrap_or_else(|| answered(ask(shared, |reply| Call::UseSoundfont(id, reply)))))
         }
+        (Method::Get, ["v1", "scripts"]) => {
+            Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| json(200, &library.scripts))))
+        }
+        (Method::Post, ["v1", "scripts", id, "use"]) => {
+            let id = id.to_string();
+            Some(needs(access.control, "control synththing").unwrap_or_else(|| answered(ask(shared, |reply| Call::UseScript(id, reply)))))
+        }
         (Method::Get, ["v1", "playlists"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| json(200, &library.playlists))))
         }
@@ -1008,7 +1028,7 @@ mod tests {
     /// A library with no songs, playlists or rulesets of its own.
     fn no_library() -> Library {
         let rulesets = crate::smart::builtin().map(|(id, r)| (id.to_string(), r)).into_iter().collect();
-        Library { store: SongStore::open(std::env::temp_dir()), playlists: Vec::new(), rulesets, group_ignore: String::new(), articles: false, online: false, queue: Vec::new(), soundfonts: Vec::new() }
+        Library { store: SongStore::open(std::env::temp_dir()), playlists: Vec::new(), rulesets, group_ignore: String::new(), articles: false, online: false, queue: Vec::new(), soundfonts: Vec::new(), scripts: Vec::new() }
     }
 
     /// A server on a free port with a reader's and a controller's tokens.
@@ -1041,7 +1061,10 @@ mod tests {
                     Call::Queue(QueueEdit::Remove(at), reply) if at > 0 => reply.send(Err((404, "not that many".into()))).unwrap(),
                     Call::NewPlaylist(name, reply) => reply.send(Ok(PlaylistRef { id: "new".into(), name })).unwrap(),
                     Call::UseSoundfont(id, reply) if id == "missing" => reply.send(Err((404, "no such soundfont".into()))).unwrap(),
-                    Call::Set(_, reply) | Call::Edit(_, reply) | Call::Queue(_, reply) | Call::UseSoundfont(_, reply) => reply.send(Ok(())).unwrap(),
+                    Call::UseScript(id, reply) if id == "missing" => reply.send(Err((404, "no such script".into()))).unwrap(),
+                    Call::Set(_, reply) | Call::Edit(_, reply) | Call::Queue(_, reply) | Call::UseSoundfont(_, reply) | Call::UseScript(_, reply) => {
+                        reply.send(Ok(())).unwrap()
+                    }
                     Call::Add { .. } => unreachable!("no test adds songs here"),
                 }
             }
@@ -1111,6 +1134,9 @@ mod tests {
         assert_eq!(answering(&server, empty, set("soundfonts/abc/use", &read_token)), 403);
         assert_eq!(answering(&server, empty, set("soundfonts/abc/use", &control_token)), 204);
         assert_eq!(answering(&server, empty, set("soundfonts/missing/use", &control_token)), 404);
+        assert_eq!(answering(&server, empty, set("scripts/abc/use", &read_token)), 403);
+        assert_eq!(answering(&server, empty, set("scripts/abc/use", &control_token)), 204);
+        assert_eq!(answering(&server, empty, set("scripts/missing/use", &control_token)), 404);
         assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &read_token)), 403);
         assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &control_token)), 204);
         assert_eq!(answering(&server, empty, set("queue/move?from=2", &control_token)), 400);
