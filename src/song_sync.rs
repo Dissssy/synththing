@@ -9,11 +9,14 @@
 //!   and the songs removed from every device (`removed/<key>`: gone from
 //!   the library, until a device imports one again).
 //!   Each device knows them all (`SongStore::learn`), and forgets the
-//!   removed ones (`SongStore::set_removed`).
+//!   removed ones (`SongStore::set_removed`) and those gone from it (no
+//!   device had them, and one cleared them: `clear`).
 //! - `transfers`: which songs each device wants (`want/<device>/<key>`)
 //!   and which are waiting on the relay (`ready/<key>`), and the devices
 //!   themselves (`device/<device>`: its name, and when it last said it's
-//!   there, once a day). A device that says nothing for `FORGET_AFTER` is
+//!   there, once a day), and the songs each has (`have/<device>`, by
+//!   their keys' first characters: `note_have`), so a device can tell
+//!   which songs none has (`unheld`). A device that says nothing for `FORGET_AFTER` is
 //!   forgotten, wants and all, as is one removed by hand (`forget`); it
 //!   comes back if it syncs again. A device wants a
 //!   song it lacks and hasn't blocked that's in a playlist (or starred,
@@ -47,6 +50,10 @@ pub const TRANSFERS: &str = "transfers";
 const TAG: &str = "tag/";
 const GROUP: &str = "group/";
 const REMOVED: &str = "removed/";
+const HAVE: &str = "have/";
+/// How much of each key a device's list of the songs it has keeps: enough
+/// to tell a library's songs apart, at a fifth of the size.
+const HAVE_PREFIX: usize = 12;
 
 /// The library's leaves: those synced so far (`applied`), with what this
 /// device has of them, every song here, the tags, and the songs that play
@@ -86,6 +93,11 @@ pub struct SyncedLibrary {
     songs: Vec<(String, Song)>,
 }
 
+/// The library's leaves without the songs `keys` (no device has them).
+pub fn clear(leaves: &BTreeMap<String, Value>, keys: &[String]) -> BTreeMap<String, Value> {
+    leaves.iter().filter(|(path, _)| !keys.contains(path)).map(|(p, v)| (p.clone(), v.clone())).collect()
+}
+
 /// Read the synced library from its leaves.
 pub fn read_library(fields: &Fields) -> SyncedLibrary {
     let mut library = SyncedLibrary::default();
@@ -111,12 +123,13 @@ pub fn read_library(fields: &Fields) -> SyncedLibrary {
 }
 
 /// Take the synced library: every song's name, tags and what's known of
-/// it, the tags and the songs that play together (those gone from it
-/// deleted here), and the songs removed from every device. Whether any
-/// song here was removed.
+/// it (those gone from it and not here forgotten), the tags and the songs
+/// that play together (those gone from it deleted here), and the songs
+/// removed from every device. Whether any song was removed or forgotten.
 pub fn apply_library(store: &mut SongStore, library: SyncedLibrary) -> bool {
     let SyncedLibrary { removed, tags, together, songs } = library;
-    let forgot = store.set_removed(removed);
+    let mut forgot = store.set_removed(removed);
+    let listed: BTreeSet<String> = songs.iter().map(|(key, _)| key.clone()).collect();
     for (id, tag) in &tags {
         store.set_tag(id, tag.clone());
     }
@@ -124,6 +137,8 @@ pub fn apply_library(store: &mut SongStore, library: SyncedLibrary) -> bool {
         store.set_together(id, keys.clone());
     }
     store.learn(songs);
+    let gone: Vec<String> = store.known().map(|(key, _)| key).filter(|key| !listed.contains(*key)).map(str::to_string).collect();
+    forgot |= store.forget_absent(gone.iter().map(String::as_str));
     let gone: Vec<String> = store.tags().keys().filter(|id| !tags.contains_key(*id)).cloned().collect();
     for id in gone {
         store.remove_tag(&id);
@@ -459,6 +474,7 @@ pub struct SyncedDevice {
 /// The device a transfers leaf is about, if any.
 fn device_of(path: &str) -> Option<&str> {
     path.strip_prefix("device/")
+        .or_else(|| path.strip_prefix(HAVE))
         .or_else(|| path.strip_prefix("want/").and_then(|rest| rest.split_once('/')).map(|(device, _)| device))
 }
 
@@ -481,7 +497,8 @@ pub fn devices(fields: &Fields) -> Vec<SyncedDevice> {
     devices
 }
 
-/// The transfers' leaves without `device`'s: its wants, and it.
+/// The transfers' leaves without `device`'s: its wants, what it has, and
+/// it.
 pub fn forget(leaves: &BTreeMap<String, Value>, device: &str) -> BTreeMap<String, Value> {
     leaves.iter().filter(|(path, _)| device_of(path) != Some(device)).map(|(p, v)| (p.clone(), v.clone())).collect()
 }
@@ -501,6 +518,32 @@ pub fn note_device(leaves: &mut BTreeMap<String, Value>, device: &str, name: &st
         return;
     }
     leaves.insert(path, serde_json::to_value(DeviceLeaf { name: name.to_string(), seen: now }).unwrap_or_default());
+}
+
+/// Note in the transfers' `leaves` the songs `device` has (by their keys'
+/// first `HAVE_PREFIX` characters).
+pub fn note_have(leaves: &mut BTreeMap<String, Value>, device: &str, store: &SongStore) {
+    let have: BTreeSet<&str> = store.known().filter(|(key, _)| store.has(key)).filter_map(|(key, _)| key.get(..HAVE_PREFIX)).collect();
+    leaves.insert(format!("{HAVE}{device}"), serde_json::to_value(have).unwrap_or_default());
+}
+
+/// The songs in the library that no device has, as the transfers
+/// (`fields`) say: not here (`me`), on no other device's list
+/// (`note_have`), nor waiting on the relay. None while a device hasn't
+/// said what it has (an older version): any could be on it.
+pub fn unheld(fields: &Fields, me: &str, store: &SongStore) -> Vec<String> {
+    let mut held: BTreeSet<String> = BTreeSet::new();
+    for device in devices(fields).into_iter().filter(|d| d.id != me) {
+        let have = fields.get(&format!("{HAVE}{}", device.id)).and_then(|f| serde_json::from_value::<Vec<String>>(f.value.clone()).ok());
+        let Some(have) = have else { return Vec::new() };
+        held.extend(have);
+    }
+    store
+        .known()
+        .map(|(key, _)| key)
+        .filter(|key| !store.has(key) && !fields.contains_key(&ready(key)) && key.get(..HAVE_PREFIX).is_none_or(|p| !held.contains(p)))
+        .map(str::to_string)
+        .collect()
 }
 
 #[cfg(test)]
@@ -656,6 +699,56 @@ mod tests {
         let plain = serde_json::to_vec(&leaves).unwrap();
         let sealed = crate::library::sync::seal(&[1; 32], &crate::library::sync::pack(&plain)).unwrap();
         assert!(sealed.len() < crate::library::sync::MAX_DATA * 3 / 4, "{} KB sealed, from {} KB", sealed.len() / 1024, plain.len() / 1024);
+    }
+
+    #[test]
+    fn songs_no_device_has_are_cleared() {
+        let root = std::env::temp_dir().join(format!("synththing-song-unheld-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (desktop_dir, phone_dir) = (root.join("desktop"), root.join("phone"));
+        let fields = |leaves: &BTreeMap<String, Value>| -> Fields {
+            leaves.iter().map(|(k, v)| (k.clone(), crate::settings_sync::Field { value: v.clone(), changed: 1 })).collect()
+        };
+        let mut desktop = SongStore::open(desktop_dir.clone());
+        let (kept, gone) = (song_store::write_in(b"kept", "Kept.mid", &desktop_dir).unwrap(), song_store::write_in(b"gone", "Gone.mid", &desktop_dir).unwrap());
+        desktop.add(kept.clone());
+        desktop.add(gone.clone());
+        let mut phone = SongStore::open(phone_dir.clone());
+        let synced = library_leaves(&desktop, &BTreeMap::new());
+        apply_library(&mut phone, read_library(&fields(&synced)));
+
+        // Each device says what it has: the phone, nothing.
+        let mut transfers = BTreeMap::new();
+        note_have(&mut transfers, "desktop", &desktop);
+        assert!(unheld(&fields(&transfers), "phone", &phone).is_empty(), "the desktop has both");
+        let mut older = fields(&transfers);
+        older.insert(want("old", &kept.key), crate::settings_sync::Field { value: Value::Bool(true), changed: 1 });
+        // The desktop removes one: only the phone could have it, and doesn't.
+        desktop.remove(&song_store::path_of(&desktop_dir, &gone.key)).unwrap();
+        note_have(&mut transfers, "desktop", &desktop);
+        note_have(&mut transfers, "phone", &phone);
+        assert_eq!(unheld(&fields(&transfers), "phone", &phone), [gone.key.clone()]);
+        assert_eq!(unheld(&fields(&transfers), "desktop", &desktop), [gone.key.clone()], "removed here too");
+        older.extend(fields(&transfers));
+        assert!(unheld(&older, "phone", &phone).is_empty(), "a device that hasn't said could have it");
+        let mut waiting = fields(&transfers);
+        waiting.insert(ready(&gone.key), crate::settings_sync::Field { value: Value::Bool(true), changed: 1 });
+        assert!(unheld(&waiting, "phone", &phone).is_empty(), "on the relay");
+
+        // The phone clears it: it forgets it, the library drops it, and so
+        // the desktop forgets it too.
+        assert!(phone.forget_absent([gone.key.as_str()]));
+        let cleared = library_leaves(&phone, &clear(&synced, &[gone.key.clone()]));
+        assert!(cleared.contains_key(&kept.key) && !cleared.contains_key(&gone.key));
+        assert!(apply_library(&mut desktop, read_library(&fields(&cleared))));
+        assert!(desktop.get_by_key(&gone.key).is_none() && !desktop.is_blocked(&gone.key));
+        assert!(desktop.has(&kept.key), "what it has stays");
+        // A device that turns out to have one lists it again.
+        let mut kept_cleared = clear(&cleared, &[kept.key.clone()]);
+        assert!(!apply_library(&mut desktop, read_library(&fields(&kept_cleared))), "here: not forgotten");
+        kept_cleared = library_leaves(&desktop, &kept_cleared);
+        assert!(kept_cleared.contains_key(&kept.key));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

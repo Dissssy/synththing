@@ -34,7 +34,10 @@
 //!
 //! A song removed from every device (`removed.json`, synced) is forgotten
 //! on each: its file deleted, and what's known of it with it. It stays
-//! removed until a device imports it again.
+//! removed until a device imports it again. A song no device has any more
+//! can be cleared from the library (`song_sync::unheld`): each device
+//! forgets it ([`SongStore::forget_absent`]), and one that turns out to
+//! have it lists it again.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -462,6 +465,19 @@ impl SongStore {
         self.removed = removed.into_iter().filter(|(key, _)| is_key(key)).collect();
         self.save_removed();
         let gone: Vec<String> = self.removed.keys().filter(|key| self.songs.contains_key(*key)).cloned().collect();
+        for key in &gone {
+            self.forget(key);
+        }
+        if !gone.is_empty() {
+            self.save();
+        }
+        !gone.is_empty()
+    }
+
+    /// Forget the songs `keys` that aren't here (no device has them, so the
+    /// library stops listing them). Whether any was.
+    pub fn forget_absent<'a>(&mut self, keys: impl IntoIterator<Item = &'a str>) -> bool {
+        let gone: Vec<String> = keys.into_iter().filter(|key| self.songs.contains_key(*key) && !self.has(key)).map(str::to_string).collect();
         for key in &gone {
             self.forget(key);
         }
