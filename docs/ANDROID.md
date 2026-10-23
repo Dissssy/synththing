@@ -81,6 +81,6 @@ Android orders updates by `versionCode` (`android/app/build.gradle.kts`): a rele
 ## 7. Defaults picked, open to change
 
 - arm64 only, Android 8 and newer, targetSdk 34 (35 forces drawing under the status and navigation bars, which the layout doesn't handle yet).
-- A tap plays a song (on desktop it's a double-click); long-press is the menu.
+- A tap plays a song (a click, on desktop); long-press is the menu.
 - No drag to reorder on a touch screen.
 - No m3u playlist import or export, and no identity import or export, on Android.

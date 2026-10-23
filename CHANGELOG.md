@@ -9,6 +9,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 - The local API can seek to an exact point and set the volume (`POST /v1/seek`, `POST /v1/volume`), and an event stream can ask for only the events it wants.
 - Programs you allow to Edit library (a new permission, off until you tick it) can star songs, tag them, and add songs to playlists or take them out through the local API. A new `playlists_changed` event tells when any playlist changes.
 
+### Changed
+- A single click plays a song again (and uses a soundfont, or plays a playlist's song); Ctrl+click and Shift+click select rows without playing them.
+
 ## 1.4.0 (2026-10-23)
 
 ### Added

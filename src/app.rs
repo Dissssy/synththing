@@ -266,7 +266,7 @@ pub struct App {
     /// The one-time import of the songs and playlists from before the
     /// library, while it runs.
     old_import: Option<std::sync::mpsc::Receiver<song_store::OldImport>>,
-    /// The Songs tab: the library's songs. Double-clicking one plays it.
+    /// The Songs tab: the library's songs. Clicking one plays it.
     song_list: SongList,
     /// The Groupings' state, for the session.
     groupings: groupings::Groupings,
@@ -658,7 +658,7 @@ impl App {
         let buffer_ms = config.buffer_ms.map_or(DEFAULT_BUFFER_MS, |ms| ms.clamp(MIN_BUFFER_MS, MAX_BUFFER_MS));
         let status = match playlist_errors.first() {
             Some(e) => format!("Couldn't read a playlist ({e})"),
-            None => "Double-click a song to play it, a soundfont to load it.".to_string(),
+            None => "Click a song to play it, a soundfont to load it.".to_string(),
         };
 
         let mut app = Self {
@@ -1705,7 +1705,7 @@ impl App {
                 }
                 ui.weak(size);
                 let hover = format!(
-                    "{}\nDouble-click to use; drag onto a MIDI playlist entry to override its soundfont",
+                    "{}\nClick to use; drag onto a MIDI playlist entry to override its soundfont",
                     path.display()
                 );
                 select_list::label(ui, text, Some(hover), scroll);
@@ -4966,7 +4966,7 @@ mod tests {
         assert_eq!(status_outcome("Soundfont not loaded"), Some(false));
         assert_eq!(status_outcome("Published \"Disco\" to synththing.p51.nl."), Some(true));
         assert_eq!(status_outcome("Soundfont loaded: GeneralUser-GS"), Some(true));
-        assert_eq!(status_outcome("Double-click a song to play it, a soundfont to load it."), None);
+        assert_eq!(status_outcome("Click a song to play it, a soundfont to load it."), None);
         assert_eq!(status_outcome("Loading Canon in D..."), None);
     }
 }

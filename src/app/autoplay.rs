@@ -40,7 +40,7 @@ impl App {
         }
     }
 
-    /// A song double-clicked in the Songs list: it plays, leaving any
+    /// A song clicked in the Songs list: it plays, leaving any
     /// playlist, and with Autoplay on the list plays on from it.
     pub(super) fn play_listed(&mut self, at: Position) {
         self.now_playing = None;

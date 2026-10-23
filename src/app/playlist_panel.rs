@@ -790,7 +790,7 @@ impl App {
                     if entry.missing {
                         label.push_str("  (missing)");
                     }
-                    select_list::label(ui, label, Some(format!("{}\nDouble-click to play", entry.path.display())), scroll);
+                    select_list::label(ui, label, Some(format!("{}\nClick to play", entry.path.display())), scroll);
                 });
             }
 

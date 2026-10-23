@@ -1,6 +1,6 @@
 //! The list the Songs, Soundfonts and Playlists panels share: rows of one
-//! height, click to select (Ctrl toggles, Shift extends a range), double-click
-//! to open or play, Ctrl+A to select all, and Delete reported to the list
+//! height, click to open or play (and select just that row), Ctrl+click
+//! and Shift+click to select (Ctrl toggles, Shift extends a range), Ctrl+A to select all, and Delete reported to the list
 //! that owns the rows. Each list draws its own row contents with a closure
 //! given the entry; [`label`] is the entry's text, cut to the width left
 //! for it with the full text on hover.
@@ -141,7 +141,7 @@ pub enum Steer {
     PageDown,
     First,
     Last,
-    /// Open or play the cursor's row, as a double-click would.
+    /// Open or play the cursor's row, as a click would.
     Open,
 }
 
@@ -222,7 +222,7 @@ impl Row<'_> {
 /// What happened in a list this frame.
 #[derive(Default)]
 pub struct ListOutput {
-    /// The row double-clicked (tapped, for touch).
+    /// The row clicked (tapped, for touch) without Ctrl or Shift.
     pub activated: Option<usize>,
     /// The row under the pointer.
     pub hovered: Option<usize>,
@@ -281,10 +281,14 @@ pub fn show<T>(
                 let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), row_height));
                 // Not focusable: a focused row would count as typing and turn the keys off.
                 let response = ui.interact(rect, id.with(idx), sense - egui::Sense::FOCUSABLE);
-                if response.double_clicked() || (touch && response.clicked()) {
-                    output.activated = Some(idx);
-                } else if response.clicked() {
-                    selection.click(idx, modifiers);
+                // A double-click's second click doesn't play (or load) it again.
+                if response.clicked() && !response.double_clicked() {
+                    if touch || !(modifiers.command || modifiers.shift) {
+                        output.activated = Some(idx);
+                    }
+                    if !touch {
+                        selection.click(idx, modifiers);
+                    }
                 }
                 if response.contains_pointer() {
                     output.hovered = Some(idx);

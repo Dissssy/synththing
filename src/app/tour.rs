@@ -61,7 +61,7 @@ struct Step {
 const STEPS: &[Step] = &[
     Step {
         title: "Play a song",
-        text: "These are your songs (the starter songs, if you added them; + imports more). Double-click one to play it.",
+        text: "These are your songs (the starter songs, if you added them; + imports more). Click one to play it.",
         target: Some(Target::Tab(Section::Songs)),
         tabs: &[Section::Songs],
         done: DoneWhen::SongLoaded,
@@ -78,7 +78,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         title: "Soundfonts",
-        text: "A soundfont is the set of instruments a MIDI file is played with. Double-click another one in the \
+        text: "A soundfont is the set of instruments a MIDI file is played with. Click another one in the \
                list to hear the same song played differently.",
         target: Some(Target::Tab(Section::Soundfonts)),
         tabs: &[Section::Soundfonts],
@@ -106,7 +106,7 @@ const STEPS: &[Step] = &[
     Step {
         title: "Playlists",
         text: "Drag songs from the Songs tab onto Playlists here to make a playlist (a whole folder works too; + \
-               makes an empty one). Double-click a song in it to play it; Loop and Shuffle are in the controls.",
+               makes an empty one). Click a song in it to play it; Loop and Shuffle are in the controls.",
         target: Some(Target::Tab(Section::Groupings)),
         tabs: &[Section::Songs, Section::Groupings],
         done: DoneWhen::PlaylistGrew,
