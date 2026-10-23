@@ -513,7 +513,7 @@ A script can see the current playlist and move between its songs, enough to draw
 - `current`: the index of the song playing from it, or nil
 - `entries`: its songs in order, each `{name, length, missing}`; `length` is in seconds once it's been read (nil until then), `missing` is true for a song whose file isn't there any more
 
-`play_track` starts the playlist from that song, as double-clicking it does; an index past the end is an error. `next_track` and `previous_track` do what the app's buttons do (previous restarts the song if it's been playing a little while), and follow the loop and shuffle modes. `set_loop` and `set_shuffle` change the same modes as the buttons; `playback()` reports them as `loop_mode` and `shuffle`. Like `set_paused`, these happen right after the frame. The volume stays the user's.
+`play_track` starts the playlist from that song, as clicking it does; an index past the end is an error. `next_track` and `previous_track` do what the app's buttons do (previous restarts the song if it's been playing a little while), and follow the loop and shuffle modes. `set_loop` and `set_shuffle` change the same modes as the buttons; `playback()` reports them as `loop_mode` and `shuffle`. Like `set_paused`, these happen right after the frame. The volume stays the user's.
 
 ```lua
 local list = playlist()

@@ -5,7 +5,7 @@
 //! fuzzy search over the names, file names and tags, and filters
 //! (`type:mid`, `search.rs`): with only filters, the list stays sorted and
 //! grouped.
-//! Double-clicking a song plays it (and marks it as playing); rows can be
+//! Clicking a song plays it (and marks it as playing); rows can be
 //! selected several at a time and dragged out together (onto a playlist).
 //! The alien at the left of each row stars it, or unstars it.
 //! For touch, the column sorted by goes on a second line, and sorting and
@@ -278,7 +278,7 @@ pub struct SongList {
 /// What [`SongList::ui`] reports.
 #[derive(Default)]
 pub struct Output {
-    /// The song double-clicked, where it was.
+    /// The song clicked, where it was.
     pub play: Option<Position>,
     /// Delete was pressed with these selected.
     pub delete: Vec<PathBuf>,
