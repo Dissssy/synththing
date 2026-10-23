@@ -4768,7 +4768,8 @@ fn drag_ghost_ui(ctx: &egui::Context) {
         .interactable(false)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.label(text);
+                // (On one line: the area's narrow by the window's edge.)
+                ui.add(egui::Label::new(text).extend());
             });
         });
 }
