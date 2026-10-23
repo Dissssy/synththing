@@ -627,34 +627,10 @@ impl VisualizerPanel {
         }
         self.frames.set_repaint_context(&ctx);
 
-        // The frame the script finished since last time, if it did; then,
-        // unless it's still busy or held for a recording, ask for the next
-        // one (the audio waits in the tap meanwhile). It shows when it's
-        // done, the last one staying up till then, so the window never
-        // waits on the script and a slow script only draws fewer frames.
-        // A recording asks for its next frame only after taking the last
-        // one, and waits for it.
-        let lockstep = timestep.is_some();
-        let mut done = self.frames.take_frame(Duration::ZERO);
-        if (done.is_none() || !lockstep) && !hold && self.frames.ready_for_frame() {
-            self.frames.request_frame(FrameRequest {
-                width: buf_w,
-                height: buf_h,
-                pixels: std::mem::take(&mut self.spare),
-                samples: tap.drain(),
-                notes: notes.clone(),
-                playback: playback.clone(),
-                input: self.pending_input.take().unwrap_or_default(),
-                transport,
-                timestep,
-            });
-            if lockstep {
-                done = self.frames.take_frame(FRAME_WAIT);
-            }
-        }
+        let done = self.step(tap, notes, playback, transport, (buf_w, buf_h), hold, timestep);
         let rendered = done.is_some();
         if let Some(done) = done {
-            self.accept(done, &ctx, rect);
+            self.accept(done, Some((&ctx, rect)));
         }
         if self.off_screen {
             let painter = ui.painter();
@@ -674,9 +650,72 @@ impl VisualizerPanel {
         ShowOutput { focused, cursor, rendered, image_rect: rect }
     }
 
-    /// Take a frame the script drew: its pixels into the texture, its
-    /// audio for recording, and what it asked for into `effects`.
-    fn accept(&mut self, done: FrameDone, ctx: &egui::Context, rect: egui::Rect) {
+    /// Run the script with nothing on screen (for a program watching
+    /// through the local API while the visualizer's hidden or the window's
+    /// minimized): frames `size` big, or the last frame's size, with no
+    /// input. Whether a new frame came in.
+    pub fn run_unseen(
+        &mut self,
+        ctx: &egui::Context,
+        tap: &SampleTap,
+        notes: &NotesSnapshot,
+        playback: &EngineView,
+        transport: Transport,
+        size: Option<(usize, usize)>,
+    ) -> bool {
+        self.frames.set_repaint_context(ctx);
+        let size = size.unwrap_or((self.width, self.height));
+        let done = self.step(tap, notes, playback, transport, size, false, None);
+        let rendered = done.is_some();
+        if let Some(done) = done {
+            self.accept(done, None);
+        }
+        rendered
+    }
+
+    /// The frame the script finished since last time, if it did; then,
+    /// unless it's still busy or held for a recording, ask for the next
+    /// one (`size` big; the audio waits in the tap meanwhile). It shows when
+    /// it's done, the last one staying up till then, so the window never
+    /// waits on the script and a slow script only draws fewer frames. A
+    /// recording (`timestep`) asks for its next frame only after taking the
+    /// last one, and waits for it.
+    #[allow(clippy::too_many_arguments)]
+    fn step(
+        &mut self,
+        tap: &SampleTap,
+        notes: &NotesSnapshot,
+        playback: &EngineView,
+        transport: Transport,
+        (width, height): (usize, usize),
+        hold: bool,
+        timestep: Option<f64>,
+    ) -> Option<FrameDone> {
+        let lockstep = timestep.is_some();
+        let mut done = self.frames.take_frame(Duration::ZERO);
+        if (done.is_none() || !lockstep) && !hold && self.frames.ready_for_frame() {
+            self.frames.request_frame(FrameRequest {
+                width,
+                height,
+                pixels: std::mem::take(&mut self.spare),
+                samples: tap.drain(),
+                notes: notes.clone(),
+                playback: playback.clone(),
+                input: self.pending_input.take().unwrap_or_default(),
+                transport,
+                timestep,
+            });
+            if lockstep {
+                done = self.frames.take_frame(FRAME_WAIT);
+            }
+        }
+        done
+    }
+
+    /// Take a frame the script drew: its pixels into the texture (when
+    /// shown, at `rect`), its audio for recording, and what it asked for
+    /// into `effects`.
+    fn accept(&mut self, done: FrameDone, shown: Option<(&egui::Context, egui::Rect)>) {
         if (done.width, done.height) != (self.width, self.height) {
             self.width = done.width;
             self.height = done.height;
@@ -691,9 +730,7 @@ impl VisualizerPanel {
         self.effects.live_commands.extend(effects.live_commands);
         self.effects.playback_requests.extend(effects.playback_requests);
 
-        if self.off_screen {
-            return;
-        }
+        let Some((ctx, rect)) = shown.filter(|_| !self.off_screen) else { return };
         let image = done.image;
         // Nearest, not linear: when the buffer is downscaled from the panel
         // size, this is what keeps the upscale crisp/pixel-art rather than

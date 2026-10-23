@@ -111,7 +111,7 @@ Add `?events=now_playing,seeked` (any of them, by name) for only those. A commen
 
 `/v1/visualizer/stream` sends the visualizer's pictures as they're drawn, as MJPEG (`multipart/x-mixed-replace`), at most `fps` a second (1 to 60, 30 if not given). With `width` and `height` (64 to 4096 each, made even), the script draws at exactly that size and synththing's own window just says it's streaming instead of showing it. Without them, you get whatever size it's showing at. A recording's size wins while one is going. Scripts can tell they're being watched: `playback().streaming` is true.
 
-In OBS, add a **Media Source**, untick Local File and give it `http://127.0.0.1:7340/v1/visualizer/stream?width=1920&height=1080&token=st_...`, or a **Browser Source** with `http://127.0.0.1:7340/v1/visualizer?width=1920&height=1080&token=st_...` and the same size. The visualizer has to be showing somewhere in synththing (its tab open, or the dedicated window) for pictures to come.
+In OBS, add a **Media Source**, untick Local File and give it `http://127.0.0.1:7340/v1/visualizer/stream?width=1920&height=1080&token=st_...`, or a **Browser Source** with `http://127.0.0.1:7340/v1/visualizer?width=1920&height=1080&token=st_...` and the same size. The visualizer keeps drawing while anything's watching, even with its tab hidden or synththing minimized or in the tray (it gets no mouse or keys then). Without `width` and `height` it keeps the size it last showed at.
 
 ## System media controls
 

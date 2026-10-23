@@ -751,6 +751,34 @@ impl App {
         self.api.server.as_ref()?.frames().wanted()
     }
 
+    /// Keep the visualizer running for whoever's watching it while it isn't
+    /// on screen (its tab hidden, the window minimized or in the tray),
+    /// with no input, at the size asked for (a recording's, if one's on).
+    pub(super) fn api_stream_unseen(&mut self, ctx: &egui::Context) {
+        let Some(watched) = self.api_watched() else { return };
+        if self.recording.render.is_some() {
+            return;
+        }
+        let shared = self.shared.lock().unwrap().clone();
+        let transport = self.script_transport();
+        self.script.set_streaming(true);
+        let size = self.recording.frame_size().or(watched);
+        let rendered = super::lock_panel(&self.visualizer).run_unseen(
+            ctx,
+            &self.tap,
+            &shared.notes,
+            &shared.view,
+            transport,
+            size,
+        );
+        if rendered {
+            self.api_offer_frame(size);
+        }
+        let effects = super::lock_panel(&self.visualizer).take_effects();
+        self.apply_script_effects(effects, &shared.view);
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
+
     /// The frame the visualizer just drew, to whoever's watching it, if
     /// it's the size frames are drawn at now (one asked for before a size
     /// change can still come in at the old one).

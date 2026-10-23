@@ -3977,7 +3977,8 @@ impl App {
     /// is hidden or minimized; on Android also while the app is in the
     /// background, when eframe has no window and calls nothing).
     pub fn tick(&mut self, ctx: &egui::Context) {
-        if !std::mem::take(&mut self.ui_drawn) {
+        let ui_ran = std::mem::take(&mut self.ui_drawn);
+        if !ui_ran {
             self.nothing_drawn();
         }
         self.minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
@@ -4021,6 +4022,9 @@ impl App {
         frame_timing::time("poll_sync", || self.poll_sync());
         frame_timing::time("lookup_tick", || self.lookup_tick(ctx));
         frame_timing::time("api_tick", || self.api_tick(ctx, &view));
+        if !(ui_ran && self.visualizer_was_drawn) {
+            frame_timing::time("api_stream_unseen", || self.api_stream_unseen(ctx));
+        }
         if self.songs_moving().is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
