@@ -58,6 +58,20 @@ jobs:
       - name: Test
         run: cargo test --lib
 
+  # The docs website (book.toml) builds: every page in docs/SUMMARY.md is
+  # there.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.4.40
+
+      - name: Build
+        run: mdbook build
+
   # The Android app (docs/ANDROID.md): it builds, so the desktop app's
   # changes don't quietly break it.
   android:

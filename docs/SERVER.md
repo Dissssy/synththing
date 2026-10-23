@@ -1,8 +1,8 @@
 # The script library: `synththing serve`
 
-A design for sharing visualizer scripts: servers anyone can run that hold uploaded scripts, and a Library in the app to browse, install, publish and update them. One official server (synththing.p51.nl), plus any self-hosted ones the user adds. Nothing here is built yet; this is the plan to build from, in the order at the end.
+How sharing visualizer scripts works: servers anyone can run that hold uploaded scripts, and a Library in the app to browse, install, publish and update them. One official server (synththing.p51.nl), plus any self-hosted ones the user adds. The same server also signs devices in, syncs them and relays songs between them (Signing in another device, Sync). It's all built; the order it was built in is at the end. How to run one is docs/DEPLOY.md.
 
-Not covered: the local API for editing scripts in VS Code. That's the app talking to an editor on the same machine, a separate piece (see TODO).
+Not covered: the app's own local API, for programs on the same computer (docs/API.md).
 
 ## Goals
 
@@ -128,7 +128,7 @@ Rendered by the server on each upload and each new version, through a queue (one
 
 - **Admins** are keys listed by the server (added with `synththing admin add-admin <id>`), and the server's own key.
 - One endpoint, `POST /api/v1/admin`, signed by an admin, takes an action (`AdminAction`): reports, a script's extra metadata (uploader key and addresses, versions, its reports) and source (hidden or not), hide, unhide, delete, ban (a key or an address, for a while or for good, optionally hiding everything the key uploaded), unban, bans, add-admin, remove-admin, admins, resolve, feedback, feedback-done.
-- **`synththing admin <command>`** on the server sends those, signed with the server's own key from its data folder, to the running server at its configured address: it works from SSH, under systemd, and in Docker (`docker exec <container> synththing admin ...`). Still to come: `update`.
+- **`synththing admin <command>`** on the server sends those, signed with the server's own key from its data folder, to the running server at its configured address: it works from SSH, under systemd, and in Docker (`docker exec <container> synththing admin ...`), and `update` asks it to update itself (Hosting, below).
 - **Moderation** in the app's Library tab, for admin keys: reports with the lines they point at highlighted in the code and the sprites drawn, and the actions above, signed with the admin's key.
 - **Web admin panel**: parked. Moderation in the app does the job and stays in step with it; if the app ever builds for the web (egui runs in a browser, see TODO), that's the web version.
 - **Rules** and a contact address in `/api/v1/info` (contact@p51.nl on the official server), for reports and takedown requests.
@@ -193,8 +193,7 @@ GET  /api/v1/scripts/{id}/preview.png     the still
 GET  /api/v1/scripts/{id}/preview-sheet.png
 GET  /api/v1/previews/{sha256}/preview.png  the still of the version whose source has that SHA-256
 GET  /api/v1/previews/{sha256}/preview-sheet.png
-POST /api/v1/scripts                      upload
-POST /api/v1/scripts/{id}/versions        new version (owner)
+POST /api/v1/scripts                      upload (signed with a slug its author used before: a new version of that script)
 DELETE /api/v1/scripts/{id}               owner or admin
 POST /api/v1/scripts/{id}/encore          (and DELETE to take it back)
 POST /api/v1/scripts/{id}/report
@@ -203,6 +202,8 @@ GET  /api/v1/intake                       feedback waiting to be filed (the inta
 POST /api/v1/intake/taken                 mark it filed (the intake token)
 POST /api/v1/admin                        an admin action (signed by an admin)
 GET  /api/v1/users/{id}                   names, uploads, total encores
+GET  /api/v1/users/{id}/scripts/{slug}    a script by its author and slug
+GET  /api/v1/documents/{slug}             one of the server's documents (EULA, privacy policy)
 POST /api/v1/notices                     signed: a copyright notice (takes the item down at once)
 POST /api/v1/notices/{id}                signed: the notice, for its uploader or claimant
 POST /api/v1/notices/{id}/dispute        signed: the uploader's counter-notice
@@ -222,6 +223,8 @@ POST /api/v1/identity/apply               present rotation records (any server)
 POST /api/v1/pair                         signed: park a sealed sign-in handoff
 POST /api/v1/pair/{id}                    signed by the key that parked it: whether it's been taken, and by which device
 POST /api/v1/pair/{id}/take               the handoff, once (and the taking device's name)
+GET  /pair                                where a sign-in link lands outside the app
+GET  /.well-known/assetlinks.json         lets Android open sign-in links in the app (with android_fingerprints)
 POST /api/v1/sync/{name}                  signed: write synced data made from a revision (servers with "sync": true)
 POST /api/v1/sync/{name}/get              signed: read synced data and its revision
 POST /api/v1/relay/inbox/{inbox}          signed: listen for a song streamed to this device (servers with "sync": true)
@@ -242,7 +245,7 @@ Errors are JSON (`{ "error": "...", "retry_after": ... }`). Requests are signed 
 
 - **Servers** (Preferences): the official server, always listed, can be turned off but not removed; others added by URL, each turned on or off, showing what it requires (signed only, its license).
 - **Library tab**: browse and search all enabled servers (or one), by category and tag, sorted by newest or most encores; a script's page shows its animated preview, description, author, versions, remixes and encores; Install, Encore, Report.
-- The app only contacts a server while the Library is open, when publishing, or when asked to check installed scripts for updates. Never on its own at launch.
+- For scripts, the app only contacts a server while the Library is open, when publishing, or when asked to check installed scripts for updates. With an identity, the notifications stream (on unless turned off) and sync (when it's on) talk to it on their own, from launch.
 - **Installing** saves the `.lua` to the scripts folder with a sidecar (`<script>.lua.source.json`: server, ID, version, the installed source's hash) and caches its preview, description and category.
 - **Updating** (on request, "Check for updates"): if the script was changed since it was installed, the app says so and shows a diff before overwriting. **Restore original** puts back the installed version, like Restore default for bundled scripts, and only shows when there's something to restore.
 - **Publishing** ("Publish..." by the script picker): name, description, category, tags, the name to post under, which server; the license; the minimum app version it worked out. If the user's settings differ from the script's defaults, it offers to add them as a preset (below).
@@ -256,23 +259,20 @@ Errors are JSON (`{ "error": "...", "retry_after": ... }`). Requests are signed 
 
 ## Hosting
 
-- **The official server**: the Linux release binary on a Hetzner VPS (Ubuntu 24.04, glibc 2.39; the binary is built against 2.35), as a systemd service, data in `/var/lib/synththing`, behind Caddy:
-
-  ```
-  synththing.p51.nl {
-      reverse_proxy localhost:<port>
-  }
-  ```
+- **The official server**: the Linux release binary on a Hetzner VPS (Ubuntu 24.04, glibc 2.39; the binary is built against 2.35), as a systemd service, data in `/var/lib/synththing`, behind Caddy, which also serves the website and these docs (docs/DEPLOY.md, The official server).
 
 - **Docker**: an image with the binary, the data folder as a volume, and the admin command through `docker exec`.
 - **Updating** (`server/update.rs`): the Moderation window's Server tab (and `synththing admin update --check`) says which version's running and which is the newest release. The server knows how it's run (Docker, systemd or by hand): under Docker it says to pull the new image; run by hand, an admin's Update downloads and checks the new binary (the app's updater code), swaps it in, starts the new version and exits; under systemd, where the service can't write its own binary, it leaves `update.request` in its data folder, and `synththing-update.path` starts the root-run update script (which also runs hourly from its timer on the official server). Database migrations run forward-only at startup.
 
-## Build order
+## How it was built
+
+In this order:
+
 
 1. **Basics**: `serve` with open uploads, listing, search, download, server keys; the Library tab (browse, install with sidecar), Servers in Preferences.
 2. **Identity**: keys, signed requests, ownership (versions, delete), user pages, export/import, receipts.
 3. **Previews**: the queue, frame scoring, sprite sheets; the picker's sidebar.
-4. **Encores, reports and moderation**: `synththing admin`, the admin tab, bans, rate limits, proof-of-work.
+4. **Encores, reports and moderation**: `synththing admin`, the admin tab, bans, rate limits.
 5. **Publishing extras**: remixes, copy detection, minimum app version (`HOST_API` versions), presets.
 6. **Updates and diffs** for installed scripts.
 7. **Authorities**: rotation records, applying them, email attach and recovery.

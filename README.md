@@ -1,8 +1,14 @@
 # synththing
 
-A MIDI and audio player for Windows with a visualizer you can script in Lua.
+A music player for Windows (with Linux and Android builds, both experimental) that keeps your whole library, MIDI included, tidy and in step across your devices, with a visualizer you can script in Lua. What it does, in plain words: [synththing.p51.nl](https://synththing.p51.nl). The technical docs: [synththing.p51.nl/docs](https://synththing.p51.nl/docs/) (the same as the `docs` folder).
 
-- Plays MIDI files through any SoundFont (`.sf2`), and audio files (MP3, WAV, OGG, Opus, FLAC, M4A/AAC/ALAC, AIFF, WMA, and more through ffmpeg).
+- Plays audio files (MP3, WAV, OGG, Opus, FLAC, M4A/AAC/ALAC, AIFF, WMA, and more through ffmpeg) and MIDI files through any SoundFont (`.sf2`).
+- A song library: synththing keeps its own copy of each song, with columns to sort and group by, your own colored tags, starred songs, album art, and a search that takes filters (`artist:nujabes year:>2000 -type:mid`).
+- Smart playlists from rules, and Groupings: a page for every album, artist, genre or anything else a ruleset splits by. An Up next queue for what plays next.
+- Song details you can edit, one song or many at once, with Clean up suggestions (artists in one, names spelled two ways, track numbers in titles) and a background lookup on MusicBrainz that fills in what's missing and finds album covers.
+- Sign in with a QR code, and your settings, playlists and songs sync between your devices, encrypted on the device so the server can't read them.
+- Every action has a keyboard shortcut you can change, a command palette (Ctrl+Shift+P), and the system's media keys and controls work.
+- A local API for your own programs: see and control what's playing, edit playlists, and stream the visualizer into OBS (docs/API.md).
 - Playlists: build them by dragging songs or whole folders in, reorder, shuffle and loop, give MIDI tracks their own soundfont, import and export `.m3u`.
 - A visualizer driven by Lua scripts: waveform, spectrum, piano roll, spectrogram, and games that play along: a Guitar Hero style highway charted from any song, a snake game, a platformer, and a piano you can play on with your keyboard. Write your own with a live-reloading editor: scripts can take mouse, keyboard and game controller input (with rebindable controls), take typed text, and play notes on the song's instruments, in a window or fullscreen.
 - A sprite editor for the pixel art scripts draw: paint, fill, lines, rectangles, flips, palettes and sprite sheets, written straight back into the script.
@@ -49,8 +55,14 @@ The View menu shows and hides each section; drag tabs around to arrange them how
 | F9 | Start / stop recording the visualizer |
 | F10 | Pause / resume the recording |
 | Esc | Back to windowed |
+| Shift+Left / Right | Seek 30 seconds |
+| Ctrl+Shift+P | Command palette: everything the app can do, by name |
+| Ctrl+G, then a letter | Go to a tab (S Songs, G Groupings, U Up next, F Soundfonts, V Visualizer, E Script Editor...): the popup after Ctrl+G lists them |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
 
-In the Songs, Soundfonts and Playlists lists: click to play or open (the selection stays as it is), Ctrl+click and Shift+click to select, Ctrl+A selects all, Esc (or the ✕ under the list) selects none, and drag the selection (from Songs onto a playlist, or within a playlist to reorder it). Delete removes the selection from a playlist or the soundfont list, or (asking first) from the library. Right-click a row for more.
+Preferences > Keyboard changes any of them (and they sync with your other devices).
+
+In the Songs, Groupings, Up next and Soundfonts lists: click to play or open (the selection stays as it is), Up/Down, Page Up/Down and Home/End to move (Shift to select as you go) and Enter to play, Ctrl+click and Shift+click to select, Ctrl+A selects all, Esc (or the ✕ under the list) selects none, and drag the selection (from Songs onto a playlist, or within a playlist to reorder it). Delete removes the selection from a playlist or the soundfont list, or (asking first) from the library. Right-click a row for more.
 
 ## Visualizer scripts
 
@@ -68,13 +80,15 @@ synththing run-script my_script.lua --song song.mid
 
 ## Where things are kept
 
-Everything lives in `%APPDATA%\synththing\config`:
+Everything lives in `%APPDATA%\synththing\config` (`~/.config/synththing` on Linux; Preferences > App > Storage shows how much each part takes):
 
-- `soundfonts.json`: settings, the soundfont list, the layout
-- `visualizers\`: scripts, plus each script's settings (`.settings.json`) and saved data (`.store.json`)
+- `soundfonts.json`: settings (your own themes included), the soundfont list, the layout
+- `music\`: the song library: each song named by its contents, and `library.json` with their details, tags and stars
 - `playlists\`: one file per playlist
-- `themes\`: your own themes, one file each (colors as `#rrggbb`)
+- `visualizers\`: scripts, plus each script's settings (`.settings.json`) and saved data (`.store.json`)
 - `soundfonts\`: the starter pack's soundfonts
+- `art\`, `musicbrainz\` and `lookup.json`: album covers and details found online, and what the lookup has matched
+- `identity.key`, `sync.key` and `device.json`: who you are online and on which device (back them up with Preferences > Online Library > Export)
 - `synththing.log`: the app's log (also under Help > Log...); the previous run's is `synththing.prev.log`
 
 ## Building from source

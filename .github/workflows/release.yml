@@ -118,6 +118,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" synththing-android-arm64.apk
 
+  # The docs as a website (book.toml), added to the release as
+  # synththing-docs.tar.gz; the official server's update script puts them
+  # at synththing.p51.nl/docs/ (docs/DEPLOY.md).
+  docs:
+    needs: windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.4.40
+
+      - name: Build
+        run: mdbook build
+
+      - name: Add to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tar -czf synththing-docs.tar.gz -C target/book .
+          gh release upload "$GITHUB_REF_NAME" synththing-docs.tar.gz
+
   # The server's container image (docs/DEPLOY.md): the Linux build just
   # added, in deploy/release.Dockerfile's runtime, pushed to
   # ghcr.io/<owner>/synththing as :<version> and :latest.

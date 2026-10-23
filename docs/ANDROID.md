@@ -1,12 +1,12 @@
 # synththing on Android
 
-An experimental Android app (issue #27): the same Rust app, with a mobile layout made for a phone. It's on GitHub only (no Play Store): each release has `synththing-android-arm64.apk`, and the `nightly` canary has one too, once the release key is set up (section 4).
+An experimental Android app (issue #27): the same Rust app, with a mobile layout made for a phone. It's on GitHub only (no Play Store): each release has `synththing-android-arm64.apk`, and the `nightly` canary has one too.
 
-Status: it builds (CI's `android` job) and the Rust side cross-compiles cleanly, but nobody has run it on a phone yet. Try it, and work through section 6.
+Status: it's in use on phones, and CI's `android` job keeps it building. Section 6 is what to check on a phone after a change that touches it.
 
 ## 1. What it is
 
-- **The mobile layout.** One page at a time: Now playing (the visualizer, with the controls under it), Songs, Soundfonts, Playlists, Visualizers, Library and Downloads, from the menu at the top left. The chevron next to the time collapses the controls so the visualizer fills the screen. On Android it's always on. On desktop it's View > Mobile layout (and "Desktop layout" in its menu goes back), so it can be tried and tested without a phone: branch builds have it too, and testers of a branch that touches it should check both layouts.
+- **The mobile layout.** One page at a time: Now playing (the visualizer, with the controls under it), Songs, your playlists and each ruleset's (as in Groupings), Soundfonts, Visualizers and Library, from the menu at the top left. The chevron next to the time collapses the controls so the visualizer fills the screen. On Android it's always on. On desktop it's View > Mobile layout (and "Desktop layout" in its menu goes back), so it can be tried and tested without a phone: branch builds have it too, and testers of a branch that touches it should check both layouts.
 - **Back.** Android's back (button or gesture), and Escape on desktop, goes back a step at a time: it closes a dialog or popup, then the menu, then a Preferences section, then full screen, then any page but Now playing. On Now playing, back says "Back again to leave synththing", and a second back puts the app in the background (playback carries on). `mobile_back` in `src/app/mobile.rs`; a new screen that needs its own step adds it there.
 - **Preferences as a page.** The menu's Preferences opens a page listing the sections (`src/app/preferences.rs`, the same sections and order as the desktop's Preferences window); each opens in its place, with a back arrow.
 - **Importing instead of browsing.** Android apps can't wander the file system, so Songs and Soundfonts import instead: Android's file picker, and the files are copied into the app (the song library in its `music` folder, and `soundfonts`). The desktop's Songs tab is the same library, so it works the same everywhere.
@@ -46,9 +46,9 @@ Without the release key, that's signed with your debug key, and as it can never 
 
 CI does the same in `.github/actions/android-apk`, which `ci.yml` (every pull request), `test-builds.yml` (the nightly and branch builds) and `release.yml` share. It pins the SDK packages and NDK (27.2.12479018) with setup-android. The jobs run on the self-hosted runner when the `RUNNER` repository variable names one (not for pull requests from forks), and on GitHub's otherwise; the runner keeps the SDK, Gradle's caches, the JDK and cargo's builds on volumes, so the GitHub caches are skipped there.
 
-## 4. The release key (needs doing once)
+## 4. The release key
 
-Android installs an update only when it's signed with the same key as what's installed, so every published APK must have one key, kept for good: lose it and everyone has to uninstall and reinstall. Until it's set up, CI builds the APK but publishes none.
+It's set up (the `ANDROID_*` secrets below); this is how, should it ever need doing again. Android installs an update only when it's signed with the same key as what's installed, so every published APK must have one key, kept for good: lose it and everyone has to uninstall and reinstall. Until it's set up, CI builds the APK but publishes none.
 
 1. Make it (keep the file and both passwords somewhere safe):
    ```
