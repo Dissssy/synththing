@@ -100,9 +100,6 @@ pub struct Config {
     /// channel's instrument, instead of numbered checkboxes.
     #[serde(default)]
     pub channel_chips: bool,
-    /// Preference: list audio files (MP3, WAV, ...) as songs, not only MIDI.
-    #[serde(default)]
-    pub show_audio_files: bool,
     /// The Songs list's columns, sorting and grouping.
     #[serde(default)]
     pub songs_view: crate::song_list::View,

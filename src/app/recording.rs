@@ -27,8 +27,6 @@ use eframe::egui::TextureHandle;
 
 use eframe::egui;
 
-#[cfg(not(target_os = "android"))]
-use super::listed_song_extensions;
 use super::{is_midi_path, open_in_file_manager, App};
 use crate::config::nice_name;
 use crate::audio::AudioCommand;
@@ -1194,7 +1192,7 @@ impl App {
         #[cfg(not(target_os = "android"))]
         if choose_song
             && let Some(path) = rfd::FileDialog::new()
-                .add_filter("Songs", listed_song_extensions(&self.config))
+                .add_filter("Songs", super::SONG_EXTENSIONS)
                 .pick_file()
         {
             draft.song = Some(path);
