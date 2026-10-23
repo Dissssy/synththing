@@ -4022,7 +4022,9 @@ impl App {
         frame_timing::time("poll_sync", || self.poll_sync());
         frame_timing::time("lookup_tick", || self.lookup_tick(ctx));
         frame_timing::time("api_tick", || self.api_tick(ctx, &view));
-        let on_screen = ui_ran && self.visualizer_was_drawn;
+        // (Minimized, eframe still draws the window, but only 10 times a
+        // second.)
+        let on_screen = ui_ran && self.visualizer_was_drawn && !self.minimized;
         frame_timing::time("api_stream_unseen", || self.api_stream_unseen(ctx, on_screen, &view));
         if self.songs_moving().is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));

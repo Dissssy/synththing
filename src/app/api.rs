@@ -822,8 +822,8 @@ impl App {
     }
 
     /// Keep the visualizer running for whoever's watching it while it isn't
-    /// on screen (`on_screen`: it was drawn last frame): its tab hidden or
-    /// closed, the window minimized or in the tray. A thread of its own
+    /// on screen (`on_screen`: drawn last frame, and not minimized): its tab
+    /// hidden or closed, the window minimized or in the tray. A thread of its own
     /// draws it then, since the window itself only gets 10 frames a second
     /// while minimized or hidden; the app passes it what it can't see for
     /// itself and carries out what the script asks for.
