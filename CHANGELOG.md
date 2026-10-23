@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- A local API for your own integrations (Preferences > Integrations, desktop only, off by default): programs on this computer can see what's playing, search your songs and playlists, follow events (song changed, paused, seeked, library changed) and run any command the keyboard can, including new Play and Pause commands. Each program gets its own token, allowed to read, control or both. See docs/API.md.
+
 ## 1.3.1 (2026-10-21)
 
 ### Added

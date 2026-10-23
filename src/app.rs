@@ -7,6 +7,7 @@
 //! around, split, float them out into windows. Closing a tab only hides that
 //! section; the View menu brings it back (see `layout.rs` for where).
 
+mod api;
 mod autoplay;
 mod branding;
 mod close;
@@ -580,6 +581,8 @@ pub struct App {
     tray_panel: tray_panel::TrayPanel,
     /// The window's hidden in the tray.
     hidden: bool,
+    /// The local app API's server and what it last told of.
+    api: api::ApiState,
     /// Quit was decided: the next close goes through.
     quitting: bool,
     /// A question closing asks first (the first close; a recording on).
@@ -807,6 +810,7 @@ impl App {
             second_launch: None,
             tray_panel: tray_panel::TrayPanel::new(picture),
             hidden: false,
+            api: api::ApiState::default(),
             quitting: false,
             close_prompt: None,
             set_aside: Vec::new(),
@@ -3417,6 +3421,11 @@ impl App {
     fn run_command(&mut self, ctx: &egui::Context, command: Command, view: &EngineView) {
         match command {
             Command::TogglePause => self.send(AudioCommand::TogglePause),
+            Command::Play | Command::Pause => {
+                if view.paused == (command == Command::Play) {
+                    self.send(AudioCommand::TogglePause);
+                }
+            }
             Command::SeekBack => self.send(AudioCommand::SeekRelative(-5.0)),
             Command::SeekForward => self.send(AudioCommand::SeekRelative(5.0)),
             Command::RestartSong => self.send(AudioCommand::Seek(0.0)),
@@ -3948,6 +3957,7 @@ impl App {
         frame_timing::time("poll_notifications", || self.poll_notifications(ctx));
         frame_timing::time("poll_sync", || self.poll_sync());
         frame_timing::time("lookup_tick", || self.lookup_tick());
+        frame_timing::time("api_tick", || self.api_tick(ctx, &view));
         if self.songs_moving().is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }

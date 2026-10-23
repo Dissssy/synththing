@@ -17,6 +17,7 @@
 #![cfg_attr(target_os = "android", allow(dead_code))]
 
 mod album_art;
+mod api;
 mod app;
 #[cfg(any(target_os = "android", test))]
 mod android_id;
