@@ -190,6 +190,9 @@ pub struct Config {
     /// starred songs (one picked by hand still plays).
     #[serde(default)]
     pub only_starred: bool,
+    /// Preference: where songs dropped on the window go, after the library.
+    #[serde(default)]
+    pub dropped_songs: DroppedSongs,
     /// Preference: how many letters (1 to 4) a tile without art shows of
     /// its name (`album_art`; `None`: 2).
     #[serde(default)]
@@ -259,6 +262,30 @@ impl MiniPlayerShape {
             Self::Square => "Square",
             Self::Wide => "Wide (16:9)",
             Self::Tall => "Tall (9:16)",
+        }
+    }
+}
+
+/// Where songs dropped on the window go once they're in the library.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DroppedSongs {
+    /// Only the library (and the playlist on screen, if one is).
+    #[default]
+    Import,
+    /// The end of the queue.
+    AddToQueue,
+    /// The front of the queue.
+    PlayNext,
+}
+
+impl DroppedSongs {
+    pub const ALL: [Self; 3] = [Self::Import, Self::AddToQueue, Self::PlayNext];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Import => "Just import",
+            Self::AddToQueue => "Add to the queue",
+            Self::PlayNext => "Play next",
         }
     }
 }
