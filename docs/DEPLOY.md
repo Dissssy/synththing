@@ -166,6 +166,8 @@ synththing.p51.nl {
 
 The update script keeps it at the newest release's copy once `/var/www/synththing` exists, so update the page in the repo when a release adds something worth telling people about.
 
+The docs are at `/docs/` beside it: this folder's Markdown, rendered by [mdBook](https://rust-lang.github.io/mdBook/) (`book.toml`, with `docs/SUMMARY.md` as the table of contents). Each release carries them as `synththing-docs.tar.gz`, and the update script unpacks the newest into `/var/www/synththing/docs/`. To see them locally: `mdbook serve --open`. A new page goes in `docs/SUMMARY.md` too.
+
 Its EULA and privacy policy are `deploy/official/eula.md` and `privacy.md`, copied to `/var/lib/synththing/` and listed in its `server.json`:
 
 ```json

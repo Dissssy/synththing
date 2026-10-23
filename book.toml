@@ -1,0 +1,13 @@
+# The developer docs as a website (synththing.p51.nl/docs/): docs/ rendered
+# by mdBook. docs/SUMMARY.md is its table of contents.
+[book]
+title = "synththing docs"
+src = "docs"
+
+[build]
+build-dir = "target/book"
+
+[output.html]
+site-url = "/docs/"
+git-repository-url = "https://github.com/Dissssy/synththing"
+edit-url-template = "https://github.com/Dissssy/synththing/edit/master/{path}"
