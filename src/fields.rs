@@ -84,6 +84,8 @@ pub enum Field {
     /// say.
     #[serde(rename = "musicbrainz_release")]
     MusicBrainzRelease,
+    /// The program that added it through the local API (`api.rs`).
+    AddedBy,
 }
 
 /// Where Song info shows an editable field.
@@ -181,6 +183,7 @@ pub const FIELDS: &[Def] = &[
     def(Field::SkipShuffle, "skip_shuffle", "Skip when shuffling", Kind::Flag, true, 0.0, false, &[], true),
     def(Field::RememberPosition, "remember_position", "Remember position", Kind::Flag, true, 0.0, false, &[], true),
     def(Field::MusicBrainzRelease, "musicbrainz_release", "MusicBrainz release", Kind::Text, true, 0.0, false, &[], false),
+    def(Field::AddedBy, "added_by", "Added by", Kind::Text, true, 120.0, true, &[], false),
 ];
 
 impl Def {
@@ -293,6 +296,8 @@ pub struct Facts<'a> {
     pub tags: &'a [String],
     /// What the user says of it over what its file does.
     pub edits: Option<&'a Edits>,
+    /// The program that added it through the local API, if one did.
+    pub added_by: Option<&'a str>,
 }
 
 /// A song's edits (in the synced library, `song_store::Song::edits`): an
@@ -303,7 +308,7 @@ pub type Edits = BTreeMap<Field, String>;
 impl<'a> Facts<'a> {
     /// A song in the library, as every device knows it.
     pub fn of(song: &'a song_store::Song) -> Self {
-        Self { file_name: &song.name, meta: song.meta.as_ref(), info: None, imported: Some(song.imported), tags: &song.tags, edits: Some(&song.edits) }
+        Self { file_name: &song.name, meta: song.meta.as_ref(), info: None, imported: Some(song.imported), tags: &song.tags, edits: Some(&song.edits), added_by: song.added_by.as_deref() }
     }
 
     /// What the song's edits say `field` is, if they do.
@@ -343,6 +348,7 @@ impl<'a> Facts<'a> {
             Field::MusicBrainzRelease => text(meta.map(|m| &m.musicbrainz_release)),
             Field::FileName => Some(Cow::Borrowed(Path::new(self.file_name).file_stem().and_then(|s| s.to_str()).unwrap_or(self.file_name))),
             Field::FileExtension => Path::new(self.file_name).extension().map(|e| Cow::Owned(e.to_string_lossy().to_lowercase())),
+            Field::AddedBy => self.added_by.map(Cow::Borrowed),
             _ => None,
         }?;
         match value {
@@ -574,7 +580,7 @@ mod tests {
     fn facts_give_each_field() {
         let meta = Meta { title: Some(" Song ".into()), artist: Some(String::new()), track: Some(3), length: Some(83.0), size: 4_200_000, ..Meta::default() };
         let tags = vec![STARRED.to_string()];
-        let facts = Facts { file_name: "03 Song.MP3", meta: Some(&meta), info: None, imported: Some(86_400), tags: &tags, edits: None };
+        let facts = Facts { file_name: "03 Song.MP3", meta: Some(&meta), info: None, imported: Some(86_400), tags: &tags, edits: None, added_by: None };
         assert_eq!(facts.text(Field::Title).as_deref(), Some("Song"));
         assert_eq!(facts.text(Field::Artist), None, "empty is none");
         assert_eq!(facts.text(Field::FileName).as_deref(), Some("03 Song"));

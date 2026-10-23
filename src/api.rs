@@ -14,7 +14,7 @@
 //! Events go out as Server-Sent Events to every open stream.
 
 use std::collections::HashMap;
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
 use std::net::SocketAddr;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
@@ -27,7 +27,7 @@ use tiny_http::{Header, Method, Request, Response};
 
 use crate::commands::Command;
 use crate::fields::{Facts, Field};
-use crate::song_store::{self, Song, SongStore};
+use crate::song_store::{self, Song, SongStore, Stored};
 
 /// The port it listens on unless it's given another.
 pub const DEFAULT_PORT: u16 = 7340;
@@ -41,6 +41,8 @@ const KEEP_ALIVE: Duration = Duration::from_secs(25);
 const APP_WAIT: Duration = Duration::from_secs(5);
 /// Songs in one page of a list, unless the request asks for fewer.
 const MOST_SONGS: usize = 500;
+/// The largest song a program can send (as the relay's limit).
+const LARGEST_SONG: usize = 250 << 20;
 
 /// The API's preferences (`Config::api`), kept on this device only.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -74,6 +76,9 @@ pub struct Access {
     pub token: String,
     pub read: bool,
     pub control: bool,
+    /// May add songs to the library (`POST /v1/songs`). Never on unless
+    /// the user ticks it.
+    pub add_songs: bool,
 }
 
 impl Access {
@@ -83,7 +88,7 @@ impl Access {
         let mut bytes = [0u8; 24];
         getrandom::fill(&mut bytes).expect("the OS's random numbers");
         let token = format!("st_{}", crate::library::hex(&bytes));
-        let access = Access { name: name.to_string(), token: crate::library::sha256_hex(token.as_bytes()), read: true, control: false };
+        let access = Access { name: name.to_string(), token: crate::library::sha256_hex(token.as_bytes()), read: true, control: false, add_songs: false };
         (access, token)
     }
 }
@@ -95,6 +100,14 @@ pub enum Call {
     NowPlaying(Sender<NowPlaying>),
     /// A copy of the library and its playlists, to search.
     Library(Sender<Library>),
+    /// A song a program sent (`program`, by its name), already in the
+    /// store's folder, to add to the library: the song, and whether it's
+    /// new to the library (only then is it marked as the program's).
+    Add {
+        stored: Stored,
+        program: String,
+        reply: Sender<Result<(SongInfo, bool), String>>,
+    },
 }
 
 /// What's playing, as `GET /v1/now-playing` and the `now_playing` event
@@ -154,6 +167,8 @@ pub struct SongInfo {
     pub tags: Vec<String>,
     /// When it came into the library (Unix seconds).
     pub imported: i64,
+    /// The program that added it through this API, if one did.
+    pub added_by: Option<String>,
 }
 
 impl SongInfo {
@@ -174,6 +189,7 @@ impl SongInfo {
             starred: facts.starred(),
             tags: song.tags.iter().filter_map(|id| store.tags().get(id)).map(|t| t.name.clone()).collect(),
             imported: song.imported,
+            added_by: song.added_by.clone(),
         }
     }
 }
@@ -302,7 +318,7 @@ fn ask<T>(shared: &Shared, call: impl FnOnce(Sender<T>) -> Call) -> Result<T, Re
     rx.recv_timeout(APP_WAIT).map_err(|_| error(503, "synththing didn't answer in time"))
 }
 
-fn handle(shared: &Arc<Shared>, request: Request) {
+fn handle(shared: &Arc<Shared>, mut request: Request) {
     let url = request.url().to_string();
     let (path, query) = url.split_once('?').unwrap_or((&url, ""));
     let query = crate::library::server::parse_query(query);
@@ -321,6 +337,7 @@ fn handle(shared: &Arc<Shared>, request: Request) {
                 "version": crate::build_info::VERSION,
                 "read": access.read,
                 "control": access.control,
+                "add_songs": access.add_songs,
             }),
         )),
         (Method::Get, ["v1", "events"]) => match needs(access.read, "read") {
@@ -348,6 +365,10 @@ fn handle(shared: &Arc<Shared>, request: Request) {
         (Method::Get, ["v1", "songs"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| songs(&library.store, &query))))
         }
+        (Method::Post, ["v1", "songs"]) => Some(match needs(access.add_songs, "add songs") {
+            Some(reply) => reply,
+            None => add_song(shared, &mut request, &access, &query),
+        }),
         (Method::Get, ["v1", "songs", key]) => Some(needs(access.read, "read").unwrap_or_else(|| {
             ask(shared, Call::Library).map_or_else(
                 |reply| reply,
@@ -363,6 +384,37 @@ fn handle(shared: &Arc<Shared>, request: Request) {
         _ => None,
     };
     let _ = request.respond(reply.unwrap_or_else(|| error(404, "no such request (see docs/API.md)")));
+}
+
+/// `POST /v1/songs?name=<file name>`, the file as the body: into the
+/// store, then the library (`Call::Add`). 201 with the song if it's new to
+/// the library, 200 if it was there already.
+fn add_song(shared: &Shared, request: &mut Request, access: &Access, query: &HashMap<String, String>) -> Reply {
+    let Some(name) = query.get("name").map(|n| n.trim()).filter(|n| !n.is_empty() && !n.contains(['/', '\\'])) else {
+        return error(400, "say the song's file name: ?name=Song.mp3");
+    };
+    if !song_store::takes(std::path::Path::new(name), crate::app::SONG_EXTENSIONS) {
+        return error(415, format!("{name} isn't a file synththing can play"));
+    }
+    if request.body_length().is_some_and(|n| n > LARGEST_SONG) {
+        return error(413, "that song is too big (250 MB at most)");
+    }
+    let mut bytes = Vec::new();
+    match request.as_reader().take(LARGEST_SONG as u64 + 1).read_to_end(&mut bytes) {
+        Ok(_) if bytes.len() > LARGEST_SONG => return error(413, "that song is too big (250 MB at most)"),
+        Ok(_) if bytes.is_empty() => return error(400, "send the song's file as the body"),
+        Ok(_) => {}
+        Err(e) => return error(400, format!("couldn't read the song: {e}")),
+    }
+    let stored = match crate::config::music_dir().and_then(|dir| song_store::write_in(&bytes, name, &dir)) {
+        Ok(stored) => stored,
+        Err(e) => return error(500, format!("couldn't store the song: {e:#}")),
+    };
+    match ask(shared, |reply| Call::Add { stored, program: access.name.clone(), reply }) {
+        Ok(Ok((song, new))) => json(if new { 201 } else { 200 }, &song),
+        Ok(Err(why)) => error(503, why),
+        Err(reply) => reply,
+    }
 }
 
 #[derive(Serialize)]
@@ -475,6 +527,7 @@ mod tests {
                     Call::Command(_, reply) => reply.send(Ok(())).unwrap(),
                     Call::NowPlaying(reply) => reply.send(NowPlaying::default()).unwrap(),
                     Call::Library(reply) => reply.send(library()).unwrap(),
+                    Call::Add { .. } => unreachable!("no test adds songs here"),
                 }
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -527,6 +580,55 @@ mod tests {
         assert_eq!(one["total"], 1);
         assert_eq!(one["songs"][0]["file_name"], "Beta Theme.mid");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn songs_a_program_added_are_found_by_it() {
+        let dir = std::env::temp_dir().join(format!("synththing-api-added-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = SongStore::open(dir.clone());
+        let mine = song_store::write_in(b"one", "Mine.mid", &dir).unwrap();
+        let sent = song_store::write_in(b"two", "Sent.mid", &dir).unwrap();
+        let sent_key = sent.key.clone();
+        store.add(mine);
+        store.add(sent);
+        store.set_added_by(&sent_key, "downloader");
+        let found = matching(&store, "addedby:downloader");
+        assert_eq!(found.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), [sent_key.as_str()]);
+        assert_eq!(matching(&store, "-addedby:downloader").len(), 1);
+        assert_eq!(SongInfo::of(&sent_key, found[0].1, &store).added_by.as_deref(), Some("downloader"));
+        // (Synced: another device learns who added it.)
+        let other = std::env::temp_dir().join(format!("synththing-api-added-other-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&other);
+        std::fs::create_dir_all(&other).unwrap();
+        let mut elsewhere = SongStore::open(other.clone());
+        elsewhere.learn(store.known().map(|(k, s)| (k.to_string(), s.clone())));
+        assert_eq!(elsewhere.get_by_key(&sent_key).unwrap().added_by.as_deref(), Some("downloader"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn adding_songs_needs_its_own_permission() {
+        let (mut reader, read_token) = Access::new("reader");
+        reader.control = true;
+        let (mut adder, add_token) = Access::new("adder");
+        adder.add_songs = true;
+        let server = Server::start(0, vec![reader, adder], egui::Context::default()).unwrap();
+        let post = |query: &str, token: &str| {
+            agent()
+                .post(format!("http://{}/v1/songs{query}", server.addr()))
+                .header("Authorization", format!("Bearer {token}"))
+                .send(&b"MThd"[..])
+                .unwrap()
+                .status()
+                .as_u16()
+        };
+        assert_eq!(post("?name=Song.mid", &read_token), 403);
+        assert_eq!(post("", &add_token), 400);
+        assert_eq!(post("?name=notes.txt", &add_token), 415);
+        assert_eq!(post("?name=..%2Fescape.mid", &add_token), 400);
     }
 
     #[test]

@@ -8,7 +8,7 @@ Preferences > Integrations:
 
 1. Tick **Let programs on this computer use the API**. It listens on `127.0.0.1`, port 7340 unless you pick another. Nothing outside this computer can reach it.
 2. Type a name for your program and click **Add**. Copy the token it shows: only its hash is kept, so it isn't shown again (remove the program and add it again for a new one).
-3. Tick what that program may do: **Read** (the library, what's playing, events) and **Control** (run commands).
+3. Tick what that program may do: **Read** (the library, what's playing, events), **Control** (run commands) and **Add songs** (send songs into your library). Add songs is never on until you tick it.
 
 Send the token with every request:
 
@@ -28,6 +28,7 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 401 (n
 | `GET /v1/now-playing` | read | What's playing (below) |
 | `GET /v1/songs?q=&offset=&limit=` | read | `{"total", "songs": [...]}`: the songs `q` finds, by file name, at most 500 at a time |
 | `GET /v1/songs/{key}` | read | One song |
+| `POST /v1/songs?name=Song.mp3` | add songs | Adds the file sent as the body (up to 250 MB) to the library: 201 with the song if it's new, 200 if it was there already |
 | `GET /v1/playlists` | read | `[{"id", "name", "smart", "songs": [keys]}]` |
 | `GET /v1/commands` | read | `[{"id", "name"}]`: every command there is |
 | `POST /v1/commands/{id}` | control | Runs it: 204 when it ran |
@@ -40,7 +41,7 @@ A song:
 ```json
 {"key": "3f2a...", "file_name": "Overworld.mid", "title": "Overworld", "artist": "Koji Kondo",
  "album": null, "album_artist": null, "genre": null, "year": 1985, "track": 1, "length": 84.2,
- "starred": true, "tags": ["chill"], "imported": 1761000000}
+ "starred": true, "tags": ["chill"], "imported": 1761000000, "added_by": null}
 ```
 
 What's playing:
@@ -51,6 +52,10 @@ What's playing:
 ```
 
 Commands are the ones Preferences > Keyboard lists, by id: `play`, `pause`, `toggle_pause`, `next_track`, `previous_track`, `seek_back`, `seek_forward`, `restart_song`, `toggle_visualizer`, `toggle_fullscreen`, `go_to_songs` and so on. `GET /v1/commands` has them all.
+
+## Songs added by programs
+
+Every song a program adds that wasn't in your library yet is marked with that program's name (`added_by`), on all your devices. Search `addedby:name` in Songs to see them, or `-addedby:name` to leave them out. If a program fills your library with songs you don't want, Preferences > Integrations has **Remove the N songs it added...** beside it, which opens the usual Remove dialog (with "Remove from all my devices" when your library syncs). Removing the program itself only stops its token: its songs stay.
 
 ## Events
 
@@ -73,6 +78,7 @@ TOKEN=st_...
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7340/v1/now-playing
 curl -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7340/v1/commands/next_track
 curl -N -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7340/v1/events
+curl -H "Authorization: Bearer $TOKEN" --data-binary @Song.mp3 "http://127.0.0.1:7340/v1/songs?name=Song.mp3"
 ```
 
 On Windows PowerShell:

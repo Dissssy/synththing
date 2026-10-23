@@ -98,7 +98,7 @@ const VISUALIZER_HEIGHT: usize = 320;
 /// else is decoded as plain audio (rodio/symphonia, or ffmpeg for what they
 /// can't, figure out the actual format themselves; this list is just what
 /// shows up in the picker).
-const SONG_EXTENSIONS: &[&str] = &[
+pub(crate) const SONG_EXTENSIONS: &[&str] = &[
     "mid", "midi", "wav", "mp3", "ogg", "oga", "opus", "flac", "m4a", "aac", "aif", "aiff", "caf", "mka", "mp2", "wma", "ac3",
 ];
 const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];

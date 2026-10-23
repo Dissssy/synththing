@@ -85,11 +85,32 @@ impl App {
                 Call::NowPlaying(reply) => {
                     let _ = reply.send(self.api_now_playing(view));
                 }
+                Call::Add { stored, program, reply } => {
+                    let _ = reply.send(self.api_add(stored, &program));
+                }
                 Call::Library(reply) => {
                     let _ = reply.send(api::Library { store: self.songs.clone(), playlists: self.api_playlists() });
                 }
             }
         }
+    }
+
+    /// A song `program` sent, stored already, into the library: marked as
+    /// the program's if it's new there.
+    fn api_add(&mut self, stored: crate::song_store::Stored, program: &str) -> Result<(SongInfo, bool), String> {
+        // (The one-time import writes the library's index last: until
+        // then, nothing else may.)
+        if self.old_import.is_some() {
+            return Err("synththing is still setting up its library: try again in a moment".into());
+        }
+        let key = stored.key.clone();
+        let new = self.songs.get_by_key(&key).is_none();
+        self.add_to_library([stored]);
+        if new {
+            self.songs.set_added_by(&key, program);
+        }
+        let song = self.songs.get_by_key(&key).ok_or("the song didn't stay in the library")?;
+        Ok((SongInfo::of(&key, song, &self.songs), new))
     }
 
     /// Run `command` if it can run now.
@@ -292,17 +313,34 @@ impl App {
         if settings.apps.is_empty() {
             ui.weak("None yet. Add one below to get its token.");
         }
+        // (Each program's songs, by its name: what it added.)
+        let mut added: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+        for (key, song) in self.songs.known() {
+            if let Some(by) = &song.added_by {
+                added.entry(by.as_str()).or_default().push(key);
+            }
+        }
         let mut remove = None;
+        let mut remove_songs = None;
         for (i, app) in settings.apps.iter_mut().enumerate() {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(&app.name);
                 ui.checkbox(&mut app.read, "Read").on_hover_text("See the library, what's playing, and events");
                 ui.checkbox(&mut app.control, "Control").on_hover_text("Run commands: play, pause, next track...");
-                if ui.button("Remove").on_hover_text("Its token stops working").clicked() {
+                ui.checkbox(&mut app.add_songs, "Add songs")
+                    .on_hover_text("Send songs into your library. Each one is marked as this program's (search addedby:name)");
+                if ui.button("Remove").on_hover_text("Its token stops working. The songs it added stay").clicked() {
                     remove = Some(i);
                 }
             });
+            if let Some(keys) = added.get(app.name.as_str()) {
+                let plural = if keys.len() == 1 { "" } else { "s" };
+                if ui.button(format!("Remove the {} song{plural} {} added...", keys.len(), app.name)).clicked() {
+                    remove_songs = Some(keys.clone());
+                }
+            }
         }
+        let remove_songs: Option<Vec<std::path::PathBuf>> = remove_songs.map(|keys| keys.iter().map(|k| self.songs.path(k)).collect());
         if let Some(i) = remove {
             settings.apps.remove(i);
         }
@@ -327,6 +365,13 @@ impl App {
             });
         }
 
+        // (The usual Remove dialog, over the library, in place of
+        // Preferences.)
+        if let Some(paths) = remove_songs {
+            self.remove_songs = paths;
+            self.preferences_open = false;
+            self.api_preferences_closed();
+        }
         if self.config.api != before {
             if self.config.api.port() != before.port() {
                 self.api.failed = None;
