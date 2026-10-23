@@ -3670,13 +3670,13 @@ impl App {
     }
 
     /// Confine the cursor to the window while a script asks for it, but only
-    /// in the dedicated fullscreen, while the visualizer has focus and the
-    /// window is focused. Released the moment any of that stops being true
-    /// (Escape included), so a script can never trap the cursor.
+    /// while the visualizer has focus and the window is focused. Released the
+    /// moment either stops being true (Escape or a click elsewhere included),
+    /// so a script can never trap the cursor. `mouse_delta` is raw mouse
+    /// motion while focused, so turning doesn't stop at the window's edge.
     fn apply_cursor_confinement(&mut self, ctx: &egui::Context) {
         let window_focused = ctx.input(|i| i.focused);
-        let want = self.dedicated.is_some()
-            && self.visualizer_output.focused
+        let want = self.visualizer_output.focused
             && self.visualizer_output.cursor.confined
             && window_focused
             && !self.preferences_open;
@@ -3722,6 +3722,18 @@ impl App {
                 .clicked()
             {
                 self.restart_script();
+            }
+            if self.script.options().assets
+                && let Some(path) = self.active_script.and_then(|i| self.available_scripts.get(i))
+            {
+                let folder = lua_visualizer::assets_path(path);
+                if ui
+                    .add(icon_button("folder-open"))
+                    .on_hover_text(format!("Open the script's assets folder ({}), for the files it reads", folder.display()))
+                    .clicked()
+                {
+                    open_folder(&folder);
+                }
             }
             if visualizer {
                 self.tour.mark(tour::Target::ScriptPicker, picker.rect);
@@ -4813,6 +4825,21 @@ pub(super) fn chip(ui: &mut egui::Ui, text: &str, color: egui::Color32) -> egui:
         ui.painter().galley(rect.min + padding, galley, on_color(color));
     }
     response
+}
+
+/// Open the folder `dir` in the system file manager, making it first.
+fn open_folder(dir: &Path) {
+    let _ = std::fs::create_dir_all(dir);
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    if let Err(e) = std::process::Command::new(opener).arg(dir).spawn() {
+        log::warn!("couldn't open the file manager: {e}");
+    }
 }
 
 /// Show `path` in the system file manager (selected, on Windows).

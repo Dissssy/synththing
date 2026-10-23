@@ -1158,6 +1158,12 @@ pub const API_SINCE: &[(&str, &str)] = &[
     ("sprite", "0.1.8"),
     ("sprite_size", "0.1.8"),
     ("album_art", "1.5.0"),
+    ("blit", "1.5.0"),
+    ("read_asset", "1.5.0"),
+    ("list_assets", "1.5.0"),
+    ("midi_send", "1.5.0"),
+    ("sound_register", "1.5.0"),
+    ("sound_play", "1.5.0"),
     ("circle", "0.1.6"),
     ("triangle", "0.1.6"),
     ("polygon", "0.1.6"),
@@ -1274,6 +1280,7 @@ pub const OPTION_SINCE: &[(&str, &str)] = &[
     ("record_prepare", "0.4.0"),
     ("record_auto", "0.4.0"),
     ("transparent", "1.5.0"),
+    ("assets", "1.5.0"),
 ];
 
 /// The oldest synththing version that has everything `source` uses: the

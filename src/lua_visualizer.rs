@@ -108,7 +108,7 @@ use crate::midi_notes::NoteList;
 use crate::pixel_font;
 use crate::spectrum::{self, OnsetDetector, SpectrumAnalyzer};
 use crate::gamepad::{AXIS_NAMES, PadInput};
-use crate::live::{LiveCommand, LiveNote};
+use crate::live::{LiveCommand, LiveNote, Sound};
 use crate::playlist::LoopMode;
 use crate::typing::TypingSpan;
 use crate::visualizer::{
@@ -320,6 +320,7 @@ pub fn rename_script(old: &Path, new_name: &str) -> Result<PathBuf> {
         (sidecar_path(old), sidecar_path(&new)),
         (store_path(old), store_path(&new)),
         (controls_path(old), controls_path(&new)),
+        (assets_path(old), assets_path(&new)),
         (user_presets_path(old), user_presets_path(&new)),
         (crate::library::installed_path(old), crate::library::installed_path(&new)),
     ] {
@@ -428,6 +429,8 @@ enum DrawCommand {
         src: (usize, usize, usize, usize),
         colors: Option<Rc<[u32]>>,
     },
+    /// `blit`: a whole image of packed colors, stretched over `(x, y, w, h)`.
+    Image { image: Rc<Sprite>, x: f32, y: f32, w: f32, h: f32 },
 }
 
 /// A sprite a script registered: its palette-indexed image turned into
@@ -457,6 +460,15 @@ fn tint_color(color: u32, tint: u32) -> u32 {
 /// How long one run of a script's code (its top level when it loads, or
 /// one `render()` call) may take before the watchdog stops it, unless
 /// `set_watchdog_limit` says otherwise.
+/// The most pixels one `blit` may draw from (about 4K).
+const MAX_BLIT_PIXELS: usize = 3840 * 2160;
+/// The longest sound `sound_register` takes (about 3 minutes at 44.1 kHz)
+/// and how many a script may register.
+const MAX_SOUND_SAMPLES: usize = 8_000_000;
+const MAX_SOUNDS: usize = 1000;
+/// The biggest file `read_asset` reads.
+const MAX_ASSET_BYTES: u64 = 256 * 1024 * 1024;
+
 pub const WATCHDOG_LIMIT: Duration = Duration::from_secs(3);
 /// The most memory each script's Lua may use, in bytes (0: no limit).
 /// Set for the whole process by one that runs scripts it can't trust
@@ -1533,10 +1545,13 @@ pub struct ScriptOptions {
     /// of the clear color (whose alpha still fades the last frame), and
     /// `clear` keeps its color's alpha.
     pub transparent: bool,
+    /// It reads data files (`read_asset`): its assets folder is made, and
+    /// the bar above the visualizer has a button to open it.
+    pub assets: bool,
 }
 
 /// The `script_options` keys, for the error naming them.
-const SCRIPT_OPTIONS: &str = "start_paused, app_log, record_prepare, record_auto and transparent";
+const SCRIPT_OPTIONS: &str = "start_paused, app_log, record_prepare, record_auto, transparent and assets";
 
 /// What a script can see of the app's playback beyond the engine: the
 /// loop and shuffle modes, and the current playlist (read-only).
@@ -1631,6 +1646,14 @@ impl ScriptStore {
 fn store_path(script_path: &Path) -> PathBuf {
     let mut name = script_path.as_os_str().to_os_string();
     name.push(".store.json");
+    PathBuf::from(name)
+}
+
+/// `<script>.lua.assets`: a folder of the script's own data files, which
+/// it reads with `read_asset`.
+pub fn assets_path(script_path: &Path) -> PathBuf {
+    let mut name = script_path.as_os_str().to_os_string();
+    name.push(".assets");
     PathBuf::from(name)
 }
 
@@ -1830,6 +1853,8 @@ struct Compiled {
     cursor: Rc<RefCell<CursorRequest>>,
     playback_requests: Rc<RefCell<Vec<PlaybackRequest>>>,
     store: Rc<RefCell<ScriptStore>>,
+    /// The script's assets folder (`read_asset`), None for an unsaved script.
+    assets: Rc<RefCell<Option<PathBuf>>>,
     /// Sprites the script registered (`sprite_register`), per script.
     sprites: Rc<RefCell<Vec<Sprite>>>,
     /// Input actions (`input_register`) and their bindings.
@@ -1996,6 +2021,7 @@ impl LuaVisualizer {
         if let Some(compiled) = &self.compiled {
             compiled.store.borrow_mut().path = Some(store_path(&path));
             compiled.controls.borrow_mut().path = Some(controls_path(&path));
+            *compiled.assets.borrow_mut() = Some(assets_path(&path));
         }
         self.path = Some(path);
     }
@@ -2521,9 +2547,11 @@ fn compile(
     register_album_art(&lua, &sprites, song).map_err(|e| e.to_string())?;
     register_song_and_state(&lua, note_list, &playback_requests, &store, song).map_err(|e| e.to_string())?;
     let options: Rc<Cell<ScriptOptions>> = Rc::default();
+    let assets = Rc::new(RefCell::new(script_path.map(assets_path)));
     {
         let options = Rc::clone(&options);
         let log = Rc::clone(&log);
+        let assets = Rc::clone(&assets);
         lua.globals()
             .set(
                 "script_options",
@@ -2537,8 +2565,17 @@ fn compile(
                             ("record_prepare", Value::Boolean(on)) => set.record_prepare = on,
                             ("record_auto", Value::Boolean(on)) => set.record_auto = on,
                             ("transparent", Value::Boolean(on)) => set.transparent = on,
+                            ("assets", Value::Boolean(on)) => {
+                                set.assets = on;
+                                if let Some(dir) = assets.borrow().as_ref().filter(|_| on) {
+                                    fs::create_dir_all(dir).map_err(|e| {
+                                        mlua::Error::runtime(format!("script_options: making {}: {e}", dir.display()))
+                                    })?;
+                                }
+                            }
                             (
-                                name @ ("start_paused" | "app_log" | "record_prepare" | "record_auto" | "transparent"),
+                                name @ ("start_paused" | "app_log" | "record_prepare" | "record_auto" | "transparent"
+                                | "assets"),
                                 other,
                             ) => {
                                 return Err(mlua::Error::runtime(format!(
@@ -2564,6 +2601,7 @@ fn compile(
     register_timing_audio_shapes(&lua, note_list, playback, features, &commands).map_err(|e| e.to_string())?;
     register_color_helpers(&lua).map_err(|e| e.to_string())?;
     register_live_notes(&lua, notes, playback, note_list, live).map_err(|e| e.to_string())?;
+    register_assets(&lua, &assets).map_err(|e| e.to_string())?;
 
     let host_globals: HashSet<String> = lua
         .globals()
@@ -2600,6 +2638,7 @@ fn compile(
         cursor,
         playback_requests,
         store,
+        assets,
         sprites,
         controls,
         typing,
@@ -2720,6 +2759,89 @@ fn register_live_notes(
     {
         let playable = playable.clone();
         globals.set("notes_playable", lua.create_function(move |_, ()| Ok(playable()))?)?;
+    }
+
+    let sounds: Rc<RefCell<Vec<Arc<Sound>>>> = Rc::default();
+    {
+        let sounds = Rc::clone(&sounds);
+        globals.set(
+            "sound_register",
+            lua.create_function(move |_, (data, sample_rate): (Value, u32)| {
+                if !(1000..=192_000).contains(&sample_rate) {
+                    return Err(mlua::Error::runtime("sound_register: sample_rate is 1000 to 192000"));
+                }
+                let samples: Vec<f32> = match data {
+                    // Unsigned 8-bit, as in WAV files and Doom's sounds.
+                    Value::String(bytes) => bytes.as_bytes().iter().map(|&b| (b as f32 - 128.0) / 128.0).collect(),
+                    Value::Table(t) => t.sequence_values::<f32>().map(|v| v.map(|v| v.clamp(-1.0, 1.0))).collect::<mlua::Result<_>>()?,
+                    other => {
+                        return Err(mlua::Error::runtime(format!(
+                            "sound_register: samples are a string of 8-bit samples or a list of numbers, not a {}",
+                            other.type_name()
+                        )));
+                    }
+                };
+                if samples.len() > MAX_SOUND_SAMPLES {
+                    return Err(mlua::Error::runtime(format!("sound_register: at most {MAX_SOUND_SAMPLES} samples")));
+                }
+                let mut sounds = sounds.borrow_mut();
+                if sounds.len() >= MAX_SOUNDS {
+                    return Err(mlua::Error::runtime(format!(
+                        "sound_register: at most {MAX_SOUNDS} sounds per script (register them once, outside render())"
+                    )));
+                }
+                sounds.push(Arc::new(Sound { samples, sample_rate }));
+                Ok(sounds.len())
+            })?,
+        )?;
+    }
+    {
+        let (playable, live, sounds) = (playable.clone(), Rc::clone(live), Rc::clone(&sounds));
+        globals.set(
+            "sound_play",
+            lua.create_function(move |_, (id, options): (usize, Option<Table>)| {
+                let Some(sound) = id.checked_sub(1).and_then(|i| sounds.borrow().get(i).cloned()) else {
+                    return Err(mlua::Error::runtime(format!("sound_play: no sound with id {id}")));
+                };
+                if !playable() {
+                    return Ok(false);
+                }
+                let (mut volume, mut pan, mut speed) = (1.0, 0.0, 1.0);
+                if let Some(o) = options {
+                    volume = o.get::<Option<f32>>("volume")?.unwrap_or(volume);
+                    pan = o.get::<Option<f32>>("pan")?.unwrap_or(pan);
+                    speed = o.get::<Option<f32>>("speed")?.unwrap_or(speed);
+                }
+                if !(volume.is_finite() && pan.is_finite() && speed.is_finite()) {
+                    return Err(mlua::Error::runtime("sound_play: volume, pan and speed are numbers"));
+                }
+                live.borrow_mut().commands.push(LiveCommand::Sound { sound, volume, pan, speed });
+                Ok(true)
+            })?,
+        )?;
+    }
+
+    {
+        let (playable, live) = (playable.clone(), Rc::clone(live));
+        globals.set(
+            "midi_send",
+            lua.create_function(move |_, (status, data1, data2): (i64, Option<i64>, Option<i64>)| {
+                if !(0x80..=0xEF).contains(&status) {
+                    return Err(mlua::Error::runtime("midi_send: status is a channel message, 0x80 to 0xEF"));
+                }
+                if !playable() {
+                    return Ok(false);
+                }
+                let data = |d: Option<i64>| d.unwrap_or(0).clamp(0, 127) as u8;
+                live.borrow_mut().commands.push(LiveCommand::Midi {
+                    channel: (status & 0x0F) as u8,
+                    command: (status & 0xF0) as u8,
+                    data1: data(data1),
+                    data2: data(data2),
+                });
+                Ok(true)
+            })?,
+        )?;
     }
 
     {
@@ -3094,6 +3216,56 @@ fn register_song_and_state(
 /// `beat`, `time_at_beat`, `bar`, `tempo`, `time_signature`,
 /// `level_left`, `level_right`, `onset`, `circle`, `triangle`, `polygon`.
 /// `sprite_register`, `sprite`, `sprite_size`.
+/// `read_asset(name)`: a file's bytes, read only from the script's own
+/// assets folder (`assets_path`), by plain file name (no folders, nothing
+/// hidden), so a script gets the data it ships with (a game's levels, say)
+/// and nothing else on the computer.
+fn register_assets(lua: &Lua, folder: &Rc<RefCell<Option<PathBuf>>>) -> mlua::Result<()> {
+    let reads = Rc::clone(folder);
+    lua.globals().set(
+        "read_asset",
+        lua.create_function(move |lua, name: String| {
+            let plain = !name.is_empty()
+                && !name.starts_with('.')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ' '));
+            if !plain {
+                return Err(mlua::Error::runtime(format!(
+                    "read_asset: `{name}` isn't a plain file name (letters, digits, . _ - and spaces)"
+                )));
+            }
+            let Some(path) = reads.borrow().as_ref().map(|dir| dir.join(&name)) else { return Ok(None) };
+            match fs::metadata(&path) {
+                Ok(meta) if meta.is_file() && meta.len() <= MAX_ASSET_BYTES => {}
+                Ok(meta) if meta.is_file() => {
+                    return Err(mlua::Error::runtime(format!("read_asset: {name} is over {} MB", MAX_ASSET_BYTES >> 20)));
+                }
+                _ => return Ok(None),
+            }
+            let bytes = fs::read(&path).map_err(|e| mlua::Error::runtime(format!("read_asset: {name}: {e}")))?;
+            lua.create_string(bytes).map(Some)
+        })?,
+    )?;
+    let folder = Rc::clone(folder);
+    lua.globals().set(
+        "list_assets",
+        lua.create_function(move |_, ()| {
+            let mut names: Vec<String> = folder
+                .borrow()
+                .as_ref()
+                .and_then(|dir| fs::read_dir(dir).ok())
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_ok_and(|t| t.is_file()))
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| !name.starts_with('.'))
+                .collect();
+            names.sort_by_key(|name| name.to_lowercase());
+            Ok(names)
+        })?,
+    )
+}
+
 fn register_sprites(
     lua: &Lua,
     sprites: &Rc<RefCell<Vec<Sprite>>>,
@@ -3114,6 +3286,54 @@ fn register_sprites(
             list.push(parse_sprite(&data)?);
             Ok(list.len())
         })?,
+    )?;
+
+    let cmds = Rc::clone(commands);
+    globals.set(
+        "blit",
+        lua.create_function(
+            move |_, (data, width, height, palette, x, y, w, h): (Value, usize, usize, Table, Option<f32>, Option<f32>, Option<f32>, Option<f32>)| {
+                let count = width.checked_mul(height).filter(|&n| n > 0 && n <= MAX_BLIT_PIXELS).ok_or_else(|| {
+                    mlua::Error::runtime(format!("blit: width x height must be 1 to {MAX_BLIT_PIXELS} pixels"))
+                })?;
+                let mut colors = [0u32; 256];
+                for (i, color) in colors.iter_mut().enumerate() {
+                    if let Some(c) = palette.raw_get::<Option<Table>>(i + 1)? {
+                        *color = table_to_color(&c)?;
+                    }
+                }
+                let mut pixels = Vec::with_capacity(count);
+                match data {
+                    Value::String(bytes) => {
+                        let bytes = bytes.as_bytes();
+                        if bytes.len() < count {
+                            return Err(mlua::Error::runtime(format!("blit: {count} pixels needed, the string has {}", bytes.len())));
+                        }
+                        pixels.extend(bytes[..count].iter().map(|&b| colors[b as usize]));
+                    }
+                    Value::Table(t) => {
+                        for i in 1..=count {
+                            pixels.push(colors[(t.raw_get::<Option<i64>>(i)?.unwrap_or(0) & 0xFF) as usize]);
+                        }
+                    }
+                    other => {
+                        return Err(mlua::Error::runtime(format!(
+                            "blit: pixels are a string or a list of palette indices, not a {}",
+                            other.type_name()
+                        )));
+                    }
+                }
+                let image = Rc::new(Sprite { width, height, pixels, indices: Vec::new(), palette: Vec::new() });
+                cmds.borrow_mut().push(DrawCommand::Image {
+                    image,
+                    x: x.unwrap_or(0.0),
+                    y: y.unwrap_or(0.0),
+                    w: w.unwrap_or(width as f32),
+                    h: h.unwrap_or(height as f32),
+                });
+                Ok(())
+            },
+        )?,
     )?;
 
     let list = Rc::clone(sprites);
@@ -4783,14 +5003,19 @@ fn rasterize(target: &mut Target, cmd: DrawCommand, sprites: &[Sprite]) {
         }
         DrawCommand::Sprite { index, x, y, scale, flip_x, flip_y, src, colors } => {
             if let Some(sprite) = sprites.get(index) {
-                draw_sprite(target, sprite, colors.as_deref(), src, (x + ox, y + oy), scale, (flip_x, flip_y));
+                draw_sprite(target, sprite, colors.as_deref(), src, (x + ox, y + oy), (scale, scale), (flip_x, flip_y));
             }
+        }
+        DrawCommand::Image { image, x, y, w, h } => {
+            let scale = (w / image.width as f32, h / image.height as f32);
+            let src = (0, 0, image.width, image.height);
+            draw_sprite(target, &image, None, src, (x + ox, y + oy), scale, (false, false));
         }
     }
 }
 
 /// Draw the `src` part of `sprite` (x, y, width, height in sprite pixels)
-/// with its top-left at `(x, y)`, `scale` times its size,
+/// with its top-left at `(x, y)`, `scale` (x, y) times its size,
 /// nearest-neighbor: every buffer pixel takes the sprite pixel under its
 /// center. Transparent pixels are skipped, opaque ones copied, translucent
 /// ones blended. `colors`, when given, recolors it: one color per palette
@@ -4802,11 +5027,11 @@ fn draw_sprite(
     colors: Option<&[u32]>,
     (src_x, src_y, src_w, src_h): (usize, usize, usize, usize),
     (x, y): (f32, f32),
-    scale: f32,
+    (scale_x, scale_y): (f32, f32),
     (flip_x, flip_y): (bool, bool),
 ) {
-    let out_w = (src_w as f32 * scale).round();
-    let out_h = (src_h as f32 * scale).round();
+    let out_w = (src_w as f32 * scale_x).round();
+    let out_h = (src_h as f32 * scale_y).round();
     if out_w < 1.0 || out_h < 1.0 || src_w == 0 || src_h == 0 {
         return;
     }
@@ -5888,7 +6113,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(".seeded"), "").unwrap();
         seed_bundled(&dir).unwrap();
-        assert_eq!(added(&dir), ["dashboard", "highway", "note_runner", "now_playing"]);
+        assert_eq!(added(&dir), ["dashboard", "doom", "highway", "note_runner", "now_playing"]);
         let _ = fs::remove_dir_all(&dir);
     }
 

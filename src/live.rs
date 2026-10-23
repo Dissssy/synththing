@@ -45,6 +45,27 @@ pub enum LiveCommand {
     Stop(u64),
     /// Release everything and cancel everything pending.
     StopAll,
+    /// A raw MIDI channel message (`midi_send`). The channel stops copying
+    /// the song's channel state until `StopAll`, so the script's program
+    /// changes and controllers stick.
+    Midi { channel: u8, command: u8, data1: u8, data2: u8 },
+    /// Play a recorded sound (`sound_play`) once, mixed over the notes.
+    Sound { sound: Arc<Sound>, volume: f32, pan: f32, speed: f32 },
+}
+
+/// A sound a script registered (`sound_register`): mono samples, -1 to 1.
+#[derive(Debug, PartialEq)]
+pub struct Sound {
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+}
+
+/// A sound playing: where it's up to, in the sound's own samples.
+struct Playing {
+    sound: Arc<Sound>,
+    position: f64,
+    step: f64,
+    gain: (f32, f32),
 }
 
 /// What the schedule tells the synthesizer to do.
@@ -114,6 +135,7 @@ impl Schedule {
                 self.pending.retain(|p| p.tag != tag);
                 self.end_where(|s| s.tag == tag, ops);
             }
+            LiveCommand::Midi { .. } | LiveCommand::Sound { .. } => {}
             LiveCommand::StopAll => {
                 self.pending.clear();
                 self.sounding.clear();
@@ -187,6 +209,9 @@ pub struct LiveSynth {
     schedule: Schedule,
     /// Samples rendered since anything was sounding or pending.
     quiet: u64,
+    /// Channels `midi_send` took over, one bit each: not copied from the song.
+    owned: u16,
+    sounds: Vec<Playing>,
     ops: Vec<SynthOp>,
     scratch_l: Vec<f32>,
     scratch_r: Vec<f32>,
@@ -200,6 +225,8 @@ impl LiveSynth {
             synth,
             schedule: Schedule::new(sample_rate),
             quiet: u64::MAX,
+            owned: 0,
+            sounds: Vec::new(),
             ops: Vec::new(),
             scratch_l: Vec::new(),
             scratch_r: Vec::new(),
@@ -207,8 +234,32 @@ impl LiveSynth {
     }
 
     pub fn apply(&mut self, command: LiveCommand) {
-        if matches!(command, LiveCommand::Play(_)) {
-            self.quiet = 0;
+        match command {
+            LiveCommand::Play(_) => self.quiet = 0,
+            LiveCommand::Midi { channel, command, data1, data2 } => {
+                let channel = channel.min(15);
+                self.owned |= 1 << channel;
+                self.quiet = 0;
+                self.synth.process_midi_message(channel as i32, command as i32, data1 as i32, data2 as i32);
+                return;
+            }
+            LiveCommand::Sound { sound, volume, pan, speed } => {
+                // Equal-power pan, -1 (left) to 1 (right).
+                let angle = (pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
+                let volume = volume.clamp(0.0, 1.0);
+                let step = sound.sample_rate as f64 / self.schedule.sample_rate as f64 * speed.clamp(0.1, 10.0) as f64;
+                self.sounds.push(Playing { sound, position: 0.0, step, gain: (volume * angle.cos(), volume * angle.sin()) });
+                self.quiet = 0;
+                return;
+            }
+            LiveCommand::StopAll => {
+                self.sounds.clear();
+                if self.owned != 0 {
+                    self.owned = 0;
+                    self.synth.reset();
+                }
+            }
+            _ => {}
         }
         self.schedule.apply(command, &mut self.ops);
         self.run_ops();
@@ -223,13 +274,13 @@ impl LiveSynth {
     /// Whether there's anything to hear: notes sounding or coming, or a
     /// tail still ringing out.
     pub fn busy(&self) -> bool {
-        !self.schedule.idle() || self.quiet < (TAIL_SECONDS * self.schedule.sample_rate as f64) as u64
+        !self.schedule.idle() || !self.sounds.is_empty() || self.quiet < (TAIL_SECONDS * self.schedule.sample_rate as f64) as u64
     }
 
     /// Render the next block into an interleaved stereo buffer, sounding
     /// like `song`'s channels.
     pub fn render(&mut self, song: &Synthesizer, out: &mut [f32]) {
-        self.synth.copy_channels_from(song);
+        self.synth.copy_channels_from(song, self.owned);
         let frames = out.len() / 2;
         self.schedule.advance(frames as u64, &mut self.ops);
         self.run_ops();
@@ -241,6 +292,22 @@ impl LiveSynth {
             out[2 * i] = self.scratch_l[i];
             out[2 * i + 1] = self.scratch_r[i];
         }
+        for playing in &mut self.sounds {
+            let samples = &playing.sound.samples;
+            for frame in out.chunks_exact_mut(2) {
+                let i = playing.position as usize;
+                if i + 1 >= samples.len() {
+                    playing.position = samples.len() as f64;
+                    break;
+                }
+                let t = (playing.position - i as f64) as f32;
+                let sample = samples[i] + (samples[i + 1] - samples[i]) * t;
+                frame[0] += sample * playing.gain.0;
+                frame[1] += sample * playing.gain.1;
+                playing.position += playing.step;
+            }
+        }
+        self.sounds.retain(|p| (p.position as usize) + 1 < p.sound.samples.len());
 
         if self.schedule.idle() && self.synth.active_voice_count() == 0 {
             self.quiet = self.quiet.saturating_add(frames as u64);

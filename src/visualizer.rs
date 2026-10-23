@@ -785,7 +785,13 @@ fn gather_input(
             input.scroll = (i.smooth_scroll_delta.x, i.smooth_scroll_delta.y);
         }
         if hovered || focused {
-            let delta = i.pointer.delta();
+            // While focused, raw mouse motion: it keeps coming with the
+            // cursor held at the window's edge (`set_cursor_locked`).
+            let raw = i.events.iter().fold(egui::Vec2::ZERO, |sum, e| match e {
+                egui::Event::MouseMoved(d) => sum + *d,
+                _ => sum,
+            });
+            let delta = if focused && raw != egui::Vec2::ZERO { raw } else { i.pointer.delta() };
             input.pointer_delta = (delta.x * scale_x, delta.y * scale_y);
             for (n, &button) in MOUSE_BUTTONS.iter().enumerate() {
                 input.buttons_down[n] = i.pointer.button_down(button);

@@ -147,6 +147,12 @@ function render(width, height)
 end
 ```
 
+```lua
+blit(pixels, width, height, palette, [x, y, w, h])   -- a whole palette-indexed image, stretched to w x h
+```
+
+`blit` draws a `width` by `height` image in one call, for scripts that render their own picture pixel by pixel (a software 3D renderer, an emulator) where thousands of `pixel` calls would be far too slow. `pixels` is a string of bytes or a list of numbers, one per pixel, row by row from the top-left, each a palette index from 0 to 255; `palette` is a list of up to 256 color tables, where `palette[1]` is the color of index 0 (Lua counting, like sprites), and missing entries are transparent. The image is stretched nearest-neighbor over `x, y, w, h` (the image's own size at the top-left by default), so a 320 x 200 picture can fill the whole visualizer. It's opaque unless the palette's colors say otherwise. `doom.lua` (a bundled game) draws its whole view with one `blit` a frame. Since 1.5.0.
+
 ### Moving and clipping
 
 ```lua
@@ -469,7 +475,7 @@ function render(width, height, left, right)
 end
 ```
 
-`script_options` only takes the options it knows (`start_paused`, `app_log`, `record_prepare`, `record_auto` and `transparent`, each true or false; see Logging for `app_log`, Recording for `record_prepare` and `record_auto`, and the clear color for `transparent`), and an unknown one is an error that says so, so a typo can't go unnoticed. Several can go in one call: `script_options({ start_paused = true, app_log = true })`.
+`script_options` only takes the options it knows (`start_paused`, `app_log`, `record_prepare`, `record_auto`, `transparent` and `assets`, each true or false; see Logging for `app_log`, Recording for `record_prepare` and `record_auto`, the clear color for `transparent`, and Assets for `assets`), and an unknown one is an error that says so, so a typo can't go unnoticed. Several can go in one call: `script_options({ start_paused = true, app_log = true })`.
 
 `TIME` and `FRAME` start over when the script is reloaded or restarted. `TIME` keeps counting while the visualizer isn't being drawn, unlike the sum of `DT`.
 
@@ -624,10 +630,10 @@ Touch also still works the mouse, as before, for scripts written for one: the fi
 
 ```lua
 set_cursor_visible(visible)   -- false: hide the system cursor over the visualizer
-set_cursor_locked(locked)     -- true: keep the cursor on screen (dedicated only)
+set_cursor_locked(locked)     -- true: keep the cursor in the window while the visualizer has focus
 ```
 
-Both stick until changed (or a different script loads). A hidden cursor only hides while it's over the visualizer, so draw your own there. Locking only takes effect in the dedicated fullscreen while it has focus, and lets go whenever that stops (Escape, switching windows), so a script can't trap the cursor. It keeps the cursor inside the screen rather than pinning it in place, so use `mouse_delta()` for motion. See `input_demo.lua` (New > input_demo).
+Both stick until changed (or a different script loads). A hidden cursor only hides while it's over the visualizer, so draw your own there. Locking only takes effect while the visualizer has focus, in any view, and lets go whenever that stops (Escape, clicking elsewhere, switching windows), so a script can't trap the cursor. It keeps the cursor inside the window rather than pinning it in place, so use `mouse_delta()` for motion: while the visualizer has focus it's raw mouse motion, which keeps coming with the cursor at the window's edge (mouse look). In any view since 1.5.0, the dedicated fullscreen only before. See `input_demo.lua` (New > input_demo).
 
 ## Controls
 
@@ -657,7 +663,7 @@ An unknown name is a script error that says so, as is one of the app's reserved 
 
 For `input` and `input_down`, every controller input is on or off: a stick direction or a trigger counts as pressed once it's past halfway, with a little slack before it lets go so it doesn't flicker at the edge. That's what makes them interchangeable with keys (a "left" action can be the A key, the d-pad or the stick). Any connected controller counts: pressing A on either of two pads presses `pad_a`. Controllers work while synththing's window has focus (no need to click into the visualizer first), and like keys, they don't reach actions while a typing span is open.
 
-For smooth movement, `pad_axis` reads the sticks and triggers directly: `"lstick_x"`, `"lstick_y"`, `"rstick_x"`, `"rstick_y"` from -1 to 1 (x is right, y is down, like screen coordinates; a small wobble around the middle reads 0), and `"lt"`, `"rt"` from 0 (let go) to 1 (all the way). With several controllers it's the one pushed furthest. Axes aren't rebindable: they're the controller's own. `gamepads()` lists the connected controllers' names, empty when there are none. `gamepad_demo.lua` (New > Examples) shows all of it on a drawn controller.
+For smooth movement, `pad_axis` reads the sticks and triggers directly: `"lstick_x"`, `"lstick_y"`, `"rstick_x"`, `"rstick_y"` from -1 to 1 (x is right, y is down, like screen coordinates; a small wobble around the middle reads 0), and `"lt"`, `"rt"` from 0 (let go) to 1 (all the way). With several controllers it's the one pushed furthest. Axes aren't rebindable: they're the controller's own. `gamepads()` lists the connected controllers' names, empty when there are none. `gamepad_demo.lua` (New > Games) shows all of it on a drawn controller.
 
 ```lua
 local x = 100
@@ -761,6 +767,19 @@ end
 ```
 
 Script notes play on a separate synthesizer from the song's, mixed in at the output with very little delay (tens of milliseconds, not the song's audio buffer), and they never cut off the song's notes or get cut off by them. They show up in `active_notes()` while they sound, with `source = "script"` (the song's own notes have `source = "song"`), so a visualizer lights up for them like for the song's, and one that only wants the score can skip them. Their sound is in the `left`/`right` samples `render()` gets, mixed with the song's (and on their own while the song is paused), so the waveform, `fft_left`/`fft_right`, the levels and `onset()` react to them too. They aren't in `notes_between` or `upcoming_notes`, which read the song file. Everything a script plays stops when it's reloaded or restarted, when another song loads, and when the visualizer is closed or hidden. A script holding notes with `note_on` should let go when it loses focus (`has_focus()`), since a key released while the visualizer didn't have focus never reports `"released"`.
+
+```lua
+midi_send(status, [data1], [data2]) -> bool   -- a raw MIDI channel message, e.g. midi_send(0xC0 | 3, 30) for a program change
+```
+
+`midi_send` sends one MIDI channel message (status `0x80` to `0xEF`: note off and on, controllers, program change, pitch bend, ...) straight to the script's synthesizer, for scripts that play whole scores themselves, with their own instruments. A channel it touches stops following the song's channel (its instrument, volume, ...) and keeps what the script set, until the script is reloaded or restarted. Channel 9 is drums. Notes sent this way don't show in `active_notes()`. Returns false (and does nothing) without a soundfont, like `play_note`. Since 1.5.0.
+
+```lua
+sound_register(samples, sample_rate) -> id      -- samples: a string of unsigned 8-bit samples (128 is silence), or a list of numbers -1 to 1
+sound_play(id, [{ volume = 1, pan = 0, speed = 1 }]) -> bool   -- pan -1 (left) to 1 (right); speed 2 plays it an octave up
+```
+
+`sound_register` keeps a mono sound effect, sampled at `sample_rate` (1000 to 192000), and returns its id for `sound_play`; register each sound once, outside `render()` or the first time it's needed (at most 1000 per script, 8,000,000 samples each). A string of bytes is read as unsigned 8-bit samples, as in 8-bit WAV files and Doom's sounds, so data from `read_asset` can go straight in. `sound_play` starts it mixed in with the script's notes, as many times over as it's called; the copies play to the end and stop when the script's notes do. Returns false (and does nothing) without a soundfont, like `play_note`. Since 1.5.0.
 
 ## Sequences
 
@@ -887,6 +906,21 @@ It's kept in `<script>.lua.store.json` next to the script, written within about 
 local best = store_get("best") or 0
 if score > best then store_set("best", score) end
 ```
+
+## Assets
+
+```lua
+read_asset(name) -> string or nil   -- the bytes of a file in the script's `<name>.lua.assets` folder
+list_assets() -> names              -- the files in it, sorted by name
+```
+
+A script can read data files it ships with (a game's levels, a sound bank) from its own assets folder: a folder next to it named after it, like its other files (`doom.lua.assets` for `doom.lua`), which moves along when the script is renamed. `name` is a plain file name, letters, digits, `.`, `_`, `-` and spaces: no folders, nothing outside that folder, and nothing is ever written. It returns the whole file as a Lua string (binary is fine; read it with `string.unpack` and `string.byte`), or nil when there's no such file. Files over 256 MB are an error. `list_assets()` lists the folder's files (empty when there is none), for letting the user pick one with a setting. `doom.lua` reads its WAD this way. Since 1.5.0.
+
+```lua
+script_options({ assets = true })  -- once, at the top
+```
+
+A script that reads assets says so with `script_options`: its assets folder is made if it isn't there yet, and the bar above the visualizer gets a button that opens it, so it's easy to put the files in. Since 1.5.0.
 
 ## Testing scripts from the command line
 
@@ -1049,6 +1083,7 @@ text_size("Score: 120", 24) --> 118, 24
 sprite_register({ image = { { 1, 1, 0 }, { 0, 1, 1 } }, palette = { red } }) --> 1   -- an id
 sprite(heart, 0, 0, 4) --> 12, 8                   -- the size drawn: 3 x 2 sprite pixels, times 4
 sprite_size(heart) --> 3, 2
+blit("\0\1\1\0", 2, 2, { black, white }, 0, 0, 64, 64)   -- a 2 x 2 checkerboard, stretched to 64 x 64
 ```
 
 Settings and saved data:
@@ -1072,6 +1107,18 @@ notes_playable() --> true          -- false with no soundfont
 play_note(60) --> true             -- false when notes can't play
 sequence_register({ 60, { key = 64, length = 0.5 } }) --> 1   -- an id
 sequence_play(riff) --> 1          -- a handle for sequence_stop; nil when notes can't play
+midi_send(0xC0, 30) --> true       -- channel 0 switched to program 30; false with no soundfont
+sound_register(read_asset("boom.raw"), 11025) --> 1   -- an id
+sound_play(boom, { volume = 0.5, pan = -1 }) --> true   -- false with no soundfont
+```
+
+Assets:
+
+```lua
+list_assets() --> { "DOOM1.WAD", "notes.txt" }   -- {} with no assets folder
+read_asset("notes.txt") --> "hello\n"
+read_asset("missing.txt") --> nil
+read_asset("../secret.txt")       -- an error: a plain file name only
 ```
 
 ## Bundled scripts, as reference
@@ -1095,6 +1142,7 @@ Games:
 - `highway.lua`, a Guitar Hero style game charted on the fly from any track of the song: chords, sustains, drums by kit piece, difficulties and practice speeds; songs load paused for it (`script_options`), it switches songs within the playlist (`next_track`), charts a bit per frame (coroutines), and takes part in recordings (`record_prepare`, `record_auto`: it can play itself)
 - `snake.lua`, one snake per channel hunting apples spawned by note-ons; apples are sprites, a text scoreboard, and a `player_channel` setting to steer one snake yourself with rebindable steering actions (best length saved with `store_set`); worth reading end to end
 - `note_runner.lua`, a platformer whose level is the music: notes are platforms, channels take turns being solid; rebindable controls, recolored player sprite (`palette`, `tint`), best scores per song (`song_id`)
+- `doom.lua`, Doom in pure Lua, playing the maps of a WAD you put in its assets folder (`script_options` assets, `read_asset`, `list_assets`, a WAD picker with `setting_selection`): a software renderer drawn with one `blit` a frame, mouse look (`set_cursor_locked`, `mouse_delta`), the map's music played on the soundfont (`midi_send`), the WAD's sound effects (`sound_register`, `sound_play`), and monsters, weapons and pickups
 
 Templates (New):
 
