@@ -40,6 +40,8 @@ const MOST_STREAMS: usize = 32;
 const KEEP_ALIVE: Duration = Duration::from_secs(25);
 /// How long a request waits for the app to answer.
 const APP_WAIT: Duration = Duration::from_secs(5);
+/// The events there are (`GET /v1/events?events=` picks among them).
+const EVENTS: [&str; 3] = ["now_playing", "seeked", "library_changed"];
 /// Songs in one page of a list, unless the request asks for fewer.
 const MOST_SONGS: usize = 500;
 /// The largest song a program can send (as the relay's limit).
@@ -111,6 +113,9 @@ pub enum Call {
         playlist: Option<String>,
         reply: Sender<Result<(), (u16, String)>>,
     },
+    /// Set where the song is or how loud it plays: `Err` (with its status)
+    /// if it can't be now.
+    Set(Set, Sender<Result<(), (u16, String)>>),
     /// A song a program sent (`program`, by its name), already in the
     /// store's folder, to add to the library: the song, and whether it's
     /// new to the library (only then is it marked as the program's).
@@ -119,6 +124,15 @@ pub enum Call {
         program: String,
         reply: Sender<Result<(SongInfo, bool), String>>,
     },
+}
+
+/// What `Call::Set` sets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Set {
+    /// Seconds into the song.
+    Position(f64),
+    /// 0 to 1.
+    Volume(f32),
 }
 
 /// What's playing, as `GET /v1/now-playing` and the `now_playing` event
@@ -275,7 +289,8 @@ struct Shared {
     /// Woken when a call comes in, so it's answered even while nothing's
     /// being drawn.
     waker: egui::Context,
-    streams: Mutex<Vec<Sender<String>>>,
+    /// Each open stream, with the events it wants (`None`: all).
+    streams: Mutex<Vec<(Option<Vec<String>>, Sender<String>)>>,
 }
 
 impl Server {
@@ -327,7 +342,11 @@ impl Server {
     pub fn event(&self, name: &str, data: &impl Serialize) {
         let Ok(data) = serde_json::to_string(data) else { return };
         let message = format!("event: {name}\ndata: {data}\n\n");
-        self.shared.streams.lock().unwrap_or_else(|p| p.into_inner()).retain(|stream| stream.send(message.clone()).is_ok());
+        self.shared
+            .streams
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|(wanted, stream)| wanted.as_ref().is_some_and(|w| !w.iter().any(|e| e == name)) || stream.send(message.clone()).is_ok());
     }
 }
 
@@ -397,6 +416,25 @@ fn from_here(request: &Request) -> bool {
     })
 }
 
+/// The app's answer to something it was asked to do: 204 when done.
+fn answered(answer: Result<Result<(), (u16, String)>, Reply>) -> Reply {
+    match answer {
+        Ok(Ok(())) => Response::from_data(Vec::new()).with_status_code(204),
+        Ok(Err((status, why))) => error(status, why),
+        Err(reply) => reply,
+    }
+}
+
+/// `?events=now_playing,seeked`: the events a stream wants (`None`: all).
+fn wanted_events(query: &HashMap<String, String>) -> Result<Option<Vec<String>>, Reply> {
+    let Some(named) = query.get("events") else { return Ok(None) };
+    let wanted: Vec<String> = named.split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect();
+    match wanted.iter().find(|e| !EVENTS.contains(&e.as_str())) {
+        Some(unknown) => Err(error(400, format!("there's no event \"{unknown}\": {}", EVENTS.join(", ")))),
+        None => Ok(Some(wanted)),
+    }
+}
+
 /// Ask the app, and wait for its answer.
 fn ask<T>(shared: &Shared, call: impl FnOnce(Sender<T>) -> Call) -> Result<T, Reply> {
     let (tx, rx) = mpsc::channel();
@@ -433,13 +471,25 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 "add_songs": access.add_songs,
             }),
         )),
-        (Method::Get, ["v1", "events"]) => match needs(access.read, "read") {
-            Some(reply) => Some(reply),
-            None => {
-                stream(shared, request);
+        (Method::Get, ["v1", "events"]) => match needs(access.read, "read").map_or_else(|| wanted_events(&query), Err) {
+            Err(reply) => Some(reply),
+            Ok(wanted) => {
+                stream(shared, request, wanted);
                 return;
             }
         },
+        (Method::Post, ["v1", "seek"]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| {
+            match query.get("to").and_then(|t| t.parse::<f64>().ok()).filter(|t| t.is_finite() && *t >= 0.0) {
+                None => error(400, "say where to: ?to=<seconds>"),
+                Some(to) => answered(ask(shared, |reply| Call::Set(Set::Position(to), reply))),
+            }
+        })),
+        (Method::Post, ["v1", "volume"]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| {
+            match query.get("to").and_then(|t| t.parse::<f32>().ok()).filter(|t| (0.0..=1.0).contains(t)) {
+                None => error(400, "say how loud, from 0 to 1: ?to=0.5"),
+                Some(to) => answered(ask(shared, |reply| Call::Set(Set::Volume(to), reply))),
+            }
+        })),
         (Method::Get, ["v1", "commands"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
             let commands: Vec<_> = Command::ALL.iter().map(|c| serde_json::json!({ "id": c.id(), "name": c.name() })).collect();
             json(200, &commands)
@@ -457,11 +507,7 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             if song.is_none() && playlist.is_none() {
                 return error(400, "say what to play: ?song=<key> or ?playlist=<id>");
             }
-            match ask(shared, |reply| Call::Play { song, playlist, reply }) {
-                Ok(Ok(())) => Response::from_data(Vec::new()).with_status_code(204),
-                Ok(Err((status, why))) => error(status, why),
-                Err(reply) => reply,
-            }
+            answered(ask(shared, |reply| Call::Play { song, playlist, reply }))
         })),
         (Method::Get, ["v1", "now-playing"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::NowPlaying).map_or_else(|reply| reply, |now| json(200, &now))))
@@ -643,7 +689,7 @@ fn matching<'s>(store: &'s SongStore, query: &str) -> Vec<(String, &'s Song)> {
 
 /// `GET /v1/events`: keep the connection, on a thread of its own, and send
 /// it every event until it's closed.
-fn stream(shared: &Arc<Shared>, request: Request) {
+fn stream(shared: &Arc<Shared>, request: Request, wanted: Option<Vec<String>>) {
     let (tx, rx) = mpsc::channel::<String>();
     {
         let mut streams = shared.streams.lock().unwrap_or_else(|p| p.into_inner());
@@ -652,7 +698,7 @@ fn stream(shared: &Arc<Shared>, request: Request) {
             let _ = request.respond(error(503, "too many open event streams"));
             return;
         }
-        streams.push(tx);
+        streams.push((wanted, tx));
     }
     let spawned = std::thread::Builder::new().name("api events".into()).spawn(move || {
         let mut writer = request.into_writer();
@@ -716,6 +762,7 @@ mod tests {
                     Call::Library(reply) => reply.send(library()).unwrap(),
                     Call::Play { song: Some(song), reply, .. } if song == "missing" => reply.send(Err((404, "no such song".into()))).unwrap(),
                     Call::Play { reply, .. } => reply.send(Ok(())).unwrap(),
+                    Call::Set(_, reply) => reply.send(Ok(())).unwrap(),
                     Call::Add { .. } => unreachable!("no test adds songs here"),
                 }
             }
@@ -766,6 +813,17 @@ mod tests {
         assert_eq!(answering(&server, empty, play("?song=abc", &control_token)), 204);
         assert_eq!(answering(&server, empty, play("?playlist=p1&song=abc", &control_token)), 204);
         assert_eq!(answering(&server, empty, play("?song=missing", &control_token)), 404);
+
+        let url = format!("http://{}/v1/", server.addr());
+        let set = move |what: &str, token: &str| {
+            let (url, token) = (format!("{url}{what}"), format!("Bearer {token}"));
+            move || agent().post(url).header("Authorization", token).send_empty().unwrap().status().as_u16()
+        };
+        assert_eq!(answering(&server, empty, set("seek?to=12.5", &read_token)), 403);
+        assert_eq!(answering(&server, empty, set("seek?to=12.5", &control_token)), 204);
+        assert_eq!(answering(&server, empty, set("seek?to=-1", &control_token)), 400);
+        assert_eq!(answering(&server, empty, set("volume?to=0.4", &control_token)), 204);
+        assert_eq!(answering(&server, empty, set("volume?to=2", &control_token)), 400);
     }
 
     #[test]
@@ -878,5 +936,25 @@ mod tests {
         }
         server.event("now_playing", &NowPlaying::default());
         assert_eq!(stream.join().unwrap(), "event: now_playing");
+    }
+
+    #[test]
+    fn a_stream_gets_only_the_events_it_names() {
+        let (server, read_token, _) = server();
+        let addr = server.addr();
+        let bogus = agent().get(format!("http://{addr}/v1/events?token={read_token}&events=nope")).call().unwrap();
+        assert_eq!(bogus.status().as_u16(), 400);
+        let url = format!("http://{addr}/v1/events?token={read_token}&events=seeked");
+        let stream = std::thread::spawn(move || {
+            let response = agent().get(url).call().unwrap();
+            let mut lines = BufReader::new(response.into_body().into_reader()).lines();
+            lines.find(|l| l.as_ref().is_ok_and(|l| l.starts_with("event:"))).unwrap().unwrap()
+        });
+        while !server.listened_to() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        server.event("now_playing", &NowPlaying::default());
+        server.event("seeked", &serde_json::json!({ "position": 1.0 }));
+        assert_eq!(stream.join().unwrap(), "event: seeked");
     }
 }
