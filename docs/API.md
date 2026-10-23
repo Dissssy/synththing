@@ -79,8 +79,9 @@ Every song a program adds that wasn't in your library yet is marked with that pr
 - `now_playing`: the song, playlist, pause, speed or volume changed. Its data is what's playing, as above.
 - `seeked`: the song jumped (a seek, or a loop back to the start): `{"position": 30.0}`.
 - `library_changed`: songs were added, removed or edited: `{}`. Ask `/v1/songs` again for the new state.
+- `playlists_changed`: a playlist was made, renamed, deleted or had songs added, removed or moved (here or by sync): `{}`. Ask `/v1/playlists` again.
 
-Add `?events=now_playing,seeked` (any of the three, by name) for only those. A comment line (`: keep-alive`) comes every 25 seconds when nothing else does.
+Add `?events=now_playing,seeked` (any of them, by name) for only those. A comment line (`: keep-alive`) comes every 25 seconds when nothing else does.
 
 ## System media controls
 

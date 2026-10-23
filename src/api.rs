@@ -41,7 +41,7 @@ const KEEP_ALIVE: Duration = Duration::from_secs(25);
 /// How long a request waits for the app to answer.
 const APP_WAIT: Duration = Duration::from_secs(5);
 /// The events there are (`GET /v1/events?events=` picks among them).
-const EVENTS: [&str; 3] = ["now_playing", "seeked", "library_changed"];
+const EVENTS: [&str; 4] = ["now_playing", "seeked", "library_changed", "playlists_changed"];
 /// Songs in one page of a list, unless the request asks for fewer.
 const MOST_SONGS: usize = 500;
 /// The largest song a program can send (as the relay's limit).

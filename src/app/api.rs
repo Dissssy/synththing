@@ -23,6 +23,9 @@ pub(super) struct ApiState {
     /// What the last events told of: (what's playing, how far it had
     /// jumped, the library's revision).
     seen: Option<(Seen, u64, u64)>,
+    /// What the playlists were when the last event told of them (a hash
+    /// of each one's ID, name and songs), while a stream is open.
+    playlists_seen: Option<u64>,
     /// A token just made, shown until Preferences close: (app name, token).
     new_token: Option<(String, String)>,
     /// The name being typed for a new app.
@@ -323,6 +326,10 @@ impl App {
         }
         let Some((last_seen, last_generation, last_revision)) = last else { return };
         let now = (seen != last_seen).then(|| self.api_now_playing(view));
+        if !streams {
+            // (Worked out afresh once one opens.)
+            self.api.playlists_seen = None;
+        }
         let Some(server) = self.api.server.as_ref().filter(|_| streams) else { return };
         match now {
             Some(now) => server.event("now_playing", &now),
@@ -331,6 +338,18 @@ impl App {
         }
         if revision != last_revision {
             server.event("library_changed", &serde_json::json!({}));
+        }
+        let playlists = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            for list in &self.playlists.lists {
+                (&list.id, &list.playlist.name).hash(&mut hasher);
+                list.playlist.entries.iter().for_each(|e| e.path.hash(&mut hasher));
+            }
+            hasher.finish()
+        };
+        if self.api.playlists_seen.replace(playlists).is_some_and(|seen| seen != playlists) {
+            server.event("playlists_changed", &serde_json::json!({}));
         }
     }
 
