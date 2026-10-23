@@ -326,7 +326,7 @@ impl Default for ShowOutput {
 /// Implement this to draw one frame of a visualizer.
 ///
 /// * `buffer` is `width * height` pixels, row-major from the top-left, in
-///   `0x00RRGGBB` format, write it in full each call (there's no double
+///   `0xAARRGGBB` format, write it in full each call (there's no double
 ///   buffering to inherit stale pixels from).
 /// * `samples` are the `(left, right)` pairs rendered since the previous call
 ///   to `render`, oldest first. Empty when nothing new has played (paused, no
@@ -419,7 +419,7 @@ const FRAME_WAIT: Duration = Duration::from_millis(50);
 /// the panel can be shared by the windows that show it.
 pub struct VisualizerPanel {
     frames: FramePipe,
-    /// The last frame the script drew (`0x00RRGGBB`), `width` by `height`.
+    /// The last frame the script drew (`0xAARRGGBB`), `width` by `height`.
     pixels: Vec<u32>,
     /// An old frame's buffer, for the next frame to draw into.
     spare: Vec<u32>,
@@ -496,7 +496,7 @@ impl VisualizerPanel {
         }
     }
 
-    /// The last frame the script drew: its size and pixels (`0x00RRGGBB`).
+    /// The last frame the script drew: its size and pixels (`0xAARRGGBB`).
     pub fn last_frame(&self) -> (usize, usize, &[u32]) {
         (self.width, self.height, &self.pixels)
     }
@@ -535,7 +535,7 @@ impl VisualizerPanel {
     }
 
     /// For recording: the audio the last drawn frame was given, and its
-    /// pixels (`0x00RRGGBB`). A recorder may swap the pixel buffer out for
+    /// pixels (`0xAARRGGBB`). A recorder may swap the pixel buffer out for
     /// another of the same size; the next frame redraws it in full anyway.
     pub fn recording_parts(&mut self) -> (&[StereoFrame], &mut Vec<u32>) {
         (&self.last_samples, &mut self.pixels)

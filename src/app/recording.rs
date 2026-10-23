@@ -444,7 +444,8 @@ impl App {
                 [*w, *h],
                 pixels
                     .iter()
-                    .map(|&p| egui::Color32::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8))
+                    .map(|&p| crate::lua_visualizer::over_black(p))
+                    .map(|p| egui::Color32::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8))
                     .collect(),
             );
             let texture = ui.ctx().load_texture("render_preview", image, egui::TextureOptions::NEAREST);

@@ -127,6 +127,12 @@ end
 ```
 
 ```lua
+script_options({ transparent = true })  -- once, at the top: see-through frames
+```
+
+A frame is opaque unless the script asks for see-through ones. With `transparent`, each frame starts transparent instead of filled with the clear color, and whatever isn't drawn on shows what's behind it (in synththing, the panel). Translucent drawing over nothing stays translucent, and `clear()` keeps its color's `a`, so `clear({ r = 0, g = 0, b = 0, a = 0.5 })` is a half see-through black backdrop. The clear color's `a` still means trails: it fades the last frame out by that much (its `r`, `g` and `b` don't matter), and the strip `shift_frame` uncovers is transparent. Where nothing can show through (a recording, a JPEG), see-through parts are shown over black. Since 1.5.0.
+
+```lua
 shift_frame(dx, [dy])   -- move what's drawn so far by dx, dy whole pixels
 ```
 
@@ -443,7 +449,7 @@ function render(width, height, left, right)
 end
 ```
 
-`script_options` only takes the options it knows (`start_paused`, `app_log`, `record_prepare` and `record_auto`, each true or false; see Logging for `app_log`, Recording for the other two), and an unknown one is an error that says so, so a typo can't go unnoticed. Several can go in one call: `script_options({ start_paused = true, app_log = true })`.
+`script_options` only takes the options it knows (`start_paused`, `app_log`, `record_prepare`, `record_auto` and `transparent`, each true or false; see Logging for `app_log`, Recording for `record_prepare` and `record_auto`, and the clear color for `transparent`), and an unknown one is an error that says so, so a typo can't go unnoticed. Several can go in one call: `script_options({ start_paused = true, app_log = true })`.
 
 `TIME` and `FRAME` start over when the script is reloaded or restarted. `TIME` keeps counting while the visualizer isn't being drawn, unlike the sum of `DT`.
 

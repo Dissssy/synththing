@@ -46,7 +46,7 @@ pub struct Stage {
     pub visualizer: LuaVisualizer,
     pub width: usize,
     pub height: usize,
-    /// The last frame drawn (`width * height`, `0x00RRGGBB`).
+    /// The last frame drawn (`width * height`, `0xAARRGGBB`).
     pub pixels: Vec<u32>,
     audio: Vec<f32>,
     live: Vec<f32>,
@@ -202,7 +202,7 @@ pub struct RenderStatus {
     pub seconds: f64,
     /// The video is being finished (encoded and muxed).
     pub finishing: bool,
-    /// A small copy of a recent frame: width, height, `0x00RRGGBB`, and a
+    /// A small copy of a recent frame: width, height, `0xAARRGGBB`, and a
     /// count that goes up when it changes.
     pub preview: Option<(usize, usize, Arc<Vec<u32>>)>,
     pub preview_revision: u64,

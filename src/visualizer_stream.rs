@@ -121,7 +121,11 @@ impl Frames {
 }
 
 fn encode(width: usize, height: usize, pixels: &[u32]) -> image::ImageResult<Vec<u8>> {
-    let rgb: Vec<u8> = pixels.iter().flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8]).collect();
+    let rgb: Vec<u8> = pixels
+        .iter()
+        .map(|&p| crate::lua_visualizer::over_black(p))
+        .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, p as u8])
+        .collect();
     let mut jpeg = Vec::new();
     let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, QUALITY);
     image::ImageEncoder::write_image(encoder, &rgb, width as u32, height as u32, image::ExtendedColorType::Rgb8)?;

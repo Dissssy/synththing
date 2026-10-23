@@ -11,6 +11,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Programs allowed to Edit library can make, rename and delete playlists and reorder their songs through the local API.
 - Song downloads from the local API answer `Range` requests, so a player can stream a song and seek in it.
 - The local API streams the visualizer live as MJPEG (`/v1/visualizer/stream`, or a page for OBS's Browser Source at `/v1/visualizer`), drawn at the size the program asks for, and gives single pictures (`/v1/visualizer/frame.jpg`). Scripts see `playback().streaming`. It keeps drawing while watched with its tab hidden or the window minimized, and OBS's Browser Source no longer shows an old copy of the page.
+- Visualizers can have see-through frames: `script_options({ transparent = true })`. Each frame starts transparent, `clear()` keeps its alpha, and the clear color's alpha fades the last frame out. Recordings and JPEG frames show them over black.
 - The local API lists the visualizer scripts and can switch which one draws (`GET /v1/scripts`, `POST /v1/scripts/{id}/use`), with a `scripts_changed` event.
 - The local API gives songs' album art and your Groupings (each ruleset's playlists), and can group any search by artist, album, genre, year or tag.
 - The local API can seek to an exact point and set the volume (`POST /v1/seek`, `POST /v1/volume`), and an event stream can ask for only the events it wants.

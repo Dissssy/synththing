@@ -1504,10 +1504,14 @@ pub struct ScriptOptions {
     pub record_prepare: bool,
     /// It can play itself, for recording (the Record window offers Auto).
     pub record_auto: bool,
+    /// Its frames have see-through parts: each starts transparent instead
+    /// of the clear color (whose alpha still fades the last frame), and
+    /// `clear` keeps its color's alpha.
+    pub transparent: bool,
 }
 
 /// The `script_options` keys, for the error naming them.
-const SCRIPT_OPTIONS: &str = "start_paused, app_log, record_prepare and record_auto";
+const SCRIPT_OPTIONS: &str = "start_paused, app_log, record_prepare, record_auto and transparent";
 
 /// What a script can see of the app's playback beyond the engine: the
 /// loop and shuffle modes, and the current playlist (read-only).
@@ -2279,10 +2283,11 @@ impl Visualizer for LuaVisualizer {
         self.last_render_instant = Some(now);
 
         let Some(compiled) = &self.compiled else {
-            buffer.fill(0);
+            buffer.fill(OPAQUE_BLACK);
             return;
         };
-        compiled.canvas.begin(buffer, width, height);
+        let transparent = compiled.options.get().transparent;
+        compiled.canvas.begin(buffer, width, height, transparent);
         *compiled.view.borrow_mut() = ViewState::default();
         let _ = compiled.lua.globals().set("DT", dt);
         compiled.frame.set(compiled.frame.get() + 1);
@@ -2338,7 +2343,7 @@ impl Visualizer for LuaVisualizer {
             compiled.log.borrow_mut().push(LogLevel::Error, e.clone());
         }
 
-        let mut target = Target::new(buffer, width, height);
+        let mut target = Target::new(buffer, width, height, transparent);
         for cmd in compiled.commands.borrow_mut().drain(..) {
             rasterize(&mut target, cmd, &compiled.sprites.borrow());
         }
@@ -2461,7 +2466,7 @@ fn compile(
                 "shift_frame",
                 lua.create_function(move |_, (dx, dy): (f32, Option<f32>)| {
                     let whole = |v: f32| if v.is_finite() { v.round().clamp(-1e6, 1e6) as i32 } else { 0 };
-                    let fill = clear_color.get() & 0x00FF_FFFF;
+                    let fill = clear_color.get() | 0xFF00_0000;
                     cmds.borrow_mut().push(DrawCommand::Shift { dx: whole(dx), dy: whole(dy.unwrap_or(0.0)), fill });
                     Ok(())
                 })
@@ -2490,7 +2495,11 @@ fn compile(
                             ("app_log", Value::Boolean(on)) => set.app_log = on,
                             ("record_prepare", Value::Boolean(on)) => set.record_prepare = on,
                             ("record_auto", Value::Boolean(on)) => set.record_auto = on,
-                            (name @ ("start_paused" | "app_log" | "record_prepare" | "record_auto"), other) => {
+                            ("transparent", Value::Boolean(on)) => set.transparent = on,
+                            (
+                                name @ ("start_paused" | "app_log" | "record_prepare" | "record_auto" | "transparent"),
+                                other,
+                            ) => {
                                 return Err(mlua::Error::runtime(format!(
                                     "script_options: {name} is true or false, not a {}",
                                     other.type_name()
@@ -4568,6 +4577,8 @@ struct Target<'a> {
     height: usize,
     clip: Clip,
     offset: (f32, f32),
+    /// The script's frames can be see-through (`script_options`).
+    transparent: bool,
 }
 
 /// A rectangle of whole pixels: columns `x0..x1`, rows `y0..y1`.
@@ -4580,8 +4591,9 @@ struct Clip {
 }
 
 impl<'a> Target<'a> {
-    fn new(pixels: &'a mut [u32], width: usize, height: usize) -> Self {
-        Self { pixels, width, height, clip: Clip { x0: 0, y0: 0, x1: width, y1: height }, offset: (0.0, 0.0) }
+    fn new(pixels: &'a mut [u32], width: usize, height: usize, transparent: bool) -> Self {
+        let clip = Clip { x0: 0, y0: 0, x1: width, y1: height };
+        Self { pixels, width, height, clip, offset: (0.0, 0.0), transparent }
     }
 
     /// A script's clip rectangle as whole pixels inside the frame, rounded
@@ -4603,14 +4615,19 @@ fn rasterize(target: &mut Target, cmd: DrawCommand, sprites: &[Sprite]) {
             target.offset = offset;
             target.clip = target.clip_of(clip);
         }
-        // `clear` always overwrites (the alpha channel is dropped), the
-        // clip rectangle only while there is one.
-        DrawCommand::Shift { dx, dy, fill } => shift_pixels(target, dx, dy, fill),
+        // What's uncovered starts transparent in a see-through frame.
+        DrawCommand::Shift { dx, dy, fill } => {
+            let fill = if target.transparent { 0 } else { fill };
+            shift_pixels(target, dx, dy, fill);
+        }
+        // `clear` always overwrites (opaque, unless the frame's see-through),
+        // the clip rectangle only while there is one.
         DrawCommand::Clear(color) => {
+            let color = if target.transparent { color } else { color | 0xFF00_0000 };
             let Clip { x0, y0, x1, y1 } = target.clip;
             if x0 < x1 {
                 for row in y0..y1 {
-                    target.pixels[row * target.width + x0..row * target.width + x1].fill(color & 0x00FF_FFFF);
+                    target.pixels[row * target.width + x0..row * target.width + x1].fill(color);
                 }
             }
         }
@@ -4690,7 +4707,7 @@ fn draw_sprite(
         let dst_row = &mut target.pixels[by as usize * stride + x_start as usize..by as usize * stride + x_end as usize];
         let put = |dst: &mut u32, color: u32| match color >> 24 {
             0 => {}
-            255 => *dst = color & 0x00FF_FFFF,
+            255 => *dst = color,
             _ => *dst = blend(*dst, color),
         };
         match colors {
@@ -4922,19 +4939,23 @@ impl Default for Canvas {
 
 impl Canvas {
     /// Set `buffer` up for a new frame. A frame of a different size (a
-    /// resize, a recording starting) starts from black instead.
-    fn begin(&self, buffer: &mut [u32], width: usize, height: usize) {
+    /// resize, a recording starting) starts from black instead. A
+    /// see-through one (`transparent`) starts from nothing: the clear
+    /// color's alpha fades the last frame out instead of toward the color.
+    fn begin(&self, buffer: &mut [u32], width: usize, height: usize, transparent: bool) {
         let color = self.clear_color.get();
         let kept = self.kept.borrow();
         if color >> 24 < 255 && (kept.1, kept.2) == (width, height) && kept.0.len() == buffer.len() {
             buffer.copy_from_slice(&kept.0);
             if color >> 24 > 0 {
                 for pixel in buffer.iter_mut() {
-                    *pixel = fade(*pixel, color);
+                    *pixel = if transparent { fade_out(*pixel, color >> 24) } else { fade(*pixel, color) };
                 }
             }
+        } else if transparent {
+            buffer.fill(0);
         } else {
-            buffer.fill(fade(0, color));
+            buffer.fill(fade(OPAQUE_BLACK, color));
         }
     }
 
@@ -4951,14 +4972,35 @@ impl Canvas {
     }
 }
 
-/// Move `dst` (`0x00RRGGBB`) toward `color` (`0xAARRGGBB`) by its alpha,
+/// Opaque black, `0xAARRGGBB` like every pixel of a frame.
+pub const OPAQUE_BLACK: u32 = 0xFF00_0000;
+
+/// `pixel` shown over black: opaque, for what can't show through (JPEG,
+/// video, previews).
+pub fn over_black(pixel: u32) -> u32 {
+    let a = pixel >> 24;
+    if a == 255 {
+        return pixel;
+    }
+    let channel = |shift: u32| (((pixel >> shift) & 0xFF) * a + 127) / 255;
+    OPAQUE_BLACK | (channel(16) << 16) | (channel(8) << 8) | channel(0)
+}
+
+/// Take `alpha` (0 to 255) off `pixel`'s opacity, rounding toward
+/// transparent, so a fade by a little every frame still gets there.
+fn fade_out(pixel: u32, alpha: u32) -> u32 {
+    let kept = (pixel >> 24) * (255 - alpha) / 255;
+    (kept << 24) | (pixel & 0x00FF_FFFF)
+}
+
+/// Move `dst` (`0xFFRRGGBB`) toward `color` (`0xAARRGGBB`) by its alpha,
 /// like [`blend`] but rounding toward `color`: fading by a little every
 /// frame always gets there, where `blend`'s rounding would leave a faint
 /// glow that never goes.
 fn fade(dst: u32, color: u32) -> u32 {
     let a = (color >> 24) as i32;
     if a >= 255 {
-        return color & 0x00FF_FFFF;
+        return color;
     }
     if a == 0 {
         return dst;
@@ -4969,26 +5011,40 @@ fn fade(dst: u32, color: u32) -> u32 {
         let diff = s - d;
         (d + (diff.abs() * a + 254) / 255 * diff.signum()) as u32
     };
-    (channel(16) << 16) | (channel(8) << 8) | channel(0)
+    OPAQUE_BLACK | (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
-/// Alpha-composite `src` (`0xAARRGGBB`) over `dst` (`0x00RRGGBB`), returning
-/// `0x00RRGGBB`. `src` alpha 255 overwrites, 0 leaves `dst` untouched.
+/// Alpha-composite `src` over `dst` (both `0xAARRGGBB`, not premultiplied).
+/// `src` alpha 255 overwrites, 0 leaves `dst` untouched; over an opaque
+/// `dst` (every pixel, unless the frame's see-through) it stays opaque.
 fn blend(dst: u32, src: u32) -> u32 {
     let a = src >> 24;
     if a >= 255 {
-        return src & 0x00FF_FFFF;
+        return src;
     }
     if a == 0 {
         return dst;
     }
     let inv = 255 - a;
+    let below = dst >> 24;
+    if below == 255 {
+        let channel = |shift: u32| {
+            let s = (src >> shift) & 0xFF;
+            let d = (dst >> shift) & 0xFF;
+            (s * a + d * inv + 127) / 255
+        };
+        return OPAQUE_BLACK | (channel(16) << 16) | (channel(8) << 8) | channel(0);
+    }
+    // Over something see-through: how much of `dst` shows (`below` of the
+    // rest), and each channel weighted by how much of it shows.
+    let shown = below * inv;
+    let out = a * 255 + shown;
     let channel = |shift: u32| {
         let s = (src >> shift) & 0xFF;
         let d = (dst >> shift) & 0xFF;
-        (s * a + d * inv + 127) / 255
+        (s * a * 255 + d * shown + out / 2) / out
     };
-    (channel(16) << 16) | (channel(8) << 8) | channel(0)
+    (((out + 127) / 255) << 24) | (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
 /// Fill an axis-aligned rectangle, clipped.
@@ -5005,7 +5061,7 @@ fn fill_rect(target: &mut Target, (x0, y0, x1, y1): (f32, f32, f32, f32), color:
     for y in ya..yb {
         let row = y * target.width;
         if alpha >= 255 {
-            target.pixels[row + xa..row + xb].fill(color & 0x00FF_FFFF);
+            target.pixels[row + xa..row + xb].fill(color);
         } else {
             for pixel in &mut target.pixels[row + xa..row + xb] {
                 *pixel = blend(*pixel, color);
@@ -5435,6 +5491,14 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
     fn frame(visualizer: &mut LuaVisualizer, playback: &EngineView) {
         let mut buffer = vec![0u32; 4];
         visualizer.render(&mut buffer, 2, 2, &[], &NotesSnapshot::default(), playback, &VisualizerInput::default());
+    }
+
+    /// Just the frame's colors, for tests of where drawing lands (opacity
+    /// has tests of its own).
+    fn colors(buffer: &mut [u32]) {
+        for pixel in buffer {
+            *pixel &= 0x00FF_FFFF;
+        }
     }
 
     fn last_log(visualizer: &LuaVisualizer) -> String {
@@ -5981,6 +6045,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         let (w, h) = (32, 16);
         let mut buffer = vec![0u32; w * h];
         visualizer.render(&mut buffer, w, h, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        colors(&mut buffer);
         assert_eq!(visualizer.error(), None);
         assert_eq!(last_log(&visualizer), "11.0 12.0 22.0 24.0");
         let lit: Vec<(usize, usize)> =
@@ -6002,6 +6067,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         let w = 32;
         let mut buffer = vec![0u32; w * w];
         visualizer.render(&mut buffer, w, w, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        colors(&mut buffer);
         assert_eq!(visualizer.error(), None);
         let at = |x: usize, y: usize| buffer[y * w + x];
         // Circle: center filled, corners of its box not.
@@ -6085,6 +6151,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
             let mut buffer = vec![0u32; 8 * 4];
             for _ in 0..frames {
                 visualizer.render(&mut buffer, 8, 4, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+                colors(&mut buffer);
             }
             if let Some(e) = visualizer.error() {
                 return e.to_string();
@@ -6238,6 +6305,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         for _ in 0..3 {
             let mut buffer = vec![0u32; 6 * 2];
             visualizer.render(&mut buffer, 6, 2, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+            colors(&mut buffer);
             assert_eq!(visualizer.error(), None);
             frames.push(buffer.iter().map(|p| format!("{:x}", p >> 16 | (p >> 8 & 0xFF))).collect::<Vec<_>>().join(" "));
         }
@@ -6258,6 +6326,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
             let mut visualizer = LuaVisualizer::new(format!("W = {{ r = 255, g = 255, b = 255 }} function render() {call} end"), None, 44_100);
             let mut buffer = vec![0u32; 9 * 9];
             visualizer.render(&mut buffer, 9, 9, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+            colors(&mut buffer);
             if let Some(e) = visualizer.error() {
                 return e.to_string();
             }
@@ -6283,6 +6352,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         );
         let mut buffer = vec![0u32; 81];
         visualizer.render(&mut buffer, 9, 9, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        colors(&mut buffer);
         let shades: std::collections::BTreeSet<u32> = buffer.iter().map(|p| p & 0xFF).collect();
         assert_eq!(shades, [0, 128, 192].into_iter().collect(), "each shape blends once: 0, one layer, both");
         assert!(draw("circle_outline(4, 4, 3, W, 0)").contains("width must be more than 0"));
@@ -6296,6 +6366,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
             let mut visualizer = LuaVisualizer::new(format!("function render() {call} end"), None, 44_100);
             let mut buffer = vec![0u32; 10 * 7];
             visualizer.render(&mut buffer, 10, 7, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+            colors(&mut buffer);
             if let Some(e) = visualizer.error() {
                 return e.to_string();
             }
@@ -6339,6 +6410,37 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         assert!(draw(&format!("line(0, 0, 1, 1, {white}, 0)")).contains("width must be more than 0"));
     }
 
+    /// Frames are opaque, unless the script opts into see-through ones:
+    /// those start transparent, `clear` keeps its alpha, translucent
+    /// drawing over nothing stays translucent, and the clear color's alpha
+    /// fades the last frame out.
+    #[test]
+    fn transparent_frames_show_through() {
+        let frame = |script: &str, frames: usize| {
+            let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+            let mut buffer = vec![0u32; 4];
+            for _ in 0..frames {
+                visualizer.render(&mut buffer, 4, 1, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+            }
+            assert_eq!(visualizer.error(), None);
+            buffer
+        };
+        let draw = "function render() clear({ r = 0, g = 0, b = 255, a = 0.5 }, nil) \
+                    pixel(1, 0, { r = 255, g = 0, b = 0, a = 0.5 }) pixel(2, 0, { r = 0, g = 255, b = 0 }) end";
+        assert_eq!(frame(draw, 1), [0xFF00_00FF, 0xFF80_007F, 0xFF00_FF00, 0xFF00_00FF], "opaque");
+        let see_through = format!("script_options({{ transparent = true }})\n{draw}");
+        assert_eq!(frame(&see_through, 1), [0x8000_00FF, 0xC0AA_0055, 0xFF00_FF00, 0x8000_00FF]);
+        let over_nothing = "script_options({ transparent = true })
+            function render() pixel(0, 0, { r = 255, g = 0, b = 0, a = 0.5 }) end";
+        assert_eq!(frame(over_nothing, 1), [0x80FF_0000, 0, 0, 0]);
+
+        let trail = "script_options({ transparent = true }) set_clear_color({ r = 9, g = 9, b = 9, a = 0.5 })
+            function render() if FRAME == 1 then pixel(0, 0, { r = 255, g = 255, b = 255 }) end end";
+        assert_eq!(frame(trail, 2), [0x7FFF_FFFF, 0, 0, 0], "half gone, its color kept");
+        assert_eq!(frame(trail, 12)[0] >> 24, 0, "and then all of it");
+        assert_eq!(over_black(0x7FFF_FFFF), 0xFF7F_7F7F);
+    }
+
     /// Each frame starts from the last one with the clear color blended
     /// over it: opaque black wipes it (the default), alpha 0 keeps it, in
     /// between fades it all the way out; a new size starts from black.
@@ -6355,6 +6457,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
                 let width = sizes.get(f).copied().unwrap_or(2);
                 buffer = vec![0x00AB_CDEF; width]; // whatever the host hands over
                 visualizer.render(&mut buffer, width, 1, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+                colors(&mut buffer);
                 assert_eq!(visualizer.error(), None);
             }
             buffer
@@ -6437,6 +6540,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         let w = 8;
         let mut buffer = vec![0u32; w * 4];
         visualizer.render(&mut buffer, w, 4, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        colors(&mut buffer);
         assert_eq!(visualizer.error(), None);
         assert_eq!(last_log(&visualizer), "1 2x2 drawn 4.0x4.0");
         let at = |x: usize, y: usize| buffer[y * w + x];
@@ -6480,6 +6584,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         let w = 8;
         let mut buffer = vec![0u32; w * 4];
         visualizer.render(&mut buffer, w, 4, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        colors(&mut buffer);
         assert_eq!(visualizer.error(), None);
         assert_eq!(last_log(&visualizer), "4.0x4.0");
         let at = |x: usize, y: usize| buffer[y * w + x];
@@ -6506,6 +6611,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
         let mut buffer = vec![0u32; 8];
         visualizer.render(&mut buffer, 8, 1, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        colors(&mut buffer);
         assert_eq!(visualizer.error(), None);
         assert_eq!(
             buffer,
@@ -6524,6 +6630,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
             let mut visualizer = LuaVisualizer::new(script, None, 44_100);
             let mut buffer = vec![0u32; 4];
             visualizer.render(&mut buffer, 2, 2, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+            colors(&mut buffer);
             let error = visualizer.error().unwrap_or_default();
             assert!(error.contains(message), "{bad}: {error}");
         }
