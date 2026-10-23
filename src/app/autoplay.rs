@@ -27,7 +27,7 @@ pub(super) fn button_ui(ui: &mut egui::Ui, mode: Autoplay) -> bool {
 
 impl App {
     pub(super) fn has_next(&self) -> bool {
-        self.now_playing.is_some() || self.listed.is_some()
+        self.now_playing.is_some() || self.listed.is_some() || !self.queue.is_empty()
     }
 
     fn listed_rules(&self) -> Rules {

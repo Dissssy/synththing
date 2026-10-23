@@ -511,7 +511,7 @@ impl App {
         let title = egui::RichText::new(title.as_deref().unwrap_or("Nothing playing")).heading().strong();
         ui.vertical_centered(|ui| crate::marquee::show(ui, title, true));
         let mut detail = Vec::new();
-        if let Some(np) = &self.now_playing
+        if let Some(np) = self.playing_entry()
             && let Some(list) = self.playlists.lists.get(np.list)
         {
             detail.push(format!("{} {}/{}", list.playlist.name, np.entry + 1, list.playlist.entries.len()));

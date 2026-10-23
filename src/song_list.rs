@@ -223,12 +223,6 @@ struct Hits {
     values: Vec<Vec<usize>>,
 }
 
-impl Entry {
-    fn tags(&self) -> impl DoubleEndedIterator<Item = (&str, [u8; 3])> {
-        self.song.tags.iter().map(|(name, color)| (name.as_str(), *color))
-    }
-}
-
 /// The rows as last made, and what they were made from: made again only
 /// when that changes, not every frame.
 struct Built {
@@ -391,6 +385,210 @@ fn cell(ui: &mut egui::Ui, width: f32, text: impl Into<egui::WidgetText>, scroll
     let x = response.rect.left() - ui.spacing().item_spacing.x / 2.0;
     ui.painter().vline(x, ui.max_rect().y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
     response
+}
+
+/// A song's row, after its drag and menu: its star, its name (with its
+/// tags, and whether it plays together with others), the `shown` columns'
+/// values (`song.values`, in their order), and `trailing`'s widgets at the
+/// end; on a touch screen, the name over the first column's value.
+/// Whether its star was clicked.
+#[allow(clippy::too_many_arguments)]
+fn song_row(
+    ui: &mut egui::Ui,
+    path: &Path,
+    song: &Described,
+    hits: &Hits,
+    shown: &[&Def],
+    scroll: bool,
+    touch: bool,
+    trailing: &mut dyn FnMut(&mut egui::Ui, &Path),
+) -> bool {
+    let star = select_list::star(ui, song.plays.starred);
+    let tags = || song.tags.iter().map(|(name, color)| (name.as_str(), *color));
+    let text = highlighted(ui, &song.name, &hits.name, false);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let size = egui::vec2(TRAILING_WIDTH, ui.available_height());
+        ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.set_width(TRAILING_WIDTH);
+            trailing(ui, path);
+        });
+        // (Linked, if it plays together with others.)
+        let linked = |ui: &mut egui::Ui| {
+            if let Some(set) = &song.plays.together {
+                ui.label(egui::RichText::new(crate::app::icon("link")).weak())
+                    .on_hover_text(format!("Plays together with others: {} of {} (Song info > Options lists them)", set.at + 1, set.of));
+            }
+        };
+        if touch {
+            linked(ui);
+            // The name and the tags, and under them the first column's
+            // value (the one sorted by, in the list).
+            let second = shown.first().and(song.values.first()).cloned().flatten();
+            select_list::two_lines(ui, tags(), text, second.map(|v| v.text), scroll);
+            return;
+        }
+        let hits = |i: usize| hits.values.get(i).map_or(&[][..], Vec::as_slice);
+        for (i, (c, value)) in shown.iter().zip(&song.values).enumerate().rev() {
+            cell(ui, c.width, highlighted(ui, value.as_ref().map_or("", |v| v.text.as_str()), hits(i), true), scroll);
+        }
+        select_list::chips(ui, tags());
+        linked(ui);
+        select_list::label(ui, text, None, scroll);
+    });
+    star
+}
+
+/// The column headers' cells in `rect`, over `shown`'s columns and the
+/// names, titled by `title` (given a column's key and label): each one's
+/// response, by key (`"name"` for the names).
+fn header_cells(ui: &mut egui::Ui, rect: egui::Rect, shown: &[&Def], title: impl Fn(&str, &str) -> egui::RichText) -> Vec<(&'static str, egui::Response)> {
+    ui.painter().rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
+    ui.painter().hline(rect.x_range(), rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
+    let mut headers = Vec::new();
+    let builder = egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center));
+    ui.scope_builder(builder, |ui| {
+        ui.add_space(TRAILING_WIDTH + ui.spacing().item_spacing.x);
+        for c in shown.iter().rev() {
+            let response = cell(ui, c.width, title(c.key, c.label), false).interact(egui::Sense::click());
+            headers.push((c.key, response));
+        }
+        let name = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            // (Over the rows' notes.)
+            ui.add_space(select_list::STAR_WIDTH + ui.spacing().item_spacing.x);
+            ui.add(egui::Label::new(title("name", "Name")).truncate().selectable(false).sense(egui::Sense::click()))
+        });
+        headers.push(("name", name.inner));
+    });
+    headers
+}
+
+/// The keys of `view`'s columns: what [`ordered_ui`]'s songs are
+/// described by, in order.
+pub fn column_keys(view: &View) -> Vec<&'static str> {
+    view.columns.iter().filter_map(|k| column(k)).map(|c| c.key).collect()
+}
+
+/// What [`ordered_ui`] reports.
+#[derive(Default)]
+pub struct OrderedOutput {
+    /// The row clicked.
+    pub play: Option<usize>,
+    /// Delete was pressed with these rows selected.
+    pub delete: Vec<usize>,
+    /// The song's star was clicked: star it (`true`) or unstar it.
+    pub star: Option<(PathBuf, bool)>,
+    /// Songs dragged in were dropped before this row (or after the last,
+    /// below them).
+    pub insert: Option<(Vec<PathBuf>, usize)>,
+    /// Rows dragged were dropped before this one (or after the last).
+    pub moved: Option<(Vec<usize>, usize)>,
+}
+
+/// Drag-and-drop payload for rows of an ordered list ([`ordered_ui`])
+/// being moved within it: the selection if the dragged row is part of it,
+/// else just that row.
+pub struct DraggedRows {
+    /// The list's `id_salt`.
+    pub list: &'static str,
+    pub rows: Vec<usize>,
+    /// What's being dragged, for the label following the pointer.
+    pub label: String,
+}
+
+/// `songs` (described by [`column_keys`]) in their own order, shown as the
+/// Songs list shows songs, with its columns but without its search,
+/// sorting or groups: the play queue. `menu` is a row's right-click menu,
+/// given the rows it's for. Rows drag to move them, and songs dragged in
+/// (from Songs) drop between them, or anywhere below them for the end.
+pub fn ordered_ui(
+    ui: &mut egui::Ui,
+    id_salt: &'static str,
+    songs: &[(PathBuf, Described)],
+    selection: &mut Selection,
+    view: &View,
+    trailing: &mut dyn FnMut(&mut egui::Ui, &Path),
+    menu: &mut dyn FnMut(&mut egui::Ui, &[usize]),
+) -> OrderedOutput {
+    let touch = select_list::touch(ui.ctx());
+    let room = ui.available_width() - TRAILING_WIDTH - MIN_NAME_WIDTH;
+    let mut used = 0.0;
+    let shown: Vec<&'static Def> = if touch {
+        view.columns.iter().filter_map(|k| column(k)).take(1).collect()
+    } else {
+        view.columns
+            .iter()
+            .filter_map(|k| column(k))
+            .take_while(|c| {
+                used += c.width + ui.spacing().item_spacing.x;
+                used <= room
+            })
+            .collect()
+    };
+    if !touch {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y), egui::Sense::hover());
+        header_cells(ui, rect, &shown, |_, label| egui::RichText::new(label).strong());
+    }
+    let mut star = None;
+    let mut insert = None;
+    let mut moved = None;
+    let hits = Hits::default();
+    let area = ui.max_rect();
+    let ctx = ui.ctx().clone();
+    let released = ui.input(|i| i.pointer.any_released());
+    let output = select_list::show(ui, id_salt, songs, selection, None, |ui, row, (path, song)| {
+        if row.response.drag_started() {
+            let rows = row.rows();
+            let label = match rows.len() {
+                1 => song.name.clone(),
+                n => format!("{} and {} more", song.name, n - 1),
+            };
+            row.response.dnd_set_drag_payload(DraggedRows { list: id_salt, rows, label });
+        }
+        // Dropped onto this row: before it in its top half, else after it.
+        if row.response.contains_pointer() {
+            let rect = row.response.rect;
+            let above = ui.input(|i| i.pointer.hover_pos()).is_none_or(|p| p.y < rect.center().y);
+            let at = if above { row.idx } else { row.idx + 1 };
+            let line = if above { rect.top() } else { rect.bottom() };
+            let stroke = egui::Stroke::new(2.0, ui.visuals().selection.stroke.color);
+            if egui::DragAndDrop::has_payload_of_type::<DraggedFiles>(&ctx) {
+                ui.painter().hline(rect.x_range(), line, stroke);
+                if released && let Some(files) = egui::DragAndDrop::take_payload::<DraggedFiles>(&ctx) {
+                    insert = Some((files.paths.clone(), at));
+                }
+            } else if let Some(dragged) = egui::DragAndDrop::payload::<DraggedRows>(&ctx)
+                && dragged.list == id_salt
+            {
+                ui.painter().hline(rect.x_range(), line, stroke);
+                if released {
+                    egui::DragAndDrop::clear_payload(&ctx);
+                    moved = Some((dragged.rows.clone(), at));
+                }
+            }
+        }
+        row.response.context_menu(|ui| menu(ui, &row.rows()));
+        if song_row(ui, path, song, &hits, &shown, select_list::scrolls(row, false), touch, trailing) {
+            star = Some((path.clone(), !song.plays.starred));
+        }
+    });
+    // Released anywhere else over the list: at the end.
+    if released && insert.is_none() && moved.is_none() && ui.rect_contains_pointer(area) {
+        if let Some(files) = egui::DragAndDrop::take_payload::<DraggedFiles>(&ctx) {
+            insert = Some((files.paths.clone(), songs.len()));
+        } else if let Some(dragged) = egui::DragAndDrop::payload::<DraggedRows>(&ctx)
+            && dragged.list == id_salt
+        {
+            egui::DragAndDrop::clear_payload(&ctx);
+            moved = Some((dragged.rows.clone(), songs.len()));
+        }
+    }
+    OrderedOutput {
+        play: output.activated,
+        delete: if output.delete { selection.rows().to_vec() } else { Vec::new() },
+        star,
+        insert,
+        moved,
+    }
 }
 
 impl SongList {
@@ -642,40 +840,10 @@ impl SongList {
                 row.response.dnd_set_drag_payload(DraggedFiles { paths, label });
             }
             row.response.context_menu(|ui| menu(ui, &rows()));
-            if select_list::star(ui, entry.song.plays.starred) {
+            let scroll = select_list::scrolls(row, active == Some(row.idx));
+            if song_row(ui, &entry.path, &entry.song, &entry.hits, &shown, scroll, touch, trailing) {
                 star = Some((entry.path.clone(), !entry.song.plays.starred));
             }
-            let text = highlighted(ui, &entry.song.name, &entry.hits.name, false);
-            let scroll = select_list::scrolls(row, active == Some(row.idx));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let size = egui::vec2(TRAILING_WIDTH, ui.available_height());
-                ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.set_width(TRAILING_WIDTH);
-                    trailing(ui, &entry.path);
-                });
-                // (Linked, if it plays together with others.)
-                let linked = |ui: &mut egui::Ui| {
-                    if let Some(set) = &entry.song.plays.together {
-                        ui.label(egui::RichText::new(crate::app::icon("link")).weak())
-                            .on_hover_text(format!("Plays together with others: {} of {} (Song info > Options lists them)", set.at + 1, set.of));
-                    }
-                };
-                if touch {
-                    linked(ui);
-                    // The name and the tags, and under them the value
-                    // sorted by.
-                    let second = shown.first().and(entry.song.values.first()).cloned().flatten();
-                    select_list::two_lines(ui, entry.tags(), text, second.map(|v| v.text), scroll);
-                    return;
-                }
-                let hits = |i: usize| entry.hits.values.get(i).map_or(&[][..], Vec::as_slice);
-                for (i, (c, value)) in shown.iter().zip(&entry.song.values).enumerate().rev() {
-                    cell(ui, c.width, highlighted(ui, value.as_ref().map_or("", |v| v.text.as_str()), hits(i), true), scroll);
-                }
-                select_list::chips(ui, entry.tags());
-                linked(ui);
-                select_list::label(ui, text, None, scroll);
-            });
         });
         self.hovered = output.hovered.and_then(path_of);
         let output = Output {
@@ -704,29 +872,13 @@ impl SongList {
         let height = ui.spacing().interact_size.y;
         // The whole row first, under the headers, for right-clicks between them.
         let (rect, background) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
-        ui.painter().rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
-        ui.painter().hline(rect.x_range(), rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
         let arrow = format!(" {}", crate::app::icon(if view.descending { "caret-down" } else { "caret-up" }));
         let title = |key: &str, title: &str| {
             let text = if view.sort == key { format!("{title}{arrow}") } else { title.to_string() };
             egui::RichText::new(text).strong()
         };
         let hint = "Click to sort by it (again to turn it around); right-click for columns and groups";
-        let mut headers: Vec<(&str, egui::Response)> = Vec::new();
-        let builder = egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center));
-        ui.scope_builder(builder, |ui| {
-            ui.add_space(TRAILING_WIDTH + ui.spacing().item_spacing.x);
-            for c in shown.iter().rev() {
-                let response = cell(ui, c.width, title(c.key, c.label), false).interact(egui::Sense::click());
-                headers.push((c.key, response));
-            }
-            let name = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                // (Over the rows' notes.)
-                ui.add_space(select_list::STAR_WIDTH + ui.spacing().item_spacing.x);
-                ui.add(egui::Label::new(title("name", "Name")).truncate().selectable(false).sense(egui::Sense::click()))
-            });
-            headers.push(("name", name.inner));
-        });
+        let headers = header_cells(ui, rect, shown, title);
         let mut changed = false;
         let mut sort_by = None;
         for (key, response) in &headers {

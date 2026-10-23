@@ -133,6 +133,8 @@ enum Act {
     /// Play the playlist with this ID.
     PlayPlaylist(String),
     Shuffle(Vec<PathBuf>),
+    /// Queue these songs: next, or at the end.
+    Queue(Vec<PathBuf>, bool),
     Star(Vec<PathBuf>, bool),
     Info(PathBuf),
     /// Open group `key` of ruleset `id` (a playlist, by its ID, for
@@ -264,6 +266,7 @@ impl App {
                 let start = (self.rng.next() % tracks.len() as u64) as usize;
                 self.play_tracks(tracks, start);
             }
+            Some(Act::Queue(paths, next)) => self.queue_songs(ui.ctx(), paths, next),
             Some(Act::Star(paths, on)) => self.tag_songs(super::tags::TagAction::Set(STARRED.into(), on), &paths),
             Some(Act::Info(path)) => self.details_for = Some(vec![path]),
             Some(Act::Open(id, key)) if id == PLAYLISTS => {
@@ -562,6 +565,7 @@ impl App {
         // cursor: the rows must take exactly the height `show_rows` was
         // told.)
         let mut opened = None;
+        let mut queued = None;
         if list {
             let height = 56.0;
             let rows = shown.len();
@@ -596,6 +600,11 @@ impl App {
                     if response.clicked() {
                         opened = Some(group.key.clone());
                     }
+                    response.context_menu(|ui| {
+                        if let Some(next) = super::queue::menu(ui) {
+                            queued = Some((shown[row], next));
+                        }
+                    });
                 }
             });
             if let Some(i) = play {
@@ -636,12 +645,20 @@ impl App {
                         if response.clicked() {
                             opened = Some(group.key.clone());
                         }
+                        response.context_menu(|ui| {
+                            if let Some(next) = super::queue::menu(ui) {
+                                queued = Some((i, next));
+                            }
+                        });
                     }
                 }
             });
         }
         if let Some(key) = opened {
             act = Some(Act::Open(id.to_string(), key));
+        }
+        if let Some((i, next)) = queued {
+            act = Some(Act::Queue(self.playable(&groups[i]), next));
         }
         act
     }
@@ -797,6 +814,9 @@ impl App {
                         if ui.add(icon_button("shuffle")).on_hover_text("Shuffle").clicked() {
                             act = Some(Act::Shuffle(playable.clone()));
                         }
+                        if ui.add(icon_button("list-plus")).on_hover_text("Add them to the queue").clicked() {
+                            act = Some(Act::Queue(playable.clone(), false));
+                        }
                         let hover = if all_starred { "Unstar them all" } else { "Star them all" };
                         if ui.add(icon_button(select_list::STAR_ICON).selected(all_starred)).on_hover_text(hover).clicked() {
                             act = Some(Act::Star(tracks.iter().map(|t| t.path.clone()).collect(), !all_starred));
@@ -851,6 +871,9 @@ impl App {
                 if output.info {
                     act = Some(Act::Info(track.path.clone()));
                 }
+                if let Some(next) = output.queue {
+                    act = Some(Act::Queue(vec![track.path.clone()], next));
+                }
             }
         });
         if choose_art {
@@ -870,6 +893,8 @@ struct RowOutput {
     play: bool,
     star: bool,
     info: bool,
+    /// Queue it: next, or at the end.
+    queue: Option<bool>,
     change: Option<Change>,
 }
 
@@ -922,6 +947,7 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
     }
     if track.here {
         response.context_menu(|ui| {
+            output.queue = super::queue::menu(ui);
             if ui.button("Song info").clicked() {
                 output.info = true;
             }

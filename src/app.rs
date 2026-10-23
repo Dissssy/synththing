@@ -19,6 +19,7 @@ mod loading;
 mod mobile;
 mod preferences;
 mod profiler;
+mod queue;
 use preferences::PrefTab;
 mod playlist_panel;
 mod identity;
@@ -500,6 +501,15 @@ pub struct App {
     /// Set while autoplay goes down the Songs list (never with
     /// `now_playing`).
     listed: Option<song_list::Playing>,
+    /// The play queue (Up next, see `queue.rs`).
+    queue: Vec<PathBuf>,
+    /// The song playing came from the queue: `now_playing` or `listed` is
+    /// what it was queued after.
+    playing_queued: bool,
+    /// The Up next tab's selected rows.
+    queue_selection: select_list::Selection,
+    /// The Up next tab's rows as last described, and what from (a hash).
+    queue_rows: Option<(u64, Vec<(PathBuf, song_list::Described)>)>,
     /// Becomes true once the current playlist track is seen playing (not
     /// finished), so the "finished" that ends it advances exactly once, not
     /// again on a stale snapshot from before the next track loaded.
@@ -777,6 +787,10 @@ impl App {
             playlist_positions: std::collections::HashMap::new(),
             now_playing: None,
             listed: None,
+            queue: Vec::new(),
+            playing_queued: false,
+            queue_selection: Default::default(),
+            queue_rows: None,
             advance_armed: false,
             song_loads: 0,
             playing_at: None,
@@ -1507,7 +1521,7 @@ impl App {
                 Some(path) => ui.label(self.song_title(&path)),
                 None => ui.label(view.track_name.as_deref().unwrap_or("(none)")),
             };
-            if let Some(np) = &self.now_playing
+            if let Some(np) = self.playing_entry()
                 && let Some(list) = self.playlists.lists.get(np.list)
             {
                 ui.weak(format!(
@@ -1572,10 +1586,10 @@ impl App {
             if ui
                 .add_enabled(self.has_next(), icon_button("skip-forward"))
                 .on_hover_text(format!(
-                    "Next: the next playlist track, or the next song autoplay plays{}",
+                    "Next: the next queued song, else the next playlist track, or the next song autoplay plays{}",
                     commands::hint(ui.ctx(), Command::NextTrack)
                 ))
-                .on_disabled_hover_text("Play something from a playlist, or from Songs with Autoplay on, to queue up a next track")
+                .on_disabled_hover_text("Queue songs (right-click them), or play something from a playlist or from Songs with Autoplay on, to have a next track")
                 .clicked()
             {
                 self.next_track();
@@ -1617,6 +1631,7 @@ impl App {
                 self.set_shuffle(!self.shuffle);
                 toast::show(ui.ctx(), shuffle_text(self.shuffle));
             }
+            self.queue_button_ui(ui);
 
             ui.separator();
             ui.weak(playback_state_text(view));
@@ -1764,6 +1779,7 @@ impl App {
                 section_checkbox(ui, Section::Songs);
                 section_checkbox(ui, Section::Groupings);
                 section_checkbox(ui, Section::Soundfonts);
+                section_checkbox(ui, Section::Queue);
                 ui.separator();
                 section_checkbox(ui, Section::Visualizer);
                 section_checkbox(ui, Section::Editor);
@@ -2853,6 +2869,7 @@ impl App {
         let mut remove = Vec::new();
         let mut tag = None;
         let mut together: Option<(bool, Vec<PathBuf>)> = None;
+        let mut queued: Option<(Vec<PathBuf>, bool)> = None;
         let store = &self.songs;
         let mut add_to: Option<(Option<usize>, Vec<PathBuf>)> = None;
         // With no dragging (touch), songs go onto playlists from their menu.
@@ -2864,6 +2881,9 @@ impl App {
             Vec::new()
         };
         let mut menu = |ui: &mut egui::Ui, paths: &[PathBuf]| {
+            if let Some(next) = queue::menu(ui) {
+                queued = Some((paths.to_vec(), next));
+            }
             if touch {
                 ui.menu_button("Add to playlist", |ui| {
                     for (i, name) in &playlists {
@@ -2924,6 +2944,9 @@ impl App {
         }
         if let Some(at) = output.play {
             self.play_listed(at);
+        }
+        if let Some((paths, next)) = queued {
+            self.queue_songs(ui.ctx(), paths, next);
         }
         if let Some(query) = output.save_search {
             self.smart_playlist_from_search(ui.ctx(), &query);
@@ -3328,7 +3351,7 @@ impl App {
                     (l.playlist.name.clone(), names)
                 })
                 .collect(),
-            playing: self.now_playing.as_ref().map(|n| (n.list, n.entry)),
+            playing: self.playing_entry().map(|n| (n.list, n.entry)),
             script: self.script.path().map(nice_name),
             scripts: self.available_scripts.iter().map(|p| nice_name(p)).collect(),
             active_script: self.active_script,
@@ -3380,9 +3403,10 @@ impl App {
     /// What scripts see of the playlist and the loop/shuffle modes.
     fn script_transport(&mut self) -> lua_visualizer::Transport {
         let naming = naming(&self.config, &self.songs);
+        let playing_entry = self.playing_entry().map(|np| (np.list, np.entry));
         let playlist = self.script_playlist().map(|list| {
             let stored = &self.playlists.lists[list].playlist;
-            let playing = self.now_playing.as_ref().filter(|np| np.list == list);
+            let playing = playing_entry.filter(|(l, _)| *l == list).map(|(_, entry)| entry);
             let entries = stored
                 .entries
                 .iter()
@@ -3395,7 +3419,7 @@ impl App {
             lua_visualizer::PlaylistView {
                 name: stored.name.clone(),
                 playing: playing.is_some(),
-                current: playing.map(|np| np.entry),
+                current: playing,
                 entries,
             }
         });
@@ -3493,6 +3517,7 @@ impl App {
             Section::Songs => Some("songs"),
             Section::Groupings => Some("playlist_rows"),
             Section::Soundfonts => Some("soundfonts"),
+            Section::Queue => Some("queue"),
             _ => None,
         }
     }
@@ -4255,6 +4280,7 @@ impl TabViewer for SectionTabs<'_> {
             Section::Songs => app.songs_ui(ui),
             Section::Groupings => app.groupings_ui(ui),
             Section::Soundfonts => app.soundfont_ui(ui),
+            Section::Queue => app.queue_ui(ui),
             Section::Visualizer => {
                 app.visualizer_preview_ui(ui, self.shared.notes.clone(), self.shared.view.clone());
             }
@@ -4728,6 +4754,8 @@ fn drag_ghost_ui(ctx: &egui::Context) {
         format!("SoundFont: {}", nice_name(&sf.0))
     } else if let Some(entry) = DragAndDrop::payload::<playlist_panel::DraggedEntry>(ctx) {
         entry.label.clone()
+    } else if let Some(rows) = DragAndDrop::payload::<song_list::DraggedRows>(ctx) {
+        rows.label.clone()
     } else {
         return;
     };
@@ -4740,7 +4768,8 @@ fn drag_ghost_ui(ctx: &egui::Context) {
         .interactable(false)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.label(text);
+                // (On one line: the area's narrow by the window's edge.)
+                ui.add(egui::Label::new(text).extend());
             });
         });
 }
