@@ -149,6 +149,23 @@ Check it from anywhere with `curl https://scripts.example.org/api/v1/info`, then
 
 synththing.p51.nl runs the systemd setup above, with the update timer, behind Caddy. It's the identity authority (with SendGrid mail, from synththing@p51.nl), and its publisher is the official one (the default), whose key `.github/workflows/scripts.yml` publishes the bundled scripts with (the `SYNTHTHING_PUBLISH_KEY` secret).
 
+Its front page is `deploy/website/index.html`, a plain-language tour of what the app does, copied to `/var/www/synththing/`. Caddy sends the server's own paths to it and serves the page for the rest:
+
+```
+synththing.p51.nl {
+    @server path /api/* /pair /.well-known/*
+    handle @server {
+        reverse_proxy localhost:7381
+    }
+    handle {
+        root * /var/www/synththing
+        file_server
+    }
+}
+```
+
+Update the page when a release adds something worth telling people about.
+
 Its EULA and privacy policy are `deploy/official/eula.md` and `privacy.md`, copied to `/var/lib/synththing/` and listed in its `server.json`:
 
 ```json
