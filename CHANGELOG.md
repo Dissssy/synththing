@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.5.0 (2026-10-23)
+
 ### Added
 - The local API shows Shuffle, Loop and Autoplay with what's playing, and can set them (`POST /v1/modes`).
 - The local API lists your soundfonts and can switch which one MIDI songs play with (`GET /v1/soundfonts`, `POST /v1/soundfonts/{id}/use`). What's playing tells which soundfont a MIDI song plays with, and a `soundfonts_changed` event tells when the list or the one in use changes.
