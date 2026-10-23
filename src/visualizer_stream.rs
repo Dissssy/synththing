@@ -102,6 +102,12 @@ impl Frames {
         }
     }
 
+    /// How many pictures have come so far: a watcher starting now waits for
+    /// the next one (the newest may be from before it, at another size).
+    pub fn count(&self) -> u64 {
+        self.lock().count
+    }
+
     /// The first picture newer than the `seen`th (`None` within `wait`):
     /// it, and how many have come so far.
     pub fn next(&self, seen: u64, wait: Duration) -> Option<(Arc<Vec<u8>>, u64)> {
@@ -130,6 +136,7 @@ mod tests {
     fn watchers_get_each_new_frame_and_the_newest_size() {
         let frames = Frames::new();
         assert_eq!(frames.wanted(), None);
+        assert_eq!(frames.count(), 0);
         let first = frames.watch(None);
         assert_eq!(frames.wanted(), Some(None));
         let sized = frames.watch(Some((64, 36)));
