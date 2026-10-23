@@ -717,9 +717,6 @@ impl App {
         if missing > 0 {
             summary.push_str(&format!(", {missing} missing"));
         }
-        if !selection.is_empty() {
-            summary.push_str(&format!(", {} selected", selection.len()));
-        }
         ui.weak(summary);
         ui.separator();
 
@@ -808,7 +805,7 @@ impl App {
                     if entry.missing {
                         label.push_str("  (missing)");
                     }
-                    select_list::label(ui, label, Some(format!("{}\nDouble-click to play", entry.path.display())), scroll);
+                    select_list::label(ui, label, Some(format!("{}\nClick to play", entry.path.display())), scroll);
                 });
             }
 

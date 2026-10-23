@@ -10,6 +10,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Programs you allow to Edit library (a new permission, off until you tick it) can star songs, tag them, and add songs to playlists or take them out through the local API. A new `playlists_changed` event tells when any playlist changes.
 - A play queue: right-click songs (or an album, artist or playlist) for Play next or Add to queue, and the Up next button by Shuffle shows what's queued. Queued songs play after the one playing, then the playlist or list it was playing from carries on. A playlist's or album's songs go in in order, or shuffled while Shuffle is on.
 
+### Changed
+- A single click plays a song again (and uses a soundfont, or plays a playlist's song), leaving the selection as it was; Ctrl+click and Shift+click select rows without playing them. While rows are selected, a line under the list says how many, with a button to clear them; Esc clears them too.
+
 ## 1.4.0 (2026-10-23)
 
 ### Added

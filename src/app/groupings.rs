@@ -907,8 +907,8 @@ enum Change {
 }
 
 /// One song's row in `rect`: its star, number, name, guest artist and
-/// length, marked when it's `playing` or `picked`. A click picks it and a
-/// double-click plays it (a tap, on a phone); on the desktop it drags onto
+/// length, marked when it's `playing` or `picked`. A click (a tap, on a
+/// phone) plays it and Ctrl+click picks it; on the desktop it drags onto
 /// a playlist. One whose file isn't here yet (known from your other
 /// devices) is faint, with a download cloud for its star, and does none of
 /// that: there's nothing to play or pick yet. With `moves` (whether
@@ -926,15 +926,21 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
     if !track.here {
         response = response.on_hover_text(NOT_HERE);
     }
-    let mut output = RowOutput { picked: response.clicked(), play: response.double_clicked() || (touch && response.clicked()), ..RowOutput::default() };
+    let pick = !touch && ui.input(|i| i.modifiers.command || i.modifiers.shift);
+    let mut output = RowOutput { picked: response.clicked() && pick, play: response.clicked() && !pick && !response.double_clicked(), ..RowOutput::default() };
     let visuals = ui.style().interact_selectable(&response, picked);
     let playing_color = crate::theme::playing_color(ui.ctx());
     if playing && !picked && !response.hovered() {
-        ui.painter().rect(rect, visuals.corner_radius, playing_color.gamma_multiply(0.15), egui::Stroke::new(1.0, playing_color), egui::StrokeKind::Inside);
+        ui.painter().rect_filled(rect, visuals.corner_radius, playing_color.gamma_multiply(0.15));
     } else if picked || (track.here && response.hovered()) {
-        ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
+        let stroke = if playing { egui::Stroke::NONE } else { visuals.bg_stroke };
+        ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, stroke, egui::StrokeKind::Inside);
     } else if striped {
         ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+    }
+    if playing {
+        // Outlined, picked or not.
+        ui.painter().rect_stroke(rect, visuals.corner_radius, egui::Stroke::new(1.0, playing_color), egui::StrokeKind::Inside);
     }
     if response.drag_started() {
         response.dnd_set_drag_payload(DraggedFiles { paths: vec![track.path.clone()], label: track.name.clone() });
