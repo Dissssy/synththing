@@ -183,7 +183,7 @@ fn render_songs(source: String, script: &Path, soundfont: &Path, out: Option<&Pa
     let songs_to_play = if check { &SONGS[..1] } else { &SONGS[..] };
     let mut checked = 0.0;
     'songs: for (name, _) in songs_to_play {
-        stage.load_song(&songs.join(name), Some(soundfont), &[], prepared)?;
+        stage.load_song(&songs.join(name), Default::default(), &Default::default(), Some(soundfont), &[], prepared)?;
         let mut take = RecordingTake {
             phase: if prepared { RecordPhase::Preparing } else { RecordPhase::Recording },
             kind: RecordKind::Song,

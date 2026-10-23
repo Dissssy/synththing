@@ -1157,6 +1157,7 @@ pub const API_SINCE: &[(&str, &str)] = &[
     ("sprite_register", "0.1.8"),
     ("sprite", "0.1.8"),
     ("sprite_size", "0.1.8"),
+    ("album_art", "1.5.0"),
     ("circle", "0.1.6"),
     ("triangle", "0.1.6"),
     ("polygon", "0.1.6"),

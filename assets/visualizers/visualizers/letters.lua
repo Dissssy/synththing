@@ -82,7 +82,12 @@ function render(width, height, left, right)
     local idle_color = setting_color("idle_color", { r = 90, g = 90, b = 110 })
     local saturation = setting_float("saturation", 0.85, 0.0, 1.0)
 
-    clear(background)
+    -- Below 1, the background's see-through: over the rest of a stream's
+    -- scene, through the local API's PNG frames.
+    local opacity = setting_float("background_opacity", 1, 0, 1,
+        { info = "How much the background covers: below 1 it's see-through, for OBS over the rest of your scene" })
+    script_options({ transparent = opacity < 1 })
+    clear({ r = background.r, g = background.g, b = background.b, a = opacity })
 
     local channels = midi_channels()
     local n = #channels

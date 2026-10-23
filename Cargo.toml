@@ -55,6 +55,7 @@ flate2 = "1.1.10"                                         # deflating sync blobs
 resvg = { version = "0.45", default-features = false }      # the wordmark in the menu bar (app/branding.rs)                                    # icons (the Phosphor set, as a font)
 fontdb = "0.24"                                           # finding installed fonts to fall back on (app/fonts.rs)
 skrifa = "0.44"                                           # reading which characters a font has; the same copy egui renders with
+ab_glyph_rasterizer = "0.1"                               # drawing the bundled CJK fonts into script text (pixel_font)
 # The profiler overlay (app/profiler.rs). Pinned to a commit: the release on
 # crates.io is still on egui 0.33.
 puffin = { git = "https://github.com/EmbarkStudios/puffin", rev = "c81e9bb5e3839f516f3e56fe2d9e9649b5bdea86" }

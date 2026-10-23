@@ -130,7 +130,7 @@ end
 script_options({ transparent = true })  -- once, at the top: see-through frames
 ```
 
-A frame is opaque unless the script asks for see-through ones. With `transparent`, each frame starts transparent instead of filled with the clear color, and whatever isn't drawn on shows what's behind it: in synththing, the panel; in OBS, the scene under it, through the local API's PNG frames (docs/API.md). Translucent drawing over nothing stays translucent, and `clear()` keeps its color's `a`, so `clear({ r = 0, g = 0, b = 0, a = 0.5 })` is a half see-through black backdrop. The clear color's `a` still means trails: it fades the last frame out by that much (its `r`, `g` and `b` don't matter), and the strip `shift_frame` uncovers is transparent. Where nothing can show through (a recording, a JPEG), see-through parts are shown over black. Since 1.5.0.
+A frame is opaque unless the script asks for see-through ones. With `transparent`, each frame starts transparent instead of filled with the clear color, and whatever isn't drawn on shows what's behind it: in synththing, the panel; in OBS, the scene under it, through the local API's PNG frames (docs/API.md). Translucent drawing over nothing stays translucent, and `clear()` keeps its color's `a`, so `clear({ r = 0, g = 0, b = 0, a = 0.5 })` is a half see-through black backdrop. The clear color's `a` still means trails: it fades the last frame out by that much (its `r`, `g` and `b` don't matter), and the strip `shift_frame` uncovers is transparent. Where nothing can show through (a recording, a JPEG), see-through parts are shown over black, and in synththing too unless the See-through button above the visualizer is on, so a see-through script stays readable on every theme. FFT, Pulse, Keyboard, Letters and Dashboard have a Background opacity setting that uses this. Since 1.5.0.
 
 ```lua
 shift_frame(dx, [dy])   -- move what's drawn so far by dx, dy whole pixels
@@ -212,6 +212,8 @@ end
 
 Text is drawn as rects, so it alpha-blends and clips at the edges exactly like `rect`.
 
+Characters the pixel font doesn't have (Japanese, Korean, Chinese) come from the Noto Sans fonts built into synththing instead: smooth rather than pixelated, drawn at the text's size on the same baseline, each about two characters wide (`text_size` measures them). Since 1.5.0; before, they were `?`.
+
 ## Sprites
 
 ```lua
@@ -263,6 +265,22 @@ sprite(player, x2, y2, { scale = 3, tint = { r = 255, g = 255, b = 255, a = 0.4 
 The Sprite Editor tab (View > Sprite Editor, the "Sprite editing" layout, or Ctrl+click on `sprite_register` in the code) draws a script's sprites and writes them back into the code: pick a sprite, paint with the left button (right erases, Alt+click picks a color), fill, draw lines and rectangles (Shift for a filled one), flip every frame left to right or top to bottom, undo and redo, change the size or the palette. It edits sprites whose `image` and `palette` are tables written in the script, in the call or in a `local NAME = {...}` it names; one built by code is listed but left alone. New sprite... adds a blank one above `function render`. A sprite sheet is recorded as a comment just above its call, `-- sprite sheet: 4 frames of 8x8`, which the editor reads to draw frame lines and play the frames; scripts still pick a frame with `src`.
 
 Register sprites once, at the top level of the script (outside `render()`), and keep the ids: each call registers a new sprite, and a script can have at most 10,000. Sprites belong to the script and go away when it's reloaded or restarted, which re-registers them anyway.
+
+```lua
+album_art([size]) -> { sprite, width, height, color } or nil   -- the playing song's art
+```
+
+`album_art` gives the playing song's art (its own picture, else its album's cover, as the app shows it) as a sprite to draw with `sprite`, at most `size` pixels across (its own size, up to 512, when left out), and `color`, the color it's mostly made of, bright enough to draw with on a dark background: a script can take on the colors of what's playing. It's nil while there's no song, while the art's still being read (a moment after a song starts), and for a song without any. Each size is scaled smoothly once per picture, so ask for the size you'll draw at, every frame; the ids stay the same from one song to the next. The art can be drawn with `scale`, `src` and flips, but not recolored (`palette`, `tint`). Since 1.5.0.
+
+```lua
+function render(width, height)
+    local art = album_art(96)
+    if art then
+        sprite(art.sprite, 8, 8)
+        rect(8, 108, 8 + art.width, 112, art.color)  -- a bar in the album's color
+    end
+end
+```
 
 ## Audio data
 
@@ -385,7 +403,7 @@ text(4, 4, note_name(key) .. string.format(" %+d cents", math.floor((key - math.
 ## Playback & timing
 
 ```lua
-playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, song_path, song_id, song_loads, loop_mode, shuffle, recording, streaming}
+playback() -> {position, length, speed, paused, finished, loop_enabled, generation, song_name, title, artist, album, song_path, song_id, song_loads, loop_mode, shuffle, recording, streaming}
 script_options({start_paused = true})  -- once, at the top: songs wait for the script to start them
 script_options({app_log = true})       -- its log() messages also go to the app's log
 set_paused(paused)  -- pause or resume playback
@@ -409,6 +427,8 @@ shown = approach(shown, level_left(), 30, 4)   -- up fast, down slowly
 ```
 
 Units: `position` and `length` are seconds of song time. `speed` is the playback rate (1.0 is normal), and it's song time that runs faster or slower: at 2.0, one song-second passes in half a real second. Everything song-related (`position`, note `start`/`stop`, `seconds_until`, `NOTE_LOOKAHEAD`) is in song seconds, while `DT` and `TIME` are real seconds. To turn a song-time gap into real time, divide by `speed`.
+
+`title`, `artist` and `album` are the song's tags, each nil when it hasn't got one (or isn't in the library): show `title or song_name` for a name that's always there. Since 1.5.0.
 
 `song_name` is the song's name as the app shows it, `song_path` the file's full path, and `song_id` a short code made from the file's contents (16 hex digits): the same song gives the same id wherever it's kept and whatever it's called, and a different file gives a different one. All three are nil with no song loaded. `song_id` is the one to key saved data by, like a best score per song:
 
@@ -810,7 +830,7 @@ A script can expose typed, user-editable values that show up as widgets in the S
 setting_bool(key, default [, {group, info}]) -> bool
 setting_int(key, default, min, max [, {group, info}]) -> integer
 setting_float(key, default, min, max [, {group, info}]) -> number
-setting_color(key, default [, {group, info}]) -> {r,g,b}
+setting_color(key, default [, {group, info, alpha}]) -> {r,g,b[,a]}
 setting_string(key, default [, {group, info}]) -> string
 setting_selection(key, options, defaults, max_selections [, {group, info}]) -> selected
 ```
@@ -820,6 +840,12 @@ The Settings window is laid out like Preferences: the script's groups down the s
 ```lua
 local speed = setting_float("speed", 1, 0.25, 4, { group = "Motion", info = "How fast the bars fall, in screens per second." })
 local accent = setting_color("accent", { r = 51, g = 204, b = 255 }, { group = "Colors" })
+```
+
+A color setting with `alpha = true` in that table lets the user pick its opacity too, and gives back `a` (0 to 1) along with `r`, `g` and `b`; the default can have an `a` (1 if not). Without it, a color is opaque and has no `a`. Since 1.5.0.
+
+```lua
+local card = setting_color("card", { r = 58, g = 40, b = 40, a = 0.8 }, { alpha = true, group = "Colors" })
 ```
 
 A selection picks up to `max_selections` of a fixed option list; a pick past the cap evicts whichever option was selected longest ago, so there's no disabled-checkbox state to design around.
@@ -1061,6 +1087,7 @@ Visualizers:
 - `letters.lua`, one glyph per channel, colored by pitch; a from-scratch bitmap font
 - `dashboard.lua`, four panels (a scope, a spectrum, a piano roll with an instrument legend from `channel_program`, and level meters), each drawn in its own coordinates with `translate` and kept inside its box with `clip`, and a shake on every onset
 - `pulse.lua`, a ring that beats with the song: the time signature's beats around a circle, a polygon turning with the beat and swelling with loudness, eighth-note sprites bursting out on onsets, and a tempo/bar readout
+- `now_playing.lua`, a pixel-art card for a stream overlay: the song's title and artist (`playback()`'s tags), its time and a progress bar, and its album art (`album_art`), in the album's colors; see-through (`script_options` transparent), with long titles scrolling and fading out at the edges (`clip`, then slices of the background over the text's ends)
 - `disco.lua`, a spinning mirror ball firing a laser per note, colored by channel and aimed by pitch, anticipated with `upcoming_notes()`
 
 Games:

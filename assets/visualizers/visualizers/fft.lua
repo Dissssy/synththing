@@ -59,7 +59,12 @@ function render(width, height, left, right)
     local show_labels = setting_bool("frequency_labels", true)
     local show_meters = setting_bool("level_meters", true)
 
-    clear(background)
+    -- Below 1, the background's see-through: over the rest of a stream's
+    -- scene, through the local API's PNG frames.
+    local opacity = setting_float("background_opacity", 1, 0, 1,
+        { info = "How much the background covers: below 1 it's see-through, for OBS over the rest of your scene" })
+    script_options({ transparent = opacity < 1 })
+    clear({ r = background.r, g = background.g, b = background.b, a = opacity })
 
     -- The meters take a strip on the right; the spectrum gets the rest.
     local full_width = width

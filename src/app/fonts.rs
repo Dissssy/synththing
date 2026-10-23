@@ -39,18 +39,13 @@ pub fn install(ctx: &egui::Context) {
 /// text), for the few drawn filled: a starred song's alien.
 pub const PHOSPHOR_FILL: &str = "phosphor-fill";
 
-/// The fonts built into the app: egui's own, the Phosphor icons, and Noto
-/// Sans JP and KR (`assets/fonts/noto-sans-cjk`) after them. JP comes
-/// first, so the Chinese characters both have are drawn the Japanese way.
+/// The fonts built into the app: egui's own, the Phosphor icons, and the
+/// bundled CJK fonts after them.
 fn bundled() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
     egui_phosphor::add_font_bytes_as_family(&mut fonts, PHOSPHOR_FILL, egui_phosphor::Variant::Fill.font_bytes());
-    let cjk: [(&str, &'static [u8]); 2] = [
-        ("NotoSansJP-Light", include_bytes!("../../assets/fonts/noto-sans-cjk/NotoSansJP-Light.ttf")),
-        ("NotoSansKR-Light", include_bytes!("../../assets/fonts/noto-sans-cjk/NotoSansKR-Light.ttf")),
-    ];
-    let cjk = cjk.into_iter().map(|(name, bytes)| (name.to_owned(), FontData::from_static(bytes))).collect();
+    let cjk = crate::bundled_fonts::CJK.into_iter().map(|(name, bytes)| (name.to_owned(), FontData::from_static(bytes))).collect();
     with_fallbacks(fonts, cjk)
 }
 

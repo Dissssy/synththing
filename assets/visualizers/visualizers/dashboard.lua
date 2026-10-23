@@ -159,7 +159,12 @@ function render(width, height, left, right)
     if hit then shake = math.min(1, shake + 0.4 + strength) end
     shake = math.max(0, shake - DT * 4)
 
-    clear(background)
+    -- Below 1, the background's see-through: over the rest of a stream's
+    -- scene, through the local API's PNG frames.
+    local opacity = setting_float("background_opacity", 1, 0, 1,
+        { info = "How much the background covers: below 1 it's see-through, for OBS over the rest of your scene" })
+    script_options({ transparent = opacity < 1 })
+    clear({ r = background.r, g = background.g, b = background.b, a = opacity })
     push_view()
     local s = shake * shake_amount
     translate(math.sin(TIME * 90) * s, math.cos(TIME * 77) * s)

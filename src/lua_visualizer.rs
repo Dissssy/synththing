@@ -509,8 +509,8 @@ pub enum SettingValue {
     Bool(bool),
     Int(i64),
     Float(f64),
-    /// Plain RGB, no alpha, draw-call alpha is a separate, per-call concern.
-    Color([u8; 3]),
+    /// RGBA; alpha is 255 unless the setting has `alpha = true`.
+    Color([u8; 4]),
     String(String),
     /// Selected option labels, oldest-selected first, that order is what
     /// lets a new pick past `max_selections` evict the oldest one rather
@@ -523,7 +523,8 @@ pub enum SettingKind {
     Bool,
     Int { min: i64, max: i64 },
     Float { min: f64, max: f64 },
-    Color,
+    /// `alpha`: the user picks how opaque it is too.
+    Color { alpha: bool },
     String,
     Selection { options: Vec<String>, max_selections: usize },
 }
@@ -554,9 +555,9 @@ pub fn setting_from_json(kind: &SettingKind, value: &serde_json::Value) -> Optio
         SettingKind::Bool => SettingValue::Bool(value.as_bool()?),
         SettingKind::Int { min, max } => SettingValue::Int(value.as_i64().or_else(|| value.as_f64().map(|f| f.round() as i64))?.clamp(*min, *max)),
         SettingKind::Float { min, max } => SettingValue::Float(value.as_f64()?.clamp(*min, *max)),
-        SettingKind::Color => {
-            let channel = |c: &str| value.get(c).and_then(serde_json::Value::as_f64).map(|v| v.clamp(0.0, 255.0) as u8);
-            SettingValue::Color([channel("r")?, channel("g")?, channel("b")?])
+        SettingKind::Color { alpha } => {
+            let [r, g, b, a] = color_from_json(value)?;
+            SettingValue::Color([r, g, b, if *alpha { a } else { 255 }])
         }
         SettingKind::String => SettingValue::String(value.as_str()?.to_string()),
         SettingKind::Selection { options, max_selections } => {
@@ -602,7 +603,8 @@ pub fn preset_line(name: &str, descriptors: &[SettingDescriptor]) -> String {
         SettingValue::Bool(b) => b.to_string(),
         SettingValue::Int(i) => i.to_string(),
         SettingValue::Float(f) => format!("{f}"),
-        SettingValue::Color([r, g, b]) => format!("{{ r = {r}, g = {g}, b = {b} }}"),
+        SettingValue::Color([r, g, b, 255]) => format!("{{ r = {r}, g = {g}, b = {b} }}"),
+        SettingValue::Color([r, g, b, a]) => format!("{{ r = {r}, g = {g}, b = {b}, a = {} }}", alpha_fraction(*a)),
         SettingValue::String(s) => lua_string(s),
         SettingValue::Selection(items) => {
             format!("{{ {} }}", items.iter().map(|s| lua_string(s)).collect::<Vec<_>>().join(", "))
@@ -666,6 +668,10 @@ fn item_labels(function: &str, table: Option<Table>) -> mlua::Result<Option<Item
     let mut labels = ItemLabels::default();
     for pair in table.pairs::<String, Value>() {
         let (key, value) = pair?;
+        // setting_color's own flag, read there.
+        if function == "setting_color" && key == "alpha" {
+            continue;
+        }
         let text = match value {
             Value::String(s) => s.to_str()?.trim().to_string(),
             other => {
@@ -681,7 +687,8 @@ fn item_labels(function: &str, table: Option<Table>) -> mlua::Result<Option<Item
             "info" => labels.info = text,
             other => {
                 return Err(mlua::Error::runtime(format!(
-                    "{function}: no option `{other}` (there are group and info)"
+                    "{function}: no option `{other}` (there are {})",
+                    if function == "setting_color" { "group, info and alpha" } else { "group and info" }
                 )));
             }
         }
@@ -775,26 +782,16 @@ impl SettingsStore {
         initial
     }
 
-    fn get_or_register_color(&mut self, key: &str, default: [u8; 3]) -> [u8; 3] {
-        #[derive(Deserialize)]
-        struct ColorJson {
-            r: u8,
-            g: u8,
-            b: u8,
-        }
-
+    fn get_or_register_color(&mut self, key: &str, default: [u8; 4], alpha: bool) -> [u8; 4] {
+        let opaque = |[r, g, b, a]: [u8; 4]| [r, g, b, if alpha { a } else { 255 }];
+        let default = opaque(default);
         if let Some(SettingValue::Color(v)) = self.find(key).map(|d| &d.value) {
             return *v;
         }
-        let initial = self
-            .pending
-            .get(key)
-            .and_then(|v| serde_json::from_value::<ColorJson>(v.clone()).ok())
-            .map(|c| [c.r, c.g, c.b])
-            .unwrap_or(default);
+        let initial = self.pending.get(key).and_then(color_from_json).map(opaque).unwrap_or(default);
         self.descriptors.push(SettingDescriptor {
             key: key.to_string(),
-            kind: SettingKind::Color,
+            kind: SettingKind::Color { alpha },
             value: SettingValue::Color(initial),
             default: SettingValue::Color(default),
             labels: ItemLabels::default(),
@@ -898,12 +895,27 @@ fn save_sidecar(script_path: &Path, store: &SettingsStore) {
     }
 }
 
+/// A color as the settings file keeps it: `r`, `g`, `b` bytes and `a` from
+/// 0 to 1 (like a script's color tables), opaque when there's none.
+fn color_from_json(value: &serde_json::Value) -> Option<[u8; 4]> {
+    let channel = |c: &str| value.get(c).and_then(serde_json::Value::as_f64);
+    let byte = |v: f64| v.clamp(0.0, 255.0) as u8;
+    let a = channel("a").map_or(255, |a| (a.clamp(0.0, 1.0) * 255.0).round() as u8);
+    Some([byte(channel("r")?), byte(channel("g")?), byte(channel("b")?), a])
+}
+
+/// An alpha byte as a script's `a`, 0 to 1, rounded to 3 places.
+fn alpha_fraction(a: u8) -> f64 {
+    (a as f64 / 255.0 * 1000.0).round() / 1000.0
+}
+
 pub fn setting_value_to_json(v: &SettingValue) -> serde_json::Value {
     match v {
         SettingValue::Bool(b) => serde_json::Value::Bool(*b),
         SettingValue::Int(i) => serde_json::Value::from(*i),
         SettingValue::Float(f) => serde_json::Value::from(*f),
-        SettingValue::Color([r, g, b]) => serde_json::json!({ "r": r, "g": g, "b": b }),
+        SettingValue::Color([r, g, b, 255]) => serde_json::json!({ "r": r, "g": g, "b": b }),
+        SettingValue::Color([r, g, b, a]) => serde_json::json!({ "r": r, "g": g, "b": b, "a": alpha_fraction(*a) }),
         SettingValue::String(s) => serde_json::Value::String(s.clone()),
         SettingValue::Selection(items) => serde_json::Value::from(items.clone()),
     }
@@ -1426,11 +1438,24 @@ impl SampleHistory {
     }
 }
 
+/// The playing song's tags, for `playback()`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SongTags {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+}
+
 /// Which song is loaded, for `playback()`.
 #[derive(Clone, Default)]
 struct SongIdentity {
     path: Option<String>,
     id: Option<String>,
+    tags: SongTags,
+    /// Its art (`album_art()`), once read; art read for the song after it,
+    /// which can come in before it does, waits in `next_art`.
+    art: Option<Arc<crate::album_art::ScriptArt>>,
+    next_art: Option<(String, Option<Arc<crate::album_art::ScriptArt>>)>,
     /// The app's playlist and transport modes, refreshed each frame.
     transport: Transport,
     /// Songs loaded so far (`playback().song_loads`), the same one again
@@ -1996,13 +2021,28 @@ impl LuaVisualizer {
         }
     }
 
-    /// The current song's file and id (`loader::song_id`), for
-    /// `playback().song_path` / `song_id`.
-    pub fn set_song(&mut self, path: Option<&Path>, id: Option<String>) {
+    /// The current song's file, id (`loader::song_id`) and tags, for
+    /// `playback()`.
+    pub fn set_song(&mut self, path: Option<&Path>, id: Option<String>, tags: SongTags) {
         let mut song = self.song.borrow_mut();
         song.path = path.map(|p| p.display().to_string());
         song.id = id;
+        song.tags = tags;
         song.loads += 1;
+        let next = song.next_art.take();
+        song.art = next.filter(|(path, _)| song.path.as_ref() == Some(path)).and_then(|(_, art)| art);
+    }
+
+    /// The art of the song at `path` (`album_art()`), read since it was
+    /// sent: kept for it if it's not the current song yet.
+    pub fn set_art(&mut self, path: &Path, art: Option<Arc<crate::album_art::ScriptArt>>) {
+        let mut song = self.song.borrow_mut();
+        let path = path.display().to_string();
+        if song.path.as_ref() == Some(&path) {
+            song.art = art;
+        } else {
+            song.next_art = Some((path, art));
+        }
     }
 
     /// Whether the visualizer is being recorded (`playback().recording`),
@@ -2478,6 +2518,7 @@ fn compile(
     let store = Rc::new(RefCell::new(ScriptStore::load(script_path)));
     let sprites: Rc<RefCell<Vec<Sprite>>> = Rc::default();
     register_sprites(&lua, &sprites, &commands).map_err(|e| e.to_string())?;
+    register_album_art(&lua, &sprites, song).map_err(|e| e.to_string())?;
     register_song_and_state(&lua, note_list, &playback_requests, &store, song).map_err(|e| e.to_string())?;
     let options: Rc<Cell<ScriptOptions>> = Rc::default();
     {
@@ -3133,6 +3174,72 @@ fn register_sprites(
 /// The colors for one draw of `sprite`, from an options table's `palette`
 /// (`{[index] = color, ...}`, replacing just those entries) and `tint` (a
 /// color every entry is multiplied by), or `None` for its own colors.
+/// `album_art([size])`: the playing song's art as a sprite, at most `size`
+/// pixels across (its own size, up to 512, by default), and the color it's
+/// mostly made of. Each size is made once per picture; a new picture
+/// takes over the same sprite ids.
+fn register_album_art(lua: &Lua, sprites: &Rc<RefCell<Vec<Sprite>>>, song: &Rc<RefCell<SongIdentity>>) -> mlua::Result<()> {
+    type Made = (Option<Arc<crate::album_art::ScriptArt>>, HashMap<u32, (usize, u32, u32)>);
+    let made: Rc<RefCell<Made>> = Rc::default();
+    let (sprites, song) = (Rc::clone(sprites), Rc::clone(song));
+    lua.globals().set(
+        "album_art",
+        lua.create_function(move |lua, size: Option<f64>| {
+            let Some(art) = song.borrow().art.clone() else { return Ok(Value::Nil) };
+            let full = art.image.width().max(art.image.height());
+            let size = match size {
+                None => full,
+                Some(size) if size.is_finite() && size >= 1.0 => (size.round() as u32).min(full),
+                Some(_) => return Err(mlua::Error::runtime("album_art: size is a number of pixels, 1 or more")),
+            };
+            let mut made = made.borrow_mut();
+            if !made.0.as_ref().is_some_and(|m| Arc::ptr_eq(m, &art)) {
+                made.0 = Some(Arc::clone(&art));
+                for slot in made.1.values_mut() {
+                    slot.1 = 0; // (made again below when asked for)
+                }
+            }
+            let mut sprites = sprites.borrow_mut();
+            let (id, width, height) = match made.1.get(&size).copied().filter(|slot| slot.1 > 0) {
+                Some(slot) => slot,
+                None => {
+                    let image = if size == full {
+                        art.image.clone()
+                    } else {
+                        image::imageops::thumbnail(&art.image, size * art.image.width() / full, size * art.image.height() / full)
+                    };
+                    let (width, height) = image.dimensions();
+                    let sprite = Sprite {
+                        width: width as usize,
+                        height: height as usize,
+                        pixels: image.pixels().map(|p| u32::from_be_bytes([p[3], p[0], p[1], p[2]])).collect(),
+                        indices: Vec::new(),
+                        palette: Vec::new(),
+                    };
+                    let id = match made.1.get(&size) {
+                        Some(&(id, ..)) => {
+                            sprites[id - 1] = sprite;
+                            id
+                        }
+                        None => {
+                            sprites.push(sprite);
+                            sprites.len()
+                        }
+                    };
+                    made.1.insert(size, (id, width, height));
+                    (id, width, height)
+                }
+            };
+            let t = lua.create_table_with_capacity(0, 4)?;
+            t.raw_set("sprite", id)?;
+            t.raw_set("width", width)?;
+            t.raw_set("height", height)?;
+            t.raw_set("color", rgb_to_table(lua, [(art.color >> 16) as u8, (art.color >> 8) as u8, art.color as u8])?)?;
+            Ok(Value::Table(t))
+        })?,
+    )
+}
+
 fn sprite_colors(options: &Table, sprite: &Sprite) -> mlua::Result<Option<Rc<[u32]>>> {
     let swaps: Option<Table> = options
         .get::<Option<Table>>("palette")
@@ -3142,6 +3249,9 @@ fn sprite_colors(options: &Table, sprite: &Sprite) -> mlua::Result<Option<Rc<[u3
         .map_err(|_| mlua::Error::runtime("sprite: tint is a color table"))?;
     if swaps.is_none() && tint.is_none() {
         return Ok(None);
+    }
+    if sprite.palette.is_empty() {
+        return Err(mlua::Error::runtime("sprite: album art has no palette to recolor or tint"));
     }
     let mut colors = sprite.palette.clone();
     if let Some(swaps) = swaps {
@@ -3920,7 +4030,9 @@ fn register_globals(
                 let color = table_to_color(&color)?;
                 let height = text_height(height)?;
                 let mut cmds = cmds.borrow_mut();
-                pixel_font::layout(&text, x, y, height, |x0, y0, x1, y1| {
+                pixel_font::layout(&text, x, y, height, |x0, y0, x1, y1, coverage| {
+                    let alpha = ((color >> 24) as f32 * coverage).round() as u32;
+                    let color = (alpha << 24) | (color & 0x00FF_FFFF);
                     cmds.push(DrawCommand::Rect { x0, y0, x1, y1, color });
                 });
                 Ok(pixel_font::measure(&text, height))
@@ -4076,7 +4188,7 @@ fn register_globals(
         lua.create_function(move |lua, ()| {
             let view = view.borrow();
             let song = song.borrow();
-            let t = lua.create_table_with_capacity(0, 13)?;
+            let t = lua.create_table_with_capacity(0, 19)?;
             t.raw_set("position", view.position)?;
             t.raw_set("length", view.length)?;
             t.raw_set("speed", view.speed)?;
@@ -4085,6 +4197,9 @@ fn register_globals(
             t.raw_set("loop_enabled", view.loop_enabled)?;
             t.raw_set("generation", view.generation)?;
             t.raw_set("song_name", view.track_name.clone())?;
+            t.raw_set("title", song.tags.title.clone())?;
+            t.raw_set("artist", song.tags.artist.clone())?;
+            t.raw_set("album", song.tags.album.clone())?;
             t.raw_set("song_path", song.path.clone())?;
             t.raw_set("song_id", song.id.clone())?;
             t.raw_set("song_loads", song.loads)?;
@@ -4175,12 +4290,21 @@ fn register_globals(
     globals.set(
         "setting_color",
         lua.create_function(move |lua, (key, default, labels): (String, Table, Option<Table>)| {
+            // `alpha` sits with the labels: { alpha = true, group = "Colors" }.
+            let alpha = match &labels {
+                Some(t) => t.get::<Option<bool>>("alpha")?.unwrap_or(false),
+                None => false,
+            };
             let labels = item_labels("setting_color", labels)?;
-            let default = table_to_rgb(&default)?;
+            let default = table_to_rgba(&default)?;
             let mut store = store.borrow_mut();
-            let value = store.get_or_register_color(&key, default);
+            let [r, g, b, a] = store.get_or_register_color(&key, default, alpha);
             store.label(&key, labels);
-            rgb_to_table(lua, value)
+            let t = rgb_to_table(lua, [r, g, b])?;
+            if alpha {
+                t.raw_set("a", alpha_fraction(a))?;
+            }
+            Ok(t)
         })?,
     )?;
 
@@ -4212,10 +4336,7 @@ fn register_globals(
                     Value::Integer(i) => serde_json::Value::from(i),
                     Value::Number(n) => serde_json::Value::from(n),
                     Value::String(s) => serde_json::Value::String(s.to_str()?.to_string()),
-                    Value::Table(t) if t.contains_key("r")? => {
-                        let [r, g, b] = table_to_rgb(&t)?;
-                        serde_json::json!({ "r": r, "g": g, "b": b })
-                    }
+                    Value::Table(t) if t.contains_key("r")? => setting_value_to_json(&SettingValue::Color(table_to_rgba(&t)?)),
                     Value::Table(t) => serde_json::Value::from(table_to_strings(&t)?),
                     other => {
                         return Err(mlua::Error::runtime(format!(
@@ -4404,6 +4525,13 @@ fn table_to_rgb(t: &Table) -> mlua::Result<[u8; 3]> {
     let b: f32 = t.get("b")?;
     let byte = |v: f32| v.clamp(0.0, 255.0) as u8;
     Ok([byte(r), byte(g), byte(b)])
+}
+
+/// A color table with an optional `a` (0 to 1, opaque when left out).
+fn table_to_rgba(t: &Table) -> mlua::Result<[u8; 4]> {
+    let [r, g, b] = table_to_rgb(t)?;
+    let a: Option<f32> = t.get("a")?;
+    Ok([r, g, b, (a.unwrap_or(1.0).clamp(0.0, 1.0) * 255.0).round() as u8])
 }
 
 fn rgb_to_table(lua: &Lua, [r, g, b]: [u8; 3]) -> mlua::Result<Table> {
@@ -5501,6 +5629,12 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         }
     }
 
+    fn frame_with_error(visualizer: &mut LuaVisualizer, wanted: &str) {
+        let mut buffer = vec![0u32; 4];
+        visualizer.render(&mut buffer, 4, 1, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        assert!(visualizer.error().is_some_and(|e| e.contains(wanted)), "{:?}", visualizer.error());
+    }
+
     fn last_log(visualizer: &LuaVisualizer) -> String {
         visualizer.log_entries().last().map(|e| e.message.clone()).unwrap_or_default()
     }
@@ -5754,7 +5888,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(".seeded"), "").unwrap();
         seed_bundled(&dir).unwrap();
-        assert_eq!(added(&dir), ["dashboard", "highway", "note_runner"]);
+        assert_eq!(added(&dir), ["dashboard", "highway", "note_runner", "now_playing"]);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -5948,8 +6082,8 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         frame(&mut visualizer, &sample_playback());
         assert_eq!(last_log(&visualizer), "0");
         // The same song twice still counts twice.
-        visualizer.set_song(Some(Path::new("a.mid")), Some("x".into()));
-        visualizer.set_song(Some(Path::new("a.mid")), Some("x".into()));
+        visualizer.set_song(Some(Path::new("a.mid")), Some("x".into()), SongTags::default());
+        visualizer.set_song(Some(Path::new("a.mid")), Some("x".into()), SongTags::default());
         frame(&mut visualizer, &sample_playback());
         assert_eq!(last_log(&visualizer), "2");
         // playback().recording follows set_recording.
@@ -6410,6 +6544,41 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         assert!(draw(&format!("line(0, 0, 1, 1, {white}, 0)")).contains("width must be more than 0"));
     }
 
+    /// Scripts see the song's tags, and its art as a sprite at the size they
+    /// ask for, once it's read (art read early waits for its song).
+    #[test]
+    fn songs_tags_and_art() {
+        let script = "function render()
+            local p, art = playback(), album_art(2)
+            log(tostring(p.title) .. '|' .. tostring(p.artist) .. '|' .. tostring(p.album) .. '|' ..
+                (art and (art.sprite .. ' ' .. art.width .. 'x' .. art.height .. ' ' .. art.color.r) or 'none'))
+            if art then sprite(art.sprite, 0, 0) end
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        let mut buffer = vec![0u32; 4];
+        let mut frame = |visualizer: &mut LuaVisualizer| {
+            visualizer.render(&mut buffer, 4, 1, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+            assert_eq!(visualizer.error(), None);
+            (last_log(visualizer), buffer.clone())
+        };
+        assert_eq!(frame(&mut visualizer).0, "nil|nil|nil|none");
+
+        let art = crate::album_art::ScriptArt { image: image::RgbaImage::from_pixel(4, 4, image::Rgba([250, 0, 0, 255])), color: 0xFFFA_0000 };
+        let path = Path::new("song.mp3");
+        visualizer.set_art(path, Some(Arc::new(art)));
+        let tags = SongTags { title: Some("Enemy".into()), artist: Some("Imagine Dragons".into()), album: None };
+        visualizer.set_song(Some(path), Some("id".into()), tags);
+        let (log, pixels) = frame(&mut visualizer);
+        assert_eq!(log, "Enemy|Imagine Dragons|nil|1 2x2 250");
+        assert_eq!(&pixels[..3], &[0xFFFA_0000, 0xFFFA_0000, OPAQUE_BLACK], "drawn at 2x2");
+
+        visualizer.set_song(Some(Path::new("next.mid")), None, SongTags::default());
+        assert_eq!(frame(&mut visualizer).0, "nil|nil|nil|none", "the next song's art isn't read yet");
+        visualizer.set_source("function render() sprite(album_art().sprite, 0, 0, { tint = { r = 1, g = 1, b = 1 } }) end".to_string());
+        visualizer.set_art(Path::new("next.mid"), Some(Arc::new(crate::album_art::ScriptArt { image: image::RgbaImage::new(1, 1), color: 0 })));
+        frame_with_error(&mut visualizer, "album art has no palette");
+    }
+
     /// Frames are opaque, unless the script opts into see-through ones:
     /// those start transparent, `clear` keeps its alpha, translucent
     /// drawing over nothing stays translucent, and the clear color's alpha
@@ -6645,7 +6814,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
         frame(&mut visualizer, &sample_playback());
         assert_eq!(last_log(&visualizer), "test|nil|nil");
-        visualizer.set_song(Some(Path::new("C:/music/song.mid")), Some(crate::loader::song_id(b"MThd")));
+        visualizer.set_song(Some(Path::new("C:/music/song.mid")), Some(crate::loader::song_id(b"MThd")), SongTags::default());
         frame(&mut visualizer, &sample_playback());
         // The id is the start of the file's SHA-256, so the same bytes
         // always give the same id, wherever the file is.
@@ -6896,7 +7065,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::Bool)));
         assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::Int { .. })));
         assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::Float { .. })));
-        assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::Color)));
+        assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::Color { .. })));
         assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::String)));
         assert!(settings.iter().any(|d| matches!(d.kind, SettingKind::Selection { .. })));
     }
@@ -6926,6 +7095,31 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
             .map(|d| d.value)
             .unwrap();
         assert!(matches!(value, SettingValue::Bool(true)));
+    }
+
+    /// A color setting with `alpha = true` keeps and gives back its opacity,
+    /// and one without stays opaque, whatever it's given.
+    #[test]
+    fn color_settings_with_alpha() {
+        let source = "function render()\n\
+                        local card = setting_color('card', { r = 1, g = 2, b = 3, a = 0.5 }, { alpha = true, group = 'Colors' })\n\
+                        local tint = setting_color('tint', { r = 1, g = 2, b = 3, a = 0.5 })\n\
+                        assert(card.a == 0.502 and tint.a == nil, tostring(card.a))\n\
+                      end\n";
+        let mut visualizer = LuaVisualizer::new(source.to_string(), None, 44_100);
+        let mut buffer = vec![0u32; 16 * 16];
+        visualizer.render(&mut buffer, 16, 16, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        assert_eq!(visualizer.error(), None);
+        let settings = visualizer.settings();
+        let card = settings.iter().find(|d| d.key == "card").unwrap();
+        let tint = settings.iter().find(|d| d.key == "tint").unwrap();
+        assert_eq!(card.value, SettingValue::Color([1, 2, 3, 128]));
+        assert_eq!(tint.value, SettingValue::Color([1, 2, 3, 255]));
+        let json = setting_value_to_json(&card.value);
+        assert_eq!(json, serde_json::json!({ "r": 1, "g": 2, "b": 3, "a": 0.502 }));
+        assert_eq!(setting_from_json(&card.kind, &json), Some(card.value.clone()));
+        assert_eq!(setting_from_json(&tint.kind, &json), Some(SettingValue::Color([1, 2, 3, 255])));
+        assert_eq!(setting_value_to_json(&tint.value), serde_json::json!({ "r": 1, "g": 2, "b": 3 }));
     }
 
     /// `settings_preset` offers presets (the same name again replaces one),

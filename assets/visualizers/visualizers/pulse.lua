@@ -53,7 +53,12 @@ function render(width, height, left, right)
     local show_text = setting_bool("show_readout", true)
     local note_size = setting_int("note_size", 3, 1, 8)
 
-    clear(background)
+    -- Below 1, the background's see-through: over the rest of a stream's
+    -- scene, through the local API's PNG frames.
+    local opacity = setting_float("background_opacity", 1, 0, 1,
+        { info = "How much the background covers: below 1 it's see-through, for OBS over the rest of your scene" })
+    script_options({ transparent = opacity < 1 })
+    clear({ r = background.r, g = background.g, b = background.b, a = opacity })
     local cx, cy = width / 2, height / 2
     local radius = math.min(width, height) * 0.32
 

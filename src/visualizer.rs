@@ -438,6 +438,9 @@ pub struct VisualizerPanel {
     pads: PadFrame,
     /// Whether the app is in its mobile layout (`set_mobile`).
     mobile: bool,
+    /// See-through frames show what's behind the panel (`set_see_through`);
+    /// else they're shown over black.
+    see_through: bool,
     /// Frames are drawn for a program watching through the local API, at
     /// the size it asked for: the panel just says so (`set_off_screen`).
     off_screen: bool,
@@ -463,6 +466,7 @@ impl VisualizerPanel {
             last_samples: Vec::new(),
             pads: PadFrame::default(),
             mobile: false,
+            see_through: false,
             off_screen: false,
             touches: Vec::new(),
             touch_pass: 0,
@@ -485,6 +489,12 @@ impl VisualizerPanel {
     /// Whether the app is in its mobile layout, for the next `show`.
     pub fn set_mobile(&mut self, mobile: bool) {
         self.mobile = mobile;
+    }
+
+    /// Whether see-through frames show what's behind them, for the next
+    /// `show` (else they're over black).
+    pub fn set_see_through(&mut self, see_through: bool) {
+        self.see_through = see_through;
     }
 
     /// Whether frames are only for a program watching through the local
@@ -609,6 +619,9 @@ impl VisualizerPanel {
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
         // Frozen: show the last frame as-is, without running the script.
         if frozen && let Some(texture) = &self.texture {
+            if !self.see_through {
+                ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+            }
             ui.painter().image(texture.id(), rect, uv, egui::Color32::WHITE);
             return ShowOutput { focused, cursor: CursorRequest::default(), rendered: false, image_rect: rect };
         }
@@ -640,6 +653,9 @@ impl VisualizerPanel {
         } else if let Some(texture) = &self.texture {
             // Stretched to the whole allocated rect: the texture can be
             // smaller than the panel by design (see MAX_VISUALIZER_PIXELS).
+            if !self.see_through {
+                ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+            }
             ui.painter().image(texture.id(), rect, uv, egui::Color32::WHITE);
         }
 
