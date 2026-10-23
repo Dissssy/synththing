@@ -13,7 +13,7 @@ use super::{
     SONG_EXTENSIONS,
 };
 use crate::audio::AudioCommand;
-use crate::config::nice_name;
+use crate::config::{nice_name, DroppedSongs};
 use crate::engine::EngineView;
 use crate::song_list::DraggedFiles;
 use crate::layout::Section;
@@ -418,7 +418,8 @@ impl App {
     /// Files dragged onto the window from the OS file manager: while they
     /// hover, the whole window dims under "Drop music here to import"; once
     /// dropped, soundfonts join the Soundfonts list and songs are imported
-    /// into the library (and added to the playlist on screen, if one is).
+    /// into the library, then go where the Dropped songs preference says:
+    /// the queue, or (just importing) the playlist on screen, if one is.
     pub(super) fn handle_os_file_drops(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
             let screen = ctx.content_rect();
@@ -466,12 +467,14 @@ impl App {
             return;
         }
         let shown = self.groupings.shown_id() == super::groupings::PLAYLISTS && (self.mobile() || self.is_open(Section::Groupings));
-        let then = match self.viewed_playlist.filter(|_| shown) {
-            Some(list) => {
+        let then = match (self.config.dropped_songs, self.viewed_playlist.filter(|_| shown)) {
+            (DroppedSongs::AddToQueue, _) => crate::import::Then::Queue { next: false },
+            (DroppedSongs::PlayNext, _) => crate::import::Then::Queue { next: true },
+            (DroppedSongs::Import, Some(list)) => {
                 let at = self.playlists.lists.get(list).map_or(0, |l| l.playlist.entries.len());
                 crate::import::Then::Insert { list, at }
             }
-            None => crate::import::Then::Keep,
+            (DroppedSongs::Import, None) => crate::import::Then::Keep,
         };
         let files = songs.into_iter().map(|p| (p, None)).collect();
         crate::import::songs(files, SONG_EXTENSIONS, then);
@@ -479,9 +482,16 @@ impl App {
 
     /// Imported songs (`paths`, the library's, each with its playlist
     /// soundfont) are in: put them where they were headed.
-    pub(super) fn after_import(&mut self, then: crate::import::Then, paths: Vec<PathBuf>, soundfonts: Vec<Option<PathBuf>>) {
+    pub(super) fn after_import(
+        &mut self,
+        ctx: &egui::Context,
+        then: crate::import::Then,
+        paths: Vec<PathBuf>,
+        soundfonts: Vec<Option<PathBuf>>,
+    ) {
         let list = match then {
             crate::import::Then::Keep => return,
+            crate::import::Then::Queue { next } => return self.queue_songs(ctx, paths, next),
             crate::import::Then::Insert { list, at } if list < self.playlists.lists.len() => {
                 let count = paths.len();
                 self.insert_songs(list, at, paths);

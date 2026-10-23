@@ -63,6 +63,8 @@ pub enum Then {
     Insert { list: usize, at: usize },
     /// Make a playlist of them called `name`.
     NewPlaylist { name: String },
+    /// Queue them: next (at the front), or at the end.
+    Queue { next: bool },
 }
 
 /// An import that's done: what it brought in, or why it failed.

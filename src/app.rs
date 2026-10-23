@@ -3101,7 +3101,7 @@ impl App {
     /// list. What was picked but isn't of a type synththing takes is said,
     /// and audio files with audio files turned off bring an offer to turn
     /// them on.
-    fn poll_imports(&mut self) {
+    fn poll_imports(&mut self, ctx: &egui::Context) {
         // (Waiting for the one-time import, which writes the library's
         // index last: until then, nothing else may.)
         if self.old_import.is_some() {
@@ -3145,7 +3145,7 @@ impl App {
                     self.add_to_library(stored);
                     let plural = if n == 1 { "" } else { "s" };
                     self.status = format!("Imported {n} song{plural}.");
-                    self.after_import(done.then, paths.clone(), soundfonts);
+                    self.after_import(ctx, done.then, paths.clone(), soundfonts);
                     let audio: Vec<PathBuf> = paths.into_iter().filter(|p| !is_midi_path(p)).collect();
                     if !audio.is_empty() && !self.config.show_audio_files {
                         self.offer_audio_files(audio);
@@ -3996,7 +3996,7 @@ impl App {
         }
         frame_timing::time("sync_script_song", || self.sync_script_song(&view));
         frame_timing::time("poll_loads", || self.poll_loads());
-        frame_timing::time("poll_imports", || self.poll_imports());
+        frame_timing::time("poll_imports", || self.poll_imports(ctx));
         frame_timing::time("poll_old_import", || self.poll_old_import());
         #[cfg(target_os = "android")]
         self.android_tick(&view);
