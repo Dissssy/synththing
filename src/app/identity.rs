@@ -2,10 +2,9 @@
 //! (docs/SERVER.md, Authorities): an email attached at the authority (the
 //! official server) for recovery, a new key in place of the old one, and
 //! recovering with the email when the key's lost. The records of each
-//! change are kept beside the key and shown to every server the app talks
-//! to (once a session), which moves what the old keys had to the new one.
+//! change are kept beside the key and shown to the server (once a
+//! session), which moves what the old keys had to the new one.
 
-use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use eframe::egui;
@@ -27,7 +26,7 @@ enum Event {
     /// A deletion asked for (or confirmed), or a restore: what happened.
     Deleted(Result<client::Deletion, String>),
     Restored(Result<u64, String>),
-    Applied(String, Result<u64, String>),
+    Applied(Result<u64, String>),
 }
 
 /// What's being changed.
@@ -45,9 +44,9 @@ enum Flow {
     Rotate,
     /// Recover, to `new`: the address, then the code it got.
     Recover { address: String, new: Identity, sent: bool, code: String },
-    /// Delete the identity's data from `server` (the attached email, and
-    /// the code it got, where it has one), or (`restore`) undo that.
-    Delete { server: String, restore: bool, address: String, sent: bool, code: String, done: Option<String> },
+    /// Delete the identity's data from the server (the attached email,
+    /// and the code it got, where it has one), or (`restore`) undo that.
+    Delete { restore: bool, address: String, sent: bool, code: String, done: Option<String> },
 }
 
 struct FlowState {
@@ -63,13 +62,13 @@ pub struct IdentityState {
     status: Option<Result<IdentityStatus, String>>,
     asked: bool,
     flow: Option<FlowState>,
-    /// Servers shown the rotation records this session.
-    applied: HashSet<String>,
+    /// The server's been shown the rotation records this session.
+    applied: bool,
 }
 
 impl Default for IdentityState {
     fn default() -> Self {
-        Self { events: mpsc::channel(), status: None, asked: false, flow: None, applied: HashSet::new() }
+        Self { events: mpsc::channel(), status: None, asked: false, flow: None, applied: false }
     }
 }
 
@@ -91,8 +90,7 @@ impl App {
     /// first time) asked for.
     pub(super) fn authority(&self) -> (String, Option<String>) {
         let server = library::official_url();
-        let key = self.config.library.pinned.get(&server).cloned();
-        (server, key)
+        (server, self.config.library.pinned.clone())
     }
 
     /// Another device moved the identity to a new key: this one's is refused
@@ -116,17 +114,19 @@ impl App {
     pub(super) fn forget_identity_status(&mut self) {
         self.identity.status = None;
         self.identity.asked = false;
-        self.identity.applied.clear();
+        self.identity.applied = false;
     }
 
-    /// Show `server` how the identity came to be its key, once a session.
-    pub(super) fn apply_rotations(&mut self, server: &str) {
+    /// Show the server how the identity came to be its key, once a
+    /// session.
+    pub(super) fn apply_rotations(&mut self) {
         let chain = identity::load_rotations();
-        if chain.is_empty() || !self.identity.applied.insert(server.to_string()) {
+        if chain.is_empty() || self.identity.applied {
             return;
         }
-        let server = server.to_string();
-        self.spawn_identity(move || Event::Applied(server.clone(), client::apply(&server, &chain)));
+        self.identity.applied = true;
+        let server = library::official_url();
+        self.spawn_identity(move || Event::Applied(client::apply(&server, &chain)));
     }
 
     pub(super) fn poll_identity(&mut self) {
@@ -143,10 +143,10 @@ impl App {
             let flow = self.identity.flow.as_mut();
             match event {
                 Event::Status(status) => self.identity.status = Some(status),
-                Event::Applied(server, result) => match result {
+                Event::Applied(result) => match result {
                     Ok(0) => {}
-                    Ok(n) => log::info!("{server} took {n} rotation record(s)"),
-                    Err(e) => log::warn!("{server} didn't take the rotation records: {e}"),
+                    Ok(n) => log::info!("the server took {n} rotation record(s)"),
+                    Err(e) => log::warn!("the server didn't take the rotation records: {e}"),
                 },
                 Event::EmailSent(result) => {
                     if let Some(FlowState { flow: Flow::Email { sent, .. }, busy, error }) = flow {
@@ -175,14 +175,13 @@ impl App {
                     }
                 },
                 Event::Deleted(result) => {
-                    if let Some(FlowState { flow: Flow::Delete { sent, done, server, .. }, busy, error }) = flow {
+                    if let Some(FlowState { flow: Flow::Delete { sent, done, .. }, busy, error }) = flow {
                         *busy = false;
                         match result {
                             Ok(client::Deletion { deleted: Some(until), .. }) => {
                                 let date = crate::song_info::format_length((until - unix_now()).max(0) as f64);
                                 *done = Some(format!(
-                                    "Deleted from {}: it all goes for good in {date}, unless you restore it before then.",
-                                    host(server)
+                                    "Deleted: it all goes for good in {date}, unless you restore it before then."
                                 ));
                             }
                             Ok(_) => *sent = true,
@@ -191,13 +190,12 @@ impl App {
                     }
                 }
                 Event::Restored(result) => {
-                    if let Some(FlowState { flow: Flow::Delete { done, server, .. }, busy, error }) = flow {
+                    if let Some(FlowState { flow: Flow::Delete { done, .. }, busy, error }) = flow {
                         *busy = false;
                         match result {
                             Ok(n) => {
                                 *done = Some(format!(
-                                    "Restored on {}: {n} script{} back, with everything else.",
-                                    host(server),
+                                    "Restored: {n} script{} back, with everything else.",
                                     if n == 1 { "" } else { "s" }
                                 ))
                             }
@@ -226,7 +224,7 @@ impl App {
                                 ));
                                 self.set_library_identity(new);
                                 self.identity.flow = None;
-                                self.identity.applied.clear();
+                                self.identity.applied = false;
                                 self.identity.status = None;
                                 self.identity.asked = false;
                             }
@@ -348,12 +346,11 @@ impl App {
         if current.is_some() {
             ui.horizontal(|ui| {
                 for (restore, label, hover) in [
-                    (false, "Delete my data...", "Have a server delete what it has of yours: your scripts, encores, email"),
+                    (false, "Delete my data...", "Have the server delete what it has of yours: your scripts, encores, email"),
                     (true, "Restore my data...", "Undo a deletion, within 30 days of it"),
                 ] {
                     if ui.button(label).on_hover_text(hover).clicked() {
                         open = Some(Flow::Delete {
-                            server: authority.clone(),
                             restore,
                             address: String::new(),
                             sent: false,
@@ -433,41 +430,28 @@ impl App {
                     );
                     ui.weak("Export the new one afterwards: an export of the old key won't work any more.");
                 }
-                Flow::Delete { server, restore, address, sent, code, done } => {
+                Flow::Delete { restore, address, sent, code, done } => {
                     ui.heading(if *restore { "Restore your data" } else { "Delete your data" });
                     if let Some(done) = done {
                         ui.label(done.as_str());
                     } else {
-                        if !*sent {
-                            ui.horizontal(|ui| {
-                                ui.label("On");
-                                egui::ComboBox::from_id_salt("delete_server").selected_text(host(server)).show_ui(ui, |ui| {
-                                    for s in self.config.library.enabled_servers() {
-                                        let label = host(&s).to_string();
-                                        ui.selectable_value(server, s, label);
-                                    }
-                                });
-                            });
-                        }
                         if *restore {
-                            ui.label(format!(
-                                "Puts back what {} was going to delete: your scripts, encores, admin rights. Within \
-                                 30 days of deleting.",
-                                host(server)
-                            ));
+                            ui.label(
+                                "Puts back what the server was going to delete: your scripts, encores, admin rights. \
+                                 Within 30 days of deleting.",
+                            );
                         } else if *sent {
                             ui.label("The code sent to your email:");
                             ui.add(egui::TextEdit::singleline(code).hint_text("ABCD-EFGH").desired_width(160.0));
                             ui.weak("It works for 30 minutes. No email? Check the spam folder.");
                         } else {
-                            ui.label(format!(
-                                "{} deletes what it has of yours: your scripts (their remixes then say they were \
-                                 remixed from a deleted script), the encores you gave, your admin rights, your \
+                            ui.label(
+                                "The server deletes what it has of yours: your scripts (their remixes then say they \
+                                 were remixed from a deleted script), the encores you gave, your admin rights, your \
                                  email. It all goes from listings straight away, and for good after 30 days: until \
                                  then, Restore my data puts it back. Bans stay, and so do reports (without your key).",
-                                host(server)
-                            ));
-                            if self.library_server_mail(server) {
+                            );
+                            if self.library_server_mail() {
                                 ui.label("If your identity has an email attached here, type it (a code goes to it):");
                                 ui.add(egui::TextEdit::singleline(address).desired_width(f32::INFINITY));
                             }
@@ -525,13 +509,13 @@ impl App {
                 }
             });
         });
-        if go && let Flow::Delete { server, restore, address, sent, code, .. } = &state.flow {
+        if go && let Flow::Delete { restore, address, sent, code, .. } = &state.flow {
             state.error = None;
-            match (current.clone(), self.config.library.pinned.get(server).cloned()) {
+            match (current.clone(), self.config.library.pinned.clone()) {
                 (Some(identity), Some(server_key)) => {
                     state.busy = true;
                     let (server, address, code, restore, sent) =
-                        (server.clone(), address.trim().to_string(), code.trim().to_string(), *restore, *sent);
+                        (library::official_url(), address.trim().to_string(), code.trim().to_string(), *restore, *sent);
                     self.spawn_identity(move || {
                         if restore {
                             Event::Restored(client::restore_identity(&server, &server_key, &identity))
@@ -544,7 +528,7 @@ impl App {
                     });
                 }
                 (None, _) => state.error = Some("There's no identity here.".into()),
-                (_, None) => state.error = Some("That server hasn't been reached yet: open the Online Library first.".into()),
+                (_, None) => state.error = Some("The server hasn't been reached yet: open the Online Library first.".into()),
             }
         } else if go {
             state.error = None;

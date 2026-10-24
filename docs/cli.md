@@ -166,7 +166,7 @@ Publishes every script bundled with this build (visualizers, games and examples;
 
 ## Environment variables
 
-- `SYNTHTHING_OFFICIAL_URL`: use another server as the official one (for trying things against a server of your own, e.g. `http://127.0.0.1:7381`). What's recorded about installed scripts still names the real one.
+- `SYNTHTHING_OFFICIAL_URL`: talk to another server instead of the official one (for trying things against a server of your own, e.g. `http://127.0.0.1:7381`). It's the only way to change the server: the app has no setting for it.
 
 ## Running from a terminal on Windows
 
