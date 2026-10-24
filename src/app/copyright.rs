@@ -8,14 +8,13 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use eframe::egui;
 
-use super::library::host;
 use super::App;
 use crate::library::{self, client, CounterNotice, NoticeView};
 
 enum Event {
-    Loaded(String, i64, Box<Result<NoticeView, String>>),
+    Loaded(i64, Box<Result<NoticeView, String>>),
     /// Disputed or let stand: what was done (the notification's resolution).
-    Done(String, i64, Result<&'static str, String>),
+    Done(i64, Result<&'static str, String>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -25,7 +24,6 @@ enum Mode {
 }
 
 struct Open {
-    server: String,
     id: i64,
     view: Option<Result<NoticeView, String>>,
     mode: Mode,
@@ -59,14 +57,13 @@ impl App {
         });
     }
 
-    /// Open notice `id` on `server` (from its notification).
-    pub(super) fn open_notice(&mut self, server: String, id: i64, mode_dispute: bool) {
-        let (Some(identity), Some(key)) = (self.library_identity(), self.config.library.pinned.get(&server).cloned()) else {
-            self.status = "That server's key or your identity isn't known.".into();
+    /// Open notice `id` (from its notification).
+    pub(super) fn open_notice(&mut self, id: i64, mode_dispute: bool) {
+        let (Some(identity), Some(key)) = (self.library_identity(), self.config.library.pinned.clone()) else {
+            self.status = "The server's key or your identity isn't known.".into();
             return;
         };
         self.copyright.open = Some(Open {
-            server: server.clone(),
             id,
             view: None,
             mode: if mode_dispute { Mode::Dispute } else { Mode::LetStand },
@@ -74,23 +71,23 @@ impl App {
             busy: false,
             error: None,
         });
-        self.spawn_copyright(move || Event::Loaded(server.clone(), id, Box::new(client::notice(&server, &key, &identity, id))));
+        let server = library::official_url();
+        self.spawn_copyright(move || Event::Loaded(id, Box::new(client::notice(&server, &key, &identity, id))));
     }
 
     pub(super) fn poll_copyright(&mut self) {
         while let Ok(event) = self.copyright.events.1.try_recv() {
             match event {
-                Event::Loaded(server, id, view) => {
+                Event::Loaded(id, view) => {
                     if let Some(open) = &mut self.copyright.open
-                        && open.server == server
                         && open.id == id
                     {
                         open.view = Some(*view);
                     }
                 }
-                Event::Done(server, id, result) => match result {
+                Event::Done(id, result) => match result {
                     Ok(resolution) => {
-                        self.notification_resolved(&server, "notice", id, resolution);
+                        self.notification_resolved("notice", id, resolution);
                         self.copyright.open = None;
                         self.status = match resolution {
                             "disputed" => "Disputed: the moderators will decide, and the claimant has your counter-notice.".into(),
@@ -127,7 +124,7 @@ impl App {
             };
             if let Some(view) = &view {
                 ui.heading(format!("Copyright notice on \"{}\"", view.item_name));
-                ui.weak(format!("Notice #{} on {}, {}", view.id, host(&open.server), library::ago(view.created)));
+                ui.weak(format!("Notice #{}, {}", view.id, library::ago(view.created)));
                 ui.add_space(6.0);
                 let c = &view.notice;
                 ui.label(format!("From {}, for {}.", c.name, c.on_behalf_of));
@@ -181,18 +178,18 @@ impl App {
             });
         });
         if send {
-            match (self.library_identity(), self.config.library.pinned.get(&open.server).cloned()) {
+            match (self.library_identity(), self.config.library.pinned.clone()) {
                 (Some(identity), Some(key)) => {
                     open.busy = true;
                     open.error = None;
-                    let (server, id, counter, dispute) = (open.server.clone(), open.id, open.counter.clone(), open.mode == Mode::Dispute);
+                    let (server, id, counter, dispute) = (library::official_url(), open.id, open.counter.clone(), open.mode == Mode::Dispute);
                     self.spawn_copyright(move || {
                         let result = if dispute {
                             client::dispute_notice(&server, &key, &identity, id, &counter).map(|()| "disputed")
                         } else {
                             client::accept_notice(&server, &key, &identity, id).map(|()| "let stand")
                         };
-                        Event::Done(server, id, result)
+                        Event::Done(id, result)
                     });
                 }
                 _ => open.error = Some("Your identity or the server's key isn't known.".into()),

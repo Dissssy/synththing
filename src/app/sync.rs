@@ -302,10 +302,10 @@ impl App {
         &mut self.sync.channels[blob.index()]
     }
 
-    /// The notification stream from `server` opened again (`None`), or said
-    /// synced data changed: sync what's the authority's and newer.
-    pub(super) fn sync_server_seen(&mut self, server: &str, changed: Option<library::sync::Changed>) {
-        if !self.sync.on || server != self.authority().0 {
+    /// The notification stream opened again (`None`), or said synced data
+    /// changed: sync what's newer.
+    pub(super) fn sync_server_seen(&mut self, changed: Option<library::sync::Changed>) {
+        if !self.sync.on {
             return;
         }
         for blob in Blob::ALL {
@@ -666,7 +666,7 @@ impl App {
             return;
         }
         let (authority, _) = self.authority();
-        let limit = self.library_server_info(&authority).map(|i| i.relay_song_mb);
+        let limit = self.library_server_info().map(|i| i.relay_song_mb);
         if limit == Some(0) {
             // (Its "not found" would read as songs not sent yet.)
             self.sync.error = Some(format!("{} can't move songs between your devices yet: it needs updating.", super::library::host(&authority)));
@@ -857,8 +857,7 @@ impl App {
     /// The switch, under the identity in Preferences > Online Library.
     pub(super) fn sync_ui(&mut self, ui: &mut egui::Ui) {
         let signed_in = self.library_identity().is_some();
-        let (authority, _) = self.authority();
-        let offered = self.library_server_info(&authority).is_none_or(|i| i.sync);
+        let offered = self.library_server_info().is_none_or(|i| i.sync);
         let mut on = self.sync.on;
         super::with_info(
             ui,
@@ -872,7 +871,7 @@ impl App {
             |ui| ui.add_enabled(signed_in && offered, egui::Checkbox::new(&mut on, "Sync settings and playlists between my devices")),
         );
         if !offered {
-            ui.weak(format!("{} doesn't sync yet.", super::library::host(&authority)));
+            ui.weak("The server doesn't sync yet.");
         }
         if on != self.sync.on {
             if on {

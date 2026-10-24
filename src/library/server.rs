@@ -692,6 +692,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 18 {
         db.execute_batch(feedback::SCHEMA_V18)?;
     }
+    if version < 19 {
+        db.execute_batch(remixes::SCHEMA_V19)?;
+    }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
 }
@@ -1476,16 +1479,16 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
             )?;
             if let Some(remix) = &remix {
                 tx.execute(
-                    "UPDATE scripts SET remix_server = ?, remix_id = ?, remix_version = ?, remix_name = ?, remix_author_id = ?,
-                     remix_slug = ? WHERE id = ?",
-                    params![remix.server, remix.id, remix.version, remix.name, remix.author_id, remix.slug, id],
+                    "UPDATE scripts SET remix_id = ?, remix_version = ?, remix_name = ?, remix_author_id = ?, remix_slug = ?
+                     WHERE id = ?",
+                    params![remix.id, remix.version, remix.name, remix.author_id, remix.slug, id],
                 )?;
             }
         } else {
             tx.execute(
                 "INSERT INTO scripts (id, name, description, category, tags, author_name, author_key, author_id, slug,
-                 latest, created, updated, remix_server, remix_id, remix_version, remix_name, remix_author_id, remix_slug)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 latest, created, updated, remix_id, remix_version, remix_name, remix_author_id, remix_slug)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     id,
                     upload.name,
@@ -1498,7 +1501,6 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
                     slug,
                     created,
                     created,
-                    remix.as_ref().map(|r| r.server.clone()),
                     remix.as_ref().map(|r| r.id.clone()),
                     remix.as_ref().and_then(|r| r.version),
                     remix.as_ref().map(|r| r.name.clone()),
@@ -1522,7 +1524,7 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
     }
     // (A new remix here: its original's author hears of it.)
     if existing.is_none()
-        && let Some(remix) = remix.as_ref().filter(|r| r.server.is_empty() && !r.id.is_empty())
+        && let Some(remix) = remix.as_ref().filter(|r| !r.id.is_empty())
     {
         let (by, remix_id, remix_name) = (upload.author_name.clone(), id.clone(), upload.name.clone());
         notifications::author_notify(state, &db, &remix.id, "remixed", |name| {

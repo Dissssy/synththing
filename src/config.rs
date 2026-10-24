@@ -235,8 +235,7 @@ pub struct Config {
     /// Where recordings are saved; `None` means Videos\synththing.
     #[serde(default)]
     pub record_dir: Option<PathBuf>,
-    /// The script library: which servers, their keys, the name to post
-    /// under.
+    /// The script library: the server's key, the name to post under.
     #[serde(default)]
     pub library: LibrarySettings,
     /// Show what each settings sync changed (a debug toast).
@@ -321,61 +320,26 @@ pub struct Session {
     pub script: Option<PathBuf>,
 }
 
-/// The script library's servers (Preferences > Online Library).
+/// The script library (Preferences > Online Library).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LibrarySettings {
-    /// The official server is used (it can't be removed, only turned off).
-    pub official: bool,
-    /// Other servers, by address.
-    pub servers: Vec<LibraryServer>,
-    /// Each server's key (hex) as first seen, by address: a server whose
-    /// key changes isn't trusted until the user says so.
-    pub pinned: std::collections::BTreeMap<String, String>,
+    /// The server's key (hex) as first seen: if it changes, the server
+    /// isn't trusted until the user says so.
+    pub pinned: Option<String>,
     /// The name last posted under.
     pub author_name: String,
-    /// The official publisher's keys, oldest first, as the official server
-    /// last said (empty: never rotated).
+    /// The official publisher's keys, oldest first, as the server last
+    /// said (empty: never rotated).
     pub official_publishers: Vec<String>,
-    /// Keep in touch with the servers in use for notifications (while
-    /// there's an identity): a check at launch, and a stream while open.
+    /// Keep in touch with the server for notifications (while there's an
+    /// identity): a check at launch, and a stream while open.
     pub notifications: bool,
 }
 
 impl Default for LibrarySettings {
     fn default() -> Self {
-        Self {
-            official: true,
-            servers: Vec::new(),
-            pinned: Default::default(),
-            author_name: String::new(),
-            official_publishers: Vec::new(),
-            notifications: true,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct LibraryServer {
-    pub url: String,
-    pub enabled: bool,
-}
-
-impl LibrarySettings {
-    /// The servers in use, the official one first. None while the Online
-    /// Library is off (a branch build's, `build_info::online`).
-    pub fn enabled_servers(&self) -> Vec<String> {
-        if !crate::build_info::online(crate::build_info::Online::Scripts) {
-            return Vec::new();
-        }
-        let official = self.official.then(crate::library::official_url);
-        let mut servers: Vec<String> = Vec::new();
-        for url in official.into_iter().chain(self.servers.iter().filter(|s| s.enabled).map(|s| s.url.clone())) {
-            if !servers.contains(&url) {
-                servers.push(url);
-            }
-        }
-        servers
+        Self { pinned: None, author_name: String::new(), official_publishers: Vec::new(), notifications: true }
     }
 }
 

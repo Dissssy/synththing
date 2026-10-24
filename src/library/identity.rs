@@ -1,4 +1,4 @@
-//! The user's identity on library servers (docs/SERVER.md): an Ed25519
+//! The user's identity on the server (docs/SERVER.md): an Ed25519
 //! key pair made by the app, nothing else. The public key is who you are
 //! (shown as a short ID, `#k3f9q2xa`); the secret half signs uploads,
 //! deletes and the like, and lives in the config folder

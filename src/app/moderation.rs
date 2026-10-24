@@ -1,5 +1,5 @@
 //! Reporting a script (Report... in the Library tab), and the Moderation
-//! window for a library server's admins (docs/SERVER.md).
+//! window for the server's admins (docs/SERVER.md).
 //!
 //! A report says why, and can point at the problem: lines of the reported
 //! version's code (click a line, shift-click for a range) and sprites
@@ -7,15 +7,14 @@
 //! lines highlighted in the code and the sprites drawn, and can hide,
 //! delete, ban (a key or an address, for a while or for good), and mark
 //! reports dealt with; the same actions as `synththing admin` on the
-//! server. Whether the user is an admin on a server is asked when the
-//! Library first talks to it, and again with each search until they are.
+//! server. Whether the user is an admin is asked when the Library first
+//! talks to the server, and again with each search until they are.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use eframe::egui;
 
-use super::library::host;
 use super::App;
 use crate::library::identity::Identity;
 use crate::library::{
@@ -25,31 +24,30 @@ use crate::library::{
 use crate::sprite_code::{self, SpriteCall};
 
 enum Event {
-    /// Whether the identity is an admin on a server.
-    Whoami(String, bool),
+    /// Whether the identity is an admin.
+    Whoami(bool),
     /// The source of the version being reported.
-    ReportSource(String, String, u32, Result<String, String>),
+    ReportSource(String, u32, Result<String, String>),
     Reported(Result<i64, String>),
     /// A copyright notice filed: its number and what became of the item.
     NoticeFiled(Result<(i64, String), String>),
-    Notices(String, Result<Vec<NoticeView>, String>),
-    Feedback(String, Result<Vec<Feedback>, String>),
-    Reports(String, Result<Vec<Report>, String>),
-    Bans(String, Result<Vec<Ban>, String>),
-    Admins(String, Result<Vec<(String, String)>, String>),
-    Version(String, Result<library::ServerVersion, String>),
-    /// A reported version's source, for an admin: (server, script, version).
-    Source(String, String, u32, Result<String, String>),
+    Notices(Result<Vec<NoticeView>, String>),
+    Feedback(Result<Vec<Feedback>, String>),
+    Reports(Result<Vec<Report>, String>),
+    Bans(Result<Vec<Ban>, String>),
+    Admins(Result<Vec<(String, String)>, String>),
+    Version(Result<library::ServerVersion, String>),
+    /// A reported version's source, for an admin: (script, version).
+    Source(String, u32, Result<String, String>),
     /// A script's author's key (or, anonymous, the address it came from),
     /// to ban.
-    Author(String, Result<String, String>),
+    Author(Result<String, String>),
     /// An admin action finished: what it was, and how it went.
-    Done(String, String, Result<(), String>),
+    Done(String, Result<(), String>),
 }
 
 /// Report... being filled in.
 struct ReportDraft {
-    server: String,
     id: String,
     name: String,
     version: u32,
@@ -87,9 +85,8 @@ struct BanForm {
     ban_addresses: bool,
 }
 
-/// The Moderation window, for one server.
+/// The Moderation window.
 struct Window {
-    server: String,
     tab: Tab,
     all: bool,
     reports: Option<Result<Vec<Report>, String>>,
@@ -114,8 +111,8 @@ struct Window {
 pub struct ModerationState {
     events: (Sender<Event>, Receiver<Event>),
     report: Option<ReportDraft>,
-    admin_on: Vec<String>,
-    asked: HashSet<String>,
+    /// Whether the user is an admin, once asked.
+    admin: Option<bool>,
     window: Option<Window>,
     /// Sprites drawn, by (script, version, line).
     sprite_textures: HashMap<(String, u32, u32), Option<egui::TextureHandle>>,
@@ -126,8 +123,7 @@ impl Default for ModerationState {
         Self {
             events: mpsc::channel(),
             report: None,
-            admin_on: Vec::new(),
-            asked: HashSet::new(),
+            admin: None,
             window: None,
             sprite_textures: HashMap::new(),
         }
@@ -139,8 +135,8 @@ impl ModerationState {
         self.report.is_some() || self.window.is_some()
     }
 
-    pub fn is_admin_anywhere(&self) -> bool {
-        !self.admin_on.is_empty()
+    pub fn is_admin(&self) -> bool {
+        self.admin == Some(true)
     }
 }
 
@@ -201,33 +197,34 @@ impl App {
         });
     }
 
-    /// The first time the Library talks to `server`: is the user an admin
-    /// there?
-    pub(super) fn check_admin(&mut self, server: &str) {
-        let (Some(identity), Some(key)) = (Identity::load(), self.config.library.pinned.get(server).cloned()) else {
+    /// The first time the Library talks to the server: is the user an
+    /// admin?
+    pub(super) fn check_admin(&mut self) {
+        let (Some(identity), Some(key)) = (Identity::load(), self.config.library.pinned.clone()) else {
             return;
         };
-        if !self.moderation.asked.insert(server.to_string()) {
+        if self.moderation.admin.is_some() {
             return;
         }
-        let server = server.to_string();
+        // (Asked: not an admin until it says so.)
+        self.moderation.admin = Some(false);
+        let server = library::official_url();
         self.spawn_moderation(move || {
-            let admin = client::admin::<serde_json::Value>(&server, &key, &identity, &AdminAction::Whoami).is_ok();
-            Event::Whoami(server, admin)
+            Event::Whoami(client::admin::<serde_json::Value>(&server, &key, &identity, &AdminAction::Whoami).is_ok())
         });
     }
 
-    /// Ask again whether the user is an admin, where they weren't.
-    pub(super) fn forget_admin_answers(&mut self) {
-        let admin_on = &self.moderation.admin_on;
-        self.moderation.asked.retain(|server| admin_on.contains(server));
+    /// Ask again whether the user is an admin, if they weren't.
+    pub(super) fn forget_admin_answer(&mut self) {
+        if self.moderation.admin == Some(false) {
+            self.moderation.admin = None;
+        }
     }
 
     /// Report... for `version` of a script.
-    pub(super) fn open_report(&mut self, server: &str, id: &str, name: &str, version: u32) {
-        let Some(key) = self.config.library.pinned.get(server).cloned() else { return };
+    pub(super) fn open_report(&mut self, id: &str, name: &str, version: u32) {
+        let Some(key) = self.config.library.pinned.clone() else { return };
         self.moderation.report = Some(ReportDraft {
-            server: server.to_string(),
             id: id.to_string(),
             name: name.to_string(),
             version,
@@ -243,10 +240,10 @@ impl App {
             copyright: false,
             claim: CopyrightNotice { item: id.to_string(), ..Default::default() },
         });
-        let (server, id) = (server.to_string(), id.to_string());
+        let (server, id) = (library::official_url(), id.to_string());
         self.spawn_moderation(move || {
             let source = client::download(&server, &id, Some(version), &key).map(|d| d.source);
-            Event::ReportSource(server, id, version, source)
+            Event::ReportSource(id, version, source)
         });
     }
 
@@ -268,12 +265,12 @@ impl App {
         self.refresh_moderation();
     }
 
-    /// Open the Moderation window (on the first server the user is an
-    /// admin on).
+    /// Open the Moderation window (for an admin).
     pub(super) fn open_moderation(&mut self) {
-        let Some(server) = self.moderation.admin_on.first().cloned() else { return };
+        if !self.moderation.is_admin() {
+            return;
+        }
         self.moderation.window = Some(Window {
-            server,
             tab: Tab::Reports,
             all: false,
             reports: None,
@@ -297,10 +294,10 @@ impl App {
     /// Fetch the Moderation window's current tab again.
     fn refresh_moderation(&mut self) {
         let Some(window) = &mut self.moderation.window else { return };
-        let (Some(identity), Some(key)) = (Identity::load(), self.config.library.pinned.get(&window.server).cloned()) else {
+        let (Some(identity), Some(key)) = (Identity::load(), self.config.library.pinned.clone()) else {
             return;
         };
-        let server = window.server.clone();
+        let server = library::official_url();
         let (tab, all) = (window.tab, window.all);
         match tab {
             Tab::Reports => window.reports = None,
@@ -311,27 +308,25 @@ impl App {
             Tab::Feedback => window.feedback = None,
         }
         self.spawn_moderation(move || match tab {
-            Tab::Reports => Event::Reports(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Reports { all })),
-            Tab::Bans => Event::Bans(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Bans)),
-            Tab::Admins => Event::Admins(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Admins)),
-            Tab::Server => Event::Version(server.clone(), client::admin(&server, &key, &identity, &AdminAction::UpdateCheck)),
-            Tab::Copyright => {
-                Event::Notices(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Notices { all }))
-            }
-            Tab::Feedback => {
-                Event::Feedback(server.clone(), client::admin(&server, &key, &identity, &AdminAction::Feedback { all }))
-            }
+            Tab::Reports => Event::Reports(client::admin(&server, &key, &identity, &AdminAction::Reports { all })),
+            Tab::Bans => Event::Bans(client::admin(&server, &key, &identity, &AdminAction::Bans)),
+            Tab::Admins => Event::Admins(client::admin(&server, &key, &identity, &AdminAction::Admins)),
+            Tab::Server => Event::Version(client::admin(&server, &key, &identity, &AdminAction::UpdateCheck)),
+            Tab::Copyright => Event::Notices(client::admin(&server, &key, &identity, &AdminAction::Notices { all })),
+            Tab::Feedback => Event::Feedback(client::admin(&server, &key, &identity, &AdminAction::Feedback { all })),
         });
     }
 
     /// Run admin actions in turn (stopping at one that fails), then say how
     /// it went as `what` (or, empty, as the server put it).
     fn moderate(&mut self, what: &str, actions: Vec<AdminAction>) {
-        let Some(window) = &self.moderation.window else { return };
-        let (Some(identity), Some(key)) = (Identity::load(), self.config.library.pinned.get(&window.server).cloned()) else {
+        if self.moderation.window.is_none() {
+            return;
+        }
+        let (Some(identity), Some(key)) = (Identity::load(), self.config.library.pinned.clone()) else {
             return;
         };
-        let (server, what) = (window.server.clone(), what.to_string());
+        let (server, what) = (library::official_url(), what.to_string());
         self.spawn_moderation(move || {
             let mut said = String::new();
             let result = actions.iter().try_for_each(|action| {
@@ -340,7 +335,7 @@ impl App {
                 Ok(())
             });
             let what = if what.is_empty() { said } else { what };
-            Event::Done(server, what, result)
+            Event::Done(what, result)
         });
     }
 
@@ -348,14 +343,9 @@ impl App {
         while let Ok(event) = self.moderation.events.1.try_recv() {
             let window = self.moderation.window.as_mut();
             match event {
-                Event::Whoami(server, admin) => {
-                    if admin && !self.moderation.admin_on.contains(&server) {
-                        self.moderation.admin_on.push(server);
-                    }
-                }
-                Event::ReportSource(server, id, version, source) => {
+                Event::Whoami(admin) => self.moderation.admin = Some(admin),
+                Event::ReportSource(id, version, source) => {
                     if let Some(draft) = &mut self.moderation.report
-                        && draft.server == server
                         && draft.id == id
                         && draft.version == version
                     {
@@ -369,8 +359,8 @@ impl App {
                 Event::Reported(result) => match result {
                     Ok(number) => {
                         if let Some(draft) = self.moderation.report.take() {
-                            log::info!("reported {} on {} (report #{number})", draft.id, draft.server);
-                            self.status = format!("Reported \"{}\": the server's moderators will look at it.", draft.name);
+                            log::info!("reported {} (report #{number})", draft.id);
+                            self.status = format!("Reported \"{}\": the moderators will look at it.", draft.name);
                         }
                     }
                     Err(e) => {
@@ -380,13 +370,13 @@ impl App {
                         }
                     }
                 },
-                Event::Reports(server, result) => {
-                    if let Some(w) = window.filter(|w| w.server == server) {
+                Event::Reports(result) => {
+                    if let Some(w) = window {
                         w.reports = Some(result);
                     }
                 }
-                Event::Bans(server, result) => {
-                    if let Some(w) = window.filter(|w| w.server == server) {
+                Event::Bans(result) => {
+                    if let Some(w) = window {
                         w.bans = Some(result);
                     }
                 }
@@ -409,33 +399,33 @@ impl App {
                         }
                     }
                 },
-                Event::Notices(server, result) => {
-                    if let Some(w) = window.filter(|w| w.server == server) {
+                Event::Notices(result) => {
+                    if let Some(w) = window {
                         w.notices = Some(result);
                     }
                 }
-                Event::Feedback(server, result) => {
-                    if let Some(w) = window.filter(|w| w.server == server) {
+                Event::Feedback(result) => {
+                    if let Some(w) = window {
                         w.feedback = Some(result);
                     }
                 }
-                Event::Version(server, result) => {
-                    if let Some(w) = window.filter(|w| w.server == server) {
+                Event::Version(result) => {
+                    if let Some(w) = window {
                         w.version = Some(result);
                     }
                 }
-                Event::Admins(server, result) => {
-                    if let Some(w) = window.filter(|w| w.server == server) {
+                Event::Admins(result) => {
+                    if let Some(w) = window {
                         w.admins = Some(result);
                     }
                 }
-                Event::Source(server, script, version, result) => {
-                    if let Some(w) = window.filter(|w| w.server == server) {
+                Event::Source(script, version, result) => {
+                    if let Some(w) = window {
                         w.sources.insert((script, version), result);
                     }
                 }
-                Event::Author(server, result) => {
-                    if let Some(w) = window.filter(|w| w.server == server) {
+                Event::Author(result) => {
+                    if let Some(w) = window {
                         match result {
                             Ok(target) => {
                                 w.ban.target = target;
@@ -446,8 +436,8 @@ impl App {
                         }
                     }
                 }
-                Event::Done(server, what, result) => {
-                    if let Some(w) = window.filter(|w| w.server == server) {
+                Event::Done(what, result) => {
+                    if let Some(w) = window {
                         w.message = Some(match result {
                             Ok(()) => what,
                             Err(e) => format!("Didn't work: {e}"),
@@ -475,9 +465,9 @@ impl App {
             });
             ui.separator();
             if draft.copyright {
-                notice_form_ui(ui, &mut draft.claim, &draft.server);
+                notice_form_ui(ui, &mut draft.claim);
             } else {
-                ui.weak(format!("Version {} on {}. Reports go to the server's moderators, signed with your identity.", draft.version, host(&draft.server)));
+                ui.weak(format!("Version {}. Reports go to the moderators, signed with your identity.", draft.version));
                 ui.add_space(6.0);
                 ui.label("Why?");
                 for (reason, title) in REPORT_REASONS {
@@ -591,11 +581,11 @@ impl App {
             });
         });
         if send {
-            match (self.ensure_identity(), self.config.library.pinned.get(&draft.server).cloned()) {
+            match (self.ensure_identity(), self.config.library.pinned.clone()) {
                 (Ok(identity), Some(key)) if draft.copyright => {
                     draft.sending = true;
                     draft.error = None;
-                    let (server, claim) = (draft.server.clone(), draft.claim.clone());
+                    let (server, claim) = (library::official_url(), draft.claim.clone());
                     self.spawn_moderation(move || Event::NoticeFiled(client::file_notice(&server, &key, &identity, &claim)));
                 }
                 (Ok(identity), Some(key)) => {
@@ -608,11 +598,11 @@ impl App {
                         lines: ranges(&draft.lines),
                         sprites: draft.sprites.iter().copied().collect(),
                     };
-                    let (server, id) = (draft.server.clone(), draft.id.clone());
+                    let (server, id) = (library::official_url(), draft.id.clone());
                     self.spawn_moderation(move || Event::Reported(client::report(&server, &key, &id, &identity, &request)));
                 }
                 (Err(e), _) => draft.error = Some(format!("Couldn't make your identity: {e}")),
-                (_, None) => draft.error = Some("That server's key isn't known yet.".into()),
+                (_, None) => draft.error = Some("The server's key isn't known yet.".into()),
             }
         }
         if !(close || (response.should_close() && !draft.sending)) {
@@ -630,22 +620,7 @@ impl App {
         let mut ban_author: Option<String> = None;
         let response = egui::Modal::new(egui::Id::new("library_moderation")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 760.0));
-            ui.horizontal(|ui| {
-                ui.heading("Moderation");
-                if self.moderation.admin_on.len() > 1 {
-                    egui::ComboBox::from_id_salt("moderation_server").selected_text(host(&window.server)).show_ui(ui, |ui| {
-                        for server in &self.moderation.admin_on {
-                            if ui.selectable_label(*server == window.server, host(server)).clicked() && *server != window.server {
-                                window.server = server.clone();
-                                window.sources.clear();
-                                refresh = true;
-                            }
-                        }
-                    });
-                } else {
-                    ui.weak(host(&window.server));
-                }
-            });
+            ui.heading("Moderation");
             ui.horizontal(|ui| {
                 for (tab, title) in [
                     (Tab::Reports, "Reports"),
@@ -687,7 +662,7 @@ impl App {
                 close = true;
             }
         });
-        let server = window.server.clone();
+        let server = library::official_url();
         let keep = !(close || response.should_close());
         if keep {
             self.moderation.window = Some(window);
@@ -698,7 +673,7 @@ impl App {
         for (what, list) in actions {
             self.moderate(&what, list);
         }
-        if let (Some(identity), Some(key)) = (Identity::load(), self.config.library.pinned.get(&server).cloned()) {
+        if let (Some(identity), Some(key)) = (Identity::load(), self.config.library.pinned.clone()) {
             for (script, version) in fetch_source {
                 let (server, key, identity) = (server.clone(), key.clone(), identity.clone());
                 self.spawn_moderation(move || {
@@ -709,7 +684,7 @@ impl App {
                         &AdminAction::Source { script: script.clone(), version: Some(version) },
                     )
                     .and_then(|v| v["source"].as_str().map(str::to_string).ok_or_else(|| "no source".to_string()));
-                    Event::Source(server, script, version, result)
+                    Event::Source(script, version, result)
                 });
             }
             if let Some(script) = ban_author {
@@ -720,7 +695,7 @@ impl App {
                             .or_else(|| info.uploads.iter().rev().find_map(|(_, ip, _)| ip.clone()))
                             .ok_or_else(|| "it's anonymous and its address has been forgotten".to_string())
                     });
-                    Event::Author(server, target)
+                    Event::Author(target)
                 });
             }
         }
@@ -1030,14 +1005,14 @@ fn notice_ready(claim: &CopyrightNotice) -> bool {
 }
 
 /// A copyright notice's form: what a DMCA notice needs.
-fn notice_form_ui(ui: &mut egui::Ui, claim: &mut CopyrightNotice, server: &str) {
+fn notice_form_ui(ui: &mut egui::Ui, claim: &mut CopyrightNotice) {
     ui.colored_label(
         ui.visuals().warn_fg_color,
         "This is a legal notice under the US Digital Millennium Copyright Act, not a report. The script is taken \
          down at once, its uploader sees your name, who you act for and the work you name, and may dispute it, \
          and a false notice can make you liable for damages. For anything else wrong with it, report it instead.",
     );
-    ui.weak(format!("Sent to {}'s moderators, signed with your identity.", host(server)));
+    ui.weak("Sent to the moderators, signed with your identity.");
     ui.add_space(6.0);
     egui::Grid::new("notice_form").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         for (label, field, hint) in [

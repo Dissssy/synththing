@@ -978,7 +978,6 @@ mod tests {
         let refused = upload(&base, &key, &take, Some(&bob)).unwrap_err();
         assert!(refused.contains("\"Bars\"") && refused.contains("remix"), "{refused}");
         take.remix_of = Some(RemixOf {
-            server: String::new(),
             id: first.id.clone(),
             author_id: Some(alice.id()),
             slug: Some("bars".into()),
@@ -1009,9 +1008,10 @@ mod tests {
         assert!(upload(&base, &key, &copy, None).unwrap_err().contains("comes with synththing"));
         let credited = Upload { remix_of: crate::library::bundled_original(&disco), ..copy };
         let mine = upload(&base, &key, &credited, None).unwrap();
-        // Linked to the official server's disco, found there by author and slug.
+        // Credited to the bundled disco by author and slug (not published on
+        // this server: so it reads as gone).
         let link = details(&base, &mine.id).unwrap().remix_of.unwrap();
-        assert_eq!(link.server, crate::library::OFFICIAL_URL);
+        assert!(link.gone);
         assert_eq!(link.author_id, Some(crate::library::official_id()));
         assert_eq!(link.slug.as_deref(), Some("disco"));
 
