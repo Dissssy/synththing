@@ -131,6 +131,9 @@ pub struct SyncState {
     worker: (Sender<songs::Request>, Receiver<songs::Reply>),
     /// The songs went to the worker; the next change waits for its plan.
     songs_pending: bool,
+    /// Held while an update is offered (`App::update_offered`): nothing
+    /// starts, and the songs being moved stop after the one moving.
+    held: Arc<AtomicBool>,
 }
 
 /// How a round of songs being moved is going: those to fetch or send, how
@@ -183,6 +186,7 @@ impl Default for SyncState {
             progress: Progress::default(),
             worker,
             songs_pending: false,
+            held: Arc::default(),
         }
     }
 }
@@ -336,7 +340,18 @@ impl App {
     }
 
     /// Each frame: start a sync when one's due, and take one that's done.
-    pub(super) fn poll_sync(&mut self) {
+    /// While `held`, none starts; what was due waits until it's let go.
+    pub(super) fn poll_sync(&mut self, held: bool) {
+        if self.sync.held.swap(held, Ordering::Relaxed) != held {
+            if held {
+                log::info!("sync held while an update is offered");
+                self.stop_listening();
+            } else {
+                log::info!("sync resumed");
+                // (The songs that were waiting to move.)
+                self.sync.songs_dirty = true;
+            }
+        }
         let identity = self.library_identity();
         let whose = identity.as_ref().map(Identity::public);
         if whose != self.sync.for_identity {
@@ -400,6 +415,9 @@ impl App {
             frame_timing::time("sync worker replies", || self.take_reply(reply));
         }
         frame_timing::time("poll_moves", || self.poll_moves());
+        if held {
+            return;
+        }
         if self.sync.songs_dirty && self.sync.on && !self.sync.songs_pending {
             self.sync.songs_dirty = false;
             self.sync.songs_pending = true;
@@ -593,7 +611,7 @@ impl App {
             *self.sync.wanted_ids.lock().unwrap_or_else(|p| p.into_inner()) = song_sync::wanted_ids(&sync_key, &wanted);
             self.sync.wanted = wanted.clone();
         }
-        if self.syncing(Blob::Transfers) {
+        if self.syncing(Blob::Transfers) && !self.sync.held.load(Ordering::Relaxed) {
             self.listen_for_songs(&device);
         }
         self.sync.given.retain(|_, at| at.elapsed() < GIVEN_FOR);
@@ -662,7 +680,8 @@ impl App {
 
     /// Start moving the songs the worker planned to.
     fn start_moves(&mut self, tasks: Vec<Task>) {
-        if tasks.is_empty() {
+        // (Held: planned again once it's let go.)
+        if tasks.is_empty() || self.sync.held.load(Ordering::Relaxed) {
             return;
         }
         let (authority, _) = self.authority();
@@ -679,13 +698,13 @@ impl App {
         let relay = Relay { server, server_key, identity, sync_key, dir: self.songs.dir().to_path_buf() };
         self.sync.busy = tasks.iter().map(|t| t.key().to_string()).collect();
         self.sync.progress = Progress { total: tasks.iter().filter(|t| !matches!(t, Task::Delete(_))).count(), song_mb: room.song_mb, ..Progress::default() };
-        let tx = self.sync.moves.0.clone();
+        let (tx, held) = (self.sync.moves.0.clone(), Arc::clone(&self.sync.held));
         std::thread::Builder::new()
             .name("song transfers".into())
             .spawn(move || {
                 // (One song failing doesn't stop the rest; the failed ones
-                // wait for the next try.)
-                song_sync::run_all(&relay, &tasks, room, |moved| tx.send(Moving::Moved(moved)).is_ok());
+                // wait for the next try. Held, the rest wait too.)
+                song_sync::run_all(&relay, &tasks, room, |moved| tx.send(Moving::Moved(moved)).is_ok() && !held.load(Ordering::Relaxed));
                 let _ = tx.send(Moving::Finished);
             })
             .ok();
@@ -886,6 +905,9 @@ impl App {
             }
         }
         if self.sync.on {
+            if self.sync.held.load(Ordering::Relaxed) {
+                ui.weak("Paused while the update downloads.");
+            }
             if let Some(error) = &self.sync.error {
                 ui.weak(format!("Couldn't sync: {error}"));
             }

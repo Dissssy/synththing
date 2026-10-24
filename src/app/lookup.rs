@@ -55,7 +55,8 @@ impl App {
 
     /// Take in the lookup thread's answers, and have it plan the next
     /// ask (from a copy of the songs) once it's done. Once a frame.
-    pub(super) fn lookup_tick(&mut self, ctx: &egui::Context) {
+    /// While `held`, answers are taken but nothing new is asked.
+    pub(super) fn lookup_tick(&mut self, ctx: &egui::Context, held: bool) {
         if !self.looks_up() {
             return;
         }
@@ -92,7 +93,7 @@ impl App {
                 }
             }
         }
-        if self.lookup.worker.as_ref().is_some_and(Worker::working) {
+        if held || self.lookup.worker.as_ref().is_some_and(Worker::working) {
             return;
         }
         let revision = self.songs.revision();
