@@ -731,6 +731,11 @@ impl App {
 }
 
 impl App {
+    /// The mobile layout's on the Updates page.
+    pub(super) fn on_updates_page(&self) -> bool {
+        self.mobile_state.page == Page::Updates
+    }
+
     /// An available update, on Android: unless installing in the app is
     /// on (Preferences > Updates, or always in a branch build, which was
     /// installed by the app) and allowed, it's only announced, once. `None`

@@ -1968,6 +1968,19 @@ impl App {
         }
     }
 
+    /// An update is offered (the Updates window or page is open with one
+    /// available) or downloading: sync and the online lookup wait, so the
+    /// download has the connection. Closing it, or installing it (the app
+    /// restarts without it open), lets them go on.
+    pub(super) fn update_offered(&self) -> bool {
+        match self.updater.state() {
+            UpdateState::Downloading { .. } => true,
+            UpdateState::Available(_) if self.mobile() => self.on_updates_page(),
+            UpdateState::Available(_) => self.updates_open,
+            _ => false,
+        }
+    }
+
     /// What the update check found, release notes, and installing. On a
     /// page there's no Close (back leaves), and the release notes aren't
     /// a scroll area of their own; whether a way out (Close, Not now,
@@ -4089,8 +4102,10 @@ impl App {
         frame_timing::time("poll_identity", || self.poll_identity());
         frame_timing::time("poll_pairing", || self.poll_pairing());
         frame_timing::time("poll_notifications", || self.poll_notifications(ctx));
-        frame_timing::time("poll_sync", || self.poll_sync());
-        frame_timing::time("lookup_tick", || self.lookup_tick(ctx));
+        // (The update download gets the connection.)
+        let held = self.update_offered();
+        frame_timing::time("poll_sync", || self.poll_sync(held));
+        frame_timing::time("lookup_tick", || self.lookup_tick(ctx, held));
         frame_timing::time("api_tick", || self.api_tick(ctx, &view));
         // (Minimized, eframe still draws the window, but only 10 times a
         // second.)
