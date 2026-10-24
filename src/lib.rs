@@ -32,6 +32,7 @@ mod code_edit;
 mod commands;
 mod config;
 mod device;
+mod device_sync;
 mod credits;
 mod decoded_audio;
 mod engine;

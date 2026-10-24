@@ -1,8 +1,8 @@
 //! The song library's and its transfers' sync states, kept on a thread of
 //! their own. Noting the songs here in them, planning what to move and
 //! taking in each sync go over every song in the library, which takes
-//! longer than a frame once there are thousands. The app sends what
-//! changed and takes back what it has to act on (`App::poll_sync`).
+//! longer than a frame once there are thousands. `DeviceSync` sends what
+//! changed and takes back what it has to act on (`DeviceSync::poll`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -15,7 +15,7 @@ use crate::settings_sync::{self, State};
 use crate::song_store::SongStore;
 use crate::song_sync::{self, Moved, SyncedDevice, SyncedLibrary, Task};
 
-/// The songs as the app has them, for the worker to go by.
+/// The songs as the device has them, for the worker to go by.
 pub(super) struct Songs {
     pub store: SongStore,
     /// The songs this device wants (`song_sync::wanted`).
