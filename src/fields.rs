@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::song_info::{format_length, thousands, SongInfo};
-use crate::song_store::{self, Meta, STARRED};
+use crate::song_store::{self, Meta, Online, STARRED};
 
 /// A song field. Kept (in smart playlist rules) by its key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -86,6 +86,13 @@ pub enum Field {
     MusicBrainzRelease,
     /// The program that added it through the local API (`api.rs`).
     AddedBy,
+    /// It's matched to a recording at MusicBrainz (`Facts::recording`).
+    Matched,
+    /// Its album's matched to a release at MusicBrainz (`Facts::release`).
+    AlbumMatched,
+    /// Its artist's matched at MusicBrainz: a matched song credits them
+    /// (`smart::matched_artists`).
+    ArtistMatched,
 }
 
 /// Where Song info shows an editable field.
@@ -184,6 +191,9 @@ pub const FIELDS: &[Def] = &[
     def(Field::RememberPosition, "remember_position", "Remember position", Kind::Flag, true, 0.0, false, &[], true),
     def(Field::MusicBrainzRelease, "musicbrainz_release", "MusicBrainz release", Kind::Text, true, 0.0, false, &[], false),
     def(Field::AddedBy, "added_by", "Added by", Kind::Text, true, 120.0, true, &[], false),
+    def(Field::Matched, "matched", "Matched at MusicBrainz", Kind::Flag, true, 0.0, false, &[], false),
+    def(Field::AlbumMatched, "album_matched", "Album matched at MusicBrainz", Kind::Flag, true, 0.0, false, &[], false),
+    def(Field::ArtistMatched, "artist_matched", "Artist matched at MusicBrainz", Kind::Flag, true, 0.0, false, &[], false),
 ];
 
 impl Def {
@@ -298,6 +308,8 @@ pub struct Facts<'a> {
     pub edits: Option<&'a Edits>,
     /// The program that added it through the local API, if one did.
     pub added_by: Option<&'a str>,
+    /// What it was matched to at MusicBrainz.
+    pub online: Option<&'a Online>,
 }
 
 /// A song's edits (in the synced library, `song_store::Song::edits`): an
@@ -308,7 +320,7 @@ pub type Edits = BTreeMap<Field, String>;
 impl<'a> Facts<'a> {
     /// A song in the library, as every device knows it.
     pub fn of(song: &'a song_store::Song) -> Self {
-        Self { file_name: &song.name, meta: song.meta.as_ref(), info: None, imported: Some(song.imported), tags: &song.tags, edits: Some(&song.edits), added_by: song.added_by.as_deref() }
+        Self { file_name: &song.name, meta: song.meta.as_ref(), info: None, imported: Some(song.imported), tags: &song.tags, edits: Some(&song.edits), added_by: song.added_by.as_deref(), online: song.online.as_ref() }
     }
 
     /// What the song's edits say `field` is, if they do.
@@ -421,7 +433,25 @@ impl<'a> Facts<'a> {
         match field {
             Field::Starred => self.starred(),
             Field::Compilation => self.meta.is_some_and(|m| m.compilation),
+            Field::Matched => self.recording().is_some(),
+            Field::AlbumMatched => self.release().is_some(),
             _ => false,
+        }
+    }
+
+    /// The MusicBrainz release it's on: its match's, else the one its
+    /// file says.
+    pub fn release(&self) -> Option<&'a str> {
+        self.online.and_then(|o| o.release.as_deref()).or_else(|| self.meta?.musicbrainz_release.as_deref())
+    }
+
+    /// Its MusicBrainz recording: its match's, once it's matched to a
+    /// release (the release may not line it up with one), else the one
+    /// its file says.
+    pub fn recording(&self) -> Option<&'a str> {
+        match self.online {
+            Some(Online { release: Some(_), recording, .. }) => recording.as_deref(),
+            _ => self.meta?.musicbrainz_recording.as_deref(),
         }
     }
 
@@ -580,7 +610,7 @@ mod tests {
     fn facts_give_each_field() {
         let meta = Meta { title: Some(" Song ".into()), artist: Some(String::new()), track: Some(3), length: Some(83.0), size: 4_200_000, ..Meta::default() };
         let tags = vec![STARRED.to_string()];
-        let facts = Facts { file_name: "03 Song.MP3", meta: Some(&meta), info: None, imported: Some(86_400), tags: &tags, edits: None, added_by: None };
+        let facts = Facts { file_name: "03 Song.MP3", meta: Some(&meta), info: None, imported: Some(86_400), tags: &tags, edits: None, added_by: None, online: None };
         assert_eq!(facts.text(Field::Title).as_deref(), Some("Song"));
         assert_eq!(facts.text(Field::Artist), None, "empty is none");
         assert_eq!(facts.text(Field::FileName).as_deref(), Some("03 Song"));
