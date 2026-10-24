@@ -30,6 +30,11 @@ pub fn official_url() -> String {
         .unwrap_or_else(|_| OFFICIAL_URL.to_string())
 }
 
+/// A server's address without its scheme, for showing.
+pub fn host(url: &str) -> &str {
+    url.split("://").nth(1).unwrap_or(url)
+}
+
 /// Where to reach a server recorded in a `.source.json`: the official one
 /// is recorded as `OFFICIAL_URL` (so the files stay right whatever
 /// `SYNTHTHING_OFFICIAL_URL` said when they were written), and reached at
