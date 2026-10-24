@@ -374,14 +374,16 @@ fn view_menu(ui: &mut egui::Ui, view: &mut View, touch: bool) -> bool {
 
 /// A column's cell `width` wide (in a right-to-left layout), its text cut
 /// short to fit (or scrolling, while `scroll` is on), with a line before it.
+/// The whole cell's response.
 fn cell(ui: &mut egui::Ui, width: f32, text: impl Into<egui::WidgetText>, scroll: bool) -> egui::Response {
     let size = egui::vec2(width, ui.available_height());
     let response = ui
         .allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_min_size(size);
             ui.set_width(width);
-            crate::marquee::show(ui, text, scroll)
+            crate::marquee::show(ui, text, scroll);
         })
-        .inner;
+        .response;
     let x = response.rect.left() - ui.spacing().item_spacing.x / 2.0;
     ui.painter().vline(x, ui.max_rect().y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
     response
@@ -439,13 +441,15 @@ fn song_row(
 }
 
 /// The column headers' cells in `rect`, over `shown`'s columns and the
-/// names, titled by `title` (given a column's key and label): each one's
-/// response, by key (`"name"` for the names).
+/// names, titled by `title` (given a column's key and label): each whole
+/// cell's response, by key (`"name"` for the names).
 fn header_cells(ui: &mut egui::Ui, rect: egui::Rect, shown: &[&Def], title: impl Fn(&str, &str) -> egui::RichText) -> Vec<(&'static str, egui::Response)> {
     ui.painter().rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
     ui.painter().hline(rect.x_range(), rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
     let mut headers = Vec::new();
-    let builder = egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center));
+    // (Short of the right end as the rows are, so the columns line up.)
+    let cells = rect.with_max_x(rect.max.x - select_list::EDGE);
+    let builder = egui::UiBuilder::new().max_rect(cells).layout(egui::Layout::right_to_left(egui::Align::Center));
     ui.scope_builder(builder, |ui| {
         ui.add_space(TRAILING_WIDTH + ui.spacing().item_spacing.x);
         for c in shown.iter().rev() {
@@ -455,7 +459,13 @@ fn header_cells(ui: &mut egui::Ui, rect: egui::Rect, shown: &[&Def], title: impl
         let name = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             // (Over the rows' notes.)
             ui.add_space(select_list::STAR_WIDTH + ui.spacing().item_spacing.x);
-            ui.add(egui::Label::new(title("name", "Name")).truncate().selectable(false).sense(egui::Sense::click()))
+            let size = ui.available_size();
+            ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_min_size(size);
+                ui.add(egui::Label::new(title("name", "Name")).truncate().selectable(false));
+            })
+            .response
+            .interact(egui::Sense::click())
         });
         headers.push(("name", name.inner));
     });
