@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.7.1 (2026-10-27)
+
 ### Added
 - A hub answers the local API: let a program in with `synththing hub token <name> --grant read,add_songs`, and it can read the library and the wishlist, add songs and check them first, as with the app (playing aside: a hub plays nothing). `SYNTHTHING_API_LAN=true` lets in other Docker containers. See docs/HUB.md.
 
