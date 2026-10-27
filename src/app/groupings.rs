@@ -500,7 +500,7 @@ impl App {
                 };
                 // (On a phone, a button: the search gets the room.)
                 if select_list::touch(ui.ctx()) {
-                    egui::containers::menu::MenuButton::from_button(icon_button("sort-ascending")).ui(ui, sorts);
+                    egui::containers::menu::MenuButton::from_button(icon_button("sort-ascending")).config(crate::menu::config(ui.ctx())).ui(ui, sorts);
                 } else {
                     egui::ComboBox::from_id_salt("grouping_sort").selected_text(title).show_ui(ui, sorts);
                 }
@@ -600,7 +600,7 @@ impl App {
                     if response.clicked() {
                         opened = Some(group.key.clone());
                     }
-                    response.context_menu(|ui| {
+                    crate::menu::context(&response, |ui| {
                         if let Some(next) = super::queue::menu(ui) {
                             queued = Some((shown[row], next));
                         }
@@ -645,7 +645,7 @@ impl App {
                         if response.clicked() {
                             opened = Some(group.key.clone());
                         }
-                        response.context_menu(|ui| {
+                        crate::menu::context(&response, |ui| {
                             if let Some(next) = super::queue::menu(ui) {
                                 queued = Some((i, next));
                             }
@@ -946,7 +946,7 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
         response.dnd_set_drag_payload(DraggedFiles { paths: vec![track.path.clone()], label: track.name.clone() });
     }
     if track.here {
-        response.context_menu(|ui| {
+        crate::menu::context(&response, |ui| {
             output.queue = super::queue::menu(ui);
             if ui.button("Song info").clicked() {
                 output.info = true;

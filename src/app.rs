@@ -1699,7 +1699,7 @@ impl App {
             if row.response.drag_started() {
                 row.response.dnd_set_drag_payload(DraggedSoundfont(path.clone()));
             }
-            row.response.context_menu(|ui| {
+            crate::menu::context(&row.response, |ui| {
                 if ui.button("Use").clicked() {
                     use_idx = Some(row.idx);
                 }
@@ -1745,7 +1745,7 @@ impl App {
     /// including the tool windows (Settings, Docs), so everything that can
     /// be shown is switched on and off from one place.
     fn top_bar_ui(&mut self, ui: &mut egui::Ui) {
-        egui::MenuBar::new().ui(ui, |ui| {
+        egui::MenuBar::new().config(crate::menu::config(ui.ctx())).ui(ui, |ui| {
             // The wordmark (a little taller than the menus' text: it has
             // a note above and descenders below), or the name as text if
             // it can't be drawn.
