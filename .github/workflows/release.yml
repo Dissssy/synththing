@@ -4,8 +4,8 @@
 # (experimental, docs/LINUX.md) as synththing-linux-x86_64, and the Android
 # app (experimental, docs/ANDROID.md) as synththing-android-arm64.apk: the
 # names the in-app updater (src/updater.rs, ASSET_NAME) looks for. The Linux build
-# also goes into the library server's container image
-# (ghcr.io/<owner>/synththing, docs/DEPLOY.md).
+# also goes into the container image for servers and hubs
+# (ghcr.io/<owner>/synththing, docs/DEPLOY.md, docs/HUB.md).
 name: Release
 
 on:
@@ -141,14 +141,12 @@ jobs:
           tar -czf synththing-docs.tar.gz -C target/book .
           gh release upload "$GITHUB_REF_NAME" synththing-docs.tar.gz
 
-  # The server's container image (docs/DEPLOY.md): the Linux build just
-  # added, in deploy/release.Dockerfile's runtime, pushed to
-  # ghcr.io/<owner>/synththing as :<version> and :latest.
-  #
-  # Off for now (it works: 0.4.1's image built): the image goes public with
-  # the lighter server-only build (TODO). Remove the `if` to turn it on.
+  # The container image for servers and hubs (docs/DEPLOY.md, docs/HUB.md):
+  # the Linux build just added, in deploy/release.Dockerfile's runtime,
+  # pushed to ghcr.io/<owner>/synththing as :<version> and :latest. (It's
+  # the whole app, desktop libraries and all, until there's a server-only
+  # build: TODO.)
   docker:
-    if: false
     needs: linux
     runs-on: ubuntu-latest
     permissions:
@@ -184,7 +182,7 @@ jobs:
             ${{ steps.image.outputs.name }}:latest
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.description=synththing script library server
+            org.opencontainers.image.description=synththing server and hub
 
   # The bundled scripts, published to the official script library with the
   # Linux build just made (it knows every function they use, so their

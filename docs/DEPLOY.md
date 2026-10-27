@@ -15,7 +15,7 @@ Behind a reverse proxy, set `"behind_proxy": true` so upload limits see the clie
 
 Two compose files, the same apart from where the image comes from:
 
-- `deploy/docker-compose.yml`: the published image, `ghcr.io/dissssy/synththing:latest`. It's from 0.4.1 and not kept up to date for now: release.yml's `docker` job is off until there's a lighter server-only build. Use the next one.
+- `deploy/docker-compose.yml`: the published image, `ghcr.io/dissssy/synththing:latest`, published with each release (and `:<version>`, e.g. `:v1.7.0`). The same image runs a hub (docs/HUB.md).
 - `deploy/docker-compose.build.yml`: built from this repository (`Dockerfile`; the first build compiles everything, several minutes).
 
 ```

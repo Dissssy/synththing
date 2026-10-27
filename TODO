@@ -671,8 +671,9 @@ Smaller:
     (identity keys, authorities, previews, encores, moderation, the
     Library tab; built in the order listed there). Original note:
 [M][.] server-only build (for official container images)
-    The Docker image carries GTK, ALSA and udev (about 300 MB) only because
-    the server is the app's binary. Plan: a default `gui` feature making
+    The Docker image (published with each release, for servers and hubs)
+    carries GTK, ALSA and udev (about 300 MB) only because the server is
+    the app's binary. Plan: a default `gui` feature making
     eframe, rfd, rodio and gilrs optional (egui and egui_dock are pure Rust
     and stay, as a direct egui dependency instead of eframe::egui), so
     `cargo build --release --no-default-features` gives serve,
