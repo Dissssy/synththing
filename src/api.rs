@@ -282,6 +282,8 @@ pub struct PlaylistRef {
 /// The library as the app has it, to search away from the app's thread.
 pub struct Library {
     pub store: SongStore,
+    /// The wishlist, for `is:wished` and `wish:`.
+    pub wishes: crate::wishlist::Wishes,
     pub playlists: Vec<PlaylistInfo>,
     /// Every ruleset, by ID: the built-in ones, then the user's.
     pub rulesets: Vec<(String, Ruleset)>,
@@ -302,7 +304,7 @@ impl Library {
     /// `/v1/songs` has them: a song known only from another device is
     /// left out, and a playlist of none of these with it).
     fn groups(&self, rules: &Rules) -> Vec<GroupInfo> {
-        let groups = rules.groups(&self.store, crate::settings_sync::now(), &self.group_ignore, self.articles);
+        let groups = rules.groups(&self.store, &self.wishes, crate::settings_sync::now(), &self.group_ignore, self.articles);
         groups
             .into_iter()
             .filter_map(|mut group| {
@@ -737,7 +739,7 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::NowPlaying).map_or_else(|reply| reply, |now| json(200, &now))))
         }
         (Method::Get, ["v1", "songs"]) => {
-            Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| songs(&library.store, &query))))
+            Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| songs(&library, &query))))
         }
         (Method::Post, ["v1", "songs"]) => Some(match needs(access.add_songs, "add songs") {
             Some(reply) => reply,
@@ -926,11 +928,12 @@ struct SongPage {
 
 /// `GET /v1/songs?q=&offset=&limit=`: the songs the query matches (the
 /// Songs search box's filters and text), in file name order.
-fn songs(store: &SongStore, query: &HashMap<String, String>) -> Reply {
+fn songs(library: &Library, query: &HashMap<String, String>) -> Reply {
+    let store = &library.store;
     let q = query.get("q").map_or("", String::as_str);
     let offset = query.get("offset").and_then(|o| o.parse().ok()).unwrap_or(0);
     let limit = query.get("limit").and_then(|l| l.parse().ok()).unwrap_or(MOST_SONGS).min(MOST_SONGS);
-    let found = matching(store, q);
+    let found = matching(store, &library.wishes, q);
     let total = found.len();
     let songs = found.into_iter().skip(offset).take(limit).map(|(key, song)| SongInfo::of(&key, song, store)).collect();
     json(200, &SongPage { total, songs })
@@ -947,7 +950,7 @@ fn split_by(query: &HashMap<String, String>) -> Result<SplitBy, Reply> {
 /// `GET /v1/groups?split=&q=`: the songs `q` finds (as `/v1/songs` does),
 /// split as a ruleset splitting by `by` would, in album order in each.
 fn groups(library: &Library, by: SplitBy, q: &str) -> Reply {
-    let found: std::collections::HashSet<String> = matching(&library.store, q).into_iter().map(|(key, _)| key).collect();
+    let found: std::collections::HashSet<String> = matching(&library.store, &library.wishes, q).into_iter().map(|(key, _)| key).collect();
     let rules = Rules { split: Some(Split { by, min: 1 }), order: Order::Album, seed: 0, ..Rules::default() };
     let groups: Vec<GroupInfo> = library
         .groups(&rules)
@@ -1055,9 +1058,9 @@ fn art(library: &Library, key: &str) -> Reply {
 
 /// The library's songs that `query` keeps: its filters, then each word of
 /// text found in the title, artist, album or file name.
-fn matching<'s>(store: &'s SongStore, query: &str) -> Vec<(String, &'s Song)> {
+fn matching<'s>(store: &'s SongStore, wishes: &crate::wishlist::Wishes, query: &str) -> Vec<(String, &'s Song)> {
     let search = crate::search::parse(query, store.tags());
-    let rules = search.rules.matcher(store, crate::settings_sync::now());
+    let rules = search.rules.matcher(store, wishes, crate::settings_sync::now());
     let mut found: Vec<(String, &Song)> = store
         .songs()
         .filter(|(_, song)| rules(song))
@@ -1188,7 +1191,7 @@ mod tests {
     /// A library with no songs, playlists or rulesets of its own.
     fn no_library() -> Library {
         let rulesets = crate::smart::builtin().map(|(id, r)| (id.to_string(), r)).into_iter().collect();
-        Library { store: SongStore::open(std::env::temp_dir()), playlists: Vec::new(), rulesets, group_ignore: String::new(), articles: false, online: false, queue: Vec::new(), soundfonts: Vec::new(), scripts: Vec::new() }
+        Library { store: SongStore::open(std::env::temp_dir()), wishes: Default::default(), playlists: Vec::new(), rulesets, group_ignore: String::new(), articles: false, online: false, queue: Vec::new(), soundfonts: Vec::new(), scripts: Vec::new() }
     }
 
     /// A server on a free port with a reader's and a controller's tokens.
@@ -1403,9 +1406,9 @@ mod tests {
         store.add(mine);
         store.add(sent);
         store.set_added_by(&sent_key, "downloader");
-        let found = matching(&store, "addedby:downloader");
+        let found = matching(&store, &Default::default(), "addedby:downloader");
         assert_eq!(found.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), [sent_key.as_str()]);
-        assert_eq!(matching(&store, "-addedby:downloader").len(), 1);
+        assert_eq!(matching(&store, &Default::default(), "-addedby:downloader").len(), 1);
         assert_eq!(SongInfo::of(&sent_key, found[0].1, &store).added_by.as_deref(), Some("downloader"));
         // (Synced: another device learns who added it.)
         let other = std::env::temp_dir().join(format!("synththing-api-added-other-{}", std::process::id()));

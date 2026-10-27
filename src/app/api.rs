@@ -217,6 +217,7 @@ impl App {
                 Call::Library(reply) => {
                     let _ = reply.send(api::Library {
                         store: self.songs.clone(),
+                        wishes: self.wishlist.list.wishes.clone(),
                         playlists: self.api_playlists(),
                         rulesets: self.all_rulesets(),
                         group_ignore: self.config.group_ignore.clone(),
