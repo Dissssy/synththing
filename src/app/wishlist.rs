@@ -29,10 +29,21 @@ struct Found {
 }
 
 /// What was asked of MusicBrainz to wish for an album: a release, to wish
-/// for the rest of it, or the wish itself, its tracks filled in.
+/// for the rest of it, or the wish itself, its tracks filled in; or a
+/// wished album's release, to pick its songs.
 enum Fetched {
     Release(Release),
     Album(Wish),
+    Tracks(Release),
+}
+
+/// What the tab shows in place of the wishlist: an artist's albums, to
+/// pick the ones wished for, or a wished album's songs, to skip some (by
+/// the wish's ID).
+#[derive(Clone)]
+enum Page {
+    Artist(String),
+    Album(String),
 }
 
 /// A search being made, or what came of it.
@@ -63,12 +74,11 @@ pub(super) struct WishlistState {
     adding: HashSet<String>,
     /// A watched artist's albums being asked for: who, and the answer.
     discography: Option<(String, mpsc::Receiver<Result<Vec<ArtistAlbum>, String>>)>,
-    /// The artists asked about this session (not asked again).
+    /// The artists (and wished albums' releases) asked about this session
+    /// (not asked again).
     looked_up: HashSet<String>,
-    /// The artist's watch (by ID) whose albums the tab shows, in place of
-    /// the wishlist.
-    albums: Option<String>,
-    albums_selection: Selection,
+    page: Option<Page>,
+    page_selection: Selection,
     selection: Selection,
     art: AlbumArt,
 }
@@ -88,18 +98,19 @@ impl Default for WishlistState {
             adding: HashSet::new(),
             discography: None,
             looked_up: HashSet::new(),
-            albums: None,
-            albums_selection: Selection::default(),
+            page: None,
+            page_selection: Selection::default(),
             selection: Selection::default(),
             art: AlbumArt::default(),
         }
     }
 }
 
-/// A row of the list: a part's heading, or a wish (by ID).
+/// A row of the list: a part's heading, or a wish (by ID; one of an
+/// artist's albums, under them).
 enum Row {
     Heading(State, usize),
-    Wish(String),
+    Wish(String, bool),
 }
 
 /// What's asked of the list's rows.
@@ -107,8 +118,7 @@ enum Act {
     Toggle(State),
     Play(String),
     Note(String),
-    Albums(String),
-    Count(String, &'static str, bool),
+    Open(Page),
     Remove(Vec<String>),
 }
 
@@ -210,6 +220,10 @@ impl App {
     fn take_album(&mut self, ctx: &egui::Context, answer: Result<Fetched, String>) {
         match answer {
             Ok(Fetched::Album(wish)) => self.wish_for_album(ctx, AlbumAsk::Wish(wish)),
+            Ok(Fetched::Tracks(release)) => {
+                self.lookup.kept.keep_release(release);
+                self.wishlist.progress = None;
+            }
             Ok(Fetched::Release(release)) => {
                 self.lookup.kept.keep_release(release.clone());
                 self.groupings.tracks_changed();
@@ -332,8 +346,11 @@ impl App {
             self.wishlist.search = Some(Search::Done(found));
         }
 
-        if self.wishlist.albums.is_some() {
-            self.wishlist_albums_ui(ui, online);
+        if let Some(page) = self.wishlist.page.clone() {
+            match page {
+                Page::Artist(id) => self.wishlist_artist_ui(ui, &id, online),
+                Page::Album(id) => self.wishlist_album_ui(ui, &id, online),
+            }
         } else {
             self.wishlist_search_ui(ui, online);
             self.wishlist_by_name_ui(ui);
@@ -475,24 +492,32 @@ impl App {
             return self.wishlist_act(ui.ctx(), act);
         }
 
+        // (An artist's albums go under them, not in a part of their own.)
+        let on_top = |wish: &Wish| wish.under.as_ref().is_none_or(|artist| !wishes.contains_key(artist));
         let mut rows = Vec::new();
         for state in State::ALL {
-            let mut ids: Vec<&String> = wishes.keys().filter(|id| state_of(id) == state).collect();
+            let mut ids: Vec<&String> = wishes.iter().filter(|(id, w)| on_top(w) && state_of(id) == state).map(|(id, _)| id).collect();
             if ids.is_empty() {
                 continue;
             }
             // (Newest first.)
             ids.sort_by_key(|id| std::cmp::Reverse(wishes[*id].added));
             rows.push(Row::Heading(state, ids.len()));
-            if !self.wishlist.folded.contains(&state) {
-                rows.extend(ids.into_iter().cloned().map(Row::Wish));
+            if self.wishlist.folded.contains(&state) {
+                continue;
+            }
+            for id in ids {
+                rows.push(Row::Wish(id.clone(), false));
+                let mut albums: Vec<(&String, &Wish)> = self.wishlist.list.under(id).collect();
+                albums.sort_by(|(_, a), (_, b)| (&a.year, &a.title).cmp(&(&b.year, &b.title)));
+                rows.extend(albums.into_iter().map(|(album, _)| Row::Wish(album.clone(), true)));
             }
         }
         let touch = select_list::touch(ui.ctx());
         let art = &mut self.wishlist.art;
         let folded = &self.wishlist.folded;
         let ids = |rows: &[usize], all: &[Row]| -> Vec<String> {
-            rows.iter().filter_map(|&i| if let Some(Row::Wish(id)) = all.get(i) { Some(id.clone()) } else { None }).collect()
+            rows.iter().filter_map(|&i| if let Some(Row::Wish(id, _)) = all.get(i) { Some(id.clone()) } else { None }).collect()
         };
         let mut menu_act = None;
         let output = select_list::show(ui, "wishlist", &rows, &mut self.wishlist.selection, None, |ui, row, item| {
@@ -502,7 +527,12 @@ impl App {
                     ui.label(egui::RichText::new(format!("{caret} {} ({count})", state.name())).strong());
                     return;
                 }
-                Row::Wish(id) => id,
+                Row::Wish(id, under) => {
+                    if *under {
+                        ui.add_space(ui.available_height());
+                    }
+                    id
+                }
             };
             let wish = &wishes[id];
             let progress = progress.get(id).cloned().unwrap_or_default();
@@ -511,17 +541,9 @@ impl App {
                     menu_act = Some(Act::Play(id.clone()));
                 }
                 if wish.kind == Kind::Artist && wish.musicbrainz.is_some() {
-                    if ui.button("Their albums").clicked() {
-                        menu_act = Some(Act::Albums(id.clone()));
+                    if ui.button("Pick their albums").clicked() {
+                        menu_act = Some(Act::Open(Page::Artist(id.clone())));
                     }
-                    ui.menu_button("Count", |ui| {
-                        for kind in crate::wishlist::KINDS {
-                            let mut counts = wish.counts(kind);
-                            if ui.checkbox(&mut counts, kind).changed() {
-                                menu_act = Some(Act::Count(id.clone(), kind, counts));
-                            }
-                        }
-                    });
                 }
                 if ui.button(if wish.note.is_empty() { "Add a note..." } else { "Edit the note..." }).clicked() {
                     menu_act = Some(Act::Note(id.clone()));
@@ -575,8 +597,9 @@ impl App {
         if let Some(i) = output.activated {
             match &rows[i] {
                 Row::Heading(state, _) => act = Some(Act::Toggle(*state)),
-                Row::Wish(id) if wishes[id].kind == Kind::Artist && wishes[id].musicbrainz.is_some() => act = Some(Act::Albums(id.clone())),
-                Row::Wish(id) => act = Some(Act::Play(id.clone())),
+                Row::Wish(id, _) if wishes[id].kind == Kind::Artist && wishes[id].musicbrainz.is_some() => act = Some(Act::Open(Page::Artist(id.clone()))),
+                Row::Wish(id, _) if wishes[id].kind == Kind::Album && wishes[id].release.is_some() => act = Some(Act::Open(Page::Album(id.clone()))),
+                Row::Wish(id, _) => act = Some(Act::Play(id.clone())),
             }
         }
         if output.delete {
@@ -606,14 +629,9 @@ impl App {
                 let note = self.wishlist.list.wishes.get(&id).map(|w| w.note.clone()).unwrap_or_default();
                 self.wishlist.note = Some((id, note));
             }
-            Some(Act::Albums(id)) => {
-                self.wishlist.albums = Some(id);
-                self.wishlist.albums_selection.clear();
-            }
-            Some(Act::Count(id, kind, counts)) => {
-                self.wishlist.list.set_counts(&id, kind, counts);
-                self.groupings.tracks_changed();
-                self.wishlist_changed();
+            Some(Act::Open(page)) => {
+                self.wishlist.page = Some(page);
+                self.wishlist.page_selection.clear();
             }
             Some(Act::Remove(ids)) if !ids.is_empty() => {
                 self.wishlist.list.remove(&ids);
@@ -624,104 +642,218 @@ impl App {
         }
     }
 
-    /// A watched artist's albums, in the tab in place of the wishlist:
-    /// those counted, each here, wished for (or being added), or to wish
-    /// for; and what's counted.
-    fn wishlist_albums_ui(&mut self, ui: &mut egui::Ui, online: bool) {
-        let Some(id) = self.wishlist.albums.clone() else { return };
-        let Some(wish) = self.wishlist.list.wishes.get(&id).cloned() else {
-            self.wishlist.albums = None;
+    /// The kinds of an artist's albums shown on their page.
+    pub(super) fn wishlist_kinds(&self) -> Vec<&'static str> {
+        let chosen = &self.config.wishlist_kinds;
+        crate::wishlist::KINDS.into_iter().filter(|k| if chosen.is_empty() { crate::wishlist::SHOWN.contains(k) } else { chosen.iter().any(|c| c == k) }).collect()
+    }
+
+    /// An artist's albums, in the tab in place of the wishlist (those of
+    /// the kinds shown): each ticked to wish for it, under them, with
+    /// what's here of it.
+    fn wishlist_artist_ui(&mut self, ui: &mut egui::Ui, id: &str, online: bool) {
+        let Some(wish) = self.wishlist.list.wishes.get(id).cloned() else {
+            self.wishlist.page = None;
             return;
         };
         let mut back = false;
-        let mut count = None;
+        let mut kinds = self.wishlist_kinds();
+        let mut shown_changed = false;
         ui.horizontal(|ui| {
             back = ui.add(super::icon_button("arrow-left")).on_hover_text("Back to the wishlist").clicked();
             ui.add(egui::Label::new(egui::RichText::new(&wish.title).heading()).truncate());
         });
         ui.horizontal_wrapped(|ui| {
-            ui.weak("Counted:");
+            ui.weak("Show:");
             for kind in crate::wishlist::KINDS {
-                let mut counts = wish.counts(kind);
-                if ui.checkbox(&mut counts, kind).changed() {
-                    count = Some((kind, counts));
+                let mut shown = kinds.contains(&kind);
+                if ui.checkbox(&mut shown, kind).changed() {
+                    kinds.retain(|k| *k != kind);
+                    if shown {
+                        kinds.push(kind);
+                    }
+                    shown_changed = true;
                 }
             }
         });
+        ui.weak("Tick the albums you want: they go on your wishlist under the artist.");
         ui.separator();
-        let mut ask = None;
-        match wish.musicbrainz.as_deref().and_then(|artist| self.lookup.kept.discography(artist)) {
+        // (Ticked, or not: the album, and the wish under the artist to
+        // take off, if it's unticked.)
+        let mut pick: Option<(&ArtistAlbum, Option<String>)> = None;
+        let albums = wish.musicbrainz.as_deref().and_then(|artist| self.lookup.kept.discography(artist));
+        match &albums {
             None => {
                 ui.weak(if online { "Looking up their albums at MusicBrainz..." } else { "Their albums aren't looked up on this device yet: that needs Online album art and details on." });
             }
             Some(albums) => {
-                let missing: HashSet<String> = crate::wishlist::missing_albums(&wish, &self.songs, &self.lookup.kept).into_iter().map(|a| a.id).collect();
-                let wished: HashSet<&str> = self.wishlist.list.wishes.values().filter(|w| w.kind == Kind::Album).filter_map(|w| w.musicbrainz.as_deref()).collect();
+                let here = crate::wishlist::albums_here(&self.songs);
+                let picked: BTreeMap<&str, &String> =
+                    self.wishlist.list.under(id).filter_map(|(album, w)| Some((w.musicbrainz.as_deref()?, album))).collect();
+                let progress = self.wishlist.progress.as_ref().map(|(_, p)| p);
                 let adding = &self.wishlist.adding;
-                let rows: Vec<&ArtistAlbum> = albums.iter().filter(|a| wish.counts(a.kind)).collect();
-                // (What each is: here, wished for, being added, or not.)
-                let state = |album: &ArtistAlbum| {
-                    if !missing.contains(&album.id) {
-                        Some("Here")
-                    } else if wished.contains(album.id.as_str()) {
-                        Some("Wished for")
-                    } else if adding.contains(&album.id) {
-                        Some("Adding...")
-                    } else {
-                        None
-                    }
-                };
-                let wish_for = |album: &ArtistAlbum| {
-                    let wish = crate::wishlist::album_wish(album, &wish.title);
-                    if online { AlbumAsk::Group(wish) } else { AlbumAsk::Wish(wish) }
-                };
+                let rows: Vec<&ArtistAlbum> = albums.iter().filter(|a| kinds.contains(&a.kind)).collect();
                 let touch = select_list::touch(ui.ctx());
-                let output = select_list::show(ui, "wishlist_albums", &rows, &mut self.wishlist.albums_selection, None, |ui, row, album| {
-                    let state = state(album);
+                let mut open = None;
+                let output = select_list::show(ui, "wishlist_albums", &rows, &mut self.wishlist.page_selection, None, |ui, row, album| {
+                    let wished = picked.get(album.id.as_str()).copied();
+                    let state = match wished {
+                        Some(w) => progress.and_then(|p| p.get(w)).map_or_else(String::new, |p| p.text()),
+                        None if adding.contains(&album.id) => "Adding...".to_string(),
+                        None if here.contains(album.id.as_str()) => "Some here".to_string(),
+                        None => String::new(),
+                    };
                     crate::menu::context(&row.response, |ui| {
-                        if state.is_none() && ui.button("Wish for it").clicked() {
-                            ask = Some(wish_for(album));
+                        if let Some(wished) = wished
+                            && ui.button("Pick its songs").clicked()
+                        {
+                            open = Some(Page::Album(wished.clone()));
                         }
                         if ui.button("Open at MusicBrainz").clicked() {
                             ui.ctx().open_url(egui::OpenUrl::new_tab(format!("https://musicbrainz.org/release-group/{}", album.id)));
                         }
                     });
+                    let mut ticked = wished.is_some() || adding.contains(&album.id);
+                    if ui.add_enabled(!adding.contains(&album.id), egui::Checkbox::without_text(&mut ticked)).changed() {
+                        pick = Some((*album, wished.cloned()));
+                    }
                     let scroll = select_list::scrolls(row, false);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        match state {
-                            Some(state) => {
-                                select_list::cell(ui, 80.0, egui::RichText::new(state).weak(), false);
-                            }
-                            None => {
-                                if ui.add_sized([80.0, ui.available_height() - 2.0], egui::Button::new("Wish for it")).clicked() {
-                                    ask = Some(wish_for(album));
-                                }
-                            }
-                        }
+                        select_list::cell(ui, 70.0, egui::RichText::new(state).weak(), false);
                         if !touch {
                             select_list::cell(ui, 90.0, egui::RichText::new(album.kind).weak(), false);
                         }
                         select_list::cell(ui, 40.0, egui::RichText::new(album.year.clone().unwrap_or_default()).weak(), false);
-                        let title = egui::RichText::new(&album.title);
-                        let title = if state == Some("Here") { title } else { title.color(ui.visuals().weak_text_color()) };
-                        select_list::label(ui, title, None, scroll);
+                        select_list::label(ui, &album.title, None, scroll);
                     });
                 });
                 if let Some(i) = output.activated
-                    && state(rows[i]).is_none()
+                    && !adding.contains(&rows[i].id)
                 {
-                    ask = Some(wish_for(rows[i]));
+                    pick = Some((rows[i], picked.get(rows[i].id.as_str()).map(|w| (*w).clone())));
+                }
+                if let Some(page) = open {
+                    self.wishlist.page = Some(page);
+                    self.wishlist.page_selection.clear();
                 }
             }
         }
+        let pick = pick.map(|(album, wished)| (album.clone(), wished));
         if back {
-            self.wishlist.albums = None;
+            self.wishlist.page = None;
         }
-        if let Some((kind, counts)) = count {
-            self.wishlist_act(ui.ctx(), Some(Act::Count(id, kind, counts)));
+        if shown_changed {
+            self.config.wishlist_kinds = if kinds.iter().copied().eq(crate::wishlist::SHOWN) {
+                Vec::new()
+            } else {
+                crate::wishlist::KINDS.into_iter().filter(|k| kinds.contains(k)).map(str::to_string).collect()
+            };
+            if let Err(e) = self.config.save() {
+                log::warn!("saving the config: {e}");
+            }
         }
-        if let Some(ask) = ask {
-            self.wish_for_album(ui.ctx(), ask);
+        match pick {
+            None => {}
+            Some((_, Some(wished))) => self.unwish(&wished),
+            Some((album, None)) => {
+                let wish = crate::wishlist::album_wish(&album, &wish.title, id);
+                self.wish_for_album(ui.ctx(), if online { AlbumAsk::Group(wish) } else { AlbumAsk::Wish(wish) });
+            }
+        }
+    }
+
+    /// A wished album's songs, in the tab in place of the wishlist: each
+    /// ticked unless it's skipped, with whether it's here. Its release's
+    /// tracks are asked of MusicBrainz if they aren't kept here.
+    fn wishlist_album_ui(&mut self, ui: &mut egui::Ui, id: &str, online: bool) {
+        let Some(wish) = self.wishlist.list.wishes.get(id).cloned() else {
+            self.wishlist.page = None;
+            return;
+        };
+        let mut back = false;
+        ui.horizontal(|ui| {
+            back = ui.add(super::icon_button("arrow-left")).on_hover_text("Back").clicked();
+            ui.add(egui::Label::new(egui::RichText::new(&wish.title).heading()).truncate());
+        });
+        if let Some(artist) = &wish.artist {
+            ui.weak(artist);
+        }
+        ui.weak("Untick the songs you don't want: the album's got once the rest are here.");
+        ui.separator();
+        let release = wish.release.as_deref().and_then(|r| self.lookup.kept.release(r));
+        let mut skip = None;
+        match (&release, &wish.release) {
+            (Some(release), _) => {
+                let here: HashSet<&str> = self.wishlist.progress.as_ref().and_then(|(_, p)| p.get(id)).into_iter().flat_map(|p| &p.songs).filter_map(|key| {
+                    crate::fields::Facts::of(self.songs.get_by_key(key)?).recording()
+                }).collect();
+                let rows: Vec<&crate::lookup::matching::Track> = release.tracks.iter().collect();
+                let output = select_list::show(ui, "wishlist_tracks", &rows, &mut self.wishlist.page_selection, None, |ui, row, track| {
+                    let recording = track.recording.as_deref();
+                    let mut ticked = recording.is_none_or(|r| !wish.skipped.iter().any(|s| s == r));
+                    if ui.add_enabled(recording.is_some(), egui::Checkbox::without_text(&mut ticked)).changed()
+                        && let Some(recording) = recording
+                    {
+                        skip = Some((recording.to_string(), !ticked));
+                    }
+                    let scroll = select_list::scrolls(row, false);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let state = if recording.is_some_and(|r| here.contains(r)) { "Here" } else { "" };
+                        select_list::cell(ui, 50.0, egui::RichText::new(state).weak(), false);
+                        select_list::cell(ui, 50.0, egui::RichText::new(track.length.map_or_else(String::new, crate::song_info::format_length)).weak(), false);
+                        let title = egui::RichText::new(format!("{}. {}", track.position, track.title));
+                        let title = if ticked { title } else { title.color(ui.visuals().weak_text_color()) };
+                        select_list::label(ui, title, None, scroll);
+                    });
+                });
+                if let Some(recording) = output.activated.and_then(|i| rows[i].recording.clone()) {
+                    let skipped = wish.skipped.contains(&recording);
+                    skip = Some((recording, !skipped));
+                }
+            }
+            (None, Some(release)) if online && !self.wishlist.looked_up.contains(release) || self.wishlist.adding.contains(release) => {
+                ui.weak("Asking MusicBrainz for its songs...");
+                self.fetch_tracks(ui.ctx(), release.clone());
+            }
+            (None, Some(_)) if online => {
+                ui.weak("Couldn't get its songs from MusicBrainz: try again later.");
+            }
+            _ => {
+                ui.weak("Its songs aren't known on this device yet: that needs Online album art and details on.");
+            }
+        }
+        if back {
+            // (To the artist it's under, if it's one of theirs.)
+            self.wishlist.page = wish.under.clone().filter(|artist| self.wishlist.list.wishes.contains_key(artist)).map(Page::Artist);
+            self.wishlist.page_selection.clear();
+        }
+        if let Some((recording, skipped)) = skip {
+            self.wishlist.list.set_skipped(id, &recording, skipped);
+            self.wishlist_changed();
+        }
+    }
+
+    /// Ask MusicBrainz for the tracks of `release`, a wished album's, once
+    /// a session.
+    fn fetch_tracks(&mut self, ctx: &egui::Context, release: String) {
+        if !self.wishlist.looked_up.insert(release.clone()) {
+            return;
+        }
+        self.wishlist.adding.insert(release.clone());
+        let send = self.wishlist.fetched.0.clone();
+        let repaint = ctx.clone();
+        let asked = release.clone();
+        let started = std::thread::Builder::new().name("wishlist tracks".into()).spawn(move || {
+            let fetched = MusicBrainz::new().fresh_release(&release).map(Fetched::Tracks).map_err(|e| {
+                log::warn!("asking MusicBrainz for a wished album's songs: {e:#}");
+                e.to_string()
+            });
+            let _ = send.send((release, fetched));
+            repaint.request_repaint();
+        });
+        if let Err(e) = started {
+            self.wishlist.adding.remove(&asked);
+            log::warn!("couldn't ask MusicBrainz for an album's songs: {e}");
         }
     }
 

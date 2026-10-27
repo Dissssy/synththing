@@ -891,25 +891,26 @@ impl App {
         tracks
     }
 
-    /// The albums of the artist `group` (if they're watched) that none of
-    /// is here, as rows of their page.
+    /// The albums of the artist `group` (if they're on the wishlist) that
+    /// none of is here, of the kinds their Wishlist page shows, as rows of
+    /// their page.
     fn missing_albums(&self, group: &Group) -> Vec<Track> {
         let kept = &self.lookup.kept;
         let artist = crate::wishlist::artist_of(&self.songs, kept, &group.songs, &group.title);
-        let watch = self.wishlist.list.wishes.values().find(|w| {
+        let watch = self.wishlist.list.wishes.iter().find(|(_, w)| {
             w.kind == crate::wishlist::Kind::Artist
                 && match &artist {
                     Some((id, _)) => w.musicbrainz.as_deref() == Some(id.as_str()),
                     None => crate::matching::close(&w.title, &group.title),
                 }
         });
-        let Some(watch) = watch else { return Vec::new() };
+        let Some((under, watch)) = watch else { return Vec::new() };
         let wished: HashSet<&str> =
             self.wishlist.list.wishes.values().filter(|w| w.kind == crate::wishlist::Kind::Album).filter_map(|w| w.musicbrainz.as_deref()).collect();
-        crate::wishlist::missing_albums(watch, &self.songs, kept)
+        crate::wishlist::missing_albums(watch, &self.songs, kept, &self.wishlist_kinds())
             .into_iter()
             .map(|album| {
-                let wish = (!wished.contains(album.id.as_str())).then(|| crate::wishlist::album_wish(&album, &watch.title));
+                let wish = (!wished.contains(album.id.as_str())).then(|| crate::wishlist::album_wish(&album, &watch.title, under));
                 let detail = [album.year.clone(), Some(album.kind.to_string()), wish.is_none().then(|| "wished".to_string())];
                 Track {
                     path: PathBuf::from(format!("musicbrainz:{}", album.id)),

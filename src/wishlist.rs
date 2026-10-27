@@ -1,9 +1,10 @@
 //! The wishlist: music the user wants and doesn't have yet. A wish is an
 //! album (a MusicBrainz release group, so any edition of it does), a song
-//! (a MusicBrainz recording, on whatever album it comes), an artist (a
-//! watch on their albums at MusicBrainz, of the kinds it counts: never
-//! got, only how many are here), or, for what MusicBrainz doesn't have,
-//! just a name. Kept in the config folder's
+//! (a MusicBrainz recording, on whatever album it comes), an artist (the
+//! albums of theirs picked from their albums at MusicBrainz, each an album
+//! wish `under` them: got once those are), or, for what MusicBrainz
+//! doesn't have, just a name. An album's songs can be `skipped`: it's got
+//! with the rest. Kept in the config folder's
 //! `wishlist.json` and synced as a blob of its own, a leaf per wish
 //! (`leaves`, `apply`).
 //!
@@ -48,11 +49,10 @@ impl Kind {
     }
 }
 
-/// The kinds of album an artist's watch can count
-/// (`lookup::matching::ArtistAlbum::kind`), and those it counts unless
-/// told otherwise.
+/// The kinds of an artist's albums (`lookup::matching::ArtistAlbum::kind`),
+/// and those shown of them unless asked otherwise.
 pub const KINDS: [&str; 6] = ["Album", "EP", "Single", "Compilation", "Live", "Other"];
-pub const COUNTED: [&str; 2] = ["Album", "EP"];
+pub const SHOWN: [&str; 2] = ["Album", "EP"];
 
 /// Something wished for.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -79,10 +79,12 @@ pub struct Wish {
     /// How many tracks an album's `release` has.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tracks: u32,
-    /// The kinds of album an artist's watch counts (`KINDS`): `COUNTED`
-    /// while it's empty.
+    /// The songs (recordings) of an album not wished for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub counted: Vec<String>,
+    pub skipped: Vec<String>,
+    /// The artist's wish (by ID) an album's is one of the albums of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub under: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
     /// When it was wished for (Unix seconds).
@@ -110,25 +112,12 @@ impl Wish {
             release: None,
             release_type: None,
             tracks: 0,
-            counted: Vec::new(),
+            skipped: Vec::new(),
+            under: None,
             note: String::new(),
             added: 0,
             added_by: None,
         }
-    }
-
-    /// Whether an artist's watch counts albums of `kind`.
-    pub fn counts(&self, kind: &str) -> bool {
-        if self.counted.is_empty() { COUNTED.contains(&kind) } else { self.counted.iter().any(|k| k == kind) }
-    }
-
-    /// Count albums of `kind` in an artist's watch, or not.
-    pub fn set_counts(&mut self, kind: &str, counts: bool) {
-        let mut counted: Vec<String> = KINDS.iter().filter(|k| if **k == kind { counts } else { self.counts(k) }).map(|k| k.to_string()).collect();
-        if counted.iter().map(String::as_str).eq(COUNTED) {
-            counted.clear();
-        }
-        self.counted = counted;
     }
 
     /// Whether `other` wishes for the same thing.
@@ -194,22 +183,32 @@ impl Wishlist {
         id
     }
 
+    /// Take the wishes `ids` off the wishlist, and an artist's albums with
+    /// them.
     pub fn remove(&mut self, ids: &[String]) {
         let before = self.wishes.len();
-        self.wishes.retain(|id, _| !ids.contains(id));
+        self.wishes.retain(|id, wish| !ids.contains(id) && !wish.under.as_ref().is_some_and(|artist| ids.contains(artist)));
         if self.wishes.len() != before {
             self.changed();
         }
     }
 
-    /// Count albums of `kind` in the artist's watch `id`, or not.
-    pub fn set_counts(&mut self, id: &str, kind: &str, counts: bool) {
-        if let Some(wish) = self.wishes.get_mut(id)
-            && wish.counts(kind) != counts
-        {
-            wish.set_counts(kind, counts);
-            self.changed();
+    /// Wish for the song `recording` of the album wish `id`, or skip it.
+    pub fn set_skipped(&mut self, id: &str, recording: &str, skipped: bool) {
+        let Some(wish) = self.wishes.get_mut(id) else { return };
+        if wish.skipped.iter().any(|r| r == recording) == skipped {
+            return;
         }
+        wish.skipped.retain(|r| r != recording);
+        if skipped {
+            wish.skipped.push(recording.to_string());
+        }
+        self.changed();
+    }
+
+    /// The wishes for the albums of the artist's wish `id`.
+    pub fn under<'a>(&'a self, id: &'a str) -> impl Iterator<Item = (&'a String, &'a Wish)> {
+        self.wishes.iter().filter(move |(_, w)| w.under.as_deref() == Some(id))
     }
 
     pub fn set_note(&mut self, id: &str, note: &str) {
@@ -263,32 +262,29 @@ impl State {
 }
 
 /// What of a wish is here: of how many tracks (an album's best edition,
-/// or 1; an artist's albums), how many, and its songs here (by key, in
-/// album order).
+/// or 1; for an artist, of how many of their albums picked), how many
+/// (albums got), and its songs here (by key, in album order).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Progress {
     pub have: usize,
     pub total: usize,
     pub songs: Vec<String>,
-    /// An artist's watch: never got (they may put out more), and of no
-    /// albums yet while they aren't looked up on this device.
-    pub watch: bool,
 }
 
 impl Progress {
     pub fn state(&self) -> State {
         match self.have {
             0 => State::Wanted,
-            have if have >= self.total && !self.watch => State::Got,
+            have if have >= self.total => State::Got,
             _ => State::Partly,
         }
     }
 
-    /// "7 of 12", for an album partly here, or an artist's.
+    /// "7 of 12", for an album partly here (or an artist's albums).
     pub fn text(&self) -> String {
         match self.state() {
-            _ if self.watch && self.total == 0 => "Not looked up".to_string(),
-            _ if self.watch => format!("{} of {}", self.have, self.total),
+            // (An artist none of whose albums is picked yet.)
+            _ if self.total == 0 => "None picked".to_string(),
             State::Partly => format!("{} of {}", self.have, self.total),
             state => state.name().to_string(),
         }
@@ -301,23 +297,17 @@ impl Progress {
 /// album named so (and by the artist, if it says one). An album's got
 /// once every track of one of its editions is here (`kept` has their
 /// track lists; one it hasn't is taken to have as many as the wished
-/// one).
+/// one). An artist's is of the albums under them: got once they all are.
 pub fn progress(wishlist: &Wishlist, store: &SongStore, kept: &Kept) -> BTreeMap<String, Progress> {
-    let discographies: BTreeMap<&str, Arc<Vec<ArtistAlbum>>> = wishlist
-        .wishes
-        .values()
-        .filter(|w| w.kind == Kind::Artist)
-        .filter_map(|w| w.musicbrainz.as_deref())
-        .filter_map(|id| Some((id, kept.discography(id)?)))
-        .collect();
-    let mut groups: BTreeSet<&str> = wishlist.wishes.values().filter(|w| w.kind == Kind::Album).filter_map(|w| w.musicbrainz.as_deref()).collect();
-    groups.extend(discographies.values().flat_map(|albums| albums.iter().map(|a| a.id.as_str())));
+    let groups: BTreeSet<&str> = wishlist.wishes.values().filter(|w| w.kind == Kind::Album).filter_map(|w| w.musicbrainz.as_deref()).collect();
     let releases: BTreeSet<&str> = wishlist.wishes.values().filter(|w| w.kind == Kind::Album).filter_map(|w| w.release.as_deref()).collect();
     let recordings: BTreeSet<&str> = wishlist.wishes.values().filter(|w| w.kind == Kind::Song).filter_map(|w| w.musicbrainz.as_deref()).collect();
     // The songs each wished group, release and recording has here, and
     // (for wishes by name) every song's names.
-    let mut by_group: BTreeMap<&str, Vec<(String, Option<String>)>> = BTreeMap::new();
-    let mut by_release: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    // (Each song with the release and recording it is.)
+    type Here = (String, Option<String>, Option<String>);
+    let mut by_group: BTreeMap<&str, Vec<Here>> = BTreeMap::new();
+    let mut by_release: BTreeMap<&str, Vec<Here>> = BTreeMap::new();
     let mut by_recording: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     let named = wishlist.wishes.values().any(|w| w.kind == Kind::Text);
     let mut names = Vec::new();
@@ -325,10 +315,11 @@ pub fn progress(wishlist: &Wishlist, store: &SongStore, kept: &Kept) -> BTreeMap
         let key = key.to_string();
         let facts = Facts::of(song);
         let release = facts.release();
+        let here = (key.clone(), release.map(str::to_string), facts.recording().map(str::to_string));
         if let Some(group) = song.online.as_ref().and_then(|o| o.group.as_deref()).and_then(|g| groups.get(g)) {
-            by_group.entry(group).or_default().push((key.clone(), release.map(str::to_string)));
+            by_group.entry(group).or_default().push(here);
         } else if let Some(release) = release.and_then(|r| releases.get(r)) {
-            by_release.entry(release).or_default().push(key.clone());
+            by_release.entry(release).or_default().push(here);
         }
         if let Some(recording) = facts.recording().and_then(|r| recordings.get(r)) {
             by_recording.entry(recording).or_default().push(key.clone());
@@ -348,43 +339,42 @@ pub fn progress(wishlist: &Wishlist, store: &SongStore, kept: &Kept) -> BTreeMap
         keys.dedup();
         keys
     };
-    wishlist
+    let mut progress: BTreeMap<String, Progress> = wishlist
         .wishes
         .iter()
         .map(|(id, wish)| {
             let progress = match wish.kind {
                 Kind::Album => {
-                    let mut songs: Vec<(String, Option<String>)> = wish.musicbrainz.as_deref().and_then(|g| by_group.get(g)).cloned().unwrap_or_default();
+                    let mut songs: Vec<Here> = wish.musicbrainz.as_deref().and_then(|g| by_group.get(g)).cloned().unwrap_or_default();
                     if let Some(release) = &wish.release {
-                        songs.extend(by_release.get(release.as_str()).into_iter().flatten().map(|key| (key.clone(), Some(release.clone()))));
+                        songs.extend(by_release.get(release.as_str()).into_iter().flatten().cloned());
                     }
+                    // (Not the songs skipped.)
+                    let skipped = |recording: &Option<String>| recording.as_ref().is_some_and(|r| wish.skipped.contains(r));
+                    songs.retain(|(_, _, recording)| !skipped(recording));
                     // Each edition's songs here, of its tracks.
                     let mut editions: BTreeMap<Option<&str>, usize> = BTreeMap::new();
-                    for (_, release) in &songs {
+                    for (_, release, _) in &songs {
                         *editions.entry(release.as_deref()).or_default() += 1;
                     }
-                    let wished = (wish.tracks as usize).max(1);
+                    let wished = (wish.tracks as usize).saturating_sub(wish.skipped.len()).max(1);
                     let best = editions
                         .iter()
                         .map(|(release, have)| {
-                            let total = release.and_then(|r| kept.release(r)).map_or(wished, |r| r.tracks.len().max(1));
+                            let tracks = |r: Arc<Release>| r.tracks.iter().filter(|t| !skipped(&t.recording)).count().max(1);
+                            let total = release.and_then(|r| kept.release(r)).map_or(wished, tracks);
                             ((*have).min(total), total)
                         })
                         .max_by_key(|&(have, total)| (have >= total, have))
                         .unwrap_or((0, wished));
-                    Progress { have: best.0, total: best.1, songs: ordered(songs.into_iter().map(|(key, _)| key).collect()), watch: false }
+                    Progress { have: best.0, total: best.1, songs: ordered(songs.into_iter().map(|(key, ..)| key).collect()) }
                 }
                 Kind::Song => {
                     let songs = wish.musicbrainz.as_deref().and_then(|r| by_recording.get(r)).cloned().unwrap_or_default();
-                    Progress { have: usize::from(!songs.is_empty()), total: 1, songs: ordered(songs), watch: false }
+                    Progress { have: usize::from(!songs.is_empty()), total: 1, songs: ordered(songs) }
                 }
-                Kind::Artist => {
-                    let albums = wish.musicbrainz.as_deref().and_then(|id| discographies.get(id));
-                    let counted: Vec<&ArtistAlbum> = albums.into_iter().flat_map(|a| a.iter()).filter(|a| wish.counts(a.kind)).collect();
-                    let here: Vec<&Vec<(String, Option<String>)>> = counted.iter().filter_map(|a| by_group.get(a.id.as_str())).collect();
-                    let songs = here.iter().flat_map(|songs| songs.iter().map(|(key, _)| key.clone())).collect();
-                    Progress { have: here.len(), total: counted.len(), songs: ordered(songs), watch: true }
-                }
+                // (From their albums', below.)
+                Kind::Artist => Progress::default(),
                 Kind::Text => {
                     let by = |artists: &[Option<String>; 2]| {
                         wish.artist.as_ref().is_none_or(|wanted| artists.iter().flatten().any(|a| crate::matching::close(a, wanted)))
@@ -402,12 +392,22 @@ pub fn progress(wishlist: &Wishlist, store: &SongStore, kept: &Kept) -> BTreeMap
                         })
                         .map(|(key, ..)| key.clone())
                         .collect();
-                    Progress { have: usize::from(!songs.is_empty()), total: 1, songs: ordered(songs), watch: false }
+                    Progress { have: usize::from(!songs.is_empty()), total: 1, songs: ordered(songs) }
                 }
             };
             (id.clone(), progress)
         })
-        .collect()
+        .collect();
+    for id in wishlist.wishes.iter().filter(|(_, w)| w.kind == Kind::Artist).map(|(id, _)| id) {
+        let albums: Vec<&Progress> = wishlist.under(id).filter_map(|(album, _)| progress.get(album)).collect();
+        let artist = Progress {
+            have: albums.iter().filter(|p| p.state() == State::Got).count(),
+            total: albums.len(),
+            songs: albums.iter().flat_map(|p| p.songs.iter().cloned()).collect(),
+        };
+        progress.insert(id.clone(), artist);
+    }
+    progress
 }
 
 /// The release song `key` is on at MusicBrainz: its match's, else the one
@@ -455,16 +455,24 @@ pub fn more_by(store: &SongStore, kept: &Kept, songs: &[String], artist: &str) -
     }
 }
 
-/// The albums an artist's watch counts that none of is in `store`.
-pub fn missing_albums(wish: &Wish, store: &SongStore, kept: &Kept) -> Vec<ArtistAlbum> {
-    let Some(albums) = wish.musicbrainz.as_deref().and_then(|id| kept.discography(id)) else { return Vec::new() };
-    let here: BTreeSet<&str> = store.known().filter(|(key, _)| store.has(key)).filter_map(|(_, song)| song.online.as_ref()?.group.as_deref()).collect();
-    albums.iter().filter(|a| wish.counts(a.kind) && !here.contains(a.id.as_str())).cloned().collect()
+/// The albums (release groups, by ID) some of which is in `store`.
+pub fn albums_here(store: &SongStore) -> BTreeSet<&str> {
+    store.known().filter(|(key, _)| store.has(key)).filter_map(|(_, song)| song.online.as_ref()?.group.as_deref()).collect()
 }
 
-/// A wish for one of `artist`'s albums (its tracks not known yet).
-pub fn album_wish(album: &ArtistAlbum, artist: &str) -> Wish {
+/// The albums of the artist's wish `wish` (as `kept` has them) of the
+/// kinds `shown` that none of is in `store`.
+pub fn missing_albums(wish: &Wish, store: &SongStore, kept: &Kept, shown: &[&str]) -> Vec<ArtistAlbum> {
+    let Some(albums) = wish.musicbrainz.as_deref().and_then(|id| kept.discography(id)) else { return Vec::new() };
+    let here = albums_here(store);
+    albums.iter().filter(|a| shown.contains(&a.kind) && !here.contains(a.id.as_str())).cloned().collect()
+}
+
+/// A wish for `album`, one of the albums of the artist's wish `under`
+/// (named `artist`), its tracks not known yet.
+pub fn album_wish(album: &ArtistAlbum, artist: &str, under: &str) -> Wish {
     Wish {
+        under: Some(under.to_string()),
         artist: Some(artist.to_string()),
         year: album.year.clone(),
         musicbrainz: Some(album.id.clone()),
@@ -513,6 +521,15 @@ mod tests {
         store.set_online(vec![(keys[1].clone(), Some(matched("r1", "c2")))]);
         let progress = super::progress(&wishlist, &store, &kept);
         assert_eq!(progress[&modal].state(), State::Got, "both of one edition's tracks");
+
+        let track = |recording: &str| crate::lookup::matching::Track { recording: Some(recording.into()), ..Default::default() };
+        kept.keep_release(Release { id: "r1".into(), tracks: vec![track("c1"), track("c2"), track("c3")], ..Default::default() });
+        assert_eq!(super::progress(&wishlist, &store, &kept)[&modal].text(), "2 of 3");
+        wishlist.set_skipped(&modal, "c3", true);
+        assert_eq!(super::progress(&wishlist, &store, &kept)[&modal].state(), State::Got, "the song skipped isn't wanted");
+        wishlist.set_skipped(&modal, "c2", true);
+        let progress = super::progress(&wishlist, &store, &kept);
+        assert_eq!((progress[&modal].have, progress[&modal].total, progress[&modal].songs.len()), (1, 1, 1), "nor is one skipped that's here");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -568,26 +585,23 @@ mod tests {
         let mut wishlist = Wishlist::default();
         let id = wishlist.add(watch);
         let progress = super::progress(&wishlist, &store, &kept);
-        assert_eq!((progress[&id].text(), progress[&id].state()), ("Not looked up".to_string(), State::Wanted));
+        assert_eq!((progress[&id].text(), progress[&id].state()), ("None picked".to_string(), State::Wanted));
 
         let album = |id: &str, kind| ArtistAlbum { id: id.into(), title: id.into(), year: None, kind };
         kept.keep_discography("a1", vec![album("g1", "Album"), album("g2", "Album"), album("g3", "Single")]);
+        let missing: Vec<String> = missing_albums(&wishlist.wishes[&id], &store, &kept, &SHOWN).into_iter().map(|a| a.id).collect();
+        assert_eq!(missing, ["g2"], "the single isn't shown");
+        let modal = wishlist.add(Wish { tracks: 1, ..album_wish(&album("g1", "Album"), "Nujabes", &id) });
+        let other = wishlist.add(album_wish(&album("g2", "Album"), "Nujabes", &id));
+        assert_eq!(wishlist.under(&id).count(), 2);
         let progress = super::progress(&wishlist, &store, &kept);
-        assert_eq!((progress[&id].have, progress[&id].total, progress[&id].songs.len()), (1, 2, 1), "the single isn't counted");
-        assert_eq!(progress[&id].state(), State::Partly);
-        let missing: Vec<String> = missing_albums(&wishlist.wishes[&id], &store, &kept).into_iter().map(|a| a.id).collect();
-        assert_eq!(missing, ["g2"]);
+        assert_eq!((progress[&modal].state(), progress[&other].state()), (State::Got, State::Wanted));
+        assert_eq!((progress[&id].text(), progress[&id].songs.len()), ("1 of 2".to_string(), 1), "of the albums picked");
 
-        wishlist.set_counts(&id, "Single", true);
-        assert_eq!(wishlist.wishes[&id].counted, ["Album", "EP", "Single"]);
-        wishlist.set_counts(&id, "Album", false);
-        wishlist.set_counts(&id, "Single", false);
-        let progress = super::progress(&wishlist, &store, &kept);
-        assert_eq!((progress[&id].have, progress[&id].total, progress[&id].state()), (0, 0, State::Wanted), "only EPs, and there are none");
-        wishlist.set_counts(&id, "Album", true);
-        assert!(wishlist.wishes[&id].counted.is_empty(), "back to what's counted unless told otherwise");
-        let progress = super::progress(&wishlist, &store, &kept);
-        assert_eq!(progress[&id].state(), State::Partly, "never got: all of it here is still partly");
+        wishlist.remove(&[other]);
+        assert_eq!(super::progress(&wishlist, &store, &kept)[&id].state(), State::Got, "all of those picked");
+        wishlist.remove(&[id]);
+        assert!(wishlist.wishes.is_empty(), "the artist's albums go with them");
         let _ = std::fs::remove_dir_all(&root);
     }
 

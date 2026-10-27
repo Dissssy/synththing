@@ -218,6 +218,10 @@ pub struct Config {
     /// here (`wishlist.rs`); they're shown dimmed by default.
     #[serde(default)]
     pub hide_wished: bool,
+    /// The kinds of an artist's albums their page in the Wishlist shows
+    /// (`wishlist::KINDS`): `wishlist::SHOWN` while it's empty.
+    #[serde(default)]
+    pub wishlist_kinds: Vec<String>,
     /// The user's own rulesets (`smart.rs`), by ID, beside the built-in
     /// ones (`smart::builtin`).
     #[serde(default)]
