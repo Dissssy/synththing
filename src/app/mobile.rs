@@ -538,6 +538,7 @@ impl App {
             if ui.button(format!("{}  {script}", icon("waveform"))).on_hover_text("Pick a visualizer").clicked() {
                 self.mobile_state.page = Page::Scripts;
             }
+            self.devices_button_ui(ui);
         });
         ui.add_space(6.0);
     }

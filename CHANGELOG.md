@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- See what your other devices are playing: with sync on, a Devices button by the transport (under the visualizer picker on a phone) shows up while another of your devices is online, listing each one with its song, artist and where it is.
+
 ## 1.7.3 (2026-10-27)
 
 ### Added
