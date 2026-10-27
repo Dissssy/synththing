@@ -8,3 +8,10 @@
 *.sf2 binary
 *.mid binary
 *.png binary
+
+# Every branch adds its lines under the changelog's Unreleased heading, so
+# two branches always clash there: merging keeps both sides' lines instead.
+# (A group heading both added shows up twice; src/changelog.rs reads them
+# as one.) GitHub's merge button and conflict check ignore this: merge
+# master into the branch with git to get it.
+CHANGELOG.md merge=union
