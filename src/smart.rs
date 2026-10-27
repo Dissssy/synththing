@@ -365,6 +365,11 @@ pub struct Ruleset {
     pub rules: Rules,
 }
 
+/// Every ruleset, by ID: the built-in ones, then the user's (`rulesets`).
+pub fn rulesets(theirs: &std::collections::BTreeMap<String, Ruleset>) -> Vec<(String, Ruleset)> {
+    builtin().into_iter().map(|(id, ruleset)| (id.to_string(), ruleset)).chain(theirs.iter().map(|(id, r)| (id.clone(), r.clone()))).collect()
+}
+
 /// The rulesets every library has, by ID: By Artist and By Album.
 pub fn builtin() -> [(&'static str, Ruleset); 2] {
     let split = |by| Rules { split: Some(Split { by, min: 1 }), order: Order::Album, seed: 0, ..Rules::default() };

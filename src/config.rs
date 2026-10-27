@@ -367,7 +367,7 @@ pub const DEFAULT_PRELOAD_EXPIRY_SECS: u32 = 30;
 pub const PRELOAD_EXPIRY_RANGE: std::ops::RangeInclusive<u32> = 5..=300;
 
 impl Config {
-    fn file_path() -> Result<PathBuf> {
+    pub fn file_path() -> Result<PathBuf> {
         Ok(config_dir()?.join("soundfonts.json"))
     }
 

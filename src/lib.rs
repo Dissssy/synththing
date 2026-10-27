@@ -42,6 +42,7 @@ mod frame_timing;
 mod ffmpeg;
 mod gamepad;
 mod headless;
+mod hub_api;
 mod hub;
 mod import;
 mod instance;

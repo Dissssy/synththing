@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use crate::config::{self, Config};
 use crate::device::Device;
 use crate::device_sync::{self, DeviceSync, Here, Link, Report};
+use crate::hub_api::{self, HubApi};
 use crate::library::identity::{self, Identity};
 use crate::library::{self, client, pairing};
 use crate::playlist::Library;
@@ -92,6 +93,7 @@ pub fn run() -> i32 {
     let mut info_read: Option<Instant> = None;
     let seen = watch_server(&link, &identity);
     let mut sync = DeviceSync::default();
+    let mut api = HubApi::default();
     let mut started = false;
     let mut error = None;
     loop {
@@ -118,6 +120,11 @@ pub fn run() -> i32 {
                     Ok((synced_config, applied)) => {
                         config = synced_config;
                         sync.settings_applied(synced, applied);
+                        // (Programs let in since it started, by `hub token`,
+                        // stay let in.)
+                        if let Ok(saved) = Config::load() {
+                            config.api = saved.api;
+                        }
                         if let Err(e) = config.save() {
                             log::warn!("settings sync: {e:#}");
                         }
@@ -139,6 +146,7 @@ pub fn run() -> i32 {
                 Report::Status(text) | Report::Debug(text) => log::info!("{text}"),
             }
         }
+        api.tick(&mut hub_api::Here { songs: &mut songs, playlists: &mut playlists, wishlist: &mut wishlist, sync: &mut sync, config: &config });
         let now = sync.error().map(str::to_string);
         if now != error {
             if let Some(e) = &now {

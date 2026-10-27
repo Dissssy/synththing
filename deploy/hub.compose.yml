@@ -30,6 +30,10 @@ services:
       - SYNTHTHING_CONFIG_DIR=/data
       - SYNTHTHING_HUB_NAME=Home hub
       - SYNTHTHING_PAIR_LINK=
+      # Its local API (docs/HUB.md), for programs let in with
+      # `docker exec synththing-hub synththing hub token <name> --grant ...`:
+      # true lets in other containers on its network.
+      - SYNTHTHING_API_LAN=false
     volumes:
       - ./hub:/data
     # (Watchtower, as in docker-compose.yml, only updates containers with

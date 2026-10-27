@@ -330,8 +330,7 @@ impl App {
 
     /// Every ruleset: the built-in ones, then the user's, by ID.
     pub(super) fn all_rulesets(&self) -> Vec<(String, Ruleset)> {
-        let builtin = smart::builtin().map(|(id, ruleset)| (id.to_string(), ruleset));
-        builtin.into_iter().chain(self.config.rulesets.iter().map(|(id, r)| (id.clone(), r.clone()))).collect()
+        smart::rulesets(&self.config.rulesets)
     }
 
     /// Preferences' Rulesets: the built-in ones and the user's, each

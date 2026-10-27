@@ -225,6 +225,84 @@ impl From<Release> for ReleaseInfo {
     }
 }
 
+/// The wishes of `list` that `query` keeps (as the Wishlist's filter
+/// does), newest first, each artist's albums under them, with what of
+/// each is here (`progress`).
+pub fn wishes(list: &crate::wishlist::Wishlist, progress: &std::collections::BTreeMap<String, crate::wishlist::Progress>, query: &str) -> Vec<WishInfo> {
+    let wishes = &list.wishes;
+    let filter = crate::wishlist_search::Filter::parse(query);
+    let now = crate::settings_sync::now();
+    let state = |id: &str| progress.get(id).map_or(crate::wishlist::State::Wanted, |p| p.state());
+    let kept = |id: &String| filter.keeps(&wishes[id], state(id), now);
+    let info = |id: &String, albums| info_of(id, &wishes[id], progress.get(id), albums);
+    let mut top: Vec<&String> = wishes
+        .iter()
+        .filter(|(_, w)| w.under.as_ref().is_none_or(|artist| !wishes.contains_key(artist)))
+        .map(|(id, _)| id)
+        .filter(|id| kept(id) || list.under(id).any(|(album, _)| kept(album)))
+        .collect();
+    top.sort_by_key(|id| std::cmp::Reverse(wishes[*id].added));
+    top.into_iter()
+        .map(|id| {
+            let mut albums: Vec<(&String, &Wish)> = list.under(id).filter(|(album, _)| kept(album)).collect();
+            albums.sort_by(|(_, a), (_, b)| (&a.year, &a.title).cmp(&(&b.year, &b.title)));
+            info(id, albums.into_iter().map(|(album, _)| info(album, Vec::new())).collect())
+        })
+        .collect()
+}
+
+/// Wish for `wish` on `list` for `program`: its ID, and whether it's new
+/// to the wishlist. `under` must be an artist's wish, and only an album
+/// goes under one.
+pub fn wish(list: &mut crate::wishlist::Wishlist, mut wish: Wish, program: &str) -> Result<(String, bool), (u16, String)> {
+    if let Some(artist) = &wish.under {
+        match list.wishes.get(artist) {
+            None => return Err((404, "there's no wish with that \"under\" ID".into())),
+            Some(w) if w.kind != Kind::Artist => return Err((400, "\"under\" is an artist's wish's ID".into())),
+            Some(_) if wish.kind != Kind::Album => return Err((400, "only an album goes under an artist".into())),
+            Some(_) => {}
+        }
+    }
+    let new = list.find(&wish).is_none();
+    wish.added_by = Some(program.to_string());
+    Ok((list.add(wish), new))
+}
+
+/// The wish `id` of `list` as the API has it, an artist's with its
+/// albums.
+pub fn wish_info(list: &crate::wishlist::Wishlist, progress: &std::collections::BTreeMap<String, crate::wishlist::Progress>, id: &str) -> WishInfo {
+    let albums = list.under(id).map(|(album, w)| info_of(album, w, progress.get(album), Vec::new())).collect();
+    info_of(id, &list.wishes[id], progress.get(id), albums)
+}
+
+fn info_of(id: &str, wish: &Wish, progress: Option<&crate::wishlist::Progress>, albums: Vec<WishInfo>) -> WishInfo {
+    use crate::wishlist::State;
+    let progress = progress.cloned().unwrap_or_default();
+    let got = match progress.state() {
+        _ if progress.total == 0 => "no",
+        State::Wanted => "no",
+        State::Partly => "partly",
+        State::Got => "yes",
+    };
+    WishInfo { id: id.to_string(), wish: wish.clone(), got, have: progress.have, total: progress.total, songs: progress.songs, albums }
+}
+
+/// The playlists of `playlists` as the API has them, their songs by key
+/// (those of songs not in `songs`' folder left out).
+pub fn playlist_infos(playlists: &crate::playlist::Library, songs: &SongStore) -> Vec<PlaylistInfo> {
+    let dir = songs.dir();
+    playlists
+        .lists
+        .iter()
+        .map(|list| PlaylistInfo {
+            id: list.id.clone(),
+            name: list.playlist.name.clone(),
+            smart: list.playlist.smart.is_some(),
+            songs: list.playlist.entries.iter().filter_map(|e| song_store::key_in(dir, &e.path).map(str::to_string)).collect(),
+        })
+        .collect()
+}
+
 /// A change to the play queue a program asks for (`Call::Queue`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum QueueEdit {
