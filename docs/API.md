@@ -65,19 +65,29 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `GET /v1/visualizer/frame.jpg?width=&height=` | read | The visualizer's next picture, as a JPEG: 503 if it doesn't draw one within 3 seconds |
 | `GET /v1/visualizer/frame.png?width=&height=` | read | The same, as a PNG, see-through parts kept |
 | `GET /v1/visualizer?width=&height=&fps=&format=&token=` | read | A page showing the stream, for OBS's Browser Source or a browser |
+| `GET /v1/wishlist?q=` | read | The wishlist (below): the wishes `q` keeps (as the Wishlist's filter box does: `kind:album got:no`...), newest first, each artist with the albums of theirs wished for in `albums` |
+| `POST /v1/wishlist` | edit library | Wishes for what the body says (a wish as JSON, below): 201 with the wish if it's new, 200 if it was wished for already |
+| `DELETE /v1/wishlist/{id}` | edit library | Takes the wish off the wishlist (an artist's albums with them): 204, or 404 |
+| `POST /v1/wishlist/{id}/note?text=` | edit library | Writes the wish's note (none: no note): 204, or 404 |
+| `GET /v1/musicbrainz/search?q=&kind=` | read | `{"artists", "albums", "songs"}`: what MusicBrainz finds (only `artist`s, `album`s or `song`s with `kind`), each as the wish for it, to send to `POST /v1/wishlist`. 409 if online lookups are off, 502 if MusicBrainz can't be reached |
+| `GET /v1/musicbrainz/artists/{id}/albums` | read | An artist's albums at MusicBrainz (by the artist's MusicBrainz ID, as an artist's wish has it), each as the wish for it: add `"under"` (the artist's wish's ID) to wish for it as one of theirs |
+| `GET /v1/musicbrainz/releases/{id}` | read | `{"id", "group", "title", "artist", "date", "tracks": [{"disc", "position", "title", "length", "recording"}]}`: a release's track list (by its MusicBrainz ID, as an album wish's `release`), so a program can see which songs of a wished album aren't here or `skipped` yet. Kept for months, so mostly instant |
 | `GET /v1/events` | read | Server-Sent Events (below) |
 
 An album's art is its first song's: `GET /v1/songs/{first key}/art`. Covers that synththing hasn't downloaded yet are downloaded only when online lookups are on.
 
-`q` works like the Songs search box: filters such as `artist:bonno`, `year:1990..1999`, `is:starred` or `tag:chill`, and any other words must each be in the title, artist, album or file name.
+`q` works like the Songs search box: filters such as `artist:bonno`, `year:1990..1999`, `is:starred`, `is:wished` or `tag:chill`, and any other words must each be in the title, artist, album or file name.
 
 A song:
 
 ```json
 {"key": "3f2a...", "file_name": "Overworld.mid", "title": "Overworld", "artist": "Koji Kondo",
  "album": null, "album_artist": null, "genre": null, "year": 1985, "track": 1, "length": 84.2,
- "starred": true, "tags": ["chill"], "imported": 1761000000, "added_by": null}
+ "starred": true, "tags": ["chill"], "imported": 1761000000, "added_by": null,
+ "recording": null, "release": null, "release_group": null}
 ```
+
+`recording`, `release` and `release_group` are what the song is at MusicBrainz (its match, else the IDs its file's tags have), so `matched:song` or `matched:album` in `q` finds the songs that have them.
 
 What's playing (`soundfont` is the one a MIDI song plays with, `null` for any other song):
 
@@ -89,6 +99,21 @@ What's playing (`soundfont` is the one a MIDI song plays with, `null` for any ot
 ```
 
 Commands are the ones Preferences > Keyboard lists, by id: `play`, `pause`, `toggle_pause`, `next_track`, `previous_track`, `seek_back`, `seek_forward`, `restart_song`, `toggle_visualizer`, `toggle_fullscreen`, `go_to_songs` and so on. `GET /v1/commands` has them all.
+
+## The wishlist
+
+A wish is what was wished for and what of it is here:
+
+```json
+{"id": "8c41...", "kind": "album", "title": "Modal Soul", "artist": "Nujabes", "year": "2005",
+ "musicbrainz": "<release group ID>", "release": "<release ID>", "release_type": "Album", "tracks": 14,
+ "skipped": ["<recording ID>"], "note": "from Willy", "added": 1761000000, "added_by": "my-program",
+ "got": "partly", "have": 7, "total": 13, "songs": ["3f2a..."]}
+```
+
+`kind` is `album` (a MusicBrainz release group: any edition of it does), `song` (a recording), `artist` (the albums of theirs picked, each an album wish with `"under"` its ID: `have` of `total` is how many are got) or `text` (just a name: a song or an album named `title`, by `artist` if it gives one). `got` is `no`, `partly` or `yes`, worked out from the songs on this computer, and `songs` are those (by key). An album's `skipped` songs aren't wanted: it's got without them. Fields that say nothing are left out.
+
+To wish, `POST /v1/wishlist` a wish with at least `kind` and `title` (or for `text`, `artist`), such as one `/v1/musicbrainz/search` gave. An album by its `musicbrainz` group without `tracks` gets them from MusicBrainz first, when online lookups are on. Wishes a program makes are marked with its name (`added_by`), and the wishlist syncs to your other devices.
 
 ## Songs added by programs
 
@@ -105,6 +130,7 @@ Every song a program adds that wasn't in your library yet is marked with that pr
 - `queue_changed`: songs were queued, played from the queue, moved or taken out: `{}`. Ask `/v1/queue` again.
 - `soundfonts_changed`: a soundfont was added, removed or put in use: `{}`. Ask `/v1/soundfonts` again.
 - `scripts_changed`: a script was added, removed or put in use: `{}`. Ask `/v1/scripts` again.
+- `wishlist_changed`: a wish was made, taken off or changed (here or by sync), or more of one is here: `{}`. Ask `/v1/wishlist` again.
 
 Add `?events=now_playing,seeked` (any of them, by name) for only those. A comment line (`: keep-alive`) comes every 25 seconds when nothing else does.
 
