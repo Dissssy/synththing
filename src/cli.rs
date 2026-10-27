@@ -151,6 +151,22 @@ pub enum HubCommand {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Let a program use the hub's local API (docs/API.md): prints its
+    /// token, once. The API runs while any program is let in, on
+    /// SYNTHTHING_API_PORT (default 7340); SYNTHTHING_API_LAN=true lets in
+    /// other machines (other Docker containers) too. With no name, lists
+    /// the programs let in.
+    Token {
+        /// The program's name (what the songs it adds are marked with).
+        name: Option<String>,
+        /// What it may do, comma separated: read, add_songs,
+        /// download_songs, edit_library, control.
+        #[arg(long, value_delimiter = ',', default_value = "read")]
+        grant: Vec<String>,
+        /// Stop letting it in instead.
+        #[arg(long)]
+        remove: bool,
+    },
 }
 
 #[derive(Args, Debug)]

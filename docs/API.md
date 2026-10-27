@@ -1,6 +1,6 @@
 # Local API
 
-synththing can let programs on the same computer (or, if you choose, your local network) talk to it: see what's playing, search the library, follow what happens and run commands. Use it for your own integrations: home automation, notifications, stream overlays, game hooks. It's desktop only and off until you turn it on.
+synththing can let programs on the same computer (or, if you choose, your local network) talk to it: see what's playing, search the library, follow what happens and run commands. Use it for your own integrations: home automation, notifications, stream overlays, game hooks. It's desktop only and off until you turn it on. A hub (docs/HUB.md) answers it too, for what's about the library.
 
 ## Turning it on
 

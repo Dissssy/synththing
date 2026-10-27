@@ -689,17 +689,7 @@ impl App {
     }
 
     fn api_playlists(&self) -> Vec<PlaylistInfo> {
-        let dir = self.songs.dir();
-        self.playlists
-            .lists
-            .iter()
-            .map(|list| PlaylistInfo {
-                id: list.id.clone(),
-                name: list.playlist.name.clone(),
-                smart: list.playlist.smart.is_some(),
-                songs: list.playlist.entries.iter().filter_map(|e| crate::song_store::key_in(dir, &e.path).map(str::to_string)).collect(),
-            })
-            .collect()
+        api::playlist_infos(&self.playlists, &self.songs)
     }
 
     /// Preferences > Integrations.
@@ -919,69 +909,21 @@ impl App {
         }
     }
 
-    /// The wishes `query` keeps (as the Wishlist's filter does), newest
-    /// first, each artist's albums under them.
+    /// The wishes `query` keeps (as the Wishlist's filter does).
     fn api_wishlist(&self, query: &str) -> Vec<api::WishInfo> {
-        let progress = self.api_progress();
-        let wishes = &self.wishlist.list.wishes;
-        let filter = crate::wishlist_search::Filter::parse(query);
-        let now = crate::settings_sync::now();
-        let state = |id: &str| progress.get(id).map_or(crate::wishlist::State::Wanted, |p| p.state());
-        let kept = |id: &String| filter.keeps(&wishes[id], state(id), now);
-        let info = |id: &String, albums| wish_info(id, &wishes[id], progress.get(id), albums);
-        let mut top: Vec<&String> = wishes
-            .iter()
-            .filter(|(_, w)| w.under.as_ref().is_none_or(|artist| !wishes.contains_key(artist)))
-            .map(|(id, _)| id)
-            .filter(|id| kept(id) || self.wishlist.list.under(id).any(|(album, _)| kept(album)))
-            .collect();
-        top.sort_by_key(|id| std::cmp::Reverse(wishes[*id].added));
-        top.into_iter()
-            .map(|id| {
-                let mut albums: Vec<(&String, &crate::wishlist::Wish)> = self.wishlist.list.under(id).filter(|(album, _)| kept(album)).collect();
-                albums.sort_by(|(_, a), (_, b)| (&a.year, &a.title).cmp(&(&b.year, &b.title)));
-                info(id, albums.into_iter().map(|(album, _)| info(album, Vec::new())).collect())
-            })
-            .collect()
+        api::wishes(&self.wishlist.list, &self.api_progress(), query)
     }
 
     /// Wish for `wish` for `program` (its album's edition `release`,
     /// kept): it, and whether it's new to the wishlist.
-    fn api_wish(&mut self, mut wish: crate::wishlist::Wish, release: Option<crate::lookup::matching::Release>, program: &str) -> Result<(api::WishInfo, bool), (u16, String)> {
-        use crate::wishlist::Kind;
-        if let Some(artist) = &wish.under {
-            match self.wishlist.list.wishes.get(artist) {
-                None => return Err((404, "there's no wish with that \"under\" ID".into())),
-                Some(w) if w.kind != Kind::Artist => return Err((400, "\"under\" is an artist's wish's ID".into())),
-                Some(_) if wish.kind != Kind::Album => return Err((400, "only an album goes under an artist".into())),
-                Some(_) => {}
-            }
-        }
+    fn api_wish(&mut self, wish: crate::wishlist::Wish, release: Option<crate::lookup::matching::Release>, program: &str) -> Result<(api::WishInfo, bool), (u16, String)> {
+        let (id, new) = api::wish(&mut self.wishlist.list, wish, program)?;
         if let Some(release) = release {
             self.lookup.kept.keep_release(release);
         }
-        let new = self.wishlist.list.find(&wish).is_none();
-        wish.added_by = Some(program.to_string());
-        let id = self.wishlist.list.add(wish);
         self.wishlist_changed();
-        let progress = self.api_progress();
-        let albums = self.wishlist.list.under(&id).map(|(album, w)| wish_info(album, w, progress.get(album), Vec::new())).collect();
-        Ok((wish_info(&id, &self.wishlist.list.wishes[&id], progress.get(&id), albums), new))
+        Ok((api::wish_info(&self.wishlist.list, &self.api_progress(), &id), new))
     }
-}
-
-/// Wish `id` as the API has it, with what of it is here and (an
-/// artist's) its albums.
-fn wish_info(id: &str, wish: &crate::wishlist::Wish, progress: Option<&crate::wishlist::Progress>, albums: Vec<api::WishInfo>) -> api::WishInfo {
-    use crate::wishlist::State;
-    let progress = progress.cloned().unwrap_or_default();
-    let got = match progress.state() {
-        _ if progress.total == 0 => "no",
-        State::Wanted => "no",
-        State::Partly => "partly",
-        State::Got => "yes",
-    };
-    api::WishInfo { id: id.to_string(), wish: wish.clone(), got, have: progress.have, total: progress.total, songs: progress.songs, albums }
 }
 
 /// Where the API stages songs programs send to be checked: in the config

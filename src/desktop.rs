@@ -114,6 +114,35 @@ pub fn main() -> Result<()> {
                 }
                 return Ok(());
             }
+            Some(HubCommand::Token { name: None, .. }) => {
+                match crate::hub_api::list_tokens() {
+                    Ok(apps) if apps.is_empty() => println!("No programs are let in. Add one: synththing hub token <name> --grant read,add_songs"),
+                    Ok(apps) => apps.iter().for_each(|app| println!("{app}")),
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                return Ok(());
+            }
+            Some(HubCommand::Token { name: Some(name), remove: true, .. }) => {
+                if let Err(e) = crate::hub_api::remove_token(name) {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+                println!("{name} isn't let in any more.");
+                return Ok(());
+            }
+            Some(HubCommand::Token { name: Some(name), grant, remove: false }) => {
+                match crate::hub_api::make_token(name, grant) {
+                    Ok(token) => println!("{token}\n\n{name}'s token: give it as \"Authorization: Bearer {token}\". It isn't shown again."),
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                return Ok(());
+            }
             None => std::process::exit(hub::run()),
         }
     }

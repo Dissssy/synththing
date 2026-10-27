@@ -26,6 +26,20 @@ It runs until stopped (Ctrl+C), logging what it does to the terminal and to `syn
 
 A branch build has sync off unless it's asked for: `synththing --online sync hub`.
 
+## Its local API
+
+The hub answers the local app API (docs/API.md) for programs you let in, the same as the app does for what's about the library: songs, playlists, tags, the wishlist, adding songs and checking them first (`/v1/staged`), and the events about them. A hub plays nothing, so what's about playing (now playing, play, the queue, seek, volume, soundfonts, scripts, commands, the visualizer) answers 409.
+
+Let a program in with:
+
+```
+synththing hub token bridge --grant read,add_songs,download_songs
+```
+
+It prints the program's token once. The permissions are `read`, `add_songs`, `download_songs`, `edit_library` and `control`. `synththing hub token` lists the programs let in, and `synththing hub token bridge --remove` stops letting one in. A running hub picks these up straight away.
+
+The API runs while any program is let in, on port 7340 (`SYNTHTHING_API_PORT` for another), on this machine only. `SYNTHTHING_API_LAN=true` lets in other machines too, which is what another Docker container is: then keep the port off the internet (don't publish it, or only to `127.0.0.1`), as anything that reaches it with a token can use it. In Docker, run the token command inside the container: `docker exec synththing-hub synththing hub token bridge --grant read,add_songs`.
+
 ## Docker
 
 `deploy/hub.compose.yml` runs it from the published image (ghcr.io/dissssy/synththing), keeping everything in `./hub`. Put a fresh link in its `SYNTHTHING_PAIR_LINK` and a name in `SYNTHTHING_HUB_NAME`, then start it:
