@@ -6,18 +6,22 @@
 //! settings: they're read again when they change), on the port and
 //! network the settings say, or `SYNTHTHING_API_PORT` and
 //! `SYNTHTHING_API_LAN` (`true`: let in other machines, as Docker's other
-//! containers are).
+//! containers are). Programs' panels it hosts for the user's devices
+//! (`panel_share.rs`), as the app does: a hub shows none itself.
 
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use eframe::egui;
 
 use crate::api::{self, Access, Call, Edit, PlaylistRef, SongInfo};
 use crate::config::Config;
+use crate::device::Device;
+use crate::device_messages::{self, Envelope, Outbox, Route};
 use crate::device_sync::DeviceSync;
 use crate::lookup::Kept;
+use crate::panel_share::{self, Host, Message, Out};
 use crate::playlist::{Library, PlaylistEntry};
 use crate::song_store::{Online, SongStore, Stored};
 use crate::wishlist::{Progress, Wishlist};
@@ -52,6 +56,17 @@ pub struct HubApi {
     /// What the last events told of: the songs' revision, the playlists
     /// and the wishlist (hashes).
     seen: Option<(u64, u64, u64)>,
+    /// The panels' revision as last taken, the shared ones as hosted, and
+    /// what's sent about them.
+    panels_revision: u64,
+    host: Host,
+    outbox: Outbox,
+}
+
+/// Where the hub's live messages go, and as which device.
+pub struct Live<'a> {
+    pub route: &'a Route,
+    pub me: &'a Device,
 }
 
 impl HubApi {
@@ -87,6 +102,55 @@ impl HubApi {
             self.answer(call, here);
         }
         self.events(here);
+    }
+
+    /// Each tick: the shared panels as the API has them, and what the
+    /// user's devices are due to hear of them.
+    pub fn panels_tick(&mut self, live: &Live) {
+        match &self.server {
+            Some(server) => {
+                if let Some(shown) = server.panels(&mut self.panels_revision) {
+                    self.host.take(&shown);
+                }
+            }
+            None => self.host.take(&[]),
+        }
+        let server = self.server.as_ref();
+        let out = self.host.tick(Instant::now(), |app| server.is_some_and(|s| s.connected(app)));
+        self.send(live, out);
+    }
+
+    /// A live message came, sealed: a device asking for the panels, or
+    /// what the user did with one.
+    pub fn live_heard(&mut self, live: &Live, sealed: &str) {
+        let Some(envelope) = device_messages::open(&live.route.sync_key, &live.me.id, sealed) else { return };
+        if envelope.topic != panel_share::TOPIC {
+            return;
+        }
+        let server = self.server.as_ref();
+        match serde_json::from_value::<Message>(envelope.body) {
+            Ok(Message::Hello) => {
+                let out = self.host.hello(&envelope.from.id, |app| server.is_some_and(|s| s.connected(app)));
+                self.send(live, out);
+            }
+            Ok(Message::Event { app, event }) => {
+                if let (Some(server), Some(event)) = (server, self.host.event(envelope.from, &app, event)) {
+                    server.panel_event(&app, &event);
+                }
+            }
+            // (Other devices' panels: a hub shows none.)
+            Ok(_) => {}
+            Err(e) => log::info!("a panels message from {} doesn't read: {e}", envelope.from.name),
+        }
+    }
+
+    fn send(&mut self, live: &Live, out: Vec<Out>) {
+        for Out { to, message } in out {
+            match serde_json::to_value(&message) {
+                Ok(body) => self.outbox.send(live.route, &Envelope { from: live.me.clone(), to, topic: panel_share::TOPIC.to_string(), body }),
+                Err(e) => log::warn!("a panels message: {e}"),
+            }
+        }
     }
 
     /// The programs let in, read again when the settings file changes
@@ -348,6 +412,7 @@ pub fn make_token(name: &str, grants: &[String]) -> Result<Option<String>, Strin
     };
     let access = &mut config.api.apps[at];
     (access.read, access.add_songs, access.download_songs, access.edit_library, access.control) = (false, false, false, false, false);
+    (access.panel, access.share) = (false, false);
     for grant in grants.iter().flat_map(|g| g.split(',')).map(str::trim).filter(|g| !g.is_empty()) {
         match grant {
             "read" => access.read = true,
@@ -355,7 +420,9 @@ pub fn make_token(name: &str, grants: &[String]) -> Result<Option<String>, Strin
             "download_songs" | "download-songs" => access.download_songs = true,
             "edit_library" | "edit-library" => access.edit_library = true,
             "control" => access.control = true,
-            other => return Err(format!("\"{other}\" isn't a permission: read, add_songs, download_songs, edit_library or control")),
+            "panel" => access.panel = true,
+            "share" => access.share = true,
+            other => return Err(format!("\"{other}\" isn't a permission: read, add_songs, download_songs, edit_library, control, panel or share")),
         }
     }
     config.save().map_err(|e| format!("{e:#}"))?;
@@ -381,7 +448,7 @@ pub fn list_tokens() -> Result<Vec<String>, String> {
         .apps
         .iter()
         .map(|a| {
-            let grants: Vec<&str> = [(a.read, "read"), (a.add_songs, "add_songs"), (a.download_songs, "download_songs"), (a.edit_library, "edit_library"), (a.control, "control")]
+            let grants: Vec<&str> = [(a.read, "read"), (a.add_songs, "add_songs"), (a.download_songs, "download_songs"), (a.edit_library, "edit_library"), (a.control, "control"), (a.panel, "panel"), (a.share, "share")]
                 .into_iter()
                 .filter_map(|(on, name)| on.then_some(name))
                 .collect();

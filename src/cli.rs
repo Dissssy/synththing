@@ -161,7 +161,8 @@ pub enum HubCommand {
         /// The program's name (what the songs it adds are marked with).
         name: Option<String>,
         /// What it may do, comma separated: read, add_songs,
-        /// download_songs, edit_library, control.
+        /// download_songs, edit_library, control, panel (show a panel), share
+        /// (on the user's devices: a hub shows none itself).
         #[arg(long, value_delimiter = ',', default_value = "read")]
         grant: Vec<String>,
         /// Stop letting it in instead.
