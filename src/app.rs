@@ -4748,7 +4748,7 @@ fn status_line_ui(
     entries: impl FnOnce() -> Vec<applog::Entry>,
 ) -> bool {
     let button = ui
-        .add(egui::Button::new(egui::RichText::new(icon("clock-counter-clockwise")).size(14.0)).small())
+        .add(icon_button("clock-counter-clockwise"))
         .on_hover_text(if *unseen_failure {
             "Something failed: the recent messages"
         } else {

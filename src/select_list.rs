@@ -611,7 +611,7 @@ pub fn star(ui: &mut egui::Ui, starred: bool) -> bool {
     let color = match (starred, response.hovered()) {
         (true, _) => crate::theme::star_color(ui.ctx()),
         (false, true) => weak,
-        (false, false) => weak.gamma_multiply(0.3),
+        (false, false) => weak.gamma_multiply(0.2),
     };
     let mut font = egui::TextStyle::Body.resolve(ui.style());
     if starred {

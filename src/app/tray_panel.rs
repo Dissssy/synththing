@@ -556,12 +556,12 @@ fn controls_ui(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut State, act: &
         }
     }
     ui.horizontal(|ui| {
-        let button = |glyph: &str| egui::Button::new(egui::RichText::new(icon(glyph)).size(16.0)).min_size(egui::vec2(30.0, 26.0));
+        let button = super::icon_button;
         if ui.add(button("skip-back")).on_hover_text("Previous").clicked() {
             act(Action::Previous);
         }
         let hover = if snapshot.paused { "Play" } else { "Pause" };
-        let play = super::play_button(ui.ctx(), snapshot.paused, 16.0, egui::vec2(30.0, 26.0));
+        let play = super::play_button(ui.ctx(), snapshot.paused, 16.0, egui::vec2(28.0, 24.0));
         if ui.add(play).on_hover_text(hover).clicked() {
             act(Action::TogglePause);
         }
