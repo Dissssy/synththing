@@ -326,19 +326,28 @@ fn add(here: &mut Here, stored: Stored, program: &str, online: Option<Online>) -
     Ok((SongInfo::of(&key, song, here.songs), new))
 }
 
-/// A program let in with a new token (`synththing hub token`): saved in
-/// the settings, which a running hub reads again. The token, shown once.
-pub fn make_token(name: &str, grants: &[String]) -> Result<String, String> {
+/// Let the program `name` in with a new token (`synththing hub token`),
+/// allowed `grants`: the token, shown once. A program let in already keeps
+/// its token and is allowed `grants` from now on instead (`None`). Saved
+/// in the settings, which a running hub reads again.
+pub fn make_token(name: &str, grants: &[String]) -> Result<Option<String>, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("give the program a name".into());
     }
     let mut config = Config::load().map_err(|e| format!("{e:#}"))?;
-    if config.api.apps.iter().any(|a| a.name.eq_ignore_ascii_case(name)) {
-        return Err(format!("there's a program named \"{name}\" already: pick another name, or `synththing hub token {name} --remove`"));
-    }
-    let (mut access, token) = Access::new(name);
-    access.read = false;
+    let mut made = None;
+    let at = match config.api.apps.iter().position(|a| a.name.eq_ignore_ascii_case(name)) {
+        Some(at) => at,
+        None => {
+            let (access, token) = Access::new(name);
+            made = Some(token);
+            config.api.apps.push(access);
+            config.api.apps.len() - 1
+        }
+    };
+    let access = &mut config.api.apps[at];
+    (access.read, access.add_songs, access.download_songs, access.edit_library, access.control) = (false, false, false, false, false);
     for grant in grants.iter().flat_map(|g| g.split(',')).map(str::trim).filter(|g| !g.is_empty()) {
         match grant {
             "read" => access.read = true,
@@ -349,9 +358,8 @@ pub fn make_token(name: &str, grants: &[String]) -> Result<String, String> {
             other => return Err(format!("\"{other}\" isn't a permission: read, add_songs, download_songs, edit_library or control")),
         }
     }
-    config.api.apps.push(access);
     config.save().map_err(|e| format!("{e:#}"))?;
-    Ok(token)
+    Ok(made)
 }
 
 /// Stop letting the program `name` in.
