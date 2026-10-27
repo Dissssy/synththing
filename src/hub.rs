@@ -24,6 +24,12 @@ use crate::{applog, build_info, instance};
 const TICK: Duration = Duration::from_millis(250);
 /// How often the server's info (the relay's song limit) is read again.
 const INFO_EVERY: Duration = Duration::from_secs(60 * 60);
+/// A sign-in link to sign in with on start, if it isn't signed in yet.
+const PAIR_LINK_VAR: &str = "SYNTHTHING_PAIR_LINK";
+/// The name to sign in as with it (default: the computer's name).
+const NAME_VAR: &str = "SYNTHTHING_HUB_NAME";
+/// How often it looks for a sign-in while it waits for one.
+const SIGN_IN_CHECK: Duration = Duration::from_secs(5);
 /// How long before listening to the server again after it failed.
 const RETRY: Duration = Duration::from_secs(30);
 
@@ -58,10 +64,7 @@ pub fn run() -> i32 {
     };
     applog::init(true);
     log::info!("synththing hub v{} starting", build_info::describe());
-    let Some(identity) = Identity::load() else {
-        log::error!("not signed in: on a signed-in device, open Preferences > Online Library > Sign in another device, then run: synththing hub pair '<link>'");
-        return 2;
-    };
+    let identity = signed_in();
     if identity::sync_key().is_none() {
         log::error!("signed in without a sync key: sign in again with a link from a device that syncs");
         return 2;
@@ -143,6 +146,36 @@ pub fn run() -> i32 {
             error = now;
         }
         std::thread::sleep(TICK);
+    }
+}
+
+/// The identity it's signed in as, once it is: signed in with the link in
+/// `PAIR_LINK_VAR` if there is one, else waiting for `hub pair` (so a
+/// container waits to be signed in instead of stopping).
+fn signed_in() -> Identity {
+    if let Some(identity) = Identity::load() {
+        return identity;
+    }
+    if let Ok(link) = std::env::var(PAIR_LINK_VAR)
+        && !link.trim().is_empty()
+    {
+        let name = std::env::var(NAME_VAR).ok().filter(|n| !n.trim().is_empty());
+        if let Err(e) = pair(link.trim(), name.as_deref()) {
+            log::error!("signing in with {PAIR_LINK_VAR}: {e}");
+        }
+    }
+    let mut told = false;
+    loop {
+        if let Some(identity) = Identity::load() {
+            return identity;
+        }
+        if !told {
+            told = true;
+            log::warn!(
+                "not signed in: on a signed-in device, open Preferences > Online Library > Sign in another device, then run synththing hub pair '<link>' (in Docker: docker exec synththing-hub synththing hub pair '<link>'), or set {PAIR_LINK_VAR}. Waiting for it."
+            );
+        }
+        std::thread::sleep(SIGN_IN_CHECK);
     }
 }
 

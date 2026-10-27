@@ -14,6 +14,8 @@ synththing hub pair '<link>' --name "Home hub"
 
 Quote the link: it has a `#` in it. `--name` is what your other devices show for it (by default the computer's name). The link works once, for 10 minutes.
 
+Or give `synththing hub` the link in the `SYNTHTHING_PAIR_LINK` environment variable (and the name in `SYNTHTHING_HUB_NAME`): it signs in with it when it starts, if it isn't signed in already. A hub that isn't signed in waits for one of these, so `hub pair` works while it runs.
+
 ## Running it
 
 ```
@@ -26,14 +28,13 @@ A branch build has sync off unless it's asked for: `synththing --online sync hub
 
 ## Docker
 
-`deploy/hub.compose.yml` runs it from the published image (ghcr.io/dissssy/synththing), keeping everything in `./hub`. Sign it in once, before starting it:
+`deploy/hub.compose.yml` runs it from the published image (ghcr.io/dissssy/synththing), keeping everything in `./hub`. Put a fresh link in its `SYNTHTHING_PAIR_LINK` and a name in `SYNTHTHING_HUB_NAME`, then start it:
 
 ```
-docker compose -f hub.compose.yml run --rm hub hub pair '<link>' --name "Home hub"
 docker compose -f hub.compose.yml up -d
 ```
 
-Give it a `--name`: in a container the computer's name is the container's random one. Its log is `docker logs synththing-hub`. Watchtower (see docker-compose.yml) keeps it up to date the same way as a server.
+Or start it without a link and sign it in while it waits: `docker exec synththing-hub synththing hub pair '<link>' --name "Home hub"`. Give it a name: in a container the computer's name is the container's random one. Its log is `docker logs synththing-hub`. Watchtower (see docker-compose.yml) keeps it up to date the same way as a server.
 
 ## Under systemd
 

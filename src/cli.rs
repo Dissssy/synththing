@@ -69,12 +69,14 @@ pub enum Command {
     /// Run as your hub: a device with no window that keeps every song.
     ///
     /// For an always-on machine (a home server, a NAS, a VPS, in Docker:
-    /// docs/HUB.md). Sign it in first with `hub pair`. It syncs like the
+    /// docs/HUB.md). Sign it in with `hub pair`. It syncs like the
     /// app (settings, playlists, wishlist, songs) and wants every song, so
     /// your devices' songs stream straight to it and it sends them on to
     /// each device that wants them. Its songs, playlists and sign-in live
-    /// in the config folder (--config-dir or SYNTHTHING_CONFIG_DIR). Runs
-    /// until stopped (Ctrl+C), logging to the terminal.
+    /// in the config folder (--config-dir or SYNTHTHING_CONFIG_DIR). Not
+    /// signed in yet, it signs in with the link in SYNTHTHING_PAIR_LINK (as
+    /// SYNTHTHING_HUB_NAME), or waits for `hub pair`. Runs until stopped
+    /// (Ctrl+C), logging to the terminal.
     Hub(HubArgs),
 
     /// Make a script's preview: a short looping animation and a still.
