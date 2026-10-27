@@ -19,7 +19,13 @@ use crate::build_info::{self, Online};
 use crate::lookup::Kept;
 use crate::lookup::matching::{ArtistAlbum, Release};
 use crate::lookup::musicbrainz::MusicBrainz;
+use crate::search_box::{self, SearchBox};
 use crate::select_list::{self, Selection};
+use crate::wishlist_search::Filter;
+
+/// The box the wishlist is filtered in.
+const FILTER: search_box::Kind =
+    search_box::Kind { id: "wishlist_filter", hint: "filter: kind:album got:no...", help: crate::wishlist_search::HELP, keys: false, save: false };
 use crate::song_store::SongStore;
 use crate::wishlist::{Kind, Progress, State, Wish, Wishlist};
 
@@ -93,6 +99,9 @@ pub(super) struct WishlistState {
     previews: BTreeMap<String, Wish>,
     selection: Selection,
     found_selection: Selection,
+    filter_box: SearchBox,
+    /// The filter, and the query it's from.
+    filter: Option<(String, Filter)>,
     art: AlbumArt,
 }
 
@@ -117,6 +126,8 @@ impl Default for WishlistState {
             previews: BTreeMap::new(),
             selection: Selection::default(),
             found_selection: Selection::default(),
+            filter_box: SearchBox::default(),
+            filter: None,
             art: AlbumArt::default(),
         }
     }
@@ -532,17 +543,34 @@ impl App {
         let state_of = |id: &String| progress.get(id).map_or(State::Wanted, Progress::state);
         let got = wishes.keys().filter(|id| state_of(id) == State::Got).count();
         let mut act = None;
+        // (The filter, parsed again when the query changes.)
+        let query = &self.wishlist.filter_box.query;
+        if self.wishlist.filter.as_ref().is_none_or(|(q, _)| q != query) {
+            self.wishlist.filter = Some((query.clone(), Filter::parse(query)));
+        }
+        let filter = &self.wishlist.filter.as_ref().expect("parsed").1;
+        let now = crate::settings_sync::now();
+        let kept: HashSet<&String> = wishes.iter().filter(|(id, wish)| filter.keeps(wish, state_of(id), now)).map(|(id, _)| id).collect();
         ui.horizontal(|ui| {
-            ui.weak(match wishes.len() {
-                0 => "Nothing wished for yet. Search MusicBrainz above, or add something by name with +.".to_string(),
-                1 => "1 wish".to_string(),
-                n => format!("{n} wishes"),
+            ui.weak(match (wishes.len(), kept.len()) {
+                (0, _) => "Nothing wished for yet. Search MusicBrainz above, or add something by name with +.".to_string(),
+                (all, kept) if kept < all => format!("{kept} of {all}"),
+                (1, _) => "1 wish".to_string(),
+                (n, _) => format!("{n} wishes"),
             });
+            if wishes.is_empty() {
+                return;
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let clear = ui.add_enabled(got > 0, egui::Button::new(format!("Clear got it ({got})")));
                 if clear.on_hover_text("Take the wishes that came true off the wishlist").clicked() {
                     act = Some(Act::Remove(wishes.keys().filter(|id| state_of(id) == State::Got).cloned().collect()));
                 }
+                let artists: Vec<String> = wishes.values().filter_map(|w| if w.kind == Kind::Artist { Some(&w.title) } else { w.artist.as_ref() }).cloned().collect::<BTreeSet<_>>().into_iter().collect();
+                let programs: Vec<String> = wishes.values().filter_map(|w| w.added_by.clone()).collect::<BTreeSet<_>>().into_iter().collect();
+                let mut complete = |query: &str, cursor, mode| crate::wishlist_search::complete(query, cursor, mode, &artists, &programs);
+                // (How many it keeps is said before it.)
+                self.wishlist.filter_box.ui(ui, &FILTER, &filter.problems, None, &mut complete);
             });
         });
         if wishes.is_empty() {
@@ -551,9 +579,11 @@ impl App {
 
         // (An artist's albums go under them, not in a part of their own.)
         let on_top = |wish: &Wish| wish.under.as_ref().is_none_or(|artist| !wishes.contains_key(artist));
+        // (An artist's shown for any of their albums kept.)
+        let shown = |id: &String| kept.contains(id) || self.wishlist.list.under(id).any(|(album, _)| kept.contains(album));
         let mut rows = Vec::new();
         for state in State::ALL {
-            let mut ids: Vec<&String> = wishes.iter().filter(|(id, w)| on_top(w) && state_of(id) == state).map(|(id, _)| id).collect();
+            let mut ids: Vec<&String> = wishes.iter().filter(|(id, w)| on_top(w) && state_of(id) == state && shown(id)).map(|(id, _)| id).collect();
             if ids.is_empty() {
                 continue;
             }
@@ -565,7 +595,7 @@ impl App {
             }
             for id in ids {
                 rows.push(Row::Wish(id.clone(), false));
-                let mut albums: Vec<(&String, &Wish)> = self.wishlist.list.under(id).collect();
+                let mut albums: Vec<(&String, &Wish)> = self.wishlist.list.under(id).filter(|(album, _)| kept.contains(album)).collect();
                 albums.sort_by(|(_, a), (_, b)| (&a.year, &a.title).cmp(&(&b.year, &b.title)));
                 rows.extend(albums.into_iter().map(|(album, _)| Row::Wish(album.clone(), true)));
             }
