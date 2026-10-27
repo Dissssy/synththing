@@ -157,7 +157,7 @@ impl song_list::Source for Listed<'_> {
     fn songs(&mut self, query: &str) -> (Vec<PathBuf>, crate::search::Search) {
         let search = crate::search::parse(query, self.store.tags());
         let songs = {
-            let matches = search.rules.matcher(crate::settings_sync::now());
+            let matches = search.rules.matcher(self.store, crate::settings_sync::now());
             self.store
                 .songs()
                 .filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song))
@@ -170,7 +170,7 @@ impl song_list::Source for Listed<'_> {
 
     fn values(&mut self, field: crate::fields::Field, query: &str) -> Vec<String> {
         let rules = crate::search::parse(query, self.store.tags()).rules;
-        let matches = rules.matcher(crate::settings_sync::now());
+        let matches = rules.matcher(self.store, crate::settings_sync::now());
         let songs = self.store.songs().filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song)).map(|(_, song)| song);
         if field == crate::fields::Field::Tag {
             let used: std::collections::BTreeSet<&str> = songs.flat_map(|song| song.tags.iter().map(String::as_str)).collect();

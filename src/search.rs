@@ -28,6 +28,7 @@ pub const HELP: &str = "Search for words (fuzzy), \"a phrase\" (past case and pu
     \u{2003}length:>6m or >6:00 (a bare number is minutes), size:>1.2gb (bare: MB), year:90s\n\
     added:30d (12h, 2w, 6mo, 1y), added:2026-10 (that month), added:>=2026-01-01\n\
     tag:name  is:starred  has:album  (has: any text or number key)\n\
+    matched:song  matched:album  matched:artist  (at MusicBrainz; -matched:album for what isn't)\n\
     addedby:program  (songs a program added through the local API)\n\
     Tab completes, Alt switches it between fuzzy, close and exact.";
 
@@ -52,7 +53,10 @@ pub const KEYS: &[(&str, Field)] = &[
 ];
 
 /// The keys that aren't a field's.
-pub const OTHER_KEYS: &[&str] = &["is", "has"];
+pub const OTHER_KEYS: &[&str] = &["is", "has", "matched"];
+
+/// What `matched:` can say is matched at MusicBrainz, and its field.
+const MATCHED: &[(&str, Field)] = &[("song", Field::Matched), ("album", Field::AlbumMatched), ("artist", Field::ArtistMatched)];
 
 /// A query split into its filters and the text left to search for.
 #[derive(Debug, Default, PartialEq)]
@@ -184,6 +188,10 @@ fn filter(term: &str, tags: &BTreeMap<String, Tag>) -> Result<Rule, Option<Strin
     match key.as_str() {
         "is" if value.eq_ignore_ascii_case("starred") => rule(Field::Starred, if not { Op::IsFalse } else { Op::IsTrue }, ""),
         "is" => bad("is: can only be is:starred"),
+        "matched" => match MATCHED.iter().find(|(v, _)| v.eq_ignore_ascii_case(value)) {
+            Some((_, field)) => rule(*field, if not { Op::IsFalse } else { Op::IsTrue }, ""),
+            None => bad("matched: can be matched:song, matched:album or matched:artist"),
+        },
         "has" => match field(&value.to_lowercase()).filter(|f| matches!(f.kind(), Kind::Text | Kind::Number)) {
             Some(field) => rule(field, if not { Op::IsEmpty } else { Op::IsNotEmpty }, ""),
             None => bad("has: takes a text or number key, like has:album"),
@@ -251,7 +259,7 @@ pub fn complete(query: &str, cursor: usize, mode: Mode, values: &mut dyn FnMut(F
     let options: Vec<(String, String)> = match term.split_once(':') {
         None => {
             let typed = term.to_lowercase();
-            let keys = KEYS.iter().map(|(k, _)| format!("{k}:")).chain(["is:starred".to_string(), "has:".to_string()]);
+            let keys = KEYS.iter().map(|(k, _)| format!("{k}:")).chain(["is:starred".to_string(), "has:".to_string(), "matched:".to_string()]);
             keys.filter(|k| k.starts_with(&typed) && *k != typed).take(MAX_OPTIONS).map(|k| (k.clone(), format!("{neg}{k}"))).collect()
         }
         Some((key, raw)) => {
@@ -264,6 +272,7 @@ pub fn complete(query: &str, cursor: usize, mode: Mode, values: &mut dyn FnMut(F
                     ranked(keys, typed).into_iter().map(|k| (k.clone(), keyed(&k))).collect()
                 }
                 "is" => vec![("starred".to_string(), keyed("starred"))],
+                "matched" => ranked(MATCHED.iter().map(|(v, _)| v.to_string()).collect(), typed).into_iter().map(|v| (v.clone(), keyed(&v))).collect(),
                 key => {
                     let field = field(key).filter(|f| matches!(f.kind(), Kind::Text | Kind::Tag))?;
                     let mode = if field == Field::Tag { Mode::Fuzzy } else { mode };
@@ -414,11 +423,14 @@ mod tests {
         assert_eq!(rules("added:<2026-01-01"), [rule(Field::Imported, Op::Before, "2026-01-01", "")]);
         assert_eq!(rules("-has:album"), [rule(Field::Album, Op::IsEmpty, "", "")]);
         assert_eq!(rules("type:.MID"), [rule(Field::FileExtension, Op::Is, "MID", "")]);
+        assert_eq!(rules("matched:song"), [rule(Field::Matched, Op::IsTrue, "", "")]);
+        assert_eq!(rules("-matched:Album"), [rule(Field::AlbumMatched, Op::IsFalse, "", "")]);
+        assert_eq!(rules("matched:artist"), [rule(Field::ArtistMatched, Op::IsTrue, "", "")]);
     }
 
     #[test]
     fn what_isnt_a_filter_is_text() {
-        for query in ["artist:", "re:zero", "12:30", "year:soon", "-year:>2000", "tag:nope", "is:fun", "has:tag", "added:yesterday", "colour:red"] {
+        for query in ["artist:", "re:zero", "12:30", "year:soon", "-year:>2000", "tag:nope", "is:fun", "has:tag", "matched:genre", "added:yesterday", "colour:red"] {
             let search = parse(query, &tags());
             assert!(search.rules.rules.is_empty(), "{query}");
             assert_eq!(search.text.len(), usize::from(query != "artist:"), "{query}");
@@ -446,6 +458,8 @@ mod tests {
         assert_eq!(options("artist:dp", Mode::Exact, &mut values).unwrap().1, ["artist:^\"Daft Punk\""]);
         assert_eq!(options("artist:", Mode::Fuzzy, &mut values).unwrap().1.len(), 2);
         assert_eq!(options("album:modal artist:", Mode::Fuzzy, &mut values).unwrap().1, ["artist:Nujabes"], "what the other filters keep");
+        assert_eq!(options("-mat", Mode::Fuzzy, &mut values).unwrap().1, ["-matched:"]);
+        assert_eq!(options("matched:al", Mode::Fuzzy, &mut values).unwrap().1, ["matched:album"]);
         assert_eq!(options("zelda ", Mode::Fuzzy, &mut values), None, "nothing typed");
         assert_eq!(options("artist:Nujabes", Mode::Fuzzy, &mut values), None, "done");
     }

@@ -388,6 +388,22 @@ fn shuffled(seed: u64, key: &str) -> u64 {
     u64::from_le_bytes(digest[..8].try_into().unwrap_or_default())
 }
 
+/// The artists (by `fields::group_key`) that `store`'s songs matched at
+/// MusicBrainz credit: a matched song's artists, and a matched album's
+/// album artists.
+fn matched_artists(store: &SongStore) -> BTreeSet<String> {
+    let mut artists = BTreeSet::new();
+    for (_, song) in store.known() {
+        let facts = Facts::of(song);
+        for (field, matched) in [(Field::Artist, Field::Matched), (Field::AlbumArtist, Field::AlbumMatched)] {
+            if facts.flag(matched) {
+                artists.extend(facts.items(field).iter().map(|a| fields::group_key(a, "")));
+            }
+        }
+    }
+    artists
+}
+
 /// A rule ready to test songs with: its values parsed once.
 struct Test<'a> {
     rule: &'a Rule,
@@ -396,10 +412,12 @@ struct Test<'a> {
     /// A date rule's value and `to`, as the periods they name (an age,
     /// the moment it reaches back to).
     periods: [Option<(f64, f64)>; 2],
+    /// For `Field::ArtistMatched`: the library's matched artists.
+    artists: Option<BTreeSet<String>>,
 }
 
 impl<'a> Test<'a> {
-    fn new(rule: &'a Rule, now: i64) -> Self {
+    fn new(rule: &'a Rule, store: &SongStore, now: i64) -> Self {
         let date = rule.field.kind() == Kind::Date;
         let period = |text: &str| match rule.op {
             _ if !date => None,
@@ -412,6 +430,7 @@ impl<'a> Test<'a> {
             text: rule.value.trim().to_lowercase(),
             numbers: [number(&rule.value), number(&rule.to)],
             periods: [period(&rule.value), period(&rule.to)],
+            artists: (rule.field == Field::ArtistMatched).then(|| matched_artists(store)),
         }
     }
 
@@ -482,7 +501,10 @@ impl<'a> Test<'a> {
                 if *op == Op::HasNot { !has } else { has }
             }
             Kind::Flag => {
-                let set = song.flag(*field);
+                let set = match &self.artists {
+                    Some(artists) => song.items(Field::Artist).iter().any(|a| artists.contains(&fields::group_key(a, ""))),
+                    None => song.flag(*field),
+                };
                 if *op == Op::IsFalse { !set } else { set }
             }
         }
@@ -597,14 +619,15 @@ fn sorted<'a>(mut songs: Vec<(&'a str, &'a Song)>, order: Order, seed: u64, arti
 
 impl Rules {
     /// Whether a song matches the rules (their values parsed once, here),
-    /// `now` (Unix seconds) saying when "the last N days" are.
-    pub fn matcher(&self, now: i64) -> impl Fn(&Song) -> bool + '_ {
-        let tests: Vec<Test> = self.rules.iter().map(|r| Test::new(r, now)).collect();
+    /// `now` (Unix seconds) saying when "the last N days" are, `store`
+    /// the library the songs are in.
+    pub fn matcher<'r>(&'r self, store: &SongStore, now: i64) -> impl Fn(&Song) -> bool + use<'r> {
+        let tests: Vec<Test> = self.rules.iter().map(|r| Test::new(r, store, now)).collect();
         move |song| tests.is_empty() || if self.any { tests.iter().any(|t| t.matches(song)) } else { tests.iter().all(|t| t.matches(song)) }
     }
 
-    fn matching<'a>(&self, songs: impl Iterator<Item = (&'a str, &'a Song)>, now: i64) -> Vec<(&'a str, &'a Song)> {
-        let matches = self.matcher(now);
+    fn matching<'a>(&self, store: &SongStore, songs: impl Iterator<Item = (&'a str, &'a Song)>, now: i64) -> Vec<(&'a str, &'a Song)> {
+        let matches = self.matcher(store, now);
         songs.filter(|(_, song)| matches(song)).collect()
     }
 
@@ -639,7 +662,7 @@ impl Rules {
     /// past a leading article unless `articles`.
     pub fn songs(&self, store: &SongStore, now: i64, articles: bool) -> Vec<String> {
         let candidates = store.known().filter(|(key, _)| !store.is_blocked(key));
-        self.limited(self.matching(candidates, now), articles).into_iter().map(|(key, _)| key.to_string()).collect()
+        self.limited(self.matching(store, candidates, now), articles).into_iter().map(|(key, _)| key.to_string()).collect()
     }
 
     /// The playlists of a ruleset with this definition (none if it isn't
@@ -661,7 +684,7 @@ impl Rules {
             let facts = Facts::of(song);
             if split.by == SplitBy::Album { facts.text(Field::Album).is_none() } else { split_values(split.by, &facts, song, tags).is_empty() }
         };
-        self.matching(candidates, now).into_iter().filter(|(_, song)| lacks(song)).map(|(key, _)| key.to_string()).collect()
+        self.matching(store, candidates, now).into_iter().filter(|(_, song)| lacks(song)).map(|(key, _)| key.to_string()).collect()
     }
 
     pub fn groups(&self, store: &SongStore, now: i64, ignore: &str, articles: bool) -> Vec<Group> {
@@ -687,7 +710,7 @@ impl Rules {
         let candidates = store.known().filter(|(key, _)| !store.is_blocked(key));
         let mut groups: BTreeMap<String, Making> = BTreeMap::new();
         let mut albums: BTreeMap<String, Vec<OnAlbum>> = BTreeMap::new();
-        for (key, song) in self.matching(candidates, now) {
+        for (key, song) in self.matching(store, candidates, now) {
             let facts = Facts::of(song);
             if split.by == SplitBy::Album {
                 if let Some(album) = facts.text(Field::Album) {
@@ -800,6 +823,38 @@ mod tests {
             ("d.ogg", meta("Basil Poledouris", "", 1, 100.0), &["starred"], 400),
             ("e.ogg", Meta { size: 1, ..Meta::default() }, &[], 500),
         ])
+    }
+
+    #[test]
+    fn matched_at_musicbrainz() {
+        use crate::song_store::Online;
+        let dir = std::env::temp_dir().join(format!("synththing-smart-matched-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = SongStore::open(dir);
+        let online = |release: Option<&str>, recording: Option<&str>| Some(Online { release: release.map(Into::into), recording: recording.map(Into::into), ..Online::default() });
+        let songs = [
+            ("matched.ogg", meta("Nujabes", "Modal Soul", 1, 1.0), online(Some("r1"), Some("c1"))),
+            ("extra.ogg", Meta { album_artist: Some("Shing02".into()), ..meta("Uyama Hiroto", "Modal Soul", 9, 1.0) }, online(Some("r1"), None)),
+            ("tagged.ogg", Meta { musicbrainz_recording: Some("c2".into()), ..meta("Fat Jon", "", 1, 1.0) }, None),
+            ("wrong.ogg", Meta { musicbrainz_recording: Some("c3".into()), ..meta("Fat Jon", "", 2, 1.0) }, Some(Online { rejected: vec!["r9".into()], ..Online::default() })),
+            ("loose.ogg", meta("nujabes", "Hydeout", 1, 1.0), None),
+            ("other.ogg", meta("Shing02; Someone", "", 1, 1.0), None),
+            ("unknown.ogg", meta("Koji Kondo", "", 1, 1.0), None),
+        ];
+        store.learn(songs.into_iter().enumerate().map(|(i, (name, meta, online))| {
+            (format!("{:064x}.ogg", i + 1), Song { name: name.into(), meta: Some(meta), online, ..Song::default() })
+        }));
+        let found = |field, op| {
+            let rules = Rules { rules: vec![Rule { field, op, value: String::new(), to: String::new() }], ..Rules::default() };
+            let matches = rules.matcher(&store, 0);
+            let mut names: Vec<String> = store.known().filter(|(_, s)| matches(s)).map(|(_, s)| s.name.clone()).collect();
+            names.sort();
+            names
+        };
+        assert_eq!(found(Field::Matched, Op::IsTrue), ["matched.ogg", "tagged.ogg", "wrong.ogg"], "its file's recording counts until a match says otherwise");
+        assert_eq!(found(Field::AlbumMatched, Op::IsTrue), ["extra.ogg", "matched.ogg"]);
+        assert_eq!(found(Field::ArtistMatched, Op::IsTrue), ["loose.ogg", "matched.ogg", "other.ogg", "tagged.ogg", "wrong.ogg"]);
+        assert_eq!(found(Field::ArtistMatched, Op::IsFalse), ["extra.ogg", "unknown.ogg"], "an album artist counts on a matched album");
     }
 
     fn names(store: &SongStore, keys: &[String]) -> Vec<String> {

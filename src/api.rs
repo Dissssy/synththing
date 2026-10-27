@@ -1057,7 +1057,7 @@ fn art(library: &Library, key: &str) -> Reply {
 /// text found in the title, artist, album or file name.
 fn matching<'s>(store: &'s SongStore, query: &str) -> Vec<(String, &'s Song)> {
     let search = crate::search::parse(query, store.tags());
-    let rules = search.rules.matcher(crate::settings_sync::now());
+    let rules = search.rules.matcher(store, crate::settings_sync::now());
     let mut found: Vec<(String, &Song)> = store
         .songs()
         .filter(|(_, song)| rules(song))
