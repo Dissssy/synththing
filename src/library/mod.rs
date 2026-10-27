@@ -1,5 +1,5 @@
-//! The script library (see docs/SERVER.md): servers holding shared
-//! visualizer scripts, and the app's side of talking to them.
+//! The script library (see docs/SERVER.md): the server holding shared
+//! visualizer scripts, and the app's side of talking to it.
 //!
 //! This module has what both sides agree on: the JSON the API sends and
 //! takes, the categories, and how a server signs what it serves. `server`
@@ -18,10 +18,10 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// The official server.
+/// The official server: the one server the app talks to.
 pub const OFFICIAL_URL: &str = "https://synththing.p51.nl";
 
-/// The official server's address: `OFFICIAL_URL`, unless the
+/// The server's address: `OFFICIAL_URL`, unless the
 /// `SYNTHTHING_OFFICIAL_URL` environment variable says otherwise (for
 /// trying things against a server of your own).
 pub fn official_url() -> String {
@@ -30,12 +30,13 @@ pub fn official_url() -> String {
         .unwrap_or_else(|_| OFFICIAL_URL.to_string())
 }
 
-/// Where to reach a server recorded in a `.source.json`: the official one
-/// is recorded as `OFFICIAL_URL` (so the files stay right whatever
-/// `SYNTHTHING_OFFICIAL_URL` said when they were written), and reached at
-/// `official_url()`.
-pub fn resolve_server(url: &str) -> String {
-    if url == OFFICIAL_URL { official_url() } else { url.to_string() }
+/// The server's key (hex), which signs what it serves and which signed
+/// requests name: built in (`rotation::OFFICIAL_AUTHORITY`), so nothing
+/// has to be fetched before talking to it, unless the
+/// `SYNTHTHING_OFFICIAL_KEY` environment variable says otherwise (with
+/// `SYNTHTHING_OFFICIAL_URL`, for a server of your own).
+pub fn server_key() -> String {
+    std::env::var("SYNTHTHING_OFFICIAL_KEY").unwrap_or_else(|_| rotation::OFFICIAL_AUTHORITY.to_string())
 }
 
 /// The key the official scripts were first published with (the ones
@@ -183,7 +184,6 @@ pub fn mark_bundled(dir: &std::path::Path) {
         }
         let Some(upload) = bundled_upload(category, file_name, source) else { continue };
         let installed = Installed {
-            server: OFFICIAL_URL.to_string(),
             id: String::new(),
             version: 0,
             sha256: sha256_hex(source.as_bytes()),
@@ -212,7 +212,6 @@ pub fn bundled_original(source: &str) -> Option<RemixOf> {
         .filter(|(.., similarity)| *similarity >= fingerprint::COPY)
         .max_by(|a, b| a.2.total_cmp(&b.2))
         .map(|(file, original, _)| RemixOf {
-            server: OFFICIAL_URL.to_string(),
             id: String::new(),
             author_id: Some(official_id()),
             slug: Some(slugify(file.trim_end_matches(".lua"))),
@@ -230,7 +229,7 @@ pub fn publisher_rotate(server: &str) -> Result<(), String> {
     let old = identity::Identity::from_secret_hex(&secret).ok_or("SYNTHTHING_PUBLISH_KEY isn't a key")?;
     let server = client::normalize_url(server);
     let info = client::info(&server)?;
-    if resolve_server(&server) == official_url() && info.key != rotation::OFFICIAL_AUTHORITY {
+    if server == official_url() && info.key != rotation::OFFICIAL_AUTHORITY {
         return Err(format!("{server} doesn't have the official authority's key: not rotating there"));
     }
     if !info.authority {
@@ -482,8 +481,6 @@ pub struct ScriptDetails {
 /// sidecar knows it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct RemixOf {
-    /// The original's server; empty for the server it's uploaded to.
-    pub server: String,
     /// Its ID; empty for a bundled script's copy that hasn't learned it
     /// (then its author and slug find it).
     pub id: String,
@@ -497,16 +494,14 @@ pub struct RemixOf {
 /// A remix's original, in its details.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RemixLink {
-    /// Empty for a script on the same server.
-    pub server: String,
     pub id: String,
     pub name: String,
     /// The version remixed, when known.
     pub version: Option<u32>,
     /// It's been deleted (or hidden).
     pub gone: bool,
-    /// Its author and slug, to find it by on its server when the ID isn't
-    /// known (a remix of a bundled script's copy).
+    /// Its author and slug, to find it by when the ID isn't known (a remix
+    /// of a bundled script's copy).
     #[serde(default)]
     pub author_id: Option<String>,
     #[serde(default)]
@@ -1055,8 +1050,6 @@ pub fn parse_tags(text: &str) -> Vec<String> {
 /// (`<script>.lua.source.json`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Installed {
-    /// The server's address.
-    pub server: String,
     pub id: String,
     pub version: u32,
     /// The SHA-256 of the source as installed (or published), to tell

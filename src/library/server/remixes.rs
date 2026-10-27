@@ -3,9 +3,9 @@
 //! An upload can say what it's a remix of (`RemixOf`, from its installed
 //! copy's sidecar): a script here, found by its ID or by its author and
 //! slug (a bundled script's copy knows only those), and the version by the
-//! source's SHA-256; or one on another server, recorded as given. The
-//! original then lists it among its remixes, and it links back; if the
-//! original goes, the remix says it was remixed from a deleted script.
+//! source's SHA-256. The original then lists it among its remixes, and it
+//! links back; if the original goes (or was never here), the remix says it
+//! was remixed from a deleted script.
 //!
 //! Each version's `Fingerprint` is kept. An upload that's a near-copy of
 //! someone else's script here (or of a bundled visualizer or game) is
@@ -35,6 +35,16 @@ PRAGMA user_version = 7;
 COMMIT;
 ";
 
+/// Remixes of scripts on other servers go: there's only this one.
+pub(super) const SCHEMA_V19: &str = "
+BEGIN;
+UPDATE scripts SET remix_id = NULL, remix_version = NULL, remix_name = NULL, remix_author_id = NULL, remix_slug = NULL
+    WHERE remix_server IS NOT NULL AND remix_server != '';
+ALTER TABLE scripts DROP COLUMN remix_server;
+PRAGMA user_version = 19;
+COMMIT;
+";
+
 /// Fingerprint the versions stored before there were fingerprints.
 pub(super) fn fingerprint_stored(db: &Connection) -> rusqlite::Result<()> {
     let stored: Vec<(String, u32, String)> = db
@@ -55,7 +65,6 @@ pub(super) fn fingerprint_stored(db: &Connection) -> rusqlite::Result<()> {
 
 /// What an upload is a remix of, as stored.
 pub(super) struct Remix {
-    pub server: String,
     pub id: String,
     pub version: Option<u32>,
     pub name: String,
@@ -63,20 +72,9 @@ pub(super) struct Remix {
     pub slug: Option<String>,
 }
 
-/// Where `remix` points, here or elsewhere. A script here that can't be
-/// found (deleted) is still recorded, as it was named.
+/// Where `remix` points. A script that can't be found (deleted) is still
+/// recorded, as it was named.
 pub(super) fn resolve(db: &Connection, remix: &RemixOf) -> rusqlite::Result<Remix> {
-    let as_given = |server: &str| Remix {
-        server: server.to_string(),
-        id: remix.id.clone(),
-        version: None,
-        name: remix.name.clone(),
-        author_id: remix.author_id.clone(),
-        slug: remix.slug.clone(),
-    };
-    if !remix.server.is_empty() {
-        return Ok(as_given(&remix.server));
-    }
     type Found = (String, String, Option<String>, Option<String>);
     // (Songs aren't remixed.)
     let columns = "SELECT id, name, author_id, slug FROM scripts WHERE kind = 'script' AND";
@@ -92,22 +90,28 @@ pub(super) fn resolve(db: &Connection, remix: &RemixOf) -> rusqlite::Result<Remi
         db.query_row(&format!("{columns} id = ?"), [&remix.id], row).optional()?
     };
     let Some((id, name, author_id, slug)) = found else {
-        return Ok(as_given(""));
+        return Ok(Remix {
+            id: remix.id.clone(),
+            version: None,
+            name: remix.name.clone(),
+            author_id: remix.author_id.clone(),
+            slug: remix.slug.clone(),
+        });
     };
     let version = db
         .query_row("SELECT version FROM versions WHERE script_id = ? AND sha256 = ?", params![id, remix.sha256], |r| r.get(0))
         .optional()?;
-    Ok(Remix { server: String::new(), id, version, name, author_id, slug })
+    Ok(Remix { id, version, name, author_id, slug })
 }
 
-/// A script here and what it was remixed from, back up the chain (ending
-/// at one that isn't a remix, or one on another server).
+/// A script and what it was remixed from, back up the chain (ending at one
+/// that isn't a remix).
 fn chain(db: &Connection, first: &str) -> rusqlite::Result<Vec<String>> {
     let mut ids = vec![first.to_string()];
     while ids.len() < 32 {
         let up: Option<Option<String>> = db
             .query_row(
-                "SELECT remix_id FROM scripts WHERE id = ? AND (remix_server IS NULL OR remix_server = '')",
+                "SELECT remix_id FROM scripts WHERE id = ?",
                 [ids.last().map(String::as_str).unwrap_or_default()],
                 |r| r.get(0),
             )
@@ -169,7 +173,7 @@ pub(super) fn refuse_copy(
     // originals (and the bundled scripts the official ones among them are).
     let mut credited: HashSet<String> = HashSet::new();
     let mut credited_bundled: HashSet<String> = HashSet::new();
-    // (An official script, here or on the official server: the bundled one.)
+    // (An official script: the bundled one.)
     if let Some((asked, _)) = remix
         && asked.author_id.as_deref().is_some_and(crate::library::is_official_id)
         && let Some(slug) = &asked.slug
@@ -177,7 +181,7 @@ pub(super) fn refuse_copy(
         credited_bundled.insert(slug.clone());
     }
     let remix = remix.map(|(_, resolved)| resolved);
-    if let Some(remix) = remix.filter(|r| r.server.is_empty() && !r.id.is_empty()) {
+    if let Some(remix) = remix.filter(|r| !r.id.is_empty()) {
         for id in chain(db, &remix.id)? {
             let official: Option<(Option<String>, Option<String>)> = db
                 .query_row("SELECT author_key, slug FROM scripts WHERE id = ?", [&id], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -258,30 +262,25 @@ pub(super) fn refuse_copy(
     }))
 }
 
-/// A script's remix columns: server, original's ID, version, name, author
-/// ID, slug.
-type StoredRemix = (Option<String>, Option<String>, Option<u32>, Option<String>, Option<String>, Option<String>);
+/// A script's remix columns: original's ID, version, name, author ID, slug.
+type StoredRemix = (Option<String>, Option<u32>, Option<String>, Option<String>, Option<String>);
 
 /// What `id` is a remix of, and its remixes here.
 pub(super) fn links(db: &Connection, id: &str) -> rusqlite::Result<(Option<RemixLink>, Vec<ScriptSummary>)> {
     let stored: Option<StoredRemix> = db
         .query_row(
-            "SELECT remix_server, remix_id, remix_version, remix_name, remix_author_id, remix_slug FROM scripts WHERE id = ?",
+            "SELECT remix_id, remix_version, remix_name, remix_author_id, remix_slug FROM scripts WHERE id = ?",
             [id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()?;
     let remix_of = match stored {
-        Some((Some(server), Some(original), version, name, author_id, slug)) => {
-            let here: Option<String> = if server.is_empty() {
-                db.query_row("SELECT name FROM scripts WHERE id = ? AND hidden = 0", [&original], |r| r.get(0)).optional()?
-            } else {
-                None
-            };
+        Some((Some(original), version, name, author_id, slug)) => {
+            let here: Option<String> =
+                db.query_row("SELECT name FROM scripts WHERE id = ? AND hidden = 0", [&original], |r| r.get(0)).optional()?;
             Some(RemixLink {
-                gone: server.is_empty() && here.is_none(),
+                gone: here.is_none(),
                 name: here.or(name).unwrap_or_default(),
-                server,
                 id: original,
                 version,
                 author_id,
@@ -292,7 +291,7 @@ pub(super) fn links(db: &Connection, id: &str) -> rusqlite::Result<(Option<Remix
     };
     let remixes = db
         .prepare(&format!(
-            "SELECT {} FROM scripts WHERE remix_id = ? AND (remix_server IS NULL OR remix_server = '') AND hidden = 0
+            "SELECT {} FROM scripts WHERE remix_id = ? AND hidden = 0
              ORDER BY created DESC LIMIT 50",
             super::SUMMARY_COLUMNS
         ))?

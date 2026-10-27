@@ -108,9 +108,6 @@ pub struct ServerConfig {
     /// Its address as people reach it (for links in emails), e.g.
     /// `https://synththing.p51.nl`.
     pub public_url: String,
-    /// The authorities whose rotations it takes (keys, hex): the official
-    /// server's, by default.
-    pub authorities: Vec<String>,
     /// Sending email (an authority's codes), through SendGrid.
     pub mail: Option<MailConfig>,
     /// On an authority with mail: uploads a day for a key without an email
@@ -162,7 +159,6 @@ impl Default for ServerConfig {
             check_uploads: true,
             authority: false,
             public_url: String::new(),
-            authorities: vec![super::rotation::OFFICIAL_AUTHORITY.to_string()],
             mail: None,
             unverified_uploads_per_day: 3,
             documents: Vec::new(),
@@ -692,6 +688,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 18 {
         db.execute_batch(feedback::SCHEMA_V18)?;
     }
+    if version < 19 {
+        db.execute_batch(remixes::SCHEMA_V19)?;
+    }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
 }
@@ -918,10 +917,6 @@ fn handle(state: &Arc<State>, mut request: Request) {
             relay::delete(state, &request, &id)
         }
         (Method::Post, ["api", "v1", "identity", "rotate"]) => authority::rotate(state, &mut request),
-        (Method::Post, ["api", "v1", "identity", "apply"]) => {
-            let ip = client_ip(state, &request);
-            authority::apply(state, &mut request, &ip)
-        }
         (Method::Post, ["api", "v1", "identity", "status"]) => authority::status(state, &mut request),
         (Method::Get, ["api", "v1", "identity", "rotations"]) => {
             authority::lineage(state, query.get("key").map(String::as_str).unwrap_or_default())
@@ -1476,16 +1471,16 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
             )?;
             if let Some(remix) = &remix {
                 tx.execute(
-                    "UPDATE scripts SET remix_server = ?, remix_id = ?, remix_version = ?, remix_name = ?, remix_author_id = ?,
-                     remix_slug = ? WHERE id = ?",
-                    params![remix.server, remix.id, remix.version, remix.name, remix.author_id, remix.slug, id],
+                    "UPDATE scripts SET remix_id = ?, remix_version = ?, remix_name = ?, remix_author_id = ?, remix_slug = ?
+                     WHERE id = ?",
+                    params![remix.id, remix.version, remix.name, remix.author_id, remix.slug, id],
                 )?;
             }
         } else {
             tx.execute(
                 "INSERT INTO scripts (id, name, description, category, tags, author_name, author_key, author_id, slug,
-                 latest, created, updated, remix_server, remix_id, remix_version, remix_name, remix_author_id, remix_slug)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 latest, created, updated, remix_id, remix_version, remix_name, remix_author_id, remix_slug)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     id,
                     upload.name,
@@ -1498,7 +1493,6 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
                     slug,
                     created,
                     created,
-                    remix.as_ref().map(|r| r.server.clone()),
                     remix.as_ref().map(|r| r.id.clone()),
                     remix.as_ref().and_then(|r| r.version),
                     remix.as_ref().map(|r| r.name.clone()),
@@ -1522,7 +1516,7 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
     }
     // (A new remix here: its original's author hears of it.)
     if existing.is_none()
-        && let Some(remix) = remix.as_ref().filter(|r| r.server.is_empty() && !r.id.is_empty())
+        && let Some(remix) = remix.as_ref().filter(|r| !r.id.is_empty())
     {
         let (by, remix_id, remix_name) = (upload.author_name.clone(), id.clone(), upload.name.clone());
         notifications::author_notify(state, &db, &remix.id, "remixed", |name| {

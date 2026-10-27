@@ -120,8 +120,8 @@ pub enum Shown<'a> {
 pub enum Source {
     /// Made here, playing the starter songs with this soundfont.
     Made(PathBuf),
-    /// The servers' own, for the same source.
-    Servers(Vec<String>),
+    /// The server's own, for the same source.
+    Server,
 }
 
 /// A preview being read from the cache, in the background (decoding a
@@ -309,9 +309,9 @@ impl LocalPreviews {
         let ctx = ctx.clone();
         let soundfont = match source {
             Source::Made(soundfont) => soundfont,
-            Source::Servers(servers) => {
+            Source::Server => {
                 std::thread::spawn(move || {
-                    if let Err(why) = fetch(&servers, &dir, &sha256) {
+                    if let Err(why) = fetch(&dir, &sha256) {
                         *failed.lock().unwrap() = Some(why);
                     }
                     done.store(true, Ordering::Relaxed);
@@ -365,23 +365,16 @@ impl LocalPreviews {
 
 /// The preview of the source `sha256` from the first of `servers` that has
 /// one, into the cache `dir`.
-fn fetch(servers: &[String], dir: &Path, sha256: &str) -> Result<(), String> {
-    let mut why = String::new();
-    for server in servers {
-        match library::client::preview_of_source(server, sha256, false) {
-            Ok(still) => {
-                let sheet = library::client::preview_of_source(server, sha256, true).ok();
-                std::fs::create_dir_all(dir).map_err(|e| format!("No preview: couldn't keep it ({e})."))?;
-                keep(sha256, &still, sheet.as_deref());
-                return Ok(());
-            }
-            Err(e) => {
-                log::info!("preview of {sha256} from {server}: {e}");
-                why = e;
-            }
-        }
-    }
-    Err(format!("No preview: {why}."))
+fn fetch(dir: &Path, sha256: &str) -> Result<(), String> {
+    let server = library::official_url();
+    let still = library::client::preview_of_source(&server, sha256, false).map_err(|e| {
+        log::info!("preview of {sha256}: {e}");
+        format!("No preview: {e}.")
+    })?;
+    let sheet = library::client::preview_of_source(&server, sha256, true).ok();
+    std::fs::create_dir_all(dir).map_err(|e| format!("No preview: couldn't keep it ({e})."))?;
+    keep(sha256, &still, sheet.as_deref());
+    Ok(())
 }
 
 /// The picker's sidebar width.
@@ -397,15 +390,14 @@ pub(super) enum Picked {
 
 impl super::App {
     /// Where previews not made yet come from: made here with the starter
-    /// pack's TimGM6mb (what library servers use), else the first soundfont
-    /// in the list; on Android, the servers.
+    /// pack's TimGM6mb (what the server uses), else the first soundfont in
+    /// the list; on Android, the server.
     fn preview_source(&self) -> Result<Source, String> {
         if cfg!(target_os = "android") {
-            let servers = self.config.library.enabled_servers();
-            return if servers.is_empty() {
-                Err("Previews come from the Online Library: turn on a server in Preferences > Online Library.".into())
+            return if crate::build_info::online(crate::build_info::Online::Scripts) {
+                Ok(Source::Server)
             } else {
-                Ok(Source::Servers(servers))
+                Err("Previews come from the Online Library, which is off in branch builds.".into())
             };
         }
         crate::starter::soundfonts_dir()
@@ -584,7 +576,7 @@ impl super::App {
                         .on_hover_text(super::library::OFFICIAL_HOVER);
                 }
                 Some(i) if i.receipt.is_some() || (i.author_id.is_some() && i.author_id == mine) => {
-                    ui.weak(format!("yours, published on {}", super::library::host(&i.server)));
+                    ui.weak("yours, published");
                 }
                 Some(i) => {
                     let author = i
@@ -592,7 +584,7 @@ impl super::App {
                         .clone()
                         .or_else(|| i.author_id.as_ref().map(|id| format!("#{id}")))
                         .unwrap_or_else(|| "someone anonymous".to_string());
-                    ui.weak(format!("by {author}, from {}", super::library::host(&i.server)));
+                    ui.weak(format!("by {author}, from the Online Library"));
                 }
                 None if bundled.is_some() => {
                     ui.weak("by");

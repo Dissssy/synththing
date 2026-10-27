@@ -4,8 +4,8 @@
 //! asked for by the old key and the new one both; a recovery
 //! (`how: "email"`) is confirmed by a code sent to the email attached to
 //! the identity. Records chain: a key rotated twice has two, the second's
-//! `old` the first's `new`. Servers check them offline, against the
-//! authorities they trust, and move what the old key had to the new one.
+//! `old` the first's `new`. The authority moves what the old key had to
+//! the new one; the app checks records offline, against its key.
 
 use serde::{Deserialize, Serialize};
 

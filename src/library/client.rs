@@ -225,7 +225,7 @@ fn checked_rotation(server_key: &str, record: super::rotation::Rotation) -> Resu
 }
 
 /// Replace `old` with `new` at the authority whose key is `server_key`:
-/// the record of it, to keep (and show other servers).
+/// the record of it, to keep (an export carries it).
 pub fn rotate(base: &str, server_key: &str, old: &Identity, new: &Identity) -> Result<super::rotation::Rotation, String> {
     let time = now();
     let ask = super::rotation::RotateRequest {
@@ -250,13 +250,6 @@ pub fn lineage(base: &str, server_key: &str, key: &str) -> Result<Vec<super::rot
         return Err("the authority sent rotations for another key".into());
     }
     Ok(chain)
-}
-
-/// Show a server the rotations an identity went through (oldest first):
-/// how many were new to it.
-pub fn apply(base: &str, chain: &[super::rotation::Rotation]) -> Result<u64, String> {
-    let reply: serde_json::Value = read(check(agent().post(format!("{base}/api/v1/identity/apply")).send_json(chain))?)?;
-    Ok(reply["applied"].as_u64().unwrap_or(0))
 }
 
 /// What the authority knows of `identity`.
@@ -978,7 +971,6 @@ mod tests {
         let refused = upload(&base, &key, &take, Some(&bob)).unwrap_err();
         assert!(refused.contains("\"Bars\"") && refused.contains("remix"), "{refused}");
         take.remix_of = Some(RemixOf {
-            server: String::new(),
             id: first.id.clone(),
             author_id: Some(alice.id()),
             slug: Some("bars".into()),
@@ -1009,9 +1001,10 @@ mod tests {
         assert!(upload(&base, &key, &copy, None).unwrap_err().contains("comes with synththing"));
         let credited = Upload { remix_of: crate::library::bundled_original(&disco), ..copy };
         let mine = upload(&base, &key, &credited, None).unwrap();
-        // Linked to the official server's disco, found there by author and slug.
+        // Credited to the bundled disco by author and slug (not published on
+        // this server: so it reads as gone).
         let link = details(&base, &mine.id).unwrap().remix_of.unwrap();
-        assert_eq!(link.server, crate::library::OFFICIAL_URL);
+        assert!(link.gone);
         assert_eq!(link.author_id, Some(crate::library::official_id()));
         assert_eq!(link.slug.as_deref(), Some("disco"));
 
@@ -1024,7 +1017,7 @@ mod tests {
 
     /// An authority: emails attached with a code (changing one needs the
     /// current address's too), key-signed rotations, recovery by email
-    /// (and cancelling one), and another server taking the records.
+    /// (and cancelling one).
     #[test]
     fn rotations_and_recovery() {
         use crate::library::rotation::{EmailConfirm, EmailRequest};
@@ -1041,21 +1034,12 @@ mod tests {
         let base = format!("http://{}", running.addr);
         let key = info(&base).unwrap().key;
         assert!(info(&base).unwrap().authority);
-        // Another server that trusts this authority.
-        let other_dir = dir.join("other");
-        std::fs::create_dir_all(&other_dir).unwrap();
-        std::fs::write(other_dir.join("server.json"), format!(r#"{{ "previews": false, "check_uploads": false, "authorities": ["{key}"] }}"#))
-            .unwrap();
-        let other = server::start(&other_dir, Some("127.0.0.1:0".into())).unwrap();
-        let other_base = format!("http://{}", other.addr);
-        let other_key = info(&other_base).unwrap().key;
         let code_in = |mail: &crate::library::server::Mail| mail.subject.rsplit(' ').next().unwrap().to_string();
 
         let alice = Identity::generate().unwrap();
         let mut bars = upload_of("Bars", "visualizer", "function render() end");
         bars.slug = Some("bars".into());
         let here = upload(&base, &key, &bars, Some(&alice)).unwrap();
-        let there = upload(&other_base, &other_key, &bars, Some(&alice)).unwrap();
 
         // An email, attached with its code.
         assert!(!identity_status(&base, &key, &alice).unwrap().email);
@@ -1105,17 +1089,10 @@ mod tests {
 
         // The whole history, from the authority.
         assert_eq!(lineage(&base, &key, &alice3.public()).unwrap(), [first.clone(), second.clone()]);
-        // The other server takes the chain: alice3 owns it there too.
-        assert_eq!(apply(&other_base, &[first.clone(), second.clone()]).unwrap(), 2);
-        assert_eq!(apply(&other_base, &[first, second]).unwrap(), 0, "once");
-        assert_eq!(details(&other_base, &there.id).unwrap().summary.author_id, Some(alice3.id()));
+        // The old keys are refused for uploads; the new one gives a new version.
         bars.source = "function render() end -- 2".into();
-        assert!(upload(&other_base, &other_key, &bars, Some(&alice)).unwrap_err().contains("replaced"));
-        assert_eq!(upload(&other_base, &other_key, &bars, Some(&alice3)).unwrap().version, 2);
-        // A record from an authority it doesn't trust: refused.
-        let mut forged = rotate(&base, &key, &alice3, &Identity::generate().unwrap()).unwrap();
-        forged.authority = other_key.clone();
-        assert!(apply(&other_base, &[forged]).unwrap_err().contains("trusts"));
+        assert!(upload(&base, &key, &bars, Some(&alice)).unwrap_err().contains("replaced"));
+        assert_eq!(upload(&base, &key, &bars, Some(&alice3)).unwrap().version, 2);
 
         // "That wasn't me": cancelled, and recovery paused for a day.
         let alice5 = Identity::generate().unwrap();
@@ -1132,7 +1109,6 @@ mod tests {
         recover(&base, &key, "alice@example.org", &Identity::generate().unwrap()).unwrap();
         assert_eq!(running.outbox().len(), sent);
         running.stop();
-        other.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

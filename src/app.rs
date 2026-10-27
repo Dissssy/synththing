@@ -464,7 +464,7 @@ pub struct App {
     choose_art: Option<choose_art::ChooseArt>,
     /// Settings sync between the identity's devices.
     sync: sync::SyncState,
-    /// Notifications from library servers.
+    /// Notifications from the server.
     notifications: notifications::NotificationsState,
     /// A copyright notice on one of the user's uploads, open.
     copyright: copyright::CopyrightState,
@@ -4274,7 +4274,6 @@ impl eframe::App for App {
         self.record_window_ui(&ctx, view);
         self.script_window_ui(&ctx);
         self.publish_ui(&ctx);
-        self.confirm_server_ui(&ctx);
         self.document_ui(&ctx);
         self.update_ui(&ctx);
         self.report_ui(&ctx);
