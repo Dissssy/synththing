@@ -19,6 +19,9 @@ use crate::playback_share::{self, Control, Mark, Message, Player, Players, Share
 
 /// How often the shown position of a device playing moves on.
 const RUN_ON: Duration = Duration::from_millis(500);
+/// How long a seek bar holds where it was let go, waiting to hear the
+/// device went there.
+const SEEK_WAIT: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 pub(super) struct DevicesState {
@@ -27,10 +30,17 @@ pub(super) struct DevicesState {
     /// What other devices asked of this one (and which asked), done at the
     /// next tick.
     asked: Vec<(String, Control)>,
-    /// A device's seek bar being dragged (its ID), and where it's at: sent
-    /// once it's let go.
-    seeking: Option<(String, f64)>,
+    seeking: Option<Seek>,
     following: Option<Following>,
+}
+
+/// A device's seek bar being dragged, or let go and waiting to hear the
+/// device went there: it shows `at` meanwhile, rather than jumping back.
+struct Seek {
+    device: String,
+    at: f64,
+    /// When it was let go (and the seek sent).
+    sent: Option<Instant>,
 }
 
 /// The device this one follows.
@@ -286,7 +296,7 @@ fn player_ui(
     players: &Players,
     me: &str,
     following: Option<&str>,
-    seeking: &mut Option<(String, f64)>,
+    seeking: &mut Option<Seek>,
     now: Instant,
 ) -> Option<Act> {
     let state = &player.state;
@@ -338,7 +348,7 @@ fn player_ui(
 
 /// A device's song with where it is and its controls, or that it's idle.
 /// What it's asked to do, if anything.
-fn song_ui(ui: &mut egui::Ui, player: &Player, seeking: &mut Option<(String, f64)>, now: Instant) -> Option<Control> {
+fn song_ui(ui: &mut egui::Ui, player: &Player, seeking: &mut Option<Seek>, now: Instant) -> Option<Control> {
     let state = &player.state;
     let id = &player.device.id;
     let Some(song) = &state.song else {
@@ -351,16 +361,25 @@ fn song_ui(ui: &mut egui::Ui, player: &Player, seeking: &mut Option<(String, f64
     });
     let mut asked = None;
     ui.horizontal(|ui| {
-        let held = seeking.as_ref().filter(|(device, _)| device == id).map(|(_, at)| *at);
-        let mut position = held.unwrap_or_else(|| player.position(now));
+        // (A seek sent is done once the device is heard from since, or
+        // it's been too long.)
+        if seeking.as_ref().is_some_and(|s| &s.device == id && s.sent.is_some_and(|sent| player.heard() > sent || now >= sent + SEEK_WAIT)) {
+            *seeking = None;
+        }
+        let held = seeking.as_ref().filter(|s| &s.device == id);
+        let waiting = held.is_some_and(|s| s.sent.is_some());
+        let mut position = held.map_or_else(|| player.position(now), |s| s.at);
         ui.spacing_mut().slider_width = 160.0;
-        let bar = seek_bar_ui(ui, &mut position, song.length, None);
+        let bar = ui.add_enabled_ui(!waiting, |ui| seek_bar_ui(ui, &mut position, song.length, None)).inner;
         if bar.dragged() {
-            *seeking = Some((id.clone(), position));
+            *seeking = Some(Seek { device: id.clone(), at: position, sent: None });
         }
         if bar.drag_stopped() || (bar.changed() && !bar.dragged()) {
-            *seeking = None;
+            *seeking = Some(Seek { device: id.clone(), at: position, sent: Some(now) });
             asked = Some(Control::Seek { position });
+        }
+        if waiting {
+            ui.ctx().request_repaint_after(RUN_ON);
         }
         ui.monospace(format!("{} / {}", fmt_time(position), fmt_time(song.length)));
         if state.speed != 1.0 {

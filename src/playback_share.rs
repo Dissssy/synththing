@@ -140,6 +140,11 @@ pub struct Player {
 }
 
 impl Player {
+    /// When its state was last heard.
+    pub fn heard(&self) -> Instant {
+        self.heard
+    }
+
     /// Where it is now: run on from when it was heard while playing.
     pub fn position(&self, now: Instant) -> f64 {
         let state = &self.state;
