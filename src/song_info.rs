@@ -489,6 +489,8 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
             details.push(("Codec".into(), "Opus".into()));
         }
         meta.sample_rate = params.sample_rate;
+        meta.lossless = is_lossless(params.codec);
+        meta.bits = params.bits_per_sample.filter(|_| meta.lossless);
         if let Some(rate) = params.sample_rate {
             details.push(("Sample rate".into(), format!("{rate} Hz")));
         }
@@ -500,6 +502,23 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
         }
     }
     Ok(SongInfo { meta, details, notes: None, bpm: None })
+}
+
+/// Whether symphonia's `codec` keeps audio without loss: linear PCM
+/// (not A-law or µ-law), FLAC, WavPack, Monkey's Audio, ALAC and TTA.
+fn is_lossless(codec: symphonia::core::codecs::CodecType) -> bool {
+    use symphonia::core::codecs::*;
+    [
+        CODEC_TYPE_PCM_S32LE, CODEC_TYPE_PCM_S32LE_PLANAR, CODEC_TYPE_PCM_S32BE, CODEC_TYPE_PCM_S32BE_PLANAR, CODEC_TYPE_PCM_S24LE,
+        CODEC_TYPE_PCM_S24LE_PLANAR, CODEC_TYPE_PCM_S24BE, CODEC_TYPE_PCM_S24BE_PLANAR, CODEC_TYPE_PCM_S16LE, CODEC_TYPE_PCM_S16LE_PLANAR,
+        CODEC_TYPE_PCM_S16BE, CODEC_TYPE_PCM_S16BE_PLANAR, CODEC_TYPE_PCM_S8, CODEC_TYPE_PCM_S8_PLANAR, CODEC_TYPE_PCM_U32LE,
+        CODEC_TYPE_PCM_U32LE_PLANAR, CODEC_TYPE_PCM_U32BE, CODEC_TYPE_PCM_U32BE_PLANAR, CODEC_TYPE_PCM_U24LE, CODEC_TYPE_PCM_U24LE_PLANAR,
+        CODEC_TYPE_PCM_U24BE, CODEC_TYPE_PCM_U24BE_PLANAR, CODEC_TYPE_PCM_U16LE, CODEC_TYPE_PCM_U16LE_PLANAR, CODEC_TYPE_PCM_U16BE,
+        CODEC_TYPE_PCM_U16BE_PLANAR, CODEC_TYPE_PCM_U8, CODEC_TYPE_PCM_U8_PLANAR, CODEC_TYPE_PCM_F32LE, CODEC_TYPE_PCM_F32LE_PLANAR,
+        CODEC_TYPE_PCM_F32BE, CODEC_TYPE_PCM_F32BE_PLANAR, CODEC_TYPE_PCM_F64LE, CODEC_TYPE_PCM_F64LE_PLANAR, CODEC_TYPE_PCM_F64BE,
+        CODEC_TYPE_PCM_F64BE_PLANAR, CODEC_TYPE_FLAC, CODEC_TYPE_WAVPACK, CODEC_TYPE_MONKEYS_AUDIO, CODEC_TYPE_ALAC, CODEC_TYPE_TTA,
+    ]
+    .contains(&codec)
 }
 
 /// What `ffmpeg -i <file>` (with no output) prints about it on stderr: the
@@ -562,6 +581,8 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
     // "wmav2 (a[1][0][0] / 0x0161), 44100 Hz, stereo, fltp, 128 kb/s"
     let mut parts = stream.split(", ").map(str::trim);
     if let Some(codec) = parts.next().and_then(|c| c.split_whitespace().next()) {
+        meta.lossless = matches!(codec, "flac" | "alac" | "wavpack" | "ape" | "tta" | "wmalossless" | "truehd" | "mlp")
+            || (codec.starts_with("pcm_") && !codec.ends_with("law"));
         details.push(("Codec".into(), ffmpeg_codec_name(codec)));
     }
     let rest: Vec<&str> = parts.collect();
@@ -584,6 +605,7 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
             Some((_, real)) => real.trim_end_matches(" bit)"),
             None => format[1..].trim_end_matches('p'),
         };
+        meta.bits = bits.parse().ok().filter(|_| meta.lossless);
         details.push(("Bits per sample".into(), bits.to_string()));
     }
     Some(SongInfo { meta, details, notes: None, bpm: None })
@@ -712,6 +734,7 @@ At least one output file must be specified
         let info = parse_ffmpeg_info(log).unwrap();
         assert_eq!(info.meta.length, Some(90.5));
         assert_eq!(info.meta.sample_rate, Some(44100));
+        assert!(!info.meta.lossless);
         let details: Vec<(&str, &str)> = info.details.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         assert_eq!(
             details,
@@ -731,6 +754,8 @@ At least one output file must be specified
         assert_eq!(info.meta.length, None);
         assert!(info.details.contains(&("Channels".into(), "5.1".into())));
         assert!(info.details.contains(&("Bits per sample".into(), "24".into())));
+        assert!(info.meta.lossless);
+        assert_eq!(info.meta.bits, Some(24));
 
         assert!(parse_ffmpeg_info("not-there.wma: No such file or directory\n").is_none());
     }

@@ -5,7 +5,7 @@ use super::App;
 use crate::device::Device;
 use crate::device_messages::{self, Envelope, Outbox, Route};
 use crate::library::identity;
-use crate::panel_share;
+use crate::{panel_share, playback_share};
 
 #[derive(Default)]
 pub(super) struct LiveState {
@@ -38,6 +38,7 @@ impl App {
     /// This device listens again (the notification stream opened).
     pub(super) fn live_opened(&mut self) {
         self.panels_hello();
+        self.devices_hello();
     }
 
     /// A live message came, sealed.
@@ -45,8 +46,10 @@ impl App {
         let Some(sync_key) = identity::sync_key() else { return };
         let me = self.this_device().id;
         let Some(envelope) = device_messages::open(&sync_key, &me, sealed) else { return };
-        if envelope.topic == panel_share::TOPIC {
-            self.panels_heard(envelope.from, envelope.body);
+        match envelope.topic.as_str() {
+            panel_share::TOPIC => self.panels_heard(envelope.from, envelope.body),
+            playback_share::TOPIC => self.devices_heard(envelope.from, envelope.body),
+            _ => {}
         }
     }
 }

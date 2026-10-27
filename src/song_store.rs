@@ -195,6 +195,12 @@ pub struct Meta {
     /// Hz.
     #[serde(rename = "sr", skip_serializing_if = "Option::is_none")]
     pub sample_rate: Option<u32>,
+    /// Bits per sample, for a lossless file that says.
+    #[serde(rename = "bd", skip_serializing_if = "Option::is_none")]
+    pub bits: Option<u32>,
+    /// Its audio's stored without loss (FLAC, ALAC, WAV, ...).
+    #[serde(rename = "ll", skip_serializing_if = "std::ops::Not::not")]
+    pub lossless: bool,
     /// Its MusicBrainz IDs, where a tagger (Picard) wrote them: its
     /// release (album), its recording, and its track on that release.
     #[serde(rename = "mbr", skip_serializing_if = "Option::is_none")]
@@ -211,8 +217,9 @@ pub struct Meta {
 
 /// The version of what's read of a song's file (`Meta::version`): 1 added
 /// its grouping, comment and sample rate; 2 trims the NULs some taggers
-/// leave at the end of a tag; 3 added its MusicBrainz IDs.
-pub const META_VERSION: u32 = 3;
+/// leave at the end of a tag; 3 added its MusicBrainz IDs; 4 whether
+/// it's lossless, and its bits per sample.
+pub const META_VERSION: u32 = 4;
 
 fn is_zero(n: &u32) -> bool {
     *n == 0
