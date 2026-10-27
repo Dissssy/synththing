@@ -84,7 +84,7 @@ impl PrefTab {
             Self::Appearance => "Theme, UI scale, the seek bar, full screen, song names",
             Self::Playback => "Audio buffer, what's kept from last time",
             Self::Songs => "Audio files, loading, rulesets",
-            Self::Visualizers => "Script logs",
+            Self::Visualizers => "Pixel scale, script logs",
             Self::Library => "Servers and identity",
             Self::Updates => "Checking for updates, canary builds",
             Self::App => "Tray, welcome and starter pack",
@@ -170,6 +170,7 @@ impl App {
         let mut beat_pulse = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE) * 100.0;
         let mut pulse_length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH) * 100.0;
         let mut script_log = self.config.script_log_to_app;
+        let mut visualizer_scale = config::visualizer_scale_down(self.config.visualizer_scale.unwrap_or(1));
         let mut channel_chips = self.config.channel_chips;
         let mut buffer_ms = self.buffer_ms;
         let mut remember = self.config.remember;
@@ -418,6 +419,17 @@ impl App {
                     });
             }
             PrefTab::Visualizers => {
+                ui.horizontal(|ui| {
+                    ui.label("Pixel scale");
+                    egui::ComboBox::from_id_salt("visualizer_pixel_scale")
+                        .selected_text(format!("{}x", visualizer_scale))
+                        .show_ui(ui, |ui| {
+                            for scale in config::VISUALIZER_SCALES {
+                                ui.selectable_value(&mut visualizer_scale, scale, format!("{scale}x"));
+                            }
+                        });
+                });
+                ui.weak("Each buffer pixel covers this many output pixels in both directions. Larger values render faster with a chunkier image.");
                 with_info(
                     ui,
                     "What visualizer scripts log() shows in their Debug window; with this \
@@ -536,6 +548,7 @@ impl App {
             || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
             || (pulse_length / 100.0 - self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH)).abs() > 1e-4
             || script_log != self.config.script_log_to_app
+            || visualizer_scale != self.config.visualizer_scale.unwrap_or(1)
             || channel_chips != self.config.channel_chips
             || buffer_ms != self.buffer_ms
             || remember != self.config.remember
@@ -556,6 +569,7 @@ impl App {
             self.config.buffer_ms = (buffer_ms != DEFAULT_BUFFER_MS).then_some(buffer_ms);
             self.config.channel_chips = channel_chips;
             self.config.script_log_to_app = script_log;
+            self.config.visualizer_scale = (visualizer_scale != 1).then_some(visualizer_scale);
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
             self.config.beat_pulse = Some(beat_pulse / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE).abs() > 1e-4);
             self.config.beat_pulse_length =

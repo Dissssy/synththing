@@ -3,3 +3,4 @@
 # Secrets: API keys, signing keys (never in the repository)
 /sendgrid
 *.key
+/test
