@@ -600,7 +600,7 @@ pub fn scrolls(row: &Row, playing: bool) -> bool {
 /// starred, in outline when not.
 pub const STAR_ICON: &str = "alien";
 /// How wide a song's star is, at the left of its row.
-pub const STAR_WIDTH: f32 = 18.0;
+pub const STAR_WIDTH: f32 = 14.0;
 
 /// A song's star, at the left of its row: its alien filled in the theme's
 /// star color when it's starred, a faint outline when it isn't. Whether it

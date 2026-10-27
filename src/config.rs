@@ -173,6 +173,10 @@ pub struct Config {
     /// desktop (View > Mobile layout). Android always uses it.
     #[serde(default)]
     pub mobile_layout: bool,
+    /// Preference: the window has the system's frame (title bar and
+    /// borders) rather than drawing its own (`app/title_bar.rs`).
+    #[serde(default)]
+    pub native_frame: bool,
     /// On Android: the visualizer filling the screen draws under a notch
     /// or camera hole too (off: that strip is black).
     #[serde(default)]

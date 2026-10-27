@@ -11,6 +11,8 @@ What changed in each version of synththing, newest first. The app shows the new 
   - Panels have no outlines and no lines between them, and the open tab is one shape with its panel. A panel alone in its spot has no tab bar at all: drag it by the handle on its top edge. Tabs have no close buttons, since View shows and hides panels. Dragging a tab tints where it would land.
   - Playlists and groupings show a play button in the middle of the art (list and grid), under the pointer.
   - Up next clears with an icon button, and shows no column headings while it's empty.
+  - The window draws its own frame: the menu bar is the title bar (drag its empty middle to move the window, double-click it to maximize), with minimize, maximize and close at its right, and the window's edges resize it. Preferences > App > "Use the system's window frame" brings the system's back. The synththing menu is gone: Preferences and Record are buttons on the bar, Quit is Ctrl+Q, the tray's menu, or closing the window.
+  - The star column sits closer to the song names.
 
 ## 1.7.6 (2026-10-27)
 

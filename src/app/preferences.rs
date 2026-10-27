@@ -166,6 +166,7 @@ impl App {
         let mut check_updates = self.config.check_updates_on_launch.unwrap_or(true);
         let mut canary = self.config.canary_updates();
         let mut close_to_tray = self.config.close_to_tray.unwrap_or(false);
+        let mut native_frame = self.config.native_frame;
         let mut warn_heavy = self.config.warn_heavy_midi.unwrap_or(true);
         let mut beat_pulse = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE) * 100.0;
         let mut pulse_length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH) * 100.0;
@@ -511,6 +512,15 @@ impl App {
                         |ui| ui.checkbox(&mut close_to_tray, "Keep running in the tray when the window's closed"),
                     );
                 }
+                if !cfg!(target_os = "android") {
+                    with_info(
+                        ui,
+                        "On: the window has your system's title bar and borders. Off: synththing \
+                         draws its own, the menu bar doubling as the title bar (drag its empty \
+                         middle to move the window, double-click it to maximize).",
+                        |ui| ui.checkbox(&mut native_frame, "Use the system's window frame"),
+                    );
+                }
                 ui.horizontal_wrapped(|ui| {
                     if ui
                         .button("Welcome & starter pack...")
@@ -554,6 +564,7 @@ impl App {
             || canary != self.config.canary_updates()
             || (self.tray.is_some() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
             || warn_heavy != self.config.warn_heavy_midi.unwrap_or(true)
+            || native_frame != self.config.native_frame
             || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
             || (pulse_length / 100.0 - self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH)).abs() > 1e-4
             || script_log != self.config.script_log_to_app
@@ -580,6 +591,7 @@ impl App {
             self.config.script_log_to_app = script_log;
             self.config.visualizer_scale = (visualizer_scale != config::DEFAULT_VISUALIZER_SCALE).then_some(visualizer_scale);
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
+            self.config.native_frame = native_frame;
             self.config.beat_pulse = Some(beat_pulse / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE).abs() > 1e-4);
             self.config.beat_pulse_length =
                 Some(pulse_length / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE_LENGTH).abs() > 1e-4);

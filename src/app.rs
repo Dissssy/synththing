@@ -50,6 +50,7 @@ mod song_names;
 mod storage;
 mod sprite_editor;
 mod themes;
+mod title_bar;
 mod toast;
 mod tray_panel;
 mod tour;
@@ -554,6 +555,9 @@ pub struct App {
     /// (e.g. "Show in Songs" from inside a playlist) queue up in
     /// `pending_layout` and apply right after.
     dock_in_use: bool,
+    /// Whether the window has the system's frame, as last set
+    /// (`App::apply_window_frame`).
+    native_frame: Option<bool>,
     pending_layout: Vec<(Section, bool)>,
     /// Which sections are open, refreshed after every layout change, so
     /// `is_open` still answers correctly while `dock` is moved out.
@@ -827,6 +831,7 @@ impl App {
             open_sections: Section::ALL.into_iter().filter(|&s| layout::is_open(&dock, s)).collect(),
             dock,
             dock_in_use: false,
+            native_frame: None,
             pending_layout: Vec::new(),
             saved_layout_json,
             last_layout_check: 0.0,
@@ -1793,111 +1798,6 @@ impl App {
         }
     }
 
-    /// Desktop-style menu bar. View holds one checkbox per section,
-    /// including the tool windows (Settings, Docs), so everything that can
-    /// be shown is switched on and off from one place.
-    fn top_bar_ui(&mut self, ui: &mut egui::Ui) {
-        egui::MenuBar::new().config(crate::menu::config(ui.ctx())).ui(ui, |ui| {
-            // The wordmark (a little taller than the menus' text: it has
-            // a note above and descenders below), or the name as text if
-            // it can't be drawn.
-            let height = ui.text_style_height(&egui::TextStyle::Button) * 1.25;
-            let button = match self.wordmark.image(ui.ctx(), height, ui.visuals().panel_fill) {
-                Some(image) => egui::Button::image(image),
-                None => egui::Button::new("synththing"),
-            };
-            egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
-                if ui.button("Preferences...").clicked() {
-                    self.preferences_open = true;
-                }
-                ui.separator();
-                self.recording_menu_ui(ui);
-                ui.separator();
-                let quit = egui::Button::new("Quit").shortcut_text(ui.ctx().format_shortcut(&egui::KeyboardShortcut::new(
-                    egui::Modifiers::COMMAND,
-                    egui::Key::Q,
-                )));
-                if ui.add(quit).on_hover_text("Close synththing completely, even with the tray in use").clicked() {
-                    let ctx = ui.ctx().clone();
-                    self.close_with(&ctx, close::CloseAction::Quit);
-                }
-            });
-            let mut toggled = Vec::new();
-            let mut switch_to_mobile = false;
-            ui.menu_button("View", |ui| {
-                let mut section_checkbox = |ui: &mut egui::Ui, section: Section| {
-                    let mut open = self.open_sections.contains(&section);
-                    if ui.checkbox(&mut open, section.title()).changed() {
-                        toggled.push((section, open));
-                    }
-                };
-                section_checkbox(ui, Section::Songs);
-                section_checkbox(ui, Section::Groupings);
-                section_checkbox(ui, Section::Soundfonts);
-                section_checkbox(ui, Section::Queue);
-                section_checkbox(ui, Section::Wishlist);
-                section_checkbox(ui, Section::Apps);
-                ui.separator();
-                section_checkbox(ui, Section::Visualizer);
-                section_checkbox(ui, Section::Editor);
-                section_checkbox(ui, Section::Reference);
-                section_checkbox(ui, Section::Sprites);
-                section_checkbox(ui, Section::Library);
-                ui.separator();
-                ui.menu_button("Layout", |ui| self.layout_menu_ui(ui));
-                if ui.button("Mobile layout").on_hover_text("The Android app's layout, one page at a time, in a phone-sized window").clicked() {
-                    switch_to_mobile = true;
-                }
-            });
-            if switch_to_mobile {
-                let ctx = ui.ctx().clone();
-                self.set_mobile_layout(&ctx, true);
-            }
-            for (section, open) in toggled {
-                self.set_open(section, open);
-            }
-            ui.menu_button("Help", |ui| {
-                if ui.button("Welcome...").on_hover_text("The welcome window, and the starter pack").clicked() {
-                    self.open_welcome();
-                }
-                if ui.button("Tour").on_hover_text("A walk through the app, one thing at a time").clicked() {
-                    self.start_tour();
-                }
-                if ui.button("Check for updates...").clicked() {
-                    self.launch_update_check = false;
-                    self.updates_open = true;
-                    self.updater.check(self.update_track());
-                }
-                if ui.button("Changelog...").clicked() {
-                    self.changelog = Some(None);
-                }
-                if ui.button("Send feedback...").on_hover_text("Tell us what's working and what isn't").clicked() {
-                    self.open_feedback();
-                }
-                if ui.button("Log...").clicked() {
-                    self.log_open = true;
-                }
-                let mut profiler = profiler::is_open();
-                if ui
-                    .checkbox(&mut profiler, "Profiler")
-                    .on_hover_text("How long each part of every frame takes, live, as a flame graph")
-                    .changed()
-                {
-                    profiler::set_open(profiler);
-                }
-                if ui.button("Credits & licenses...").clicked() {
-                    self.credits_open = true;
-                }
-                ui.separator();
-                ui.weak(format!("synththing v{}", crate::build_info::describe()));
-            });
-            // Notifications and feedback, at the far right.
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.notifications_button_ui(ui);
-                self.feedback_button_ui(ui);
-            });
-        });
-    }
 
     /// The app log viewer, as a modal (the mobile layout shows it as a
     /// page instead).
@@ -4293,6 +4193,7 @@ impl eframe::App for App {
         // separate-fullscreen-layout preference is on), so settle that before
         // drawing anything.
         self.sync_layout_slot();
+        self.apply_window_frame(&ctx);
 
         self.song_list.clear_hovered();
         self.hovered_playlist_entry = None;
@@ -4314,7 +4215,10 @@ impl eframe::App for App {
             self.history_ui(&ctx);
             self.status_toast_ui(&ctx);
         } else {
-            egui::Panel::top("top_bar").show_separator_line(false).show(ui, |ui| frame_timing::time("top bar", || self.top_bar_ui(ui)));
+            egui::Panel::top("top_bar")
+                .show_separator_line(false)
+                .exact_size(title_bar::HEIGHT)
+                .show(ui, |ui| frame_timing::time("top bar", || self.title_bar_ui(ui)));
             egui::Panel::bottom("controls_panel").show_separator_line(false).show(ui, |ui| {
                 let _timing = frame_timing::scope("controls bar");
                 self.controls_bar_ui(ui, view);
