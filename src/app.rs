@@ -1536,6 +1536,9 @@ impl App {
     /// buffer tucked underneath. Shown identically whether fullscreen or
     /// not, so it's the one thing that's always reachable.
     fn controls_bar_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        if self.following() {
+            return self.following_bar_ui(ui, view);
+        }
         ui.add_space(4.0);
 
         ui.horizontal(|ui| {
@@ -1655,7 +1658,7 @@ impl App {
                 toast::show(ui.ctx(), shuffle_text(self.shuffle));
             }
             self.queue_button_ui(ui);
-            self.devices_button_ui(ui);
+            self.devices_button_ui(ui, view);
 
             ui.separator();
             ui.weak(playback_state_text(view));
@@ -3536,6 +3539,9 @@ impl App {
 
     /// Carries out a command, whichever source it came from.
     fn run_command(&mut self, ctx: &egui::Context, command: Command, view: &EngineView) {
+        if self.command_to_leader(command) {
+            return;
+        }
         match command {
             Command::TogglePause => self.send(AudioCommand::TogglePause),
             Command::Play | Command::Pause => {
@@ -3621,7 +3627,7 @@ impl App {
     fn command_available(&self, command: Command) -> bool {
         match command {
             Command::ExitFullscreen => self.fullscreen || self.dedicated.is_some(),
-            Command::NextTrack => self.has_next(),
+            Command::NextTrack => self.has_next() || self.following(),
             // (The mobile layout has pages, not tabs.)
             Command::GoTo(section) => !self.mobile() && self.dedicated.is_none() && section != Section::Removed,
             Command::NextSection | Command::PreviousSection => !self.mobile() && self.dedicated.is_none(),

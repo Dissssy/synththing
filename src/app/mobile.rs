@@ -448,6 +448,9 @@ impl App {
 
     /// Under the visualizer: the seek bar, the song, the transport.
     fn mobile_controls_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        if self.following() {
+            return self.following_bar_ui(ui, view);
+        }
         // The seek bar, edge to edge: the line between the visualizer and
         // the controls. In the tempo's color, as on the desktop.
         let accent = self.transport_accent(ui.ctx(), view);
@@ -538,7 +541,7 @@ impl App {
             if ui.button(format!("{}  {script}", icon("waveform"))).on_hover_text("Pick a visualizer").clicked() {
                 self.mobile_state.page = Page::Scripts;
             }
-            self.devices_button_ui(ui);
+            self.devices_button_ui(ui, view);
         });
         ui.add_space(6.0);
     }
