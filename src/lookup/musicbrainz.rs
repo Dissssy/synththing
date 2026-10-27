@@ -243,9 +243,10 @@ impl MusicBrainz {
         Ok(discography(&groups))
     }
 
-    /// A wish for the album (release group) `group`: from its first
-    /// official release (else its first), whose tracks are kept.
-    pub fn album(&mut self, group: &str) -> Result<Wish> {
+    /// A wish for the album (release group) `group`, and the release it's
+    /// from, with its tracks: its first official release (else its first).
+    /// Each of its releases is kept.
+    pub fn album(&mut self, group: &str) -> Result<(Wish, Release)> {
         self.wait_turn();
         let found: BrowseResult<Entity> = Entity::browse()
             .by_release_group(group)
@@ -258,7 +259,9 @@ impl MusicBrainz {
         for release in &found.entities {
             self.cache.put("release", &release.id, release);
         }
-        album_wishes(&found.entities).into_iter().next().with_context(|| format!("album {group} has no releases"))
+        let wish = album_wishes(&found.entities).into_iter().next().with_context(|| format!("album {group} has no releases"))?;
+        let release = found.entities.iter().find(|r| wish.release.as_deref() == Some(r.id.as_str())).map(converted).unwrap_or_default();
+        Ok((wish, release))
     }
 
     /// The release `id` as MusicBrainz has it now (and kept).

@@ -33,8 +33,11 @@ struct Found {
 /// wished album's release, to pick its songs.
 enum Fetched {
     Release(Release),
-    Album(Wish),
+    Album(Wish, Release),
     Tracks(Release),
+    /// An album of an artist's (by its group) not wished for, to pick
+    /// songs of: the wish it'd be.
+    Preview(Wish, Release),
 }
 
 /// What the tab shows in place of the wishlist: an artist's albums, to
@@ -79,6 +82,11 @@ pub(super) struct WishlistState {
     looked_up: HashSet<String>,
     page: Option<Page>,
     page_selection: Selection,
+    /// The albums (by group) opened on an artist's page, to pick songs of.
+    expanded: HashSet<String>,
+    /// The wishes the albums opened there that aren't wished for would be,
+    /// by group, once MusicBrainz said what they are.
+    previews: BTreeMap<String, Wish>,
     selection: Selection,
     art: AlbumArt,
 }
@@ -100,6 +108,8 @@ impl Default for WishlistState {
             looked_up: HashSet::new(),
             page: None,
             page_selection: Selection::default(),
+            expanded: HashSet::new(),
+            previews: BTreeMap::new(),
             selection: Selection::default(),
             art: AlbumArt::default(),
         }
@@ -184,9 +194,9 @@ impl App {
                     let mut musicbrainz = MusicBrainz::new();
                     let fetched = match ask {
                         AlbumAsk::Fetch(release) => musicbrainz.fresh_release(&release).map(Fetched::Release),
-                        AlbumAsk::Group(wish) => musicbrainz.album(wish.musicbrainz.as_deref().unwrap_or_default()).map(|found| {
-                            // (As the artist's albums name it.)
-                            Fetched::Album(Wish { title: wish.title, artist: wish.artist, release_type: wish.release_type, ..found })
+                        AlbumAsk::Group(wish) => musicbrainz.album(wish.musicbrainz.as_deref().unwrap_or_default()).map(|(found, release)| {
+                            // (As the artist's albums name it, and under them.)
+                            Fetched::Album(found_as(wish, found), release)
                         }),
                         AlbumAsk::Wish(_) => unreachable!("wished above"),
                     };
@@ -219,7 +229,16 @@ impl App {
 
     fn take_album(&mut self, ctx: &egui::Context, answer: Result<Fetched, String>) {
         match answer {
-            Ok(Fetched::Album(wish)) => self.wish_for_album(ctx, AlbumAsk::Wish(wish)),
+            Ok(Fetched::Album(wish, release)) => {
+                self.lookup.kept.keep_release(release);
+                self.wish_for_album(ctx, AlbumAsk::Wish(wish));
+            }
+            Ok(Fetched::Preview(wish, release)) => {
+                self.lookup.kept.keep_release(release);
+                if let Some(group) = wish.musicbrainz.clone() {
+                    self.wishlist.previews.insert(group, wish);
+                }
+            }
             Ok(Fetched::Tracks(release)) => {
                 self.lookup.kept.keep_release(release);
                 self.wishlist.progress = None;
@@ -652,7 +671,7 @@ impl App {
     /// the kinds shown): each ticked to wish for it, under them, with
     /// what's here of it.
     fn wishlist_artist_ui(&mut self, ui: &mut egui::Ui, id: &str, online: bool) {
-        let Some(wish) = self.wishlist.list.wishes.get(id).cloned() else {
+        let Some(artist) = self.wishlist.list.wishes.get(id).cloned() else {
             self.wishlist.page = None;
             return;
         };
@@ -661,15 +680,18 @@ impl App {
         let mut shown_changed = false;
         ui.horizontal(|ui| {
             back = ui.add(super::icon_button("arrow-left")).on_hover_text("Back to the wishlist").clicked();
-            ui.add(egui::Label::new(egui::RichText::new(&wish.title).heading()).truncate());
+            ui.add(egui::Label::new(egui::RichText::new(&artist.title).heading()).truncate());
         });
         ui.horizontal_wrapped(|ui| {
-            ui.weak("Show:");
             for kind in crate::wishlist::KINDS {
-                let mut shown = kinds.contains(&kind);
-                if ui.checkbox(&mut shown, kind).changed() {
+                let shown = kinds.contains(&kind);
+                // (The last one shown stays: there's always something.)
+                let last = shown && kinds.len() == 1;
+                let chip = super::toggle_chip(ui, shown, kind, kind_color(kind));
+                let hover = if last { "Show another kind to hide this one" } else if shown { "Shown: click to hide them" } else { "Hidden: click to show them" };
+                if chip.on_hover_text(hover).clicked() && !last {
                     kinds.retain(|k| *k != kind);
-                    if shown {
+                    if !shown {
                         kinds.push(kind);
                     }
                     shown_changed = true;
@@ -678,10 +700,11 @@ impl App {
         });
         ui.weak("Tick the albums you want: they go on your wishlist under the artist.");
         ui.separator();
-        // (Ticked, or not: the album, and the wish under the artist to
-        // take off, if it's unticked.)
-        let mut pick: Option<(&ArtistAlbum, Option<String>)> = None;
-        let albums = wish.musicbrainz.as_deref().and_then(|artist| self.lookup.kept.discography(artist));
+        let mut act = None;
+        // (What to ask MusicBrainz, for an opened album's songs: the wish
+        // it'd be, or the release of the one it is.)
+        let mut fetch: Option<Result<Wish, String>> = None;
+        let albums = artist.musicbrainz.as_deref().and_then(|a| self.lookup.kept.discography(a));
         match &albums {
             None => {
                 ui.weak(if online { "Looking up their albums at MusicBrainz..." } else { "Their albums aren't looked up on this device yet: that needs Online album art and details on." });
@@ -690,55 +713,113 @@ impl App {
                 let here = crate::wishlist::albums_here(&self.songs);
                 let picked: BTreeMap<&str, &String> =
                     self.wishlist.list.under(id).filter_map(|(album, w)| Some((w.musicbrainz.as_deref()?, album))).collect();
+                let wishes = &self.wishlist.list.wishes;
                 let progress = self.wishlist.progress.as_ref().map(|(_, p)| p);
                 let adding = &self.wishlist.adding;
-                let rows: Vec<&ArtistAlbum> = albums.iter().filter(|a| kinds.contains(&a.kind)).collect();
-                let touch = select_list::touch(ui.ctx());
-                let mut open = None;
-                let output = select_list::show(ui, "wishlist_albums", &rows, &mut self.wishlist.page_selection, None, |ui, row, album| {
-                    let wished = picked.get(album.id.as_str()).copied();
-                    let state = match wished {
-                        Some(w) => progress.and_then(|p| p.get(w)).map_or_else(String::new, |p| p.text()),
-                        None if adding.contains(&album.id) => "Adding...".to_string(),
-                        None if here.contains(album.id.as_str()) => "Some here".to_string(),
-                        None => String::new(),
-                    };
-                    crate::menu::context(&row.response, |ui| {
-                        if let Some(wished) = wished
-                            && ui.button("Pick its songs").clicked()
-                        {
-                            open = Some(Page::Album(wished.clone()));
-                        }
-                        if ui.button("Open at MusicBrainz").clicked() {
-                            ui.ctx().open_url(egui::OpenUrl::new_tab(format!("https://musicbrainz.org/release-group/{}", album.id)));
-                        }
-                    });
-                    let mut ticked = wished.is_some() || adding.contains(&album.id);
-                    if ui.add_enabled(!adding.contains(&album.id), egui::Checkbox::without_text(&mut ticked)).changed() {
-                        pick = Some((*album, wished.cloned()));
+                let kept = &self.lookup.kept;
+                // (An opened album's songs: its wish's release's, or the one
+                // it would be's, once known.)
+                let mut rows: Vec<ArtistRow> = Vec::new();
+                for album in albums.iter().filter(|a| kinds.contains(&a.kind)) {
+                    rows.push(ArtistRow::Album(album));
+                    if !self.wishlist.expanded.contains(&album.id) {
+                        continue;
                     }
-                    let scroll = select_list::scrolls(row, false);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        select_list::cell(ui, 70.0, egui::RichText::new(state).weak(), false);
-                        if !touch {
-                            select_list::cell(ui, 90.0, egui::RichText::new(album.kind).weak(), false);
+                    let wish = picked.get(album.id.as_str()).and_then(|w| wishes.get(*w)).or_else(|| self.wishlist.previews.get(&album.id));
+                    match wish.and_then(|w| kept.release(w.release.as_deref()?)) {
+                        Some(release) => rows.extend(release.tracks.iter().map(|t| ArtistRow::Track(album, t.clone()))),
+                        None if adding.contains(&album.id) || wish.and_then(|w| w.release.as_ref()).is_some_and(|r| adding.contains(r)) => {
+                            rows.push(ArtistRow::Note("Asking MusicBrainz for its songs...".into()))
                         }
-                        select_list::cell(ui, 40.0, egui::RichText::new(album.year.clone().unwrap_or_default()).weak(), false);
-                        select_list::label(ui, &album.title, None, scroll);
-                    });
+                        None if online => {
+                            let asked = self.wishlist.looked_up.contains(&album.id) || wish.and_then(|w| w.release.as_ref()).is_some_and(|r| self.wishlist.looked_up.contains(r));
+                            let note = if asked { "Couldn't get its songs from MusicBrainz: try again later." } else { "Asking MusicBrainz for its songs..." };
+                            rows.push(ArtistRow::Note(note.into()));
+                            match wish {
+                                Some(w) if w.release.is_some() => fetch = Some(Err(w.release.clone().unwrap_or_default())),
+                                _ => fetch = Some(Ok(crate::wishlist::album_wish(album, &artist.title, id))),
+                            }
+                        }
+                        None => rows.push(ArtistRow::Note("Its songs aren't known on this device yet.".into())),
+                    }
+                }
+                let touch = select_list::touch(ui.ctx());
+                let expanded = &self.wishlist.expanded;
+                let previews = &self.wishlist.previews;
+                let output = select_list::show(ui, "wishlist_albums", &rows, &mut self.wishlist.page_selection, None, |ui, row, item| {
+                    let scroll = select_list::scrolls(row, false);
+                    match item {
+                        ArtistRow::Note(note) => {
+                            ui.add_space(2.0 * ui.available_height());
+                            ui.weak(note);
+                        }
+                        ArtistRow::Album(album) => {
+                            let wished = picked.get(album.id.as_str()).copied();
+                            let skipped = wished.and_then(|w| wishes.get(w)).is_some_and(|w| !w.skipped.is_empty());
+                            let state = match wished {
+                                Some(w) => progress.and_then(|p| p.get(w)).map_or_else(String::new, |p| p.text()),
+                                None if adding.contains(&album.id) && !expanded.contains(&album.id) => "Adding...".to_string(),
+                                None if here.contains(album.id.as_str()) => "Some here".to_string(),
+                                None => String::new(),
+                            };
+                            crate::menu::context(&row.response, |ui| {
+                                if ui.button("Open at MusicBrainz").clicked() {
+                                    ui.ctx().open_url(egui::OpenUrl::new_tab(format!("https://musicbrainz.org/release-group/{}", album.id)));
+                                }
+                            });
+                            let open = expanded.contains(&album.id);
+                            let caret = super::icon(if open { "caret-down" } else { "caret-right" });
+                            if ui.add(egui::Button::new(caret).frame(false)).on_hover_text(if open { "Hide its songs" } else { "Pick its songs" }).clicked() {
+                                act = Some(ArtistAct::Expand(album.id.clone()));
+                            }
+                            let busy = adding.contains(&album.id) && wished.is_none() && !expanded.contains(&album.id);
+                            let mut ticked = wished.is_some() || busy;
+                            let checkbox = egui::Checkbox::without_text(&mut ticked).indeterminate(skipped);
+                            if ui.add_enabled(!busy, checkbox).changed() {
+                                act = Some(ArtistAct::Album((*album).clone(), wished.cloned()));
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                select_list::cell(ui, 70.0, egui::RichText::new(state).weak(), false);
+                                if !touch {
+                                    select_list::cell(ui, 90.0, egui::RichText::new(album.kind).weak(), false);
+                                }
+                                select_list::cell(ui, 40.0, egui::RichText::new(album.year.clone().unwrap_or_default()).weak(), false);
+                                select_list::label(ui, &album.title, None, scroll);
+                            });
+                        }
+                        ArtistRow::Track(album, track) => {
+                            ui.add_space(2.0 * ui.available_height());
+                            let wished = picked.get(album.id.as_str()).and_then(|w| Some((*w, wishes.get(*w)?)));
+                            let recording = track.recording.as_deref();
+                            let mut ticked = match wished {
+                                Some((_, w)) => recording.is_none_or(|r| !w.skipped.iter().any(|s| s == r)),
+                                None => false,
+                            };
+                            if ui.add_enabled(recording.is_some(), egui::Checkbox::without_text(&mut ticked)).changed()
+                                && let Some(recording) = recording
+                            {
+                                act = Some(match wished {
+                                    Some((w, _)) => ArtistAct::Song(w.clone(), recording.to_string(), !ticked),
+                                    None => ArtistAct::OnlySong(previews.get(&album.id).cloned(), recording.to_string()),
+                                });
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                select_list::cell(ui, 70.0, "", false);
+                                select_list::cell(ui, 50.0, egui::RichText::new(track.length.map_or_else(String::new, crate::song_info::format_length)).weak(), false);
+                                let title = egui::RichText::new(format!("{}. {}", track.position, track.title));
+                                let title = if ticked { title } else { title.color(ui.visuals().weak_text_color()) };
+                                select_list::label(ui, title, None, scroll);
+                            });
+                        }
+                    }
                 });
                 if let Some(i) = output.activated
-                    && !adding.contains(&rows[i].id)
+                    && let ArtistRow::Album(album) = &rows[i]
                 {
-                    pick = Some((rows[i], picked.get(rows[i].id.as_str()).map(|w| (*w).clone())));
-                }
-                if let Some(page) = open {
-                    self.wishlist.page = Some(page);
-                    self.wishlist.page_selection.clear();
+                    act = Some(ArtistAct::Expand(album.id.clone()));
                 }
             }
         }
-        let pick = pick.map(|(album, wished)| (album.clone(), wished));
         if back {
             self.wishlist.page = None;
         }
@@ -752,13 +833,48 @@ impl App {
                 log::warn!("saving the config: {e}");
             }
         }
-        match pick {
+        match fetch {
+            Some(Ok(wish)) => self.fetch_preview(ui.ctx(), wish),
+            Some(Err(release)) => self.fetch_tracks(ui.ctx(), release),
             None => {}
-            Some((_, Some(wished))) => self.unwish(&wished),
-            Some((album, None)) => {
-                let wish = crate::wishlist::album_wish(&album, &wish.title, id);
-                self.wish_for_album(ui.ctx(), if online { AlbumAsk::Group(wish) } else { AlbumAsk::Wish(wish) });
+        }
+        match act {
+            None => {}
+            Some(ArtistAct::Expand(group)) => {
+                if !self.wishlist.expanded.remove(&group) {
+                    self.wishlist.expanded.insert(group);
+                }
             }
+            Some(ArtistAct::Album(_, Some(wished))) => self.unwish(&wished),
+            Some(ArtistAct::Album(album, None)) => {
+                let wish = crate::wishlist::album_wish(&album, &artist.title, id);
+                // (Its songs known already: wished for as it is.)
+                match self.wishlist.previews.remove(&album.id) {
+                    Some(preview) => self.wish_for_album(ui.ctx(), AlbumAsk::Wish(preview)),
+                    None => self.wish_for_album(ui.ctx(), if online { AlbumAsk::Group(wish) } else { AlbumAsk::Wish(wish) }),
+                }
+            }
+            Some(ArtistAct::Song(wished, recording, skipped)) => {
+                // (Its last song skipped: the album isn't wished for.)
+                let tracks = self.wishlist.list.wishes.get(&wished).and_then(|w| self.lookup.kept.release(w.release.as_deref()?)).map(|r| r.tracks.len());
+                let skipped_all = self.wishlist.list.wishes.get(&wished).is_some_and(|w| skipped && Some(w.skipped.len() + 1) >= tracks);
+                if skipped_all {
+                    self.unwish(&wished);
+                } else {
+                    self.wishlist.list.set_skipped(&wished, &recording, skipped);
+                    self.wishlist_changed();
+                }
+            }
+            Some(ArtistAct::OnlySong(Some(preview), recording)) => {
+                // (Wished for with only that song.)
+                let tracks = preview.release.as_deref().and_then(|r| self.lookup.kept.release(r));
+                let skipped = tracks.iter().flat_map(|r| &r.tracks).filter_map(|t| t.recording.clone()).filter(|r| *r != recording).collect();
+                if let Some(group) = &preview.musicbrainz {
+                    self.wishlist.previews.remove(group);
+                }
+                self.wish_for_album(ui.ctx(), AlbumAsk::Wish(Wish { skipped, ..preview }));
+            }
+            Some(ArtistAct::OnlySong(None, _)) => {}
         }
     }
 
@@ -830,6 +946,31 @@ impl App {
         if let Some((recording, skipped)) = skip {
             self.wishlist.list.set_skipped(id, &recording, skipped);
             self.wishlist_changed();
+        }
+    }
+
+    /// Ask MusicBrainz what the album `wish` (not wished for yet) would be,
+    /// to pick songs of, once a session.
+    fn fetch_preview(&mut self, ctx: &egui::Context, wish: Wish) {
+        let Some(group) = wish.musicbrainz.clone() else { return };
+        if !self.wishlist.looked_up.insert(group.clone()) {
+            return;
+        }
+        self.wishlist.adding.insert(group.clone());
+        let send = self.wishlist.fetched.0.clone();
+        let repaint = ctx.clone();
+        let asked = group.clone();
+        let started = std::thread::Builder::new().name("wishlist preview".into()).spawn(move || {
+            let fetched = MusicBrainz::new().album(&group).map(|(found, release)| Fetched::Preview(found_as(wish, found), release)).map_err(|e| {
+                log::warn!("asking MusicBrainz for an album's songs: {e:#}");
+                e.to_string()
+            });
+            let _ = send.send((group, fetched));
+            repaint.request_repaint();
+        });
+        if let Err(e) = started {
+            self.wishlist.adding.remove(&asked);
+            log::warn!("couldn't ask MusicBrainz for an album's songs: {e}");
         }
     }
 
@@ -960,6 +1101,43 @@ pub(super) fn artist_wish_menu(ui: &mut egui::Ui, store: &SongStore, kept: &Kept
 pub(super) fn artist_wish_button(ui: &mut egui::Ui, wish: Option<Wish>) -> Option<Wish> {
     let wish = wish?;
     ui.add(super::icon_button("gift")).on_hover_text(artist_hover(&wish)).clicked().then_some(wish)
+}
+
+/// The wish MusicBrainz `found` for an album asked for as `asked`: named
+/// as the artist's albums name it, and under them.
+fn found_as(asked: Wish, found: Wish) -> Wish {
+    Wish { title: asked.title, artist: asked.artist, release_type: asked.release_type, under: asked.under, skipped: asked.skipped, ..found }
+}
+
+/// What's asked of an artist's page: open or close an album; wish for it
+/// (or not: the wish under the artist it is); skip a song of the album
+/// wished for (its wish, the song, whether it's skipped); or wish for an
+/// album not wished for with only that song (the wish it'd be).
+enum ArtistAct {
+    Expand(String),
+    Album(ArtistAlbum, Option<String>),
+    Song(String, String, bool),
+    OnlySong(Option<Wish>, String),
+}
+
+/// A row of an artist's page: one of their albums, or (it opened) a song
+/// of it, or what's being waited on for its songs.
+enum ArtistRow<'a> {
+    Album(&'a ArtistAlbum),
+    Track(&'a ArtistAlbum, crate::lookup::matching::Track),
+    Note(String),
+}
+
+/// The color of a kind of album's chip.
+fn kind_color(kind: &str) -> egui::Color32 {
+    match kind {
+        "Album" => egui::Color32::from_rgb(0x4c, 0x8b, 0xf5),
+        "EP" => egui::Color32::from_rgb(0x2e, 0xb8, 0x8a),
+        "Single" => egui::Color32::from_rgb(0xf2, 0xa3, 0x3a),
+        "Compilation" => egui::Color32::from_rgb(0x9b, 0x6b, 0xe8),
+        "Live" => egui::Color32::from_rgb(0xe8, 0x5d, 0x75),
+        _ => egui::Color32::from_rgb(0x8a, 0x93, 0xa6),
+    }
 }
 
 /// Where a wish's art comes from: the release it's on.
