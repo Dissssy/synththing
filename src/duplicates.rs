@@ -2,7 +2,8 @@
 //! format or bitrate), for Clean up (`cleanup`). The library keys songs
 //! by their file's hash, so these are songs of their own; they're found
 //! as songs of one MusicBrainz recording (`Facts::recording`: its match,
-//! else its file's tag). MIDI files are never one with an audio file.
+//! else its file's tag), or guessed as songs of one title and artist and
+//! about as long. MIDI files are never one with an audio file.
 //! Each group's copies are ranked, the one to keep first: lossless
 //! before lossy; lossless by sample rate, then bits per sample; lossy by
 //! bitrate, then sample rate; then the one imported first. What the
@@ -10,34 +11,64 @@
 //! removed.
 
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::fields::{Facts, Field};
+use crate::fields::{self, Facts, Field};
 use crate::song_store::{Meta, Online, Song, SongStore};
+
+/// How far apart (seconds) two copies' lengths may be and still be
+/// guessed one song.
+const LEEWAY: f64 = 2.0;
 
 /// Songs that are one recording: their keys, the one to keep first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Group {
     pub title: String,
     pub keys: Vec<String>,
+    /// Known to be one (a MusicBrainz recording), not guessed from their
+    /// title, artist and length.
+    pub sure: bool,
 }
 
-/// The library's duplicate songs, the largest groups first.
-pub fn groups(store: &SongStore) -> Vec<Group> {
+/// The library's duplicate songs (names grouped as by
+/// `fields::group_key`, past `ignore`), the largest groups first. Songs
+/// of one recording are sure; songs of one title and artist, as long as
+/// each other give or take `LEEWAY`, of no more than one recording and
+/// not all of it, are guessed (which takes in a sure group they reach).
+pub fn groups(store: &SongStore, ignore: &str) -> Vec<Group> {
     let mut by_recording: BTreeMap<&str, Vec<(&str, &Song)>> = BTreeMap::new();
+    let mut by_name: BTreeMap<(String, String), Vec<(f64, &str, &Song)>> = BTreeMap::new();
     for (key, song) in store.known().filter(|(key, _)| !store.is_blocked(key)) {
         let facts = Facts::of(song);
-        if let Some(recording) = facts.recording().filter(|_| !facts.is_midi()) {
+        if facts.is_midi() {
+            continue;
+        }
+        if let Some(recording) = facts.recording() {
             by_recording.entry(recording).or_default().push((key, song));
         }
+        if let (Some(title), Some(length)) = (facts.text(Field::Title), song.meta.as_ref().and_then(|m| m.length)) {
+            let artist = facts.first(Field::Artist).map(|a| fields::group_key(&a, ignore)).unwrap_or_default();
+            by_name.entry((fields::group_key(&title, ignore), artist)).or_default().push((length, key, song));
+        }
     }
-    let mut groups: Vec<Group> = by_recording
-        .into_values()
-        .filter(|songs| songs.len() > 1)
-        .map(|mut songs| {
+    let mut guessed: Vec<Vec<(&str, &Song)>> = Vec::new();
+    for mut songs in by_name.into_values().filter(|songs| songs.len() > 1) {
+        songs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for run in songs.chunk_by(|a, b| b.0 - a.0 <= LEEWAY) {
+            let recordings: BTreeSet<Option<&str>> = run.iter().map(|(_, _, s)| Facts::of(s).recording()).collect();
+            if run.len() > 1 && recordings.contains(&None) && recordings.len() <= 2 {
+                guessed.push(run.iter().map(|(_, key, song)| (*key, *song)).collect());
+            }
+        }
+    }
+    let taken: BTreeSet<&str> = guessed.iter().flatten().filter_map(|(_, s)| Facts::of(s).recording()).collect();
+    let sure = by_recording.into_iter().filter(|(recording, songs)| songs.len() > 1 && !taken.contains(recording)).map(|(_, songs)| (songs, true));
+    let mut groups: Vec<Group> = sure
+        .chain(guessed.into_iter().map(|songs| (songs, false)))
+        .map(|(mut songs, sure)| {
             songs.sort_by_cached_key(|(key, song)| (Reverse(rank(song)), *key));
             let title = Facts::of(songs[0].1).text(Field::Title).map_or_else(|| songs[0].1.name.clone(), |t| t.into_owned());
-            Group { title, keys: songs.into_iter().map(|(key, _)| key.to_string()).collect() }
+            Group { title, keys: songs.into_iter().map(|(key, _)| key.to_string()).collect(), sure }
         })
         .collect();
     groups.sort_by(|a, b| b.keys.len().cmp(&a.keys.len()).then_with(|| a.title.cmp(&b.title)));
@@ -168,11 +199,46 @@ mod tests {
                 ("f", song("Song.mid", "r1", Meta::default())),
             ],
         );
-        let groups = groups(&store);
+        let groups = groups(&store, "");
         assert_eq!(groups.len(), 1, "one copy alone, and MIDI, aren't duplicates");
+        assert!(groups[0].sure);
         assert_eq!(short(&groups[0].keys), ["d", "b", "c", "a"]);
         assert_eq!(describe(store.get_by_key(&groups[0].keys[0]).unwrap()), "FLAC, 96 kHz, 24 bit");
         assert_eq!(describe(store.get_by_key(&groups[0].keys[2]).unwrap()), "MP3, 320 kb/s, 44.1 kHz");
+    }
+
+    #[test]
+    fn guesses_by_title_artist_and_length() {
+        let meta = |title: &str, artist: &str, length| Meta {
+            title: Some(title.into()),
+            artist: Some(artist.into()),
+            length: Some(length),
+            size: 1_000_000,
+            ..Meta::default()
+        };
+        let untagged = |name: &str, meta: Meta| Song { name: name.into(), meta: Some(meta), ..Song::default() };
+        let store = store(
+            "guess",
+            vec![
+                ("a", untagged("a.mp3", meta("Smart Race", "Toby Fox", 100.0))),
+                ("b", untagged("b.mp3", meta("smart race", "Toby Fox", 101.5))),
+                ("c", untagged("c.mp3", meta("Smart Race", "Toby Fox", 140.0))),
+                ("d", untagged("d.mp3", meta("Smart Race", "Someone Else", 100.0))),
+                ("e", song("e.flac", "r1", meta("Spamton", "Toby Fox", 80.0))),
+                ("f", untagged("f.mp3", meta("Spamton", "Toby Fox", 80.5))),
+                ("1", song("1.flac", "r1", meta("Spamton", "Toby Fox", 79.0))),
+                ("2", song("2.flac", "r2", meta("KEYGEN", "Toby Fox", 60.0))),
+                ("3", song("3.flac", "r3", meta("KEYGEN", "Toby Fox", 60.0))),
+                ("4", untagged("4.mp3", meta("KEYGEN", "Toby Fox", 60.0))),
+            ],
+        );
+        let groups = groups(&store, "");
+        let found: Vec<(Vec<&str>, bool)> = groups.iter().map(|g| (short(&g.keys), g.sure)).collect();
+        assert_eq!(
+            found,
+            [(vec!["1", "e", "f"], false), (vec!["a", "b"], false)],
+            "a guess takes in its recording's sure group; another length, artist or two recordings aren't one"
+        );
     }
 
     #[test]
