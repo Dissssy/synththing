@@ -1755,17 +1755,20 @@ fn matching<'s>(store: &'s SongStore, wishes: &crate::wishlist::Wishes, query: &
 /// it every event until it's closed.
 /// A page OBS's Browser Source, or a browser, can show: the visualizer's
 /// stream and/or a player for what plays, with the page's own query (token
-/// and all) passed on to them.
+/// and all) passed on to them. The pictures are PNG unless it asks for
+/// JPEG: no artifacts on pixel art, see-through parts kept, and small at
+/// the sizes a page shows. Scaled up, they stay pixelated.
 fn page(title: &str, raw_query: &str, video: bool, audio: bool) -> Reply {
     let query = raw_query.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
     let mut page = format!(
         "<!doctype html><meta charset=\"utf-8\"><title>synththing {title}</title>\
          <style>html,body{{margin:0;height:100%;background:transparent;overflow:hidden}}\
-         img{{width:100%;height:100%;object-fit:contain;display:block}}\
+         img{{width:100%;height:100%;object-fit:contain;display:block;image-rendering:pixelated}}\
          button{{position:fixed;inset:0;margin:auto;width:max-content;height:max-content;padding:.6em 1.2em;font:16px sans-serif;cursor:pointer}}</style>"
     );
     if video {
-        page += &format!("<img src=\"/v1/visualizer/stream?{query}\" alt=\"\">");
+        let png = if raw_query.split('&').any(|p| p.starts_with("format=")) { "" } else { "&amp;format=png" };
+        page += &format!("<img src=\"/v1/visualizer/stream?{query}{png}\" alt=\"\">");
     }
     if audio {
         // (A JSON string, as script text isn't HTML: `&amp;` would stay
@@ -2169,7 +2172,9 @@ mod tests {
         assert_eq!(get(&server, "/v1/visualizer/stream?format=gif", &read_token).0, 400);
         let (status, page) = get(&server, "/v1/visualizer?width=640&height=360&token=x", &read_token);
         assert_eq!(status, 200);
-        assert!(page.contains("/v1/visualizer/stream?width=640&amp;height=360&amp;token=x"), "{page}");
+        assert!(page.contains("/v1/visualizer/stream?width=640&amp;height=360&amp;token=x&amp;format=png\""), "{page}");
+        let (_, page) = get(&server, "/v1/visualizer?format=jpeg&token=x", &read_token);
+        assert!(page.contains("/v1/visualizer/stream?format=jpeg&amp;token=x\""), "{page}");
         assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &read_token)), 403);
         assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &control_token)), 204);
         assert_eq!(answering(&server, empty, set("queue/move?from=2", &control_token)), 400);
