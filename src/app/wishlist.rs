@@ -11,8 +11,10 @@ use eframe::egui;
 use super::{icon, toast, App};
 use crate::album_art::{AlbumArt, Source};
 use crate::build_info::{self, Online};
+use crate::lookup::Kept;
 use crate::lookup::musicbrainz::MusicBrainz;
 use crate::select_list::{self, Selection};
+use crate::song_store::SongStore;
 use crate::wishlist::{Kind, Progress, State, Wish, Wishlist};
 
 /// What a MusicBrainz search found.
@@ -99,8 +101,43 @@ impl App {
     }
 
     /// Wish for `wish`, and send it to the other devices.
-    fn wish_for(&mut self, wish: Wish) {
+    pub(super) fn wish_for(&mut self, wish: Wish) {
         self.wishlist.list.add(wish);
+        self.wishlist_changed();
+    }
+
+    /// Wish for `wish` from somewhere else in the app, and say so.
+    pub(super) fn wish_from_library(&mut self, ctx: &egui::Context, wish: Wish) {
+        toast::show(ctx, format!("Wished for {}", wish.title));
+        self.wish_for(wish);
+    }
+
+    /// The wishes for albums none of are here, by ID: By Album shows them
+    /// dimmed.
+    pub(super) fn wanted_albums(&self) -> Vec<(&str, &Wish)> {
+        let Some((_, progress)) = &self.wishlist.progress else { return Vec::new() };
+        self.wishlist
+            .list
+            .wishes
+            .iter()
+            .filter(|(id, wish)| wish.kind == Kind::Album && progress.get(*id).is_none_or(|p| p.state() == State::Wanted))
+            .map(|(id, wish)| (id.as_str(), wish))
+            .collect()
+    }
+
+    /// Show the Wishlist: its tab, or its page on a phone.
+    pub(super) fn go_to_wishlist(&mut self) {
+        if self.mobile() {
+            self.show_mobile_page(super::mobile::Page::Wishlist);
+        } else {
+            self.set_open(crate::layout::Section::Wishlist, true);
+            super::layout::focus(&mut self.dock, crate::layout::Section::Wishlist);
+        }
+    }
+
+    /// Take the wish `id` off the wishlist.
+    pub(super) fn unwish(&mut self, id: &str) {
+        self.wishlist.list.remove(&[id.to_string()]);
         self.wishlist_changed();
     }
 
@@ -430,7 +467,21 @@ impl App {
 }
 
 /// Where a wish's art comes from: the release it's on.
-fn source(wish: &Wish) -> Source {
+/// "Wish for the rest of its album", in a menu of `songs` (keys): the wish,
+/// when it's clicked. Shown for the first of them that's matched to an
+/// album not all here and not on `wishlist` yet.
+pub(super) fn album_wish_menu(ui: &mut egui::Ui, store: &SongStore, kept: &Kept, wishlist: &Wishlist, songs: &[String]) -> Option<Wish> {
+    let wish = songs.iter().find_map(|key| crate::wishlist::rest_of_album(store, kept, key))?;
+    if wishlist.find(&wish).is_some() {
+        return None;
+    }
+    ui.button("Wish for the rest of its album")
+        .on_hover_text(format!("Put {} on your wishlist: it shows how much of it is here", wish.title))
+        .clicked()
+        .then_some(wish)
+}
+
+pub(super) fn source(wish: &Wish) -> Source {
     let group = (wish.kind == Kind::Album).then(|| wish.musicbrainz.clone()).flatten();
     Source { release: wish.release.clone().map(|release| (release, group)), ..Source::default() }
 }

@@ -214,6 +214,10 @@ pub struct Config {
     /// its name (`album_art`; `None`: 2).
     #[serde(default)]
     pub tile_letters: Option<u8>,
+    /// By Album leaves out the albums on the wishlist that none of are
+    /// here (`wishlist.rs`); they're shown dimmed by default.
+    #[serde(default)]
+    pub hide_wished: bool,
     /// The user's own rulesets (`smart.rs`), by ID, beside the built-in
     /// ones (`smart::builtin`).
     #[serde(default)]

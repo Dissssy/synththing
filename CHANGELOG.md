@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Wish for the rest of an album from the library: right-click a song (or an album in By Album), or use Song info, on an album matched at MusicBrainz that isn't all here. By Album shows the albums on your wishlist you have none of yet, dimmed with a gift (the gift button hides them); click one to see it in the wishlist.
 - A wishlist (View > Wishlist, or Wishlist in the phone menu): search MusicBrainz for albums and songs you want and add them, or wish for something by name. Each wish shows as Wanted, Partly got ("7 of 12") or Got it as matching songs reach your library, with a note when one comes true; click one to play what's here. It syncs between your devices with the rest (Preferences > Online Library > Wishlist).
 - Write scripts in your favorite editor: the scripts folder now has the script API's definitions for the Lua language server, so VS Code's Lua extension (or Neovim, Zed, JetBrains) gives completion, hover help and type checks for every synththing function. Open the folder and go.
 - The Scripting Reference lists every function with the version it came in, and has a new Tables section with every table scripts get and give, field by field.

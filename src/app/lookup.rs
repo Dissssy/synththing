@@ -312,6 +312,10 @@ impl App {
             ui.label(format!("{} on {}", if online.by_user { "By you" } else { "By the lookup" }, crate::fields::date(online.at)));
             ui.end_row();
         });
+        let wish = super::wishlist::album_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, &[key]);
+        if let Some(wish) = wish {
+            self.wish_from_library(ui.ctx(), wish);
+        }
         if wrong {
             self.wrong_match(&release);
         }
