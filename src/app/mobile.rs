@@ -40,6 +40,8 @@ pub(super) enum Page {
     Grouping,
     Soundfonts,
     Wishlist,
+    /// The panels programs show (only listed while there are any).
+    Apps,
     Scripts,
     Library,
     /// From the menu's lower part, not its pages.
@@ -52,11 +54,12 @@ pub(super) enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 6] = [
+    const ALL: [Page; 7] = [
         Self::NowPlaying,
         Self::Songs,
         Self::Soundfonts,
         Self::Wishlist,
+        Self::Apps,
         Self::Scripts,
         Self::Library,
     ];
@@ -68,6 +71,7 @@ impl Page {
             Self::Grouping => "Groupings",
             Self::Soundfonts => "Soundfonts",
             Self::Wishlist => "Wishlist",
+            Self::Apps => "Apps",
             Self::Scripts => "Visualizers",
             Self::Library => "Script library",
             Self::Preferences => "Preferences",
@@ -85,6 +89,7 @@ impl Page {
             Self::Grouping => "squares-four",
             Self::Soundfonts => "piano-keys",
             Self::Wishlist => "gift",
+            Self::Apps => "app-window",
             Self::Scripts => "waveform",
             Self::Library => "storefront",
             Self::Preferences => "gear",
@@ -229,6 +234,7 @@ impl App {
                 Page::Grouping => self.grouping_ui(ui),
                 Page::Soundfonts => self.soundfont_ui(ui),
                 Page::Wishlist => self.wishlist_ui(ui),
+                Page::Apps => self.apps_ui(ui),
                 Page::Scripts => self.mobile_scripts_ui(ui),
                 Page::Library => self.library_ui(ui),
                 Page::Preferences => self.mobile_preferences_ui(ui),
@@ -668,6 +674,9 @@ impl App {
         let showing = (self.mobile_state.page == Page::Grouping).then(|| self.groupings.shown_id());
         let mut ruleset = None;
         for page in Page::ALL {
+            if page == Page::Apps && !self.panels.any() {
+                continue;
+            }
             if ui.add(drawer_item(ui, self.mobile_state.page == page, page.icon(), page.title())).clicked() {
                 picked = Some(page);
             }

@@ -78,6 +78,7 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `GET /v1/musicbrainz/artists/{id}/albums` | read | An artist's albums at MusicBrainz (by the artist's MusicBrainz ID, as an artist's wish has it), each as the wish for it: add `"under"` (the artist's wish's ID) to wish for it as one of theirs |
 | `GET /v1/musicbrainz/releases/{id}` | read | `{"id", "group", "title", "artist", "date", "tracks": [{"disc", "position", "title", "length", "recording"}]}`: a release's track list (by its MusicBrainz ID, as an album wish's `release`), so a program can see which songs of a wished album aren't here or `skipped` yet. Kept for months, so mostly instant |
 | `PUT /v1/panel` | show a panel | Shows the panel sent as the body in the Apps tab, in place of any it showed (below): 204, 400 if it isn't one, 413 over 64 KB |
+| `PATCH /v1/panel/elements/{id}` | show a panel | Changes some fields of one element, sent as a JSON object (a list's `items`, a label's `text`), leaving the rest: 204, 404 if there's no such element, 400 if the panel would no longer be one |
 | `DELETE /v1/panel` | show a panel | Takes it away: 204 |
 | `GET /v1/events` | read | Server-Sent Events (below) |
 | `DELETE /v1/events` | any token | Closes your event streams: say it when your program closes down, and your panel greys at once: 204 |
@@ -185,8 +186,13 @@ Every element has an `id` of your choosing (each one different), which its event
 | `textbox` | `hint`: shown while it's empty; `value`: what it says; `multiline` (`false` if not given) |
 | `button` | `text`; `enabled` (`true` if not given) |
 | `row` | `elements`: side by side |
+| `list` | `items`: rows to pick from, each `{"id", "text", "subtitle", "link", "actions"}` |
 
-Text is shown as it is: no markup. A panel has at most 200 elements, rows at most 4 deep, and texts at most 500 characters.
+A list's items need an `id` and `text`; the rest is optional. `subtitle` goes under the text, `actions` are up to two buttons at the row's end (`["Get", "Skip"]`), and `link` says what in synththing the item is: `{"song": "<key>"}` or `{"wish": "<id>"}`. A linked item shows that song's or wish's picture; clicking it plays the song or shows the Wishlist, and right-clicking a song offers Play, Play next and Add to queue. Lists scroll by themselves and share the height left under what's above them, so put them last; a list can't go in a row.
+
+Text is shown as it is: no markup. A panel has at most 200 elements, rows at most 4 deep, a list at most 2,000 items, and texts at most 500 characters.
+
+To change part of a panel without sending all of it, `PATCH /v1/panel/elements/{id}` with just the fields to change: `{"items": [...]}` refills a list, `{"text": "Found 12"}` changes a label. An element's `id` and `type` stay as they are.
 
 synththing keeps nothing of a panel: what it shows lives in your program. A textbox keeps what the user typed until a panel you send gives it a `value` (which doesn't touch it while the user is typing in it), so send a `value` only to change what it says, or to put back what it said when your program starts again. Panels go when synththing closes, so send yours again whenever you connect.
 
@@ -195,6 +201,8 @@ Your panel hears the user on your event stream (`GET /v1/events`, which needs Re
 - `{"element": "q", "kind": "changed", "value": "overw"}`: a textbox's text changed (every change, so wait a moment before searching on it if that's costly).
 - `{"element": "q", "kind": "submitted", "value": "overworld"}`: Enter in a one-line textbox.
 - `{"element": "go", "kind": "clicked"}`: a button.
+- `{"element": "results", "kind": "picked", "item": "r1"}`: a list's item was clicked; with `"action": "Get"` when it was that action's button.
+- `{"kind": "shown"}` and `{"kind": "hidden"}`: your panel came into view (its tab, or the Apps page on a phone layout, showing it) or left it. You're told it's shown when you open a stream while it is, so work only the user can see can wait for it.
 
 While none of your event streams is open, your panel is greyed out with "isn't running", and the user can close it. Send `DELETE /v1/events` as your program closes down and it greys at once; if your program stops without saying so, it greys within a few seconds. It comes back as it was when you open a stream again, or as you send it next.
 

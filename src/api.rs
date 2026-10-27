@@ -624,6 +624,13 @@ pub struct ShownPanel {
     /// The program's name, as the user typed it.
     pub name: String,
     pub panel: Panel,
+    /// Textboxes (by ID) the program has given a value since the app last
+    /// looked, with the latest value: each is taken once, so a later
+    /// change elsewhere in the panel doesn't put it back over what's been
+    /// typed since.
+    pub fresh: Vec<(String, String)>,
+    /// The panel as sent, for `PATCH` to change.
+    source: serde_json::Value,
 }
 
 /// The library's revisions while synththing runs: each song as it was
@@ -741,10 +748,14 @@ impl Server {
     /// The programs' panels, if they changed since `revision` (which then
     /// moves on to now).
     pub fn panels(&self, revision: &mut u64) -> Option<Vec<ShownPanel>> {
-        let panels = lock(&self.shared.panels);
+        let mut panels = lock(&self.shared.panels);
         (panels.revision != *revision).then(|| {
             *revision = panels.revision;
-            panels.shown.clone()
+            let shown = panels.shown.clone();
+            for panel in &mut panels.shown {
+                panel.fresh.clear();
+            }
+            shown
         })
     }
 
@@ -999,6 +1010,9 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             }
         })),
         (Method::Put, ["v1", "panel"]) => Some(needs(access.panel, "show a panel").unwrap_or_else(|| set_panel(shared, &mut request, &access))),
+        (Method::Patch, ["v1", "panel", "elements", id]) => {
+            Some(needs(access.panel, "show a panel").unwrap_or_else(|| patch_panel(shared, &mut request, &access, id)))
+        }
         (Method::Delete, ["v1", "panel"]) => Some(needs(access.panel, "show a panel").unwrap_or_else(|| {
             let mut panels = lock(&shared.panels);
             panels.shown.retain(|shown| shown.app != access.token);
@@ -1765,25 +1779,60 @@ fn video(shared: &Arc<Shared>, request: Request, size: Option<(usize, usize)>, f
     }
 }
 
-/// `PUT /v1/panel`: the program's panel, as sent, in place of any it had.
-fn set_panel(shared: &Shared, request: &mut Request, access: &Access) -> Reply {
+/// A panel's JSON sent as the body, if it's no bigger than a panel may be.
+fn panel_json(request: &mut Request) -> Result<serde_json::Value, Reply> {
     let mut body = Vec::new();
     if request.as_reader().take(crate::panel::LARGEST as u64 + 1).read_to_end(&mut body).is_err() {
-        return error(400, "couldn't read the panel");
+        return Err(error(400, "couldn't read the request"));
     }
     if body.len() > crate::panel::LARGEST {
-        return error(413, format!("a panel is at most {} KB", crate::panel::LARGEST >> 10));
+        return Err(error(413, format!("a panel is at most {} KB", crate::panel::LARGEST >> 10)));
     }
-    let panel = match Panel::parse(&body) {
+    serde_json::from_slice(&body).map_err(|e| error(400, format!("not JSON: {e}")))
+}
+
+/// `PUT /v1/panel`: the program's panel, as sent, in place of any it had.
+fn set_panel(shared: &Shared, request: &mut Request, access: &Access) -> Reply {
+    let source = match panel_json(request) {
+        Ok(source) => source,
+        Err(reply) => return reply,
+    };
+    let panel = match Panel::parse(&source) {
         Ok(panel) => panel,
         Err(why) => return error(400, why),
     };
-    let shown = ShownPanel { app: access.token.clone(), name: access.name.clone(), panel };
     let mut panels = lock(&shared.panels);
-    match panels.shown.iter_mut().find(|s| s.app == shown.app) {
-        Some(had) => *had = shown,
-        None => panels.shown.push(shown),
+    let fresh = panel.values();
+    match panels.shown.iter_mut().find(|s| s.app == access.token) {
+        Some(had) => {
+            had.fresh.extend(fresh);
+            (had.name, had.panel, had.source) = (access.name.clone(), panel, source);
+        }
+        None => panels.shown.push(ShownPanel { app: access.token.clone(), name: access.name.clone(), panel, fresh, source }),
     }
+    panels.revision += 1;
+    shared.waker.request_repaint();
+    Response::from_data(Vec::new()).with_status_code(204)
+}
+
+/// `PATCH /v1/panel/elements/{id}`: some of one element's fields changed.
+fn patch_panel(shared: &Shared, request: &mut Request, access: &Access, id: &str) -> Reply {
+    let changes = match panel_json(request) {
+        Ok(changes) => changes,
+        Err(reply) => return reply,
+    };
+    let value = changes.get("value").and_then(|v| v.as_str()).map(str::to_string);
+    let mut panels = lock(&shared.panels);
+    let Some(shown) = panels.shown.iter_mut().find(|s| s.app == access.token) else { return error(404, "you have no panel: PUT /v1/panel first") };
+    let mut source = shown.source.clone();
+    if let Err((status, why)) = crate::panel::patch(&mut source, id, changes) {
+        return error(status, why);
+    }
+    match Panel::parse(&source) {
+        Ok(panel) => (shown.panel, shown.source) = (panel, source),
+        Err(why) => return error(400, why),
+    }
+    shown.fresh.extend(value.map(|value| (id.to_string(), value)));
     panels.revision += 1;
     shared.waker.request_repaint();
     Response::from_data(Vec::new()).with_status_code(204)
@@ -2337,6 +2386,18 @@ mod tests {
         let shown = server.panels(&mut revision).unwrap();
         assert_eq!((shown.len(), shown[0].name.as_str(), shown[0].app.as_str()), (1, "Finder", finder_hash.as_str()));
         assert!(server.panels(&mut revision).is_none(), "nothing new since");
+        let patch = |id: &str, body: &str| {
+            let request = agent().patch(format!("http://{addr}/v1/panel/elements/{id}")).header("Authorization", format!("Bearer {finder_token}"));
+            request.send(body).unwrap().status().as_u16()
+        };
+        assert_eq!(patch("q", r#"{"value": "overworld"}"#), 204);
+        assert_eq!(patch("nope", r#"{"hint": "x"}"#), 404);
+        assert_eq!(patch("q", r#"{"multiline": "yes"}"#), 400);
+        let shown = server.panels(&mut revision).unwrap();
+        assert_eq!(shown[0].fresh, vec![("q".to_string(), "overworld".to_string())]);
+        assert!(matches!(&shown[0].panel.elements[0].kind, crate::panel::Kind::Textbox { value: Some(v), .. } if v == "overworld"));
+        assert_eq!(patch("q", r#"{"hint": "Search"}"#), 204);
+        assert!(server.panels(&mut revision).unwrap()[0].fresh.is_empty(), "a value is handed over once");
         assert!(!server.connected(&finder_hash));
 
         // (The reader's stream hears nothing of Finder's panel; Finder's own
@@ -2355,7 +2416,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(server.connected(&finder_hash));
-        server.panel_event(&finder_hash, &crate::panel::Event { element: "q".into(), kind: crate::panel::EventKind::Changed, value: Some("ov".into()) });
+        server.panel_event(&finder_hash, &crate::panel::Event::of("go", crate::panel::EventKind::Clicked));
         assert_eq!(finder_stream.join().unwrap(), "event: panel");
         server.event("seeked", &serde_json::json!({ "position": 1.0 }));
         assert_eq!(reader_stream.join().unwrap(), "event: seeked");

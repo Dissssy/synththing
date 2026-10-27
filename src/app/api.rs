@@ -170,8 +170,11 @@ impl App {
         #[cfg(not(target_os = "android"))]
         self.media_tick(ctx, view);
         self.integration_changes(view);
+        if let Some(server) = &self.api.server {
+            server.set_apps(&self.config.api.apps);
+        }
+        self.panels_tick(ctx);
         let Some(server) = &self.api.server else { return };
-        server.set_apps(&self.config.api.apps);
         let calls: Vec<Call> = server.calls().collect();
         // (What a call changed lands in the engine's view a little later:
         // a frame then tells of it, even with nothing being drawn, before

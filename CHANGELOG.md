@@ -15,6 +15,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## 1.7.0 (2026-10-27)
 
 ### Added
+- Panels can hold lists: rows with a subtitle and up to two buttons, and rows that stand for a song (with its art: click to play, right-click to queue) or a wish. Programs change one element without resending the panel (`PATCH /v1/panel/elements/{id}`) and hear when their panel comes into view or leaves it. In the mobile layout, Apps is in the menu while a program has a panel.
 - Programs can show a panel of their own: with the new Show a panel permission (Preferences > Integrations), a program sends `PUT /v1/panel` with labels, textboxes, buttons and rows, and it shows in the new Apps tab (View > Apps), under a chip with the program's name. What the user types and clicks reaches the program as `panel` events on its event stream, and the panel greys out while the program isn't running. See docs/API.md.
 - Run a hub: `synththing hub` is one of your devices with no window that keeps every song, for an always-on machine (a home server, a NAS, a VPS, or Docker with deploy/hub.compose.yml). Sign it in with `synththing hub pair '<link>'` and your devices' songs stream to it, and from it to each device once that's open. See docs/HUB.md.
 - The local API tells programs only what changed: `GET /v1/songs?since=<revision>` gives the songs that came or changed since an earlier answer, and the keys of those that left. See docs/API.md.
