@@ -1768,7 +1768,10 @@ fn page(title: &str, raw_query: &str, video: bool, audio: bool) -> Reply {
         page += &format!("<img src=\"/v1/visualizer/stream?{query}\" alt=\"\">");
     }
     if audio {
-        page += &format!("<button hidden>Click to listen</button><script>const STREAM = \"/v1/audio/stream?{query}\";\n{PLAYER}</script>");
+        // (A JSON string, as script text isn't HTML: `&amp;` would stay
+        // as it is. `<` escaped so the query can't end the script.)
+        let stream = serde_json::to_string(&format!("/v1/audio/stream?{raw_query}")).unwrap_or_default().replace('<', "\\u003c");
+        page += &format!("<button hidden>Click to listen</button><script>const STREAM = {stream};\n{PLAYER}</script>");
     }
     Response::from_data(page)
         .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap())
@@ -2366,9 +2369,11 @@ mod tests {
     fn what_plays_is_heard_only_with_its_permission() {
         let (reader, read_token) = Access::new("reader");
         let (mut listener, listen_token) = Access::new("listener");
+        let (mut both, both_token) = Access::new("both");
+        both.listen = true;
         (listener.read, listener.listen) = (false, true);
         let listeners = Listeners::new();
-        let server = Server::start(0, false, vec![reader, listener], egui::Context::default(), staging(), Some(Arc::clone(&listeners))).unwrap();
+        let server = Server::start(0, false, vec![reader, listener, both], egui::Context::default(), staging(), Some(Arc::clone(&listeners))).unwrap();
         assert_eq!(get(&server, "/v1/audio/stream", &read_token).0, 403);
         assert_eq!(get(&server, "/v1/audio", &read_token).0, 403);
         assert_eq!(get(&server, "/v1/visualizer?audio=1", &read_token).0, 403, "the visualizer with sound needs both");
@@ -2376,6 +2381,8 @@ mod tests {
         let (status, page) = get(&server, "/v1/audio?token=x", &listen_token);
         assert_eq!(status, 200);
         assert!(page.contains("/v1/audio/stream?token=x") && !page.contains("<img"), "{page}");
+        let (_, page) = get(&server, "/v1/visualizer?width=640&height=360&audio=1&token=x", &both_token);
+        assert!(page.contains(r#"const STREAM = "/v1/audio/stream?width=640&height=360&audio=1&token=x";"#), "{page}");
 
         let url = format!("http://{}/v1/audio/stream", server.addr());
         let response = agent().get(url).header("Authorization", format!("Bearer {listen_token}")).call().unwrap();
