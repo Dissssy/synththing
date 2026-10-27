@@ -82,8 +82,11 @@ A song:
 ```json
 {"key": "3f2a...", "file_name": "Overworld.mid", "title": "Overworld", "artist": "Koji Kondo",
  "album": null, "album_artist": null, "genre": null, "year": 1985, "track": 1, "length": 84.2,
- "starred": true, "tags": ["chill"], "imported": 1761000000, "added_by": null}
+ "starred": true, "tags": ["chill"], "imported": 1761000000, "added_by": null,
+ "recording": null, "release": null, "release_group": null}
 ```
+
+`recording`, `release` and `release_group` are what the song is at MusicBrainz (its match, else the IDs its file's tags have), so `matched:song` or `matched:album` in `q` finds the songs that have them.
 
 What's playing (`soundfont` is the one a MIDI song plays with, `null` for any other song):
 

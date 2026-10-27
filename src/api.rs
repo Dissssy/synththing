@@ -412,6 +412,11 @@ pub struct SongInfo {
     pub imported: i64,
     /// The program that added it through this API, if one did.
     pub added_by: Option<String>,
+    /// What it is at MusicBrainz (its match, else what its file says):
+    /// its recording, release and the release's group.
+    pub recording: Option<String>,
+    pub release: Option<String>,
+    pub release_group: Option<String>,
 }
 
 impl SongInfo {
@@ -433,6 +438,9 @@ impl SongInfo {
             tags: song.tags.iter().filter_map(|id| store.tags().get(id)).map(|t| t.name.clone()).collect(),
             imported: song.imported,
             added_by: song.added_by.clone(),
+            recording: facts.recording().map(str::to_string),
+            release: facts.release().map(str::to_string),
+            release_group: song.online.as_ref().and_then(|o| o.group.clone()),
         }
     }
 }
