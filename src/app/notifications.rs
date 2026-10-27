@@ -187,7 +187,7 @@ impl App {
     pub(super) fn keep_listening(&mut self, ctx: &egui::Context) {
         let identity = self.library_identity().filter(|_| self.config.library.notifications || self.sync_on());
         let whose = identity.as_ref().map(Identity::public);
-        let key = self.config.library.pinned.clone().filter(|_| crate::build_info::online(crate::build_info::Online::Scripts));
+        let key = Some(library::server_key()).filter(|_| crate::build_info::online(crate::build_info::Online::Scripts));
         let notifications = &mut self.notifications;
         if whose != notifications.listening_as {
             if let Some((_, stop)) = notifications.listening.take() {
@@ -257,7 +257,8 @@ impl App {
 
     /// Mark these read (or handled) on the server, and here.
     fn mark_notifications(&mut self, ids: Vec<i64>, handled: bool) {
-        let (Some(identity), Some(key)) = (self.library_identity(), self.config.library.pinned.clone()) else { return };
+        let Some(identity) = self.library_identity() else { return };
+        let key = library::server_key();
         for n in self.notifications.items.iter_mut().filter(|n| ids.contains(&n.id)) {
             n.read = true;
             n.handled |= handled;

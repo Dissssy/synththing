@@ -156,7 +156,6 @@ pub const CATEGORIES: &[Category] = &[
     Category {
         name: "Online Library",
         settings: &[
-            setting("server_key", "The server's key", &["library/pinned"]),
             setting("author_name", "Name to post under", &["library/author_name"]),
             setting("notifications", "Notifications", &["library/notifications"]),
         ],
@@ -534,10 +533,10 @@ mod tests {
 
     #[test]
     fn leaves_leave_out_the_devices_own() {
-        let config = json!({ "theme": "dark", "layout": { "a": 1 }, "library": { "author_name": "x", "pinned": "k" } });
+        let config = json!({ "theme": "dark", "layout": { "a": 1 }, "library": { "author_name": "x", "notifications": true } });
         let leaves = synced_leaves(&config, &Choices::new());
-        assert_eq!(leaves.keys().collect::<Vec<_>>(), ["library/author_name", "library/pinned", "theme"]);
-        let no_library = Choices::from([("author_name".to_string(), false), ("server_key".to_string(), false)]);
+        assert_eq!(leaves.keys().collect::<Vec<_>>(), ["library/author_name", "library/notifications", "theme"]);
+        let no_library = Choices::from([("author_name".to_string(), false), ("notifications".to_string(), false)]);
         assert_eq!(synced_leaves(&config, &no_library).keys().collect::<Vec<_>>(), ["theme"]);
         let session = json!({ "session": { "volume": 0.5, "script": "C:/x.lua" } });
         assert!(synced_leaves(&session, &Choices::new()).is_empty(), "volume and speed are off by default");

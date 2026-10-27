@@ -30,6 +30,15 @@ pub fn official_url() -> String {
         .unwrap_or_else(|_| OFFICIAL_URL.to_string())
 }
 
+/// The server's key (hex), which signs what it serves and which signed
+/// requests name: built in (`rotation::OFFICIAL_AUTHORITY`), so nothing
+/// has to be fetched before talking to it, unless the
+/// `SYNTHTHING_OFFICIAL_KEY` environment variable says otherwise (with
+/// `SYNTHTHING_OFFICIAL_URL`, for a server of your own).
+pub fn server_key() -> String {
+    std::env::var("SYNTHTHING_OFFICIAL_KEY").unwrap_or_else(|_| rotation::OFFICIAL_AUTHORITY.to_string())
+}
+
 /// The key the official scripts were first published with (the ones
 /// bundled with the app, published by CI from the repository:
 /// `publish_bundled`). Scripts signed by it, or by a key it was rotated to

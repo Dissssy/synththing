@@ -59,10 +59,11 @@ impl App {
 
     /// Open notice `id` (from its notification).
     pub(super) fn open_notice(&mut self, id: i64, mode_dispute: bool) {
-        let (Some(identity), Some(key)) = (self.library_identity(), self.config.library.pinned.clone()) else {
-            self.status = "The server's key or your identity isn't known.".into();
+        let Some(identity) = self.library_identity() else {
+            self.status = "Your identity isn't here.".into();
             return;
         };
+        let key = library::server_key();
         self.copyright.open = Some(Open {
             id,
             view: None,
@@ -178,8 +179,9 @@ impl App {
             });
         });
         if send {
-            match (self.library_identity(), self.config.library.pinned.clone()) {
-                (Some(identity), Some(key)) => {
+            match self.library_identity() {
+                Some(identity) => {
+                    let key = library::server_key();
                     open.busy = true;
                     open.error = None;
                     let (server, id, counter, dispute) = (library::official_url(), open.id, open.counter.clone(), open.mode == Mode::Dispute);
@@ -192,7 +194,7 @@ impl App {
                         Event::Done(id, result)
                     });
                 }
-                _ => open.error = Some("Your identity or the server's key isn't known.".into()),
+                None => open.error = Some("Your identity isn't here.".into()),
             }
         }
         if !(close || (response.should_close() && !open.busy)) {

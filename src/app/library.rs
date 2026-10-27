@@ -20,9 +20,8 @@
 //! Update can keep both (`library::merge`).
 //!
 //! Requests run on threads of their own and come back as `Event`s, picked
-//! up each frame (`poll_library`). The server's key is pinned the first
-//! time it's seen; if it changes, the server isn't used until the user
-//! trusts it again.
+//! up each frame (`poll_library`). The server's key is built in
+//! (`library::server_key`).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -55,9 +54,8 @@ enum Event {
     Details(Result<ScriptDetails, String>),
     User(Result<UserInfo, String>),
     Downloaded(ScriptSummary, Result<client::Download, String>),
-    /// An upload finished: the server key used, the local script, the
-    /// upload, and the result.
-    Published(String, PathBuf, Box<Upload>, Result<Receipt, String>),
+    /// An upload finished: the local script, the upload, and the result.
+    Published(PathBuf, Box<Upload>, Result<Receipt, String>),
     Deleted(String, Result<(), String>),
     /// Whether the user has a script with a slug.
     SlugChecked(String, Result<Option<ScriptSummary>, String>),
@@ -211,8 +209,6 @@ pub struct LibraryState {
     error: Option<String>,
     /// What the server last said about itself.
     info: Option<Info>,
-    /// The server's key, when it isn't the one pinned.
-    key_changed: Option<String>,
     selected: Option<String>,
     details: Option<ScriptDetails>,
     preview: Option<LibraryPreview>,
@@ -266,7 +262,6 @@ impl LibraryState {
             total: 0,
             error: None,
             info: None,
-            key_changed: None,
             selected: None,
             details: None,
             preview: None,
@@ -393,18 +388,15 @@ impl App {
         let generation = lib.generation;
         // (Made an admin since? Each search asks again.)
         self.forget_admin_answer();
-        let known = self.library.info.is_some();
-        if known {
-            self.check_admin();
-        }
+        self.check_admin();
         let server = library::official_url();
-        self.spawn_request(move || {
-            // (The server's info first, the first time: its key gets pinned.)
-            if !known {
-                return Event::Info(client::info(&server));
-            }
-            Event::Listing(generation, client::list(&server, &search))
-        });
+        // (What the server says about itself, the first time: its documents,
+        // rules and license, who the official publisher is now.)
+        if self.library.info.is_none() {
+            let server = server.clone();
+            self.spawn_request(move || Event::Info(client::info(&server)));
+        }
+        self.spawn_request(move || Event::Listing(generation, client::list(&server, &search)));
         self.refresh_installed();
     }
 
@@ -498,7 +490,7 @@ impl App {
                         Err(e) => self.status = format!("Couldn't install {}: {e}", summary.name),
                     }
                 }
-                Event::Published(key, script, upload, result) => self.published(key, script, *upload, result),
+                Event::Published(script, upload, result) => self.published(script, *upload, result),
                 Event::SlugChecked(slug, result) => {
                     if let Some(draft) = &mut self.library.publish
                         && let Ok(found) = result
@@ -733,12 +725,8 @@ impl App {
 
     /// An upload finished: on success, note it beside the script (so
     /// publishing it again makes a new version).
-    fn published(&mut self, key: String, script: PathBuf, upload: Upload, result: Result<Receipt, String>) {
+    fn published(&mut self, script: PathBuf, upload: Upload, result: Result<Receipt, String>) {
         self.library.busy = false;
-        if self.config.library.pinned.is_none() {
-            self.config.library.pinned = Some(key);
-            let _ = self.config.save();
-        }
         let receipt = match result {
             Ok(receipt) => receipt,
             Err(e) => {
@@ -778,34 +766,19 @@ impl App {
         self.library_search();
     }
 
-    /// The server's info came back: pin its key (or notice it changed),
-    /// then run the search waiting on it.
+    /// The server's info came back: check it's the server this app knows
+    /// (its key), and note who the official publisher is now.
     fn library_info(&mut self, result: Result<Info, String>) {
         let info = match result {
             Ok(info) => info,
             Err(e) => {
-                self.library.searching = false;
-                self.library.error = Some(e);
+                log::info!("couldn't get the server's info: {e}");
                 return;
             }
         };
-        match &self.config.library.pinned {
-            Some(pinned) if *pinned != info.key => {
-                self.library.searching = false;
-                self.library.key_changed = Some(info.key.clone());
-                self.library.error = Some(
-                    "The server's key has changed since it was first used, so it isn't trusted (Preferences > Online Library)"
-                        .into(),
-                );
-                return;
-            }
-            Some(_) => {}
-            None => {
-                self.config.library.pinned = Some(info.key.clone());
-                if let Err(e) = self.config.save() {
-                    self.status = format!("Couldn't save preferences: {e}");
-                }
-            }
+        if info.key != library::server_key() {
+            self.library.error = Some("The server's key isn't the one this app knows, so it isn't trusted.".into());
+            return;
         }
         // The server says who the official publisher is now.
         if !info.publisher_rotations.is_empty() {
@@ -821,11 +794,6 @@ impl App {
             }
         }
         self.library.info = Some(info);
-        self.apply_rotations();
-        self.check_admin();
-        let generation = self.library.generation;
-        let (server, search) = (library::official_url(), self.library_query());
-        self.spawn_request(move || Event::Listing(generation, client::list(&server, &search)));
     }
 
     /// Write a downloaded script into the scripts folder (a new file, or
@@ -1010,55 +978,49 @@ impl App {
             self.library_open_script(id);
         }
         if let Some(summary) = install {
-            match self.config.library.pinned.clone() {
-                Some(key) => {
-                    self.library.busy = true;
-                    self.status = format!("Installing \"{}\"...", summary.name);
-                    let server = library::official_url();
-                    self.spawn_request(move || {
-                        // The newest version this app can run.
-                        let result = client::details(&server, &summary.id).and_then(|details| {
-                            let Some(version) = details.newest_for(library::supported_version()) else {
-                                let needs = details.newest().map(|v| v.min_app_version.clone()).unwrap_or_default();
-                                return Err(format!("it needs synththing {needs} or newer"));
-                            };
-                            client::download(&server, &summary.id, Some(version.version), &key)
-                        });
-                        Event::Downloaded(summary, result)
-                    });
-                }
-                None => self.status = "The server's key isn't known yet: search again.".to_string(),
-            }
+            self.library.busy = true;
+            self.status = format!("Installing \"{}\"...", summary.name);
+            let (server, key) = (library::official_url(), library::server_key());
+            self.spawn_request(move || {
+                // The newest version this app can run.
+                let result = client::details(&server, &summary.id).and_then(|details| {
+                    let Some(version) = details.newest_for(library::supported_version()) else {
+                        let needs = details.newest().map(|v| v.min_app_version.clone()).unwrap_or_default();
+                        return Err(format!("it needs synththing {needs} or newer"));
+                    };
+                    client::download(&server, &summary.id, Some(version.version), &key)
+                });
+                Event::Downloaded(summary, result)
+            });
         }
         if let Some(id) = delete {
             self.library.confirm_delete = None;
-            match (self.config.library.pinned.clone(), Identity::load()) {
-                (Some(key), Some(identity)) => {
+            match Identity::load() {
+                Some(identity) => {
                     self.library.busy = true;
-                    let server = library::official_url();
+                    let (server, key) = (library::official_url(), library::server_key());
                     self.spawn_request(move || {
                         let result = client::delete(&server, &key, &id, &identity);
                         Event::Deleted(id, result)
                     });
                 }
-                _ => self.status = "Couldn't delete it: the server or your identity isn't known.".to_string(),
+                None => self.status = "Couldn't delete it: your identity isn't here.".to_string(),
             }
         }
         if let Some(script) = update {
             self.start_update(script);
         }
         if let Some((id, give)) = encore {
-            match (self.ensure_identity(), self.config.library.pinned.clone()) {
-                (Ok(identity), Some(key)) => {
+            match self.ensure_identity() {
+                Ok(identity) => {
                     self.library.encoring = true;
-                    let server = library::official_url();
+                    let (server, key) = (library::official_url(), library::server_key());
                     self.spawn_request(move || {
                         let result = client::encore(&server, &key, &id, &identity, give);
                         Event::Encored(id, result)
                     });
                 }
-                (Err(e), _) => self.status = format!("Couldn't make your identity: {e}"),
-                (_, None) => self.status = "The server's key isn't known yet: search again.".to_string(),
+                Err(e) => self.status = format!("Couldn't make your identity: {e}"),
             }
         }
         if let Some((id, name, version)) = report {
@@ -1462,17 +1424,12 @@ impl App {
             return;
         };
         self.flush_editor();
-        let pinned = self.config.library.pinned.clone();
         self.library.busy = true;
         self.status = format!("Looking for a newer \"{}\"...", installed.name);
-        let server = library::official_url();
+        let (server, key) = (library::official_url(), library::server_key());
         self.spawn_request(move || {
             let mut installed = installed;
             let result = (|| {
-                let key = match pinned {
-                    Some(key) => key,
-                    None => client::info(&server)?.key,
-                };
                 // A bundled script: found by its slug, its version by its
                 // contents (none matching: it's newer than what's
                 // published, or older, by the app it came with).
@@ -1925,21 +1882,11 @@ impl App {
             let _ = self.config.save();
         }
         let (server, script) = (library::official_url(), draft.script.clone());
-        let pinned = self.config.library.pinned.clone();
+        let key = library::server_key();
         self.spawn_request(move || {
-            // (Not searched yet: the server's key, first.)
-            let key = match pinned {
-                Some(key) => Ok(key),
-                None => client::info(&server).map(|i| i.key),
-            };
-            let result = key.clone().and_then(|key| client::upload(&server, &key, &upload, identity.as_ref()));
-            Event::Published(key.unwrap_or_default(), script, Box::new(upload), result)
+            let result = client::upload(&server, &key, &upload, identity.as_ref());
+            Event::Published(script, Box::new(upload), result)
         });
-    }
-
-    /// Whether the server sends email (as it last said).
-    pub(super) fn library_server_mail(&self) -> bool {
-        self.library.info.as_ref().is_some_and(|i| i.mail)
     }
 
     /// The identity, for the Preferences' recovery part (`identity.rs`).
@@ -2003,24 +1950,10 @@ impl App {
         }
     }
 
-    /// The name to post as, notifications, and a changed server key to
-    /// trust.
+    /// The name to post as, and notifications.
     fn library_settings_ui(&mut self, ui: &mut egui::Ui) {
         let before = self.config.library.author_name.clone();
         let mut changed = false;
-        if let Some(key) = self.library.key_changed.clone() {
-            ui.colored_label(ui.visuals().warn_fg_color, "The server's key isn't the one it had when first used.");
-            ui.horizontal(|ui| {
-                ui.weak("If synththing's makers say they changed it, trust the new one:");
-                if ui.small_button("Trust the new key").clicked() {
-                    self.library.key_changed = None;
-                    self.config.library.pinned = Some(key);
-                    self.library.info = None;
-                    changed = true;
-                }
-            });
-        }
-        ui.add_space(6.0);
         with_info(ui, "The name your uploads show. Each upload can use a different one.", |ui| {
             ui.horizontal(|ui| {
                 ui.label("Post as");

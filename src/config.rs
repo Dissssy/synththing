@@ -250,7 +250,7 @@ pub struct Config {
     /// Where recordings are saved; `None` means Videos\synththing.
     #[serde(default)]
     pub record_dir: Option<PathBuf>,
-    /// The script library: the server's key, the name to post under.
+    /// The script library: the name to post under, notifications.
     #[serde(default)]
     pub library: LibrarySettings,
     /// Show what each settings sync changed (a debug toast).
@@ -339,9 +339,6 @@ pub struct Session {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LibrarySettings {
-    /// The server's key (hex) as first seen: if it changes, the server
-    /// isn't trusted until the user says so.
-    pub pinned: Option<String>,
     /// The name last posted under.
     pub author_name: String,
     /// The official publisher's keys, oldest first, as the server last
@@ -354,7 +351,7 @@ pub struct LibrarySettings {
 
 impl Default for LibrarySettings {
     fn default() -> Self {
-        Self { pinned: None, author_name: String::new(), official_publishers: Vec::new(), notifications: true }
+        Self { author_name: String::new(), official_publishers: Vec::new(), notifications: true }
     }
 }
 

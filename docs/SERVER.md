@@ -55,13 +55,12 @@ Every server has its own Ed25519 key (separate from HTTPS), made on first run:
 
 ## Authorities: rotation and recovery
 
-An authority is a server whose key is trusted for identity changes. The app and every server keep a list of trusted authority keys, by default only the official one's. Anyone can run their own authority and trust it instead, so identity doesn't have to rely on the official server either.
+An authority is a server that signs identity changes: the official server is one (`"authority": true`), and the app trusts its key, which is built in (`rotation::OFFICIAL_AUTHORITY`, also the key the app expects the server to have: `library::server_key`, which `SYNTHTHING_OFFICIAL_KEY` overrides for a test server).
 
 - **Rotation** (`library/rotation.rs`, `server/authority.rs`): replacing a key with a new one. A rotation record says "key A is now key B": asked for with key A (the request signed by A, and B's signature showing B is held) or confirmed by email (recovery), and signed by the authority, which keeps every record (`GET /api/v1/identity/rotations?key=` gives the chain that led to a key). The new key has to be one the authority hasn't seen.
-- **Applying it elsewhere**: servers aren't told. The app keeps the chain beside the key (`identity.rotations.json`, and in an export) and shows it to each server the first time it talks to it in a session (`POST /api/v1/identity/apply`); the server checks the authority's signature (no network call needed) and moves everything from the old key to the new one: scripts, encores, reports, admin rights, and bans (a rotation is no way out of one). The old key is refused from then on. A server that was down or unreachable catches up whenever the app next uses it. Records already issued keep working even if the authority is down; only new rotations wait for it.
+- **Applying it**: the authority moves everything from the old key to the new one as it issues the record: scripts, encores, reports, admin rights, and bans (a rotation is no way out of one). The old key is refused from then on. The app keeps the chain beside the key (`identity.rotations.json`, and in an export).
 - **Precedence**: an email recovery replaces whatever the current key is, including one rotated in by a thief, and a stolen key can't take the email off or change it (that needs a code sent to the address). There's no notice email for a key-signed rotation: the authority keeps only a hash of the address, so it can't write to it unasked.
 - **The publisher**: the key the official scripts are published with can be rotated like any other (`synththing publisher-rotate`). Each server follows its `publisher` through its rotations; the official server lists them in `/api/v1/info`, and the app checks them against the official authority and keeps them, so the gold name, updates of the bundled scripts and their links follow the new key (and an app released before the rotation learns of it the first time it talks to the server).
-- Each server has a list of authorities it trusts (`authorities` in `server.json`, the official server's key by default); an authority trusts itself too.
 
 ### Email (authorities only, and only when configured)
 
@@ -218,7 +217,6 @@ POST /api/v1/identity/email/confirm       signed: the codes (authorities)
 POST /api/v1/identity/recover             start a recovery: a code to the email (authorities)
 POST /api/v1/identity/recover/confirm     the code: the rotation to the new key (authorities)
 GET  /api/v1/identity/cancel?token=       a code email's "that wasn't me" link (authorities)
-POST /api/v1/identity/apply               present rotation records (any server)
 POST /api/v1/pair                         signed: park a sealed sign-in handoff
 POST /api/v1/pair/{id}                    signed by the key that parked it: whether it's been taken, and by which device
 POST /api/v1/pair/{id}/take               the handoff, once (and the taking device's name)

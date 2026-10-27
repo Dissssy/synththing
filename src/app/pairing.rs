@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use super::library::host;
 use super::App;
 use crate::device::Device;
 use crate::library::identity::{self, Identity};
@@ -163,8 +162,8 @@ impl App {
         let (authority, key) = self.authority();
         let identity = self.library_identity();
         let Some(state) = self.pairing.flow.as_mut() else { return };
-        let (Some(identity), Some(key)) = (identity, key) else {
-            state.error = Some(format!("{} hasn't been reached yet: open the Online Library first.", host(&authority)));
+        let Some(identity) = identity else {
+            state.error = Some("There's no identity here to sign in with.".into());
             return;
         };
         state.busy = true;
@@ -270,7 +269,7 @@ impl App {
                 }
             });
         });
-        if let (Some(link), Some(identity), (_, Some(key))) = (check, current.clone(), self.authority()) {
+        if let (Some(link), Some(identity), (_, key)) = (check, current.clone(), self.authority()) {
             self.spawn_pairing(move || Event::Status(client::pair_status(&link.server, &key, &identity, &link.id)));
         }
         if go && let Flow::Enter { link } = &state.flow {

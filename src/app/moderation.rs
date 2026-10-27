@@ -200,9 +200,10 @@ impl App {
     /// The first time the Library talks to the server: is the user an
     /// admin?
     pub(super) fn check_admin(&mut self) {
-        let (Some(identity), Some(key)) = (Identity::load(), self.config.library.pinned.clone()) else {
+        let Some(identity) = Identity::load() else {
             return;
         };
+        let key = library::server_key();
         if self.moderation.admin.is_some() {
             return;
         }
@@ -223,7 +224,7 @@ impl App {
 
     /// Report... for `version` of a script.
     pub(super) fn open_report(&mut self, id: &str, name: &str, version: u32) {
-        let Some(key) = self.config.library.pinned.clone() else { return };
+        let key = library::server_key();
         self.moderation.report = Some(ReportDraft {
             id: id.to_string(),
             name: name.to_string(),
@@ -294,9 +295,10 @@ impl App {
     /// Fetch the Moderation window's current tab again.
     fn refresh_moderation(&mut self) {
         let Some(window) = &mut self.moderation.window else { return };
-        let (Some(identity), Some(key)) = (Identity::load(), self.config.library.pinned.clone()) else {
+        let Some(identity) = Identity::load() else {
             return;
         };
+        let key = library::server_key();
         let server = library::official_url();
         let (tab, all) = (window.tab, window.all);
         match tab {
@@ -323,9 +325,10 @@ impl App {
         if self.moderation.window.is_none() {
             return;
         }
-        let (Some(identity), Some(key)) = (Identity::load(), self.config.library.pinned.clone()) else {
+        let Some(identity) = Identity::load() else {
             return;
         };
+        let key = library::server_key();
         let (server, what) = (library::official_url(), what.to_string());
         self.spawn_moderation(move || {
             let mut said = String::new();
@@ -581,14 +584,15 @@ impl App {
             });
         });
         if send {
-            match (self.ensure_identity(), self.config.library.pinned.clone()) {
-                (Ok(identity), Some(key)) if draft.copyright => {
+            let key = library::server_key();
+            match self.ensure_identity() {
+                Ok(identity) if draft.copyright => {
                     draft.sending = true;
                     draft.error = None;
                     let (server, claim) = (library::official_url(), draft.claim.clone());
                     self.spawn_moderation(move || Event::NoticeFiled(client::file_notice(&server, &key, &identity, &claim)));
                 }
-                (Ok(identity), Some(key)) => {
+                Ok(identity) => {
                     draft.sending = true;
                     draft.error = None;
                     let request = ReportRequest {
@@ -601,8 +605,7 @@ impl App {
                     let (server, id) = (library::official_url(), draft.id.clone());
                     self.spawn_moderation(move || Event::Reported(client::report(&server, &key, &id, &identity, &request)));
                 }
-                (Err(e), _) => draft.error = Some(format!("Couldn't make your identity: {e}")),
-                (_, None) => draft.error = Some("The server's key isn't known yet.".into()),
+                Err(e) => draft.error = Some(format!("Couldn't make your identity: {e}")),
             }
         }
         if !(close || (response.should_close() && !draft.sending)) {
@@ -673,7 +676,8 @@ impl App {
         for (what, list) in actions {
             self.moderate(&what, list);
         }
-        if let (Some(identity), Some(key)) = (Identity::load(), self.config.library.pinned.clone()) {
+        if let Some(identity) = Identity::load() {
+            let key = library::server_key();
             for (script, version) in fetch_source {
                 let (server, key, identity) = (server.clone(), key.clone(), identity.clone());
                 self.spawn_moderation(move || {

@@ -10,7 +10,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Visualizer pixel scale (Preferences > Visualizers): visualizers now draw at your screen's full resolution (4x by default on phones), or at 2x, 4x and up for chunkier pixels and faster drawing. It replaces the old cap of about 1280x720 pixels and stays on each device.
 
 ### Changed
-- The app talks to one server, synththing.p51.nl: the list of library servers in Preferences > Online Library is gone, along with remix links to scripts on other servers. Testing against a server of your own works with the `SYNTHTHING_OFFICIAL_URL` environment variable.
+- The app talks to one server, synththing.p51.nl: the list of library servers in Preferences > Online Library is gone, along with remix links to scripts on other servers. Its key is built in, so signing in another device, sync, notifications and the rest work from launch without opening the Online Library first. Testing against a server of your own works with the `SYNTHTHING_OFFICIAL_URL` and `SYNTHTHING_OFFICIAL_KEY` environment variables.
 
 ### Fixed
 - Scripts using `blit`, `read_asset`, `list_assets`, `midi_send`, `sound_register`, `sound_play` or the `assets` option are no longer offered to 1.5.0, which doesn't have them (they came in 1.6.0).

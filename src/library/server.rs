@@ -108,9 +108,6 @@ pub struct ServerConfig {
     /// Its address as people reach it (for links in emails), e.g.
     /// `https://synththing.p51.nl`.
     pub public_url: String,
-    /// The authorities whose rotations it takes (keys, hex): the official
-    /// server's, by default.
-    pub authorities: Vec<String>,
     /// Sending email (an authority's codes), through SendGrid.
     pub mail: Option<MailConfig>,
     /// On an authority with mail: uploads a day for a key without an email
@@ -162,7 +159,6 @@ impl Default for ServerConfig {
             check_uploads: true,
             authority: false,
             public_url: String::new(),
-            authorities: vec![super::rotation::OFFICIAL_AUTHORITY.to_string()],
             mail: None,
             unverified_uploads_per_day: 3,
             documents: Vec::new(),
@@ -921,10 +917,6 @@ fn handle(state: &Arc<State>, mut request: Request) {
             relay::delete(state, &request, &id)
         }
         (Method::Post, ["api", "v1", "identity", "rotate"]) => authority::rotate(state, &mut request),
-        (Method::Post, ["api", "v1", "identity", "apply"]) => {
-            let ip = client_ip(state, &request);
-            authority::apply(state, &mut request, &ip)
-        }
         (Method::Post, ["api", "v1", "identity", "status"]) => authority::status(state, &mut request),
         (Method::Get, ["api", "v1", "identity", "rotations"]) => {
             authority::lineage(state, query.get("key").map(String::as_str).unwrap_or_default())

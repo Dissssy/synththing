@@ -441,10 +441,7 @@ impl App {
     /// The authority, its key, the identity and the sync key, to sync with.
     fn sync_with(&mut self) -> Option<(String, String, Identity, [u8; 32])> {
         let (server, server_key) = self.authority();
-        let (Some(identity), Some(server_key)) = (self.library_identity(), server_key) else {
-            self.sync.error = Some(format!("{} hasn't been reached yet: open the Online Library first.", super::library::host(&server)));
-            return None;
-        };
+        let identity = self.library_identity()?;
         let Some(sync_key) = identity::sync_key() else {
             self.sync.on = false;
             return None;
@@ -832,7 +829,7 @@ impl App {
     fn listen_for_songs(&mut self, device: &str) {
         // (Not before the authority's been reached: that's for the sync
         // to say.)
-        if self.sync.listener.is_some() || self.authority().1.is_none() {
+        if self.sync.listener.is_some() {
             return;
         }
         let Some((server, server_key, identity, sync_key)) = self.sync_with() else { return };

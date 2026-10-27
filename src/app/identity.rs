@@ -26,7 +26,6 @@ enum Event {
     /// A deletion asked for (or confirmed), or a restore: what happened.
     Deleted(Result<client::Deletion, String>),
     Restored(Result<u64, String>),
-    Applied(Result<u64, String>),
 }
 
 /// What's being changed.
@@ -62,13 +61,11 @@ pub struct IdentityState {
     status: Option<Result<IdentityStatus, String>>,
     asked: bool,
     flow: Option<FlowState>,
-    /// The server's been shown the rotation records this session.
-    applied: bool,
 }
 
 impl Default for IdentityState {
     fn default() -> Self {
-        Self { events: mpsc::channel(), status: None, asked: false, flow: None, applied: false }
+        Self { events: mpsc::channel(), status: None, asked: false, flow: None }
     }
 }
 
@@ -86,11 +83,9 @@ impl App {
         });
     }
 
-    /// The authority (the official server) and its key, pinned or (the
-    /// first time) asked for.
-    pub(super) fn authority(&self) -> (String, Option<String>) {
-        let server = library::official_url();
-        (server, self.config.library.pinned.clone())
+    /// The authority (the server) and its key.
+    pub(super) fn authority(&self) -> (String, String) {
+        (library::official_url(), library::server_key())
     }
 
     /// Another device moved the identity to a new key: this one's is refused
@@ -114,19 +109,6 @@ impl App {
     pub(super) fn forget_identity_status(&mut self) {
         self.identity.status = None;
         self.identity.asked = false;
-        self.identity.applied = false;
-    }
-
-    /// Show the server how the identity came to be its key, once a
-    /// session.
-    pub(super) fn apply_rotations(&mut self) {
-        let chain = identity::load_rotations();
-        if chain.is_empty() || self.identity.applied {
-            return;
-        }
-        self.identity.applied = true;
-        let server = library::official_url();
-        self.spawn_identity(move || Event::Applied(client::apply(&server, &chain)));
     }
 
     pub(super) fn poll_identity(&mut self) {
@@ -143,11 +125,6 @@ impl App {
             let flow = self.identity.flow.as_mut();
             match event {
                 Event::Status(status) => self.identity.status = Some(status),
-                Event::Applied(result) => match result {
-                    Ok(0) => {}
-                    Ok(n) => log::info!("the server took {n} rotation record(s)"),
-                    Err(e) => log::warn!("the server didn't take the rotation records: {e}"),
-                },
                 Event::EmailSent(result) => {
                     if let Some(FlowState { flow: Flow::Email { sent, .. }, busy, error }) = flow {
                         *busy = false;
@@ -224,7 +201,6 @@ impl App {
                                 ));
                                 self.set_library_identity(new);
                                 self.identity.flow = None;
-                                self.identity.applied = false;
                                 self.identity.status = None;
                                 self.identity.asked = false;
                             }
@@ -256,13 +232,7 @@ impl App {
         {
             self.identity.asked = true;
             let (identity, authority, key) = (identity.clone(), authority.clone(), key.clone());
-            self.spawn_identity(move || {
-                let key = match key {
-                    Some(key) => Ok(key),
-                    None => client::info(&authority).map(|i| i.key),
-                };
-                Event::Status(key.and_then(|key| client::identity_status(&authority, &key, &identity)))
-            });
+            self.spawn_identity(move || Event::Status(client::identity_status(&authority, &key, &identity)));
         }
         let mut open: Option<Flow> = None;
         if current.is_some() {
@@ -417,9 +387,8 @@ impl App {
                 Flow::Rotate => {
                     ui.heading("Move to a new key");
                     ui.label(format!(
-                        "A new key replaces #{}: your scripts, encores and admin rights move to it, on {} now and \
-                         on other servers the next time the app talks to them, and the old key stops working \
-                         wherever that's happened. Do this if the old key might have got out.",
+                        "A new key replaces #{}: your scripts, encores and admin rights move to it on {}, and the \
+                         old key stops working. Do this if the old key might have got out.",
                         current.as_ref().map(Identity::id).unwrap_or_default(),
                         host(&authority)
                     ));
@@ -451,7 +420,8 @@ impl App {
                                  email. It all goes from listings straight away, and for good after 30 days: until \
                                  then, Restore my data puts it back. Bans stay, and so do reports (without your key).",
                             );
-                            if self.library_server_mail() {
+                            // (What the server said with the recovery email's status.)
+                            if self.identity.status.as_ref().is_some_and(|s| s.as_ref().is_ok_and(|s| s.mail)) {
                                 ui.label("If your identity has an email attached here, type it (a code goes to it):");
                                 ui.add(egui::TextEdit::singleline(address).desired_width(f32::INFINITY));
                             }
@@ -511,11 +481,11 @@ impl App {
         });
         if go && let Flow::Delete { restore, address, sent, code, .. } = &state.flow {
             state.error = None;
-            match (current.clone(), self.config.library.pinned.clone()) {
-                (Some(identity), Some(server_key)) => {
+            match current.clone() {
+                Some(identity) => {
                     state.busy = true;
-                    let (server, address, code, restore, sent) =
-                        (library::official_url(), address.trim().to_string(), code.trim().to_string(), *restore, *sent);
+                    let (server, server_key) = (authority.clone(), key.clone());
+                    let (address, code, restore, sent) = (address.trim().to_string(), code.trim().to_string(), *restore, *sent);
                     self.spawn_identity(move || {
                         if restore {
                             Event::Restored(client::restore_identity(&server, &server_key, &identity))
@@ -527,19 +497,12 @@ impl App {
                         }
                     });
                 }
-                (None, _) => state.error = Some("There's no identity here.".into()),
-                (_, None) => state.error = Some("The server hasn't been reached yet: open the Online Library first.".into()),
+                None => state.error = Some("There's no identity here.".into()),
             }
         } else if go {
             state.error = None;
             state.busy = true;
-            let key = key.unwrap_or_default();
-            if key.is_empty() {
-                state.busy = false;
-                state.error = Some(format!("{} hasn't been reached yet: open the Online Library first.", host(&authority)));
-            } else {
-                self.identity_step(&mut state, authority, key, current);
-            }
+            self.identity_step(&mut state, authority, key, current);
         }
         if !(close || (response.should_close() && !state.busy)) {
             self.identity.flow = Some(state);

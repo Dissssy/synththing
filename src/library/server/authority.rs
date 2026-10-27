@@ -1,11 +1,9 @@
 //! Rotation and recovery (docs/SERVER.md, Authorities).
 //!
-//! Every server keeps the rotations it's been shown (`apply`): checked
-//! against the authorities it trusts, each moves what the old key had
-//! (scripts, encores, reports, admin rights, bans) to the new one, and the
-//! old key is refused from then on.
+//! A rotation moves what the old key had (scripts, encores, reports, admin
+//! rights, bans) to the new one, and the old key is refused from then on.
 //!
-//! An authority (`"authority": true`) also issues them: a key-signed
+//! An authority (`"authority": true`) issues them: a key-signed
 //! rotation (`rotate`), and with mail on, a recovery confirmed by a code
 //! sent to the email attached to the identity. Addresses are kept only as
 //! a hash (Argon2id, salted with a secret of the server's in
@@ -27,7 +25,7 @@ use tiny_http::{Request, Response};
 use super::mail::code_mail;
 use super::{error, header, json, now, read_body, signer, Reply, State};
 use crate::library::rotation::{
-    is_email, new_key_message, normalize_email, rotation_message, verify_chain, EmailConfirm, EmailRequest,
+    is_email, new_key_message, normalize_email, rotation_message, EmailConfirm, EmailRequest,
     IdentityStatus, RecoverConfirm, RecoverRequest, RotateRequest, Rotation,
 };
 use crate::library::{base32, hex, key_id, sign_hex, verify_hex, REQUEST_WINDOW_SECONDS};
@@ -122,15 +120,6 @@ pub(super) fn has_email(db: &Connection, key: &str) -> bool {
         .ok()
         .flatten()
         .is_some()
-}
-
-/// The authorities this server takes rotations from.
-fn trusted(state: &State) -> Vec<String> {
-    let mut trusted = state.config.authorities.clone();
-    if state.config.authority {
-        trusted.push(state.key_hex.clone());
-    }
-    trusted
 }
 
 /// Move what `record.old` had to `record.new`, once; false if it was
@@ -271,36 +260,6 @@ pub(super) fn rotate(state: &State, request: &mut Request) -> Reply {
         Ok(record) => json(200, &record),
         Err(reply) => reply,
     }
-}
-
-/// `POST /api/v1/identity/apply`: rotations to take (any server).
-pub(super) fn apply(state: &State, request: &mut Request, ip: &str) -> Reply {
-    let chain: Vec<Rotation> = match unsigned_json(request) {
-        Ok(chain) => chain,
-        Err(reply) => return reply,
-    };
-    if chain.len() > 64 {
-        return error(400, "that's a lot of rotations");
-    }
-    if let Err(reply) = super::moderation::limit(state, "apply", ip, 60, Duration::from_secs(3600), "requests") {
-        return reply;
-    }
-    if let Err(problem) = verify_chain(&chain, &trusted(state)) {
-        return error(400, problem);
-    }
-    let db = state.db();
-    let mut applied = 0;
-    for record in &chain {
-        match apply_rotation(&db, record) {
-            Ok(true) => {
-                applied += 1;
-                println!("applied the rotation of #{} to #{}", key_id(&record.old), key_id(&record.new));
-            }
-            Ok(false) => {}
-            Err(e) => return error(500, format!("database: {e}")),
-        }
-    }
-    json(200, &serde_json::json!({ "applied": applied }))
 }
 
 /// The hash an address is kept as.

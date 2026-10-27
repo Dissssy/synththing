@@ -111,7 +111,6 @@ Runs a server (how it works is in docs/SERVER.md, running one for real in docs/D
 - `intake`: hand feedback out to the hourly intake run, with the token in `intake.token` (false; docs/DEPLOY.md, Feedback intake).
 - `android_fingerprints`: the SHA-256 fingerprints of the key the Android app is signed with, served in `/.well-known/assetlinks.json` so Android opens this server's sign-in links in the app (docs/DEPLOY.md).
 - `preview_seconds`: how long making one may take before it's stopped (120); the first frame it drew stays as the still.
-- `authorities`: the identity authorities whose rotation records it takes (their keys, hex): the official server's by default.
 - `authority`: this server is an identity authority itself (false): it issues rotations (an identity moving to a new key), and with `mail`, attaches recovery emails and recovers identities by them (docs/SERVER.md).
 - `public_url`: the address people reach it at, for links in its emails (e.g. `https://scripts.example.org`).
 - `mail`: sending email, for an authority: `{ "from": "synththing@example.org", "from_name": "synththing", "api_key_file": "sendgrid.key" }`. Mail goes through SendGrid, with the API key read from `api_key_file` (in the data folder unless it's a full path). Without it, an authority does rotations only.
@@ -166,7 +165,7 @@ Publishes every script bundled with this build (visualizers, games and examples;
 
 ## Environment variables
 
-- `SYNTHTHING_OFFICIAL_URL`: talk to another server instead of the official one (for trying things against a server of your own, e.g. `http://127.0.0.1:7381`). It's the only way to change the server: the app has no setting for it.
+- `SYNTHTHING_OFFICIAL_URL`, `SYNTHTHING_OFFICIAL_KEY`: talk to another server instead of the official one (for trying things against a server of your own, e.g. `http://127.0.0.1:7381`), and its key (hex: `key` in its `/api/v1/info`). The app has the official server's key built in, so it never has to ask for it; with a server of your own, set both. They're the only way to change the server: the app has no setting for it.
 
 ## Running from a terminal on Windows
 
