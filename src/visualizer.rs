@@ -395,17 +395,6 @@ impl VisualizerInput {
     }
 }
 
-/// Upper bound on how many pixels the visualizer actually renders, no matter
-/// how large the panel showing it is. Every bundled script does real
-/// per-pixel work (filling rects, running the alpha blender, scanning the
-/// quantized-run palette, ...), so buffer size directly sets render cost:
-/// fine at a windowed panel's few hundred thousand pixels, not at a
-/// fullscreen 1440p+ one's several million. Above this budget the logical
-/// buffer shrinks (same aspect ratio) and gets scaled back up to fill the
-/// panel with nearest-neighbor filtering, trading a bit of crispness for
-/// render cost that stays flat regardless of window or monitor size.
-const MAX_VISUALIZER_PIXELS: f32 = 1280.0 * 720.0;
-
 /// How long a recording waits for a frame it just asked the script for,
 /// to stay in step with the video. (Otherwise the window never waits: the
 /// frame asked for shows once it's done.)
@@ -414,9 +403,9 @@ const FRAME_WAIT: Duration = Duration::from_millis(50);
 /// Shows the frames the script (on its own thread, `ScriptHost`) draws,
 /// as one `ui.image(...)` each time [`show`](Self::show) is called, and
 /// hands it each frame's audio, notes and input. The frames can be smaller
-/// than the panel showing them, see [`MAX_VISUALIZER_PIXELS`]. It holds the
-/// script's frame side ([`FramePipe`]); the app keeps the control side, so
-/// the panel can be shared by the windows that show it.
+/// than the panel showing them, depending on the configured pixel scale. It
+/// holds the script's frame side ([`FramePipe`]); the app keeps the control
+/// side, so the panel can be shared by the windows that show it.
 pub struct VisualizerPanel {
     frames: FramePipe,
     /// The last frame the script drew (`0xAARRGGBB`), `width` by `height`.
@@ -425,6 +414,7 @@ pub struct VisualizerPanel {
     spare: Vec<u32>,
     width: usize,
     height: usize,
+    pixel_scale: u32,
     texture: Option<egui::TextureHandle>,
     /// Take keyboard focus the next time it's drawn (entering the dedicated
     /// fullscreen).
@@ -460,6 +450,7 @@ impl VisualizerPanel {
             spare: Vec::new(),
             width,
             height,
+            pixel_scale: crate::config::DEFAULT_VISUALIZER_SCALE,
             texture: None,
             focus_requested: false,
             pending_input: None,
@@ -495,6 +486,11 @@ impl VisualizerPanel {
     /// `show` (else they're over black).
     pub fn set_see_through(&mut self, see_through: bool) {
         self.see_through = see_through;
+    }
+
+    /// Set how many output pixels each visualizer buffer pixel covers.
+    pub fn set_pixel_scale(&mut self, scale: u32) {
+        self.pixel_scale = crate::config::visualizer_scale_down(scale);
     }
 
     /// Whether frames are only for a program watching through the local
@@ -626,7 +622,8 @@ impl VisualizerPanel {
             return ShowOutput { focused, cursor: CursorRequest::default(), rendered: false, image_rect: rect };
         }
 
-        let (buf_w, buf_h) = fixed_size.unwrap_or_else(|| logical_buffer_size(available));
+        let (buf_w, buf_h) = fixed_size
+            .unwrap_or_else(|| logical_buffer_size(available, ctx.pixels_per_point(), self.pixel_scale));
         let mut input = gather_input(&ctx, &response, rect, (buf_w, buf_h), focused, mode);
         input.pads = std::mem::take(&mut self.pads);
         input.mobile = self.mobile;
@@ -652,7 +649,7 @@ impl VisualizerPanel {
             painter.text(panel_rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(16.0), egui::Color32::GRAY);
         } else if let Some(texture) = &self.texture {
             // Stretched to the whole allocated rect: the texture can be
-            // smaller than the panel by design (see MAX_VISUALIZER_PIXELS).
+            // smaller than the panel by design (the pixel scale preference).
             if !self.see_through {
                 ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
             }
@@ -826,9 +823,6 @@ fn gather_input(
     })
 }
 
-/// `available` scaled down (preserving aspect ratio) so its area fits within
-/// [`MAX_VISUALIZER_PIXELS`], a no-op (1:1 with the panel) for ordinary
-/// windowed sizes, which is already comfortably under budget.
 /// The largest rect of aspect ratio `aspect` (width / height) that fits in
 /// `outer`, centered.
 fn letterbox(outer: egui::Rect, aspect: f32) -> egui::Rect {
@@ -837,17 +831,27 @@ fn letterbox(outer: egui::Rect, aspect: f32) -> egui::Rect {
     egui::Rect::from_center_size(outer.center(), size)
 }
 
-fn logical_buffer_size(available: egui::Vec2) -> (usize, usize) {
-    let w = available.x.max(1.0);
-    let h = available.y.max(1.0);
-    let area = w * h;
-    let scale = if area > MAX_VISUALIZER_PIXELS { (MAX_VISUALIZER_PIXELS / area).sqrt() } else { 1.0 };
-    (((w * scale) as usize).max(1), ((h * scale) as usize).max(1))
+/// The buffer for a panel of `available` points: its size in screen pixels,
+/// divided by `pixel_scale` (each buffer pixel is `pixel_scale` screen
+/// pixels a side).
+fn logical_buffer_size(available: egui::Vec2, pixels_per_point: f32, pixel_scale: u32) -> (usize, usize) {
+    let scale = pixels_per_point / pixel_scale as f32;
+    let w = (available.x.max(1.0) * scale) as usize;
+    let h = (available.y.max(1.0) * scale) as usize;
+    (w.max(1), h.max(1))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logical_buffer_size_applies_pixel_scale_and_rounds_down() {
+        assert_eq!(logical_buffer_size(egui::vec2(101.0, 51.0), 1.0, 1), (101, 51));
+        assert_eq!(logical_buffer_size(egui::vec2(101.0, 51.0), 1.0, 4), (25, 12));
+        assert_eq!(logical_buffer_size(egui::vec2(101.0, 51.0), 2.0, 4), (50, 25));
+        assert_eq!(logical_buffer_size(egui::vec2(1.0, 1.0), 1.0, 1024), (1, 1));
+    }
 
     #[test]
     fn skipped_frames_keep_every_touch() {

@@ -3206,6 +3206,7 @@ impl App {
             panel.set_pads(self.pad_frame.clone());
             panel.set_mobile(self.mobile());
             panel.set_see_through(self.config.visualizer_see_through);
+            panel.set_pixel_scale(self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE));
         }
         // (A program watching through the API: drawn at the size it asked
         // for, unless a recording has a size already.)
