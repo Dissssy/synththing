@@ -5,6 +5,9 @@
 //! `## Unreleased`) starts a version, `### New` a group within it, `- `
 //! a bullet (wrapped lines carry on), anything else a paragraph. Text
 //! before the first version is the file's own introduction, not shown.
+//! A group named twice in one version is shown once, with both's lines:
+//! git merges this file by union (`.gitattributes`), so two branches that
+//! each start an `### Added` under Unreleased leave two.
 //! `cargo release` turns `## Unreleased` into the new version's heading
 //! (release.toml), and the release workflow publishes that version's
 //! section as the GitHub release notes.
@@ -99,7 +102,32 @@ fn parse(text: &str) -> Vec<Release> {
         }
     }
     releases.retain(|r| !r.blocks.is_empty());
+    for release in &mut releases {
+        release.blocks = merge_groups(std::mem::take(&mut release.blocks));
+    }
     releases
+}
+
+/// The blocks with each group's lines under its first heading.
+fn merge_groups(blocks: Vec<Block>) -> Vec<Block> {
+    let mut before = Vec::new();
+    let mut groups: Vec<(String, Vec<Block>)> = Vec::new();
+    let mut at = None;
+    for block in blocks {
+        match block {
+            Block::Heading(name) => {
+                at = Some(groups.iter().position(|(n, _)| *n == name).unwrap_or_else(|| {
+                    groups.push((name, Vec::new()));
+                    groups.len() - 1
+                }));
+            }
+            block => match at {
+                Some(i) => groups[i].1.push(block),
+                None => before.push(block),
+            },
+        }
+    }
+    before.into_iter().chain(groups.into_iter().flat_map(|(name, lines)| std::iter::once(Block::Heading(name)).chain(lines))).collect()
 }
 
 #[cfg(test)]
@@ -144,6 +172,12 @@ mod tests {
             [Block::Heading("New".into()), Block::Bullet("One wrapped".into()), Block::Bullet("Two `code`".into())]
         );
         assert_eq!(releases[1].blocks, [Block::Paragraph("First.".into())]);
+        let merged = parse("## Unreleased\n\n### Added\n- A\n\n### Fixed\n- B\n\n### Added\n- C\n");
+        assert_eq!(
+            merged[0].blocks,
+            [Block::Heading("Added".into()), Block::Bullet("A".into()), Block::Bullet("C".into()), Block::Heading("Fixed".into()), Block::Bullet("B".into())],
+            "a group named twice (a union merge) is shown once"
+        );
         assert_eq!(parse_version("v0.2.10"), Some((0, 2, 10)));
         assert_eq!(parse_version("0.2"), None);
         assert_eq!(parse_version("Unreleased"), None);
