@@ -28,6 +28,11 @@ impl App {
         self.sync.engine.on()
     }
 
+    /// Where this device reaches the hub directly, if it does.
+    pub(super) fn hub_reached(&self) -> Option<&crate::song_sync::Hub> {
+        self.sync.engine.hub_reached()
+    }
+
     /// Whether the song library syncs here (so a song can be removed from
     /// every device).
     pub(super) fn syncs_library(&self) -> bool {

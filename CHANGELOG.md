@@ -9,6 +9,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Control your other devices from the Devices button: play, pause, previous, next, and seek on each one's bar.
 - See what your other devices are playing: with sync on, a Devices button by the transport (under the visualizer picker on a phone) shows up while another of your devices is online, listing each one with its song, artist and where it is.
 - Songs go straight to and from your hub: devices that reach it (on your network, or at its public address with port 7390 forwarded) send it the songs it lacks and take theirs from it directly, with no size limit, and the relay carries the rest. Devices sending at once split the songs between them, the rarest first. Set where it's reached with `SYNTHTHING_HUB_URL`. See docs/HUB.md.
+- Live messages between your devices, such as panels shared to your other devices, go through your hub while a device reaches it, and through the server otherwise.
 
 ## 1.7.3 (2026-10-27)
 
