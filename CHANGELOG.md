@@ -13,6 +13,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Visualizer pixel scale (Preferences > Visualizers): visualizers now draw at your screen's full resolution (4x by default on phones), or at 2x, 4x and up for chunkier pixels and faster drawing. It replaces the old cap of about 1280x720 pixels and stays on each device.
 
 ### Changed
+- Groupings' list view and the Wishlist's MusicBrainz results are drawn like the other lists: striped rows, the same hover and selection, and Ctrl/Shift+click to select.
 - The app talks to one server, synththing.p51.nl: the list of library servers in Preferences > Online Library is gone, along with remix links to scripts on other servers. Its key is built in, so signing in another device, sync, notifications and the rest work from launch without opening the Online Library first. Testing against a server of your own works with the `SYNTHTHING_OFFICIAL_URL` and `SYNTHTHING_OFFICIAL_KEY` environment variables.
 
 ### Fixed
