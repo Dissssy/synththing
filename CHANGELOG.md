@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Join another device from the Devices button, or Bring one here: the device following pauses, and its transport (and hotkeys) shows and drives the other's playing until you press Leave, play a song on it, or the other goes offline.
 - Listen to synththing from another device or OBS: with the new **Listen** permission, `/v1/audio/stream` sends what plays (before the volume slider) as a live WAV, `/v1/audio` is a page that plays it with little delay, and `/v1/visualizer?audio=1` shows the visualizer and plays the sound with it, so one Browser Source gives OBS both. See docs/API.md.
 - Control your other devices from the Devices button: play, pause, previous, next, and seek on each one's bar.
 - See what your other devices are playing: with sync on, a Devices button by the transport (under the visualizer picker on a phone) shows up while another of your devices is online, listing each one with its song, artist and where it is.

@@ -9,7 +9,13 @@
 //! the position honest; the others forget one not heard from in `SILENCE`
 //! and run the position on from when they heard it. A device can also be
 //! told to play, pause, skip or seek (`Control`), as its own transport
-//! would; what it does then reaches the others as its state. No egui here.
+//! would; what it does then reaches the others as its state.
+//!
+//! A device can follow another (its leader): it plays nothing itself, and
+//! its transport drives the leader's. There are no sessions to keep: a
+//! leader and the devices following it are one, and following a device
+//! that follows another follows that one (`Players::leader_of`). No egui
+//! here.
 
 use std::time::{Duration, Instant};
 
@@ -48,6 +54,8 @@ pub enum Control {
     Next,
     /// To this many seconds in.
     Seek { position: f64 },
+    /// Follow the device that sent this (Bring here).
+    FollowMe,
 }
 
 /// What a device plays.
@@ -59,6 +67,9 @@ pub struct State {
     /// Seconds, as it was sent.
     pub position: f64,
     pub speed: f64,
+    /// The device it follows (by ID), if it does: it plays nothing then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub following: Option<String>,
 }
 
 /// The song a device plays, as the others show it (they may not have it).
@@ -77,6 +88,7 @@ pub struct Song {
 /// (`EngineView::generation`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Mark {
+    pub following: Option<String>,
     pub loaded: bool,
     pub paused: bool,
     pub speed: f64,
@@ -128,6 +140,11 @@ pub struct Player {
 }
 
 impl Player {
+    /// When its state was last heard.
+    pub fn heard(&self) -> Instant {
+        self.heard
+    }
+
     /// Where it is now: run on from when it was heard while playing.
     pub fn position(&self, now: Instant) -> f64 {
         let state = &self.state;
@@ -146,6 +163,22 @@ pub struct Players {
 impl Players {
     pub fn all(&self) -> &[Player] {
         &self.players
+    }
+
+    pub fn get(&self, id: &str) -> Option<&Player> {
+        self.players.iter().find(|p| p.device.id == id)
+    }
+
+    /// Whom to follow to be with `id`: the device it follows, if it
+    /// follows one (`me` aside: following one that follows this device
+    /// would be a circle), else it.
+    pub fn leader_of(&self, id: &str, me: &str) -> Option<String> {
+        let player = self.get(id)?;
+        match player.state.following.as_deref() {
+            Some(leader) if leader == me => None,
+            Some(leader) => Some(leader.to_string()),
+            None => Some(id.to_string()),
+        }
     }
 
     /// A device's state.
@@ -181,7 +214,7 @@ mod tests {
     use super::*;
 
     fn mark(paused: bool, jumps: u64) -> Mark {
-        Mark { loaded: true, paused, speed: 1.0, jumps }
+        Mark { following: None, loaded: true, paused, speed: 1.0, jumps }
     }
 
     fn device(id: &str) -> Device {
@@ -212,12 +245,12 @@ mod tests {
         let start = Instant::now();
         let mut players = Players::default();
         let song = Song { key: None, title: "a".into(), artist: None, length: 100.0 };
-        players.hear(device("phone"), State { song: Some(song.clone()), paused: false, position: 10.0, speed: 2.0 }, start);
+        players.hear(device("phone"), State { song: Some(song.clone()), paused: false, position: 10.0, speed: 2.0, following: None }, start);
         let later = start + Duration::from_secs(5);
         assert_eq!(players.all()[0].position(later), 20.0);
         assert_eq!(players.all()[0].position(start + Duration::from_secs(60)), 100.0, "not past the end");
 
-        players.hear(device("phone"), State { song: Some(song), paused: true, position: 30.0, speed: 2.0 }, later);
+        players.hear(device("phone"), State { song: Some(song), paused: true, position: 30.0, speed: 2.0, following: None }, later);
         assert_eq!(players.all().len(), 1, "the same device, its state replaced");
         assert_eq!(players.all()[0].position(later + Duration::from_secs(5)), 30.0, "paused");
 
@@ -229,11 +262,24 @@ mod tests {
 
     #[test]
     fn controls_read_back_as_sent() {
-        for control in [Control::Play, Control::Pause, Control::Previous, Control::Next, Control::Seek { position: 12.5 }] {
+        for control in [Control::Play, Control::Pause, Control::Previous, Control::Next, Control::Seek { position: 12.5 }, Control::FollowMe] {
             let body = serde_json::to_value(Message::Control(control)).unwrap();
             assert_eq!(serde_json::from_value::<Message>(body).unwrap(), Message::Control(control));
         }
         let seek = serde_json::to_value(Message::Control(Control::Seek { position: 3.0 })).unwrap();
         assert_eq!(seek, serde_json::json!({ "kind": "control", "do": "seek", "position": 3.0 }));
+    }
+
+    #[test]
+    fn following_a_follower_follows_its_leader() {
+        let now = Instant::now();
+        let mut players = Players::default();
+        players.hear(device("pc"), State::default(), now);
+        players.hear(device("phone"), State { following: Some("pc".into()), ..State::default() }, now);
+        players.hear(device("tv"), State { following: Some("me".into()), ..State::default() }, now);
+        assert_eq!(players.leader_of("pc", "me").as_deref(), Some("pc"));
+        assert_eq!(players.leader_of("phone", "me").as_deref(), Some("pc"));
+        assert_eq!(players.leader_of("tv", "me"), None, "it's with this device already");
+        assert_eq!(players.leader_of("gone", "me"), None);
     }
 }
