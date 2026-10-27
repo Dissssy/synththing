@@ -705,6 +705,21 @@ impl App {
         // it'd be, or the release of the one it is.)
         let mut fetch: Option<Result<Wish, String>> = None;
         let albums = artist.musicbrainz.as_deref().and_then(|a| self.lookup.kept.discography(a));
+        // (Their albums wished for by themselves: theirs now, ticked here.)
+        if let Some(albums) = &albums {
+            let groups: HashSet<&str> = albums.iter().map(|a| a.id.as_str()).collect();
+            let alone: Vec<String> = self
+                .wishlist
+                .list
+                .wishes
+                .iter()
+                .filter(|(_, w)| w.kind == Kind::Album && w.under.is_none() && w.musicbrainz.as_deref().is_some_and(|g| groups.contains(g)))
+                .map(|(id, _)| id.clone())
+                .collect();
+            if self.wishlist.list.adopt(id, &alone.iter().map(String::as_str).collect::<Vec<_>>()) {
+                self.wishlist_changed();
+            }
+        }
         match &albums {
             None => {
                 ui.weak(if online { "Looking up their albums at MusicBrainz..." } else { "Their albums aren't looked up on this device yet: that needs Online album art and details on." });

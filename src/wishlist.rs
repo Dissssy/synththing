@@ -173,14 +173,35 @@ impl Wishlist {
     /// Wish for `wish`, wished for now: its ID (the one there was, if it
     /// was wished for already).
     pub fn add(&mut self, mut wish: Wish) -> String {
-        if let Some(id) = self.find(&wish) {
-            return id.to_string();
+        if let Some(id) = self.find(&wish).map(str::to_string) {
+            // (An album wished for by itself before: now one of the
+            // artist's picking it.)
+            if let Some(under) = wish.under {
+                self.adopt(&under, &[&id]);
+            }
+            return id;
         }
         wish.added = crate::settings_sync::now();
         let id = crate::playlist::new_id();
         self.wishes.insert(id.clone(), wish);
         self.changed();
         id
+    }
+
+    /// Put the wishes `ids` that aren't under an artist under the artist's
+    /// wish `artist`: whether any was.
+    pub fn adopt(&mut self, artist: &str, ids: &[&str]) -> bool {
+        let mut adopted = false;
+        for id in ids {
+            if let Some(wish) = self.wishes.get_mut(*id).filter(|w| w.under.is_none() && *id != artist) {
+                wish.under = Some(artist.to_string());
+                adopted = true;
+            }
+        }
+        if adopted {
+            self.changed();
+        }
+        adopted
     }
 
     /// Take the wishes `ids` off the wishlist, and an artist's albums with
@@ -591,7 +612,10 @@ mod tests {
         kept.keep_discography("a1", vec![album("g1", "Album"), album("g2", "Album"), album("g3", "Single")]);
         let missing: Vec<String> = missing_albums(&wishlist.wishes[&id], &store, &kept, &SHOWN).into_iter().map(|a| a.id).collect();
         assert_eq!(missing, ["g2"], "the single isn't shown");
-        let modal = wishlist.add(Wish { tracks: 1, ..album_wish(&album("g1", "Album"), "Nujabes", &id) });
+        let alone = wishlist.add(Wish { tracks: 1, ..Wish::new(Kind::Album, "g1") });
+        wishlist.wishes.get_mut(&alone).unwrap().musicbrainz = Some("g1".into());
+        let modal = wishlist.add(album_wish(&album("g1", "Album"), "Nujabes", &id));
+        assert_eq!((modal.as_str(), wishlist.wishes[&modal].under.as_deref()), (alone.as_str(), Some(id.as_str())), "wished for by itself before: now theirs");
         let other = wishlist.add(album_wish(&album("g2", "Album"), "Nujabes", &id));
         assert_eq!(wishlist.under(&id).count(), 2);
         let progress = super::progress(&wishlist, &store, &kept);
