@@ -66,7 +66,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::{egui, Frame};
-use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{DockArea, DockState, TabViewer};
 
 use crate::applog;
@@ -1535,176 +1534,201 @@ impl App {
         Some(egui::Color32::from_rgb(r, g, b))
     }
 
-    /// The bottom transport bar, VLC-style: track info, seek bar, then a
-    /// button row (play/restart/stop, view toggles, loop) with speed/volume/
-    /// buffer tucked underneath. Shown identically whether fullscreen or
+    /// The bottom transport bar, across the window's width: the song (title
+    /// over a weak detail line) with the status line at the right, the seek
+    /// bar between the times, then the view toggles, the transport in the
+    /// middle, and speed and volume. Shown identically whether fullscreen or
     /// not, so it's the one thing that's always reachable.
     fn controls_bar_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         if self.following() {
             return self.following_bar_ui(ui, view);
         }
-        ui.add_space(4.0);
+        ui.add_space(6.0);
 
-        ui.horizontal(|ui| {
-            ui.weak("Song:");
-            match self.current_song.clone() {
-                Some(path) => ui.label(self.song_title(&path)),
-                None => ui.label(view.track_name.as_deref().unwrap_or("(none)")),
-            };
-            if let Some(np) = self.playing_entry()
-                && let Some(list) = self.playlists.lists.get(np.list)
-            {
-                ui.weak(format!(
-                    "({} {}/{})",
-                    list.playlist.name,
-                    np.entry + 1,
-                    list.playlist.entries.len()
-                ));
-            }
-            if !view.has_audio_file {
-                ui.separator();
-                ui.weak("SoundFont:");
-                ui.label(view.soundfont_name.as_deref().unwrap_or("(none)"));
-            }
-            ui.separator();
-            if self.songs_moving().is_some() {
-                sync::songs_moving_ui(ui, self.songs_moving());
-                ui.separator();
-            }
-            if status_line_ui(ui, &self.status, &mut self.unseen_failure, applog::elapsed, applog::entries) {
-                self.log_search = STATUS_TARGET.to_string();
-                self.log_open = true;
-            }
+        let line = egui::vec2(ui.available_width(), 34.0);
+        ui.allocate_ui_with_layout(line, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.scope(|ui| {
+                    ui.set_max_width(ui.available_width() * 0.45);
+                    if status_line_ui(ui, &self.status, &mut self.unseen_failure, applog::elapsed, applog::entries) {
+                        self.log_search = STATUS_TARGET.to_string();
+                        self.log_open = true;
+                    }
+                });
+                ui.add_space(12.0);
+                let title = match self.current_song.clone() {
+                    Some(path) => self.song_title(&path),
+                    None => view.track_name.clone().unwrap_or_else(|| "Nothing playing".to_string()),
+                };
+                let detail = self.song_detail(view);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    select_list::two_lines(ui, std::iter::empty(), egui::RichText::new(title).strong(), Some(detail), true);
+                });
+            });
         });
 
         let accent = self.transport_accent(ui.ctx(), view);
         ui.horizontal(|ui| {
-            let mut position = view.position;
-            if seek_bar_ui(ui, &mut position, view.length, accent).changed() {
-                self.send(AudioCommand::Seek(position));
-            }
-            ui.monospace(format!("{} / {}", fmt_time(view.position), fmt_time(view.length)));
+            ui.weak(fmt_time(view.position));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.weak(fmt_time(view.length));
+                ui.spacing_mut().slider_width = ui.available_width();
+                let mut position = view.position;
+                if seek_bar_ui(ui, &mut position, view.length, accent).changed() {
+                    self.send(AudioCommand::Seek(position));
+                }
+            });
         });
+        ui.add_space(2.0);
 
-        ui.horizontal_wrapped(|ui| {
-            // Play is green, Pause orange (the channel palette's).
-            let (glyph, color, hover) = if view.paused {
-                ("play", palette_color(2), "Play")
-            } else {
-                ("pause", palette_color(1), "Pause")
+        // The view toggles at the left, the transport centred, speed and
+        // volume at the right; on top of each other when they don't fit.
+        let center = TRANSPORT_WIDTH;
+        let side = (ui.available_width() - center) / 2.0;
+        if side < SIDE_WIDTH {
+            ui.horizontal_wrapped(|ui| {
+                self.transport_ui(ui, view);
+                self.views_ui(ui, view);
+                self.speed_volume_ui(ui, view);
+            });
+        } else {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), TRANSPORT_HEIGHT), egui::Sense::hover());
+            let zone = |x: f32, width: f32, layout: egui::Layout| {
+                egui::UiBuilder::new()
+                    .max_rect(egui::Rect::from_min_size(egui::pos2(rect.left() + x, rect.top()), egui::vec2(width, rect.height())))
+                    .layout(layout)
             };
-            let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::TogglePause));
-            if ui.add(colored_icon_button(glyph, color)).on_hover_text(hover).clicked() {
+            ui.scope_builder(zone(0.0, side, egui::Layout::left_to_right(egui::Align::Center)), |ui| self.views_ui(ui, view));
+            ui.scope_builder(zone(side, center, egui::Layout::left_to_right(egui::Align::Center)), |ui| self.transport_ui(ui, view));
+            ui.scope_builder(zone(side + center, side, egui::Layout::right_to_left(egui::Align::Center)), |ui| {
+                self.speed_volume_ui(ui, view)
+            });
+        }
+        ui.add_space(6.0);
+    }
+
+    /// The bar's detail line: where the song is on its playlist, its
+    /// soundfont, or why nothing plays.
+    fn song_detail(&self, view: &EngineView) -> String {
+        let mut parts = Vec::new();
+        if let Some(np) = self.playing_entry()
+            && let Some(list) = self.playlists.lists.get(np.list)
+        {
+            parts.push(format!("{} {}/{}", list.playlist.name, np.entry + 1, list.playlist.entries.len()));
+        }
+        if view.has_midi && view.has_soundfont {
+            parts.push(view.soundfont_name.clone().unwrap_or_default());
+        }
+        match playback_state_text(view) {
+            "no song" | "no soundfont" => parts.push(playback_state_text(view).to_string()),
+            _ => {}
+        }
+        parts.retain(|p| !p.is_empty());
+        parts.join("  ·  ")
+    }
+
+    /// Shuffle, stop, previous, play/pause, next and loop.
+    fn transport_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        let hover = shuffle_text(self.shuffle);
+        if ui.add(icon_button("shuffle").selected(self.shuffle)).on_hover_text(hover).clicked() {
+            self.set_shuffle(!self.shuffle);
+            toast::show(ui.ctx(), shuffle_text(self.shuffle));
+        }
+        if ui.add(icon_button("stop")).on_hover_text("Stop").clicked() {
+            self.send(AudioCommand::Seek(0.0));
+            if !view.paused {
                 self.send(AudioCommand::TogglePause);
             }
-            if ui
-                .add(icon_button("skip-back"))
-                .on_hover_text(format!(
-                    "Previous: the previous playlist track, or this one from the start if it's been playing a few seconds{}",
-                    commands::hint(ui.ctx(), Command::PreviousTrack)
-                ))
-                .clicked()
-            {
-                self.previous_track(view.position);
-            }
-            if ui.add(icon_button("stop")).on_hover_text("Stop").clicked() {
-                self.send(AudioCommand::Seek(0.0));
-                if !view.paused {
-                    self.send(AudioCommand::TogglePause);
-                }
-            }
-            if ui
-                .add_enabled(self.has_next(), icon_button("skip-forward"))
-                .on_hover_text(format!(
-                    "Next: the next queued song, else the next playlist track, or the next song autoplay plays{}",
-                    commands::hint(ui.ctx(), Command::NextTrack)
-                ))
-                .on_disabled_hover_text("Queue songs (right-click them), or play something from a playlist or from Songs with Autoplay on, to have a next track")
-                .clicked()
-            {
-                self.next_track();
-            }
+        }
+        if ui
+            .add(icon_button("skip-back"))
+            .on_hover_text(format!(
+                "Previous: the previous playlist track, or this one from the start if it's been playing a few seconds{}",
+                commands::hint(ui.ctx(), Command::PreviousTrack)
+            ))
+            .clicked()
+        {
+            self.previous_track(view.position);
+        }
+        let hover = if view.paused { "Play" } else { "Pause" };
+        let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::TogglePause));
+        let play = play_button(ui.ctx(), view.paused, 18.0, egui::vec2(PLAY_WIDTH, TRANSPORT_HEIGHT));
+        if ui.add(play).on_hover_text(hover).clicked() {
+            self.send(AudioCommand::TogglePause);
+        }
+        if ui
+            .add_enabled(self.has_next(), icon_button("skip-forward"))
+            .on_hover_text(format!(
+                "Next: the next queued song, else the next playlist track, or the next song autoplay plays{}",
+                commands::hint(ui.ctx(), Command::NextTrack)
+            ))
+            .on_disabled_hover_text("Queue songs (right-click them), or play something from a playlist or from Songs with Autoplay on, to have a next track")
+            .clicked()
+        {
+            self.next_track();
+        }
+        let (glyph, hover) = match self.loop_mode {
+            LoopMode::Off => ("repeat", "Loop: off (click: loop the playlist, or what autoplay plays)"),
+            LoopMode::All => ("repeat", "Loop: the playlist, or what autoplay plays (click: this track)"),
+            LoopMode::One => ("repeat-once", "Loop: this track (click: off)"),
+        };
+        if ui.add(icon_button(glyph).selected(self.loop_mode != LoopMode::Off)).on_hover_text(hover).clicked() {
+            self.set_loop_mode(self.loop_mode.cycle());
+            toast::show(ui.ctx(), loop_text(self.loop_mode));
+        }
+    }
 
-            ui.separator();
+    /// Fullscreen and the toggles for the Visualizer, Playlists, Up next
+    /// and other devices.
+    fn views_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        let (glyph, hover) = if self.fullscreen { ("corners-in", "Exit fullscreen") } else { ("corners-out", "Fullscreen") };
+        let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::ToggleFullscreen));
+        if ui.add(icon_button(glyph)).on_hover_text(hover).clicked() {
+            let ctx = ui.ctx().clone();
+            self.set_fullscreen(&ctx, !self.fullscreen);
+        }
+        let visualizer = self.is_open(Section::Visualizer);
+        if ui.add(icon_button("monitor-play").selected(visualizer)).on_hover_text(format!("Visualizer{}", commands::hint(ui.ctx(), Command::ToggleVisualizer))).clicked() {
+            self.set_open(Section::Visualizer, !visualizer);
+        }
+        let playlists = self.is_open(Section::Groupings) && self.groupings.shown_id() == groupings::PLAYLISTS;
+        if ui.add(icon_button("playlist").selected(playlists)).on_hover_text("Playlists").clicked() {
+            if playlists {
+                self.set_open(Section::Groupings, false);
+            } else {
+                self.groupings.show(groupings::PLAYLISTS);
+                self.set_open(Section::Groupings, true);
+                layout::focus(&mut self.dock, Section::Groupings);
+            }
+        }
+        self.queue_button_ui(ui);
+        self.devices_button_ui(ui, view);
+    }
 
-            let (glyph, hover) = if self.fullscreen { ("corners-in", "Exit fullscreen") } else { ("corners-out", "Fullscreen") };
-            let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::ToggleFullscreen));
-            if ui.add(icon_button(glyph)).on_hover_text(hover).clicked() {
-                let ctx = ui.ctx().clone();
-                self.set_fullscreen(&ctx, !self.fullscreen);
-            }
-            let visualizer = self.is_open(Section::Visualizer);
-            if ui.add(icon_button("monitor-play").selected(visualizer)).on_hover_text(format!("Visualizer{}", commands::hint(ui.ctx(), Command::ToggleVisualizer))).clicked() {
-                self.set_open(Section::Visualizer, !visualizer);
-            }
-            let playlists = self.is_open(Section::Groupings) && self.groupings.shown_id() == groupings::PLAYLISTS;
-            if ui.add(icon_button("playlist").selected(playlists)).on_hover_text("Playlists").clicked() {
-                if playlists {
-                    self.set_open(Section::Groupings, false);
-                } else {
-                    self.groupings.show(groupings::PLAYLISTS);
-                    self.set_open(Section::Groupings, true);
-                    layout::focus(&mut self.dock, Section::Groupings);
-                }
-            }
-            let (glyph, hover) = match self.loop_mode {
-                LoopMode::Off => ("repeat", "Loop: off (click: loop the playlist, or what autoplay plays)"),
-                LoopMode::All => ("repeat", "Loop: the playlist, or what autoplay plays (click: this track)"),
-                LoopMode::One => ("repeat-once", "Loop: this track (click: off)"),
-            };
-            if ui.add(icon_button(glyph).selected(self.loop_mode != LoopMode::Off)).on_hover_text(hover).clicked() {
-                self.set_loop_mode(self.loop_mode.cycle());
-                toast::show(ui.ctx(), loop_text(self.loop_mode));
-            }
-            let hover = shuffle_text(self.shuffle);
-            if ui.add(icon_button("shuffle").selected(self.shuffle)).on_hover_text(hover).clicked() {
-                self.set_shuffle(!self.shuffle);
-                toast::show(ui.ctx(), shuffle_text(self.shuffle));
-            }
-            self.queue_button_ui(ui);
-            self.devices_button_ui(ui, view);
+    /// Speed and volume, each an icon, a slider and its value (in a
+    /// right-to-left layout). The speed's icon puts it back to 1x.
+    fn speed_volume_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        ui.add_sized([36.0, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.0}%", self.volume * 100.0)).weak()));
+        ui.spacing_mut().slider_width = 96.0;
+        if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false)).changed() {
+            self.send_volume();
+        }
+        let speaker = match self.volume {
+            v if v <= 0.0 => "speaker-x",
+            v if v < 0.5 => "speaker-low",
+            _ => "speaker-high",
+        };
+        ui.label(egui::RichText::new(icon(speaker)).size(16.0)).on_hover_text("Volume");
 
-            ui.separator();
-            ui.weak(playback_state_text(view));
-        });
-
-        ui.horizontal_wrapped(|ui| {
-            ui.label(egui::RichText::new(icon("gauge")).size(15.0)).on_hover_text("Speed");
-            if ui.small_button("-").clicked() {
-                self.send(AudioCommand::NudgeSpeed(-0.05));
-            }
-            let mut speed = view.speed;
-            if ui
-                .add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED))
-                .changed()
-            {
-                self.send(AudioCommand::SetSpeed(speed));
-            }
-            if ui.small_button("+").clicked() {
-                self.send(AudioCommand::NudgeSpeed(0.05));
-            }
-            if ui.small_button("1x").clicked() {
-                self.send(AudioCommand::SetSpeed(1.0));
-            }
-
-            ui.separator();
-
-            let speaker = match self.volume {
-                v if v <= 0.0 => "speaker-x",
-                v if v < 0.5 => "speaker-low",
-                _ => "speaker-high",
-            };
-            ui.label(egui::RichText::new(icon(speaker)).size(15.0)).on_hover_text("Volume");
-            if ui
-                .add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false))
-                .changed()
-            {
-                self.send_volume();
-            }
-            ui.monospace(format!("{:>3.0}%", self.volume * 100.0));
-        });
-
-        ui.add_space(4.0);
+        ui.add_space(12.0);
+        ui.add_sized([40.0, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.2}x", view.speed)).weak()));
+        let mut speed = view.speed;
+        if ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).show_value(false)).changed() {
+            self.send(AudioCommand::SetSpeed(speed));
+        }
+        if ui.add(icon_button("gauge").selected(view.speed != 1.0)).on_hover_text("Speed (click: back to 1x)").clicked() {
+            self.send(AudioCommand::SetSpeed(1.0));
+        }
     }
 
     fn soundfont_ui(&mut self, ui: &mut egui::Ui) {
@@ -2788,23 +2812,34 @@ impl App {
         // `&mut self`, so the layout is moved out for the duration.
         let mut dock = std::mem::replace(&mut self.dock, DockState::new(Vec::new()));
         self.dock_in_use = true;
-        let mut tabs = SectionTabs { app: self, shared, closed: false };
+        // A section alone in its spot has no tab bar: its top edge (with a
+        // handle drawn on it) drags it instead.
+        // The open tab joins its body, so where it's the first one the
+        // body's corner under it is square.
+        let (mut alone, mut joined) = (Vec::new(), Vec::new());
+        for (_, leaf) in dock.iter_leaves_mut() {
+            leaf.tab_bar_hidden = leaf.len() == 1;
+            if leaf.tab_bar_hidden {
+                alone.extend(leaf.tabs().first().copied());
+            } else if leaf.active.0 == 0 {
+                joined.extend(leaf.tabs().first().copied());
+            }
+        }
+        let mut tabs = SectionTabs { app: self, shared, alone, joined };
         egui::CentralPanel::default().show(ui, |ui| {
             DockArea::new(&mut dock)
                 .id(egui::Id::new("section_dock"))
+                .style(crate::theme::dock_style(ui.style()))
+                .hidable_tab_bars(true)
                 .show_add_buttons(false)
                 .show_leaf_close_all_buttons(false)
                 .show_leaf_collapse_buttons(false)
                 .show_inside(ui, &mut tabs);
         });
-        let closed = tabs.closed;
         self.dock_in_use = false;
         self.dock = dock;
 
         self.refresh_open_sections();
-        if closed {
-            self.save_layout();
-        }
         for (section, open) in std::mem::take(&mut self.pending_layout) {
             self.set_open(section, open);
         }
@@ -4279,8 +4314,8 @@ impl eframe::App for App {
             self.history_ui(&ctx);
             self.status_toast_ui(&ctx);
         } else {
-            egui::Panel::top("top_bar").show(ui, |ui| frame_timing::time("top bar", || self.top_bar_ui(ui)));
-            egui::Panel::bottom("controls_panel").show(ui, |ui| {
+            egui::Panel::top("top_bar").show_separator_line(false).show(ui, |ui| frame_timing::time("top bar", || self.top_bar_ui(ui)));
+            egui::Panel::bottom("controls_panel").show_separator_line(false).show(ui, |ui| {
                 let _timing = frame_timing::scope("controls bar");
                 self.controls_bar_ui(ui, view);
                 self.tour.mark(tour::Target::Controls, ui.min_rect());
@@ -4394,8 +4429,10 @@ impl eframe::App for App {
 struct SectionTabs<'a> {
     app: &'a mut App,
     shared: &'a PlaybackShared,
-    /// A tab was closed this frame, so the layout should be saved.
-    closed: bool,
+    /// The sections alone in their spots, so without a tab bar.
+    alone: Vec<Section>,
+    /// The sections open as the first of their spots' tabs.
+    joined: Vec<Section>,
 }
 
 impl TabViewer for SectionTabs<'_> {
@@ -4413,6 +4450,11 @@ impl TabViewer for SectionTabs<'_> {
         let app = &mut *self.app;
         let _timing = frame_timing::scope(tab.title());
         app.tour.mark(tour::Target::Tab(*tab), ui.max_rect());
+        if self.alone.contains(tab) {
+            drag_handle(ui);
+        } else if self.joined.contains(tab) {
+            square_corner(ui);
+        }
         match tab {
             Section::Songs => app.songs_ui(ui),
             Section::Groupings => app.groupings_ui(ui),
@@ -4432,11 +4474,10 @@ impl TabViewer for SectionTabs<'_> {
         }
     }
 
-    /// Closing a tab just hides the section, all its state lives in `App`,
-    /// not the tab, and View brings it back.
-    fn on_close(&mut self, _tab: &mut Section) -> OnCloseResponse {
-        self.closed = true;
-        OnCloseResponse::Close
+    /// Sections are shown and hidden from View (and the transport's
+    /// toggles), not closed from their tabs.
+    fn is_closeable(&self, _tab: &Section) -> bool {
+        false
     }
 
     /// Every section scrolls its own content where it needs to; a second,
@@ -4812,6 +4853,49 @@ pub(super) fn palette_color(index: u8) -> egui::Color32 {
 /// Give it a hover text saying what it does.
 pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(icon(name)).size(16.0)).min_size(egui::vec2(28.0, 24.0))
+}
+
+/// How wide the transport (`App::transport_ui`) is: five icon buttons and
+/// play, with the gaps between.
+const TRANSPORT_WIDTH: f32 = 5.0 * 28.0 + PLAY_WIDTH + 5.0 * 8.0;
+/// How wide each side of it has to be for the bar to fit on one line.
+const SIDE_WIDTH: f32 = 380.0;
+const PLAY_WIDTH: f32 = 44.0;
+const TRANSPORT_HEIGHT: f32 = 28.0;
+
+/// The handle on the top edge of a section without a tab bar (in the
+/// margin over `ui`, its body), where it's dragged from: a short line,
+/// brighter under the pointer.
+fn drag_handle(ui: &egui::Ui) {
+    let content = ui.max_rect();
+    let margin = crate::theme::DOCK_HANDLE;
+    let strip = egui::Rect::from_min_max(egui::pos2(content.left(), content.top() - margin), egui::pos2(content.right(), content.top()));
+    let weak = ui.visuals().weak_text_color();
+    let color = if ui.rect_contains_pointer(strip) { weak } else { weak.gamma_multiply(0.4) };
+    let line = egui::Rect::from_center_size(strip.center(), egui::vec2(32.0, 3.0));
+    ui.ctx().layer_painter(ui.layer_id()).rect_filled(line, 1.5, color);
+}
+
+/// Square off the top left corner of the body around `ui`, under its tab.
+fn square_corner(ui: &egui::Ui) {
+    let content = ui.max_rect();
+    let corner = egui::pos2(content.left() - f32::from(crate::theme::DOCK_MARGIN), content.top() - crate::theme::DOCK_HANDLE);
+    let patch = egui::Rect::from_min_size(corner, egui::Vec2::splat(8.0));
+    ui.ctx().layer_painter(ui.layer_id()).rect_filled(patch, 0.0, ui.visuals().window_fill);
+}
+
+/// The play/pause button: Play while `paused`, else Pause in the look of
+/// the playing row (`select_list::paint_row`): tinted and outlined in the
+/// theme's playing color.
+pub(super) fn play_button(ctx: &egui::Context, paused: bool, icon_size: f32, size: egui::Vec2) -> egui::Button<'static> {
+    if paused {
+        return egui::Button::new(egui::RichText::new(icon("play")).size(icon_size)).min_size(size);
+    }
+    let color = crate::theme::playing_color(ctx);
+    egui::Button::new(egui::RichText::new(icon("pause")).size(icon_size).color(color))
+        .min_size(size)
+        .fill(color.gamma_multiply(0.15))
+        .stroke(egui::Stroke::new(1.0, color))
 }
 
 /// What Loop is set to, for the toast its button shows.

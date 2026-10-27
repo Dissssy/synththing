@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, AtomExt as _};
 
 use super::preferences::PrefTab;
-use super::{fmt_time, icon, palette_color, status_color, status_outcome, App};
+use super::{fmt_time, icon, status_color, status_outcome, App};
 use crate::audio::{AudioCommand, PlaybackShared};
 use crate::engine::EngineView;
 use crate::frame_timing;
@@ -507,9 +507,8 @@ impl App {
             if ui.add(big_icon_button("skip-back", sizes[1])).on_hover_text("Previous").clicked() {
                 self.previous_track(view.position);
             }
-            let (glyph, color) = if view.paused { ("play", palette_color(2)) } else { ("pause", palette_color(1)) };
             if ui
-                .add(egui::Button::new(egui::RichText::new(icon(glyph)).size(sizes[2] * 0.5).color(color)).min_size(egui::Vec2::splat(sizes[2])))
+                .add(super::play_button(ui.ctx(), view.paused, sizes[2] * 0.5, egui::Vec2::splat(sizes[2])))
                 .on_hover_text(if view.paused { "Play" } else { "Pause" })
                 .clicked()
             {
@@ -551,9 +550,8 @@ impl App {
     fn mobile_now_playing_bar_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let title = self.current_title().or_else(|| view.track_name.clone());
         ui.horizontal(|ui| {
-            let (glyph, color) = if view.paused { ("play", palette_color(2)) } else { ("pause", palette_color(1)) };
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let play = egui::Button::new(egui::RichText::new(icon(glyph)).size(20.0).color(color)).min_size(egui::Vec2::splat(40.0));
+                let play = super::play_button(ui.ctx(), view.paused, 20.0, egui::Vec2::splat(40.0));
                 if ui.add(play).on_hover_text(if view.paused { "Play" } else { "Pause" }).clicked() {
                     self.send(AudioCommand::TogglePause);
                 }

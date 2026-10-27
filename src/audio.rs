@@ -49,7 +49,6 @@ pub enum AudioCommand {
     Seek(f64),
     SeekRelative(f64),
     SetSpeed(f64),
-    NudgeSpeed(f64),
     /// The song, its name, and whether it starts paused (a script asked
     /// for that with `script_options`).
     LoadMidi(Arc<MidiFile>, String, bool),
@@ -388,7 +387,6 @@ impl AudioEngine {
                 self.flush_now();
             }
             AudioCommand::SetSpeed(speed) => self.engine.set_speed(speed),
-            AudioCommand::NudgeSpeed(delta) => self.engine.nudge_speed(delta),
             AudioCommand::LoadMidi(midi, name, paused) => {
                 self.engine.load_midi(midi, name, paused);
                 self.flush_now();

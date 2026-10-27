@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use eframe::egui;
 
-use super::{icon, palette_color};
+use super::icon;
 use crate::audio::PlaybackShared;
 use crate::lua_visualizer::Transport;
 use crate::script_host::Effects;
@@ -560,9 +560,8 @@ fn controls_ui(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut State, act: &
         if ui.add(button("skip-back")).on_hover_text("Previous").clicked() {
             act(Action::Previous);
         }
-        let (glyph, color, hover) =
-            if snapshot.paused { ("play", palette_color(2), "Play") } else { ("pause", palette_color(1), "Pause") };
-        let play = egui::Button::new(egui::RichText::new(icon(glyph)).size(16.0).color(color)).min_size(egui::vec2(30.0, 26.0));
+        let hover = if snapshot.paused { "Play" } else { "Pause" };
+        let play = super::play_button(ui.ctx(), snapshot.paused, 16.0, egui::vec2(30.0, 26.0));
         if ui.add(play).on_hover_text(hover).clicked() {
             act(Action::TogglePause);
         }

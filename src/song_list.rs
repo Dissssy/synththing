@@ -536,7 +536,7 @@ pub fn ordered_ui(
             .collect()
     };
     let mut view_changed = false;
-    if !touch {
+    if !touch && !songs.is_empty() {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y), egui::Sense::hover());
         let output = header(ui, header_id, rect, &shown, |_, label| egui::RichText::new(label).strong());
         view_changed = view.resize(output.resized);

@@ -4,6 +4,14 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- A visual pass to tie the app's look together:
+  - The bottom bar uses the window's full width: the song's title over its playlist and soundfont, the seek bar between the times, then the view toggles at the left, the transport in the middle (play bigger), and speed and volume at the right. The speed icon puts it back to 1x.
+  - Pause looks like the playing row in lists (tinted and outlined in the playing color), on the desktop, the phone layout and the tray panel.
+  - Panels have no outlines and no lines between them, and the open tab is one shape with its panel. A panel alone in its spot has no tab bar at all: drag it by the handle on its top edge. Tabs have no close buttons, since View shows and hides panels. Dragging a tab tints where it would land.
+  - Playlists and groupings show a play button in the middle of the art (list and grid), under the pointer.
+  - Up next clears with an icon button, and shows no column headings while it's empty.
+
 ## 1.7.6 (2026-10-27)
 
 ### Fixed
