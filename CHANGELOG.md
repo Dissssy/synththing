@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- The local API tells programs only what changed: `GET /v1/songs?since=<revision>` gives the songs that came or changed since an earlier answer, and the keys of those that left. See docs/API.md.
 - Programs can check songs before adding them: `/v1/staged` takes a file and reads it without putting it in the library, `/v1/staged/check` matches what's staged at MusicBrainz (and says which wishes it would fill), and `/v1/staged/{key}/import` adds it as checked without sending it again. See docs/API.md.
 - The local API has the wishlist: `GET`, `POST` and `DELETE /v1/wishlist` (an artist comes with the albums of theirs wished for), notes, `GET /v1/musicbrainz/search` and an artist's albums and a release's track list at MusicBrainz to wish from, and a `wishlist_changed` event. See docs/API.md.
 - Filter the Wishlist: its box takes kind:album, got:no (partly, yes), type:ep, artist:, title:, note:, addedby:, year:2010..2019 and added:30d, with completion, and words found in a wish's title, artist or note. In the Songs search and smart playlists, is:wished finds the songs filling a wish and wish:"Album name" those filling that one (is:wished added:30d is what came in from your wishlist lately).

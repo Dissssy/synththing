@@ -26,7 +26,7 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | --- | --- | --- |
 | `GET /v1` | any token | `{"app", "version", "read", "control", "add_songs", "edit_library", "download_songs"}`: who you are to it |
 | `GET /v1/now-playing` | read | What's playing (below) |
-| `GET /v1/songs?q=&offset=&limit=` | read | `{"total", "songs": [...]}`: the songs `q` finds, sorted by file name: `limit` of them (at most and by default 500) after skipping `offset` |
+| `GET /v1/songs?q=&offset=&limit=&since=` | read | `{"total", "songs": [...], "revision", "full"}`: the songs `q` finds, sorted by file name: `limit` of them (at most and by default 500) after skipping `offset`. With `since` (a `revision` an earlier answer gave), only the songs that changed after it, and `removed`: the keys of those that left the list (below) |
 | `GET /v1/songs/{key}` | read | One song, by the `key` the other requests give |
 | `POST /v1/songs?name=Song.mp3` | add songs | Adds the file sent as the body (up to 250 MB) to the library: 201 with the song if it's new, 200 if it was there already |
 | `POST /v1/staged?name=Song.mp3` | add songs | Stages the file sent as the body (below): read, but not in the library. 201 with it if it's new, 200 if it was staged already |
@@ -105,6 +105,12 @@ What's playing (`soundfont` is the one a MIDI song plays with, `null` for any ot
 
 Commands are the ones Preferences > Keyboard lists, by id: `play`, `pause`, `toggle_pause`, `next_track`, `previous_track`, `seek_back`, `seek_forward`, `restart_song`, `toggle_visualizer`, `toggle_fullscreen`, `go_to_songs` and so on. `GET /v1/commands` has them all.
 
+## Keeping up with the library
+
+Every `/v1/songs` answer carries the library's `revision`. Ask again with `?since=<revision>` and only the songs that came or changed after it come back (with the same `q`, `offset` and `limit` as ever), plus `removed`: the keys of the songs that left the list since, because they're gone from the library or changed so `q` doesn't find them any more. Keep the `revision` of the first page when paging, so nothing that changes meanwhile is missed (it's sent again next time).
+
+`full` says whether the answer is every song `q` finds rather than only what changed: without `since`, or with one from before synththing last started (revisions only last while it runs). Then start again from that list.
+
 ## The wishlist
 
 A wish is what was wished for and what of it is here:
@@ -146,7 +152,7 @@ Every song a program adds that wasn't in your library yet is marked with that pr
 
 - `now_playing`: the song, playlist, pause, speed, volume, Shuffle, Loop, Autoplay or soundfont changed. Its data is what's playing, as above.
 - `seeked`: the song jumped (a seek, or a loop back to the start): `{"position": 30.0}`.
-- `library_changed`: songs were added, removed or edited: `{}`. Ask `/v1/songs` again for the new state.
+- `library_changed`: songs were added, removed or edited: `{}`. Ask `/v1/songs?since=` again for what changed.
 - `playlists_changed`: a playlist was made, renamed, deleted or had songs added, removed or moved (here or by sync): `{}`. Ask `/v1/playlists` again.
 - `queue_changed`: songs were queued, played from the queue, moved or taken out: `{}`. Ask `/v1/queue` again.
 - `soundfonts_changed`: a soundfont was added, removed or put in use: `{}`. Ask `/v1/soundfonts` again.
