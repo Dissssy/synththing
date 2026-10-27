@@ -3,8 +3,10 @@
 //! name, in three parts: Wanted, Partly got and Got it, worked out from
 //! the songs here as they're matched. A wish that comes true says so.
 //! A watched artist's albums are looked up at MusicBrainz on each device
-//! (one artist at a time, once), and listed in a window of their own,
-//! where each can be wished for.
+//! (one artist at a time, once), and listed on a page of their own in the
+//! tab, where each can be wished for; an album's page picks its songs.
+//! An artist or album found by a search opens on the same page, to wish
+//! for it or for some of it.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::mpsc;
@@ -42,11 +44,13 @@ enum Fetched {
 
 /// What the tab shows in place of the wishlist: an artist's albums, to
 /// pick the ones wished for, or a wished album's songs, to skip some (by
-/// the wish's ID).
+/// the wish's ID); or either of an artist or album found at MusicBrainz
+/// and not wished for, to wish for it (or for some of it).
 #[derive(Clone)]
 enum Page {
     Artist(String),
     Album(String),
+    Found(Wish),
 }
 
 /// A search being made, or what came of it.
@@ -276,11 +280,14 @@ impl App {
         }
         let kept = &self.lookup.kept;
         let looked_up = &self.wishlist.looked_up;
-        let next = self
-            .wishlist
-            .list
-            .wishes
-            .values()
+        // (The one found at MusicBrainz being looked at first.)
+        let found = match &self.wishlist.page {
+            Some(Page::Found(wish)) => Some(wish),
+            _ => None,
+        };
+        let next = found
+            .into_iter()
+            .chain(self.wishlist.list.wishes.values())
             .filter(|w| w.kind == Kind::Artist)
             .filter_map(|w| w.musicbrainz.clone())
             .find(|id| !looked_up.contains(id) && kept.discography(id).is_none());
@@ -365,10 +372,26 @@ impl App {
             self.wishlist.search = Some(Search::Done(found));
         }
 
+        // (One found, wished for now: its page as a wish.)
+        if let Some(Page::Found(wish)) = &self.wishlist.page
+            && let Some(id) = self.wishlist.list.find(wish)
+        {
+            let id = id.to_string();
+            self.wishlist.page = Some(if wish.kind == Kind::Artist { Page::Artist(id) } else { Page::Album(id) });
+        }
         if let Some(page) = self.wishlist.page.clone() {
-            match page {
-                Page::Artist(id) => self.wishlist_artist_ui(ui, &id, online),
-                Page::Album(id) => self.wishlist_album_ui(ui, &id, online),
+            let wish = match &page {
+                Page::Artist(id) | Page::Album(id) => self.wishlist.list.wishes.get(id).cloned(),
+                Page::Found(wish) => Some(wish.clone()),
+            };
+            let id = match &page {
+                Page::Artist(id) | Page::Album(id) => Some(id.as_str()),
+                Page::Found(_) => None,
+            };
+            match wish {
+                None => self.wishlist.page = None,
+                Some(wish) if wish.kind == Kind::Artist => self.wishlist_artist_ui(ui, id, wish, online),
+                Some(wish) => self.wishlist_album_ui(ui, id, wish, online),
             }
         } else {
             self.wishlist_search_ui(ui, online);
@@ -404,6 +427,7 @@ impl App {
         }
         let mut close = false;
         let mut add = None;
+        let mut open = None;
         match &self.wishlist.search {
             None => {}
             Some(Search::Waiting(_)) => {
@@ -434,8 +458,10 @@ impl App {
                                 ui.weak("Nothing found.");
                             }
                             for wish in wishes {
-                                if found_row_ui(ui, art, wish, list.find(wish).is_some()) {
-                                    add = Some(wish.clone());
+                                match found_row_ui(ui, art, wish, list.find(wish).is_some()) {
+                                    Some(FoundAct::Add) => add = Some(wish.clone()),
+                                    Some(FoundAct::Open) => open = Some(wish.clone()),
+                                    None => {}
                                 }
                             }
                         }
@@ -449,6 +475,9 @@ impl App {
         if let Some(wish) = add {
             toast::show(ui.ctx(), format!("Wished for {}", wish.title));
             self.wish_for(wish);
+        }
+        if let Some(wish) = open {
+            self.wishlist_act(ui.ctx(), Some(Act::Open(Page::Found(wish))));
         }
     }
 
@@ -669,19 +698,24 @@ impl App {
 
     /// An artist's albums, in the tab in place of the wishlist (those of
     /// the kinds shown): each ticked to wish for it, under them, with
-    /// what's here of it.
-    fn wishlist_artist_ui(&mut self, ui: &mut egui::Ui, id: &str, online: bool) {
-        let Some(artist) = self.wishlist.list.wishes.get(id).cloned() else {
-            self.wishlist.page = None;
-            return;
-        };
+    /// what's here of it. An artist not wished for (`id` none, found at
+    /// MusicBrainz) is wished for with the first album ticked, or by
+    /// themselves with the button by their name.
+    fn wishlist_artist_ui(&mut self, ui: &mut egui::Ui, id: Option<&str>, artist: Wish, online: bool) {
         let mut back = false;
+        let mut wish_them = false;
         let mut kinds = self.wishlist_kinds();
         let mut shown_changed = false;
         ui.horizontal(|ui| {
             back = ui.add(super::icon_button("arrow-left")).on_hover_text("Back to the wishlist").clicked();
             ui.add(egui::Label::new(egui::RichText::new(&artist.title).heading()).truncate());
+            if id.is_none() {
+                wish_them = ui.button(format!("{} Wish for them", icon("gift"))).on_hover_text("Watch over their albums: tick the ones you want").clicked();
+            }
         });
+        if let Some(about) = artist.artist.as_ref().filter(|_| id.is_none()) {
+            ui.weak(about);
+        }
         ui.horizontal_wrapped(|ui| {
             for kind in crate::wishlist::KINDS {
                 let shown = kinds.contains(&kind);
@@ -706,7 +740,7 @@ impl App {
         let mut fetch: Option<Result<Wish, String>> = None;
         let albums = artist.musicbrainz.as_deref().and_then(|a| self.lookup.kept.discography(a));
         // (Their albums wished for by themselves: theirs now, ticked here.)
-        if let Some(albums) = &albums {
+        if let (Some(albums), Some(id)) = (&albums, id) {
             let groups: HashSet<&str> = albums.iter().map(|a| a.id.as_str()).collect();
             let alone: Vec<String> = self
                 .wishlist
@@ -726,8 +760,9 @@ impl App {
             }
             Some(albums) => {
                 let here = crate::wishlist::albums_here(&self.songs);
+                let songs_here = crate::wishlist::songs_here(&self.songs);
                 let picked: BTreeMap<&str, &String> =
-                    self.wishlist.list.under(id).filter_map(|(album, w)| Some((w.musicbrainz.as_deref()?, album))).collect();
+                    self.wishlist.list.under(id.unwrap_or_default()).filter(|_| id.is_some()).filter_map(|(album, w)| Some((w.musicbrainz.as_deref()?, album))).collect();
                 let wishes = &self.wishlist.list.wishes;
                 let progress = self.wishlist.progress.as_ref().map(|(_, p)| p);
                 let adding = &self.wishlist.adding;
@@ -752,7 +787,7 @@ impl App {
                             rows.push(ArtistRow::Note(note.into()));
                             match wish {
                                 Some(w) if w.release.is_some() => fetch = Some(Err(w.release.clone().unwrap_or_default())),
-                                _ => fetch = Some(Ok(crate::wishlist::album_wish(album, &artist.title, id))),
+                                _ => fetch = Some(Ok(crate::wishlist::album_wish(album, &artist.title, id.unwrap_or_default()))),
                             }
                         }
                         None => rows.push(ArtistRow::Note("Its songs aren't known on this device yet.".into())),
@@ -818,12 +853,13 @@ impl App {
                                     None => ArtistAct::OnlySong(previews.get(&album.id).cloned(), recording.to_string()),
                                 });
                             }
+                            let is_here = recording.is_some_and(|r| songs_here.contains(r));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                select_list::cell(ui, 70.0, "", false);
+                                here_cell(ui, is_here);
                                 select_list::cell(ui, 50.0, egui::RichText::new(track.length.map_or_else(String::new, crate::song_info::format_length)).weak(), false);
                                 let title = egui::RichText::new(format!("{}. {}", track.position, track.title));
-                                let title = if ticked { title } else { title.color(ui.visuals().weak_text_color()) };
-                                select_list::label(ui, title, None, scroll);
+                                let title = if ticked && !is_here { title } else { title.color(ui.visuals().weak_text_color()) };
+                                select_list::label(ui, title, is_here.then(|| HERE.to_string()), scroll);
                             });
                         }
                     }
@@ -837,6 +873,9 @@ impl App {
         }
         if back {
             self.wishlist.page = None;
+        }
+        if wish_them {
+            self.wish_for_artist(ui.ctx(), artist.clone());
         }
         if shown_changed {
             self.config.wishlist_kinds = if kinds.iter().copied().eq(crate::wishlist::SHOWN) {
@@ -853,6 +892,17 @@ impl App {
             Some(Err(release)) => self.fetch_tracks(ui.ctx(), release),
             None => {}
         }
+        // (Not wished for yet: they are, with what's picked under them.)
+        let wishes = matches!(act, Some(ArtistAct::Album(_, None) | ArtistAct::OnlySong(Some(_), _)));
+        let id = match id {
+            Some(id) => id.to_string(),
+            None if wishes => {
+                let id = self.wishlist.list.add(artist.clone());
+                self.wishlist_changed();
+                id
+            }
+            None => String::new(),
+        };
         match act {
             None => {}
             Some(ArtistAct::Expand(group)) => {
@@ -862,10 +912,10 @@ impl App {
             }
             Some(ArtistAct::Album(_, Some(wished))) => self.unwish(&wished),
             Some(ArtistAct::Album(album, None)) => {
-                let wish = crate::wishlist::album_wish(&album, &artist.title, id);
+                let wish = crate::wishlist::album_wish(&album, &artist.title, &id);
                 // (Its songs known already: wished for as it is.)
                 match self.wishlist.previews.remove(&album.id) {
-                    Some(preview) => self.wish_for_album(ui.ctx(), AlbumAsk::Wish(preview)),
+                    Some(preview) => self.wish_for_album(ui.ctx(), AlbumAsk::Wish(Wish { under: Some(id), ..preview })),
                     None => self.wish_for_album(ui.ctx(), if online { AlbumAsk::Group(wish) } else { AlbumAsk::Wish(wish) }),
                 }
             }
@@ -887,7 +937,7 @@ impl App {
                 if let Some(group) = &preview.musicbrainz {
                     self.wishlist.previews.remove(group);
                 }
-                self.wish_for_album(ui.ctx(), AlbumAsk::Wish(Wish { skipped, ..preview }));
+                self.wish_for_album(ui.ctx(), AlbumAsk::Wish(Wish { skipped, under: Some(id), ..preview }));
             }
             Some(ArtistAct::OnlySong(None, _)) => {}
         }
@@ -896,49 +946,50 @@ impl App {
     /// A wished album's songs, in the tab in place of the wishlist: each
     /// ticked unless it's skipped, with whether it's here. Its release's
     /// tracks are asked of MusicBrainz if they aren't kept here.
-    fn wishlist_album_ui(&mut self, ui: &mut egui::Ui, id: &str, online: bool) {
-        let Some(wish) = self.wishlist.list.wishes.get(id).cloned() else {
-            self.wishlist.page = None;
-            return;
-        };
+    /// An album not wished for (`id` none, found at MusicBrainz) is wished
+    /// for with the songs ticked (the rest skipped), or all of it with the
+    /// button by its name.
+    fn wishlist_album_ui(&mut self, ui: &mut egui::Ui, id: Option<&str>, wish: Wish, online: bool) {
         let mut back = false;
+        let mut wish_all = false;
         ui.horizontal(|ui| {
             back = ui.add(super::icon_button("arrow-left")).on_hover_text("Back").clicked();
             ui.add(egui::Label::new(egui::RichText::new(&wish.title).heading()).truncate());
+            if id.is_none() {
+                wish_all = ui.button(format!("{} Wish for all of it", icon("gift"))).clicked();
+            }
         });
         if let Some(artist) = &wish.artist {
             ui.weak(artist);
         }
-        ui.weak("Untick the songs you don't want: the album's got once the rest are here.");
+        ui.weak(if id.is_some() { "Untick the songs you don't want: the album's got once the rest are here." } else { "Tick the songs you want, or wish for all of it." });
         ui.separator();
         let release = wish.release.as_deref().and_then(|r| self.lookup.kept.release(r));
         let mut skip = None;
         match (&release, &wish.release) {
             (Some(release), _) => {
-                let here: HashSet<&str> = self.wishlist.progress.as_ref().and_then(|(_, p)| p.get(id)).into_iter().flat_map(|p| &p.songs).filter_map(|key| {
-                    crate::fields::Facts::of(self.songs.get_by_key(key)?).recording()
-                }).collect();
+                let here = crate::wishlist::songs_here(&self.songs);
                 let rows: Vec<&crate::lookup::matching::Track> = release.tracks.iter().collect();
                 let output = select_list::show(ui, "wishlist_tracks", &rows, &mut self.wishlist.page_selection, None, |ui, row, track| {
                     let recording = track.recording.as_deref();
-                    let mut ticked = recording.is_none_or(|r| !wish.skipped.iter().any(|s| s == r));
+                    let mut ticked = id.is_some() && recording.is_none_or(|r| !wish.skipped.iter().any(|s| s == r));
                     if ui.add_enabled(recording.is_some(), egui::Checkbox::without_text(&mut ticked)).changed()
                         && let Some(recording) = recording
                     {
                         skip = Some((recording.to_string(), !ticked));
                     }
                     let scroll = select_list::scrolls(row, false);
+                    let is_here = recording.is_some_and(|r| here.contains(r));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let state = if recording.is_some_and(|r| here.contains(r)) { "Here" } else { "" };
-                        select_list::cell(ui, 50.0, egui::RichText::new(state).weak(), false);
+                        here_cell(ui, is_here);
                         select_list::cell(ui, 50.0, egui::RichText::new(track.length.map_or_else(String::new, crate::song_info::format_length)).weak(), false);
                         let title = egui::RichText::new(format!("{}. {}", track.position, track.title));
-                        let title = if ticked { title } else { title.color(ui.visuals().weak_text_color()) };
-                        select_list::label(ui, title, None, scroll);
+                        let title = if ticked && !is_here { title } else { title.color(ui.visuals().weak_text_color()) };
+                        select_list::label(ui, title, is_here.then(|| HERE.to_string()), scroll);
                     });
                 });
                 if let Some(recording) = output.activated.and_then(|i| rows[i].recording.clone()) {
-                    let skipped = wish.skipped.contains(&recording);
+                    let skipped = id.is_none() || wish.skipped.contains(&recording);
                     skip = Some((recording, !skipped));
                 }
             }
@@ -958,9 +1009,22 @@ impl App {
             self.wishlist.page = wish.under.clone().filter(|artist| self.wishlist.list.wishes.contains_key(artist)).map(Page::Artist);
             self.wishlist.page_selection.clear();
         }
-        if let Some((recording, skipped)) = skip {
-            self.wishlist.list.set_skipped(id, &recording, skipped);
-            self.wishlist_changed();
+        if wish_all {
+            toast::show(ui.ctx(), format!("Wished for {}", wish.title));
+            self.wish_for(wish.clone());
+        }
+        match (skip, id) {
+            (Some((recording, skipped)), Some(id)) => {
+                self.wishlist.list.set_skipped(id, &recording, skipped);
+                self.wishlist_changed();
+            }
+            // (Not wished for yet: it is, with only that song.)
+            (Some((recording, false)), None) => {
+                let skipped = release.iter().flat_map(|r| &r.tracks).filter_map(|t| t.recording.clone()).filter(|r| *r != recording).collect();
+                toast::show(ui.ctx(), format!("Wished for {}", wish.title));
+                self.wish_for(Wish { skipped, ..wish });
+            }
+            _ => {}
         }
     }
 
@@ -1173,12 +1237,37 @@ fn musicbrainz_url(wish: &Wish) -> Option<String> {
 
 /// A search result: its cover, what it is, and Add (or that it's wished
 /// for already). Whether Add was clicked.
-fn found_row_ui(ui: &mut egui::Ui, art: &mut AlbumArt, wish: &Wish, wished: bool) -> bool {
+const HERE: &str = "You have this song";
+
+/// The cell saying a song's here.
+fn here_cell(ui: &mut egui::Ui, here: bool) {
+    let text = if here { format!("{} Here", icon("check")) } else { String::new() };
+    select_list::cell(ui, 70.0, egui::RichText::new(text).weak(), false);
+}
+
+/// What's asked of a search result: wish for it, or open its page.
+enum FoundAct {
+    Add,
+    Open,
+}
+
+fn found_row_ui(ui: &mut egui::Ui, art: &mut AlbumArt, wish: &Wish, wished: bool) -> Option<FoundAct> {
+    // (An artist's albums, or an album's songs, to pick from: its picture
+    // and name open them.)
+    let opens = match wish.kind {
+        Kind::Artist => wish.musicbrainz.is_some(),
+        Kind::Album => wish.release.is_some(),
+        Kind::Song | Kind::Text => false,
+    };
+    let sense = if opens { egui::Sense::click() } else { egui::Sense::hover() };
+    let hover = if wish.kind == Kind::Artist { "See their albums" } else { "See its songs" };
     let mut add = false;
+    let mut open = false;
     ui.horizontal(|ui| {
         let side = 2.0 * ui.spacing().interact_size.y;
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
+        let (rect, tile) = ui.allocate_exact_size(egui::vec2(side, side), sense);
         art.tile(ui, rect, &source(wish), &wish.title);
+        open |= tile.clicked();
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if wished {
                 ui.weak(format!("{} On your wishlist", icon("check")));
@@ -1186,7 +1275,11 @@ fn found_row_ui(ui: &mut egui::Ui, art: &mut AlbumArt, wish: &Wish, wished: bool
                 add = ui.button("Add").clicked();
             }
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                ui.add(egui::Label::new(&wish.title).truncate());
+                let title = ui.add(egui::Label::new(&wish.title).truncate().sense(sense));
+                open |= title.clicked();
+                if opens {
+                    title.on_hover_text(hover).on_hover_cursor(egui::CursorIcon::PointingHand);
+                }
                 let mut detail: Vec<String> = [wish.artist.clone(), wish.year.clone(), wish.release_type.clone()].into_iter().flatten().collect();
                 if wish.tracks > 0 {
                     detail.push(if wish.tracks == 1 { "1 track".to_string() } else { format!("{} tracks", wish.tracks) });
@@ -1195,5 +1288,9 @@ fn found_row_ui(ui: &mut egui::Ui, art: &mut AlbumArt, wish: &Wish, wished: bool
             });
         });
     });
-    add
+    if add {
+        Some(FoundAct::Add)
+    } else {
+        open.then_some(FoundAct::Open)
+    }
 }

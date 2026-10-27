@@ -481,6 +481,11 @@ pub fn albums_here(store: &SongStore) -> BTreeSet<&str> {
     store.known().filter(|(key, _)| store.has(key)).filter_map(|(_, song)| song.online.as_ref()?.group.as_deref()).collect()
 }
 
+/// The songs (recordings, by ID) in `store`.
+pub fn songs_here(store: &SongStore) -> BTreeSet<&str> {
+    store.known().filter(|(key, _)| store.has(key)).filter_map(|(_, song)| crate::fields::Facts::of(song).recording()).collect()
+}
+
 /// The albums of the artist's wish `wish` (as `kept` has them) of the
 /// kinds `shown` that none of is in `store`.
 pub fn missing_albums(wish: &Wish, store: &SongStore, kept: &Kept, shown: &[&str]) -> Vec<ArtistAlbum> {
