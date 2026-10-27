@@ -13,12 +13,15 @@
 //! and what album they'd be. What MusicBrainz says otherwise of matched
 //! songs (`lookup::details`) is offered field by field for each album,
 //! and songs far from their track's length are flagged for a look.
+//! Songs that are one recording (`duplicates`) are offered as one: the
+//! best copy kept, the rest merged onto it and removed.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use unicode_normalization::UnicodeNormalization;
 
+use crate::duplicates;
 use crate::fields::{self, Facts, Field};
 use crate::file_tags::{self, Known};
 use crate::smart::VARIOUS_ARTISTS;
@@ -34,6 +37,9 @@ const TIDIED: [Field; 6] = [Field::Title, Field::Artist, Field::AlbumArtist, Fie
 pub enum Kind {
     /// Not songs at all: remove them from the library.
     Junk,
+    /// One recording in several files (`duplicates`): keep the best,
+    /// remove the others.
+    Duplicate,
     /// Tags from a song's file name, for one with no title.
     FileName,
     /// A title starting with its track number.
@@ -59,6 +65,7 @@ impl Kind {
     pub fn label(self) -> &'static str {
         match self {
             Kind::Junk => "Not songs",
+            Kind::Duplicate => "Duplicate",
             Kind::FileName => "From file name",
             Kind::NumberInTitle => "Number in title",
             Kind::VideoTitle => "Video title",
@@ -95,6 +102,8 @@ pub enum What {
     Online { field: Field, album: String, release: String, changes: Vec<(String, String)> },
     /// A song's length (seconds) here and at MusicBrainz.
     Length { title: String, here: f64, there: f64 },
+    /// One recording's copies (`Suggestion::keys`, the best first).
+    Duplicates { title: String },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -126,6 +135,10 @@ impl Suggestion {
             What::Fields { group, .. } => format!("{:?}:{group}", self.kind),
             What::Online { field, release, .. } => format!("musicbrainz:{release}:{}", field.def().key),
             What::Length { .. } => format!("length:{}", self.keys.join("|")),
+            What::Duplicates { .. } => {
+                let keys: BTreeSet<&str> = self.keys.iter().map(String::as_str).collect();
+                format!("duplicate:{}", keys.into_iter().collect::<Vec<_>>().join("|"))
+            }
         }
     }
 }
@@ -198,6 +211,12 @@ pub fn suggest(store: &SongStore, ignore: &str) -> Vec<Suggestion> {
     if !junk.is_empty() {
         suggestions.push(Suggestion { kind: Kind::Junk, what: What::AppleDouble, to: String::new(), keys: junk });
     }
+    suggestions.extend(duplicates::groups(store).into_iter().map(|group| Suggestion {
+        kind: Kind::Duplicate,
+        what: What::Duplicates { title: group.title },
+        to: String::new(),
+        keys: group.keys,
+    }));
     suggestions.extend(same_names(&names));
     suggestions.extend(albums.into_values().filter(|a| a.artists.len() > 1 && !a.album_artist && !a.unmarked.is_empty()).map(|album| Suggestion {
         kind: Kind::Compilation,
@@ -484,9 +503,9 @@ pub fn edits(store: &SongStore, chosen: &[(&Suggestion, &str)], ignore: &str) ->
                 written.get(&(key.clone(), field)).cloned().or_else(|| facts.text(field).map(Cow::into_owned))
             };
             match &suggestion.what {
-                // (Removed, not edited: `App::remove_songs`; or only to
-                // look at.)
-                What::AppleDouble | What::Length { .. } => {}
+                // (Removed, not edited: `App::remove_songs`; merged and
+                // removed: `App::merge_duplicates`; or only to look at.)
+                What::AppleDouble | What::Duplicates { .. } | What::Length { .. } => {}
                 What::Online { field, changes, .. } => {
                     if let Some((_, to)) = suggestion.keys.iter().position(|k| k == key).map(|i| &changes[i]) {
                         written.insert((key.clone(), *field), to.clone());

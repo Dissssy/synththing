@@ -34,6 +34,7 @@ mod config;
 mod device;
 mod device_sync;
 mod device_messages;
+mod duplicates;
 mod credits;
 mod decoded_audio;
 mod engine;

@@ -17,7 +17,9 @@ use eframe::egui;
 use super::lookup::{self, Reviewed, Unsure};
 use super::{App, fit_width, icon_button};
 use crate::cleanup::{self, Kind, Suggestion, What};
+use crate::duplicates;
 use crate::lookup::{Kept, Tried};
+use crate::playlist::PlaylistEntry;
 use crate::song_store::SongStore;
 
 /// The Clean up window, while it's open.
@@ -32,6 +34,9 @@ pub(super) struct CleanUp {
     unsure: Vec<Unsure>,
     /// The release picked for each (by its album's id), by index.
     picks: BTreeMap<String, usize>,
+    /// The copy picked to keep of each duplicate song (by the
+    /// suggestion's ID), by index; the best's the default.
+    keep: BTreeMap<String, usize>,
     /// The rows being worked out, and what from.
     working: Option<(u64, mpsc::Receiver<Rows>)>,
 }
@@ -56,6 +61,58 @@ impl Rows {
 }
 
 impl App {
+    /// Make the song `keep` stand in for its duplicates `others`, before
+    /// they're removed: it gets what they have that it lacks
+    /// (`duplicates::merge`), and their places in playlists and in sets
+    /// that play together (a playlist with it already loses theirs).
+    fn merge_duplicates(&mut self, keep: &str, others: &[String]) {
+        let merged = duplicates::merge(&self.songs, keep, others);
+        if let Some(tags) = merged.tags {
+            self.songs.set_song_tags(keep, tags);
+        }
+        self.songs.edit(merged.edits);
+        if merged.online.is_some() {
+            self.songs.set_online(vec![(keep.to_string(), merged.online)]);
+        }
+        if merged.position.is_some() {
+            self.songs.set_position(keep, merged.position);
+        }
+        let sets: Vec<(String, Vec<String>)> = self
+            .songs
+            .together()
+            .iter()
+            .filter(|(_, keys)| keys.iter().any(|k| others.contains(k)))
+            .map(|(id, keys)| (id.clone(), keys.iter().map(|k| if others.contains(k) { keep.to_string() } else { k.clone() }).collect()))
+            .collect();
+        for (id, keys) in sets {
+            self.songs.set_together(&id, keys);
+        }
+        let kept = self.songs.path(keep);
+        let gone: Vec<PathBuf> = others.iter().map(|k| self.songs.path(k)).collect();
+        for list in 0..self.playlists.lists.len() {
+            let playlist = &mut self.playlists.lists[list].playlist;
+            if playlist.smart.is_some() || !playlist.entries.iter().any(|e| gone.contains(&e.path)) {
+                continue;
+            }
+            let mut has = playlist.entries.iter().any(|e| e.path == kept);
+            let mut drop = Vec::new();
+            for (i, entry) in playlist.entries.iter_mut().enumerate().filter(|(_, e)| gone.contains(&e.path)) {
+                if has {
+                    drop.push(i);
+                } else {
+                    *entry = PlaylistEntry { soundfont: entry.soundfont.take(), ..PlaylistEntry::new(kept.clone()) };
+                    has = true;
+                }
+            }
+            if drop.is_empty() {
+                self.save_playlist(list);
+            } else {
+                self.remove_entries(list, &drop);
+            }
+        }
+        self.songs_changed();
+    }
+
     /// What the clean-up suggestions are made from: the songs, and how
     /// their names group.
     fn cleanup_revision(&self) -> u64 {
@@ -148,7 +205,7 @@ impl App {
                             if ui.add(icon_button("x")).on_hover_text("Dismiss: leave it as it is").clicked() {
                                 dismiss.push(id.clone());
                             }
-                            let fixed = matches!(suggestion.kind, Kind::Compilation | Kind::Junk)
+                            let fixed = matches!(suggestion.kind, Kind::Compilation | Kind::Junk | Kind::Duplicate)
                                 || matches!(suggestion.what, What::Fields { .. } | What::Online { .. });
                             let look = suggestion.kind == Kind::LengthDiffers;
                             if !look && ui.add_enabled(fixed || !to.trim().is_empty(), icon_button("check")).on_hover_text("Apply").clicked() {
@@ -158,6 +215,18 @@ impl App {
                                 ui.add(egui::Label::new(to.as_str()).truncate());
                             } else if suggestion.kind == Kind::Junk {
                                 ui.label("Remove from the library");
+                            } else if suggestion.kind == Kind::Duplicate {
+                                let keep = cleanup.keep.entry(id.clone()).or_default();
+                                let copy = |key: &String| self.songs.get_by_key(key).map(duplicates::describe).unwrap_or_default();
+                                egui::ComboBox::from_id_salt(("duplicate", id))
+                                    .width(ui.available_width())
+                                    .truncate()
+                                    .selected_text(format!("Keep {}", copy(&suggestion.keys[*keep])))
+                                    .show_ui(ui, |ui| {
+                                        for (i, key) in suggestion.keys.iter().enumerate() {
+                                            ui.selectable_value(keep, i, copy(key));
+                                        }
+                                    });
                             } else if suggestion.kind == Kind::Compilation {
                                 ui.label(format!("Mark a compilation, by {to}"));
                             } else if fixed {
@@ -193,10 +262,20 @@ impl App {
             cleanup.unsure.retain(|u| u.album.id != album);
             self.reviewed(reviewed);
         }
-        // (Junk's removed, asked about first: `App::remove_songs_ui`.)
+        // (Junk's removed, asked about first: `App::remove_songs_ui`; so
+        // are duplicates, once they're merged onto the copy kept.)
         let (junk, apply): (Vec<usize>, Vec<usize>) = apply.into_iter().partition(|&i| cleanup.suggestions[i].kind == Kind::Junk);
         for i in junk {
             self.remove_songs.extend(cleanup.suggestions[i].keys.iter().map(|k| self.songs.path(k)));
+        }
+        let (copies, apply): (Vec<usize>, Vec<usize>) = apply.into_iter().partition(|&i| cleanup.suggestions[i].kind == Kind::Duplicate);
+        for i in copies {
+            let keys = &cleanup.suggestions[i].keys;
+            let keep = cleanup.keep.get(&cleanup.suggestions[i].id(&ignore)).copied().unwrap_or_default().min(keys.len() - 1);
+            let others: Vec<String> = keys.iter().enumerate().filter(|(j, _)| *j != keep).map(|(_, k)| k.clone()).collect();
+            self.merge_duplicates(&keys[keep], &others);
+            self.remove_songs.extend(others.iter().map(|k| self.songs.path(k)));
+            self.remove_everywhere = true;
         }
         if !apply.is_empty() {
             let chosen: Vec<(&Suggestion, &str)> = apply
@@ -324,6 +403,13 @@ fn describe(suggestion: &Suggestion) -> (String, String) {
             title.clone(),
             format!(
                 "{title} is far from its track's length at MusicBrainz: it may be another version, or a bad rip. Nothing to apply; dismiss it once you've had a look."
+            ),
+        ),
+        What::Duplicates { title } => (
+            format!("{title} ({} copies)", suggestion.keys.len()),
+            format!(
+                "{title} is in your library {} times, as one recording at MusicBrainz. Applying keeps the copy picked, puts what the others have onto it (playlists, tags and stars, edits, its match), then asks to remove the others.",
+                suggestion.keys.len()
             ),
         ),
         What::AppleDouble => {
