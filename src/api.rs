@@ -494,6 +494,72 @@ struct Shared {
     streams: Mutex<Vec<(Option<Vec<String>>, Sender<String>)>>,
     /// The visualizer's pictures, for whoever's watching them.
     frames: Arc<crate::visualizer_stream::Frames>,
+    /// What changed in the library when, for `/v1/songs?since=`.
+    changes: Mutex<Changes>,
+}
+
+/// The library's revisions while synththing runs: each song as it was
+/// last seen (a hash of it as the API gives it) and the revision it last
+/// changed in, and each song gone and when. A revision is `<run>.<n>`,
+/// `run` telling this run of synththing from the others (a revision from
+/// another one means nothing here).
+struct Changes {
+    run: u32,
+    revision: u64,
+    seen: HashMap<String, (u64, u64)>,
+    gone: HashMap<String, u64>,
+}
+
+impl Changes {
+    fn new() -> Self {
+        let run = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.subsec_nanos() ^ t.as_secs() as u32);
+        Changes { run, revision: 0, seen: HashMap::new(), gone: HashMap::new() }
+    }
+
+    /// Catch up with `store`: a new revision if any song came, changed or
+    /// went since last time.
+    fn update(&mut self, store: &SongStore) {
+        use std::hash::{Hash, Hasher};
+        let next = self.revision + 1;
+        let mut changed = false;
+        let mut here = std::collections::HashSet::new();
+        for (path, song) in store.songs() {
+            let Some(key) = song_store::key_in(store.dir(), &path) else { continue };
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_string(&SongInfo::of(key, song, store)).unwrap_or_default().hash(&mut hasher);
+            let hash = hasher.finish();
+            let key = key.to_string();
+            if self.seen.get(&key).is_none_or(|(seen, _)| *seen != hash) {
+                self.seen.insert(key.clone(), (hash, next));
+                self.gone.remove(&key);
+                changed = true;
+            }
+            here.insert(key);
+        }
+        let went: Vec<String> = self.seen.keys().filter(|key| !here.contains(*key)).cloned().collect();
+        for key in went {
+            self.seen.remove(&key);
+            self.gone.insert(key, next);
+            changed = true;
+        }
+        if changed {
+            self.revision = next;
+        }
+    }
+
+    fn revision(&self) -> String {
+        format!("{}.{}", self.run, self.revision)
+    }
+
+    /// `since` as a revision of this run, if it is one.
+    fn since(&self, since: &str) -> Option<u64> {
+        let (run, n) = since.split_once('.')?;
+        (run.parse() == Ok(self.run)).then(|| n.parse().ok()).flatten().filter(|n| *n <= self.revision)
+    }
+
+    fn changed_after(&self, key: &str, since: u64) -> bool {
+        self.seen.get(key).is_some_and(|(_, rev)| *rev > since)
+    }
 }
 
 impl Server {
@@ -503,7 +569,7 @@ impl Server {
         let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
         let http = Arc::new(http);
         let (tx, calls) = mpsc::channel();
-        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default(), frames: crate::visualizer_stream::Frames::new() });
+        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default(), frames: crate::visualizer_stream::Frames::new(), changes: Mutex::new(Changes::new()) });
         let threads = (0..WORKERS)
             .map(|_| {
                 let (http, shared) = (Arc::clone(&http), Arc::clone(&shared));
@@ -812,7 +878,7 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::NowPlaying).map_or_else(|reply| reply, |now| json(200, &now))))
         }
         (Method::Get, ["v1", "songs"]) => {
-            Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| songs(&library, &query))))
+            Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| songs(shared, &library, &query))))
         }
         (Method::Post, ["v1", "songs"]) => Some(match needs(access.add_songs, "add songs") {
             Some(reply) => reply,
@@ -1111,22 +1177,45 @@ fn wish_for(shared: &Shared, request: &mut Request, access: &Access) -> Reply {
 
 #[derive(Serialize)]
 struct SongPage {
-    /// Songs the query matches, in all.
+    /// Songs the query matches, in all (with `since`: of those changed).
     total: usize,
     songs: Vec<SongInfo>,
+    /// The library's revision now: `?since=` it next time for only what
+    /// changes after.
+    revision: String,
+    /// Whether this is every song the query matches, not only those
+    /// changed (no `since`, or one from before synththing last started).
+    full: bool,
+    /// With `since`: the songs no longer in the list (gone from the
+    /// library, or changed so the query doesn't find them).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    removed: Vec<String>,
 }
 
-/// `GET /v1/songs?q=&offset=&limit=`: the songs the query matches (the
-/// Songs search box's filters and text), in file name order.
-fn songs(library: &Library, query: &HashMap<String, String>) -> Reply {
+/// `GET /v1/songs?q=&offset=&limit=&since=`: the songs the query matches
+/// (the Songs search's syntax), by file name, a page of them; with
+/// `since` (a revision an earlier answer gave), only those that changed
+/// after it, and the ones that left the list.
+fn songs(shared: &Shared, library: &Library, query: &HashMap<String, String>) -> Reply {
     let store = &library.store;
     let q = query.get("q").map_or("", String::as_str);
     let offset = query.get("offset").and_then(|o| o.parse().ok()).unwrap_or(0);
     let limit = query.get("limit").and_then(|l| l.parse().ok()).unwrap_or(MOST_SONGS).min(MOST_SONGS);
-    let found = matching(store, &library.wishes, q);
+    let mut changes = shared.changes.lock().unwrap_or_else(|e| e.into_inner());
+    changes.update(store);
+    let since = query.get("since").and_then(|since| changes.since(since));
+    let mut found = matching(store, &library.wishes, q);
+    let mut removed = Vec::new();
+    if let Some(since) = since {
+        found.retain(|(key, _)| changes.changed_after(key, since));
+        let kept: std::collections::HashSet<&str> = found.iter().map(|(key, _)| key.as_str()).collect();
+        removed = changes.gone.iter().filter(|(_, rev)| **rev > since).map(|(key, _)| key.clone()).collect();
+        removed.extend(changes.seen.iter().filter(|(key, (_, rev))| *rev > since && !kept.contains(key.as_str())).map(|(key, _)| key.clone()));
+        removed.sort();
+    }
     let total = found.len();
     let songs = found.into_iter().skip(offset).take(limit).map(|(key, song)| SongInfo::of(&key, song, store)).collect();
-    json(200, &SongPage { total, songs })
+    json(200, &SongPage { total, songs, revision: changes.revision(), full: since.is_none(), removed })
 }
 
 /// `?split=` as what to split by: `artist`, `album_artist`, `album`,
@@ -1627,6 +1716,50 @@ mod tests {
         let one: serde_json::Value = serde_json::from_str(&answering(&server, &library, search("beta"))).unwrap();
         assert_eq!(one["total"], 1);
         assert_eq!(one["songs"][0]["file_name"], "Beta Theme.mid");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn songs_since_a_revision_are_only_those_changed() {
+        let dir = std::env::temp_dir().join(format!("synththing-api-since-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(Mutex::new(SongStore::open(dir.clone())));
+        let (alpha, beta) = (song_store::write_in(b"one", "Alpha.mid", &dir).unwrap(), song_store::write_in(b"two", "Beta.mid", &dir).unwrap());
+        let (alpha_key, beta_key) = (alpha.key.clone(), beta.key.clone());
+        store.lock().unwrap().add(alpha);
+        store.lock().unwrap().add(beta);
+        let (server, read_token, _) = server();
+        let library = {
+            let store = Arc::clone(&store);
+            move || Library { store: store.lock().unwrap().clone(), ..no_library() }
+        };
+        let addr = server.addr();
+        let ask = |query: String| {
+            let (url, token) = (format!("http://{addr}/v1/songs?{query}"), format!("Bearer {read_token}"));
+            let body = answering(&server, &library, move || agent().get(url).header("Authorization", token).call().unwrap().body_mut().read_to_string().unwrap());
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()
+        };
+        let all = ask(String::new());
+        assert_eq!((all["total"].clone(), all["full"].clone()), (2.into(), true.into()));
+        let revision = all["revision"].as_str().unwrap().to_string();
+        let none = ask(format!("since={revision}"));
+        assert_eq!((none["total"].clone(), none["full"].clone(), none["revision"].clone()), (0.into(), false.into(), revision.clone().into()));
+        // (One changed, one gone.)
+        store.lock().unwrap().set_added_by(&alpha_key, "downloader");
+        let beta_path = store.lock().unwrap().path(&beta_key);
+        store.lock().unwrap().remove(&beta_path).unwrap();
+        let changed = ask(format!("since={revision}"));
+        assert_eq!(changed["total"], 1);
+        assert_eq!(changed["songs"][0]["key"], alpha_key.as_str());
+        assert_eq!(changed["removed"], serde_json::json!([beta_key]));
+        assert_ne!(changed["revision"], revision.as_str());
+        // (Changed so the query no longer finds it: it left that list.)
+        let left = ask(format!("since={revision}&q=-addedby:downloader"));
+        assert_eq!(left["total"], 0);
+        assert_eq!(left["removed"], serde_json::json!([alpha_key, beta_key].into_iter().collect::<std::collections::BTreeSet<_>>()));
+        // (A revision from another run means everything again.)
+        assert_eq!(ask("since=1.1".into())["full"], true);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
