@@ -33,6 +33,8 @@ use crate::fields::{Facts, Field};
 use crate::panel::{Given, Panel};
 use crate::smart::{Group, Order, Rules, Ruleset, Split, SplitBy};
 use crate::song_store::{self, Song, SongStore, Stored};
+use crate::audio::SAMPLE_RATE;
+use crate::audio_stream::Listeners;
 use crate::visualizer_stream::Format;
 use crate::lookup::matching::Release;
 use crate::lookup::musicbrainz::MusicBrainz;
@@ -47,6 +49,9 @@ const WORKERS: usize = 2;
 const MOST_STREAMS: usize = 32;
 /// How long a stream goes quiet before a keep-alive comment.
 const KEEP_ALIVE: Duration = Duration::from_secs(25);
+/// How long an audio stream waits for audio before it sends that long a
+/// silence instead.
+const QUIET: Duration = Duration::from_millis(250);
 /// As `KEEP_ALIVE`, for a program with a panel: a stream only finds out
 /// it's closed when it next writes, and the panel should grey soon after.
 const PANEL_KEEP_ALIVE: Duration = Duration::from_secs(2);
@@ -107,6 +112,9 @@ pub struct Access {
     /// May download songs' files (`GET /v1/songs/{key}/file`). Never on
     /// unless the user ticks it.
     pub download_songs: bool,
+    /// May hear what plays (`GET /v1/audio/stream`). Never on unless the
+    /// user ticks it.
+    pub listen: bool,
     /// May show a panel in the Apps tab (`PUT /v1/panel`). Never on unless
     /// the user ticks it.
     pub panel: bool,
@@ -130,6 +138,7 @@ impl Access {
             add_songs: false,
             edit_library: false,
             download_songs: false,
+            listen: false,
             panel: false,
             share: false,
         };
@@ -588,6 +597,9 @@ struct Shared {
     panels: Mutex<Panels>,
     /// The visualizer's pictures, for whoever's watching them.
     frames: Arc<crate::visualizer_stream::Frames>,
+    /// What plays, for whoever's listening: `None` where nothing plays (a
+    /// hub).
+    listeners: Option<Arc<Listeners>>,
     /// What changed in the library when, for `/v1/songs?since=`.
     changes: Mutex<Changes>,
     /// Songs programs sent to be checked before they're imported.
@@ -724,12 +736,12 @@ impl Changes {
 impl Server {
     /// Listen on `port`, on this computer only unless `lan`, staging songs
     /// in `staging` (emptied first).
-    pub fn start(port: u16, lan: bool, apps: Vec<Access>, waker: egui::Context, staging: std::path::PathBuf) -> Result<Server, String> {
+    pub fn start(port: u16, lan: bool, apps: Vec<Access>, waker: egui::Context, staging: std::path::PathBuf, listeners: Option<Arc<Listeners>>) -> Result<Server, String> {
         let http = tiny_http::Server::http((if lan { "0.0.0.0" } else { "127.0.0.1" }, port)).map_err(|e| format!("couldn't listen on port {port}: {e}"))?;
         let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
         let http = Arc::new(http);
         let (tx, calls) = mpsc::channel();
-        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default(), panels: Mutex::default(), frames: crate::visualizer_stream::Frames::new(), changes: Mutex::new(Changes::new()), staged: Mutex::new(Staged::new(staging)) });
+        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default(), panels: Mutex::default(), frames: crate::visualizer_stream::Frames::new(), listeners, changes: Mutex::new(Changes::new()), staged: Mutex::new(Staged::new(staging)) });
         let threads = (0..WORKERS)
             .map(|_| {
                 let (http, shared) = (Arc::clone(&http), Arc::clone(&shared));
@@ -950,6 +962,7 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 "add_songs": access.add_songs,
                 "edit_library": access.edit_library,
                 "download_songs": access.download_songs,
+                "listen": access.listen,
                 "panel": access.panel,
                 "share": access.share,
             }),
@@ -967,20 +980,23 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             shared.waker.request_repaint();
             Some(Response::from_data(Vec::new()).with_status_code(204))
         }
-        (Method::Get, ["v1", "visualizer"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
-            // (A page OBS's Browser Source, or a browser, can show: the
-            // stream, with the same query, token and all.)
-            let query = raw_query.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
-            let page = format!(
-                "<!doctype html><meta charset=\"utf-8\"><title>synththing visualizer</title>\
-                 <style>html,body{{margin:0;height:100%;background:transparent;overflow:hidden}}\
-                 img{{width:100%;height:100%;object-fit:contain;display:block}}</style>\
-                 <img src=\"/v1/visualizer/stream?{query}\" alt=\"\">"
-            );
-            Response::from_data(page)
-                .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap())
-                .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap())
-        })),
+        (Method::Get, ["v1", "visualizer"]) => {
+            // (With ?audio=1, it plays what synththing does too.)
+            let audio = query.get("audio").is_some_and(|a| a == "1");
+            Some(needs(access.read, "read").or_else(|| needs(access.listen || !audio, "listen")).unwrap_or_else(|| page("visualizer", raw_query, true, audio)))
+        }
+        (Method::Get, ["v1", "audio"]) => Some(needs(access.listen, "listen").unwrap_or_else(|| page("audio", raw_query, false, true))),
+        (Method::Get, ["v1", "audio", "stream"]) => match needs(access.listen, "listen") {
+            Some(reply) => Some(reply),
+            None => match shared.listeners.as_ref().map(|l| l.listen()) {
+                None => Some(error(404, "nothing plays here")),
+                Some(None) => Some(error(503, format!("{} programs are listening already", crate::audio_stream::MOST_LISTENERS))),
+                Some(Some(chunks)) => {
+                    listen(request, chunks);
+                    return;
+                }
+            },
+        },
         (Method::Get, ["v1", "visualizer", "stream"]) => match needs(access.read, "read").map_or_else(|| watch_options(&query), Err) {
             Err(reply) => Some(reply),
             Ok((size, fps, format)) => {
@@ -1737,6 +1753,106 @@ fn matching<'s>(store: &'s SongStore, wishes: &crate::wishlist::Wishes, query: &
 
 /// `GET /v1/events`: keep the connection, on a thread of its own, and send
 /// it every event until it's closed.
+/// A page OBS's Browser Source, or a browser, can show: the visualizer's
+/// stream and/or a player for what plays, with the page's own query (token
+/// and all) passed on to them.
+fn page(title: &str, raw_query: &str, video: bool, audio: bool) -> Reply {
+    let query = raw_query.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
+    let mut page = format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>synththing {title}</title>\
+         <style>html,body{{margin:0;height:100%;background:transparent;overflow:hidden}}\
+         img{{width:100%;height:100%;object-fit:contain;display:block}}\
+         button{{position:fixed;inset:0;margin:auto;width:max-content;height:max-content;padding:.6em 1.2em;font:16px sans-serif;cursor:pointer}}</style>"
+    );
+    if video {
+        page += &format!("<img src=\"/v1/visualizer/stream?{query}\" alt=\"\">");
+    }
+    if audio {
+        page += &format!("<button hidden>Click to listen</button><script>const STREAM = \"/v1/audio/stream?{query}\";\n{PLAYER}</script>");
+    }
+    Response::from_data(page)
+        .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap())
+        .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap())
+}
+
+/// Plays `STREAM` (`/v1/audio/stream`, whose 16-bit stereo it reads past
+/// the WAV header) a little behind as it comes, so it keeps up with the
+/// visualizer. Each piece is scheduled right after the last: if that's
+/// fallen behind, or drifted too far ahead, it starts over `LEAD` ahead.
+/// A browser only lets a page make sound after a click, so until then it
+/// shows a button; OBS lets it straight away.
+const PLAYER: &str = r#"
+const LEAD = 0.15, RATE = 44100;
+const ctx = new AudioContext({ sampleRate: RATE, latencyHint: "interactive" });
+const button = document.querySelector("button");
+const shown = () => { button.hidden = ctx.state === "running"; };
+ctx.onstatechange = shown;
+button.onclick = () => ctx.resume();
+shown();
+let next = 0;
+function play(bytes) {
+  const frames = bytes.length >> 2;
+  if (!frames || ctx.state !== "running") return;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, frames * 4);
+  const buffer = ctx.createBuffer(2, frames, RATE);
+  const left = buffer.getChannelData(0), right = buffer.getChannelData(1);
+  for (let i = 0; i < frames; i++) {
+    left[i] = view.getInt16(i * 4, true) / 32768;
+    right[i] = view.getInt16(i * 4 + 2, true) / 32768;
+  }
+  const now = ctx.currentTime;
+  if (next < now || next > now + LEAD + 0.25) next = now + LEAD;
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(ctx.destination);
+  source.start(next);
+  next += buffer.duration;
+}
+async function listen() {
+  try {
+    const reader = (await fetch(STREAM, { cache: "no-store" })).body.getReader();
+    let header = 44, rest = new Uint8Array(0);
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      let bytes = new Uint8Array(rest.length + value.length);
+      bytes.set(rest);
+      bytes.set(value, rest.length);
+      const skipped = Math.min(header, bytes.length);
+      bytes = bytes.subarray(skipped);
+      header -= skipped;
+      const whole = bytes.length - (bytes.length % 4);
+      rest = bytes.slice(whole);
+      play(bytes.subarray(0, whole));
+    }
+  } catch (e) {}
+  setTimeout(listen, 1000);
+}
+listen();
+"#;
+
+/// Send what plays to `request`, as a WAV that doesn't end, until it goes.
+fn listen(request: Request, chunks: Receiver<crate::audio_stream::Chunk>) {
+    let spawned = std::thread::Builder::new().name("api listener".into()).spawn(move || {
+        let mut writer = request.into_writer();
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
+        let mut ok = writer
+            .write_all(head.as_bytes())
+            .and_then(|()| writer.write_all(&crate::audio_stream::wav_header(SAMPLE_RATE)))
+            .and_then(|()| writer.flush())
+            .is_ok();
+        while ok {
+            // (Nothing for a while: no audio's going out. The player's kept
+            // going, and the connection checked, with that much silence.)
+            let chunk = chunks.recv_timeout(QUIET).unwrap_or_else(|_| vec![0u8; SAMPLE_RATE as usize / 4 * 4].into());
+            ok = writer.write_all(&chunk).and_then(|()| writer.flush()).is_ok();
+        }
+    });
+    if spawned.is_err() {
+        log::warn!("api: couldn't start an audio stream");
+    }
+}
+
 /// `?width=&height=&fps=` for the visualizer's pictures: the size to draw
 /// them at (both or neither), and how many a second at most.
 fn watch_options(query: &HashMap<String, String>) -> Result<(Option<(usize, usize)>, u32, Format), Reply> {
@@ -1935,7 +2051,7 @@ mod tests {
         reader.read = true;
         let (mut controller, control_token) = Access::new("controller");
         (controller.read, controller.control) = (false, true);
-        let server = Server::start(0, false, vec![reader, controller], egui::Context::default(), staging()).unwrap();
+        let server = Server::start(0, false, vec![reader, controller], egui::Context::default(), staging(), None).unwrap();
         (server, read_token, control_token)
     }
 
@@ -2247,6 +2363,35 @@ mod tests {
     }
 
     #[test]
+    fn what_plays_is_heard_only_with_its_permission() {
+        let (reader, read_token) = Access::new("reader");
+        let (mut listener, listen_token) = Access::new("listener");
+        (listener.read, listener.listen) = (false, true);
+        let listeners = Listeners::new();
+        let server = Server::start(0, false, vec![reader, listener], egui::Context::default(), staging(), Some(Arc::clone(&listeners))).unwrap();
+        assert_eq!(get(&server, "/v1/audio/stream", &read_token).0, 403);
+        assert_eq!(get(&server, "/v1/audio", &read_token).0, 403);
+        assert_eq!(get(&server, "/v1/visualizer?audio=1", &read_token).0, 403, "the visualizer with sound needs both");
+        assert_eq!(get(&server, "/v1/visualizer?audio=1", &listen_token).0, 403, "the visualizer with sound needs both");
+        let (status, page) = get(&server, "/v1/audio?token=x", &listen_token);
+        assert_eq!(status, 200);
+        assert!(page.contains("/v1/audio/stream?token=x") && !page.contains("<img"), "{page}");
+
+        let url = format!("http://{}/v1/audio/stream", server.addr());
+        let response = agent().get(url).header("Authorization", format!("Bearer {listen_token}")).call().unwrap();
+        assert_eq!(response.headers().get("Content-Type").unwrap(), "audio/wav");
+        let mut body = response.into_body().into_reader();
+        let mut header = [0u8; 44];
+        body.read_exact(&mut header).unwrap();
+        assert_eq!(header, crate::audio_stream::wav_header(SAMPLE_RATE));
+        assert!(listeners.listening());
+        listeners.send(&[0.5, -0.5]);
+        let mut sample = [0u8; 4];
+        body.read_exact(&mut sample).unwrap();
+        assert_eq!(sample, [0xff, 0x3f, 0x01, 0xc0]);
+    }
+
+    #[test]
     fn songs_are_downloaded_only_with_their_permission() {
         let dir = std::env::temp_dir().join(format!("synththing-api-files-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -2258,7 +2403,7 @@ mod tests {
         let (reader, read_token) = Access::new("reader");
         let (mut fetcher, fetch_token) = Access::new("fetcher");
         fetcher.download_songs = true;
-        let server = Server::start(0, false, vec![reader, fetcher], egui::Context::default(), staging()).unwrap();
+        let server = Server::start(0, false, vec![reader, fetcher], egui::Context::default(), staging(), None).unwrap();
         let library = move || Library { store: store.clone(), ..no_library() };
         let addr = server.addr();
         let fetch = move |key: &str, token: &str| {
@@ -2283,7 +2428,7 @@ mod tests {
         reader.control = true;
         let (mut adder, add_token) = Access::new("adder");
         adder.add_songs = true;
-        let server = Server::start(0, false, vec![reader, adder], egui::Context::default(), staging()).unwrap();
+        let server = Server::start(0, false, vec![reader, adder], egui::Context::default(), staging(), None).unwrap();
         let post = |query: &str, token: &str| {
             agent()
                 .post(format!("http://{}/v1/songs{query}", server.addr()))
@@ -2304,7 +2449,7 @@ mod tests {
         let (mut adder, add_token) = Access::new("adder");
         adder.add_songs = true;
         let (reader, read_token) = Access::new("reader");
-        let server = Server::start(0, false, vec![reader, adder], egui::Context::default(), staging()).unwrap();
+        let server = Server::start(0, false, vec![reader, adder], egui::Context::default(), staging(), None).unwrap();
         let addr = server.addr();
         let send = move |method: &'static str, path: &str, token: &str| {
             let (url, token) = (format!("http://{addr}{path}"), format!("Bearer {token}"));
@@ -2401,7 +2546,7 @@ mod tests {
         let (mut finder, finder_token) = Access::new("Finder");
         finder.panel = true;
         let finder_hash = finder.token.clone();
-        let server = Server::start(0, false, vec![reader, finder], egui::Context::default(), staging()).unwrap();
+        let server = Server::start(0, false, vec![reader, finder], egui::Context::default(), staging(), None).unwrap();
         let addr = server.addr();
         let put = |token: &str, body: &str| {
             let request = agent().put(format!("http://{addr}/v1/panel")).header("Authorization", format!("Bearer {token}"));

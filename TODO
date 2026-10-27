@@ -21,6 +21,13 @@
     follows it to your other devices. Left out of the 1.0.0 song library
     on purpose; pick it up only when asked.
 
+[M][.] Opus audio stream (only once something needs it, e.g. a music
+    bot; Ethan 2026-10-27): `GET /v1/audio/stream?format=opus` as live
+    Ogg Opus next to the WAV one (audio_stream.rs). Small enough for
+    the internet and what Discord takes, but adds libopus (C) to the
+    build, and players buffer it like the WAV. Could also serve a hub
+    playing for others.
+
 [M][.] Run scripts from an external editor (only if someone asks for
     more external dev tool support; Ethan 2026-10-23): a
     `POST /v1/scripts/run` taking the script's source in the body (and a

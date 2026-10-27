@@ -155,7 +155,7 @@ impl App {
             && self.api.failed.as_ref().is_none_or(|(p, _)| *p != port)
         {
             self.api.server = None;
-            match api::Server::start(port, settings.lan, settings.apps.clone(), ctx.clone(), staging()) {
+            match api::Server::start(port, settings.lan, settings.apps.clone(), ctx.clone(), staging(), Some(Arc::clone(&self.listeners))) {
                 Ok(server) => {
                     log::info!("api: listening on {}", server.addr());
                     self.api.server = Some(server);
@@ -765,11 +765,12 @@ impl App {
         let mut remove_songs = None;
         if !settings.apps.is_empty() {
             // (Programs down the side, what each may do across the top.)
-            let permissions: [(&str, &str, fn(&mut Access) -> &mut bool); 7] = [
+            let permissions: [(&str, &str, fn(&mut Access) -> &mut bool); 8] = [
                 ("eye", "Read: see the library, what's playing, and events", |a| &mut a.read),
                 ("play-pause", "Control: run commands (play, pause, next track...)", |a| &mut a.control),
                 ("pencil-simple", "Edit library: star and tag songs; make, rename, delete and reorder playlists, and add songs to them or take them out", |a| &mut a.edit_library),
                 ("download-simple", "Download songs: copy songs' files out of your library", |a| &mut a.download_songs),
+                ("headphones", "Listen: hear what synththing plays, as it plays it (before the volume slider)", |a| &mut a.listen),
                 (
                     "music-notes-plus",
                     "Add songs: send songs into your library. Each one is marked as this program's (search addedby:name)",

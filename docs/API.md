@@ -8,7 +8,7 @@ Preferences > Integrations:
 
 1. Tick **Let programs on this computer use the API**. It listens on `127.0.0.1`, port 7340 unless you pick another. Nothing outside this computer can reach it unless you also tick **Let devices on the local network in too**: then other computers and phones on your network can use it at this computer's address, with a token as always. It's plain HTTP, so tokens and everything else cross the network unencrypted: only turn it on in a network you trust. While it's off, requests passed on by a proxy (with `Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host` or `X-Real-IP`) or addressed to any name but `localhost`, `127.0.0.1` or `[::1]` are turned away with 403, so a reverse proxy or a web page can't reach it on another's behalf.
 2. Type a name for your program and click **Add**. Copy the token it shows: only its hash is kept, so it isn't shown again (remove the program and add it again for a new one).
-3. Tick what that program may do: **Read** (the library, what's playing, events), **Control** (run commands), **Edit library** (star, tag, make, rename, delete and reorder playlists, and add songs to them or take them out), **Add songs** (send songs into your library), **Download songs** (copy songs' files out) and **Show a panel** (a panel of its own in the Apps tab, below). Edit library, Add songs, Download songs and Show a panel are never on until you tick them.
+3. Tick what that program may do: **Read** (the library, what's playing, events), **Control** (run commands), **Edit library** (star, tag, make, rename, delete and reorder playlists, and add songs to them or take them out), **Add songs** (send songs into your library), **Download songs** (copy songs' files out), **Listen** (hear what synththing plays, below) and **Show a panel** (a panel of its own in the Apps tab, below). Edit library, Add songs, Download songs, Listen and Show a panel are never on until you tick them.
 
 Send the token with every request:
 
@@ -24,7 +24,7 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 
 | Request | Needs | What it gives |
 | --- | --- | --- |
-| `GET /v1` | any token | `{"app", "version", "read", "control", "add_songs", "edit_library", "download_songs", "panel"}`: who you are to it |
+| `GET /v1` | any token | `{"app", "version", "read", "control", "add_songs", "edit_library", "download_songs", "listen", "panel"}`: who you are to it |
 | `GET /v1/now-playing` | read | What's playing (below) |
 | `GET /v1/songs?q=&offset=&limit=&since=` | read | `{"total", "songs": [...], "revision", "full"}`: the songs `q` finds, sorted by file name: `limit` of them (at most and by default 500) after skipping `offset`. With `since` (a `revision` an earlier answer gave), only the songs that changed after it, and `removed`: the keys of those that left the list (below) |
 | `GET /v1/songs/{key}` | read | One song, by the `key` the other requests give |
@@ -69,7 +69,9 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `GET /v1/visualizer/stream?width=&height=&fps=&format=` | read | The visualizer, live, as MJPEG or PNG pictures (below) |
 | `GET /v1/visualizer/frame.jpg?width=&height=` | read | The visualizer's next picture, as a JPEG: 503 if it doesn't draw one within 3 seconds |
 | `GET /v1/visualizer/frame.png?width=&height=` | read | The same, as a PNG, see-through parts kept |
-| `GET /v1/visualizer?width=&height=&fps=&format=&token=` | read | A page showing the stream, for OBS's Browser Source or a browser |
+| `GET /v1/visualizer?width=&height=&fps=&format=&token=&audio=1` | read | A page showing the stream, for OBS's Browser Source or a browser. With `audio=1` (and Listen) it plays what synththing does too |
+| `GET /v1/audio/stream` | listen | What synththing plays, live, as a WAV that doesn't end (below) |
+| `GET /v1/audio?token=` | listen | A page playing it, for OBS's Browser Source or a browser |
 | `GET /v1/wishlist?q=` | read | The wishlist (below): the wishes `q` keeps (as the Wishlist's filter box does: `kind:album got:no`...), newest first, each artist with the albums of theirs wished for in `albums` |
 | `POST /v1/wishlist` | edit library | Wishes for what the body says (a wish as JSON, below): 201 with the wish if it's new, 200 if it was wished for already |
 | `DELETE /v1/wishlist/{id}` | edit library | Takes the wish off the wishlist (an artist's albums with them): 204, or 404 |
@@ -221,6 +223,12 @@ Events without `device` happened on the device your program talks to. Each devic
 `/v1/visualizer/stream` sends the visualizer's pictures as they're drawn, as MJPEG (`multipart/x-mixed-replace`), at most `fps` a second (1 to 60, 30 if not given). `format=png` sends PNG pictures instead of JPEG ones (`format=jpeg`, the default): bigger and slower to make, but a visualizer with see-through frames (`script_options({ transparent = true })`) stays see-through. JPEG shows those parts over black. With `width` and `height` (64 to 4096 each, made even), the script draws at exactly that size and synththing's own window just says it's streaming instead of showing it. Without them, you get whatever size it's showing at. A recording's size wins while one is going. Scripts can tell they're being watched: `playback().streaming` is true.
 
 In OBS, add a **Media Source**, untick Local File and give it `http://127.0.0.1:7340/v1/visualizer/stream?width=1920&height=1080&token=st_...`, or a **Browser Source** with `http://127.0.0.1:7340/v1/visualizer?width=1920&height=1080&token=st_...` and the same size. For a see-through visualizer over the rest of the scene, use the Browser Source with `&format=png`: Now playing (a now-playing card with album art, try `width=500&height=190`) is made for that, as are FFT, Pulse, Keyboard, Letters and Dashboard with their Background opacity turned down. The visualizer keeps drawing while anything's watching, even with its tab hidden or synththing minimized or in the tray (it gets no mouse or keys then). Without `width` and `height` it keeps the size it last showed at.
+
+## Listening
+
+`/v1/audio/stream` sends what synththing plays, as it plays it: 16-bit stereo at 44.1 kHz, as a WAV that doesn't end (about 1.4 Mbit/s, fine on this computer or the local network). It's the sound before the volume slider, so turning synththing down or muting it doesn't change what listeners hear; a song's own Volume adjust does count. While nothing plays it sends silence. Up to 8 can listen at once (503 after that).
+
+Players buffer it, so it comes a second or two late: VLC, ffmpeg or OBS's **Media Source** (untick Local File, give it `http://127.0.0.1:7340/v1/audio/stream?token=st_...`) play it as it is. For less delay, use the pages: `/v1/audio?token=st_...` plays it about 0.15 seconds behind, and `/v1/visualizer?...&audio=1` shows the visualizer and plays the sound with it, so one **Browser Source** gives OBS both (tick its **Control audio via OBS** to mix it like any other source). A browser only plays sound after a click, so the page shows a **Click to listen** button until then; OBS doesn't need one. Another device on the network can open the same pages with Preferences > Integrations letting the local network in.
 
 ## System media controls
 

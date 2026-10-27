@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Result};
 
 use crate::app::App;
-use crate::audio::{AudioEngine, AudioRing, PlaybackShared, SynthSource};
+use crate::audio::{AudioEngine, AudioRing, Output, PlaybackShared, Volume};
+use crate::audio_stream::Listeners;
 use crate::config::Config;
 use crate::engine::Engine;
 use crate::visualizer::SampleTap;
@@ -17,7 +18,7 @@ use crate::visualizer::SampleTap;
 /// Start playback and make the app, ready to hand to eframe. The audio
 /// output has to stay alive for as long as the app runs: drop it after.
 pub fn start() -> Result<(App, rodio::MixerDeviceSink)> {
-    let sample_rate = 44_100u32;
+    let sample_rate = crate::audio::SAMPLE_RATE;
 
     let engine = Engine::new(sample_rate);
 
@@ -37,15 +38,21 @@ pub fn start() -> Result<(App, rodio::MixerDeviceSink)> {
     let shared = Arc::new(Mutex::new(PlaybackShared::default()));
     let (command_tx, command_rx) = mpsc::channel();
 
-    // Audio output, a pure consumer of the ring.
+    let volume = Volume::default();
+    // Whoever listens through the local API (`GET /v1/audio/stream`).
+    let listeners = Listeners::new();
+
+    // Audio output, a pure consumer of the rings.
     let stream = rodio::DeviceSinkBuilder::open_default_sink()
         .map_err(|e| anyhow!("could not open an audio output device: {e}"))?;
-    stream
-        .mixer()
-        .add(SynthSource::new(ring.clone(), Arc::clone(&flush), sample_rate));
-    stream
-        .mixer()
-        .add(SynthSource::new(live_ring.clone(), Arc::new(AtomicBool::new(false)), sample_rate));
+    stream.mixer().add(Output::new(
+        ring.clone(),
+        Arc::clone(&flush),
+        live_ring.clone(),
+        volume.clone(),
+        Arc::clone(&listeners),
+        sample_rate,
+    ));
 
     // Render thread, owns the engine, produces into the ring.
     let audio = AudioEngine::new(
@@ -56,6 +63,7 @@ pub fn start() -> Result<(App, rodio::MixerDeviceSink)> {
         Arc::clone(&flush),
         command_rx,
         Arc::clone(&shared),
+        volume,
         sample_rate,
     );
     std::thread::Builder::new()
@@ -67,7 +75,7 @@ pub fn start() -> Result<(App, rodio::MixerDeviceSink)> {
     let mut config = Config::load_for_app()?;
     config.soundfonts.sort();
 
-    let mut app = App::new(command_tx, shared, config, tap, sample_rate);
+    let mut app = App::new(command_tx, shared, config, tap, listeners, sample_rate);
     app.autoload_soundfont();
     app.check_for_updates_on_launch();
     app.whats_new_on_launch(ran_before);
