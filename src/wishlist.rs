@@ -292,12 +292,15 @@ impl State {
 
 /// What of a wish is here: of how many tracks (an album's best edition,
 /// or 1; for an artist, of how many of their albums picked), how many
-/// (albums got), and its songs here (by key, in album order).
+/// (albums got), and its songs here (by key, in album order); for an
+/// album partly here, the titles of the tracks still missing, when its
+/// edition's track list is known.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Progress {
     pub have: usize,
     pub total: usize,
     pub songs: Vec<String>,
+    pub missing: Vec<String>,
 }
 
 impl Progress {
@@ -435,25 +438,40 @@ pub fn progress(wishlist: &Wishlist, store: &SongStore, kept: &Kept) -> BTreeMap
             let songs = filled.remove(id.as_str()).unwrap_or_default();
             let progress = match wish.kind {
                 Kind::Album => {
-                    // Each edition's songs here, of its tracks.
+                    // Of the wished release's tracks (as its page lists
+                    // them, when they're known), those here by recording;
+                    // or each edition's songs here, of its tracks, if one
+                    // is more of it.
                     let skipped = |recording: &Option<String>| recording.as_ref().is_some_and(|r| wish.skipped.contains(r));
+                    let here: Vec<Option<&str>> = songs.iter().filter_map(|(key, _)| store.get_by_key(key)).map(|song| Facts::of(song).recording()).collect();
+                    let of_release = |release: Arc<Release>| {
+                        let tracks: Vec<_> = release.tracks.iter().filter(|t| !skipped(&t.recording)).collect();
+                        let missing: Vec<String> = tracks.iter().filter(|t| !here.contains(&t.recording.as_deref())).map(|t| t.title.clone()).collect();
+                        (tracks.len() - missing.len(), tracks.len().max(1), missing)
+                    };
                     let mut editions: BTreeMap<Option<&str>, usize> = BTreeMap::new();
                     for (_, release) in &songs {
                         *editions.entry(release.as_deref()).or_default() += 1;
                     }
                     let wished = (wish.tracks as usize).saturating_sub(wish.skipped.len()).max(1);
-                    let best = editions
-                        .iter()
-                        .map(|(release, have)| {
-                            let tracks = |r: Arc<Release>| r.tracks.iter().filter(|t| !skipped(&t.recording)).count().max(1);
-                            let total = release.and_then(|r| kept.release(r)).map_or(wished, tracks);
-                            ((*have).min(total), total)
-                        })
-                        .max_by_key(|&(have, total)| (have >= total, have))
-                        .unwrap_or((0, wished));
-                    Progress { have: best.0, total: best.1, songs: ordered(songs.into_iter().map(|(key, _)| key).collect()) }
+                    let edition = |(release, have): (&Option<&str>, &usize)| match release.and_then(|r| kept.release(r)) {
+                        Some(found) => {
+                            let (_, total, missing) = of_release(found);
+                            ((*have).min(total), total, missing)
+                        }
+                        None => ((*have).min(wished), wished, Vec::new()),
+                    };
+                    let wished_release = wish.release.as_deref().and_then(|r| kept.release(r)).map(of_release);
+                    let best = wished_release
+                        .into_iter()
+                        .chain(editions.iter().map(edition))
+                        .max_by_key(|(have, total, _)| (have >= total, *have))
+                        .unwrap_or((0, wished, Vec::new()));
+                    let missing = if best.0 < best.1 { best.2 } else { Vec::new() };
+                    let songs = ordered(songs.into_iter().map(|(key, _)| key).collect());
+                    Progress { have: best.0, total: best.1, songs, missing }
                 }
-                _ => Progress { have: usize::from(!songs.is_empty()), total: 1, songs: ordered(songs.into_iter().map(|(key, _)| key).collect()) },
+                _ => Progress { have: usize::from(!songs.is_empty()), total: 1, songs: ordered(songs.into_iter().map(|(key, _)| key).collect()), missing: Vec::new() },
             };
             (id.clone(), progress)
         })
@@ -464,6 +482,7 @@ pub fn progress(wishlist: &Wishlist, store: &SongStore, kept: &Kept) -> BTreeMap
             have: albums.iter().filter(|p| p.state() == State::Got).count(),
             total: albums.len(),
             songs: albums.iter().flat_map(|p| p.songs.iter().cloned()).collect(),
+            missing: Vec::new(),
         };
         progress.insert(id.clone(), artist);
     }
@@ -587,9 +606,10 @@ mod tests {
         let progress = super::progress(&wishlist, &store, &kept);
         assert_eq!(progress[&modal].state(), State::Got, "both of one edition's tracks");
 
-        let track = |recording: &str| crate::lookup::matching::Track { recording: Some(recording.into()), ..Default::default() };
+        let track = |recording: &str| crate::lookup::matching::Track { recording: Some(recording.into()), title: recording.to_uppercase(), ..Default::default() };
         kept.keep_release(Release { id: "r1".into(), tracks: vec![track("c1"), track("c2"), track("c3")], ..Default::default() });
-        assert_eq!(super::progress(&wishlist, &store, &kept)[&modal].text(), "2 of 3");
+        let progress = super::progress(&wishlist, &store, &kept);
+        assert_eq!((progress[&modal].text(), progress[&modal].missing.as_slice()), ("2 of 3".to_string(), &["C3".to_string()][..]));
         wishlist.set_skipped(&modal, "c3", true);
         assert_eq!(super::progress(&wishlist, &store, &kept)[&modal].state(), State::Got, "the song skipped isn't wanted");
         wishlist.set_skipped(&modal, "c2", true);

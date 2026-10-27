@@ -75,6 +75,42 @@ pub fn groups(store: &SongStore, ignore: &str) -> Vec<Group> {
     groups
 }
 
+/// The library's copies of `song`, a song that isn't in it (one staged
+/// through the API, say), found as `groups` finds them: each one's key,
+/// and whether it's sure (one recording) rather than guessed; and whether
+/// `song` is better than every copy.
+pub fn copies_of(store: &SongStore, song: &Song, ignore: &str) -> (Vec<(String, bool)>, bool) {
+    let facts = Facts::of(song);
+    if facts.is_midi() {
+        return (Vec::new(), true);
+    }
+    let recording = facts.recording();
+    let name = |facts: &Facts| {
+        let artist = facts.first(Field::Artist).map(|a| fields::group_key(&a, ignore)).unwrap_or_default();
+        facts.text(Field::Title).map(|title| (fields::group_key(&title, ignore), artist))
+    };
+    let (named, length) = (name(&facts), song.meta.as_ref().and_then(|m| m.length));
+    let mut copies = Vec::new();
+    let mut better = true;
+    for (key, other) in store.known().filter(|(key, _)| !store.is_blocked(key)) {
+        let theirs = Facts::of(other);
+        if theirs.is_midi() {
+            continue;
+        }
+        let sure = recording.is_some() && theirs.recording() == recording;
+        let guessed = !sure
+            && (recording.is_none() || theirs.recording().is_none())
+            && named.is_some()
+            && name(&theirs) == named
+            && length.zip(other.meta.as_ref().and_then(|m| m.length)).is_some_and(|(a, b)| (a - b).abs() <= LEEWAY);
+        if sure || guessed {
+            better &= rank(song) > rank(other);
+            copies.push((key.to_string(), sure));
+        }
+    }
+    (copies, better)
+}
+
 /// How good a song's copy is, the better the greater.
 fn rank(song: &Song) -> (bool, u32, u32, u32, Reverse<i64>) {
     let Some(meta) = &song.meta else {
@@ -239,6 +275,29 @@ mod tests {
             [(vec!["1", "e", "f"], false), (vec!["a", "b"], false)],
             "a guess takes in its recording's sure group; another length, artist or two recordings aren't one"
         );
+    }
+
+    #[test]
+    fn a_song_from_outside_finds_its_copies() {
+        let mp3 = Meta { title: Some("Gaia".into()), artist: Some("KGLW".into()), length: Some(100.0), size: 4_000_000, sample_rate: Some(44100), ..Meta::default() };
+        let flac = Meta { size: 30_000_000, lossless: true, bits: Some(16), ..mp3.clone() };
+        let untagged = Song { name: "gaia.mp3".into(), meta: Some(Meta { length: Some(101.0), ..mp3.clone() }), ..Song::default() };
+        let store = store(
+            "outside",
+            vec![
+                ("a", song("Gaia.mp3", "r1", mp3.clone())),
+                ("b", untagged),
+                ("c", song("Gaia (live).mp3", "r2", Meta { length: Some(140.0), ..mp3.clone() })),
+                ("d", song("Gaia.mid", "r1", Meta::default())),
+            ],
+        );
+        let (copies, better) = copies_of(&store, &song("Gaia.flac", "r1", flac), "");
+        assert_eq!(copies, [(key_of("a"), true), (key_of("b"), false)], "the same recording, and guessed by name and length");
+        assert!(better, "lossless beats both");
+        let (copies, better) = copies_of(&store, &song("Gaia.mp3", "r1", Meta { size: 1_000_000, ..mp3 }), "");
+        assert_eq!(copies.len(), 2);
+        assert!(!better, "a lower bitrate");
+        assert!(copies_of(&store, &song("New.mp3", "r9", Meta::default()), "").0.is_empty());
     }
 
     #[test]
