@@ -8,7 +8,7 @@ Preferences > Integrations:
 
 1. Tick **Let programs on this computer use the API**. It listens on `127.0.0.1`, port 7340 unless you pick another. Nothing outside this computer can reach it unless you also tick **Let devices on the local network in too**: then other computers and phones on your network can use it at this computer's address, with a token as always. It's plain HTTP, so tokens and everything else cross the network unencrypted: only turn it on in a network you trust. While it's off, requests passed on by a proxy (with `Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host` or `X-Real-IP`) or addressed to any name but `localhost`, `127.0.0.1` or `[::1]` are turned away with 403, so a reverse proxy or a web page can't reach it on another's behalf.
 2. Type a name for your program and click **Add**. Copy the token it shows: only its hash is kept, so it isn't shown again (remove the program and add it again for a new one).
-3. Tick what that program may do: **Read** (the library, what's playing, events), **Control** (run commands), **Edit library** (star, tag, make, rename, delete and reorder playlists, and add songs to them or take them out), **Add songs** (send songs into your library) and **Download songs** (copy songs' files out). Edit library, Add songs and Download songs are never on until you tick them.
+3. Tick what that program may do: **Read** (the library, what's playing, events), **Control** (run commands), **Edit library** (star, tag, make, rename, delete and reorder playlists, and add songs to them or take them out), **Add songs** (send songs into your library), **Download songs** (copy songs' files out) and **Show a panel** (a panel of its own in the Apps tab, below). Edit library, Add songs, Download songs and Show a panel are never on until you tick them.
 
 Send the token with every request:
 
@@ -24,7 +24,7 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 
 | Request | Needs | What it gives |
 | --- | --- | --- |
-| `GET /v1` | any token | `{"app", "version", "read", "control", "add_songs", "edit_library", "download_songs"}`: who you are to it |
+| `GET /v1` | any token | `{"app", "version", "read", "control", "add_songs", "edit_library", "download_songs", "panel"}`: who you are to it |
 | `GET /v1/now-playing` | read | What's playing (below) |
 | `GET /v1/songs?q=&offset=&limit=&since=` | read | `{"total", "songs": [...], "revision", "full"}`: the songs `q` finds, sorted by file name: `limit` of them (at most and by default 500) after skipping `offset`. With `since` (a `revision` an earlier answer gave), only the songs that changed after it, and `removed`: the keys of those that left the list (below) |
 | `GET /v1/songs/{key}` | read | One song, by the `key` the other requests give |
@@ -77,7 +77,10 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `GET /v1/musicbrainz/search?q=&kind=` | read | `{"artists", "albums", "songs"}`: what MusicBrainz finds (only `artist`s, `album`s or `song`s with `kind`), each as the wish for it, to send to `POST /v1/wishlist`. 409 if online lookups are off, 502 if MusicBrainz can't be reached |
 | `GET /v1/musicbrainz/artists/{id}/albums` | read | An artist's albums at MusicBrainz (by the artist's MusicBrainz ID, as an artist's wish has it), each as the wish for it: add `"under"` (the artist's wish's ID) to wish for it as one of theirs |
 | `GET /v1/musicbrainz/releases/{id}` | read | `{"id", "group", "title", "artist", "date", "tracks": [{"disc", "position", "title", "length", "recording"}]}`: a release's track list (by its MusicBrainz ID, as an album wish's `release`), so a program can see which songs of a wished album aren't here or `skipped` yet. Kept for months, so mostly instant |
+| `PUT /v1/panel` | show a panel | Shows the panel sent as the body in the Apps tab, in place of any it showed (below): 204, 400 if it isn't one, 413 over 64 KB |
+| `DELETE /v1/panel` | show a panel | Takes it away: 204 |
 | `GET /v1/events` | read | Server-Sent Events (below) |
+| `DELETE /v1/events` | any token | Closes your event streams: say it when your program closes down, and your panel greys at once: 204 |
 
 An album's art is its first song's: `GET /v1/songs/{first key}/art`. Covers that synththing hasn't downloaded yet are downloaded only when online lookups are on.
 
@@ -158,8 +161,42 @@ Every song a program adds that wasn't in your library yet is marked with that pr
 - `soundfonts_changed`: a soundfont was added, removed or put in use: `{}`. Ask `/v1/soundfonts` again.
 - `scripts_changed`: a script was added, removed or put in use: `{}`. Ask `/v1/scripts` again.
 - `wishlist_changed`: a wish was made, taken off or changed (here or by sync), or more of one is here: `{}`. Ask `/v1/wishlist` again.
+- `panel`: the user did something in your panel (below). Only your own streams get your panel's events.
 
-Add `?events=now_playing,seeked` (any of them, by name) for only those. A comment line (`: keep-alive`) comes every 25 seconds when nothing else does.
+Add `?events=now_playing,seeked` (any of them, by name) for only those. A comment line (`: keep-alive`) comes every 25 seconds when nothing else does (every 2 seconds while you have a panel).
+
+## Panels
+
+A program allowed to **Show a panel** can put a small UI of its own in synththing's **Apps** tab (View > Apps): a chip for each program with a panel, and the picked one's panel under it, with the program's name. Send the whole panel with `PUT /v1/panel` whenever it changes:
+
+```json
+{"title": "Finder", "elements": [
+  {"id": "q", "type": "textbox", "hint": "Search"},
+  {"id": "buttons", "type": "row", "elements": [
+    {"id": "go", "type": "button", "text": "Search"},
+    {"id": "status", "type": "label", "text": "Ready", "weak": true}]}]}
+```
+
+Every element has an `id` of your choosing (each one different), which its events name. They stack top to bottom, except inside a `row`:
+
+| Element | Fields |
+| --- | --- |
+| `label` | `text`; `weak`: greyed (`false` if not given) |
+| `textbox` | `hint`: shown while it's empty; `value`: what it says; `multiline` (`false` if not given) |
+| `button` | `text`; `enabled` (`true` if not given) |
+| `row` | `elements`: side by side |
+
+Text is shown as it is: no markup. A panel has at most 200 elements, rows at most 4 deep, and texts at most 500 characters.
+
+synththing keeps nothing of a panel: what it shows lives in your program. A textbox keeps what the user typed until a panel you send gives it a `value` (which doesn't touch it while the user is typing in it), so send a `value` only to change what it says, or to put back what it said when your program starts again. Panels go when synththing closes, so send yours again whenever you connect.
+
+Your panel hears the user on your event stream (`GET /v1/events`, which needs Read too), as `panel` events:
+
+- `{"element": "q", "kind": "changed", "value": "overw"}`: a textbox's text changed (every change, so wait a moment before searching on it if that's costly).
+- `{"element": "q", "kind": "submitted", "value": "overworld"}`: Enter in a one-line textbox.
+- `{"element": "go", "kind": "clicked"}`: a button.
+
+While none of your event streams is open, your panel is greyed out with "isn't running", and the user can close it. Send `DELETE /v1/events` as your program closes down and it greys at once; if your program stops without saying so, it greys within a few seconds. It comes back as it was when you open a stream again, or as you send it next.
 
 ## The visualizer, live
 

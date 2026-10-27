@@ -30,6 +30,7 @@ use crate::song_list::Autoplay;
 
 use crate::commands::Command;
 use crate::fields::{Facts, Field};
+use crate::panel::Panel;
 use crate::smart::{Group, Order, Rules, Ruleset, Split, SplitBy};
 use crate::song_store::{self, Song, SongStore, Stored};
 use crate::visualizer_stream::Format;
@@ -46,6 +47,9 @@ const WORKERS: usize = 2;
 const MOST_STREAMS: usize = 32;
 /// How long a stream goes quiet before a keep-alive comment.
 const KEEP_ALIVE: Duration = Duration::from_secs(25);
+/// As `KEEP_ALIVE`, for a program with a panel: a stream only finds out
+/// it's closed when it next writes, and the panel should grey soon after.
+const PANEL_KEEP_ALIVE: Duration = Duration::from_secs(2);
 /// The visualizer stream's frame rate, unless it asks for another.
 const DEFAULT_FPS: u32 = 30;
 /// How long `frame.jpg` waits for the visualizer to draw one.
@@ -53,8 +57,8 @@ const FRAME_WAIT: Duration = Duration::from_secs(3);
 /// How long a request waits for the app to answer.
 const APP_WAIT: Duration = Duration::from_secs(5);
 /// The events there are (`GET /v1/events?events=` picks among them).
-const EVENTS: [&str; 8] =
-    ["now_playing", "seeked", "library_changed", "playlists_changed", "queue_changed", "soundfonts_changed", "scripts_changed", "wishlist_changed"];
+const EVENTS: [&str; 9] =
+    ["now_playing", "seeked", "library_changed", "playlists_changed", "queue_changed", "soundfonts_changed", "scripts_changed", "wishlist_changed", "panel"];
 /// Songs in one page of a list, unless the request asks for fewer.
 const MOST_SONGS: usize = 500;
 /// The largest song a program can send (as the relay's limit).
@@ -103,6 +107,9 @@ pub struct Access {
     /// May download songs' files (`GET /v1/songs/{key}/file`). Never on
     /// unless the user ticks it.
     pub download_songs: bool,
+    /// May show a panel in the Apps tab (`PUT /v1/panel`). Never on unless
+    /// the user ticks it.
+    pub panel: bool,
 }
 
 impl Access {
@@ -120,6 +127,7 @@ impl Access {
             add_songs: false,
             edit_library: false,
             download_songs: false,
+            panel: false,
         };
         (access, token)
     }
@@ -572,14 +580,50 @@ struct Shared {
     /// Woken when a call comes in, so it's answered even while nothing's
     /// being drawn.
     waker: egui::Context,
-    /// Each open stream, with the events it wants (`None`: all).
-    streams: Mutex<Vec<(Option<Vec<String>>, Sender<String>)>>,
+    streams: Mutex<Vec<Stream>>,
+    panels: Mutex<Panels>,
     /// The visualizer's pictures, for whoever's watching them.
     frames: Arc<crate::visualizer_stream::Frames>,
     /// What changed in the library when, for `/v1/songs?since=`.
     changes: Mutex<Changes>,
     /// Songs programs sent to be checked before they're imported.
     staged: Mutex<Staged>,
+}
+
+/// An open event stream.
+struct Stream {
+    /// Tells it from the others, to take it out when it closes.
+    id: u64,
+    /// The program's token's hash (`Access::token`): its panel's events
+    /// go only to its own streams.
+    app: String,
+    /// The events it wants (`None`: all).
+    wanted: Option<Vec<String>>,
+    tx: Sender<String>,
+}
+
+impl Stream {
+    fn wants(&self, name: &str) -> bool {
+        self.wanted.as_ref().is_none_or(|w| w.iter().any(|e| e == name))
+    }
+}
+
+/// The programs' panels, in the order they first came, and a count that
+/// goes up with every change, so the app only looks again after one.
+#[derive(Default)]
+struct Panels {
+    revision: u64,
+    shown: Vec<ShownPanel>,
+}
+
+/// A program's panel, as the Apps tab shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShownPanel {
+    /// The program's token's hash (`Access::token`).
+    pub app: String,
+    /// The program's name, as the user typed it.
+    pub name: String,
+    pub panel: Panel,
 }
 
 /// The library's revisions while synththing runs: each song as it was
@@ -654,7 +698,7 @@ impl Server {
         let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
         let http = Arc::new(http);
         let (tx, calls) = mpsc::channel();
-        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default(), frames: crate::visualizer_stream::Frames::new(), changes: Mutex::new(Changes::new()), staged: Mutex::new(Staged::new(staging)) });
+        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default(), panels: Mutex::default(), frames: crate::visualizer_stream::Frames::new(), changes: Mutex::new(Changes::new()), staged: Mutex::new(Staged::new(staging)) });
         let threads = (0..WORKERS)
             .map(|_| {
                 let (http, shared) = (Arc::clone(&http), Arc::clone(&shared));
@@ -680,11 +724,47 @@ impl Server {
         &self.shared.frames
     }
 
-    /// The apps allowed in, as the preferences now have them.
+    /// The apps allowed in, as the preferences now have them. A panel
+    /// whose program is gone, or may no longer show one, goes with it.
     pub fn set_apps(&self, apps: &[Access]) {
         if *self.shared.apps.read().unwrap_or_else(|p| p.into_inner()) != apps {
             *self.shared.apps.write().unwrap_or_else(|p| p.into_inner()) = apps.to_vec();
+            let mut panels = lock(&self.shared.panels);
+            let before = panels.shown.len();
+            panels.shown.retain(|shown| apps.iter().any(|a| a.token == shown.app && a.panel));
+            if panels.shown.len() != before {
+                panels.revision += 1;
+            }
         }
+    }
+
+    /// The programs' panels, if they changed since `revision` (which then
+    /// moves on to now).
+    pub fn panels(&self, revision: &mut u64) -> Option<Vec<ShownPanel>> {
+        let panels = lock(&self.shared.panels);
+        (panels.revision != *revision).then(|| {
+            *revision = panels.revision;
+            panels.shown.clone()
+        })
+    }
+
+    /// Take a program's panel away (the user closed it).
+    pub fn close_panel(&self, app: &str) {
+        let mut panels = lock(&self.shared.panels);
+        panels.shown.retain(|shown| shown.app != app);
+        panels.revision += 1;
+    }
+
+    /// Whether a program (by its token's hash) has an event stream open:
+    /// only then does it hear its panel.
+    pub fn connected(&self, app: &str) -> bool {
+        lock(&self.shared.streams).iter().any(|stream| stream.app == app)
+    }
+
+    /// Tell a program (by its token's hash) what the user did with its
+    /// panel.
+    pub fn panel_event(&self, app: &str, event: &crate::panel::Event) {
+        self.send("panel", event, |stream| stream.app == app);
     }
 
     /// The calls waiting for the app.
@@ -694,18 +774,20 @@ impl Server {
 
     /// Whether any event stream is open (events are only worked out then).
     pub fn listened_to(&self) -> bool {
-        !self.shared.streams.lock().unwrap_or_else(|p| p.into_inner()).is_empty()
+        !lock(&self.shared.streams).is_empty()
     }
 
     /// Send an event to every open stream.
     pub fn event(&self, name: &str, data: &impl Serialize) {
+        self.send(name, data, |_| true);
+    }
+
+    /// Send an event to the open streams `to` picks that want it (and let
+    /// go of those that closed).
+    fn send(&self, name: &str, data: &impl Serialize, to: impl Fn(&Stream) -> bool) {
         let Ok(data) = serde_json::to_string(data) else { return };
         let message = format!("event: {name}\ndata: {data}\n\n");
-        self.shared
-            .streams
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .retain(|(wanted, stream)| wanted.as_ref().is_some_and(|w| !w.iter().any(|e| e == name)) || stream.send(message.clone()).is_ok());
+        lock(&self.shared.streams).retain(|stream| !(to(stream) && stream.wants(name)) || stream.tx.send(message.clone()).is_ok());
     }
 }
 
@@ -716,7 +798,7 @@ impl Drop for Server {
         for _ in &self.threads {
             self.http.unblock();
         }
-        self.shared.streams.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        lock(&self.shared.streams).clear();
         for thread in self.threads.drain(..) {
             let _ = thread.join();
         }
@@ -724,6 +806,10 @@ impl Drop for Server {
 }
 
 type Reply = Response<Cursor<Vec<u8>>>;
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 #[derive(Serialize)]
 struct ApiError {
@@ -830,15 +916,22 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 "add_songs": access.add_songs,
                 "edit_library": access.edit_library,
                 "download_songs": access.download_songs,
+                "panel": access.panel,
             }),
         )),
         (Method::Get, ["v1", "events"]) => match needs(access.read, "read").map_or_else(|| wanted_events(&query), Err) {
             Err(reply) => Some(reply),
             Ok(wanted) => {
-                stream(shared, request, wanted);
+                stream(shared, request, access.token.clone(), wanted);
                 return;
             }
         },
+        (Method::Delete, ["v1", "events"]) => {
+            // (A program closing down says so, and its panel greys at once.)
+            lock(&shared.streams).retain(|stream| stream.app != access.token);
+            shared.waker.request_repaint();
+            Some(Response::from_data(Vec::new()).with_status_code(204))
+        }
         (Method::Get, ["v1", "visualizer"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
             // (A page OBS's Browser Source, or a browser, can show: the
             // stream, with the same query, token and all.)
@@ -904,6 +997,14 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 (Ok(None), Ok(None), Ok(None)) => error(400, "say what to set: ?shuffle=, ?loop= or ?autoplay="),
                 (Ok(shuffle), Ok(loop_mode), Ok(autoplay)) => answered(ask(shared, |reply| Call::Set(Set::Modes { shuffle, loop_mode, autoplay }, reply))),
             }
+        })),
+        (Method::Put, ["v1", "panel"]) => Some(needs(access.panel, "show a panel").unwrap_or_else(|| set_panel(shared, &mut request, &access))),
+        (Method::Delete, ["v1", "panel"]) => Some(needs(access.panel, "show a panel").unwrap_or_else(|| {
+            let mut panels = lock(&shared.panels);
+            panels.shown.retain(|shown| shown.app != access.token);
+            panels.revision += 1;
+            shared.waker.request_repaint();
+            Response::from_data(Vec::new()).with_status_code(204)
         })),
         (Method::Get, ["v1", "commands"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
             let commands: Vec<_> = Command::ALL.iter().map(|c| serde_json::json!({ "id": c.id(), "name": c.name() })).collect();
@@ -1664,31 +1765,63 @@ fn video(shared: &Arc<Shared>, request: Request, size: Option<(usize, usize)>, f
     }
 }
 
-fn stream(shared: &Arc<Shared>, request: Request, wanted: Option<Vec<String>>) {
+/// `PUT /v1/panel`: the program's panel, as sent, in place of any it had.
+fn set_panel(shared: &Shared, request: &mut Request, access: &Access) -> Reply {
+    let mut body = Vec::new();
+    if request.as_reader().take(crate::panel::LARGEST as u64 + 1).read_to_end(&mut body).is_err() {
+        return error(400, "couldn't read the panel");
+    }
+    if body.len() > crate::panel::LARGEST {
+        return error(413, format!("a panel is at most {} KB", crate::panel::LARGEST >> 10));
+    }
+    let panel = match Panel::parse(&body) {
+        Ok(panel) => panel,
+        Err(why) => return error(400, why),
+    };
+    let shown = ShownPanel { app: access.token.clone(), name: access.name.clone(), panel };
+    let mut panels = lock(&shared.panels);
+    match panels.shown.iter_mut().find(|s| s.app == shown.app) {
+        Some(had) => *had = shown,
+        None => panels.shown.push(shown),
+    }
+    panels.revision += 1;
+    shared.waker.request_repaint();
+    Response::from_data(Vec::new()).with_status_code(204)
+}
+
+fn stream(shared: &Arc<Shared>, request: Request, app: String, wanted: Option<Vec<String>>) {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (tx, rx) = mpsc::channel::<String>();
     {
-        let mut streams = shared.streams.lock().unwrap_or_else(|p| p.into_inner());
+        let mut streams = lock(&shared.streams);
         if streams.len() >= MOST_STREAMS {
             drop(streams);
             let _ = request.respond(error(503, "too many open event streams"));
             return;
         }
-        streams.push((wanted, tx));
+        streams.push(Stream { id, app: app.clone(), wanted, tx });
     }
+    // (A program's panel shows whether it's listening.)
+    shared.waker.request_repaint();
+    let closing = Arc::clone(shared);
     let spawned = std::thread::Builder::new().name("api events".into()).spawn(move || {
         let mut writer = request.into_writer();
         let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\
                     Connection: close\r\n\r\n: open\n\n";
         let mut ok = writer.write_all(head.as_bytes()).and_then(|()| writer.flush()).is_ok();
         while ok {
-            let chunk = match rx.recv_timeout(KEEP_ALIVE) {
+            let has_panel = lock(&closing.panels).shown.iter().any(|shown| shown.app == app);
+            let chunk = match rx.recv_timeout(if has_panel { PANEL_KEEP_ALIVE } else { KEEP_ALIVE }) {
                 Ok(message) => message,
                 Err(mpsc::RecvTimeoutError::Timeout) => ": keep-alive\n\n".to_string(),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
             ok = writer.write_all(chunk.as_bytes()).and_then(|()| writer.flush()).is_ok();
         }
-        // (Gone: its sender goes with the next event.)
+        // (Closed: out of the list now, so its program's panel greys.)
+        lock(&closing.streams).retain(|stream| stream.id != id);
+        closing.waker.request_repaint();
     });
     if spawned.is_err() {
         log::warn!("api: couldn't start an event stream");
@@ -2181,5 +2314,63 @@ mod tests {
         server.event("now_playing", &NowPlaying::default());
         server.event("seeked", &serde_json::json!({ "position": 1.0 }));
         assert_eq!(stream.join().unwrap(), "event: seeked");
+    }
+
+    #[test]
+    fn a_panel_is_shown_and_its_events_reach_only_its_program() {
+        let (reader, read_token) = Access::new("reader");
+        let (mut finder, finder_token) = Access::new("Finder");
+        finder.panel = true;
+        let finder_hash = finder.token.clone();
+        let server = Server::start(0, false, vec![reader, finder], egui::Context::default(), staging()).unwrap();
+        let addr = server.addr();
+        let put = |token: &str, body: &str| {
+            let request = agent().put(format!("http://{addr}/v1/panel")).header("Authorization", format!("Bearer {token}"));
+            request.send(body).unwrap().status().as_u16()
+        };
+        let panel = r#"{"title": "Finder", "elements": [{"id": "q", "type": "textbox"}]}"#;
+        assert_eq!(put(&read_token, panel), 403);
+        assert_eq!(put(&finder_token, r#"{"title": "Finder"}"#), 400);
+        assert_eq!(put(&finder_token, &"x".repeat(crate::panel::LARGEST + 1)), 413);
+        assert_eq!(put(&finder_token, panel), 204);
+        let mut revision = 0;
+        let shown = server.panels(&mut revision).unwrap();
+        assert_eq!((shown.len(), shown[0].name.as_str(), shown[0].app.as_str()), (1, "Finder", finder_hash.as_str()));
+        assert!(server.panels(&mut revision).is_none(), "nothing new since");
+        assert!(!server.connected(&finder_hash));
+
+        // (The reader's stream hears nothing of Finder's panel; Finder's own
+        // stream does.)
+        let listen = |token: String| {
+            let url = format!("http://{addr}/v1/events?token={token}");
+            std::thread::spawn(move || {
+                let response = agent().get(url).call().unwrap();
+                let mut lines = BufReader::new(response.into_body().into_reader()).lines();
+                lines.find(|l| l.as_ref().is_ok_and(|l| l.starts_with("event:"))).unwrap().unwrap()
+            })
+        };
+        let reader_stream = listen(read_token);
+        let finder_stream = listen(finder_token.clone());
+        while lock(&server.shared.streams).len() < 2 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(server.connected(&finder_hash));
+        server.panel_event(&finder_hash, &crate::panel::Event { element: "q".into(), kind: crate::panel::EventKind::Changed, value: Some("ov".into()) });
+        assert_eq!(finder_stream.join().unwrap(), "event: panel");
+        server.event("seeked", &serde_json::json!({ "position": 1.0 }));
+        assert_eq!(reader_stream.join().unwrap(), "event: seeked");
+
+        let finder_stream = listen(finder_token.clone());
+        while !server.connected(&finder_hash) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let goodbye = agent().delete(format!("http://{addr}/v1/events")).header("Authorization", format!("Bearer {finder_token}")).call().unwrap();
+        assert_eq!(goodbye.status().as_u16(), 204);
+        assert!(!server.connected(&finder_hash), "a goodbye closes its streams at once");
+        drop(finder_stream);
+
+        let delete = agent().delete(format!("http://{addr}/v1/panel")).header("Authorization", format!("Bearer {finder_token}")).call().unwrap();
+        assert_eq!(delete.status().as_u16(), 204);
+        assert_eq!(server.panels(&mut revision), Some(Vec::new()));
     }
 }

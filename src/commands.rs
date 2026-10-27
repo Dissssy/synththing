@@ -55,7 +55,7 @@ pub enum Command {
 
 impl Command {
     /// Every command, in the order the palette and Preferences list them.
-    pub const ALL: [Command; 38] = [
+    pub const ALL: [Command; 39] = [
         Self::TogglePause,
         Self::Play,
         Self::Pause,
@@ -78,6 +78,7 @@ impl Command {
         Self::GoTo(Section::Soundfonts),
         Self::GoTo(Section::Queue),
         Self::GoTo(Section::Wishlist),
+        Self::GoTo(Section::Apps),
         Self::GoTo(Section::Visualizer),
         Self::GoTo(Section::Editor),
         Self::GoTo(Section::Reference),
@@ -124,6 +125,7 @@ impl Command {
                 Section::Soundfonts => "go_to_soundfonts",
                 Section::Queue => "go_to_queue",
                 Section::Wishlist => "go_to_wishlist",
+                Section::Apps => "go_to_apps",
                 Section::Visualizer => "go_to_visualizer",
                 Section::Editor => "go_to_editor",
                 Section::Reference => "go_to_reference",
@@ -177,6 +179,7 @@ impl Command {
                 Section::Soundfonts => "Go to Soundfonts",
                 Section::Queue => "Go to Up next",
                 Section::Wishlist => "Go to Wishlist",
+                Section::Apps => "Go to Apps",
                 Section::Visualizer => "Go to Visualizer",
                 Section::Editor => "Go to Script Editor",
                 Section::Reference => "Go to Scripting Reference",

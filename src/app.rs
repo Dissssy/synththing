@@ -56,6 +56,7 @@ mod tour;
 mod welcome;
 mod which_key;
 mod wishlist;
+mod panels;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
@@ -516,6 +517,8 @@ pub struct App {
     /// The Up next tab's selected rows.
     queue_selection: select_list::Selection,
     wishlist: wishlist::WishlistState,
+    /// The Apps tab's panels (`panels.rs`).
+    panels: panels::PanelsState,
     /// The Up next tab's rows as last described, and what from (a hash).
     queue_rows: Option<(u64, Vec<(PathBuf, song_list::Described)>)>,
     /// Becomes true once the current playlist track is seen playing (not
@@ -802,6 +805,7 @@ impl App {
             playing_queued: false,
             queue_selection: Default::default(),
             wishlist: Default::default(),
+            panels: Default::default(),
             queue_rows: None,
             advance_armed: false,
             song_loads: 0,
@@ -1794,6 +1798,7 @@ impl App {
                 section_checkbox(ui, Section::Soundfonts);
                 section_checkbox(ui, Section::Queue);
                 section_checkbox(ui, Section::Wishlist);
+                section_checkbox(ui, Section::Apps);
                 ui.separator();
                 section_checkbox(ui, Section::Visualizer);
                 section_checkbox(ui, Section::Editor);
@@ -4396,6 +4401,7 @@ impl TabViewer for SectionTabs<'_> {
             Section::Soundfonts => app.soundfont_ui(ui),
             Section::Queue => app.queue_ui(ui),
             Section::Wishlist => app.wishlist_ui(ui),
+            Section::Apps => app.apps_ui(ui),
             Section::Visualizer => {
                 app.visualizer_preview_ui(ui, self.shared.notes.clone(), self.shared.view.clone());
             }
