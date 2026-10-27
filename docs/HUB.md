@@ -36,7 +36,7 @@ Let a program in with:
 synththing hub token bridge --grant read,add_songs,download_songs
 ```
 
-It prints the program's token once. The permissions are `read`, `add_songs`, `download_songs`, `edit_library` and `control`. `synththing hub token` lists the programs let in, and `synththing hub token bridge --remove` stops letting one in. A running hub picks these up straight away.
+It prints the program's token once. The permissions are `read`, `add_songs`, `download_songs`, `edit_library` and `control`. `synththing hub token` lists the programs let in, and `synththing hub token bridge --remove` stops letting one in. Run it again for a program let in already to change what it may do: it keeps its token. A running hub picks these up straight away.
 
 The API runs while any program is let in, on port 7340 (`SYNTHTHING_API_PORT` for another), on this machine only. `SYNTHTHING_API_LAN=true` lets in other machines too, which is what another Docker container is: then keep the port off the internet (don't publish it, or only to `127.0.0.1`), as anything that reaches it with a token can use it. In Docker, run the token command inside the container: `docker exec synththing-hub synththing hub token bridge --grant read,add_songs`.
 
