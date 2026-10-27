@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.7.3 (2026-10-27)
+
 ### Added
 - A hub hosts programs' panels for your devices: let one in with `synththing hub token <name> --grant read,panel,share` and its panel shows in the Apps tab on your other devices, as one shared from a PC does.
 
