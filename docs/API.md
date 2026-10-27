@@ -29,6 +29,11 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `GET /v1/songs?q=&offset=&limit=&since=` | read | `{"total", "songs": [...], "revision", "full"}`: the songs `q` finds, sorted by file name: `limit` of them (at most and by default 500) after skipping `offset`. With `since` (a `revision` an earlier answer gave), only the songs that changed after it, and `removed`: the keys of those that left the list (below) |
 | `GET /v1/songs/{key}` | read | One song, by the `key` the other requests give |
 | `POST /v1/songs?name=Song.mp3` | add songs | Adds the file sent as the body (up to 250 MB) to the library: 201 with the song if it's new, 200 if it was there already |
+| `POST /v1/staged?name=Song.mp3` | add songs | Stages the file sent as the body (below): read, but not in the library. 201 with it if it's new, 200 if it was staged already |
+| `GET /v1/staged` | add songs | The staged songs (below) |
+| `POST /v1/staged/check?keys=` | add songs | Matches the staged songs `keys` (comma separated; all of them without it) at MusicBrainz, album by album (below). 409 if online lookups are off |
+| `POST /v1/staged/{key}/import` | add songs | Adds the staged song to the library, with its match, as `POST /v1/songs` would: 201 with the song if it's new to the library, 200 if it was there already, 404 if it isn't staged |
+| `DELETE /v1/staged/{key}` | add songs | Drops the staged song: 204, or 404 |
 | `GET /v1/playlists` | read | `[{"id", "name", "smart", "songs": [keys]}]` |
 | `POST` / `DELETE /v1/songs/{key}/star` | edit library | Stars the song, or unstars it: 204 |
 | `POST` / `DELETE /v1/songs/{key}/tags?tag={name}` | edit library | Gives the song that tag, or takes it off: 204, or 404 if there's no such tag (tags are made in synththing) |
@@ -120,6 +125,22 @@ A wish is what was wished for and what of it is here:
 `kind` is `album` (a MusicBrainz release group: any edition of it does), `song` (a recording), `artist` (the albums of theirs picked, each an album wish with `"under"` its ID: `have` of `total` is how many are got) or `text` (just a name: a song or an album named `title`, by `artist` if it gives one). `got` is `no`, `partly` or `yes`, worked out from the songs on this computer, and `songs` are those (by key). An album's `skipped` songs aren't wanted: it's got without them. Fields that say nothing are left out.
 
 To wish, `POST /v1/wishlist` a wish with at least `kind` and `title` (or for `text`, `artist`), such as one `/v1/musicbrainz/search` gave. An album by its `musicbrainz` group without `tracks` gets them from MusicBrainz first, when online lookups are on. Wishes a program makes are marked with its name (`added_by`), and the wishlist syncs to your other devices.
+
+## Checking songs before they're added
+
+A program that isn't sure a file is what it wants (a download that might be the wrong edition, say) can stage it first: `POST /v1/staged?name=` with the file, as for `POST /v1/songs`. A staged song is read (its tags, length and so on) but kept out of everything else: it isn't in the library, Songs, search, playlists or events, and it doesn't sync. Each comes back as a song of the library would, plus `here` (the library has this very file already) and `fills` (the IDs of the wishes it would fill).
+
+`POST /v1/staged/check` then matches the staged songs at MusicBrainz as synththing's own lookup matches the library's: grouped into albums by their tags, each album against MusicBrainz's releases (a song on no album by its recording). It waits for MusicBrainz, a second or so for each album it hasn't asked about before. For each album it answers:
+
+```json
+{"album": "Modal Soul", "artist": "Nujabes", "outcome": "matched",
+ "release": {"id": "...", "group": "...", "title": "Modal Soul", "artist": "Nujabes", "date": "2005-11-11", "tracks": [...]},
+ "songs": [{"key": "3f2a...", "title": "Feather", "recording": "...", "release": "...", "release_group": "...", "here": false, "fills": ["8c41..."]}]}
+```
+
+`outcome` is `matched` (to `release`: each song has its `recording`, `release` and `release_group` now, and `fills` says which wishes it would fill), `unsure` (it might be one of `candidates`), `not_found` or `failed` (`error` says why). Staging more songs of an album and checking again checks them together.
+
+`POST /v1/staged/{key}/import` adds a staged song to the library without sending it again, matched as it was checked (so the lookup doesn't ask again), and marked as the program's as `POST /v1/songs` marks it. `DELETE` drops one. What isn't imported within a day is dropped, and nothing stays staged once synththing quits (or the API is turned off).
 
 ## Songs added by programs
 

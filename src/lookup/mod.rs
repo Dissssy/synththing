@@ -82,11 +82,17 @@ fn is_midi(name: &str) -> bool {
 /// The library's albums (of songs here that aren't MIDI), the largest
 /// first.
 pub fn albums(store: &SongStore, ignore: &str) -> Vec<Album> {
+    albums_of(store.known().filter(|(key, _)| store.has(key) && !store.is_blocked(key)), ignore)
+}
+
+/// The albums `songs` (by key) are on, as [`albums`] has them: songs not
+/// yet in the library too, such as those a program sent to be checked.
+pub fn albums_of<'s>(songs: impl Iterator<Item = (&'s str, &'s song_store::Song)>, ignore: &str) -> Vec<Album> {
     let mut albums: HashMap<String, Album> = HashMap::new();
     let mut artists: HashMap<String, Vec<String>> = HashMap::new();
     let mut loose = Vec::new();
-    for (key, song) in store.known() {
-        if !store.has(key) || is_midi(&song.name) || store.is_blocked(key) {
+    for (key, song) in songs {
+        if is_midi(&song.name) {
             continue;
         }
         let facts = Facts::of(song);
@@ -567,7 +573,7 @@ fn next(plan: &Plan, kept: &Kept, albums: &[Album]) -> Option<Ask> {
 
 /// What a lookup makes of `album`: a song on no album by its recording,
 /// else by its releases.
-fn look_up(musicbrainz: &mut musicbrainz::MusicBrainz, album: &Album, fresh: bool) -> Outcome {
+pub fn look_up(musicbrainz: &mut musicbrainz::MusicBrainz, album: &Album, fresh: bool) -> Outcome {
     if album.loose {
         return musicbrainz.recording(album, fresh).unwrap_or_else(|e| Outcome::Failed(format!("{e:#}")));
     }

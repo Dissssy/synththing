@@ -148,7 +148,7 @@ impl App {
             && self.api.failed.as_ref().is_none_or(|(p, _)| *p != port)
         {
             self.api.server = None;
-            match api::Server::start(port, settings.lan, settings.apps.clone(), ctx.clone()) {
+            match api::Server::start(port, settings.lan, settings.apps.clone(), ctx.clone(), staging()) {
                 Ok(server) => {
                     log::info!("api: listening on {}", server.addr());
                     self.api.server = Some(server);
@@ -213,8 +213,8 @@ impl App {
                 Call::Play { song, playlist, reply } => {
                     let _ = reply.send(self.api_play(song.as_deref(), playlist.as_deref()));
                 }
-                Call::Add { stored, program, reply } => {
-                    let _ = reply.send(self.api_add(stored, &program));
+                Call::Add { stored, program, online, reply } => {
+                    let _ = reply.send(self.api_add(stored, &program, online));
                 }
                 Call::Wishlist(query, reply) => {
                     let _ = reply.send(self.api_wishlist(&query));
@@ -250,8 +250,9 @@ impl App {
     }
 
     /// A song `program` sent, stored already, into the library: marked as
-    /// the program's if it's new there.
-    fn api_add(&mut self, stored: crate::song_store::Stored, program: &str) -> Result<(SongInfo, bool), String> {
+    /// the program's if it's new there, and matched at MusicBrainz as
+    /// `online` says unless it's matched already.
+    fn api_add(&mut self, stored: crate::song_store::Stored, program: &str, online: Option<crate::song_store::Online>) -> Result<(SongInfo, bool), String> {
         // (The one-time import writes the library's index last: until
         // then, nothing else may.)
         if self.old_import.is_some() {
@@ -262,6 +263,10 @@ impl App {
         self.add_to_library([stored]);
         if new {
             self.songs.set_added_by(&key, program);
+        }
+        if online.is_some() && self.songs.get_by_key(&key).is_some_and(|song| song.online.as_ref().is_none_or(|o| o.release.is_none() && o.recording.is_none())) {
+            self.songs.set_online(vec![(key.clone(), online)]);
+            self.songs_changed();
         }
         let song = self.songs.get_by_key(&key).ok_or("the song didn't stay in the library")?;
         Ok((SongInfo::of(&key, song, &self.songs), new))
@@ -977,4 +982,10 @@ fn wish_info(id: &str, wish: &crate::wishlist::Wish, progress: Option<&crate::wi
         State::Got => "yes",
     };
     api::WishInfo { id: id.to_string(), wish: wish.clone(), got, have: progress.have, total: progress.total, songs: progress.songs, albums }
+}
+
+/// Where the API stages songs programs send to be checked: in the config
+/// folder, beside the library (so importing one is a move).
+fn staging() -> std::path::PathBuf {
+    crate::config::config_dir().map_or_else(|_| std::env::temp_dir().join("synththing-staged"), |dir| dir.join("staged"))
 }
