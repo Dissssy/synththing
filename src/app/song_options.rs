@@ -18,10 +18,11 @@ impl App {
         self.current_song.as_deref().and_then(|p| self.songs.get(p)).map(Facts::of)
     }
 
-    /// Set the output volume: the slider's, by the playing song's adjust.
+    /// Set the output volume: the slider's, and the playing song's adjust.
     pub(super) fn send_volume(&self) {
         let adjust = self.playing_facts().and_then(|f| f.number(Field::VolumeAdjust)).unwrap_or(0.0);
-        self.send(AudioCommand::SetVolume(self.volume * (1.0 + adjust as f32 / 100.0)));
+        self.send(AudioCommand::SetVolume(self.volume));
+        self.send(AudioCommand::SetSongGain(1.0 + adjust as f32 / 100.0));
     }
 
     /// The song just sent to play: from where it was left, else its start

@@ -83,7 +83,7 @@ impl HubApi {
         {
             self.server = None;
             let staging = crate::config::config_dir().map_or_else(|_| std::env::temp_dir().join("synththing-staged"), |dir| dir.join("staged"));
-            match api::Server::start(port, lan, self.apps.clone(), egui::Context::default(), staging) {
+            match api::Server::start(port, lan, self.apps.clone(), egui::Context::default(), staging, None) {
                 Ok(server) => {
                     log::info!("api: listening on {} for {} program(s)", server.addr(), self.apps.len());
                     self.server = Some(server);

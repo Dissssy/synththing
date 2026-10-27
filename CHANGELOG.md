@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Listen to synththing from another device or OBS: with the new **Listen** permission, `/v1/audio/stream` sends what plays (before the volume slider) as a live WAV, `/v1/audio` is a page that plays it with little delay, and `/v1/visualizer?audio=1` shows the visualizer and plays the sound with it, so one Browser Source gives OBS both. See docs/API.md.
 - Control your other devices from the Devices button: play, pause, previous, next, and seek on each one's bar.
 - See what your other devices are playing: with sync on, a Devices button by the transport (under the visualizer picker on a phone) shows up while another of your devices is online, listing each one with its song, artist and where it is.
 - Songs go straight to and from your hub: devices that reach it (on your network, or at its public address with port 7390 forwarded) send it the songs it lacks and take theirs from it directly, with no size limit, and the relay carries the rest. Devices sending at once split the songs between them, the rarest first. Set where it's reached with `SYNTHTHING_HUB_URL`. See docs/HUB.md.
