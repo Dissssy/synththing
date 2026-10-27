@@ -75,8 +75,8 @@ pub enum Command {
     /// each device that wants them. Its songs, playlists and sign-in live
     /// in the config folder (--config-dir or SYNTHTHING_CONFIG_DIR). Not
     /// signed in yet, it signs in with the link in SYNTHTHING_PAIR_LINK (as
-    /// SYNTHTHING_HUB_NAME), or waits for `hub pair`. Runs until stopped
-    /// (Ctrl+C), logging to the terminal.
+    /// SYNTHTHING_HUB_NAME), or waits for `hub pair` or a link pasted into
+    /// its terminal. Runs until stopped (Ctrl+C), logging to the terminal.
     Hub(HubArgs),
 
     /// Make a script's preview: a short looping animation and a still.

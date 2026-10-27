@@ -6,6 +6,7 @@
 //! each song a device sends streams straight to it, and it sends them on to
 //! each device that wants them once that one's open.
 
+use std::io::IsTerminal;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -150,20 +151,22 @@ pub fn run() -> i32 {
 }
 
 /// The identity it's signed in as, once it is: signed in with the link in
-/// `PAIR_LINK_VAR` if there is one, else waiting for `hub pair` (so a
-/// container waits to be signed in instead of stopping).
+/// `PAIR_LINK_VAR` if there is one, else waiting for `hub pair` or, with a
+/// terminal (`docker attach`), a link pasted in (so a container waits to
+/// be signed in instead of stopping).
 fn signed_in() -> Identity {
     if let Some(identity) = Identity::load() {
         return identity;
     }
+    let name = std::env::var(NAME_VAR).ok().filter(|n| !n.trim().is_empty());
     if let Ok(link) = std::env::var(PAIR_LINK_VAR)
         && !link.trim().is_empty()
     {
-        let name = std::env::var(NAME_VAR).ok().filter(|n| !n.trim().is_empty());
         if let Err(e) = pair(link.trim(), name.as_deref()) {
             log::error!("signing in with {PAIR_LINK_VAR}: {e}");
         }
     }
+    let pasted = std::io::stdin().is_terminal().then(read_links);
     let mut told = false;
     loop {
         if let Some(identity) = Identity::load() {
@@ -174,9 +177,42 @@ fn signed_in() -> Identity {
             log::warn!(
                 "not signed in: on a signed-in device, open Preferences > Online Library > Sign in another device, then run synththing hub pair '<link>' (in Docker: docker exec synththing-hub synththing hub pair '<link>'), or set {PAIR_LINK_VAR}. Waiting for it."
             );
+            if pasted.is_some() {
+                println!("Or paste the link here:");
+            }
         }
-        std::thread::sleep(SIGN_IN_CHECK);
+        let Some(pasted) = &pasted else {
+            std::thread::sleep(SIGN_IN_CHECK);
+            continue;
+        };
+        match pasted.recv_timeout(SIGN_IN_CHECK) {
+            Ok(link) => {
+                if let Err(e) = pair(&link, name.as_deref()) {
+                    println!("{e}. Paste another link:");
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(SIGN_IN_CHECK),
+        }
     }
+}
+
+/// The lines typed or pasted into the terminal, from a thread of its own
+/// (until the receiver's dropped), leaving out blank ones.
+fn read_links() -> Receiver<String> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("sign-in link".into())
+        .spawn(move || {
+            for line in std::io::stdin().lines().map_while(Result::ok) {
+                let line = line.trim();
+                if !line.is_empty() && tx.send(line.to_string()).is_err() {
+                    return;
+                }
+            }
+        })
+        .ok();
+    rx
 }
 
 /// Turn sync on here if it isn't, and want every song.

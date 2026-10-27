@@ -9,7 +9,9 @@
 #
 # It signs in on its first start (the link works once, for 10 minutes,
 # and is ignored once it's signed in). Without one it waits to be signed
-# in with: docker exec synththing-hub synththing hub pair '<link>'
+# in: `docker attach synththing-hub` (or Portainer's Attach console),
+# paste the link, then detach with Ctrl+P Ctrl+Q. Or:
+# docker exec synththing-hub synththing hub pair '<link>'
 #
 # Its songs, playlists, settings and sign-in are in ./hub (songs in
 # ./hub/music); its log is `docker logs synththing-hub` (and
@@ -21,6 +23,9 @@ services:
     container_name: synththing-hub
     restart: unless-stopped
     command: ["hub"]
+    # (A terminal to paste a sign-in link into, with docker attach.)
+    stdin_open: true
+    tty: true
     environment:
       - SYNTHTHING_CONFIG_DIR=/data
       - SYNTHTHING_HUB_NAME=Home hub
