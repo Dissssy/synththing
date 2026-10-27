@@ -2,7 +2,7 @@
 //! `config.json` that aren't one device's own, kept the same on every
 //! device signed in as one identity that has it on.
 //!
-//! The config is flattened to its leaves (`library/servers`, `theme`, ...),
+//! The config is flattened to its leaves (`library/author_name`, `theme`, ...),
 //! and each synced one is kept with when it last changed. Every save of
 //! the config (`Config::save`) stamps the leaves that changed since the
 //! last one, so nothing else needs to know about sync. `sync-settings.json`
@@ -34,7 +34,8 @@ pub const NAME: &str = "settings";
 
 /// The config's leaves that are this device's own, and every leaf under
 /// them: its folders, layouts and window, audio buffer, what it last
-/// played, its updates and how it looks on its screen.
+/// played, its updates and how it looks on its screen (UI and visualizer
+/// pixel scale).
 const LOCAL: &[&str] = &[
     "soundfonts",
     "record_dir",
@@ -58,6 +59,7 @@ const LOCAL: &[&str] = &[
     "mobile_layout",
     "fullscreen_over_cutout",
     "ui_scale",
+    "visualizer_scale",
     "sync_debug",
     "local_keymap",
     "api",
@@ -121,6 +123,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("cleanup_dismissed", "Dismissed clean-up suggestions", &["cleanup_dismissed"]),
             setting("online_lookup", "Online album art and details", &["online_lookup", "lookup_device"]),
             PLAYLISTS,
+            WISHLIST,
             SONGS,
             STARRED_SONGS,
             EVERY_SONG,
@@ -154,8 +157,6 @@ pub const CATEGORIES: &[Category] = &[
     Category {
         name: "Online Library",
         settings: &[
-            setting("servers", "Servers", &["library/official", "library/servers"]),
-            setting("server_keys", "Servers' keys", &["library/pinned"]),
             setting("author_name", "Name to post under", &["library/author_name"]),
             setting("notifications", "Notifications", &["library/notifications"]),
         ],
@@ -176,6 +177,10 @@ const OTHER: Setting = setting("other", "Anything else", &[]);
 /// The playlists (`playlist_sync.rs`): no settings of their own, but
 /// chosen with them.
 pub const PLAYLISTS: Setting = setting("playlists", "Playlists", &[]);
+
+/// The wishlist (`wishlist.rs`): chosen with the settings, like the
+/// playlists.
+pub const WISHLIST: Setting = setting("wishlist", "Wishlist", &[]);
 
 /// Fetching songs from the other devices (`song_sync.rs`): those in
 /// playlists, with `STARRED_SONGS` the starred ones too, or with
@@ -533,10 +538,10 @@ mod tests {
 
     #[test]
     fn leaves_leave_out_the_devices_own() {
-        let config = json!({ "theme": "dark", "layout": { "a": 1 }, "library": { "servers": [1], "pinned": { "x/y": "k" } } });
+        let config = json!({ "theme": "dark", "layout": { "a": 1 }, "library": { "author_name": "x", "notifications": true } });
         let leaves = synced_leaves(&config, &Choices::new());
-        assert_eq!(leaves.keys().collect::<Vec<_>>(), ["library/pinned/x~1y", "library/servers", "theme"]);
-        let no_library = Choices::from([("servers".to_string(), false), ("server_keys".to_string(), false)]);
+        assert_eq!(leaves.keys().collect::<Vec<_>>(), ["library/author_name", "library/notifications", "theme"]);
+        let no_library = Choices::from([("author_name".to_string(), false), ("notifications".to_string(), false)]);
         assert_eq!(synced_leaves(&config, &no_library).keys().collect::<Vec<_>>(), ["theme"]);
         let session = json!({ "session": { "volume": 0.5, "script": "C:/x.lua" } });
         assert!(synced_leaves(&session, &Choices::new()).is_empty(), "volume and speed are off by default");

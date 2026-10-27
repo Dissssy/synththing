@@ -33,6 +33,9 @@ use crate::fields::{Facts, Field};
 use crate::smart::{Group, Order, Rules, Ruleset, Split, SplitBy};
 use crate::song_store::{self, Song, SongStore, Stored};
 use crate::visualizer_stream::Format;
+use crate::lookup::matching::Release;
+use crate::lookup::musicbrainz::MusicBrainz;
+use crate::wishlist::{Kind, Wish};
 
 /// The port it listens on unless it's given another.
 pub const DEFAULT_PORT: u16 = 7340;
@@ -49,7 +52,8 @@ const FRAME_WAIT: Duration = Duration::from_secs(3);
 /// How long a request waits for the app to answer.
 const APP_WAIT: Duration = Duration::from_secs(5);
 /// The events there are (`GET /v1/events?events=` picks among them).
-const EVENTS: [&str; 7] = ["now_playing", "seeked", "library_changed", "playlists_changed", "queue_changed", "soundfonts_changed", "scripts_changed"];
+const EVENTS: [&str; 8] =
+    ["now_playing", "seeked", "library_changed", "playlists_changed", "queue_changed", "soundfonts_changed", "scripts_changed", "wishlist_changed"];
 /// Songs in one page of a list, unless the request asks for fewer.
 const MOST_SONGS: usize = 500;
 /// The largest song a program can send (as the relay's limit).
@@ -158,6 +162,63 @@ pub enum Call {
         program: String,
         reply: Sender<Result<(SongInfo, bool), String>>,
     },
+    /// The wishlist, those `query` keeps (`wishlist_search`): its wishes
+    /// with what of each is here, an artist's albums under them.
+    Wishlist(String, Sender<Vec<WishInfo>>),
+    /// Wish for `wish`, for `program` (`release` its album's edition, as
+    /// MusicBrainz said, to keep): it, and whether it's new to the
+    /// wishlist; `Err` (with its status) if it can't be.
+    Wish {
+        wish: Wish,
+        release: Option<Release>,
+        program: String,
+        reply: Sender<Result<(WishInfo, bool), (u16, String)>>,
+    },
+}
+
+/// A wish, as `/v1/wishlist` has it: what was wished for (`Wish`'s
+/// fields), its ID, and what of it is here: how much (`got`: no, partly
+/// or yes; `have` of `total` tracks, or an artist's albums), its songs
+/// (by key) and an artist's albums wished for.
+#[derive(Clone, Debug, Serialize)]
+pub struct WishInfo {
+    pub id: String,
+    #[serde(flatten)]
+    pub wish: Wish,
+    pub got: &'static str,
+    pub have: usize,
+    pub total: usize,
+    pub songs: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub albums: Vec<WishInfo>,
+}
+
+/// A release at MusicBrainz as the API gives it: its tracks, each with
+/// the recording that fills a song wish (and an album wish's `skipped`).
+#[derive(Clone, Debug, Serialize)]
+pub struct ReleaseInfo {
+    pub id: String,
+    pub group: Option<String>,
+    pub title: String,
+    pub artist: String,
+    pub date: Option<String>,
+    pub tracks: Vec<TrackInfo>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TrackInfo {
+    pub disc: u32,
+    pub position: u32,
+    pub title: String,
+    pub length: Option<f64>,
+    pub recording: Option<String>,
+}
+
+impl From<Release> for ReleaseInfo {
+    fn from(release: Release) -> Self {
+        let tracks = release.tracks.into_iter().map(|t| TrackInfo { disc: t.disc, position: t.position, title: t.title, length: t.length, recording: t.recording }).collect();
+        ReleaseInfo { id: release.id, group: release.group, title: release.title, artist: release.artist, date: release.date, tracks }
+    }
 }
 
 /// A change to the play queue a program asks for (`Call::Queue`).
@@ -190,6 +251,10 @@ pub enum Edit {
     /// Move the entry at `from` of playlist `playlist` so it ends up at
     /// `to`.
     Move { playlist: String, from: usize, to: usize },
+    /// Take wish `id` off the wishlist (an artist's albums with them).
+    Unwish { id: String },
+    /// Write `note` on wish `id`.
+    Note { id: String, note: String },
 }
 
 /// What `Call::Set` sets.
@@ -282,6 +347,8 @@ pub struct PlaylistRef {
 /// The library as the app has it, to search away from the app's thread.
 pub struct Library {
     pub store: SongStore,
+    /// The wishlist, for `is:wished` and `wish:`.
+    pub wishes: crate::wishlist::Wishes,
     pub playlists: Vec<PlaylistInfo>,
     /// Every ruleset, by ID: the built-in ones, then the user's.
     pub rulesets: Vec<(String, Ruleset)>,
@@ -302,7 +369,7 @@ impl Library {
     /// `/v1/songs` has them: a song known only from another device is
     /// left out, and a playlist of none of these with it).
     fn groups(&self, rules: &Rules) -> Vec<GroupInfo> {
-        let groups = rules.groups(&self.store, crate::settings_sync::now(), &self.group_ignore, self.articles);
+        let groups = rules.groups(&self.store, &self.wishes, crate::settings_sync::now(), &self.group_ignore, self.articles);
         groups
             .into_iter()
             .filter_map(|mut group| {
@@ -373,6 +440,11 @@ pub struct SongInfo {
     pub imported: i64,
     /// The program that added it through this API, if one did.
     pub added_by: Option<String>,
+    /// What it is at MusicBrainz (its match, else what its file says):
+    /// its recording, release and the release's group.
+    pub recording: Option<String>,
+    pub release: Option<String>,
+    pub release_group: Option<String>,
 }
 
 impl SongInfo {
@@ -394,6 +466,9 @@ impl SongInfo {
             tags: song.tags.iter().filter_map(|id| store.tags().get(id)).map(|t| t.name.clone()).collect(),
             imported: song.imported,
             added_by: song.added_by.clone(),
+            recording: facts.recording().map(str::to_string),
+            release: facts.release().map(str::to_string),
+            release_group: song.online.as_ref().and_then(|o| o.group.clone()),
         }
     }
 }
@@ -419,6 +494,72 @@ struct Shared {
     streams: Mutex<Vec<(Option<Vec<String>>, Sender<String>)>>,
     /// The visualizer's pictures, for whoever's watching them.
     frames: Arc<crate::visualizer_stream::Frames>,
+    /// What changed in the library when, for `/v1/songs?since=`.
+    changes: Mutex<Changes>,
+}
+
+/// The library's revisions while synththing runs: each song as it was
+/// last seen (a hash of it as the API gives it) and the revision it last
+/// changed in, and each song gone and when. A revision is `<run>.<n>`,
+/// `run` telling this run of synththing from the others (a revision from
+/// another one means nothing here).
+struct Changes {
+    run: u32,
+    revision: u64,
+    seen: HashMap<String, (u64, u64)>,
+    gone: HashMap<String, u64>,
+}
+
+impl Changes {
+    fn new() -> Self {
+        let run = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.subsec_nanos() ^ t.as_secs() as u32);
+        Changes { run, revision: 0, seen: HashMap::new(), gone: HashMap::new() }
+    }
+
+    /// Catch up with `store`: a new revision if any song came, changed or
+    /// went since last time.
+    fn update(&mut self, store: &SongStore) {
+        use std::hash::{Hash, Hasher};
+        let next = self.revision + 1;
+        let mut changed = false;
+        let mut here = std::collections::HashSet::new();
+        for (path, song) in store.songs() {
+            let Some(key) = song_store::key_in(store.dir(), &path) else { continue };
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_string(&SongInfo::of(key, song, store)).unwrap_or_default().hash(&mut hasher);
+            let hash = hasher.finish();
+            let key = key.to_string();
+            if self.seen.get(&key).is_none_or(|(seen, _)| *seen != hash) {
+                self.seen.insert(key.clone(), (hash, next));
+                self.gone.remove(&key);
+                changed = true;
+            }
+            here.insert(key);
+        }
+        let went: Vec<String> = self.seen.keys().filter(|key| !here.contains(*key)).cloned().collect();
+        for key in went {
+            self.seen.remove(&key);
+            self.gone.insert(key, next);
+            changed = true;
+        }
+        if changed {
+            self.revision = next;
+        }
+    }
+
+    fn revision(&self) -> String {
+        format!("{}.{}", self.run, self.revision)
+    }
+
+    /// `since` as a revision of this run, if it is one.
+    fn since(&self, since: &str) -> Option<u64> {
+        let (run, n) = since.split_once('.')?;
+        (run.parse() == Ok(self.run)).then(|| n.parse().ok()).flatten().filter(|n| *n <= self.revision)
+    }
+
+    fn changed_after(&self, key: &str, since: u64) -> bool {
+        self.seen.get(key).is_some_and(|(_, rev)| *rev > since)
+    }
 }
 
 impl Server {
@@ -428,7 +569,7 @@ impl Server {
         let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
         let http = Arc::new(http);
         let (tx, calls) = mpsc::channel();
-        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default(), frames: crate::visualizer_stream::Frames::new() });
+        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default(), frames: crate::visualizer_stream::Frames::new(), changes: Mutex::new(Changes::new()) });
         let threads = (0..WORKERS)
             .map(|_| {
                 let (http, shared) = (Arc::clone(&http), Arc::clone(&shared));
@@ -737,7 +878,7 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::NowPlaying).map_or_else(|reply| reply, |now| json(200, &now))))
         }
         (Method::Get, ["v1", "songs"]) => {
-            Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| songs(&library.store, &query))))
+            Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| songs(shared, &library, &query))))
         }
         (Method::Post, ["v1", "songs"]) => Some(match needs(access.add_songs, "add songs") {
             Some(reply) => reply,
@@ -864,6 +1005,47 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             Err(reply) => reply,
             Ok(by) => ask(shared, Call::Library).map_or_else(|reply| reply, |library| groups(&library, by, query.get("q").map_or("", String::as_str))),
         })),
+        (Method::Get, ["v1", "wishlist"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            let q = query.get("q").cloned().unwrap_or_default();
+            ask(shared, |reply| Call::Wishlist(q, reply)).map_or_else(|reply| reply, |wishes| json(200, &wishes))
+        })),
+        (Method::Post, ["v1", "wishlist"]) => Some(match needs(access.edit_library, "edit the library") {
+            Some(reply) => reply,
+            None => wish_for(shared, &mut request, &access),
+        }),
+        (Method::Delete, ["v1", "wishlist", id]) => Some(needs(access.edit_library, "edit the library").unwrap_or_else(|| {
+            let edit = Edit::Unwish { id: id.to_string() };
+            answered(ask(shared, |reply| Call::Edit(edit, reply)))
+        })),
+        (Method::Post, ["v1", "wishlist", id, "note"]) => Some(needs(access.edit_library, "edit the library").unwrap_or_else(|| {
+            let edit = Edit::Note { id: id.to_string(), note: query.get("text").map(|t| t.trim().to_string()).unwrap_or_default() };
+            answered(ask(shared, |reply| Call::Edit(edit, reply)))
+        })),
+        (Method::Get, ["v1", "musicbrainz", "search"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            let q = query.get("q").map(|q| q.trim().to_string()).filter(|q| !q.is_empty());
+            match (q, query.get("kind").map(String::as_str)) {
+                (None, _) => error(400, "say what to search for: ?q="),
+                (_, Some(kind)) if !["artist", "album", "song"].contains(&kind) => error(400, "?kind= is artist, album or song"),
+                (Some(q), kind) => online(shared).unwrap_or_else(|| musicbrainz_search(&q, kind)),
+            }
+        })),
+        (Method::Get, ["v1", "musicbrainz", "artists", id, "albums"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            online(shared).unwrap_or_else(|| match MusicBrainz::new().discography(id) {
+                Ok(albums) => {
+                    // (Each as the wish for it would be, under none yet.)
+                    let wishes: Vec<Wish> = albums.iter().map(|a| Wish { under: None, artist: None, ..crate::wishlist::album_wish(a, "", "") }).collect();
+                    json(200, &wishes)
+                }
+                Err(e) => error(502, format!("couldn't ask MusicBrainz: {e:#}")),
+            })
+        })),
+        (Method::Get, ["v1", "musicbrainz", "releases", id]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            // (Kept releases answer at once; others wait their turn to ask.)
+            online(shared).unwrap_or_else(|| match crate::lookup::musicbrainz::kept_release(id).map_or_else(|| MusicBrainz::new().fresh_release(id), Ok) {
+                Ok(release) => json(200, &ReleaseInfo::from(release)),
+                Err(e) => error(502, format!("couldn't ask MusicBrainz: {e:#}")),
+            })
+        })),
         (Method::Get, ["v1", "soundfonts"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| json(200, &library.soundfonts))))
         }
@@ -917,23 +1099,123 @@ fn add_song(shared: &Shared, request: &mut Request, access: &Access, query: &Has
     }
 }
 
-#[derive(Serialize)]
-struct SongPage {
-    /// Songs the query matches, in all.
-    total: usize,
-    songs: Vec<SongInfo>,
+/// `None` if MusicBrainz may be asked from here (Online album art and
+/// details on), else why not.
+fn online(shared: &Shared) -> Option<Reply> {
+    match ask(shared, Call::Library) {
+        Err(reply) => Some(reply),
+        Ok(library) if !library.online => Some(error(409, "asking MusicBrainz needs Online album art and details on (Preferences > Songs)")),
+        Ok(_) => None,
+    }
 }
 
-/// `GET /v1/songs?q=&offset=&limit=`: the songs the query matches (the
-/// Songs search box's filters and text), in file name order.
-fn songs(store: &SongStore, query: &HashMap<String, String>) -> Reply {
+/// `GET /v1/musicbrainz/search?q=&kind=`: the artists, albums and songs
+/// (or only those of `kind`) MusicBrainz finds, each as the wish for it.
+fn musicbrainz_search(q: &str, kind: Option<&str>) -> Reply {
+    let mut musicbrainz = MusicBrainz::new();
+    let found = (|| {
+        let mut found = serde_json::Map::new();
+        if kind.is_none_or(|k| k == "artist") {
+            found.insert("artists".into(), serde_json::to_value(musicbrainz.find_artists(q)?)?);
+        }
+        if kind.is_none_or(|k| k == "album") {
+            found.insert("albums".into(), serde_json::to_value(musicbrainz.find_albums(q)?)?);
+        }
+        if kind.is_none_or(|k| k == "song") {
+            found.insert("songs".into(), serde_json::to_value(musicbrainz.find_songs(q)?)?);
+        }
+        Ok::<_, anyhow::Error>(found)
+    })();
+    match found {
+        Ok(found) => json(200, &found),
+        Err(e) => error(502, format!("couldn't ask MusicBrainz: {e:#}")),
+    }
+}
+
+/// `POST /v1/wishlist`, the wish as a JSON body (as `/v1/musicbrainz/search`
+/// gives it, or written out): onto the wishlist (`Call::Wish`). An album
+/// by its MusicBrainz group without its tracks gets them from there
+/// first, when it may be asked. 201 with the wish if it's new, 200 if it
+/// was wished for already.
+fn wish_for(shared: &Shared, request: &mut Request, access: &Access) -> Reply {
+    let mut body = Vec::new();
+    if let Err(e) = request.as_reader().take(64 * 1024).read_to_end(&mut body) {
+        return error(400, format!("couldn't read the wish: {e}"));
+    }
+    let mut wish: Wish = match serde_json::from_slice(&body) {
+        Ok(wish) => wish,
+        Err(e) => return error(400, format!("send the wish as JSON, like {{\"kind\": \"album\", \"title\": \"Modal Soul\", \"artist\": \"Nujabes\"}}: {e}")),
+    };
+    wish.title = wish.title.trim().to_string();
+    if wish.title.is_empty() && !(wish.kind == Kind::Text && wish.artist.is_some()) {
+        return error(400, "say what it's called: \"title\" (or for a wish by name, at least \"artist\")");
+    }
+    let mut release = None;
+    if let (Kind::Album, Some(group), 0) = (wish.kind, wish.musicbrainz.clone(), wish.tracks)
+        && online(shared).is_none()
+    {
+        match MusicBrainz::new().album(&group) {
+            // (As it was asked for, its tracks as MusicBrainz says.)
+            Ok((found, edition)) => {
+                let asked = std::mem::replace(&mut wish, found);
+                wish.title = asked.title;
+                wish.artist = asked.artist.or(wish.artist.take());
+                wish.year = asked.year.or(wish.year.take());
+                wish.release_type = asked.release_type.or(wish.release_type.take());
+                (wish.under, wish.note, wish.skipped) = (asked.under, asked.note, asked.skipped);
+                release = Some(edition);
+            }
+            Err(e) => return error(502, format!("couldn't ask MusicBrainz about that album: {e:#}")),
+        }
+    }
+    match ask(shared, |reply| Call::Wish { wish, release, program: access.name.clone(), reply }) {
+        Ok(Ok((wish, new))) => json(if new { 201 } else { 200 }, &wish),
+        Ok(Err((status, why))) => error(status, why),
+        Err(reply) => reply,
+    }
+}
+
+#[derive(Serialize)]
+struct SongPage {
+    /// Songs the query matches, in all (with `since`: of those changed).
+    total: usize,
+    songs: Vec<SongInfo>,
+    /// The library's revision now: `?since=` it next time for only what
+    /// changes after.
+    revision: String,
+    /// Whether this is every song the query matches, not only those
+    /// changed (no `since`, or one from before synththing last started).
+    full: bool,
+    /// With `since`: the songs no longer in the list (gone from the
+    /// library, or changed so the query doesn't find them).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    removed: Vec<String>,
+}
+
+/// `GET /v1/songs?q=&offset=&limit=&since=`: the songs the query matches
+/// (the Songs search's syntax), by file name, a page of them; with
+/// `since` (a revision an earlier answer gave), only those that changed
+/// after it, and the ones that left the list.
+fn songs(shared: &Shared, library: &Library, query: &HashMap<String, String>) -> Reply {
+    let store = &library.store;
     let q = query.get("q").map_or("", String::as_str);
     let offset = query.get("offset").and_then(|o| o.parse().ok()).unwrap_or(0);
     let limit = query.get("limit").and_then(|l| l.parse().ok()).unwrap_or(MOST_SONGS).min(MOST_SONGS);
-    let found = matching(store, q);
+    let mut changes = shared.changes.lock().unwrap_or_else(|e| e.into_inner());
+    changes.update(store);
+    let since = query.get("since").and_then(|since| changes.since(since));
+    let mut found = matching(store, &library.wishes, q);
+    let mut removed = Vec::new();
+    if let Some(since) = since {
+        found.retain(|(key, _)| changes.changed_after(key, since));
+        let kept: std::collections::HashSet<&str> = found.iter().map(|(key, _)| key.as_str()).collect();
+        removed = changes.gone.iter().filter(|(_, rev)| **rev > since).map(|(key, _)| key.clone()).collect();
+        removed.extend(changes.seen.iter().filter(|(key, (_, rev))| *rev > since && !kept.contains(key.as_str())).map(|(key, _)| key.clone()));
+        removed.sort();
+    }
     let total = found.len();
     let songs = found.into_iter().skip(offset).take(limit).map(|(key, song)| SongInfo::of(&key, song, store)).collect();
-    json(200, &SongPage { total, songs })
+    json(200, &SongPage { total, songs, revision: changes.revision(), full: since.is_none(), removed })
 }
 
 /// `?split=` as what to split by: `artist`, `album_artist`, `album`,
@@ -947,7 +1229,7 @@ fn split_by(query: &HashMap<String, String>) -> Result<SplitBy, Reply> {
 /// `GET /v1/groups?split=&q=`: the songs `q` finds (as `/v1/songs` does),
 /// split as a ruleset splitting by `by` would, in album order in each.
 fn groups(library: &Library, by: SplitBy, q: &str) -> Reply {
-    let found: std::collections::HashSet<String> = matching(&library.store, q).into_iter().map(|(key, _)| key).collect();
+    let found: std::collections::HashSet<String> = matching(&library.store, &library.wishes, q).into_iter().map(|(key, _)| key).collect();
     let rules = Rules { split: Some(Split { by, min: 1 }), order: Order::Album, seed: 0, ..Rules::default() };
     let groups: Vec<GroupInfo> = library
         .groups(&rules)
@@ -1055,9 +1337,9 @@ fn art(library: &Library, key: &str) -> Reply {
 
 /// The library's songs that `query` keeps: its filters, then each word of
 /// text found in the title, artist, album or file name.
-fn matching<'s>(store: &'s SongStore, query: &str) -> Vec<(String, &'s Song)> {
+fn matching<'s>(store: &'s SongStore, wishes: &crate::wishlist::Wishes, query: &str) -> Vec<(String, &'s Song)> {
     let search = crate::search::parse(query, store.tags());
-    let rules = search.rules.matcher(crate::settings_sync::now());
+    let rules = search.rules.matcher(store, wishes, crate::settings_sync::now());
     let mut found: Vec<(String, &Song)> = store
         .songs()
         .filter(|(_, song)| rules(song))
@@ -1188,7 +1470,7 @@ mod tests {
     /// A library with no songs, playlists or rulesets of its own.
     fn no_library() -> Library {
         let rulesets = crate::smart::builtin().map(|(id, r)| (id.to_string(), r)).into_iter().collect();
-        Library { store: SongStore::open(std::env::temp_dir()), playlists: Vec::new(), rulesets, group_ignore: String::new(), articles: false, online: false, queue: Vec::new(), soundfonts: Vec::new(), scripts: Vec::new() }
+        Library { store: SongStore::open(std::env::temp_dir()), wishes: Default::default(), playlists: Vec::new(), rulesets, group_ignore: String::new(), articles: false, online: false, queue: Vec::new(), soundfonts: Vec::new(), scripts: Vec::new() }
     }
 
     /// A server on a free port with a reader's and a controller's tokens.
@@ -1226,6 +1508,14 @@ mod tests {
                         reply.send(Ok(())).unwrap()
                     }
                     Call::Add { .. } => unreachable!("no test adds songs here"),
+                    Call::Wishlist(query, reply) => {
+                        let wish = Wish { note: query, ..Wish::new(Kind::Album, "Modal Soul") };
+                        reply.send(vec![WishInfo { id: "w1".into(), wish, got: "partly", have: 7, total: 12, songs: Vec::new(), albums: Vec::new() }]).unwrap()
+                    }
+                    Call::Wish { wish, program, reply, .. } => {
+                        let wish = Wish { added_by: Some(program), ..wish };
+                        reply.send(Ok((WishInfo { id: "w2".into(), wish, got: "no", have: 0, total: 1, songs: Vec::new(), albums: Vec::new() }, true))).unwrap()
+                    }
                 }
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -1352,6 +1642,44 @@ mod tests {
         assert_eq!(answering(&server, empty, edit(false, "playlists/p1/songs/move?to=0", &edit_token)), 400);
         assert_eq!(answering(&server, empty, edit(true, "playlists/p1", &control_token)), 403);
         assert_eq!(answering(&server, empty, edit(true, "playlists/p1", &edit_token)), 204);
+
+        let (status, body) = answering(&server, empty, fetch_as(&server, "/v1/wishlist?q=got:partly", &read_token));
+        assert_eq!(status, 200);
+        assert!(body.contains(r#""id":"w1","kind":"album","title":"Modal Soul""#) && body.contains(r#""got":"partly","have":7,"total":12"#), "{body}");
+        assert!(body.contains(r#""note":"got:partly""#), "the query is the app's to filter by: {body}");
+        assert_eq!(answering(&server, empty, edit(true, "wishlist/w1", &control_token)), 403);
+        assert_eq!(answering(&server, empty, edit(true, "wishlist/w1", &edit_token)), 204);
+        assert_eq!(answering(&server, empty, edit(false, "wishlist/w1/note?text=from%20Willy", &edit_token)), 204);
+        let (status, body) = answering(&server, empty, wish_json(&server, r#"{"kind": "song", "title": "Feather", "musicbrainz": "c1"}"#, &edit_token));
+        assert_eq!(status, 201);
+        assert!(body.contains(r#""added_by":"editor""#), "the program's: {body}");
+        assert_eq!(answering(&server, empty, wish_json(&server, r#"{"kind": "song", "title": " "}"#, &edit_token)).0, 400);
+        assert_eq!(answering(&server, empty, wish_json(&server, r#"{"kind": "playlist"}"#, &edit_token)).0, 400);
+        assert_eq!(answering(&server, empty, wish_json(&server, r#"{"kind": "text", "title": "", "artist": "Toby Fox"}"#, &edit_token)).0, 201);
+        assert_eq!(answering(&server, empty, wish_json(&server, r#"{"kind": "text", "title": "x"}"#, &control_token)).0, 403);
+        assert_eq!(answering(&server, empty, fetch_as(&server, "/v1/musicbrainz/search", &read_token)).0, 400);
+        assert_eq!(answering(&server, empty, fetch_as(&server, "/v1/musicbrainz/search?q=nujabes&kind=label", &read_token)).0, 400);
+        assert_eq!(answering(&server, empty, fetch_as(&server, "/v1/musicbrainz/search?q=nujabes", &read_token)).0, 409, "online lookups are off");
+        assert_eq!(answering(&server, empty, fetch_as(&server, "/v1/musicbrainz/artists/a1/albums", &read_token)).0, 409);
+        assert_eq!(answering(&server, empty, fetch_as(&server, "/v1/musicbrainz/releases/r1", &read_token)).0, 409);
+    }
+
+    /// A GET of `path` with `token`, for [`answering`].
+    fn fetch_as(server: &Server, path: &str, token: &str) -> impl FnOnce() -> (u16, String) + Send + 'static {
+        let (url, token) = (format!("http://{}{path}", server.addr()), format!("Bearer {token}"));
+        move || {
+            let mut response = agent().get(url).header("Authorization", token).call().unwrap();
+            (response.status().as_u16(), response.body_mut().read_to_string().unwrap())
+        }
+    }
+
+    /// A `POST /v1/wishlist` of `body` with `token`, for [`answering`].
+    fn wish_json(server: &Server, body: &str, token: &str) -> impl FnOnce() -> (u16, String) + Send + 'static {
+        let (url, body, token) = (format!("http://{}/v1/wishlist", server.addr()), body.to_string(), format!("Bearer {token}"));
+        move || {
+            let mut response = agent().post(url).header("Authorization", token).send(body).unwrap();
+            (response.status().as_u16(), response.body_mut().read_to_string().unwrap())
+        }
     }
 
     #[test]
@@ -1392,6 +1720,50 @@ mod tests {
     }
 
     #[test]
+    fn songs_since_a_revision_are_only_those_changed() {
+        let dir = std::env::temp_dir().join(format!("synththing-api-since-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(Mutex::new(SongStore::open(dir.clone())));
+        let (alpha, beta) = (song_store::write_in(b"one", "Alpha.mid", &dir).unwrap(), song_store::write_in(b"two", "Beta.mid", &dir).unwrap());
+        let (alpha_key, beta_key) = (alpha.key.clone(), beta.key.clone());
+        store.lock().unwrap().add(alpha);
+        store.lock().unwrap().add(beta);
+        let (server, read_token, _) = server();
+        let library = {
+            let store = Arc::clone(&store);
+            move || Library { store: store.lock().unwrap().clone(), ..no_library() }
+        };
+        let addr = server.addr();
+        let ask = |query: String| {
+            let (url, token) = (format!("http://{addr}/v1/songs?{query}"), format!("Bearer {read_token}"));
+            let body = answering(&server, &library, move || agent().get(url).header("Authorization", token).call().unwrap().body_mut().read_to_string().unwrap());
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()
+        };
+        let all = ask(String::new());
+        assert_eq!((all["total"].clone(), all["full"].clone()), (2.into(), true.into()));
+        let revision = all["revision"].as_str().unwrap().to_string();
+        let none = ask(format!("since={revision}"));
+        assert_eq!((none["total"].clone(), none["full"].clone(), none["revision"].clone()), (0.into(), false.into(), revision.clone().into()));
+        // (One changed, one gone.)
+        store.lock().unwrap().set_added_by(&alpha_key, "downloader");
+        let beta_path = store.lock().unwrap().path(&beta_key);
+        store.lock().unwrap().remove(&beta_path).unwrap();
+        let changed = ask(format!("since={revision}"));
+        assert_eq!(changed["total"], 1);
+        assert_eq!(changed["songs"][0]["key"], alpha_key.as_str());
+        assert_eq!(changed["removed"], serde_json::json!([beta_key]));
+        assert_ne!(changed["revision"], revision.as_str());
+        // (Changed so the query no longer finds it: it left that list.)
+        let left = ask(format!("since={revision}&q=-addedby:downloader"));
+        assert_eq!(left["total"], 0);
+        assert_eq!(left["removed"], serde_json::json!([alpha_key, beta_key].into_iter().collect::<std::collections::BTreeSet<_>>()));
+        // (A revision from another run means everything again.)
+        assert_eq!(ask("since=1.1".into())["full"], true);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn songs_a_program_added_are_found_by_it() {
         let dir = std::env::temp_dir().join(format!("synththing-api-added-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1403,9 +1775,9 @@ mod tests {
         store.add(mine);
         store.add(sent);
         store.set_added_by(&sent_key, "downloader");
-        let found = matching(&store, "addedby:downloader");
+        let found = matching(&store, &Default::default(), "addedby:downloader");
         assert_eq!(found.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), [sent_key.as_str()]);
-        assert_eq!(matching(&store, "-addedby:downloader").len(), 1);
+        assert_eq!(matching(&store, &Default::default(), "-addedby:downloader").len(), 1);
         assert_eq!(SongInfo::of(&sent_key, found[0].1, &store).added_by.as_deref(), Some("downloader"));
         // (Synced: another device learns who added it.)
         let other = std::env::temp_dir().join(format!("synththing-api-added-other-{}", std::process::id()));

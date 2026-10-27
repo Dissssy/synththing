@@ -1,16 +1,15 @@
-//! Notifications from library servers (docs/SERVER.md): an envelope at the
+//! Notifications from the server (docs/SERVER.md): an envelope at the
 //! right of the header, red with a count when something's unread; a list
-//! of them, newest first, every server's merged by time; a window for
-//! each, with what can be done about it.
+//! of them, newest first; a window for each, with what can be done about
+//! it.
 //!
 //! While the Notifications preference is on and there's an identity, the
-//! app keeps a listener per server in use: it fetches what's there, then
-//! holds the server's stream open for new ones (and starts over a little
-//! while after it drops). A notification is a kind and its fields: the
+//! app keeps a listener running: it fetches what's there, then holds the
+//! server's stream open for new ones (and starts over a little while
+//! after it drops). A notification is a kind and its fields: the
 //! app words it from its own templates, or, for a kind it doesn't know,
 //! from the server's template; a field neither has is left as `{field}`.
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -18,35 +17,32 @@ use std::time::Duration;
 
 use eframe::egui;
 
-use super::library::host;
 use super::App;
 use crate::library::identity::Identity;
 use crate::library::{self, client, Notification};
 
 enum Event {
-    /// What a server has (replacing what was known from it).
-    List(String, Vec<Notification>),
-    New(String, Notification),
-    /// Synced data changed on a server (`sync.rs`).
-    Synced(String, library::sync::Changed),
+    /// What the server has (replacing what was known).
+    List(Vec<Notification>),
+    New(Notification),
+    /// Synced data changed on the server (`sync.rs`).
+    Synced(library::sync::Changed),
 }
 
 pub struct NotificationsState {
     events: (Sender<Event>, Receiver<Event>),
-    /// Every server's, as (server, notification).
-    items: Vec<(String, Notification)>,
-    /// The listeners running, by server: the server key each was started
-    /// with (one that changes, trusted again, starts over), its stop flag;
-    /// and whose they are.
-    listening: HashMap<String, (String, Arc<AtomicBool>)>,
+    items: Vec<Notification>,
+    /// The listener running: the server key it was started with (one that
+    /// changes, trusted again, starts over), its stop flag; and whose it is.
+    listening: Option<(String, Arc<AtomicBool>)>,
     listening_as: Option<String>,
-    /// The one open in its window: (server, id).
-    detail: Option<(String, i64)>,
+    /// The one open in its window, by ID.
+    detail: Option<i64>,
 }
 
 impl Default for NotificationsState {
     fn default() -> Self {
-        Self { events: mpsc::channel(), items: Vec::new(), listening: HashMap::new(), listening_as: None, detail: None }
+        Self { events: mpsc::channel(), items: Vec::new(), listening: None, listening_as: None, detail: None }
     }
 }
 
@@ -186,49 +182,42 @@ pub fn text(notification: &Notification) -> String {
 }
 
 impl App {
-    /// Keep a listener running for each server in use (with an identity,
-    /// and notifications or settings sync on); stop the others.
+    /// Keep the listener running (with an identity, and notifications or
+    /// settings sync on), or stop it.
     pub(super) fn keep_listening(&mut self, ctx: &egui::Context) {
         let identity = self.library_identity().filter(|_| self.config.library.notifications || self.sync_on());
         let whose = identity.as_ref().map(Identity::public);
-        if whose != self.notifications.listening_as {
-            for (_, stop) in self.notifications.listening.values() {
-                stop.store(true, Ordering::Relaxed);
-            }
-            self.notifications.listening.clear();
-            self.notifications.items.clear();
-            self.notifications.listening_as = whose;
-        }
-        let Some(identity) = identity else { return };
-        let wanted: Vec<(String, String)> = self
-            .config
-            .library
-            .enabled_servers()
-            .into_iter()
-            .filter_map(|s| self.config.library.pinned.get(&s).cloned().map(|key| (s, key)))
-            .collect();
+        let key = Some(library::server_key()).filter(|_| crate::build_info::online(crate::build_info::Online::Scripts));
         let notifications = &mut self.notifications;
-        notifications.listening.retain(|server, (key, stop)| {
-            // (Not in use any more, or its key's changed: stopped.)
-            let keep = wanted.iter().any(|(s, k)| s == server && k == key);
-            if !keep {
+        if whose != notifications.listening_as {
+            if let Some((_, stop)) = notifications.listening.take() {
                 stop.store(true, Ordering::Relaxed);
             }
-            keep
-        });
-        notifications.items.retain(|(server, _)| wanted.iter().any(|(s, _)| s == server));
-        for (server, key) in wanted {
-            if notifications.listening.contains_key(&server) {
-                continue;
-            }
-            let stop = Arc::new(AtomicBool::new(false));
-            notifications.listening.insert(server.clone(), (key.clone(), Arc::clone(&stop)));
-            let (tx, identity, ctx) = (notifications.events.0.clone(), identity.clone(), ctx.clone());
-            std::thread::Builder::new()
-                .name("notifications".into())
-                .spawn(move || listen(&server, &key, &identity, &stop, &tx, &ctx))
-                .ok();
+            notifications.items.clear();
+            notifications.listening_as = whose;
         }
+        // (The server's key changed, or the Online Library's off: stopped.)
+        if let Some((started_with, stop)) = &notifications.listening
+            && key.as_ref() != Some(started_with)
+        {
+            stop.store(true, Ordering::Relaxed);
+            notifications.listening = None;
+        }
+        let (Some(identity), Some(key)) = (identity, key) else {
+            notifications.items.clear();
+            return;
+        };
+        if notifications.listening.is_some() {
+            return;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        notifications.listening = Some((key.clone(), Arc::clone(&stop)));
+        let (tx, ctx) = (notifications.events.0.clone(), ctx.clone());
+        let server = library::official_url();
+        std::thread::Builder::new()
+            .name("notifications".into())
+            .spawn(move || listen(&server, &key, &identity, &stop, &tx, &ctx))
+            .ok();
     }
 
     pub(super) fn poll_notifications(&mut self, ctx: &egui::Context) {
@@ -237,32 +226,28 @@ impl App {
         while let Ok(event) = self.notifications.events.1.try_recv() {
             match event {
                 // (Listened to again: synced data may have changed meanwhile.)
-                Event::List(server, list) => {
-                    self.sync_server_seen(&server, None);
+                Event::List(list) => {
+                    self.sync_server_seen(None);
+                    self.notifications.items = if wanted { list } else { Vec::new() };
+                }
+                Event::New(notification) => {
                     let items = &mut self.notifications.items;
-                    items.retain(|(s, _)| *s != server);
-                    if wanted {
-                        items.extend(list.into_iter().map(|n| (server.clone(), n)));
+                    if wanted && !items.iter().any(|n| n.id == notification.id) {
+                        items.push(notification);
                     }
                 }
-                Event::New(server, notification) => {
-                    let items = &mut self.notifications.items;
-                    if wanted && !items.iter().any(|(s, n)| *s == server && n.id == notification.id) {
-                        items.push((server, notification));
-                    }
-                }
-                Event::Synced(server, changed) => self.sync_server_seen(&server, Some(changed)),
+                Event::Synced(changed) => self.sync_server_seen(Some(changed)),
             }
             let items = &mut self.notifications.items;
-            items.sort_by(|a, b| b.1.created.cmp(&a.1.created).then(b.1.id.cmp(&a.1.id)));
+            items.sort_by(|a, b| b.created.cmp(&a.created).then(b.id.cmp(&a.id)));
         }
     }
 
     /// The notifications about `field` = `value` (a notice's) are handled
     /// here (the server marked them itself): `resolution` says how.
-    pub(super) fn notification_resolved(&mut self, server: &str, field: &str, value: i64, resolution: &str) {
-        for (s, n) in &mut self.notifications.items {
-            if s == server && n.needs_action && n.data.get(field).and_then(serde_json::Value::as_i64) == Some(value) {
+    pub(super) fn notification_resolved(&mut self, field: &str, value: i64, resolution: &str) {
+        for n in &mut self.notifications.items {
+            if n.needs_action && n.data.get(field).and_then(serde_json::Value::as_i64) == Some(value) {
                 n.handled = true;
                 n.read = true;
                 n.resolution = Some(resolution.to_string());
@@ -270,26 +255,20 @@ impl App {
         }
     }
 
-    /// Mark these read (or handled) on their servers, and here.
-    fn mark_notifications(&mut self, which: Vec<(String, i64)>, handled: bool) {
+    /// Mark these read (or handled) on the server, and here.
+    fn mark_notifications(&mut self, ids: Vec<i64>, handled: bool) {
         let Some(identity) = self.library_identity() else { return };
-        let mut by_server: HashMap<String, Vec<i64>> = HashMap::new();
-        for (server, id) in which {
-            if let Some((_, n)) = self.notifications.items.iter_mut().find(|(s, n)| *s == server && n.id == id) {
-                n.read = true;
-                n.handled |= handled;
+        let key = library::server_key();
+        for n in self.notifications.items.iter_mut().filter(|n| ids.contains(&n.id)) {
+            n.read = true;
+            n.handled |= handled;
+        }
+        let server = library::official_url();
+        std::thread::spawn(move || {
+            if let Err(e) = client::mark_notifications(&server, &key, &identity, &ids, false, handled) {
+                log::warn!("couldn't mark notifications: {e}");
             }
-            by_server.entry(server).or_default().push(id);
-        }
-        for (server, ids) in by_server {
-            let Some(key) = self.config.library.pinned.get(&server).cloned() else { continue };
-            let identity = identity.clone();
-            std::thread::spawn(move || {
-                if let Err(e) = client::mark_notifications(&server, &key, &identity, &ids, false, handled) {
-                    log::warn!("couldn't mark notifications on {server}: {e}");
-                }
-            });
-        }
+        });
     }
 
     /// The envelope, at the right of the header, and its list.
@@ -297,15 +276,15 @@ impl App {
         if self.library_identity().is_none() || !self.config.library.notifications {
             return;
         }
-        let unread = self.notifications.items.iter().filter(|(_, n)| !n.read).count();
+        let unread = self.notifications.items.iter().filter(|n| !n.read).count();
         // (The badge in the color of the most serious one unread.)
         let worst = self
             .notifications
             .items
             .iter()
-            .filter(|(_, n)| !n.read)
-            .max_by_key(|(_, n)| tier_of(&n.kind))
-            .map(|(_, n)| color_of(ui, n));
+            .filter(|n| !n.read)
+            .max_by_key(|n| tier_of(&n.kind))
+            .map(|n| color_of(ui, n));
         let envelope = super::icon("envelope-simple");
         let button = ui
             .add(egui::Button::new(egui::RichText::new(envelope).size(16.0)).frame(false))
@@ -323,8 +302,7 @@ impl App {
                 super::on_color(badge),
             );
         }
-        let many_servers = self.notifications.items.iter().any(|(s, _)| *s != self.notifications.items[0].0);
-        let mut open: Option<(String, i64)> = None;
+        let mut open: Option<i64> = None;
         let mut all_read = false;
         egui::Popup::menu(&button).show(|ui| {
             // (Its lines wrap to that, so it fits a phone's screen.)
@@ -340,7 +318,7 @@ impl App {
                 ui.weak("Nothing yet.");
             }
             egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-                for (server, n) in &self.notifications.items {
+                for n in &self.notifications.items {
                     let mut line = egui::text::LayoutJob::default();
                     let style = ui.style();
                     egui::RichText::new(format!("{}  ", icon_of(&n.kind))).color(color_of(ui, n)).append_to(
@@ -352,10 +330,7 @@ impl App {
                     let words = egui::RichText::new(text(n));
                     let words = if n.read { words } else { words.strong() };
                     words.append_to(&mut line, style, egui::FontSelection::Default, egui::Align::Center);
-                    let mut when = library::ago(n.created);
-                    if many_servers {
-                        when = format!("{when}, {}", host(server));
-                    }
+                    let when = library::ago(n.created);
                     // (Unread: an accent down its side, and a tint.)
                     let accent = ui.visuals().selection.bg_fill;
                     let fill = if n.read { egui::Color32::TRANSPARENT } else { accent.gamma_multiply(0.18) };
@@ -376,27 +351,25 @@ impl App {
                     }
                     let response = shown.inner;
                     if response {
-                        open = Some((server.clone(), n.id));
+                        open = Some(n.id);
                     }
                 }
             });
         });
         if all_read {
-            let unread: Vec<(String, i64)> =
-                self.notifications.items.iter().filter(|(_, n)| !n.read).map(|(s, n)| (s.clone(), n.id)).collect();
+            let unread: Vec<i64> = self.notifications.items.iter().filter(|n| !n.read).map(|n| n.id).collect();
             self.mark_notifications(unread, false);
         }
-        if let Some((server, id)) = open {
-            self.mark_notifications(vec![(server.clone(), id)], false);
-            self.notifications.detail = Some((server, id));
+        if let Some(id) = open {
+            self.mark_notifications(vec![id], false);
+            self.notifications.detail = Some(id);
         }
     }
 
     /// A notification's window: all of it, and what can be done.
     pub(super) fn notification_ui(&mut self, ctx: &egui::Context) {
-        let Some((server, id)) = self.notifications.detail.clone() else { return };
-        let Some(n) = self.notifications.items.iter().find(|(s, n)| *s == server && n.id == id).map(|(_, n)| n.clone())
-        else {
+        let Some(id) = self.notifications.detail else { return };
+        let Some(n) = self.notifications.items.iter().find(|n| n.id == id).cloned() else {
             self.notifications.detail = None;
             return;
         };
@@ -412,7 +385,7 @@ impl App {
                 ui.heading(egui::RichText::new(icon_of(&n.kind)).color(color_of(ui, &n)));
                 ui.add(egui::Label::new(egui::RichText::new(text(&n)).size(15.0)).wrap());
             });
-            ui.weak(format!("{} on {}", library::ago(n.created), host(&server)));
+            ui.weak(library::ago(n.created));
             // (The counter-notice's contact details, sent on to the claimant.)
             if n.kind == "notice_disputed" {
                 let field = |f: &str| n.data.get(f).and_then(|v| v.as_str()).unwrap_or_default().to_string();
@@ -485,7 +458,7 @@ impl App {
         if let Some(script) = show {
             self.notifications.detail = None;
             self.set_open(crate::layout::Section::Library, true);
-            self.library_open_script(server, script);
+            self.library_open_script(script);
         } else if moderate {
             self.notifications.detail = None;
             self.open_moderation();
@@ -497,29 +470,24 @@ impl App {
             self.open_moderation_copyright();
         } else if let Some((id, dispute)) = notice {
             self.notifications.detail = None;
-            self.open_notice(server, id, dispute);
+            self.open_notice(id, dispute);
         } else if close || response.should_close() {
             self.notifications.detail = None;
         }
     }
 }
 
-/// A server's listener: what's there, then the stream, over and over until
+/// The listener: what's there, then the stream, over and over until
 /// told to stop: straight away when a stream has run its time (the list
 /// again first, for anything between), half a minute after one that failed.
 fn listen(server: &str, key: &str, identity: &Identity, stop: &AtomicBool, tx: &Sender<Event>, ctx: &egui::Context) {
     while !stop.load(Ordering::Relaxed) {
         match client::notifications(server, key, identity, None) {
             Ok(list) => {
-                let _ = tx.send(Event::List(server.to_string(), list));
+                let _ = tx.send(Event::List(list));
                 ctx.request_repaint();
             }
-            // (A server from before notifications: nothing to listen for.)
-            Err(e) if e.contains("no such page") => {
-                log::info!("{server} doesn't have notifications (it runs an older version)");
-                return;
-            }
-            Err(e) => log::info!("notifications from {server}: {e}"),
+            Err(e) => log::info!("notifications: {e}"),
         }
         let started = std::time::Instant::now();
         let streamed = client::notification_stream(server, key, identity, |event| {
@@ -527,8 +495,8 @@ fn listen(server: &str, key: &str, identity: &Identity, stop: &AtomicBool, tx: &
                 return false;
             }
             let _ = tx.send(match event {
-                client::StreamEvent::Notification(n) => Event::New(server.to_string(), n),
-                client::StreamEvent::Sync(changed) => Event::Synced(server.to_string(), changed),
+                client::StreamEvent::Notification(n) => Event::New(n),
+                client::StreamEvent::Sync(changed) => Event::Synced(changed),
             });
             ctx.request_repaint();
             true
@@ -536,7 +504,7 @@ fn listen(server: &str, key: &str, identity: &Identity, stop: &AtomicBool, tx: &
         if let Err(e) = &streamed
             && started.elapsed() < client::STREAM_FOR
         {
-            log::info!("notifications from {server}: {e}");
+            log::info!("notifications: {e}");
         }
         // (It ran its time, or nearly: open it again now.)
         if started.elapsed() >= Duration::from_secs(60) {

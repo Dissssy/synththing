@@ -34,6 +34,8 @@ pub(super) struct ApiState {
     /// What the playlists were when the last event told of them (a hash
     /// of each one's ID, name and songs), while a stream is open.
     playlists_seen: Option<u64>,
+    /// The wishlist and what of it is here, as a stream last heard.
+    wishlist_seen: Option<u64>,
     /// What the play queue was when the last event told of it (a hash),
     /// while a stream is open.
     queue_seen: Option<u64>,
@@ -214,9 +216,16 @@ impl App {
                 Call::Add { stored, program, reply } => {
                     let _ = reply.send(self.api_add(stored, &program));
                 }
+                Call::Wishlist(query, reply) => {
+                    let _ = reply.send(self.api_wishlist(&query));
+                }
+                Call::Wish { wish, release, program, reply } => {
+                    let _ = reply.send(self.api_wish(wish, release, &program));
+                }
                 Call::Library(reply) => {
                     let _ = reply.send(api::Library {
                         store: self.songs.clone(),
+                        wishes: self.wishlist.list.wishes.clone(),
                         playlists: self.api_playlists(),
                         rulesets: self.all_rulesets(),
                         group_ignore: self.config.group_ignore.clone(),
@@ -375,6 +384,19 @@ impl App {
                 let list = find(self, &playlist)?;
                 self.delete_playlist(list);
             }
+            api::Edit::Unwish { id } => {
+                if !self.wishlist.list.wishes.contains_key(&id) {
+                    return Err((404, "there's no wish with that ID".into()));
+                }
+                self.unwish(&id);
+            }
+            api::Edit::Note { id, note } => {
+                if !self.wishlist.list.wishes.contains_key(&id) {
+                    return Err((404, "there's no wish with that ID".into()));
+                }
+                self.wishlist.list.set_note(&id, &note);
+                self.wishlist_changed();
+            }
             api::Edit::Move { playlist, from, to } => {
                 let list = find(self, &playlist)?;
                 if self.playlists.lists[list].playlist.smart.is_some() {
@@ -521,6 +543,7 @@ impl App {
             self.api.queue_seen = None;
             self.api.soundfonts_seen = None;
             self.api.scripts_seen = None;
+            self.api.wishlist_seen = None;
         }
         let Some(server) = self.api.server.as_ref().filter(|_| streams) else { return };
         match now {
@@ -569,6 +592,20 @@ impl App {
         };
         if self.api.scripts_seen.replace(scripts).is_some_and(|seen| seen != scripts) {
             server.event("scripts_changed", &serde_json::json!({}));
+        }
+        // (A wish coming true changes it too, as its songs are matched.)
+        // (Once it's worked out for the wishlist as it is.)
+        if let Some(progress) = self.wishlist_progress((self.wishlist.list.revision(), self.songs.revision())) {
+            let wishlist = {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                self.wishlist.list.revision().hash(&mut hasher);
+                progress.iter().for_each(|(id, p)| (id, p.have, p.total).hash(&mut hasher));
+                hasher.finish()
+            };
+            if self.api.wishlist_seen.replace(wishlist).is_some_and(|seen| seen != wishlist) {
+                server.event("wishlist_changed", &serde_json::json!({}));
+            }
         }
     }
 
@@ -864,4 +901,80 @@ impl App {
     pub(super) fn api_preferences_closed(&mut self) {
         self.api.new_token = None;
     }
+}
+
+impl App {
+    /// What of each wish is here: as the Wishlist last worked it out, or
+    /// afresh if the wishlist or the songs changed since.
+    fn api_progress(&self) -> std::collections::BTreeMap<String, crate::wishlist::Progress> {
+        let revisions = (self.wishlist.list.revision(), self.songs.revision());
+        match self.wishlist_progress(revisions) {
+            Some(progress) => progress.clone(),
+            None => crate::wishlist::progress(&self.wishlist.list, &self.songs, &self.lookup.kept),
+        }
+    }
+
+    /// The wishes `query` keeps (as the Wishlist's filter does), newest
+    /// first, each artist's albums under them.
+    fn api_wishlist(&self, query: &str) -> Vec<api::WishInfo> {
+        let progress = self.api_progress();
+        let wishes = &self.wishlist.list.wishes;
+        let filter = crate::wishlist_search::Filter::parse(query);
+        let now = crate::settings_sync::now();
+        let state = |id: &str| progress.get(id).map_or(crate::wishlist::State::Wanted, |p| p.state());
+        let kept = |id: &String| filter.keeps(&wishes[id], state(id), now);
+        let info = |id: &String, albums| wish_info(id, &wishes[id], progress.get(id), albums);
+        let mut top: Vec<&String> = wishes
+            .iter()
+            .filter(|(_, w)| w.under.as_ref().is_none_or(|artist| !wishes.contains_key(artist)))
+            .map(|(id, _)| id)
+            .filter(|id| kept(id) || self.wishlist.list.under(id).any(|(album, _)| kept(album)))
+            .collect();
+        top.sort_by_key(|id| std::cmp::Reverse(wishes[*id].added));
+        top.into_iter()
+            .map(|id| {
+                let mut albums: Vec<(&String, &crate::wishlist::Wish)> = self.wishlist.list.under(id).filter(|(album, _)| kept(album)).collect();
+                albums.sort_by(|(_, a), (_, b)| (&a.year, &a.title).cmp(&(&b.year, &b.title)));
+                info(id, albums.into_iter().map(|(album, _)| info(album, Vec::new())).collect())
+            })
+            .collect()
+    }
+
+    /// Wish for `wish` for `program` (its album's edition `release`,
+    /// kept): it, and whether it's new to the wishlist.
+    fn api_wish(&mut self, mut wish: crate::wishlist::Wish, release: Option<crate::lookup::matching::Release>, program: &str) -> Result<(api::WishInfo, bool), (u16, String)> {
+        use crate::wishlist::Kind;
+        if let Some(artist) = &wish.under {
+            match self.wishlist.list.wishes.get(artist) {
+                None => return Err((404, "there's no wish with that \"under\" ID".into())),
+                Some(w) if w.kind != Kind::Artist => return Err((400, "\"under\" is an artist's wish's ID".into())),
+                Some(_) if wish.kind != Kind::Album => return Err((400, "only an album goes under an artist".into())),
+                Some(_) => {}
+            }
+        }
+        if let Some(release) = release {
+            self.lookup.kept.keep_release(release);
+        }
+        let new = self.wishlist.list.find(&wish).is_none();
+        wish.added_by = Some(program.to_string());
+        let id = self.wishlist.list.add(wish);
+        self.wishlist_changed();
+        let progress = self.api_progress();
+        let albums = self.wishlist.list.under(&id).map(|(album, w)| wish_info(album, w, progress.get(album), Vec::new())).collect();
+        Ok((wish_info(&id, &self.wishlist.list.wishes[&id], progress.get(&id), albums), new))
+    }
+}
+
+/// Wish `id` as the API has it, with what of it is here and (an
+/// artist's) its albums.
+fn wish_info(id: &str, wish: &crate::wishlist::Wish, progress: Option<&crate::wishlist::Progress>, albums: Vec<api::WishInfo>) -> api::WishInfo {
+    use crate::wishlist::State;
+    let progress = progress.cloned().unwrap_or_default();
+    let got = match progress.state() {
+        _ if progress.total == 0 => "no",
+        State::Wanted => "no",
+        State::Partly => "partly",
+        State::Got => "yes",
+    };
+    api::WishInfo { id: id.to_string(), wish: wish.clone(), got, have: progress.have, total: progress.total, songs: progress.songs, albums }
 }

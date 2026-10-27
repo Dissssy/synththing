@@ -84,7 +84,7 @@ impl PrefTab {
             Self::Appearance => "Theme, UI scale, the seek bar, full screen, song names",
             Self::Playback => "Audio buffer, what's kept from last time",
             Self::Songs => "Audio files, loading, rulesets",
-            Self::Visualizers => "Script logs",
+            Self::Visualizers => "Pixel scale, script logs",
             Self::Library => "Servers and identity",
             Self::Updates => "Checking for updates, canary builds",
             Self::App => "Tray, welcome and starter pack",
@@ -170,6 +170,7 @@ impl App {
         let mut beat_pulse = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE) * 100.0;
         let mut pulse_length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH) * 100.0;
         let mut script_log = self.config.script_log_to_app;
+        let mut visualizer_scale = config::visualizer_scale_down(self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE));
         let mut channel_chips = self.config.channel_chips;
         let mut buffer_ms = self.buffer_ms;
         let mut remember = self.config.remember;
@@ -420,6 +421,26 @@ impl App {
             PrefTab::Visualizers => {
                 with_info(
                     ui,
+                    "How many screen pixels each visualizer pixel covers, across and down. 1x draws at \
+                     your screen's full resolution; higher draws fewer, chunkier pixels, so scripts run \
+                     faster (useful fullscreen on a large or high-DPI screen). 4x by default on phones, \
+                     1x elsewhere. Kept on this device only.",
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Pixel scale");
+                            egui::ComboBox::from_id_salt("visualizer_pixel_scale")
+                                .selected_text(format!("{visualizer_scale}x"))
+                                .show_ui(ui, |ui| {
+                                    for scale in config::VISUALIZER_SCALES {
+                                        ui.selectable_value(&mut visualizer_scale, scale, format!("{scale}x"));
+                                    }
+                                });
+                        })
+                        .response
+                    },
+                );
+                with_info(
+                    ui,
                     "What visualizer scripts log() shows in their Debug window; with this \
                      on, it also goes to Help > Log... (and the log file), labelled with the \
                      script's name. A script can turn it on for itself (script_options), or for \
@@ -536,6 +557,7 @@ impl App {
             || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
             || (pulse_length / 100.0 - self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH)).abs() > 1e-4
             || script_log != self.config.script_log_to_app
+            || visualizer_scale != self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE)
             || channel_chips != self.config.channel_chips
             || buffer_ms != self.buffer_ms
             || remember != self.config.remember
@@ -556,6 +578,7 @@ impl App {
             self.config.buffer_ms = (buffer_ms != DEFAULT_BUFFER_MS).then_some(buffer_ms);
             self.config.channel_chips = channel_chips;
             self.config.script_log_to_app = script_log;
+            self.config.visualizer_scale = (visualizer_scale != config::DEFAULT_VISUALIZER_SCALE).then_some(visualizer_scale);
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
             self.config.beat_pulse = Some(beat_pulse / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE).abs() > 1e-4);
             self.config.beat_pulse_length =

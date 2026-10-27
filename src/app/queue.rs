@@ -106,7 +106,7 @@ impl App {
                 }
             });
         });
-        let view = self.config.songs_view.clone();
+        let mut view = self.config.songs_view.clone();
         let keys = song_list::column_keys(&view);
         let revision = {
             use std::hash::{Hash, Hasher};
@@ -128,7 +128,7 @@ impl App {
             "queue",
             rows,
             &mut self.queue_selection,
-            &view,
+            &mut view,
             &mut |ui, path| super::song_info_widgets(ui, cache, path, false),
             &mut |ui, rows| {
                 if ui.button("Move to the top").clicked() {
@@ -142,6 +142,12 @@ impl App {
                 }
             },
         );
+        if output.view_changed {
+            self.config.songs_view = view;
+            if let Err(e) = self.config.save() {
+                log::warn!("saving the config: {e}");
+            }
+        }
         if let Some(i) = output.play {
             act = Some(Act::Play(i));
         }

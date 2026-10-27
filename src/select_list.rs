@@ -14,6 +14,13 @@
 //! For touch (the mobile layout, [`set_touch`]) rows are taller, a tap
 //! opens or plays a row, a long press brings up its menu, and dragging
 //! scrolls the list instead of dragging rows.
+//!
+//! A list can have columns: rows lay their cells out with [`cell`], and
+//! [`header`] titles them over the rows, its titles clickable and the
+//! lines between them dragged to resize them ([`column_width`]).
+
+use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
 
 use eframe::egui;
 
@@ -244,12 +251,26 @@ pub fn show<T>(
     items: &[T],
     selection: &mut Selection,
     playing: Option<usize>,
+    draw: impl FnMut(&mut egui::Ui, &Row, &T),
+) -> ListOutput {
+    show_tall(ui, id_salt, items, selection, playing, 0.0, draw)
+}
+
+/// [`show`], with rows at least `height` tall (for a picture and two lines,
+/// say).
+pub fn show_tall<T>(
+    ui: &mut egui::Ui,
+    id_salt: impl egui::AsId,
+    items: &[T],
+    selection: &mut Selection,
+    playing: Option<usize>,
+    height: f32,
     mut draw: impl FnMut(&mut egui::Ui, &Row, &T),
 ) -> ListOutput {
     let id = egui::Id::new(id_salt);
     let mut output = ListOutput::default();
     let touch = touch(ui.ctx());
-    let row_height = if touch { TOUCH_ROW_HEIGHT } else { ui.spacing().interact_size.y };
+    let row_height = height.max(if touch { TOUCH_ROW_HEIGHT } else { ui.spacing().interact_size.y });
     let sense = if touch { egui::Sense::click() } else { egui::Sense::click_and_drag() };
     let modifiers = ui.input(|i| i.modifiers);
     let playing_color = crate::theme::playing_color(ui.ctx());
@@ -307,22 +328,8 @@ pub fn show<T>(
 
                 let selected = selection.contains(idx);
                 let is_playing = playing == Some(idx);
-                let marked = is_playing && !selected && !response.hovered();
+                let marked = paint_row(ui, rect, &response, idx, selected, is_playing, true);
                 let visuals = ui.style().interact_selectable(&response, selected);
-                if marked {
-                    ui.painter().rect_filled(rect, visuals.corner_radius, playing_color.gamma_multiply(0.15));
-                } else if selected || response.hovered() {
-                    // (The playing row's border goes over the selection's.)
-                    let stroke = if is_playing { egui::Stroke::NONE } else { visuals.bg_stroke };
-                    ui.painter().rect(rect.expand(visuals.expansion), visuals.corner_radius, visuals.weak_bg_fill, stroke, egui::StrokeKind::Inside);
-                } else if idx % 2 == 1 {
-                    // Striped, to tell the rows apart.
-                    ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
-                }
-                if is_playing {
-                    // Outlined, selected or not.
-                    ui.painter().rect_stroke(rect, visuals.corner_radius, egui::Stroke::new(1.0, playing_color), egui::StrokeKind::Inside);
-                }
 
                 let row = Row { idx, response, selection };
                 let builder = egui::UiBuilder::new()
@@ -373,6 +380,171 @@ pub fn show<T>(
         output.delete = delete && !selection.is_empty();
     }
     output
+}
+
+/// Paint row `idx`'s background in `rect` as a list's rows are: striped,
+/// lit while `hovers` and under the pointer or `selected`, and tinted and
+/// outlined in the theme's playing color while `playing`. Whether it's
+/// tinted (its text is drawn in that color).
+pub fn paint_row(ui: &egui::Ui, rect: egui::Rect, response: &egui::Response, idx: usize, selected: bool, playing: bool, hovers: bool) -> bool {
+    let hovered = hovers && response.hovered();
+    let marked = playing && !selected && !hovered;
+    let visuals = ui.style().interact_selectable(response, selected);
+    let playing_color = crate::theme::playing_color(ui.ctx());
+    if marked {
+        ui.painter().rect_filled(rect, visuals.corner_radius, playing_color.gamma_multiply(0.15));
+    } else if selected || hovered {
+        // (The playing row's border goes over the selection's.)
+        let stroke = if playing { egui::Stroke::NONE } else { visuals.bg_stroke };
+        ui.painter().rect(rect.expand(visuals.expansion), visuals.corner_radius, visuals.weak_bg_fill, stroke, egui::StrokeKind::Inside);
+    } else if idx % 2 == 1 {
+        // Striped, to tell the rows apart.
+        ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+    }
+    if playing {
+        // Outlined, selected or not.
+        ui.painter().rect_stroke(rect, visuals.corner_radius, egui::Stroke::new(1.0, playing_color), egui::StrokeKind::Inside);
+    }
+    marked
+}
+
+/// The widths a list's columns were dragged to, by key (the rest are
+/// their own).
+pub type Widths = BTreeMap<String, f32>;
+
+/// How narrow and how wide a column can be dragged.
+const COLUMN_WIDTHS: RangeInclusive<f32> = 24.0..=640.0;
+/// How far either side of the line between two columns grabs it.
+const GRAB: f32 = 3.0;
+
+/// A column's cell `width` wide (in a right-to-left layout), its text cut
+/// short to fit (or scrolling, while `scroll` is on), with a line before
+/// it. The whole cell's response.
+pub fn cell(ui: &mut egui::Ui, width: f32, text: impl Into<egui::WidgetText>, scroll: bool) -> egui::Response {
+    let size = egui::vec2(width, ui.available_height());
+    let response = ui
+        .allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_min_size(size);
+            ui.set_width(width);
+            crate::marquee::show(ui, text, scroll);
+        })
+        .response;
+    let x = response.rect.left() - ui.spacing().item_spacing.x / 2.0;
+    ui.painter().vline(x, ui.max_rect().y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
+    response
+}
+
+/// A list's [`header`]: the main column's title after `lead` points (over
+/// what the rows draw before their text), filling what `columns` leave
+/// (and at least `min_main` points), then the columns, and `trail` points
+/// (over the rows' trailing widgets) at the end.
+pub struct Header<'a> {
+    pub title: egui::RichText,
+    pub columns: &'a [Column<'a>],
+    pub lead: f32,
+    pub trail: f32,
+    pub min_main: f32,
+}
+
+/// A column of a [`header`]: its key, title and width.
+pub struct Column<'a> {
+    pub key: &'a str,
+    pub title: egui::RichText,
+    pub width: f32,
+}
+
+/// What [`header`] reports.
+pub struct HeaderOutput {
+    /// The main column's cell.
+    pub main: egui::Response,
+    /// The columns' cells, in order.
+    pub columns: Vec<egui::Response>,
+    /// A column was dragged to a width (its key, and the width), or
+    /// double-clicked back to its own (`None`).
+    pub resized: Option<(String, Option<f32>)>,
+}
+
+/// The width of column `key` under the header `id`: what it's being
+/// dragged to, else its width in `widths`, else `own`.
+pub fn column_width(ctx: &egui::Context, id: egui::Id, key: &str, widths: &Widths, own: f32) -> f32 {
+    match ctx.data(|d| d.get_temp::<(String, f32)>(id)) {
+        Some((dragged, width)) if dragged == key => width,
+        _ => widths.get(key).copied().unwrap_or(own),
+    }
+}
+
+/// The header `id` over a list's rows, in `rect` (as wide as the list),
+/// lined up with rows that lay their cells out with [`cell`] from the
+/// right. The line before a column drags to resize it (keeping the main
+/// column's least width), and a double-click on it puts it back.
+pub fn header(ui: &mut egui::Ui, id: egui::Id, rect: egui::Rect, header: Header) -> HeaderOutput {
+    let Header { title, columns, lead, trail, min_main } = header;
+    ui.painter().rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
+    ui.painter().hline(rect.x_range(), rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
+    let spacing = ui.spacing().item_spacing.x;
+    // (What a column can grow by and still fit.)
+    let slack = rect.width() - trail - min_main - columns.iter().map(|c| c.width + spacing).sum::<f32>();
+    let mut cells = Vec::with_capacity(columns.len());
+    let mut resized = None;
+    // (Short of the right end as the rows are, so the columns line up.)
+    let builder = egui::UiBuilder::new().max_rect(rect.with_max_x(rect.max.x - EDGE)).layout(egui::Layout::right_to_left(egui::Align::Center));
+    let main = ui
+        .scope_builder(builder, |ui| {
+            if trail > 0.0 {
+                ui.add_space(trail + spacing);
+            }
+            for c in columns.iter().rev() {
+                let response = cell(ui, c.width, c.title.clone(), false).interact(egui::Sense::click());
+                let widths = *COLUMN_WIDTHS.start()..=(c.width + slack.max(0.0)).clamp(*COLUMN_WIDTHS.start(), *COLUMN_WIDTHS.end());
+                if let Some(r) = resize(ui, id, c, response.rect, widths) {
+                    resized = Some(r);
+                }
+                cells.push(response);
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add_space(lead);
+                let size = ui.available_size();
+                ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.set_min_size(size);
+                    ui.add(egui::Label::new(title).truncate().selectable(false));
+                })
+                .response
+                .interact(egui::Sense::click())
+            })
+            .inner
+        })
+        .inner;
+    // (A drag that ended without its column, gone from the header, is over.)
+    if resized.is_none() && !ui.input(|i| i.pointer.any_down()) {
+        ui.data_mut(|d| d.remove_temp::<(String, f32)>(id));
+    }
+    cells.reverse();
+    HeaderOutput { main, columns: cells, resized }
+}
+
+/// The line before column `c`'s `cell`, dragged to resize it within
+/// `widths` (its width so far kept under `id`), or double-clicked to put
+/// it back.
+fn resize(ui: &mut egui::Ui, id: egui::Id, c: &Column, cell: egui::Rect, widths: RangeInclusive<f32>) -> Option<(String, Option<f32>)> {
+    let x = cell.left() - ui.spacing().item_spacing.x / 2.0;
+    let rect = egui::Rect::from_x_y_ranges(x - GRAB..=x + GRAB, cell.y_range());
+    let response = ui
+        .interact(rect, id.with(c.key), egui::Sense::click_and_drag())
+        .on_hover_cursor(egui::CursorIcon::ResizeColumn)
+        .on_hover_text("Drag to resize; double-click for its own width");
+    if response.double_clicked() {
+        return Some((c.key.to_string(), None));
+    }
+    if response.dragged() {
+        // (Laid out from the right, a column dragged left gets wider.)
+        let width = (c.width - response.drag_delta().x).clamp(*widths.start(), *widths.end());
+        ui.data_mut(|d| d.insert_temp(id, (c.key.to_string(), width)));
+    }
+    if response.drag_stopped() {
+        let width = ui.data_mut(|d| d.remove_temp::<(String, f32)>(id)).map_or(c.width, |(_, w)| w);
+        return Some((c.key.to_string(), Some(width)));
+    }
+    None
 }
 
 /// An entry's text, filling the width left in the row: while `scroll` is
@@ -558,3 +730,4 @@ mod tests {
         assert_eq!(clicks(&mut selection, &[(0, SHIFT)]), vec![0, 1]);
     }
 }
+

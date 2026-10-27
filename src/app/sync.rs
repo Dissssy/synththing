@@ -1,6 +1,6 @@
 //! Sync in the app: the switch in Preferences > Online Library, and what
 //! only the app does with what syncing brings (`device_sync.rs` does the
-//! syncing itself): putting synced settings in the config, finding the
+//! syncing itself, the wishlist included): putting synced settings in the config, finding the
 //! playlist playing again once synced ones replace it, and saying what
 //! moved.
 
@@ -43,15 +43,14 @@ impl App {
     /// The authority and who's signed in, for syncing.
     fn sync_link(&self) -> Link {
         let (server, server_key) = self.authority();
-        let relay_song_mb = self.library_server_info(&server).map(|i| i.relay_song_mb);
+        let relay_song_mb = self.library_server_info().map(|i| i.relay_song_mb);
         Link { server, server_key, identity: self.library_identity(), relay_song_mb }
     }
 
-    /// The notification stream from `server` opened again (`None`), or said
-    /// synced data changed.
-    pub(super) fn sync_server_seen(&mut self, server: &str, changed: Option<library::sync::Changed>) {
-        let link = self.sync_link();
-        self.sync.engine.server_seen(&link, server, changed);
+    /// The notification stream opened again (`None`), or said synced data
+    /// changed.
+    pub(super) fn sync_server_seen(&mut self, changed: Option<library::sync::Changed>) {
+        self.sync.engine.server_seen(changed);
     }
 
     /// The playlists changed here.
@@ -59,10 +58,17 @@ impl App {
         self.sync.engine.playlists_changed(&self.songs, &self.playlists);
     }
 
-    /// Each frame: sync what's due, and take in what synced.
-    pub(super) fn poll_sync(&mut self) {
+    /// The wishlist changed here.
+    pub(super) fn wishlist_changed(&mut self) {
+        self.sync.engine.wishlist_changed(&self.wishlist.list);
+    }
+
+    /// Each frame: sync what's due, and take in what synced. While `held`
+    /// (an update is offered), nothing starts.
+    pub(super) fn poll_sync(&mut self, held: bool) {
         let link = self.sync_link();
-        let reports = self.sync.engine.poll(&link, &mut Here { songs: &mut self.songs, playlists: &mut self.playlists });
+        let here = &mut Here { songs: &mut self.songs, playlists: &mut self.playlists, wishlist: &mut self.wishlist.list };
+        let reports = self.sync.engine.poll(&link, here, held);
         for report in reports {
             match report {
                 Report::Settings(synced) => self.settings_synced(synced),
@@ -70,7 +76,7 @@ impl App {
                 Report::Fetched(stored) => self.add_to_library([stored]),
                 Report::LibraryChanged => self.refresh_missing(),
                 Report::Status(text) => self.status = text,
-                Report::Progress(text) => {
+                Report::Debug(text) => {
                     if self.config.sync_debug {
                         self.sync.toast = Some((text, Instant::now()));
                     }
@@ -122,7 +128,8 @@ impl App {
         let changes = synced.changes().to_vec();
         let playing = self.now_playing.as_ref().and_then(|np| self.playlists.lists.get(np.list)).map(|l| l.id.clone());
         let viewed = self.viewed_playlist.and_then(|v| self.playlists.lists.get(v)).map(|l| l.id.clone());
-        match self.sync.engine.apply_playlists(synced, &mut Here { songs: &mut self.songs, playlists: &mut self.playlists }) {
+        let here = &mut Here { songs: &mut self.songs, playlists: &mut self.playlists, wishlist: &mut self.wishlist.list };
+        match self.sync.engine.apply_playlists(synced, here) {
             Ok(touched) if !touched.is_empty() => self.playlists_replaced(&touched, playing, viewed),
             Ok(_) => {}
             Err(e) => {
@@ -165,8 +172,7 @@ impl App {
     /// The switch, under the identity in Preferences > Online Library.
     pub(super) fn sync_ui(&mut self, ui: &mut egui::Ui) {
         let signed_in = self.library_identity().is_some();
-        let (authority, _) = self.authority();
-        let offered = self.library_server_info(&authority).is_none_or(|i| i.sync);
+        let offered = self.library_server_info().is_none_or(|i| i.sync);
         let mut on = self.sync.engine.on();
         super::with_info(
             ui,
@@ -180,18 +186,21 @@ impl App {
             |ui| ui.add_enabled(signed_in && offered, egui::Checkbox::new(&mut on, "Sync settings and playlists between my devices")),
         );
         if !offered {
-            ui.weak(format!("{} doesn't sync yet.", super::library::host(&authority)));
+            ui.weak("The server doesn't sync yet.");
         }
         if on != self.sync.engine.on() {
             if on {
                 let link = self.sync_link();
                 let config = self.config.to_json().unwrap_or_default();
-                self.sync.engine.turn_on(&link, &Here { songs: &mut self.songs, playlists: &mut self.playlists }, &config);
+                self.sync.engine.turn_on(&link, &Here { songs: &mut self.songs, playlists: &mut self.playlists, wishlist: &mut self.wishlist.list }, &config);
             } else {
                 self.sync.engine.turn_off();
             }
         }
         if self.sync.engine.on() {
+            if self.sync.engine.held() {
+                ui.weak("Paused while the update downloads.");
+            }
             if let Some(error) = self.sync.engine.error() {
                 ui.weak(format!("Couldn't sync: {error}"));
             }
@@ -249,7 +258,7 @@ impl App {
         }
         let link = self.sync_link();
         let config = self.config.to_json().unwrap_or_default();
-        self.sync.engine.choose(&link, &Here { songs: &mut self.songs, playlists: &mut self.playlists }, chosen, &config);
+        self.sync.engine.choose(&link, &Here { songs: &mut self.songs, playlists: &mut self.playlists, wishlist: &mut self.wishlist.list }, chosen, &config);
     }
 
     /// The devices syncing songs, each but this one removable.

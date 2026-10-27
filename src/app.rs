@@ -55,6 +55,7 @@ mod tray_panel;
 mod tour;
 mod welcome;
 mod which_key;
+mod wishlist;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
@@ -149,6 +150,7 @@ fn plays(store: &SongStore, path: &Path) -> song_list::Plays {
 /// those in `only` when given), as a query's filters keep them.
 struct Listed<'a> {
     store: &'a SongStore,
+    wishes: &'a crate::wishlist::Wishes,
     extensions: &'a [&'a str],
     only: Option<&'a std::collections::HashSet<&'a str>>,
 }
@@ -157,7 +159,7 @@ impl song_list::Source for Listed<'_> {
     fn songs(&mut self, query: &str) -> (Vec<PathBuf>, crate::search::Search) {
         let search = crate::search::parse(query, self.store.tags());
         let songs = {
-            let matches = search.rules.matcher(crate::settings_sync::now());
+            let matches = search.rules.matcher(self.store, self.wishes, crate::settings_sync::now());
             self.store
                 .songs()
                 .filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song))
@@ -170,8 +172,14 @@ impl song_list::Source for Listed<'_> {
 
     fn values(&mut self, field: crate::fields::Field, query: &str) -> Vec<String> {
         let rules = crate::search::parse(query, self.store.tags()).rules;
-        let matches = rules.matcher(crate::settings_sync::now());
+        let matches = rules.matcher(self.store, self.wishes, crate::settings_sync::now());
         let songs = self.store.songs().filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song)).map(|(_, song)| song);
+        if field == crate::fields::Field::Wish {
+            // (Those the songs kept fill.)
+            let index = crate::wishlist::Index::new(self.wishes);
+            let filled: std::collections::BTreeSet<&str> = songs.flat_map(|song| index.fills(song)).map(|id| index.name(id)).collect();
+            return filled.into_iter().map(str::to_string).collect();
+        }
         if field == crate::fields::Field::Tag {
             let used: std::collections::BTreeSet<&str> = songs.flat_map(|song| song.tags.iter().map(String::as_str)).collect();
             return used.into_iter().filter_map(|id| self.store.tags().get(id)).map(|t| t.name.clone()).collect();
@@ -464,7 +472,7 @@ pub struct App {
     choose_art: Option<choose_art::ChooseArt>,
     /// Settings sync between the identity's devices.
     sync: sync::SyncState,
-    /// Notifications from library servers.
+    /// Notifications from the server.
     notifications: notifications::NotificationsState,
     /// A copyright notice on one of the user's uploads, open.
     copyright: copyright::CopyrightState,
@@ -507,6 +515,7 @@ pub struct App {
     playing_queued: bool,
     /// The Up next tab's selected rows.
     queue_selection: select_list::Selection,
+    wishlist: wishlist::WishlistState,
     /// The Up next tab's rows as last described, and what from (a hash).
     queue_rows: Option<(u64, Vec<(PathBuf, song_list::Described)>)>,
     /// Becomes true once the current playlist track is seen playing (not
@@ -792,6 +801,7 @@ impl App {
             queue: Vec::new(),
             playing_queued: false,
             queue_selection: Default::default(),
+            wishlist: Default::default(),
             queue_rows: None,
             advance_armed: false,
             song_loads: 0,
@@ -1699,7 +1709,7 @@ impl App {
             if row.response.drag_started() {
                 row.response.dnd_set_drag_payload(DraggedSoundfont(path.clone()));
             }
-            row.response.context_menu(|ui| {
+            crate::menu::context(&row.response, |ui| {
                 if ui.button("Use").clicked() {
                     use_idx = Some(row.idx);
                 }
@@ -1745,7 +1755,7 @@ impl App {
     /// including the tool windows (Settings, Docs), so everything that can
     /// be shown is switched on and off from one place.
     fn top_bar_ui(&mut self, ui: &mut egui::Ui) {
-        egui::MenuBar::new().ui(ui, |ui| {
+        egui::MenuBar::new().config(crate::menu::config(ui.ctx())).ui(ui, |ui| {
             // The wordmark (a little taller than the menus' text: it has
             // a note above and descenders below), or the name as text if
             // it can't be drawn.
@@ -1783,6 +1793,7 @@ impl App {
                 section_checkbox(ui, Section::Groupings);
                 section_checkbox(ui, Section::Soundfonts);
                 section_checkbox(ui, Section::Queue);
+                section_checkbox(ui, Section::Wishlist);
                 ui.separator();
                 section_checkbox(ui, Section::Visualizer);
                 section_checkbox(ui, Section::Editor);
@@ -1965,6 +1976,19 @@ impl App {
         if close || response.should_close() {
             self.updates_open = false;
             self.updates_message = None;
+        }
+    }
+
+    /// An update is offered (the Updates window or page is open with one
+    /// available) or downloading: sync and the online lookup wait, so the
+    /// download has the connection. Closing it, or installing it (the app
+    /// restarts without it open), lets them go on.
+    pub(super) fn update_offered(&self) -> bool {
+        match self.updater.state() {
+            UpdateState::Downloading { .. } => true,
+            UpdateState::Available(_) if self.mobile() => self.on_updates_page(),
+            UpdateState::Available(_) => self.updates_open,
+            _ => false,
         }
     }
 
@@ -2809,7 +2833,7 @@ impl App {
         let revision = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            (self.songs_revision(), missing_only.then_some(missing_revision)).hash(&mut hasher);
+            (self.songs_revision(), self.wishlist.list.revision(), missing_only.then_some(missing_revision)).hash(&mut hasher);
             hasher.finish()
         };
         let selected = self.song_list.selected();
@@ -2881,9 +2905,18 @@ impl App {
         } else {
             Vec::new()
         };
+        let mut wish = None;
+        let (kept, wishes) = (&self.lookup.kept, &self.wishlist.list);
+        let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
         let mut menu = |ui: &mut egui::Ui, paths: &[PathBuf]| {
             if let Some(next) = queue::menu(ui) {
                 queued = Some((paths.to_vec(), next));
+            }
+            if let [path] = paths
+                && let Some(key) = store.key(path)
+                && let Some(album) = wishlist::album_wish_menu(ui, store, kept, wishes, online, &[key])
+            {
+                wish = Some(album);
             }
             if touch {
                 ui.menu_button("Add to playlist", |ui| {
@@ -2921,7 +2954,7 @@ impl App {
         };
         let output = self.song_list.ui(
             ui,
-            &mut Listed { store, extensions, only: only.as_ref() },
+            &mut Listed { store, wishes: &wishes.wishes, extensions, only: only.as_ref() },
             revision,
             &mut view,
             &self.config.group_ignore,
@@ -2948,6 +2981,9 @@ impl App {
         }
         if let Some((paths, next)) = queued {
             self.queue_songs(ui.ctx(), paths, next);
+        }
+        if let Some(wish) = wish {
+            self.wish_for_album(ui.ctx(), wish);
         }
         if let Some(query) = output.save_search {
             self.smart_playlist_from_search(ui.ctx(), &query);
@@ -3193,6 +3229,7 @@ impl App {
             panel.set_pads(self.pad_frame.clone());
             panel.set_mobile(self.mobile());
             panel.set_see_through(self.config.visualizer_see_through);
+            panel.set_pixel_scale(self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE));
         }
         // (A program watching through the API: drawn at the size it asked
         // for, unless a recording has a size already.)
@@ -3552,6 +3589,7 @@ impl App {
             Section::Groupings => Some("playlist_rows"),
             Section::Soundfonts => Some("soundfonts"),
             Section::Queue => Some("queue"),
+            Section::Wishlist => Some("wishlist"),
             _ => None,
         }
     }
@@ -3844,7 +3882,7 @@ impl App {
                             Some(instrument) => format!("{} \u{b7} {instrument}", channel + 1),
                             None => format!("Channel {}", channel + 1),
                         };
-                        let response = channel_chip(ui, enabled, &text, color).on_hover_ui(about);
+                        let response = toggle_chip(ui, enabled, &text, color).on_hover_ui(about);
                         if response.clicked() {
                             toggle = Some((channel, !enabled));
                         }
@@ -4076,6 +4114,7 @@ impl App {
         }
         frame_timing::time("note_song_meta", || self.note_song_meta());
         frame_timing::time("refresh_smart", || self.refresh_smart(false));
+        frame_timing::time("wishlist_tick", || self.wishlist_tick(ctx));
         frame_timing::time("repair", || {
             self.poll_repair();
             self.suggest_repair();
@@ -4089,8 +4128,10 @@ impl App {
         frame_timing::time("poll_identity", || self.poll_identity());
         frame_timing::time("poll_pairing", || self.poll_pairing());
         frame_timing::time("poll_notifications", || self.poll_notifications(ctx));
-        frame_timing::time("poll_sync", || self.poll_sync());
-        frame_timing::time("lookup_tick", || self.lookup_tick(ctx));
+        // (The update download gets the connection.)
+        let held = self.update_offered();
+        frame_timing::time("poll_sync", || self.poll_sync(held));
+        frame_timing::time("lookup_tick", || self.lookup_tick(ctx, held));
         frame_timing::time("api_tick", || self.api_tick(ctx, &view));
         // (Minimized, eframe still draws the window, but only 10 times a
         // second.)
@@ -4258,7 +4299,6 @@ impl eframe::App for App {
         self.record_window_ui(&ctx, view);
         self.script_window_ui(&ctx);
         self.publish_ui(&ctx);
-        self.confirm_server_ui(&ctx);
         self.document_ui(&ctx);
         self.update_ui(&ctx);
         self.report_ui(&ctx);
@@ -4355,6 +4395,7 @@ impl TabViewer for SectionTabs<'_> {
             Section::Groupings => app.groupings_ui(ui),
             Section::Soundfonts => app.soundfont_ui(ui),
             Section::Queue => app.queue_ui(ui),
+            Section::Wishlist => app.wishlist_ui(ui),
             Section::Visualizer => {
                 app.visualizer_preview_ui(ui, self.shared.notes.clone(), self.shared.view.clone());
             }
@@ -4564,11 +4605,11 @@ fn channel_toggle(ui: &mut egui::Ui, on: &mut bool, label: &str, color: egui::Co
     .inner
 }
 
-/// A channel's toggle as a chip (`Config::channel_chips`), like the
-/// library's: filled with the channel's color while it's on, washed out to
-/// grey while it's off, outlined in the theme's hover color while hovered.
+/// A toggle as a chip (a channel's, `Config::channel_chips`), like the
+/// library's: filled with its color while it's on, washed out to grey
+/// while it's off, outlined in the theme's hover color while hovered.
 /// Clicking it toggles.
-fn channel_chip(ui: &mut egui::Ui, on: bool, text: &str, color: egui::Color32) -> egui::Response {
+pub(super) fn toggle_chip(ui: &mut egui::Ui, on: bool, text: &str, color: egui::Color32) -> egui::Response {
     let fill = if on { color } else { washed_out(color, ui.visuals().dark_mode) };
     let font = egui::TextStyle::Button.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, on_color(fill));

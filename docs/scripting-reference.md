@@ -1051,7 +1051,7 @@ A script runs on every rendered frame while it's on screen, so the usual budget 
 
 Debug > Performance shows how long `render()` takes (average and worst over the last second, drawing included), against that budget. The script runs on a thread of its own, and the app never waits on it: a script that takes longer than a frame just renders fewer frames, the visualizer showing its last picture until the next is done, while the rest of the app keeps its pace. Nothing is lost meanwhile (the audio and any key presses arrive with the next render, and `DT` covers the whole gap). Each picture shows about a frame after the audio it was drawn from. `run-script` prints the same numbers at the end of a run.
 
-- The buffer is capped at ~1280x720 worth of pixels and scaled up (nearest-neighbor) to fill larger views, so either fullscreen on a large monitor doesn't multiply your render cost, but it's still worth keeping draw counts sane.
+- The buffer is the view's size in screen pixels, divided by the Pixel scale in Preferences > Visualizers (1x, 2x, 4x, ...) and scaled back up (nearest-neighbor) to fill the view. Fullscreen on a large or high-DPI monitor at 1x means millions of pixels, so `render()` should cope with any `width`/`height`; users can raise the pixel scale when a script is too slow, but it's still worth keeping draw counts sane.
 - `spectrogram.lua` run-length-merges same-colored cells in a column into one rect instead of one draw per cell, worth copying for any other grid/heatmap-shaped script.
 - Keep history buffers fixed-size ring buffers (see `spectrogram.lua`), not growing/shrinking arrays, removing from the front of a Lua table is O(n), and doing that every frame adds up.
 

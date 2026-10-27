@@ -17,6 +17,17 @@ use crate::playlist::LoopMode;
 /// `beat_pulse_length`) unless they're changed.
 pub const DEFAULT_BEAT_PULSE: f32 = 0.3;
 pub const DEFAULT_BEAT_PULSE_LENGTH: f32 = 0.35;
+/// The visualizer pixel scale when `visualizer_scale` isn't set: 4x on
+/// phones, whose screens are dense and hardware slow, 1x elsewhere.
+pub const DEFAULT_VISUALIZER_SCALE: u32 = if cfg!(target_os = "android") { 4 } else { 1 };
+/// The visualizer pixel scales offered (`visualizer_scale`).
+pub const VISUALIZER_SCALES: [u32; 11] = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
+
+/// `scale` rounded down to one of [`VISUALIZER_SCALES`] (1 below them all),
+/// for a hand-edited config.
+pub fn visualizer_scale_down(scale: u32) -> u32 {
+    VISUALIZER_SCALES.into_iter().take_while(|&choice| choice <= scale).last().unwrap_or(1)
+}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -135,6 +146,10 @@ pub struct Config {
     /// What goes out through the local API keeps its transparency either way.
     #[serde(default)]
     pub visualizer_see_through: bool,
+    /// How many output pixels each visualizer buffer pixel covers per side.
+    /// `None` means [`DEFAULT_VISUALIZER_SCALE`].
+    #[serde(default)]
+    pub visualizer_scale: Option<u32>,
     /// Experimental preference: start loading a song when the pointer rests
     /// on it, so clicking it plays sooner.
     #[serde(default)]
@@ -199,6 +214,14 @@ pub struct Config {
     /// its name (`album_art`; `None`: 2).
     #[serde(default)]
     pub tile_letters: Option<u8>,
+    /// By Album leaves out the albums on the wishlist that none of are
+    /// here (`wishlist.rs`); they're shown dimmed by default.
+    #[serde(default)]
+    pub hide_wished: bool,
+    /// The kinds of an artist's albums their page in the Wishlist shows
+    /// (`wishlist::KINDS`): `wishlist::SHOWN` while it's empty.
+    #[serde(default)]
+    pub wishlist_kinds: Vec<String>,
     /// The user's own rulesets (`smart.rs`), by ID, beside the built-in
     /// ones (`smart::builtin`).
     #[serde(default)]
@@ -235,8 +258,7 @@ pub struct Config {
     /// Where recordings are saved; `None` means Videos\synththing.
     #[serde(default)]
     pub record_dir: Option<PathBuf>,
-    /// The script library: which servers, their keys, the name to post
-    /// under.
+    /// The script library: the name to post under, notifications.
     #[serde(default)]
     pub library: LibrarySettings,
     /// Show what each settings sync changed (a debug toast).
@@ -321,61 +343,23 @@ pub struct Session {
     pub script: Option<PathBuf>,
 }
 
-/// The script library's servers (Preferences > Online Library).
+/// The script library (Preferences > Online Library).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LibrarySettings {
-    /// The official server is used (it can't be removed, only turned off).
-    pub official: bool,
-    /// Other servers, by address.
-    pub servers: Vec<LibraryServer>,
-    /// Each server's key (hex) as first seen, by address: a server whose
-    /// key changes isn't trusted until the user says so.
-    pub pinned: std::collections::BTreeMap<String, String>,
     /// The name last posted under.
     pub author_name: String,
-    /// The official publisher's keys, oldest first, as the official server
-    /// last said (empty: never rotated).
+    /// The official publisher's keys, oldest first, as the server last
+    /// said (empty: never rotated).
     pub official_publishers: Vec<String>,
-    /// Keep in touch with the servers in use for notifications (while
-    /// there's an identity): a check at launch, and a stream while open.
+    /// Keep in touch with the server for notifications (while there's an
+    /// identity): a check at launch, and a stream while open.
     pub notifications: bool,
 }
 
 impl Default for LibrarySettings {
     fn default() -> Self {
-        Self {
-            official: true,
-            servers: Vec::new(),
-            pinned: Default::default(),
-            author_name: String::new(),
-            official_publishers: Vec::new(),
-            notifications: true,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct LibraryServer {
-    pub url: String,
-    pub enabled: bool,
-}
-
-impl LibrarySettings {
-    /// The servers in use, the official one first. None while the Online
-    /// Library is off (a branch build's, `build_info::online`).
-    pub fn enabled_servers(&self) -> Vec<String> {
-        if !crate::build_info::online(crate::build_info::Online::Scripts) {
-            return Vec::new();
-        }
-        let official = self.official.then(crate::library::official_url);
-        let mut servers: Vec<String> = Vec::new();
-        for url in official.into_iter().chain(self.servers.iter().filter(|s| s.enabled).map(|s| s.url.clone())) {
-            if !servers.contains(&url) {
-                servers.push(url);
-            }
-        }
-        servers
+        Self { author_name: String::new(), official_publishers: Vec::new(), notifications: true }
     }
 }
 
@@ -696,8 +680,17 @@ mod tests {
         let config: Config = serde_json::from_str(r#"{ "soundfonts": [] }"#).unwrap();
         assert_eq!(config.remember, Remember { volume: true, soundfont: true, script: true, speed: false, modes: true });
         assert!(config.session.volume.is_none() && config.session.script.is_none());
+        assert!(config.visualizer_scale.is_none());
         let partial: Config = serde_json::from_str(r#"{ "remember": { "speed": true } }"#).unwrap();
         assert!(partial.remember.speed && partial.remember.volume, "left out: the default");
+    }
+
+    #[test]
+    fn visualizer_scale_rounds_down_to_a_power_of_two() {
+        assert_eq!(visualizer_scale_down(0), 1);
+        assert_eq!(visualizer_scale_down(3), 2);
+        assert_eq!(visualizer_scale_down(16), 16);
+        assert_eq!(visualizer_scale_down(2048), 1024);
     }
 
     /// A file that can't be read is moved aside rather than left to be

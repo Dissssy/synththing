@@ -1,6 +1,7 @@
 //! Syncing this device with the user's others (`settings_sync.rs`,
-//! `playlist_sync.rs`, `song_sync.rs`), with no window: each blob (the
-//! settings, the playlists, the song library and its transfers) syncs with
+//! `playlist_sync.rs`, `song_sync.rs`, `wishlist.rs`), with no window: each
+//! blob (the settings, the playlists, the song library and its transfers,
+//! the wishlist) syncs with
 //! the authority on a thread of its own: at launch, a moment after it
 //! changes here, and when the notification stream says another device
 //! wrote. Songs move through the relay on a thread of their own too, one
@@ -10,7 +11,7 @@
 //!
 //! Whatever runs it (the app, `app/sync.rs`) calls `DeviceSync::poll` often,
 //! with the authority as it knows it (`Link`) and its songs and playlists
-//! (`Here`), and acts on what comes back (`Report`): what only it can do,
+//! and wishlist (`Here`), and acts on what comes back (`Report`): what only it can do,
 //! such as putting synced settings into its config.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -30,6 +31,7 @@ use crate::playlist_sync;
 use crate::settings_sync::{self, Change, Fields, State, Winner};
 use crate::song_store::{SongStore, Stored};
 use crate::song_sync::{self, Moved, Relay, Task};
+use crate::wishlist::{self, Wishlist};
 
 mod songs;
 
@@ -49,10 +51,11 @@ enum Blob {
     Playlists,
     Library,
     Transfers,
+    Wishlist,
 }
 
 impl Blob {
-    const ALL: [Blob; 4] = [Blob::Settings, Blob::Playlists, Blob::Library, Blob::Transfers];
+    const ALL: [Blob; 5] = [Blob::Settings, Blob::Playlists, Blob::Library, Blob::Transfers, Blob::Wishlist];
 
     fn name(self) -> &'static str {
         match self {
@@ -60,6 +63,7 @@ impl Blob {
             Blob::Playlists => playlist_sync::NAME,
             Blob::Library => song_sync::LIBRARY,
             Blob::Transfers => song_sync::TRANSFERS,
+            Blob::Wishlist => wishlist::NAME,
         }
     }
 
@@ -74,6 +78,7 @@ impl Blob {
             Blob::Playlists => "playlists synced",
             Blob::Library => "library synced",
             Blob::Transfers => "transfers synced",
+            Blob::Wishlist => "wishlist synced",
         }
     }
 }
@@ -98,17 +103,18 @@ struct Channel {
 /// now.
 pub struct Link {
     pub server: String,
-    /// Its key, once it's been reached.
-    pub server_key: Option<String>,
+    /// Its key (`library::server_key`).
+    pub server_key: String,
     pub identity: Option<Identity>,
     /// The biggest song the relay keeps (MB), once its info's been read.
     pub relay_song_mb: Option<u64>,
 }
 
-/// The songs and playlists here, which syncing reads and changes.
+/// The songs, playlists and wishlist here, which syncing reads and changes.
 pub struct Here<'a> {
     pub songs: &'a mut SongStore,
     pub playlists: &'a mut Library,
+    pub wishlist: &'a mut Wishlist,
 }
 
 /// What a sync brought that whatever runs it acts on.
@@ -125,8 +131,8 @@ pub enum Report {
     LibraryChanged,
     /// Something to tell the user.
     Status(String),
-    /// A song was moved: how far along (for the debug toast).
-    Progress(String),
+    /// What a sync or a song moved did, for the debug toast.
+    Debug(String),
 }
 
 /// A settings or playlists sync, done: its outcome, and this device's
@@ -155,7 +161,7 @@ pub struct DeviceSync {
     for_identity: Option<String>,
     /// The kinds of settings this device syncs (`State::choices`).
     choices: settings_sync::Choices,
-    channels: [Channel; 4],
+    channels: [Channel; 5],
     events: (Sender<Done>, Receiver<Done>),
     error: Option<String>,
     /// The songs here or the playlists changed: say so in the library, and
@@ -189,6 +195,9 @@ pub struct DeviceSync {
     songs_pending: bool,
     /// What the last poll brought, to hand over.
     reports: Vec<Report>,
+    /// Held while an update is offered: nothing starts, and the songs
+    /// being moved stop after the one moving.
+    held: Arc<AtomicBool>,
 }
 
 /// How a round of songs being moved is going: those to fetch or send, how
@@ -241,6 +250,7 @@ impl Default for DeviceSync {
             worker,
             songs_pending: false,
             reports: Vec::new(),
+            held: Arc::default(),
         }
     }
 }
@@ -340,6 +350,11 @@ impl DeviceSync {
         self.on
     }
 
+    /// Held while an update is offered (`poll`).
+    pub fn held(&self) -> bool {
+        self.held.load(Ordering::Relaxed)
+    }
+
     /// Why the last sync failed, until one works.
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
@@ -371,6 +386,7 @@ impl DeviceSync {
                 Blob::Settings => true,
                 Blob::Playlists => settings_sync::syncs(&self.choices, &settings_sync::PLAYLISTS),
                 Blob::Library | Blob::Transfers => settings_sync::syncs(&self.choices, &settings_sync::SONGS),
+                Blob::Wishlist => settings_sync::syncs(&self.choices, &settings_sync::WISHLIST),
             }
     }
 
@@ -394,10 +410,10 @@ impl DeviceSync {
         &mut self.channels[blob.index()]
     }
 
-    /// The notification stream from `server` opened again (`None`), or said
-    /// synced data changed: sync what's the authority's and newer.
-    pub fn server_seen(&mut self, link: &Link, server: &str, changed: Option<library::sync::Changed>) {
-        if !self.on || server != link.server {
+    /// The notification stream opened again (`None`), or said synced data
+    /// changed: sync what's newer.
+    pub fn server_seen(&mut self, changed: Option<library::sync::Changed>) {
+        if !self.on {
             return;
         }
         for blob in Blob::ALL {
@@ -427,9 +443,35 @@ impl DeviceSync {
         }
     }
 
+    /// The wishlist changed here: with it syncing, note what changed, to
+    /// send once it's settled.
+    pub fn wishlist_changed(&mut self, list: &Wishlist) {
+        if !self.syncing(Blob::Wishlist) {
+            return;
+        }
+        let Some(mut state) = State::load(wishlist::NAME) else { return };
+        if state.record_leaves(wishlist::leaves(list), settings_sync::now()) {
+            if let Err(e) = state.save(wishlist::NAME) {
+                log::warn!("wishlist sync: {e}");
+            }
+            self.channel(Blob::Wishlist).dirty_since = Some(Instant::now());
+        }
+    }
+
     /// Start a sync when one's due, and take one that's done: what it
-    /// brought that's for whatever runs this to act on.
-    pub fn poll(&mut self, link: &Link, here: &mut Here) -> Vec<Report> {
+    /// brought that's for whatever runs this to act on. While `held`, none
+    /// starts; what was due waits until it's let go.
+    pub fn poll(&mut self, link: &Link, here: &mut Here, held: bool) -> Vec<Report> {
+        if self.held.swap(held, Ordering::Relaxed) != held {
+            if held {
+                log::info!("sync held while an update is offered");
+                self.stop_listening();
+            } else {
+                log::info!("sync resumed");
+                // (The songs that were waiting to move.)
+                self.songs_dirty = true;
+            }
+        }
         let whose = link.identity.as_ref().map(Identity::public);
         if whose != self.for_identity {
             // (Signed in, out, or as someone else: on only if the state's
@@ -437,7 +479,7 @@ impl DeviceSync {
             let state = State::load(settings_sync::NAME);
             self.on = state.is_some() && link.identity.is_some();
             self.choices = state.map(|s| s.choices).unwrap_or_default();
-            for blob in [Blob::Settings, Blob::Playlists] {
+            for blob in [Blob::Settings, Blob::Playlists, Blob::Wishlist] {
                 let state = State::load(blob.name());
                 let wanted = self.syncing(blob).then(Instant::now);
                 *self.channel(blob) = Channel { revision: state.as_ref().map_or(0, |s| s.revision), wanted, ..Channel::default() };
@@ -474,6 +516,7 @@ impl DeviceSync {
             match result {
                 Ok(outcome) => match blob {
                     Blob::Settings | Blob::Playlists => self.blob_synced(blob, outcome),
+                    Blob::Wishlist => self.wishlist_synced(here.wishlist, outcome),
                     Blob::Library | Blob::Transfers => {
                         self.error = None;
                         let songs = self.songs_now(link, here);
@@ -491,6 +534,9 @@ impl DeviceSync {
             frame_timing::time("sync worker replies", || self.take_reply(link, here, reply));
         }
         frame_timing::time("poll_moves", || self.poll_moves(here));
+        if held {
+            return std::mem::take(&mut self.reports);
+        }
         if self.songs_dirty && self.on && !self.songs_pending {
             self.songs_dirty = false;
             self.songs_pending = true;
@@ -514,15 +560,12 @@ impl DeviceSync {
 
     /// The authority, its key, the identity and the sync key, to sync with.
     fn sync_with(&mut self, link: &Link) -> Option<(String, String, Identity, [u8; 32])> {
-        let (Some(identity), Some(server_key)) = (link.identity.clone(), link.server_key.clone()) else {
-            self.error = Some(format!("{} hasn't been reached yet: open the Online Library first.", library::host(&link.server)));
-            return None;
-        };
+        let identity = link.identity.clone()?;
         let Some(sync_key) = identity::sync_key() else {
             self.on = false;
             return None;
         };
-        Some((link.server.clone(), server_key, identity, sync_key))
+        Some((link.server.clone(), link.server_key.clone(), identity, sync_key))
     }
 
     fn start_sync(&mut self, link: &Link, blob: Blob, adopt: bool) {
@@ -577,6 +620,21 @@ impl DeviceSync {
         Ok(touched)
     }
 
+    /// A wishlist sync is done: take its wishes, with whatever was changed
+    /// here while it ran, and send those next.
+    fn wishlist_synced(&mut self, list: &mut Wishlist, outcome: Outcome) {
+        self.error = None;
+        let Some(state) = State::load(wishlist::NAME) else { return };
+        let result = settings_sync::merge_where(&outcome.local, &state.fields, &outcome.merged, |_| true).0;
+        wishlist::apply(list, &result);
+        if !outcome.changes.is_empty() {
+            let title = |id: &str| list.wishes.get(id).map_or_else(|| format!("a removed wish ({id})"), |w| w.title.clone());
+            self.reports.push(Report::Debug(describe("Wishlist", &outcome.changes, title)));
+        }
+        let applied = wishlist::leaves(list);
+        self.blob_taken(Blob::Wishlist, Synced { outcome, state, result }, applied);
+    }
+
     fn blob_taken(&mut self, blob: Blob, synced: Synced, applied: BTreeMap<String, Value>) {
         let Synced { outcome, mut state, result } = synced;
         state.applied = applied;
@@ -598,6 +656,7 @@ impl DeviceSync {
         let leaves = match blob {
             Blob::Settings => return,
             Blob::Playlists => playlist_sync::leaves(here.playlists, here.songs),
+            Blob::Wishlist => wishlist::leaves(here.wishlist),
             Blob::Library | Blob::Transfers => {
                 let songs = self.songs_now(link, here);
                 return self.ask_worker(songs::Request::Start(blob, songs));
@@ -625,7 +684,7 @@ impl DeviceSync {
             *self.wanted_ids.lock().unwrap_or_else(|p| p.into_inner()) = song_sync::wanted_ids(&sync_key, &wanted);
             self.wanted = wanted.clone();
         }
-        if self.syncing(Blob::Transfers) {
+        if self.syncing(Blob::Transfers) && !self.held() {
             self.listen_for_songs(link, here.songs, &device);
         }
         self.given.retain(|_, at| at.elapsed() < GIVEN_FOR);
@@ -694,7 +753,8 @@ impl DeviceSync {
 
     /// Start moving the songs the worker planned to.
     fn start_moves(&mut self, link: &Link, songs: &SongStore, tasks: Vec<Task>) {
-        if tasks.is_empty() {
+        // (Held: planned again once it's let go.)
+        if tasks.is_empty() || self.held() {
             return;
         }
         if link.relay_song_mb == Some(0) {
@@ -709,13 +769,13 @@ impl DeviceSync {
         let relay = Relay { server, server_key, identity, sync_key, dir: songs.dir().to_path_buf() };
         self.busy = tasks.iter().map(|t| t.key().to_string()).collect();
         self.progress = Progress { total: tasks.iter().filter(|t| !matches!(t, Task::Delete(_))).count(), song_mb: room.song_mb, ..Progress::default() };
-        let tx = self.moves.0.clone();
+        let (tx, held) = (self.moves.0.clone(), Arc::clone(&self.held));
         std::thread::Builder::new()
             .name("song transfers".into())
             .spawn(move || {
                 // (One song failing doesn't stop the rest; the failed ones
-                // wait for the next try.)
-                song_sync::run_all(&relay, &tasks, room, |moved| tx.send(Moving::Moved(moved)).is_ok());
+                // wait for the next try. Held, the rest wait too.)
+                song_sync::run_all(&relay, &tasks, room, |moved| tx.send(Moving::Moved(moved)).is_ok() && !held.load(Ordering::Relaxed));
                 let _ = tx.send(Moving::Finished);
             })
             .ok();
@@ -777,7 +837,7 @@ impl DeviceSync {
             };
             if let Some(text) = shown {
                 let Progress { done, total, .. } = self.progress;
-                self.reports.push(Report::Progress(format!("{text} ({done} of {total})")));
+                self.reports.push(Report::Debug(format!("{text} ({done} of {total})")));
             }
             match &moved {
                 Moved::Fetched(key) => self.take_fetched(here.songs, key.clone()),
@@ -838,9 +898,7 @@ impl DeviceSync {
     /// Listen for songs streamed here, on a thread of its own, from now
     /// until songs stop syncing (`stop_listening`).
     fn listen_for_songs(&mut self, link: &Link, songs: &SongStore, device: &str) {
-        // (Not before the authority's been reached: that's for the sync
-        // to say.)
-        if self.listener.is_some() || link.server_key.is_none() {
+        if self.listener.is_some() {
             return;
         }
         let Some((server, server_key, identity, sync_key)) = self.sync_with(link) else { return };
@@ -892,7 +950,7 @@ impl DeviceSync {
                 self.error = None;
                 *self.channel(Blob::Settings) = Channel::default();
                 self.start_sync(link, Blob::Settings, true);
-                for blob in [Blob::Playlists, Blob::Library, Blob::Transfers] {
+                for blob in [Blob::Playlists, Blob::Wishlist, Blob::Library, Blob::Transfers] {
                     if self.syncing(blob) {
                         self.start_blob(link, here, blob);
                     }
@@ -915,10 +973,16 @@ impl DeviceSync {
     /// (`config`, as JSON).
     pub fn choose(&mut self, link: &Link, here: &Here, chosen: Vec<(&'static settings_sync::Setting, bool)>, config: &Value) {
         let Some(mut state) = State::load(settings_sync::NAME) else { return };
-        let own = [settings_sync::PLAYLISTS.key, settings_sync::SONGS.key, settings_sync::STARRED_SONGS.key, settings_sync::EVERY_SONG.key];
+        let own = [
+            settings_sync::PLAYLISTS.key,
+            settings_sync::WISHLIST.key,
+            settings_sync::SONGS.key,
+            settings_sync::STARRED_SONGS.key,
+            settings_sync::EVERY_SONG.key,
+        ];
         let any_on = chosen.iter().any(|(setting, on)| *on && !own.contains(&setting.key));
         let toggled = |of: &settings_sync::Setting| chosen.iter().find(|(setting, _)| setting.key == of.key).map(|(_, on)| *on);
-        let (playlists, songs) = (toggled(&settings_sync::PLAYLISTS), toggled(&settings_sync::SONGS));
+        let (playlists, wishes, songs) = (toggled(&settings_sync::PLAYLISTS), toggled(&settings_sync::WISHLIST), toggled(&settings_sync::SONGS));
         if toggled(&settings_sync::EVERY_SONG).is_some() || toggled(&settings_sync::STARRED_SONGS).is_some() {
             self.songs_dirty = true;
         }
@@ -933,10 +997,12 @@ impl DeviceSync {
         if any_on {
             self.channel(Blob::Settings).wanted = Some(Instant::now());
         }
-        match playlists {
-            Some(true) => self.start_blob(link, here, Blob::Playlists),
-            Some(false) => self.stop_blob(Blob::Playlists),
-            None => {}
+        for (blob, toggled) in [(Blob::Playlists, playlists), (Blob::Wishlist, wishes)] {
+            match toggled {
+                Some(true) => self.start_blob(link, here, blob),
+                Some(false) => self.stop_blob(blob),
+                None => {}
+            }
         }
         for blob in [Blob::Library, Blob::Transfers] {
             match songs {
