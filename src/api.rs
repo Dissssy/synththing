@@ -193,6 +193,34 @@ pub struct WishInfo {
     pub albums: Vec<WishInfo>,
 }
 
+/// A release at MusicBrainz as the API gives it: its tracks, each with
+/// the recording that fills a song wish (and an album wish's `skipped`).
+#[derive(Clone, Debug, Serialize)]
+pub struct ReleaseInfo {
+    pub id: String,
+    pub group: Option<String>,
+    pub title: String,
+    pub artist: String,
+    pub date: Option<String>,
+    pub tracks: Vec<TrackInfo>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TrackInfo {
+    pub disc: u32,
+    pub position: u32,
+    pub title: String,
+    pub length: Option<f64>,
+    pub recording: Option<String>,
+}
+
+impl From<Release> for ReleaseInfo {
+    fn from(release: Release) -> Self {
+        let tracks = release.tracks.into_iter().map(|t| TrackInfo { disc: t.disc, position: t.position, title: t.title, length: t.length, recording: t.recording }).collect();
+        ReleaseInfo { id: release.id, group: release.group, title: release.title, artist: release.artist, date: release.date, tracks }
+    }
+}
+
 /// A change to the play queue a program asks for (`Call::Queue`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum QueueEdit {
@@ -945,6 +973,13 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 Err(e) => error(502, format!("couldn't ask MusicBrainz: {e:#}")),
             })
         })),
+        (Method::Get, ["v1", "musicbrainz", "releases", id]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            // (Kept releases answer at once; others wait their turn to ask.)
+            online(shared).unwrap_or_else(|| match crate::lookup::musicbrainz::kept_release(id).map_or_else(|| MusicBrainz::new().fresh_release(id), Ok) {
+                Ok(release) => json(200, &ReleaseInfo::from(release)),
+                Err(e) => error(502, format!("couldn't ask MusicBrainz: {e:#}")),
+            })
+        })),
         (Method::Get, ["v1", "soundfonts"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| json(200, &library.soundfonts))))
         }
@@ -1537,6 +1572,7 @@ mod tests {
         assert_eq!(answering(&server, empty, fetch_as(&server, "/v1/musicbrainz/search?q=nujabes&kind=label", &read_token)).0, 400);
         assert_eq!(answering(&server, empty, fetch_as(&server, "/v1/musicbrainz/search?q=nujabes", &read_token)).0, 409, "online lookups are off");
         assert_eq!(answering(&server, empty, fetch_as(&server, "/v1/musicbrainz/artists/a1/albums", &read_token)).0, 409);
+        assert_eq!(answering(&server, empty, fetch_as(&server, "/v1/musicbrainz/releases/r1", &read_token)).0, 409);
     }
 
     /// A GET of `path` with `token`, for [`answering`].

@@ -71,6 +71,7 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `POST /v1/wishlist/{id}/note?text=` | edit library | Writes the wish's note (none: no note): 204, or 404 |
 | `GET /v1/musicbrainz/search?q=&kind=` | read | `{"artists", "albums", "songs"}`: what MusicBrainz finds (only `artist`s, `album`s or `song`s with `kind`), each as the wish for it, to send to `POST /v1/wishlist`. 409 if online lookups are off, 502 if MusicBrainz can't be reached |
 | `GET /v1/musicbrainz/artists/{id}/albums` | read | An artist's albums at MusicBrainz (by the artist's MusicBrainz ID, as an artist's wish has it), each as the wish for it: add `"under"` (the artist's wish's ID) to wish for it as one of theirs |
+| `GET /v1/musicbrainz/releases/{id}` | read | `{"id", "group", "title", "artist", "date", "tracks": [{"disc", "position", "title", "length", "recording"}]}`: a release's track list (by its MusicBrainz ID, as an album wish's `release`), so a program can see which songs of a wished album aren't here or `skipped` yet. Kept for months, so mostly instant |
 | `GET /v1/events` | read | Server-Sent Events (below) |
 
 An album's art is its first song's: `GET /v1/songs/{first key}/art`. Covers that synththing hasn't downloaded yet are downloaded only when online lookups are on.
