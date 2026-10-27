@@ -174,6 +174,7 @@ impl App {
             server.set_apps(&self.config.api.apps);
         }
         self.panels_tick(ctx);
+        self.devices_tick(ctx, view);
         let Some(server) = &self.api.server else { return };
         let calls: Vec<Call> = server.calls().collect();
         // (What a call changed lands in the engine's view a little later:

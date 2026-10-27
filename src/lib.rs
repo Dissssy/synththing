@@ -70,6 +70,7 @@ mod bundled_fonts;
 mod pixel_font;
 mod panel;
 mod panel_share;
+mod playback_share;
 mod playlist;
 mod playlist_sync;
 mod preview;

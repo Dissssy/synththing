@@ -58,6 +58,7 @@ mod which_key;
 mod wishlist;
 mod panels;
 mod device_messages;
+mod devices;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
@@ -521,6 +522,7 @@ pub struct App {
     /// The Apps tab's panels (`panels.rs`).
     panels: panels::PanelsState,
     live: device_messages::LiveState,
+    devices: devices::DevicesState,
     /// The Up next tab's rows as last described, and what from (a hash).
     queue_rows: Option<(u64, Vec<(PathBuf, song_list::Described)>)>,
     /// Becomes true once the current playlist track is seen playing (not
@@ -809,6 +811,7 @@ impl App {
             wishlist: Default::default(),
             panels: Default::default(),
             live: Default::default(),
+            devices: Default::default(),
             queue_rows: None,
             advance_armed: false,
             song_loads: 0,
@@ -1652,6 +1655,7 @@ impl App {
                 toast::show(ui.ctx(), shuffle_text(self.shuffle));
             }
             self.queue_button_ui(ui);
+            self.devices_button_ui(ui);
 
             ui.separator();
             ui.weak(playback_state_text(view));
