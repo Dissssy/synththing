@@ -3,8 +3,11 @@
 //! paced to one a second, as MusicBrainz asks. What it answers is kept as
 //! it came (`Cache`, in the config folder's `musicbrainz`) for six months,
 //! so looking an album up again, or its details later, needn't ask again.
+//! The pace is kept across every client (the lookup's and the wishlist's
+//! searches), since MusicBrainz counts what this computer asks.
 
 use std::path::PathBuf;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
@@ -24,6 +27,7 @@ use sha2::Digest;
 use super::Outcome;
 use super::artists::Artist;
 use super::matching::{self, Album, Credit, Hit, HitRelease, Release, Track};
+use crate::wishlist::{Kind, Wish};
 
 /// How many search hits are looked at.
 const HITS: u8 = 10;
@@ -33,6 +37,8 @@ const FETCHED: usize = 4;
 const PACE: Duration = Duration::from_millis(1100);
 /// How long an answer is kept before it's asked for again.
 const KEPT: Duration = Duration::from_secs(182 * 24 * 60 * 60);
+/// When the last request went, from any client.
+static LAST: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// MusicBrainz's answers, each in a file of its own: releases by id,
 /// searches by a hash of the query.
@@ -73,7 +79,6 @@ impl Cache {
 
 pub struct MusicBrainz {
     client: MusicBrainzClient,
-    last: Option<Instant>,
     cache: Cache,
 }
 
@@ -95,14 +100,16 @@ pub fn kept_artist(id: &str) -> Option<Artist> {
 impl MusicBrainz {
     pub fn new() -> Self {
         let agent = format!("synththing/{} ( https://github.com/Dissssy/synththing )", crate::build_info::VERSION);
-        Self { client: MusicBrainzClient::new(&agent), last: None, cache: cache() }
+        Self { client: MusicBrainzClient::new(&agent), cache: cache() }
     }
 
     fn wait_turn(&mut self) {
-        if let Some(last) = self.last {
+        // (Held while waiting: the next client waits its turn after this.)
+        let mut last = LAST.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(last) = *last {
             std::thread::sleep(PACE.saturating_sub(last.elapsed()));
         }
-        self.last = Some(Instant::now());
+        *last = Some(Instant::now());
     }
 
     /// The hits of a search for `query`: kept, unless `fresh`.
@@ -158,6 +165,28 @@ impl MusicBrainz {
             }
             Some(_) => Ok(Outcome::Unsure(picked.iter().take(FETCHED).map(|(_, r)| self.release(&r.id, fresh).map(|e| converted(&e))).collect::<Result<_>>()?)),
         }
+    }
+
+    /// Albums named like `words` or by an artist named like them, for the
+    /// wishlist: one wish for each album (release group), from its first
+    /// official release found (else its first).
+    pub fn find_albums(&mut self, words: &str) -> Result<Vec<Wish>> {
+        let words = lucene_words(words);
+        if words.is_empty() {
+            return Ok(Vec::new());
+        }
+        let hits = self.search(format!("release:({words}) OR artist:({words})"), false)?;
+        Ok(album_wishes(&hits))
+    }
+
+    /// Songs named like `words` or by an artist named like them, for the
+    /// wishlist.
+    pub fn find_songs(&mut self, words: &str) -> Result<Vec<Wish>> {
+        let words = lucene_words(words);
+        if words.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self.search_recordings(format!("recording:({words}) OR artist:({words})"), false)?.iter().map(song_wish).collect())
     }
 
     /// The release `id` as MusicBrainz has it now (and kept).
@@ -231,6 +260,82 @@ impl MusicBrainz {
             }
         }
         Ok(fetched)
+    }
+}
+
+/// `text`'s words, each escaped for Lucene (its operators taken as
+/// words).
+fn lucene_words(text: &str) -> String {
+    let words: Vec<String> = text
+        .split_whitespace()
+        .filter(|w| !matches!(*w, "AND" | "OR" | "NOT"))
+        .map(|w| w.chars().fold(String::new(), |mut out, c| {
+            if "+-&|!(){}[]^\"~*?:\\/".contains(c) {
+                out.push('\\');
+            }
+            out.push(c);
+            out
+        }))
+        .collect();
+    words.join(" ")
+}
+
+/// A date's year ("2005" of "2005-11-11").
+fn year(date: &str) -> Option<String> {
+    let year = date.split('-').next()?;
+    (!year.is_empty()).then(|| year.to_string())
+}
+
+fn primary_type(kind: Option<&ReleaseGroupPrimaryType>) -> Option<String> {
+    Some(match kind? {
+        ReleaseGroupPrimaryType::Album => "Album",
+        ReleaseGroupPrimaryType::Single => "Single",
+        ReleaseGroupPrimaryType::Ep => "EP",
+        ReleaseGroupPrimaryType::Broadcast => "Broadcast",
+        _ => "Other",
+    }
+    .to_string())
+}
+
+/// The albums (release groups) search hits are of, in the order they were
+/// found, each as a wish for it.
+fn album_wishes(hits: &[Entity]) -> Vec<Wish> {
+    let mut wishes: Vec<(bool, Wish)> = Vec::new();
+    for hit in hits {
+        let release = converted(hit);
+        let Some(group) = release.group.clone() else { continue };
+        let wish = Wish {
+            title: release.title.clone(),
+            artist: Some(release.artist.clone()).filter(|a| !a.is_empty()),
+            year: release.first_released.as_deref().or(release.date.as_deref()).and_then(year),
+            musicbrainz: Some(group.clone()),
+            release: Some(release.id.clone()),
+            release_type: primary_type(hit.release_group.as_ref().and_then(|g| g.primary_type.as_ref())),
+            tracks: release.tracks.len() as u32,
+            ..Wish::new(Kind::Album, "")
+        };
+        match wishes.iter_mut().find(|(_, w)| w.musicbrainz.as_deref() == Some(group.as_str())) {
+            // (A later official release over an unofficial one.)
+            Some((official, kept)) if !*official && release.official => *kept = wish,
+            Some(_) => {}
+            None => wishes.push((release.official, wish)),
+        }
+    }
+    wishes.into_iter().map(|(_, w)| w).collect()
+}
+
+/// A recording a search found, as a wish for it: its cover from the first
+/// album it's on.
+fn song_wish(recording: &Recording) -> Wish {
+    let hit = hit(recording);
+    let on = hit.releases.iter().filter(|r| r.official).min_by_key(|r| r.kind).or(hit.releases.first());
+    Wish {
+        title: recording.title.clone(),
+        artist: recording.artist_credit.as_deref().map(credit).filter(|a| !a.is_empty()),
+        year: recording.first_release_date.as_ref().and_then(|d| year(&d.0)),
+        musicbrainz: Some(recording.id.clone()),
+        release: on.map(|r| r.id.clone()),
+        ..Wish::new(Kind::Song, "")
     }
 }
 
@@ -373,6 +478,31 @@ mod tests {
         let hit = hit(&recording);
         assert_eq!((hit.artists.as_slice(), hit.length), (["Nujabes".to_string(), "Cise Starr".to_string()].as_slice(), Some(175.0)));
         assert_eq!(hit.releases.iter().map(|r| (r.id.as_str(), r.kind, r.official)).collect::<Vec<_>>(), [("r1", 0, true), ("r2", 4, true)]);
+    }
+
+    #[test]
+    fn albums_found_are_one_wish_each() {
+        let release = |id: &str, group: &str, status: &str| {
+            format!(
+                r#"{{"id":"{id}","title":"Discovery","status":"{status}","date":"2001-03-12",
+                "artist-credit":[{{"name":"Daft Punk","artist":{{"id":"a1","name":"Daft Punk","sort-name":"Daft Punk"}}}}],
+                "release-group":{{"id":"{group}","title":"Discovery","primary-type":"Album","secondary-types":[]}},
+                "media":[{{"id":"m{id}","position":1,"track-count":14}}]}}"#
+            )
+        };
+        let hits: Vec<Entity> = [release("r1", "g1", "Bootleg"), release("r2", "g1", "Official"), release("r3", "g2", "Official")]
+            .iter()
+            .map(|json| serde_json::from_str(json).expect("a release"))
+            .collect();
+        let wishes = album_wishes(&hits);
+        assert_eq!(wishes.len(), 2, "one for each group");
+        assert_eq!(wishes[0].release.as_deref(), Some("r2"), "its official release over a bootleg");
+        assert_eq!((wishes[0].artist.as_deref(), wishes[0].year.as_deref(), wishes[0].release_type.as_deref(), wishes[0].tracks), (Some("Daft Punk"), Some("2001"), Some("Album"), 14));
+    }
+
+    #[test]
+    fn search_words_are_escaped() {
+        assert_eq!(lucene_words("AC/DC  back: in OR black"), r"AC\/DC back\: in black");
     }
 
     #[test]

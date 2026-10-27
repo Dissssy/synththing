@@ -93,6 +93,7 @@ mod updater;
 mod visualizer;
 mod visualizer_stream;
 mod watch;
+mod wishlist;
 
 #[cfg(target_os = "android")]
 pub mod android;

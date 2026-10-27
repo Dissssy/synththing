@@ -39,6 +39,7 @@ pub(super) enum Page {
     /// menu has one for each.
     Grouping,
     Soundfonts,
+    Wishlist,
     Scripts,
     Library,
     /// From the menu's lower part, not its pages.
@@ -51,10 +52,11 @@ pub(super) enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 5] = [
+    const ALL: [Page; 6] = [
         Self::NowPlaying,
         Self::Songs,
         Self::Soundfonts,
+        Self::Wishlist,
         Self::Scripts,
         Self::Library,
     ];
@@ -65,6 +67,7 @@ impl Page {
             Self::Songs => "Songs",
             Self::Grouping => "Groupings",
             Self::Soundfonts => "Soundfonts",
+            Self::Wishlist => "Wishlist",
             Self::Scripts => "Visualizers",
             Self::Library => "Script library",
             Self::Preferences => "Preferences",
@@ -81,6 +84,7 @@ impl Page {
             Self::Songs => "music-notes",
             Self::Grouping => "squares-four",
             Self::Soundfonts => "piano-keys",
+            Self::Wishlist => "gift",
             Self::Scripts => "waveform",
             Self::Library => "storefront",
             Self::Preferences => "gear",
@@ -144,6 +148,7 @@ impl App {
             Page::Songs => Some(Section::Songs),
             Page::Grouping => Some(Section::Groupings),
             Page::Soundfonts => Some(Section::Soundfonts),
+            Page::Wishlist => Some(Section::Wishlist),
             _ => None,
         }
     }
@@ -217,6 +222,7 @@ impl App {
                 Page::Songs => self.songs_ui(ui),
                 Page::Grouping => self.grouping_ui(ui),
                 Page::Soundfonts => self.soundfont_ui(ui),
+                Page::Wishlist => self.wishlist_ui(ui),
                 Page::Scripts => self.mobile_scripts_ui(ui),
                 Page::Library => self.library_ui(ui),
                 Page::Preferences => self.mobile_preferences_ui(ui),

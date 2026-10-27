@@ -55,6 +55,7 @@ mod tray_panel;
 mod tour;
 mod welcome;
 mod which_key;
+mod wishlist;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
@@ -507,6 +508,7 @@ pub struct App {
     playing_queued: bool,
     /// The Up next tab's selected rows.
     queue_selection: select_list::Selection,
+    wishlist: wishlist::WishlistState,
     /// The Up next tab's rows as last described, and what from (a hash).
     queue_rows: Option<(u64, Vec<(PathBuf, song_list::Described)>)>,
     /// Becomes true once the current playlist track is seen playing (not
@@ -792,6 +794,7 @@ impl App {
             queue: Vec::new(),
             playing_queued: false,
             queue_selection: Default::default(),
+            wishlist: Default::default(),
             queue_rows: None,
             advance_armed: false,
             song_loads: 0,
@@ -1783,6 +1786,7 @@ impl App {
                 section_checkbox(ui, Section::Groupings);
                 section_checkbox(ui, Section::Soundfonts);
                 section_checkbox(ui, Section::Queue);
+                section_checkbox(ui, Section::Wishlist);
                 ui.separator();
                 section_checkbox(ui, Section::Visualizer);
                 section_checkbox(ui, Section::Editor);
@@ -3566,6 +3570,7 @@ impl App {
             Section::Groupings => Some("playlist_rows"),
             Section::Soundfonts => Some("soundfonts"),
             Section::Queue => Some("queue"),
+            Section::Wishlist => Some("wishlist"),
             _ => None,
         }
     }
@@ -4090,6 +4095,7 @@ impl App {
         }
         frame_timing::time("note_song_meta", || self.note_song_meta());
         frame_timing::time("refresh_smart", || self.refresh_smart(false));
+        frame_timing::time("wishlist_tick", || self.wishlist_tick(ctx));
         frame_timing::time("repair", || {
             self.poll_repair();
             self.suggest_repair();
@@ -4370,6 +4376,7 @@ impl TabViewer for SectionTabs<'_> {
             Section::Groupings => app.groupings_ui(ui),
             Section::Soundfonts => app.soundfont_ui(ui),
             Section::Queue => app.queue_ui(ui),
+            Section::Wishlist => app.wishlist_ui(ui),
             Section::Visualizer => {
                 app.visualizer_preview_ui(ui, self.shared.notes.clone(), self.shared.view.clone());
             }

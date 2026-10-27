@@ -21,6 +21,8 @@ pub enum Section {
     Soundfonts,
     /// The play queue (Up next).
     Queue,
+    /// Music wished for (`wishlist.rs`).
+    Wishlist,
     Visualizer,
     Editor,
     Reference,
@@ -36,11 +38,12 @@ pub enum Section {
 
 impl Section {
     /// Every section there is.
-    pub const ALL: [Section; 9] = [
+    pub const ALL: [Section; 10] = [
         Self::Songs,
         Self::Groupings,
         Self::Soundfonts,
         Self::Queue,
+        Self::Wishlist,
         Self::Visualizer,
         Self::Editor,
         Self::Reference,
@@ -54,6 +57,7 @@ impl Section {
             Self::Groupings => "Groupings",
             Self::Soundfonts => "Soundfonts",
             Self::Queue => "Up next",
+            Self::Wishlist => "Wishlist",
             Self::Visualizer => "Visualizer",
             Self::Editor => "Script Editor",
             Self::Removed => "Removed",
@@ -67,7 +71,7 @@ impl Section {
         match self {
             Self::Songs | Self::Soundfonts => Column::Left,
             Self::Queue => Column::Right,
-            Self::Groupings | Self::Visualizer | Self::Editor | Self::Removed | Self::Reference | Self::Sprites | Self::Library => {
+            Self::Groupings | Self::Wishlist | Self::Visualizer | Self::Editor | Self::Removed | Self::Reference | Self::Sprites | Self::Library => {
                 Column::Center
             }
         }
@@ -80,7 +84,7 @@ impl Section {
             Self::Soundfonts => Some(Self::Songs),
             Self::Visualizer => Some(Self::Editor),
             Self::Editor => Some(Self::Visualizer),
-            Self::Groupings | Self::Queue | Self::Removed | Self::Reference | Self::Sprites | Self::Library => None,
+            Self::Groupings | Self::Queue | Self::Wishlist | Self::Removed | Self::Reference | Self::Sprites | Self::Library => None,
         }
     }
 }
