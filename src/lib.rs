@@ -78,6 +78,7 @@ mod snippets;
 mod song_info;
 mod song_list;
 mod song_repair;
+mod staged;
 mod song_sync;
 mod song_store;
 mod song_title;

@@ -35,6 +35,7 @@ use crate::song_store::{self, Song, SongStore, Stored};
 use crate::visualizer_stream::Format;
 use crate::lookup::matching::Release;
 use crate::lookup::musicbrainz::MusicBrainz;
+use crate::staged::Staged;
 use crate::wishlist::{Kind, Wish};
 
 /// The port it listens on unless it's given another.
@@ -156,10 +157,13 @@ pub enum Call {
     UseScript(String, Sender<Result<(), (u16, String)>>),
     /// A song a program sent (`program`, by its name), already in the
     /// store's folder, to add to the library: the song, and whether it's
-    /// new to the library (only then is it marked as the program's).
+    /// new to the library (only then is it marked as the program's), with
+    /// its match at MusicBrainz if it was matched while staged (kept unless
+    /// the library's song is matched already).
     Add {
         stored: Stored,
         program: String,
+        online: Option<song_store::Online>,
         reply: Sender<Result<(SongInfo, bool), String>>,
     },
     /// The wishlist, those `query` keeps (`wishlist_search`): its wishes
@@ -496,6 +500,8 @@ struct Shared {
     frames: Arc<crate::visualizer_stream::Frames>,
     /// What changed in the library when, for `/v1/songs?since=`.
     changes: Mutex<Changes>,
+    /// Songs programs sent to be checked before they're imported.
+    staged: Mutex<Staged>,
 }
 
 /// The library's revisions while synththing runs: each song as it was
@@ -563,13 +569,14 @@ impl Changes {
 }
 
 impl Server {
-    /// Listen on `port`, on this computer only unless `lan`.
-    pub fn start(port: u16, lan: bool, apps: Vec<Access>, waker: egui::Context) -> Result<Server, String> {
+    /// Listen on `port`, on this computer only unless `lan`, staging songs
+    /// in `staging` (emptied first).
+    pub fn start(port: u16, lan: bool, apps: Vec<Access>, waker: egui::Context, staging: std::path::PathBuf) -> Result<Server, String> {
         let http = tiny_http::Server::http((if lan { "0.0.0.0" } else { "127.0.0.1" }, port)).map_err(|e| format!("couldn't listen on port {port}: {e}"))?;
         let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
         let http = Arc::new(http);
         let (tx, calls) = mpsc::channel();
-        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default(), frames: crate::visualizer_stream::Frames::new(), changes: Mutex::new(Changes::new()) });
+        let shared = Arc::new(Shared { lan, apps: RwLock::new(apps), calls: Mutex::new(tx), waker, streams: Mutex::default(), frames: crate::visualizer_stream::Frames::new(), changes: Mutex::new(Changes::new()), staged: Mutex::new(Staged::new(staging)) });
         let threads = (0..WORKERS)
             .map(|_| {
                 let (http, shared) = (Arc::clone(&http), Arc::clone(&shared));
@@ -884,6 +891,16 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             Some(reply) => reply,
             None => add_song(shared, &mut request, &access, &query),
         }),
+        (Method::Get, ["v1", "staged"]) => Some(needs(access.add_songs, "add songs").unwrap_or_else(|| match ask(shared, Call::Library) {
+            Ok(library) => json(200, &staged(shared).songs().map(|(key, song)| StagedInfo::of(key, song, &library)).collect::<Vec<_>>()),
+            Err(reply) => reply,
+        })),
+        (Method::Post, ["v1", "staged"]) => Some(needs(access.add_songs, "add songs").unwrap_or_else(|| stage_song(shared, &mut request, &query))),
+        (Method::Post, ["v1", "staged", "check"]) => Some(needs(access.add_songs, "add songs").unwrap_or_else(|| check_staged(shared, &query))),
+        (Method::Post, ["v1", "staged", key, "import"]) => Some(needs(access.add_songs, "add songs").unwrap_or_else(|| import_staged(shared, &access, key))),
+        (Method::Delete, ["v1", "staged", key]) => Some(needs(access.add_songs, "add songs").unwrap_or_else(|| {
+            answered(Ok(if staged(shared).remove(key) { Ok(()) } else { Err((404, "there's no staged song with that key".to_string())) }))
+        })),
         (Method::Get, ["v1", "songs", key]) => Some(needs(access.read, "read").unwrap_or_else(|| {
             ask(shared, Call::Library).map_or_else(
                 |reply| reply,
@@ -1072,27 +1089,169 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
 /// store, then the library (`Call::Add`). 201 with the song if it's new to
 /// the library, 200 if it was there already.
 fn add_song(shared: &Shared, request: &mut Request, access: &Access, query: &HashMap<String, String>) -> Reply {
-    let Some(name) = query.get("name").map(|n| n.trim()).filter(|n| !n.is_empty() && !n.contains(['/', '\\'])) else {
-        return error(400, "say the song's file name: ?name=Song.mp3");
+    let (name, bytes) = match song_sent(request, query) {
+        Ok(sent) => sent,
+        Err(reply) => return reply,
     };
-    if !song_store::takes(std::path::Path::new(name), crate::app::SONG_EXTENSIONS) {
-        return error(415, format!("{name} isn't a file synththing can play"));
-    }
-    if request.body_length().is_some_and(|n| n > LARGEST_SONG) {
-        return error(413, "that song is too big (250 MB at most)");
-    }
-    let mut bytes = Vec::new();
-    match request.as_reader().take(LARGEST_SONG as u64 + 1).read_to_end(&mut bytes) {
-        Ok(_) if bytes.len() > LARGEST_SONG => return error(413, "that song is too big (250 MB at most)"),
-        Ok(_) if bytes.is_empty() => return error(400, "send the song's file as the body"),
-        Ok(_) => {}
-        Err(e) => return error(400, format!("couldn't read the song: {e}")),
-    }
-    let stored = match crate::config::music_dir().and_then(|dir| song_store::write_in(&bytes, name, &dir)) {
+    let stored = match crate::config::music_dir().and_then(|dir| song_store::write_in(&bytes, &name, &dir)) {
         Ok(stored) => stored,
         Err(e) => return error(500, format!("couldn't store the song: {e:#}")),
     };
-    match ask(shared, |reply| Call::Add { stored, program: access.name.clone(), reply }) {
+    match ask(shared, |reply| Call::Add { stored, program: access.name.clone(), online: None, reply }) {
+        Ok(Ok((song, new))) => json(if new { 201 } else { 200 }, &song),
+        Ok(Err(why)) => error(503, why),
+        Err(reply) => reply,
+    }
+}
+
+/// The song file sent as the body, named `?name=`: its name and bytes, if
+/// it's a file synththing plays and not too big.
+fn song_sent(request: &mut Request, query: &HashMap<String, String>) -> Result<(String, Vec<u8>), Reply> {
+    let Some(name) = query.get("name").map(|n| n.trim()).filter(|n| !n.is_empty() && !n.contains(['/', '\\'])) else {
+        return Err(error(400, "say the song's file name: ?name=Song.mp3"));
+    };
+    if !song_store::takes(std::path::Path::new(name), crate::app::SONG_EXTENSIONS) {
+        return Err(error(415, format!("{name} isn't a file synththing can play")));
+    }
+    if request.body_length().is_some_and(|n| n > LARGEST_SONG) {
+        return Err(error(413, "that song is too big (250 MB at most)"));
+    }
+    let mut bytes = Vec::new();
+    match request.as_reader().take(LARGEST_SONG as u64 + 1).read_to_end(&mut bytes) {
+        Ok(_) if bytes.len() > LARGEST_SONG => Err(error(413, "that song is too big (250 MB at most)")),
+        Ok(_) if bytes.is_empty() => Err(error(400, "send the song's file as the body")),
+        Ok(_) => Ok((name.to_string(), bytes)),
+        Err(e) => Err(error(400, format!("couldn't read the song: {e}"))),
+    }
+}
+
+/// A staged song as the API gives it: as a song of the library would be
+/// (its match at MusicBrainz too, once it's checked), whether the library
+/// has it already, and the wishes it would fill (by ID).
+#[derive(Serialize)]
+struct StagedInfo {
+    #[serde(flatten)]
+    song: SongInfo,
+    here: bool,
+    fills: Vec<String>,
+}
+
+impl StagedInfo {
+    fn of(key: &str, song: &Song, library: &Library) -> Self {
+        let fills = crate::wishlist::Index::new(&library.wishes).fills(song).into_iter().map(str::to_string).collect();
+        StagedInfo { song: SongInfo::of(key, song, &library.store), here: library.store.has(key), fills }
+    }
+}
+
+/// What checking an album of staged songs at MusicBrainz made of it:
+/// `matched` (to `release`), `unsure` (one of `candidates`, maybe),
+/// `not_found` or `failed` (`error`), and its songs as they are now.
+#[derive(Serialize)]
+struct Checked {
+    album: String,
+    artist: Option<String>,
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    release: Option<ReleaseInfo>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    candidates: Vec<ReleaseInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    songs: Vec<StagedInfo>,
+}
+
+fn staged(shared: &Shared) -> std::sync::MutexGuard<'_, Staged> {
+    shared.staged.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// `POST /v1/staged?name=`, the file as the body: staged and read, not in
+/// the library yet. 201 with it if it's new, 200 if it was staged already.
+fn stage_song(shared: &Shared, request: &mut Request, query: &HashMap<String, String>) -> Reply {
+    let (name, bytes) = match song_sent(request, query) {
+        Ok(sent) => sent,
+        Err(reply) => return reply,
+    };
+    let library = match ask(shared, Call::Library) {
+        Ok(library) => library,
+        Err(reply) => return reply,
+    };
+    let mut staged = staged(shared);
+    match staged.add(&bytes, &name) {
+        Ok((key, new)) => {
+            let song = staged.get(&key).expect("just staged");
+            json(if new { 201 } else { 200 }, &StagedInfo::of(&key, song, &library))
+        }
+        Err(e) => error(422, format!("{e:#}")),
+    }
+}
+
+/// `POST /v1/staged/check?keys=`: the staged songs `keys` (comma
+/// separated; else all of them) matched at MusicBrainz, album by album, as
+/// the library's songs are; each song keeps its match for when it's
+/// imported. Waits for MusicBrainz (what it's answered before is kept).
+fn check_staged(shared: &Shared, query: &HashMap<String, String>) -> Reply {
+    let library = match ask(shared, Call::Library) {
+        Ok(library) if !library.online => return error(409, "asking MusicBrainz needs Online album art and details on (Preferences > Songs)"),
+        Ok(library) => library,
+        Err(reply) => return reply,
+    };
+    let wanted: Option<Vec<&str>> = query.get("keys").map(|keys| keys.split(',').map(str::trim).filter(|k| !k.is_empty()).collect());
+    let songs: Vec<(String, Song)> = {
+        let mut staged = staged(shared);
+        let songs: Vec<(String, Song)> =
+            staged.songs().filter(|(key, _)| wanted.as_ref().is_none_or(|w| w.contains(key))).map(|(key, song)| (key.to_string(), song.clone())).collect();
+        if let Some(missing) = wanted.iter().flatten().find(|key| !songs.iter().any(|(k, _)| k == *key)) {
+            return error(404, format!("{missing} isn't staged"));
+        }
+        songs
+    };
+    // (Asked without holding the staged songs: other requests go on.)
+    let albums = crate::lookup::albums_of(songs.iter().map(|(key, song)| (key.as_str(), song)), &library.group_ignore);
+    let mut musicbrainz = MusicBrainz::new();
+    let answers: Vec<_> = albums.into_iter().map(|album| (crate::lookup::look_up(&mut musicbrainz, &album, false), album)).collect();
+    let mut staged = staged(shared);
+    let checked: Vec<Checked> = answers
+        .into_iter()
+        .map(|(outcome, album)| {
+            let (mut release, mut candidates, mut error) = (None, Vec::new(), None);
+            let outcome = match outcome {
+                crate::lookup::Outcome::Matched(found, tracks) => {
+                    for (key, online) in crate::lookup::matches(&album, &found, &tracks, false, &library.store) {
+                        staged.matched(&key, online);
+                    }
+                    release = Some(ReleaseInfo::from(*found));
+                    "matched"
+                }
+                crate::lookup::Outcome::Unsure(found) => {
+                    candidates = found.into_iter().map(ReleaseInfo::from).collect();
+                    "unsure"
+                }
+                crate::lookup::Outcome::NotFound => "not_found",
+                crate::lookup::Outcome::Failed(why) => {
+                    error = Some(why);
+                    "failed"
+                }
+            };
+            let songs = album.songs.iter().filter_map(|s| Some(StagedInfo::of(&s.key, staged.get(&s.key)?, &library))).collect();
+            Checked { album: album.name, artist: album.artist, outcome, release, candidates, error, songs }
+        })
+        .collect();
+    json(200, &checked)
+}
+
+/// `POST /v1/staged/{key}/import`: the staged song into the library, with
+/// its match if it was checked, without being sent again.
+fn import_staged(shared: &Shared, access: &Access, key: &str) -> Reply {
+    let dir = match crate::config::music_dir() {
+        Ok(dir) => dir,
+        Err(e) => return error(500, format!("couldn't find the library: {e:#}")),
+    };
+    let (stored, online) = match staged(shared).import(key, &dir) {
+        Ok(Some(imported)) => imported,
+        Ok(None) => return error(404, "there's no staged song with that key"),
+        Err(e) => return error(500, format!("couldn't import it: {e:#}")),
+    };
+    match ask(shared, |reply| Call::Add { stored, program: access.name.clone(), online, reply }) {
         Ok(Ok((song, new))) => json(if new { 201 } else { 200 }, &song),
         Ok(Err(why)) => error(503, why),
         Err(reply) => reply,
@@ -1474,12 +1633,19 @@ mod tests {
     }
 
     /// A server on a free port with a reader's and a controller's tokens.
+    /// A staging folder of a test's own.
+    fn staging() -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("synththing-api-staged-{}-{n}", std::process::id()))
+    }
+
     fn server() -> (Server, String, String) {
         let (mut reader, read_token) = Access::new("reader");
         reader.read = true;
         let (mut controller, control_token) = Access::new("controller");
         (controller.read, controller.control) = (false, true);
-        let server = Server::start(0, false, vec![reader, controller], egui::Context::default()).unwrap();
+        let server = Server::start(0, false, vec![reader, controller], egui::Context::default(), staging()).unwrap();
         (server, read_token, control_token)
     }
 
@@ -1802,7 +1968,7 @@ mod tests {
         let (reader, read_token) = Access::new("reader");
         let (mut fetcher, fetch_token) = Access::new("fetcher");
         fetcher.download_songs = true;
-        let server = Server::start(0, false, vec![reader, fetcher], egui::Context::default()).unwrap();
+        let server = Server::start(0, false, vec![reader, fetcher], egui::Context::default(), staging()).unwrap();
         let library = move || Library { store: store.clone(), ..no_library() };
         let addr = server.addr();
         let fetch = move |key: &str, token: &str| {
@@ -1827,7 +1993,7 @@ mod tests {
         reader.control = true;
         let (mut adder, add_token) = Access::new("adder");
         adder.add_songs = true;
-        let server = Server::start(0, false, vec![reader, adder], egui::Context::default()).unwrap();
+        let server = Server::start(0, false, vec![reader, adder], egui::Context::default(), staging()).unwrap();
         let post = |query: &str, token: &str| {
             agent()
                 .post(format!("http://{}/v1/songs{query}", server.addr()))
@@ -1841,6 +2007,42 @@ mod tests {
         assert_eq!(post("", &add_token), 400);
         assert_eq!(post("?name=notes.txt", &add_token), 415);
         assert_eq!(post("?name=..%2Fescape.mid", &add_token), 400);
+    }
+
+    #[test]
+    fn songs_are_staged_and_dropped() {
+        let (mut adder, add_token) = Access::new("adder");
+        adder.add_songs = true;
+        let (reader, read_token) = Access::new("reader");
+        let server = Server::start(0, false, vec![reader, adder], egui::Context::default(), staging()).unwrap();
+        let addr = server.addr();
+        let send = move |method: &'static str, path: &str, token: &str| {
+            let (url, token) = (format!("http://{addr}{path}"), format!("Bearer {token}"));
+            move || {
+                let midi = b"MThd\0\0\0\x06\0\0\0\x01\0\x60MTrk\0\0\0\x04\0\xff\x2f\0".to_vec();
+                let mut response = match method {
+                    "POST" => agent().post(url).header("Authorization", token).send(&midi[..]).unwrap(),
+                    "DELETE" => agent().delete(url).header("Authorization", token).call().unwrap(),
+                    _ => agent().get(url).header("Authorization", token).call().unwrap(),
+                };
+                (response.status().as_u16(), response.body_mut().read_to_string().unwrap())
+            }
+        };
+        assert_eq!(answering(&server, no_library, send("POST", "/v1/staged?name=Theme.mid", &read_token)).0, 403);
+        let (status, body) = answering(&server, no_library, send("POST", "/v1/staged?name=Theme.mid", &add_token));
+        assert_eq!(status, 201, "{body}");
+        let staged: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!((staged["file_name"].clone(), staged["here"].clone()), ("Theme.mid".into(), false.into()));
+        let key = staged["key"].as_str().unwrap().to_string();
+        assert_eq!(answering(&server, no_library, send("POST", "/v1/staged?name=Theme.mid", &add_token)).0, 200, "staged already");
+        let (status, body) = answering(&server, no_library, send("GET", "/v1/staged", &add_token));
+        assert_eq!(status, 200);
+        assert!(body.contains(&key), "{body}");
+        assert_eq!(answering(&server, no_library, send("POST", "/v1/staged/check", &add_token)).0, 409, "online lookups are off");
+        assert_eq!(answering(&server, no_library, send("POST", "/v1/staged/nope/import", &add_token)).0, 404);
+        assert_eq!(answering(&server, no_library, send("DELETE", &format!("/v1/staged/{key}"), &add_token)).0, 204);
+        assert_eq!(answering(&server, no_library, send("DELETE", &format!("/v1/staged/{key}"), &add_token)).0, 404);
+        assert_eq!(answering(&server, no_library, send("GET", "/v1/staged", &add_token)), (200, "[]".to_string()));
     }
 
     #[test]
