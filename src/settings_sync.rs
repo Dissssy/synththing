@@ -123,6 +123,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("cleanup_dismissed", "Dismissed clean-up suggestions", &["cleanup_dismissed"]),
             setting("online_lookup", "Online album art and details", &["online_lookup", "lookup_device"]),
             PLAYLISTS,
+            WISHLIST,
             SONGS,
             STARRED_SONGS,
             EVERY_SONG,
@@ -176,6 +177,10 @@ const OTHER: Setting = setting("other", "Anything else", &[]);
 /// The playlists (`playlist_sync.rs`): no settings of their own, but
 /// chosen with them.
 pub const PLAYLISTS: Setting = setting("playlists", "Playlists", &[]);
+
+/// The wishlist (`wishlist.rs`): chosen with the settings, like the
+/// playlists.
+pub const WISHLIST: Setting = setting("wishlist", "Wishlist", &[]);
 
 /// Fetching songs from the other devices (`song_sync.rs`): those in
 /// playlists, with `STARRED_SONGS` the starred ones too, or with

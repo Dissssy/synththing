@@ -204,7 +204,7 @@ pub fn is_id(id: &str) -> bool {
     id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
-fn new_id() -> String {
+pub fn new_id() -> String {
     let mut bytes = [0u8; 8];
     if getrandom::fill(&mut bytes).is_err() {
         // (No randomness: the time will do, for one device's playlists.)

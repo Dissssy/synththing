@@ -14,7 +14,7 @@ pub mod art;
 pub mod artists;
 pub mod details;
 pub mod matching;
-mod musicbrainz;
+pub mod musicbrainz;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};

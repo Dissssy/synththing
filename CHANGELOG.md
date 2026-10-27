@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- A wishlist (View > Wishlist, or Wishlist in the phone menu): search MusicBrainz for albums and songs you want and add them, or wish for something by name. Each wish shows as Wanted, Partly got ("7 of 12") or Got it as matching songs reach your library, with a note when one comes true; click one to play what's here. It syncs between your devices with the rest (Preferences > Online Library > Wishlist).
 - Write scripts in your favorite editor: the scripts folder now has the script API's definitions for the Lua language server, so VS Code's Lua extension (or Neovim, Zed, JetBrains) gives completion, hover help and type checks for every synththing function. Open the folder and go.
 - The Scripting Reference lists every function with the version it came in, and has a new Tables section with every table scripts get and give, field by field.
 - Visualizer pixel scale (Preferences > Visualizers): visualizers now draw at your screen's full resolution (4x by default on phones), or at 2x, 4x and up for chunkier pixels and faster drawing. It replaces the old cap of about 1280x720 pixels and stays on each device.
