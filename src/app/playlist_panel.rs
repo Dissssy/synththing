@@ -687,7 +687,7 @@ impl App {
 
     /// +: a new playlist, blank or imported from an .m3u.
     pub(super) fn new_playlist_menu_ui(&mut self, ui: &mut egui::Ui) {
-        egui::containers::menu::MenuButton::from_button(super::icon_button("plus")).ui(ui, |ui| {
+        egui::containers::menu::MenuButton::from_button(super::icon_button("plus")).config(crate::menu::config(ui.ctx())).ui(ui, |ui| {
             if ui.button("Blank").clicked() {
                 let name = self.unique_playlist_name("New playlist");
                 self.create_playlist(&name, Vec::new());
@@ -748,7 +748,7 @@ impl App {
                 let label = super::title_of(cache, &naming, &entry.path);
                 row.response.dnd_set_drag_payload(DraggedEntry { list, indices: row.rows(), label });
             }
-            row.response.context_menu(|ui| {
+            crate::menu::context(&row.response, |ui| {
                 let rows = row.rows();
                 let count = if rows.len() > 1 { format!(" ({})", rows.len()) } else { String::new() };
                 let paths: Vec<PathBuf> = rows.iter().filter_map(|&i| entries.get(i)).filter(|e| !e.missing).map(|e| e.path.clone()).collect();
