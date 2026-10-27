@@ -7,7 +7,9 @@
 //! A device sends its state whenever it changes (a song, pause, speed or a
 //! seek; at most every `GAP`), and every `HEARTBEAT` besides, which keeps
 //! the position honest; the others forget one not heard from in `SILENCE`
-//! and run the position on from when they heard it. No egui here.
+//! and run the position on from when they heard it. A device can also be
+//! told to play, pause, skip or seek (`Control`), as its own transport
+//! would; what it does then reaches the others as its state. No egui here.
 
 use std::time::{Duration, Instant};
 
@@ -31,6 +33,21 @@ pub enum Message {
     Hello,
     /// What the sender plays now.
     State(State),
+    /// To one device: do this.
+    Control(Control),
+}
+
+/// What another device can have this one do. Play and pause rather than a
+/// toggle, so one sent on a state already out of date still lands right.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "do", rename_all = "snake_case")]
+pub enum Control {
+    Play,
+    Pause,
+    Previous,
+    Next,
+    /// To this many seconds in.
+    Seek { position: f64 },
 }
 
 /// What a device plays.
@@ -208,5 +225,15 @@ mod tests {
         assert_eq!(players.all().len(), 1);
         players.expire(later + SILENCE);
         assert!(players.all().is_empty());
+    }
+
+    #[test]
+    fn controls_read_back_as_sent() {
+        for control in [Control::Play, Control::Pause, Control::Previous, Control::Next, Control::Seek { position: 12.5 }] {
+            let body = serde_json::to_value(Message::Control(control)).unwrap();
+            assert_eq!(serde_json::from_value::<Message>(body).unwrap(), Message::Control(control));
+        }
+        let seek = serde_json::to_value(Message::Control(Control::Seek { position: 3.0 })).unwrap();
+        assert_eq!(seek, serde_json::json!({ "kind": "control", "do": "seek", "position": 3.0 }));
     }
 }
