@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.7.6 (2026-10-27)
+
 ### Fixed
 - A hub works out what of a wished album is here as the app does: it asks MusicBrainz for the album's tracks, so programs reading its wishlist (`got`, `missing`) no longer see an album you have as still wanted.
 
