@@ -649,7 +649,7 @@ impl VisualizerPanel {
             painter.text(panel_rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(16.0), egui::Color32::GRAY);
         } else if let Some(texture) = &self.texture {
             // Stretched to the whole allocated rect: the texture can be
-            // smaller than the panel by design (see the configured pixel scale).
+            // smaller than the panel by design (the pixel scale preference).
             if !self.see_through {
                 ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
             }
@@ -831,10 +831,13 @@ fn letterbox(outer: egui::Rect, aspect: f32) -> egui::Rect {
     egui::Rect::from_center_size(outer.center(), size)
 }
 
+/// The buffer for a panel of `available` points: its size in screen pixels,
+/// divided by `pixel_scale` (each buffer pixel is `pixel_scale` screen
+/// pixels a side).
 fn logical_buffer_size(available: egui::Vec2, pixels_per_point: f32, pixel_scale: u32) -> (usize, usize) {
-    let scale = crate::config::visualizer_scale_down(pixel_scale) as f32;
-    let w = (available.x.max(1.0) * pixels_per_point / scale) as usize;
-    let h = (available.y.max(1.0) * pixels_per_point / scale) as usize;
+    let scale = pixels_per_point / pixel_scale as f32;
+    let w = (available.x.max(1.0) * scale) as usize;
+    let h = (available.y.max(1.0) * scale) as usize;
     (w.max(1), h.max(1))
 }
 

@@ -34,7 +34,8 @@ pub const NAME: &str = "settings";
 
 /// The config's leaves that are this device's own, and every leaf under
 /// them: its folders, layouts and window, audio buffer, what it last
-/// played, its updates and how it looks on its screen.
+/// played, its updates and how it looks on its screen (UI and visualizer
+/// pixel scale).
 const LOCAL: &[&str] = &[
     "soundfonts",
     "record_dir",
@@ -58,6 +59,7 @@ const LOCAL: &[&str] = &[
     "mobile_layout",
     "fullscreen_over_cutout",
     "ui_scale",
+    "visualizer_scale",
     "sync_debug",
     "local_keymap",
     "api",

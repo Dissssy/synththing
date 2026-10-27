@@ -419,17 +419,25 @@ impl App {
                     });
             }
             PrefTab::Visualizers => {
-                ui.horizontal(|ui| {
-                    ui.label("Pixel scale");
-                    egui::ComboBox::from_id_salt("visualizer_pixel_scale")
-                        .selected_text(format!("{}x", visualizer_scale))
-                        .show_ui(ui, |ui| {
-                            for scale in config::VISUALIZER_SCALES {
-                                ui.selectable_value(&mut visualizer_scale, scale, format!("{scale}x"));
-                            }
-                        });
-                });
-                ui.weak("Each buffer pixel covers this many output pixels in both directions. Larger values render faster with a chunkier image.");
+                with_info(
+                    ui,
+                    "How many screen pixels each visualizer pixel covers, across and down. 1x draws at \
+                     your screen's full resolution; higher draws fewer, chunkier pixels, so scripts run \
+                     faster (useful fullscreen on a large or high-DPI screen). Kept on this device only.",
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Pixel scale");
+                            egui::ComboBox::from_id_salt("visualizer_pixel_scale")
+                                .selected_text(format!("{visualizer_scale}x"))
+                                .show_ui(ui, |ui| {
+                                    for scale in config::VISUALIZER_SCALES {
+                                        ui.selectable_value(&mut visualizer_scale, scale, format!("{scale}x"));
+                                    }
+                                });
+                        })
+                        .response
+                    },
+                );
                 with_info(
                     ui,
                     "What visualizer scripts log() shows in their Debug window; with this \

@@ -17,8 +17,11 @@ use crate::playlist::LoopMode;
 /// `beat_pulse_length`) unless they're changed.
 pub const DEFAULT_BEAT_PULSE: f32 = 0.3;
 pub const DEFAULT_BEAT_PULSE_LENGTH: f32 = 0.35;
+/// The visualizer pixel scales offered (`visualizer_scale`).
 pub const VISUALIZER_SCALES: [u32; 11] = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
 
+/// `scale` rounded down to one of [`VISUALIZER_SCALES`] (1 below them all),
+/// for a hand-edited config.
 pub fn visualizer_scale_down(scale: u32) -> u32 {
     VISUALIZER_SCALES.into_iter().take_while(|&choice| choice <= scale).last().unwrap_or(1)
 }
