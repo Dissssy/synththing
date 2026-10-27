@@ -29,8 +29,6 @@ use crate::together::{self, Member};
 
 /// How many ranked matches are shown for a query.
 const MAX_SEARCH_RESULTS: usize = 200;
-/// Room at the end of each row for its own widgets (`trailing`).
-const TRAILING_WIDTH: f32 = 36.0;
 /// The least room the search box has beside the toolbar's buttons (else
 /// it goes under them).
 const MIN_SEARCH_WIDTH: f32 = 180.0;
@@ -407,9 +405,10 @@ fn view_menu(ui: &mut egui::Ui, view: &mut View, touch: bool) -> bool {
 }
 
 /// A song's row, after its drag and menu: its star, its name (with its
-/// tags, and whether it plays together with others), the `shown` columns'
-/// values (`song.values`, in their order, at their widths), and `trailing`'s widgets at the
-/// end; on a touch screen, the name over the first column's value.
+/// tags, `marks`' widgets, and whether it plays together with others),
+/// and the `shown` columns' values (`song.values`, in their order, at
+/// their widths) to the row's end; on a touch screen, the name over the
+/// first column's value.
 /// Whether its star was clicked.
 #[allow(clippy::too_many_arguments)]
 fn song_row(
@@ -420,26 +419,22 @@ fn song_row(
     shown: &[(&Def, f32)],
     scroll: bool,
     touch: bool,
-    trailing: &mut dyn FnMut(&mut egui::Ui, &Path),
+    marks: &mut dyn FnMut(&mut egui::Ui, &Path),
 ) -> bool {
     let star = select_list::star(ui, song.plays.starred);
     let tags = || song.tags.iter().map(|(name, color)| (name.as_str(), *color));
     let text = highlighted(ui, &song.name, &hits.name, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let size = egui::vec2(TRAILING_WIDTH, ui.available_height());
-        ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.set_width(TRAILING_WIDTH);
-            trailing(ui, path);
-        });
-        // (Linked, if it plays together with others.)
-        let linked = |ui: &mut egui::Ui| {
+        // (The marks, and linked if it plays together with others.)
+        let mut marked = |ui: &mut egui::Ui| {
+            marks(ui, path);
             if let Some(set) = &song.plays.together {
                 ui.label(egui::RichText::new(crate::app::icon("link")).weak())
                     .on_hover_text(format!("Plays together with others: {} of {} (Song info > Options lists them)", set.at + 1, set.of));
             }
         };
         if touch {
-            linked(ui);
+            marked(ui);
             // The name and the tags, and under them the first column's
             // value (the one sorted by, in the list).
             let second = shown.first().and(song.values.first()).cloned().flatten();
@@ -451,7 +446,7 @@ fn song_row(
             select_list::cell(ui, *width, highlighted(ui, value.as_ref().map_or("", |v| v.text.as_str()), hits(i), true), scroll);
         }
         select_list::chips(ui, tags());
-        linked(ui);
+        marked(ui);
         select_list::label(ui, text, None, scroll);
     });
     star
@@ -464,7 +459,7 @@ fn header(ui: &mut egui::Ui, id: egui::Id, rect: egui::Rect, shown: &[(&Def, f32
     let columns: Vec<_> = shown.iter().map(|(c, width)| select_list::Column { key: c.key, title: title(c.key, c.label), width: *width }).collect();
     // (Over the rows' notes.)
     let lead = select_list::STAR_WIDTH + ui.spacing().item_spacing.x;
-    let header = select_list::Header { title: title("name", "Name"), columns: &columns, lead, trail: TRAILING_WIDTH, min_main: MIN_NAME_WIDTH };
+    let header = select_list::Header { title: title("name", "Name"), columns: &columns, lead, trail: 0.0, min_main: MIN_NAME_WIDTH };
     select_list::header(ui, id, rect, header)
 }
 
@@ -514,12 +509,12 @@ pub fn ordered_ui(
     songs: &[(PathBuf, Described)],
     selection: &mut Selection,
     view: &mut View,
-    trailing: &mut dyn FnMut(&mut egui::Ui, &Path),
+    marks: &mut dyn FnMut(&mut egui::Ui, &Path),
     menu: &mut dyn FnMut(&mut egui::Ui, &[usize]),
 ) -> OrderedOutput {
     let touch = select_list::touch(ui.ctx());
     let header_id = egui::Id::new(id_salt).with("header");
-    let room = ui.available_width() - TRAILING_WIDTH - MIN_NAME_WIDTH;
+    let room = ui.available_width() - MIN_NAME_WIDTH;
     let mut used = 0.0;
     let columns = view.widths(ui.ctx(), header_id, view.columns.iter().filter_map(|k| column(k)).collect());
     let shown: Vec<(&'static Def, f32)> = if touch {
@@ -577,8 +572,8 @@ pub fn ordered_ui(
                 }
             }
         }
-        row.response.context_menu(|ui| menu(ui, &row.rows()));
-        if song_row(ui, path, song, &hits, &shown, select_list::scrolls(row, false), touch, trailing) {
+        crate::menu::context(&row.response, |ui| menu(ui, &row.rows()));
+        if song_row(ui, path, song, &hits, &shown, select_list::scrolls(row, false), touch, marks) {
             star = Some((path.clone(), !song.plays.starred));
         }
     });
@@ -685,9 +680,9 @@ impl SongList {
     /// do, `ignore` included), the view, the search or the groups closed
     /// change. Groups go by `fields::group_key`, past the characters in
     /// `ignore`, and text sorts past a leading article unless `articles`.
-    /// `tools` draws buttons at the start of the toolbar, `trailing`
-    /// extra widgets at the right end of each row (right to left, in
-    /// `TRAILING_WIDTH`), and `menu` a row's right-click menu.
+    /// `tools` draws buttons at the start of the toolbar, `marks` a song's
+    /// marks beside its name (right to left), and `menu` a row's
+    /// right-click menu.
     #[allow(clippy::too_many_arguments)]
     pub fn ui(
         &mut self,
@@ -699,7 +694,7 @@ impl SongList {
         articles: bool,
         tools: &mut dyn FnMut(&mut egui::Ui),
         describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
-        trailing: &mut dyn FnMut(&mut egui::Ui, &Path),
+        marks: &mut dyn FnMut(&mut egui::Ui, &Path),
         menu: RowMenu,
     ) -> Output {
         let touch = select_list::touch(ui.ctx());
@@ -725,7 +720,7 @@ impl SongList {
             tools(ui);
             if touch {
                 let button = crate::app::icon_button("sort-ascending");
-                egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| view_changed |= view_menu(ui, view, true));
+                egui::containers::menu::MenuButton::from_button(button).config(crate::menu::config(ui.ctx())).ui(ui, |ui| view_changed |= view_menu(ui, view, true));
             }
             // (On a line of its own when the buttons leave it too little.)
             below = ui.available_width() < MIN_SEARCH_WIDTH;
@@ -739,7 +734,7 @@ impl SongList {
 
         // The columns that fit beside the name, and the one sorted by
         // (for touch, just that, on the second line).
-        let room = ui.available_width() - TRAILING_WIDTH - MIN_NAME_WIDTH;
+        let room = ui.available_width() - MIN_NAME_WIDTH;
         let mut used = 0.0;
         let sorted = column(&view.sort);
         let shown: Vec<(&'static Def, f32)> = if touch {
@@ -851,9 +846,9 @@ impl SongList {
                 };
                 row.response.dnd_set_drag_payload(DraggedFiles { paths, label });
             }
-            row.response.context_menu(|ui| menu(ui, &rows()));
+            crate::menu::context(&row.response, |ui| menu(ui, &rows()));
             let scroll = select_list::scrolls(row, active == Some(row.idx));
-            if song_row(ui, &entry.path, &entry.song, &entry.hits, &shown, scroll, touch, trailing) {
+            if song_row(ui, &entry.path, &entry.song, &entry.hits, &shown, scroll, touch, marks) {
                 star = Some((entry.path.clone(), !entry.song.plays.starred));
             }
         });
@@ -899,9 +894,9 @@ impl SongList {
             if response.clicked() {
                 sort_by = Some(key);
             }
-            response.context_menu(|ui| changed |= view_menu(ui, view, false));
+            crate::menu::context(&response, |ui| changed |= view_menu(ui, view, false));
         }
-        background.context_menu(|ui| changed |= view_menu(ui, view, false));
+        crate::menu::context(&background, |ui| changed |= view_menu(ui, view, false));
         if let Some(key) = sort_by {
             if view.sort == key {
                 view.descending = !view.descending;
@@ -1253,6 +1248,40 @@ mod tests {
     }
 
     #[test]
+    fn headers_line_up_with_the_rows_cells() {
+        let ctx = egui::Context::default();
+        let songs: Vec<PathBuf> = (0..3).map(|n| PathBuf::from(n.to_string())).collect();
+        let mut list = SongList::default();
+        let mut view = View { columns: vec!["artist".into(), "year".into()], ..View::default() };
+        view.widths.insert("year".into(), 45.0);
+        let mut texts = Vec::new();
+        // (The first frame lays the fonts out.)
+        for _ in 0..2 {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+            let mut output = ctx.run_ui(input, |ui| {
+                let mut describe = |_: &Path, keys: &[&str]| {
+                    let values = keys.iter().map(|&k| Some(Value { text: if k == "year" { "2024".into() } else { "Artist".into() }, ..Value::default() })).collect();
+                    Described { name: "Song".into(), file_name: String::new(), values, tags: Vec::new(), plays: Plays::default() }
+                };
+                list.ui(ui, &mut Fixed(songs.clone()), 1, &mut view, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
+            });
+            output.textures_delta.clear();
+            texts = output
+                .shapes
+                .into_iter()
+                .filter_map(|s| match s.shape {
+                    egui::epaint::Shape::Text(t) => Some((t.galley.text().to_string(), t.pos.x)),
+                    _ => None,
+                })
+                .collect();
+        }
+        let x = |text: &str| texts.iter().find(|(t, _)| t == text).map(|(_, x)| *x).unwrap();
+        assert_eq!(x("Year"), x("2024"), "the year column's title over its values");
+        assert!(texts.iter().filter(|(t, _)| t == "Artist").all(|(_, at)| *at == x("Artist")), "the artist column's title over its values");
+        assert_eq!(x("2024") + 45.0 + select_list::EDGE, 800.0, "the last column at the row's end");
+    }
+
+    #[test]
     fn rows_are_made_again_only_when_something_changes() {
         let ctx = egui::Context::default();
         let songs: Vec<PathBuf> = (0..30).map(|n| PathBuf::from(n.to_string())).collect();
@@ -1517,3 +1546,4 @@ mod tests {
         assert_eq!(unique(paths), ["a", "b"].map(PathBuf::from));
     }
 }
+

@@ -464,7 +464,9 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, rect: egui::Rect, header: Header)
     let builder = egui::UiBuilder::new().max_rect(rect.with_max_x(rect.max.x - EDGE)).layout(egui::Layout::right_to_left(egui::Align::Center));
     let main = ui
         .scope_builder(builder, |ui| {
-            ui.add_space(trail + spacing);
+            if trail > 0.0 {
+                ui.add_space(trail + spacing);
+            }
             for c in columns.iter().rev() {
                 let response = cell(ui, c.width, c.title.clone(), false).interact(egui::Sense::click());
                 let widths = *COLUMN_WIDTHS.start()..=(c.width + slack.max(0.0)).clamp(*COLUMN_WIDTHS.start(), *COLUMN_WIDTHS.end());
@@ -702,3 +704,4 @@ mod tests {
         assert_eq!(clicks(&mut selection, &[(0, SHIFT)]), vec![0, 1]);
     }
 }
+
