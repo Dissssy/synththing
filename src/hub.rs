@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::{self, Config};
 use crate::device::Device;
+use crate::device_messages::Route;
 use crate::device_sync::{self, DeviceSync, Here, Link, Report};
 use crate::hub_api::{self, HubApi};
 use crate::library::identity::{self, Identity};
@@ -67,10 +68,10 @@ pub fn run() -> i32 {
     applog::init(true);
     log::info!("synththing hub v{} starting", build_info::describe());
     let identity = signed_in();
-    if identity::sync_key().is_none() {
+    let Some(sync_key) = identity::sync_key() else {
         log::error!("signed in without a sync key: sign in again with a link from a device that syncs");
         return 2;
-    }
+    };
     let mut config = Config::load().unwrap_or_default();
     let songs_dir = match config::music_dir() {
         Ok(dir) => dir,
@@ -91,7 +92,9 @@ pub fn run() -> i32 {
     let server = library::official_url();
     let mut link = Link { server: server.clone(), server_key: library::server_key(), identity: Some(identity.clone()), relay_song_mb: None };
     let mut info_read: Option<Instant> = None;
-    let seen = watch_server(&link, &identity);
+    let route = Route { server: server.clone(), server_key: link.server_key.clone(), identity: identity.clone(), sync_key };
+    let live = hub_api::Live { route: &route, me: &device };
+    let heard = watch_server(&link, &identity);
     let mut sync = DeviceSync::default();
     let mut api = HubApi::default();
     let mut started = false;
@@ -105,8 +108,11 @@ pub fn run() -> i32 {
                 Err(e) => log::warn!("reading {}'s info: {e}", library::host(&server)),
             }
         }
-        while let Ok(changed) = seen.try_recv() {
-            sync.server_seen(changed);
+        while let Ok(heard) = heard.try_recv() {
+            match heard {
+                Heard::Sync(changed) => sync.server_seen(changed),
+                Heard::Live(sealed) => api.live_heard(&live, &sealed),
+            }
         }
         let here = &mut Here { songs: &mut songs, playlists: &mut playlists, wishlist: &mut wishlist };
         let reports = sync.poll(&link, here, false);
@@ -147,6 +153,7 @@ pub fn run() -> i32 {
             }
         }
         api.tick(&mut hub_api::Here { songs: &mut songs, playlists: &mut playlists, wishlist: &mut wishlist, sync: &mut sync, config: &config });
+        api.panels_tick(&live);
         let now = sync.error().map(str::to_string);
         if now != error {
             if let Some(e) = &now {
@@ -237,23 +244,32 @@ fn start(sync: &mut DeviceSync, link: &Link, here: &Here, config: &Config) {
     }
 }
 
-/// Listen to the server for synced data changing, on a thread of its own
-/// (until the receiver's dropped): `None` each time it's listened to again
-/// (what changed meanwhile isn't known), the change otherwise.
-fn watch_server(link: &Link, identity: &Identity) -> Receiver<Option<library::sync::Changed>> {
+/// What the server said, listened to.
+enum Heard {
+    /// Synced data changed: `None` each time it's listened to again (what
+    /// changed meanwhile isn't known), the change otherwise.
+    Sync(Option<library::sync::Changed>),
+    /// A live message from one of the user's devices, sealed.
+    Live(String),
+}
+
+/// Listen to the server, on a thread of its own (until the receiver's
+/// dropped).
+fn watch_server(link: &Link, identity: &Identity) -> Receiver<Heard> {
     let (tx, rx): (Sender<_>, _) = mpsc::channel();
     let (server, key, identity) = (link.server.clone(), link.server_key.clone(), identity.clone());
     std::thread::Builder::new()
         .name("server watch".into())
         .spawn(move || {
             loop {
-                if tx.send(None).is_err() {
+                if tx.send(Heard::Sync(None)).is_err() {
                     return;
                 }
                 let started = Instant::now();
                 let streamed = client::notification_stream(&server, &key, &identity, |event| match event {
-                    client::StreamEvent::Sync(changed) => tx.send(Some(changed)).is_ok(),
-                    client::StreamEvent::Notification(_) | client::StreamEvent::Live(_) | client::StreamEvent::Opened => true,
+                    client::StreamEvent::Sync(changed) => tx.send(Heard::Sync(Some(changed))).is_ok(),
+                    client::StreamEvent::Live(sealed) => tx.send(Heard::Live(sealed)).is_ok(),
+                    client::StreamEvent::Notification(_) | client::StreamEvent::Opened => true,
                 });
                 if let Err(e) = streamed
                     && started.elapsed() < client::STREAM_FOR
