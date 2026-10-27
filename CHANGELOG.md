@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.7.0 (2026-10-27)
+
 ### Added
 - Run a hub: `synththing hub` is one of your devices with no window that keeps every song, for an always-on machine (a home server, a NAS, a VPS, or Docker with deploy/hub.compose.yml). Sign it in with `synththing hub pair '<link>'` and your devices' songs stream to it, and from it to each device once that's open. See docs/HUB.md.
 - The local API tells programs only what changed: `GET /v1/songs?since=<revision>` gives the songs that came or changed since an earlier answer, and the keys of those that left. See docs/API.md.
