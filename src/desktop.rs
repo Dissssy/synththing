@@ -135,7 +135,8 @@ pub fn main() -> Result<()> {
             }
             Some(HubCommand::Token { name: Some(name), grant, remove: false }) => {
                 match crate::hub_api::make_token(name, grant) {
-                    Ok(token) => println!("{token}\n\n{name}'s token: give it as \"Authorization: Bearer {token}\". It isn't shown again."),
+                    Ok(Some(token)) => println!("{token}\n\n{name}'s token: give it as \"Authorization: Bearer {token}\". It isn't shown again."),
+                    Ok(None) => println!("{name} keeps its token, allowed: {}", grant.join(", ")),
                     Err(e) => {
                         eprintln!("error: {e}");
                         std::process::exit(1);

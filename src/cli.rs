@@ -155,7 +155,8 @@ pub enum HubCommand {
     /// token, once. The API runs while any program is let in, on
     /// SYNTHTHING_API_PORT (default 7340); SYNTHTHING_API_LAN=true lets in
     /// other machines (other Docker containers) too. With no name, lists
-    /// the programs let in.
+    /// the programs let in. For a program let in already, sets what it may
+    /// do instead (its token stays).
     Token {
         /// The program's name (what the songs it adds are marked with).
         name: Option<String>,
