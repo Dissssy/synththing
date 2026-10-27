@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.7.2 (2026-10-27)
+
 ### Fixed
 - A wishlist that can't be read (saved by a different build, say) is set aside as wishlist.json.unreadable-<time> and the app says so, keeping the wishes that can be read, instead of starting empty and being saved over.
 
