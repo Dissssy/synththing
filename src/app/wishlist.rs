@@ -92,6 +92,7 @@ pub(super) struct WishlistState {
     /// by group, once MusicBrainz said what they are.
     previews: BTreeMap<String, Wish>,
     selection: Selection,
+    found_selection: Selection,
     art: AlbumArt,
 }
 
@@ -115,6 +116,7 @@ impl Default for WishlistState {
             expanded: HashSet::new(),
             previews: BTreeMap::new(),
             selection: Selection::default(),
+            found_selection: Selection::default(),
             art: AlbumArt::default(),
         }
     }
@@ -355,6 +357,7 @@ impl App {
             let _ = send.send(found);
             ctx.request_repaint();
         });
+        self.wishlist.found_selection.clear();
         match started {
             Ok(_) => self.wishlist.search = Some(Search::Waiting(receive)),
             Err(e) => self.wishlist.search = Some(Search::Done(Err(e.to_string()))),
@@ -444,6 +447,9 @@ impl App {
             }
             Some(Search::Done(Ok(found))) => {
                 let (list, art) = (&self.wishlist.list, &mut self.wishlist.art);
+                let selection = &mut self.wishlist.found_selection;
+                // (Artists, then albums, then songs.)
+                let rows: Vec<&Wish> = found.artists.iter().chain(&found.albums).chain(&found.songs).collect();
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.strong("Found at MusicBrainz");
@@ -451,19 +457,21 @@ impl App {
                             close = ui.small_button(icon("x")).on_hover_text("Put the results away").clicked();
                         });
                     });
-                    egui::ScrollArea::vertical().id_salt("wishlist_found").max_height(ui.ctx().content_rect().height() * 0.4).show(ui, |ui| {
-                        for (heading, wishes) in [("Artists", &found.artists), ("Albums", &found.albums), ("Songs", &found.songs)] {
-                            ui.label(egui::RichText::new(heading).weak());
-                            if wishes.is_empty() {
-                                ui.weak("Nothing found.");
+                    if rows.is_empty() {
+                        ui.weak("Nothing found.");
+                        return;
+                    }
+                    let height = 2.0 * ui.spacing().interact_size.y;
+                    let pitch = height + ui.spacing().item_spacing.y;
+                    let room = egui::vec2(ui.available_width(), (rows.len() as f32 * pitch).min(ui.ctx().content_rect().height() * 0.4));
+                    ui.allocate_ui(room, |ui| {
+                        let output = select_list::show_tall(ui, "wishlist_found", &rows, selection, None, height, |ui, row, wish| {
+                            if found_row_ui(ui, row, art, wish, list.find(wish).is_some()) {
+                                add = Some((*wish).clone());
                             }
-                            for (i, wish) in wishes.iter().enumerate() {
-                                match found_row_ui(ui, art, wish, list.find(wish).is_some(), i % 2 == 1) {
-                                    Some(FoundAct::Add) => add = Some(wish.clone()),
-                                    Some(FoundAct::Open) => open = Some(wish.clone()),
-                                    None => {}
-                                }
-                            }
+                        });
+                        if let Some(i) = output.activated.filter(|&i| opens(rows[i])) {
+                            open = Some(rows[i].clone());
                         }
                     });
                 });
@@ -471,6 +479,7 @@ impl App {
         }
         if close {
             self.wishlist.search = None;
+            self.wishlist.found_selection.clear();
         }
         if let Some(wish) = add {
             toast::show(ui.ctx(), format!("Wished for {}", wish.title));
@@ -1245,55 +1254,44 @@ fn here_cell(ui: &mut egui::Ui, here: bool) {
     select_list::cell(ui, 70.0, egui::RichText::new(text).weak(), false);
 }
 
-/// What's asked of a search result: wish for it, or open its page.
-enum FoundAct {
-    Add,
-    Open,
-}
-
-/// A search result, `striped` (every other one) like a list's rows, to
-/// tell which Add is whose.
-fn found_row_ui(ui: &mut egui::Ui, art: &mut AlbumArt, wish: &Wish, wished: bool, striped: bool) -> Option<FoundAct> {
-    // (An artist's albums, or an album's songs, to pick from: its picture
-    // and name open them.)
-    let opens = match wish.kind {
+/// Whether a search result has a page: an artist's albums, or an album's
+/// songs, to pick from.
+fn opens(wish: &Wish) -> bool {
+    match wish.kind {
         Kind::Artist => wish.musicbrainz.is_some(),
         Kind::Album => wish.release.is_some(),
         Kind::Song | Kind::Text => false,
-    };
-    let sense = if opens { egui::Sense::click() } else { egui::Sense::hover() };
-    let hover = if wish.kind == Kind::Artist { "See their albums" } else { "See its songs" };
-    let mut add = false;
-    let mut open = false;
-    let fill = if striped { ui.visuals().faint_bg_color } else { egui::Color32::TRANSPARENT };
-    egui::Frame::new().fill(fill).show(ui, |ui| ui.horizontal(|ui| {
-        let side = 2.0 * ui.spacing().interact_size.y;
-        let (rect, tile) = ui.allocate_exact_size(egui::vec2(side, side), sense);
-        art.tile(ui, rect, &source(wish), &wish.title);
-        open |= tile.clicked();
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if wished {
-                ui.weak(format!("{} On your wishlist", icon("check")));
-            } else {
-                add = ui.button("Add").clicked();
-            }
-            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                let title = ui.add(egui::Label::new(&wish.title).truncate().sense(sense));
-                open |= title.clicked();
-                if opens {
-                    title.on_hover_text(hover).on_hover_cursor(egui::CursorIcon::PointingHand);
-                }
-                let mut detail: Vec<String> = [wish.artist.clone(), wish.year.clone(), wish.release_type.clone()].into_iter().flatten().collect();
-                if wish.tracks > 0 {
-                    detail.push(if wish.tracks == 1 { "1 track".to_string() } else { format!("{} tracks", wish.tracks) });
-                }
-                ui.add(egui::Label::new(egui::RichText::new(detail.join(" · ")).small().weak()).truncate());
-            });
-        });
-    }));
-    if add {
-        Some(FoundAct::Add)
-    } else {
-        open.then_some(FoundAct::Open)
     }
+}
+
+/// A search result's row: whether its Add was clicked.
+fn found_row_ui(ui: &mut egui::Ui, row: &select_list::Row, art: &mut AlbumArt, wish: &Wish, wished: bool) -> bool {
+    if opens(wish) {
+        row.response.clone().on_hover_text(if wish.kind == Kind::Artist { "Click to see their albums" } else { "Click to see its songs" });
+    }
+    crate::menu::context(&row.response, |ui| {
+        if let Some(url) = musicbrainz_url(wish)
+            && ui.button("Open at MusicBrainz").clicked()
+        {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+        }
+    });
+    let side = ui.available_height() - 4.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
+    art.tile(ui, rect, &source(wish), &wish.title);
+    let mut add = false;
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if wished {
+            ui.weak(format!("{} On your wishlist", icon("check")));
+        } else {
+            add = ui.button("Add").clicked();
+        }
+        let mut detail: Vec<String> = vec![wish.release_type.clone().unwrap_or_else(|| wish.kind.name().to_string())];
+        detail.extend([wish.artist.clone(), wish.year.clone()].into_iter().flatten());
+        if wish.tracks > 0 {
+            detail.push(if wish.tracks == 1 { "1 track".to_string() } else { format!("{} tracks", wish.tracks) });
+        }
+        select_list::two_lines(ui, std::iter::empty(), egui::RichText::new(&wish.title), Some(detail.join(" · ")), select_list::scrolls(row, false));
+    });
+    add
 }

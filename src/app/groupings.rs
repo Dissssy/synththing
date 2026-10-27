@@ -83,6 +83,8 @@ struct RulesetView {
     /// "Find in" on the group's page.
     find: String,
     picked: Option<PathBuf>,
+    /// The groups picked in the list.
+    selection: select_list::Selection,
     /// The groups shown, in order, and what that was worked out from.
     shown: Option<(u64, Vec<usize>)>,
 }
@@ -678,29 +680,22 @@ impl App {
         let mut menu_act = None;
         let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
         if list {
-            let height = 56.0;
-            let rows = shown.len();
             let mut play = None;
-            egui::ScrollArea::vertical().id_salt(("grouping_list", id)).auto_shrink([false, false]).show_rows(ui, height, rows, |ui, range| {
-                for row in range {
-                    let group = &groups[shown[row]];
-                    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
-                    let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                    if response.hovered() {
-                        ui.painter().rect_filled(rect, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
-                    } else if row % 2 == 1 {
-                        ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+            // (Out of the view while the list's drawn: the rows see the rest.)
+            let mut selection = std::mem::take(&mut self.groupings.view().selection);
+            let output = select_list::show_tall(ui, ("grouping_list", id), &shown, &mut selection, None, 56.0, |ui, row, &i| {
+                let group = &groups[i];
+                ui.add_space(6.0);
+                let (tile, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
+                let from = self.art_from(albums, group);
+                tile_ui(ui, &mut self.groupings.art, tile, from, group);
+                ui.add_space(4.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(icon_button("play")).on_hover_text("Play").clicked() {
+                        play = Some(i);
                     }
-                    let tile = egui::Rect::from_min_size(rect.min + egui::vec2(6.0, 6.0), egui::vec2(44.0, 44.0));
-                    let from = self.art_from(albums, group);
-                    tile_ui(ui, &mut self.groupings.art, tile, from, group);
-                    let button = egui::Rect::from_min_size(rect.right_center() - egui::vec2(36.0, 12.0), egui::vec2(28.0, 24.0));
-                    if ui.put(button, icon_button("play")).on_hover_text("Play").clicked() {
-                        play = Some(shown[row]);
-                    }
-                    let text = egui::Rect::from_min_max(egui::pos2(tile.right() + 10.0, rect.top() + 8.0), egui::pos2(button.left() - 8.0, rect.bottom() - 8.0));
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(text).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
-                        ui.style_mut().interaction.selectable_labels = false;
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.add_space(8.0);
                         ui.add(egui::Label::new(egui::RichText::new(&group.title).strong()).truncate());
                         let mut detail = if wished(group).is_some() { "On your wishlist".to_string() } else { count(group.songs.len(), "song") };
                         if let Some(subtitle) = &group.subtitle {
@@ -708,28 +703,29 @@ impl App {
                         }
                         ui.add(egui::Label::new(egui::RichText::new(detail).weak()).truncate());
                     });
-                    if response.clicked() {
-                        opened = Some(group.key.clone());
+                });
+                crate::menu::context(&row.response, |ui| {
+                    if let Some(wish) = wished(group) {
+                        menu_act = wished_menu(ui, wish);
+                        return;
                     }
-                    crate::menu::context(&response, |ui| {
-                        if let Some(wish) = wished(group) {
-                            menu_act = wished_menu(ui, wish);
-                            return;
-                        }
-                        if let Some(next) = super::queue::menu(ui) {
-                            queued = Some((shown[row], next));
-                        }
-                        if albums && let Some(wish) = super::wishlist::album_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs) {
-                            menu_act = Some(Act::Wish(wish));
-                        }
-                        if id == ARTISTS
-                            && let Some(wish) = super::wishlist::artist_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, &group.title, &group.songs)
-                        {
-                            menu_act = Some(Act::WishArtist(wish));
-                        }
-                    });
-                }
+                    if let Some(next) = super::queue::menu(ui) {
+                        queued = Some((i, next));
+                    }
+                    if albums && let Some(wish) = super::wishlist::album_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs) {
+                        menu_act = Some(Act::Wish(wish));
+                    }
+                    if id == ARTISTS
+                        && let Some(wish) = super::wishlist::artist_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, &group.title, &group.songs)
+                    {
+                        menu_act = Some(Act::WishArtist(wish));
+                    }
+                });
             });
+            self.groupings.view().selection = selection;
+            if let Some(row) = output.activated {
+                opened = Some(groups[shown[row]].key.clone());
+            }
             if let Some(i) = play {
                 act = Some(if id == PLAYLISTS { Act::PlayPlaylist(groups[i].key.clone()) } else { Act::Play(self.playable(&groups[i]), 0) });
             }
@@ -1082,7 +1078,7 @@ impl App {
                 let picked = view.picked.as_deref() == Some(track.path.as_path());
                 // (A set's songs move and come out of it here.)
                 let moves = (id == TOGETHER).then(|| (*t > 0, *t + 1 < tracks.len()));
-                let output = track_row(ui, rect, track, guest, playing, picked, *t % 2 == 1, moves);
+                let output = track_row(ui, rect, track, guest, playing, picked, *t, moves);
                 if let Some(change) = output.change {
                     let mut keys = group.songs.clone();
                     match change {
@@ -1164,7 +1160,7 @@ enum Change {
 /// it can go sooner, and later), it has buttons to move it in its set, or
 /// take it out.
 #[allow(clippy::too_many_arguments)]
-fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<&str>, playing: bool, picked: bool, striped: bool, moves: Option<(bool, bool)>) -> RowOutput {
+fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<&str>, playing: bool, picked: bool, idx: usize, moves: Option<(bool, bool)>) -> RowOutput {
     let touch = select_list::touch(ui.ctx());
     let sense = match (track.here, touch) {
         (false, _) => egui::Sense::hover(),
@@ -1185,18 +1181,7 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
     let mut output = RowOutput { picked: response.clicked() && pick, play: response.clicked() && !pick && !response.double_clicked(), ..RowOutput::default() };
     let visuals = ui.style().interact_selectable(&response, picked);
     let playing_color = crate::theme::playing_color(ui.ctx());
-    if playing && !picked && !response.hovered() {
-        ui.painter().rect_filled(rect, visuals.corner_radius, playing_color.gamma_multiply(0.15));
-    } else if picked || (track.here && response.hovered()) {
-        let stroke = if playing { egui::Stroke::NONE } else { visuals.bg_stroke };
-        ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, stroke, egui::StrokeKind::Inside);
-    } else if striped {
-        ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
-    }
-    if playing {
-        // Outlined, picked or not.
-        ui.painter().rect_stroke(rect, visuals.corner_radius, egui::Stroke::new(1.0, playing_color), egui::StrokeKind::Inside);
-    }
+    select_list::paint_row(ui, rect, &response, idx, picked, playing, track.here);
     if response.drag_started() {
         response.dnd_set_drag_payload(DraggedFiles { paths: vec![track.path.clone()], label: track.name.clone() });
     }

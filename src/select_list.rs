@@ -251,12 +251,26 @@ pub fn show<T>(
     items: &[T],
     selection: &mut Selection,
     playing: Option<usize>,
+    draw: impl FnMut(&mut egui::Ui, &Row, &T),
+) -> ListOutput {
+    show_tall(ui, id_salt, items, selection, playing, 0.0, draw)
+}
+
+/// [`show`], with rows at least `height` tall (for a picture and two lines,
+/// say).
+pub fn show_tall<T>(
+    ui: &mut egui::Ui,
+    id_salt: impl egui::AsId,
+    items: &[T],
+    selection: &mut Selection,
+    playing: Option<usize>,
+    height: f32,
     mut draw: impl FnMut(&mut egui::Ui, &Row, &T),
 ) -> ListOutput {
     let id = egui::Id::new(id_salt);
     let mut output = ListOutput::default();
     let touch = touch(ui.ctx());
-    let row_height = if touch { TOUCH_ROW_HEIGHT } else { ui.spacing().interact_size.y };
+    let row_height = height.max(if touch { TOUCH_ROW_HEIGHT } else { ui.spacing().interact_size.y });
     let sense = if touch { egui::Sense::click() } else { egui::Sense::click_and_drag() };
     let modifiers = ui.input(|i| i.modifiers);
     let playing_color = crate::theme::playing_color(ui.ctx());
@@ -314,22 +328,8 @@ pub fn show<T>(
 
                 let selected = selection.contains(idx);
                 let is_playing = playing == Some(idx);
-                let marked = is_playing && !selected && !response.hovered();
+                let marked = paint_row(ui, rect, &response, idx, selected, is_playing, true);
                 let visuals = ui.style().interact_selectable(&response, selected);
-                if marked {
-                    ui.painter().rect_filled(rect, visuals.corner_radius, playing_color.gamma_multiply(0.15));
-                } else if selected || response.hovered() {
-                    // (The playing row's border goes over the selection's.)
-                    let stroke = if is_playing { egui::Stroke::NONE } else { visuals.bg_stroke };
-                    ui.painter().rect(rect.expand(visuals.expansion), visuals.corner_radius, visuals.weak_bg_fill, stroke, egui::StrokeKind::Inside);
-                } else if idx % 2 == 1 {
-                    // Striped, to tell the rows apart.
-                    ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
-                }
-                if is_playing {
-                    // Outlined, selected or not.
-                    ui.painter().rect_stroke(rect, visuals.corner_radius, egui::Stroke::new(1.0, playing_color), egui::StrokeKind::Inside);
-                }
 
                 let row = Row { idx, response, selection };
                 let builder = egui::UiBuilder::new()
@@ -380,6 +380,32 @@ pub fn show<T>(
         output.delete = delete && !selection.is_empty();
     }
     output
+}
+
+/// Paint row `idx`'s background in `rect` as a list's rows are: striped,
+/// lit while `hovers` and under the pointer or `selected`, and tinted and
+/// outlined in the theme's playing color while `playing`. Whether it's
+/// tinted (its text is drawn in that color).
+pub fn paint_row(ui: &egui::Ui, rect: egui::Rect, response: &egui::Response, idx: usize, selected: bool, playing: bool, hovers: bool) -> bool {
+    let hovered = hovers && response.hovered();
+    let marked = playing && !selected && !hovered;
+    let visuals = ui.style().interact_selectable(response, selected);
+    let playing_color = crate::theme::playing_color(ui.ctx());
+    if marked {
+        ui.painter().rect_filled(rect, visuals.corner_radius, playing_color.gamma_multiply(0.15));
+    } else if selected || hovered {
+        // (The playing row's border goes over the selection's.)
+        let stroke = if playing { egui::Stroke::NONE } else { visuals.bg_stroke };
+        ui.painter().rect(rect.expand(visuals.expansion), visuals.corner_radius, visuals.weak_bg_fill, stroke, egui::StrokeKind::Inside);
+    } else if idx % 2 == 1 {
+        // Striped, to tell the rows apart.
+        ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+    }
+    if playing {
+        // Outlined, selected or not.
+        ui.painter().rect_stroke(rect, visuals.corner_radius, egui::Stroke::new(1.0, playing_color), egui::StrokeKind::Inside);
+    }
+    marked
 }
 
 /// The widths a list's columns were dragged to, by key (the rest are
