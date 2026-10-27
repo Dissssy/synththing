@@ -23,7 +23,11 @@ use serde::{Deserialize, Serialize};
 use crate::fields::{self, Def, Field, Value};
 use crate::matching::Term;
 use crate::search::{Problem, Search};
-use crate::search_box::SearchBox;
+use crate::search_box::{self, SearchBox};
+
+/// The Songs search box.
+const SEARCH: search_box::Kind =
+    search_box::Kind { id: "songs_search", hint: "search, or filter: type:mid...", help: crate::search::HELP, keys: true, save: true };
 use crate::select_list::{self, Selection};
 use crate::together::{self, Member};
 
@@ -283,6 +287,9 @@ pub struct SongList {
     active_row: Option<Option<usize>>,
     /// The search box; empty means every song.
     search: SearchBox,
+    /// A field's values to complete the search with, the rest of the
+    /// query they're for, and the library revision they're from.
+    values: Option<(crate::fields::Field, String, u64, Vec<String>)>,
     /// The row under the pointer as of the last `ui` call.
     hovered: Option<PathBuf>,
     /// Selected rows of what's listed (every song, or the search results).
@@ -703,8 +710,19 @@ impl SongList {
         let mut search = |list: &mut Self, ui: &mut egui::Ui| {
             let built = list.built.as_ref();
             let problems = built.map_or(&[][..], |b| b.problems.as_slice());
-            let found = built.filter(|b| !b.query.trim().is_empty()).map(|b| b.found);
-            let output = list.search.ui(ui, problems, found, revision, &mut |field, others| source.values(field, others));
+            let found = built.filter(|b| !b.query.trim().is_empty()).map(|b| if b.found == 1 { "1 song".to_string() } else { format!("{} songs", b.found) });
+            // (A field's values read once for each rest of the query and
+            // library revision.)
+            let cache = &mut list.values;
+            let mut complete = |query: &str, cursor, mode| {
+                crate::search::complete(query, cursor, mode, &mut |field, others| {
+                    if cache.as_ref().is_none_or(|(f, o, r, _)| *f != field || o != others || *r != revision) {
+                        *cache = Some((field, others.to_string(), revision, source.values(field, others)));
+                    }
+                    cache.as_ref().map(|(_, _, _, v)| v.clone()).unwrap_or_default()
+                })
+            };
+            let output = list.search.ui(ui, &SEARCH, problems, found, &mut complete);
             if output.changed {
                 list.selection.clear();
                 ui.ctx().request_repaint();

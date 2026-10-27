@@ -70,6 +70,7 @@ mod recorder;
 mod script_host;
 mod search;
 mod search_box;
+mod wishlist_search;
 mod select_list;
 mod settings_sync;
 mod smart;

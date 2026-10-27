@@ -69,7 +69,7 @@ impl App {
         for (i, stored) in self.playlists.lists.iter_mut().enumerate() {
             let Some(rules) = &stored.playlist.smart else { continue };
             let entries: Vec<PlaylistEntry> = rules
-                .songs(&self.songs, now, self.config.sort_with_articles)
+                .songs(&self.songs, &self.wishlist.list.wishes, now, self.config.sort_with_articles)
                 .into_iter()
                 .map(|key| PlaylistEntry { path: self.songs.path(&key), soundfont: None, missing: !self.songs.has(&key) })
                 .collect();
@@ -139,7 +139,7 @@ impl App {
         let revision = self.groups_revision();
         let Some(editor) = &mut self.rules_editor else { return };
         if editor.preview.as_ref().is_none_or(|(seen, rules, _)| *seen != revision || *rules != editor.rules) {
-            editor.preview = Some((revision, editor.rules.clone(), summary(&editor.rules, &self.songs, &self.config.group_ignore, self.config.sort_with_articles)));
+            editor.preview = Some((revision, editor.rules.clone(), summary(&editor.rules, &self.songs, &self.wishlist.list.wishes, &self.config.group_ignore, self.config.sort_with_articles)));
         }
         let ruleset = matches!(editor.editing, Editing::Ruleset(_));
         let new = matches!(editor.editing, Editing::Playlist(None) | Editing::Ruleset(None));
@@ -251,7 +251,8 @@ impl App {
     fn groups_revision(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (self.songs.revision(), &self.config.group_ignore, self.config.sort_with_articles).hash(&mut hasher);
+        // (The wishlist too: what's wished is a rule.)
+        (self.songs.revision(), self.wishlist.list.revision(), &self.config.group_ignore, self.config.sort_with_articles).hash(&mut hasher);
         hasher.finish()
     }
 
@@ -265,7 +266,7 @@ impl App {
         {
             return groups.clone();
         }
-        let groups = Arc::new(rules.groups(&self.songs, settings_sync::now(), &self.config.group_ignore, self.config.sort_with_articles));
+        let groups = Arc::new(rules.groups(&self.songs, &self.wishlist.list.wishes, settings_sync::now(), &self.config.group_ignore, self.config.sort_with_articles));
         self.ruleset_groups.insert(id.to_string(), (revision, rules.clone(), groups.clone()));
         groups
     }
@@ -292,7 +293,7 @@ impl App {
             .into_iter()
             .filter_map(|(_, ruleset)| {
                 let by = ruleset.rules.split.as_ref()?.by;
-                let keys = ruleset.rules.missing(&self.songs, now);
+                let keys = ruleset.rules.missing(&self.songs, &self.wishlist.list.wishes, now);
                 (!keys.is_empty()).then_some(Missing { name: ruleset.name, by, keys })
             })
             .collect();
@@ -406,14 +407,14 @@ fn lacking(by: SplitBy) -> &'static str {
 pub(super) type RulesetGroups = BTreeMap<String, (u64, Rules, Arc<Vec<Group>>)>;
 
 /// What `rules` come to in `store` now, in a line.
-fn summary(rules: &Rules, store: &crate::song_store::SongStore, ignore: &str, articles: bool) -> String {
+fn summary(rules: &Rules, store: &crate::song_store::SongStore, wishes: &crate::wishlist::Wishes, ignore: &str, articles: bool) -> String {
     let now = settings_sync::now();
     if rules.split.is_some() {
-        let groups = rules.groups(store, now, ignore, articles);
+        let groups = rules.groups(store, wishes, now, ignore, articles);
         let songs: usize = groups.iter().map(|g| g.songs.len()).sum();
         format!("{} playlist{}, {songs} songs in all", groups.len(), if groups.len() == 1 { "" } else { "s" })
     } else {
-        let songs = rules.songs(store, now, articles).len();
+        let songs = rules.songs(store, wishes, now, articles).len();
         format!("{songs} song{} now", if songs == 1 { "" } else { "s" })
     }
 }

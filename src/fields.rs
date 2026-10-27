@@ -93,6 +93,10 @@ pub enum Field {
     /// Its artist's matched at MusicBrainz: a matched song credits them
     /// (`smart::matched_artists`).
     ArtistMatched,
+    /// It fills a wish on the wishlist (`wishlist::Index::fills`).
+    Wished,
+    /// The names of the wishes it fills.
+    Wish,
 }
 
 /// Where Song info shows an editable field.
@@ -194,6 +198,8 @@ pub const FIELDS: &[Def] = &[
     def(Field::Matched, "matched", "Matched at MusicBrainz", Kind::Flag, true, 0.0, false, &[], false),
     def(Field::AlbumMatched, "album_matched", "Album matched at MusicBrainz", Kind::Flag, true, 0.0, false, &[], false),
     def(Field::ArtistMatched, "artist_matched", "Artist matched at MusicBrainz", Kind::Flag, true, 0.0, false, &[], false),
+    def(Field::Wished, "wished", "On your wishlist", Kind::Flag, true, 0.0, false, &[], false),
+    def(Field::Wish, "wish", "Wish", Kind::Text, true, 0.0, false, &[], false),
 ];
 
 impl Def {
@@ -263,7 +269,8 @@ impl Field {
 
     /// Whether a song name pattern can use it: it has a value to show.
     pub fn in_patterns(self) -> bool {
-        matches!(self.kind(), Kind::Text | Kind::Number | Kind::Date)
+        // (Not what it fills on the wishlist: that's not the song's.)
+        self != Field::Wish && matches!(self.kind(), Kind::Text | Kind::Number | Kind::Date)
     }
 }
 

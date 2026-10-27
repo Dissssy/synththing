@@ -150,6 +150,7 @@ fn plays(store: &SongStore, path: &Path) -> song_list::Plays {
 /// those in `only` when given), as a query's filters keep them.
 struct Listed<'a> {
     store: &'a SongStore,
+    wishes: &'a crate::wishlist::Wishes,
     extensions: &'a [&'a str],
     only: Option<&'a std::collections::HashSet<&'a str>>,
 }
@@ -158,7 +159,7 @@ impl song_list::Source for Listed<'_> {
     fn songs(&mut self, query: &str) -> (Vec<PathBuf>, crate::search::Search) {
         let search = crate::search::parse(query, self.store.tags());
         let songs = {
-            let matches = search.rules.matcher(self.store, crate::settings_sync::now());
+            let matches = search.rules.matcher(self.store, self.wishes, crate::settings_sync::now());
             self.store
                 .songs()
                 .filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song))
@@ -171,8 +172,14 @@ impl song_list::Source for Listed<'_> {
 
     fn values(&mut self, field: crate::fields::Field, query: &str) -> Vec<String> {
         let rules = crate::search::parse(query, self.store.tags()).rules;
-        let matches = rules.matcher(self.store, crate::settings_sync::now());
+        let matches = rules.matcher(self.store, self.wishes, crate::settings_sync::now());
         let songs = self.store.songs().filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song)).map(|(_, song)| song);
+        if field == crate::fields::Field::Wish {
+            // (Those the songs kept fill.)
+            let index = crate::wishlist::Index::new(self.wishes);
+            let filled: std::collections::BTreeSet<&str> = songs.flat_map(|song| index.fills(song)).map(|id| index.name(id)).collect();
+            return filled.into_iter().map(str::to_string).collect();
+        }
         if field == crate::fields::Field::Tag {
             let used: std::collections::BTreeSet<&str> = songs.flat_map(|song| song.tags.iter().map(String::as_str)).collect();
             return used.into_iter().filter_map(|id| self.store.tags().get(id)).map(|t| t.name.clone()).collect();
@@ -2826,7 +2833,7 @@ impl App {
         let revision = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            (self.songs_revision(), missing_only.then_some(missing_revision)).hash(&mut hasher);
+            (self.songs_revision(), self.wishlist.list.revision(), missing_only.then_some(missing_revision)).hash(&mut hasher);
             hasher.finish()
         };
         let selected = self.song_list.selected();
@@ -2947,7 +2954,7 @@ impl App {
         };
         let output = self.song_list.ui(
             ui,
-            &mut Listed { store, extensions, only: only.as_ref() },
+            &mut Listed { store, wishes: &wishes.wishes, extensions, only: only.as_ref() },
             revision,
             &mut view,
             &self.config.group_ignore,
