@@ -98,6 +98,9 @@ struct Track {
     starred: bool,
     /// Its file's here (it can play).
     here: bool,
+    /// It isn't in the library at all: it's on the album's track list at
+    /// MusicBrainz (its `path` only names it).
+    missing: bool,
 }
 
 /// The Groupings' state, for the session.
@@ -119,6 +122,12 @@ pub(super) struct Groupings {
 }
 
 impl Groupings {
+    /// Make the open group's songs again: an album's track list at
+    /// MusicBrainz is newly kept.
+    pub(super) fn tracks_changed(&mut self) {
+        self.page = None;
+    }
+
     fn shown(&self) -> &str {
         self.shown.as_deref().unwrap_or(FIRST)
     }
@@ -809,12 +818,53 @@ impl App {
                     length: facts.number(Field::Length),
                     starred: facts.starred(),
                     here,
+                    missing: false,
                     path,
                 }
             })
             .collect();
-        let tracks = Arc::new(tracks);
+        let tracks = Arc::new(self.with_missing(id, group, tracks));
         self.groupings.page = Some((revision, id.to_string(), group.key.clone(), tracks.clone()));
+        tracks
+    }
+
+    /// `tracks` of an album, with those of its release at MusicBrainz
+    /// (when this device keeps its track list) that aren't in the library
+    /// in their places.
+    fn with_missing(&self, id: &str, group: &Group, mut tracks: Vec<Track>) -> Vec<Track> {
+        if id != ALBUMS {
+            return tracks;
+        }
+        let Some(release) = group.songs.iter().find_map(|key| crate::wishlist::release_of(&self.songs, key)).and_then(|r| self.lookup.kept.release(r)) else {
+            return tracks;
+        };
+        let facts: Vec<Facts> = group.songs.iter().filter_map(|key| self.songs.get_by_key(key)).map(Facts::of).collect();
+        let on_it: Vec<&Facts> = facts.iter().filter(|f| f.release() == Some(release.id.as_str())).collect();
+        let missing: Vec<Track> = release
+            .tracks
+            .iter()
+            .filter(|t| {
+                let recorded = |f: &&Facts| t.recording.is_some() && f.recording() == t.recording.as_deref();
+                let placed = |f: &&Facts| f.number(Field::Disc).unwrap_or(1.0) as u32 == t.disc && f.number(Field::Track).map(|n| n as u32) == Some(t.position);
+                !on_it.iter().any(|f| recorded(f) || placed(f))
+            })
+            .map(|t| Track {
+                path: PathBuf::from(format!("musicbrainz:{}/{}/{}", release.id, t.disc, t.position)),
+                name: t.title.clone(),
+                artists: Vec::new(),
+                album: Some(release.title.clone()),
+                disc: Some(t.disc),
+                number: Some(t.position),
+                length: t.length,
+                starred: false,
+                here: false,
+                missing: true,
+            })
+            .collect();
+        if !missing.is_empty() {
+            tracks.extend(missing);
+            tracks.sort_by_key(|t| (t.disc.unwrap_or(1), t.number.unwrap_or(u32::MAX)));
+        }
         tracks
     }
 
@@ -888,8 +938,9 @@ impl App {
         }
 
         let playable: Vec<PathBuf> = tracks.iter().filter(|t| t.here).map(|t| t.path.clone()).collect();
-        let all_starred = tracks.iter().all(|t| t.starred);
-        let length: f64 = tracks.iter().filter_map(|t| t.length).sum();
+        let all_starred = tracks.iter().filter(|t| !t.missing).all(|t| t.starred);
+        let length: f64 = tracks.iter().filter(|t| !t.missing).filter_map(|t| t.length).sum();
+        let songs = tracks.iter().filter(|t| !t.missing).count();
         let art_cache = &mut self.groupings.art;
         let view = self.groupings.views.entry(id.to_string()).or_default();
         let mut act = None;
@@ -921,7 +972,7 @@ impl App {
                             ui.label(subtitle);
                         }
                     }
-                    ui.weak(format!("{} \u{b7} {}", count(tracks.len(), "song"), format_length(length)));
+                    ui.weak(format!("{} \u{b7} {}", count(songs, "song"), format_length(length)));
                     ui.horizontal(|ui| {
                         if ui.add(icon_button("play")).on_hover_text("Play").clicked() {
                             act = Some(Act::Play(playable.clone(), 0));
@@ -1004,6 +1055,9 @@ impl App {
 /// What a song not here yet says on hover.
 const NOT_HERE: &str = "Not on this device yet: it's coming from your other devices";
 
+/// What a song of an album that isn't in the library says on hover.
+const MISSING: &str = "Not in your library: it's on this album at MusicBrainz";
+
 /// What happened on a track's row.
 #[derive(Default)]
 struct RowOutput {
@@ -1042,7 +1096,7 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
     };
     let mut response = ui.interact(rect, ui.id().with(("track", &track.path)), sense - egui::Sense::FOCUSABLE);
     if !track.here {
-        response = response.on_hover_text(NOT_HERE);
+        response = response.on_hover_text(if track.missing { MISSING } else { NOT_HERE });
     }
     let pick = !touch && ui.input(|i| i.modifiers.command || i.modifiers.shift);
     let mut output = RowOutput { picked: response.clicked() && pick, play: response.clicked() && !pick && !response.double_clicked(), ..RowOutput::default() };
@@ -1088,7 +1142,8 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
             let (icon, _) = ui.allocate_exact_size(egui::vec2(select_list::STAR_WIDTH, ui.available_height()), egui::Sense::hover());
             let font = egui::TextStyle::Body.resolve(ui.style());
             let color = ui.visuals().weak_text_color();
-            ui.painter().text(icon.center(), egui::Align2::CENTER_CENTER, super::icon("cloud-arrow-down"), font, color);
+            let glyph = super::icon(if track.missing { "circle-dashed" } else { "cloud-arrow-down" });
+            ui.painter().text(icon.center(), egui::Align2::CENTER_CENTER, glyph, font, color);
         }
         let number = track.number.map_or(String::new(), |n| n.to_string());
         ui.add_sized([24.0, rect.height()], egui::Label::new(egui::RichText::new(number).weak()));

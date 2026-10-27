@@ -141,6 +141,7 @@ impl App {
         match answer {
             Ok(release) => {
                 self.lookup.kept.keep_release(release.clone());
+                self.groupings.tracks_changed();
                 match crate::wishlist::rest_of(&self.songs, &release) {
                     Some(wish) => self.wish_for_album(ctx, AlbumAsk::Wish(wish)),
                     None => toast::show(ctx, format!("All of {} is here already", release.title)),
