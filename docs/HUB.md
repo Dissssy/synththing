@@ -26,6 +26,16 @@ It runs until stopped (Ctrl+C), logging what it does to the terminal and to `syn
 
 A branch build has sync off unless it's asked for: `synththing --online sync hub`.
 
+## Songs straight to and from it
+
+Your devices send the hub the songs it doesn't have, and take the songs they want from it, directly, rather than through the relay on the official server, once they reach it: no size limit, and as fast as your network. It serves them on port 7390 (`SYNTHTHING_HUB_PORT` for another). The songs go sealed with your sync key and every request is signed with your identity, so plain HTTP is safe, and nothing but your own devices can use it.
+
+Where your devices find it goes in the synced song transfers: its address on its network (found by itself, except in Docker), and those in `SYNTHTHING_HUB_URL` (comma-separated, nearest first), such as `http://192.168.1.20:7390` and, with port 7390 forwarded to it on your router, `http://203.0.113.5:7390` or a domain name that points home. A device tries each in order, every ten minutes, and while it reaches none, songs go through the relay as before: the hub listens there too. With several devices sending, each takes different songs, the ones fewest devices have first.
+
+It takes no songs while its disk has under 2 GB free.
+
+One device is the hub at a time. Starting a hub makes it the hub; the one before stops serving songs (its log says "another device is the hub now") and carries on as an ordinary device until you stop it.
+
 ## Its local API
 
 The hub answers the local app API (docs/API.md) for programs you let in, the same as the app does for what's about the library: songs, playlists, tags, the wishlist, adding songs and checking them first (`/v1/staged`), and the events about them. A hub plays nothing, so what's about playing (now playing, play, the queue, seek, volume, soundfonts, scripts, commands, the visualizer) answers 409.
@@ -50,7 +60,7 @@ The API runs while any program is let in, on port 7340 (`SYNTHTHING_API_PORT` fo
 docker compose -f hub.compose.yml up -d
 ```
 
-Or start it without a link and sign it in while it waits: `docker attach synththing-hub` (or Portainer's Attach console), paste the link, and detach with Ctrl+P Ctrl+Q; or `docker exec synththing-hub synththing hub pair '<link>' --name "Home hub"`. Give it a name: in a container the computer's name is the container's random one. Its log is `docker logs synththing-hub`. Watchtower (see docker-compose.yml) keeps it up to date the same way as a server.
+Set `SYNTHTHING_HUB_URL` to where your devices reach it (the machine's address on your network, port 7390), as a container doesn't know that itself. Or start it without a link and sign it in while it waits: `docker attach synththing-hub` (or Portainer's Attach console), paste the link, and detach with Ctrl+P Ctrl+Q; or `docker exec synththing-hub synththing hub pair '<link>' --name "Home hub"`. Give it a name: in a container the computer's name is the container's random one. Its log is `docker logs synththing-hub`. Watchtower (see docker-compose.yml) keeps it up to date the same way as a server.
 
 ## Under systemd
 

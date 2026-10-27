@@ -31,7 +31,7 @@ use crate::playlist::Library;
 use crate::playlist_sync;
 use crate::settings_sync::{self, Change, Fields, State, Winner};
 use crate::song_store::{SongStore, Stored};
-use crate::song_sync::{self, Moved, Relay, Task};
+use crate::song_sync::{self, HubLeaf, Moved, Relay, Task};
 use crate::wishlist::{self, Wishlist};
 
 mod songs;
@@ -44,6 +44,9 @@ const RETRY: Duration = Duration::from_secs(60);
 /// How long a song streamed to a device isn't sent to it again, waiting
 /// for it to say it has it.
 const GIVEN_FOR: Duration = Duration::from_secs(5 * 60);
+/// How often a device that hasn't reached the hub directly tries again
+/// (or one that has checks it still does).
+const HUB_CHECK: Duration = Duration::from_secs(10 * 60);
 
 /// What's synced, each its own blob on the server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,6 +202,16 @@ pub struct DeviceSync {
     /// Held while an update is offered: nothing starts, and the songs
     /// being moved stop after the one moving.
     held: Arc<AtomicBool>,
+    /// The hub, as the transfers name it.
+    hub: Option<HubLeaf>,
+    /// Where this device reaches the hub directly, if it does.
+    hub_reached: Option<song_sync::Hub>,
+    /// When it last tried to (once it's started trying).
+    hub_checked: Option<Instant>,
+    hub_checking: bool,
+    /// This device is the hub (`be_hub`): its leaf, and whether it's still
+    /// to be named the hub over another.
+    hub_offer: Option<(HubLeaf, bool)>,
 }
 
 /// How a round of songs being moved is going: those to fetch or send, how
@@ -222,6 +235,8 @@ enum Moving {
     Finished,
     /// A song streamed here (or one that failed to).
     Received(Moved),
+    /// Where the hub answered, if it did.
+    Hub(Option<song_sync::Hub>),
 }
 
 impl Default for DeviceSync {
@@ -252,6 +267,11 @@ impl Default for DeviceSync {
             songs_pending: false,
             reports: Vec::new(),
             held: Arc::default(),
+            hub: None,
+            hub_reached: None,
+            hub_checked: None,
+            hub_checking: false,
+            hub_offer: None,
         }
     }
 }
@@ -548,6 +568,7 @@ impl DeviceSync {
         if held {
             return std::mem::take(&mut self.reports);
         }
+        self.check_hub();
         if self.songs_dirty && self.on && !self.songs_pending {
             self.songs_dirty = false;
             self.songs_pending = true;
@@ -699,6 +720,7 @@ impl DeviceSync {
             self.listen_for_songs(link, here.songs, &device);
         }
         self.given.retain(|_, at| at.elapsed() < GIVEN_FOR);
+        let hub_offer = self.hub_offer.clone();
         Box::new(songs::Songs {
             store: here.songs.clone(),
             wanted,
@@ -707,6 +729,8 @@ impl DeviceSync {
             given: self.given.keys().cloned().collect(),
             busy: self.busy.clone(),
             paused: self.moves_paused.is_some_and(|t| Instant::now() < t),
+            hub_direct: self.hub_reached.is_some(),
+            hub: hub_offer,
             library: self.syncing(Blob::Library),
             transfers: self.syncing(Blob::Transfers),
         })
@@ -748,7 +772,21 @@ impl DeviceSync {
                 }
                 self.songs_dirty = true;
             }
-            songs::Reply::Devices(devices) => self.devices = devices,
+            songs::Reply::Devices(devices, hub) => {
+                self.devices = devices;
+                // (Named the hub: from now on, another named after it is.)
+                if let Some((offered, take_over)) = &mut self.hub_offer
+                    && hub.as_ref().is_some_and(|hub| hub.device == offered.device)
+                {
+                    *take_over = false;
+                }
+                if hub != self.hub {
+                    // (Reached again, wherever it is now.)
+                    self.hub_reached = None;
+                    self.hub_checked = None;
+                    self.hub = hub;
+                }
+            }
             songs::Reply::Unheld(keys) => self.unheld = keys,
             songs::Reply::Error(e) => self.error = Some(e),
         }
@@ -777,7 +815,8 @@ impl DeviceSync {
         // streamed to a device listening.)
         let room = song_sync::Room { song_mb: link.relay_song_mb.unwrap_or(u64::MAX), full: self.sends_paused.is_some() };
         let Some((server, server_key, identity, sync_key)) = self.sync_with(link) else { return };
-        let relay = Relay { server, server_key, identity, sync_key, dir: songs.dir().to_path_buf() };
+        let device = self.device.get_or_insert_with(Device::load).id.clone();
+        let relay = Relay { server, server_key, identity, sync_key, dir: songs.dir().to_path_buf(), device, hub: self.hub_reached.clone() };
         self.busy = tasks.iter().map(|t| t.key().to_string()).collect();
         self.progress = Progress { total: tasks.iter().filter(|t| !matches!(t, Task::Delete(_))).count(), song_mb: room.song_mb, ..Progress::default() };
         let (tx, held) = (self.moves.0.clone(), Arc::clone(&self.held));
@@ -790,6 +829,40 @@ impl DeviceSync {
                 let _ = tx.send(Moving::Finished);
             })
             .ok();
+    }
+
+    /// See whether the hub answers directly, on a thread of its own, if
+    /// it's time to (and this device isn't it).
+    fn check_hub(&mut self) {
+        let Some(hub) = &self.hub else { return };
+        let me = &self.device.get_or_insert_with(Device::load).id;
+        if hub.device == *me || self.hub_checking || !self.syncing(Blob::Transfers) || self.hub_checked.is_some_and(|t| t.elapsed() < HUB_CHECK) {
+            return;
+        }
+        let (hub, tx) = (hub.clone(), self.moves.0.clone());
+        let spawned = std::thread::Builder::new().name("hub check".into()).spawn(move || {
+            let _ = tx.send(Moving::Hub(song_sync::reach(&hub)));
+        });
+        self.hub_checking = spawned.is_ok();
+        self.hub_checked = Some(Instant::now());
+    }
+
+    /// Make this device the hub (`hub.rs`), named so in the transfers over
+    /// any other: `leaf` says where it's reached.
+    pub fn be_hub(&mut self, leaf: HubLeaf) {
+        self.hub_offer = Some((leaf, true));
+        self.songs_dirty = true;
+    }
+
+    /// The hub, as the transfers name it.
+    pub fn hub(&self) -> Option<&HubLeaf> {
+        self.hub.as_ref()
+    }
+
+    /// A song sent straight here (to the hub, `hub_server.rs`), now in the
+    /// library's folder.
+    pub fn received(&mut self, songs: &mut SongStore, key: String) {
+        self.song_received(songs, Moved::Fetched(key));
     }
 
     /// Take the songs moved since the last poll.
@@ -823,7 +896,23 @@ impl DeviceSync {
                     self.song_received(here.songs, moved);
                     continue;
                 }
+                Moving::Hub(reached) => {
+                    self.hub_checking = false;
+                    if reached.is_some() != self.hub_reached.is_some() {
+                        // (Whether it takes songs from the hub changed.)
+                        self.songs_dirty = true;
+                    }
+                    self.hub_reached = reached;
+                    continue;
+                }
             };
+            if let Moved::HubLost(e) = &moved {
+                log::info!("the hub: {e}");
+                self.hub_reached = None;
+                self.hub_checked = Some(Instant::now());
+                self.songs_dirty = true;
+                continue;
+            }
             let progress = &mut self.progress;
             if let Moved::Full(unsent) = moved {
                 // The others take what's waiting first.
@@ -834,7 +923,7 @@ impl DeviceSync {
             if !matches!(moved, Moved::Deleted) {
                 progress.done = (progress.done + 1).min(progress.total);
             }
-            progress.changed |= matches!(moved, Moved::Sent(_) | Moved::Streamed { .. } | Moved::Fetched(_) | Moved::Gone(_) | Moved::Deleted);
+            progress.changed |= matches!(moved, Moved::Sent(_) | Moved::Streamed { .. } | Moved::Elsewhere { .. } | Moved::Fetched(_) | Moved::Gone(_) | Moved::Deleted);
             let shown = match &moved {
                 Moved::Fetched(key) => {
                     progress.fetched += 1;
@@ -858,14 +947,14 @@ impl DeviceSync {
                     self.moves_paused = Some(Instant::now() + RETRY);
                 }
                 Moved::Sent(_) | Moved::Gone(_) => self.ask_worker(songs::Request::Moved(moved.clone())),
-                Moved::Streamed { key, to } => {
+                Moved::Streamed { key, to } | Moved::Elsewhere { key, to } => {
                     self.given.insert(song_sync::want(to, key), Instant::now());
                 }
                 Moved::TooBig(key) => {
                     let name = name_of(here.songs, key);
                     self.progress.too_big.push(name);
                 }
-                Moved::Deleted | Moved::Full(_) => {}
+                Moved::Deleted | Moved::Full(_) | Moved::HubLost(_) => {}
             }
         }
         if self.moves_paused.is_some_and(|t| Instant::now() >= t) {
@@ -913,7 +1002,7 @@ impl DeviceSync {
             return;
         }
         let Some((server, server_key, identity, sync_key)) = self.sync_with(link) else { return };
-        let relay = Relay { server, server_key, identity, sync_key, dir: songs.dir().to_path_buf() };
+        let relay = Relay { server, server_key, identity, sync_key, dir: songs.dir().to_path_buf(), device: device.to_string(), hub: None };
         let stop = Arc::new(AtomicBool::new(false));
         let (device, wanted, tx, stopped) = (device.to_string(), Arc::clone(&self.wanted_ids), self.moves.0.clone(), Arc::clone(&stop));
         let spawned = std::thread::Builder::new().name("song inbox".into()).spawn(move || {
@@ -1152,10 +1241,10 @@ mod tests {
     /// One round on a device: sync the transfers, plan, do the tasks, and
     /// sync what they changed. Its state after.
     fn round(base: &str, key: &str, me: &Identity, state: State, device: &str, store: &mut crate::song_store::SongStore, wanted: &BTreeSet<String>) -> State {
-        let relay = Relay { server: base.into(), server_key: key.into(), identity: me.clone(), sync_key: [4; 32], dir: store.dir().to_path_buf() };
+        let relay = Relay { server: base.into(), server_key: key.into(), identity: me.clone(), sync_key: [4; 32], dir: store.dir().to_path_buf(), device: "test".into(), hub: None };
         let synced = sync(Job { blob: Blob::Transfers, ..job(base, key, me, &state, false) }).unwrap();
         let mut state = after(state, &synced);
-        let plan = song_sync::plan(&state.applied, device, store, wanted, &BTreeSet::new(), &BTreeSet::new());
+        let plan = song_sync::plan(&state.applied, device, store, wanted, &BTreeSet::new(), &BTreeSet::new(), None);
         let mut leaves = plan.leaves;
         for task in &plan.tasks {
             let moved = song_sync::run(&relay, task);

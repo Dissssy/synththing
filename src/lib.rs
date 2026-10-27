@@ -45,6 +45,7 @@ mod gamepad;
 mod headless;
 mod hub_api;
 mod hub;
+mod hub_server;
 mod import;
 mod instance;
 mod layout;

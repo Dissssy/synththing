@@ -23,6 +23,6 @@ COPY --from=build /src/target/release/synththing /usr/local/bin/synththing
 # pulling a new image, not in place).
 ENV SYNTHTHING_DOCKER=1
 VOLUME /data
-EXPOSE 7381
+EXPOSE 7381 7390
 ENTRYPOINT ["synththing"]
 CMD ["serve", "--data", "/data", "--bind", "0.0.0.0:7381"]
