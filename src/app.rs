@@ -2900,13 +2900,14 @@ impl App {
         };
         let mut wish = None;
         let (kept, wishes) = (&self.lookup.kept, &self.wishlist.list);
+        let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
         let mut menu = |ui: &mut egui::Ui, paths: &[PathBuf]| {
             if let Some(next) = queue::menu(ui) {
                 queued = Some((paths.to_vec(), next));
             }
             if let [path] = paths
                 && let Some(key) = store.key(path)
-                && let Some(album) = wishlist::album_wish_menu(ui, store, kept, wishes, &[key])
+                && let Some(album) = wishlist::album_wish_menu(ui, store, kept, wishes, online, &[key])
             {
                 wish = Some(album);
             }
@@ -2975,7 +2976,7 @@ impl App {
             self.queue_songs(ui.ctx(), paths, next);
         }
         if let Some(wish) = wish {
-            self.wish_from_library(ui.ctx(), wish);
+            self.wish_for_album(ui.ctx(), wish);
         }
         if let Some(query) = output.save_search {
             self.smart_playlist_from_search(ui.ctx(), &query);

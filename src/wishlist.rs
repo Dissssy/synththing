@@ -16,6 +16,7 @@ use serde_json::Value;
 
 use crate::fields::{Facts, Field};
 use crate::lookup::Kept;
+use crate::lookup::matching::Release;
 use crate::settings_sync::Fields;
 use crate::song_store::SongStore;
 
@@ -345,20 +346,22 @@ pub fn progress(wishlist: &Wishlist, store: &SongStore, kept: &Kept) -> BTreeMap
         .collect()
 }
 
-/// A wish for the album song `key` is on, if it's matched at MusicBrainz
-/// (and `kept` has its release) and some of that release's tracks aren't
-/// here.
-pub fn rest_of_album(store: &SongStore, kept: &Kept, key: &str) -> Option<Wish> {
-    let online = store.get_by_key(key)?.online.as_ref()?;
-    let (id, group) = (online.release.as_deref()?, online.group.clone()?);
-    let release = kept.release(id)?;
-    let on_it = |song: &crate::song_store::Song| song.online.as_ref().and_then(|o| o.release.as_deref()) == Some(id);
-    let have = store.known().filter(|(key, song)| store.has(key) && on_it(song)).count();
+/// The release song `key` is on at MusicBrainz: its match's, else the one
+/// its file says.
+pub fn release_of<'s>(store: &'s SongStore, key: &str) -> Option<&'s str> {
+    Facts::of(store.get_by_key(key)?).release()
+}
+
+/// A wish for the album `release` is (its group), if some of its tracks
+/// aren't here.
+pub fn rest_of(store: &SongStore, release: &Release) -> Option<Wish> {
+    let group = release.group.clone()?;
+    let have = store.known().filter(|(key, song)| store.has(key) && Facts::of(song).release() == Some(release.id.as_str())).count();
     (have < release.tracks.len()).then(|| Wish {
         artist: Some(release.artist.clone()).filter(|a| !a.is_empty()),
         year: release.first_released.as_deref().or(release.date.as_deref()).and_then(|d| d.split('-').next()).filter(|y| !y.is_empty()).map(str::to_string),
         musicbrainz: Some(group),
-        release: Some(id.to_string()),
+        release: Some(release.id.clone()),
         tracks: release.tracks.len() as u32,
         ..Wish::new(Kind::Album, &release.title)
     })
@@ -415,24 +418,23 @@ mod tests {
         let mut store = SongStore::open(music.clone());
         let stored = song_store::write_in(b"feather", "Feather.ogg", &music).unwrap();
         store.add(stored.clone());
+        assert_eq!(release_of(&store, &stored.key), None, "not matched");
         let online = Online { release: Some("r1".into()), group: Some("g1".into()), ..Online::default() };
         store.set_online(vec![(stored.key.clone(), Some(online))]);
-        let kept = Kept::default();
-        assert_eq!(rest_of_album(&store, &kept, &stored.key), None, "its release isn't known here");
+        assert_eq!(release_of(&store, &stored.key), Some("r1"));
         let track = crate::lookup::matching::Track::default();
-        let release = crate::lookup::matching::Release {
+        let release = Release {
             id: "r1".into(),
+            group: Some("g1".into()),
             title: "Modal Soul".into(),
             artist: "Nujabes".into(),
             first_released: Some("2005-11-11".into()),
             tracks: vec![track.clone(), track],
             ..Default::default()
         };
-        kept.keep_release(release.clone());
-        let wish = rest_of_album(&store, &kept, &stored.key).expect("one of two tracks here");
+        let wish = rest_of(&store, &release).expect("one of two tracks here");
         assert_eq!((wish.title.as_str(), wish.musicbrainz.as_deref(), wish.year.as_deref(), wish.tracks), ("Modal Soul", Some("g1"), Some("2005"), 2));
-        kept.keep_release(crate::lookup::matching::Release { tracks: vec![Default::default()], ..release });
-        assert_eq!(rest_of_album(&store, &kept, &stored.key), None, "all of it's here");
+        assert_eq!(rest_of(&store, &Release { tracks: vec![Default::default()], ..release }), None, "all of it's here");
         let _ = std::fs::remove_dir_all(&root);
     }
 

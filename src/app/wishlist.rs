@@ -44,6 +44,8 @@ pub(super) struct WishlistState {
     got: Option<HashSet<String>>,
     /// The parts folded away.
     folded: BTreeSet<State>,
+    /// An album's release asked of MusicBrainz, to wish for the rest of it.
+    fetching: Option<mpsc::Receiver<Result<crate::lookup::matching::Release, String>>>,
     selection: Selection,
     art: AlbumArt,
 }
@@ -59,6 +61,7 @@ impl Default for WishlistState {
             progress: None,
             got: None,
             folded: BTreeSet::new(),
+            fetching: None,
             selection: Selection::default(),
             art: AlbumArt::default(),
         }
@@ -83,6 +86,7 @@ impl App {
     /// Once a frame: work out what of each wish is here when the wishlist
     /// or the songs changed, and say which wishes just came true.
     pub(super) fn wishlist_tick(&mut self, ctx: &egui::Context) {
+        self.take_fetched_album(ctx);
         let revisions = (self.wishlist.list.revision(), self.songs.revision());
         if self.wishlist.progress.as_ref().is_some_and(|(seen, _)| *seen == revisions) {
             return;
@@ -106,10 +110,44 @@ impl App {
         self.wishlist_changed();
     }
 
-    /// Wish for `wish` from somewhere else in the app, and say so.
-    pub(super) fn wish_from_library(&mut self, ctx: &egui::Context, wish: Wish) {
-        toast::show(ctx, format!("Wished for {}", wish.title));
-        self.wish_for(wish);
+    /// Wish for the rest of an album from somewhere else in the app, and
+    /// say so: once MusicBrainz says what its tracks are, if it's to be
+    /// asked.
+    pub(super) fn wish_for_album(&mut self, ctx: &egui::Context, ask: AlbumAsk) {
+        match ask {
+            AlbumAsk::Wish(wish) => {
+                toast::show(ctx, format!("Wished for {}", wish.title));
+                self.wish_for(wish);
+            }
+            AlbumAsk::Fetch(release) => {
+                let (send, receive) = mpsc::channel();
+                let repaint = ctx.clone();
+                let started = std::thread::Builder::new().name("wishlist album".into()).spawn(move || {
+                    let _ = send.send(MusicBrainz::new().fresh_release(&release).map_err(|e| format!("{e:#}")));
+                    repaint.request_repaint();
+                });
+                match started {
+                    Ok(_) => self.wishlist.fetching = Some(receive),
+                    Err(e) => toast::show(ctx, format!("Couldn't ask MusicBrainz: {e}")),
+                }
+            }
+        }
+    }
+
+    /// An album asked about for the wishlist, once MusicBrainz answered.
+    fn take_fetched_album(&mut self, ctx: &egui::Context) {
+        let Some(answer) = self.wishlist.fetching.as_ref().and_then(|r| r.try_recv().ok()) else { return };
+        self.wishlist.fetching = None;
+        match answer {
+            Ok(release) => {
+                self.lookup.kept.keep_release(release.clone());
+                match crate::wishlist::rest_of(&self.songs, &release) {
+                    Some(wish) => self.wish_for_album(ctx, AlbumAsk::Wish(wish)),
+                    None => toast::show(ctx, format!("All of {} is here already", release.title)),
+                }
+            }
+            Err(e) => toast::show(ctx, format!("Couldn't ask MusicBrainz about its album: {e}")),
+        }
     }
 
     /// The wishes for albums none of are here, by ID: By Album shows them
@@ -467,18 +505,52 @@ impl App {
 }
 
 /// Where a wish's art comes from: the release it's on.
-/// "Wish for the rest of its album", in a menu of `songs` (keys): the wish,
-/// when it's clicked. Shown for the first of them that's matched to an
-/// album not all here and not on `wishlist` yet.
-pub(super) fn album_wish_menu(ui: &mut egui::Ui, store: &SongStore, kept: &Kept, wishlist: &Wishlist, songs: &[String]) -> Option<Wish> {
-    let wish = songs.iter().find_map(|key| crate::wishlist::rest_of_album(store, kept, key))?;
-    if wishlist.find(&wish).is_some() {
+/// What "Wish for the rest of its album" asks for: the wish, or (its
+/// release's tracks not known here yet) the release to ask MusicBrainz
+/// about first.
+pub(super) enum AlbumAsk {
+    Wish(Wish),
+    Fetch(String),
+}
+
+/// Whether to offer "Wish for the rest of its album" for `songs` (keys),
+/// and what to do when it's taken: for the first of them on a release at
+/// MusicBrainz that isn't all here (when `kept` knows its tracks; else,
+/// `online`, to ask) and isn't on `wishlist` yet.
+pub(super) fn album_ask(store: &SongStore, kept: &Kept, wishlist: &Wishlist, online: bool, songs: &[String]) -> Option<AlbumAsk> {
+    let release = songs.iter().find_map(|key| crate::wishlist::release_of(store, key))?;
+    if wishlist.wishes.values().any(|w| w.release.as_deref() == Some(release)) {
         return None;
     }
-    ui.button("Wish for the rest of its album")
-        .on_hover_text(format!("Put {} on your wishlist: it shows how much of it is here", wish.title))
-        .clicked()
-        .then_some(wish)
+    match kept.release(release) {
+        Some(known) => {
+            let wish = crate::wishlist::rest_of(store, &known)?;
+            wishlist.find(&wish).is_none().then_some(AlbumAsk::Wish(wish))
+        }
+        None if online => Some(AlbumAsk::Fetch(release.to_string())),
+        None => None,
+    }
+}
+
+impl AlbumAsk {
+    fn hover(&self) -> String {
+        match self {
+            AlbumAsk::Wish(wish) => format!("Wish for the rest of {}: it shows how much of it is here", wish.title),
+            AlbumAsk::Fetch(_) => "Wish for the rest of its album: asks MusicBrainz for its tracks first".into(),
+        }
+    }
+}
+
+/// [`album_ask`], as a menu item.
+pub(super) fn album_wish_menu(ui: &mut egui::Ui, store: &SongStore, kept: &Kept, wishlist: &Wishlist, online: bool, songs: &[String]) -> Option<AlbumAsk> {
+    let ask = album_ask(store, kept, wishlist, online, songs)?;
+    ui.button("Wish for the rest of its album").on_hover_text(ask.hover()).clicked().then_some(ask)
+}
+
+/// [`album_ask`], as a gift button.
+pub(super) fn album_wish_button(ui: &mut egui::Ui, ask: Option<AlbumAsk>) -> Option<AlbumAsk> {
+    let ask = ask?;
+    ui.add(super::icon_button("gift")).on_hover_text(ask.hover()).clicked().then_some(ask)
 }
 
 pub(super) fn source(wish: &Wish) -> Source {

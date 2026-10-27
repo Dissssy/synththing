@@ -156,7 +156,7 @@ enum Act {
     /// Make the set of songs that play together with this ID these, in
     /// order.
     Together(String, Vec<String>),
-    Wish(crate::wishlist::Wish),
+    Wish(super::wishlist::AlbumAsk),
     Unwish(String),
     GoToWishlist,
 }
@@ -312,7 +312,7 @@ impl App {
                 self.songs.set_together(&id, keys);
                 self.songs_changed();
             }
-            Some(Act::Wish(wish)) => self.wish_from_library(ui.ctx(), wish),
+            Some(Act::Wish(ask)) => self.wish_for_album(ui.ctx(), ask),
             Some(Act::Unwish(id)) => self.unwish(&id),
             Some(Act::GoToWishlist) => self.go_to_wishlist(),
             Some(Act::Shuffle(_)) | None => {}
@@ -554,7 +554,6 @@ impl App {
             if id == PLAYLISTS {
                 self.new_playlist_menu_ui(ui);
             }
-            let view = self.groupings.view();
             play_all = ui.add(icon_button("play")).on_hover_text("Play them all").clicked();
             ui.weak(count(groups.iter().filter(|g| wished(g).is_none()).count(), what));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -661,6 +660,7 @@ impl App {
         let mut opened = None;
         let mut queued = None;
         let mut menu_act = None;
+        let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
         if list {
             let height = 56.0;
             let rows = shown.len();
@@ -703,7 +703,7 @@ impl App {
                         if let Some(next) = super::queue::menu(ui) {
                             queued = Some((shown[row], next));
                         }
-                        if albums && let Some(wish) = super::wishlist::album_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, &group.songs) {
+                        if albums && let Some(wish) = super::wishlist::album_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs) {
                             menu_act = Some(Act::Wish(wish));
                         }
                     });
@@ -756,7 +756,7 @@ impl App {
                             if let Some(next) = super::queue::menu(ui) {
                                 queued = Some((i, next));
                             }
-                            if albums && let Some(wish) = super::wishlist::album_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, &group.songs) {
+                            if albums && let Some(wish) = super::wishlist::album_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs) {
                                 menu_act = Some(Act::Wish(wish));
                             }
                         });
@@ -827,6 +827,8 @@ impl App {
         let albums = albums(ruleset);
         let art_from = self.art_from(albums, group);
         let current = self.current_song.clone();
+        let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
+        let mut wish = albums.then(|| super::wishlist::album_ask(&self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs)).flatten();
         let links_to_artist = albums && id == "albums";
         let ignore = self.config.group_ignore.clone();
         let view = self.groupings.view();
@@ -936,6 +938,9 @@ impl App {
                         }
                         if albums && ui.add(icon_button("image")).on_hover_text("Choose art").clicked() {
                             choose_art = true;
+                        }
+                        if let Some(ask) = super::wishlist::album_wish_button(ui, wish.take()) {
+                            act = Some(Act::Wish(ask));
                         }
                     });
                 });
