@@ -32,6 +32,7 @@ fn kinds(path: &str) -> Option<&'static [Online]> {
     let section = path.strip_prefix("/api/v1/").unwrap_or(path).split('/').next().unwrap_or_default();
     match section {
         _ if path == FEEDBACK_PATH => None,
+        _ if path.starts_with("/hub/") => Some(&[Online::Sync]),
         "identity" | "sync" | "relay" | "pair" => Some(&[Online::Sync]),
         "info" | "documents" => Some(&[Online::Scripts, Online::Sync]),
         _ => Some(&[Online::Scripts]),
@@ -520,6 +521,75 @@ pub fn relay_inbox<W: std::io::Write>(
     } else {
         Err("a song streamed here didn't open with this device's sync key".into())
     }
+}
+
+/// How long a hub on the same network has to answer `hello`, and one
+/// further away.
+const HUB_NEAR: Duration = Duration::from_secs(2);
+const HUB_FAR: Duration = Duration::from_secs(8);
+
+#[derive(serde::Deserialize)]
+struct Hello {
+    key: String,
+    signature: String,
+}
+
+/// Whether the hub whose key is `hub_key` answers at `base` (`near`: on
+/// this network, so it's given less time).
+pub fn hub_hello(base: &str, hub_key: &str, near: bool) -> Result<(), String> {
+    let challenge = super::new_nonce();
+    let wait = if near { HUB_NEAR } else { HUB_FAR };
+    let request = agent().get(format!("{base}/hub/v1/hello")).query("challenge", &challenge).config().timeout_global(Some(wait)).build();
+    let hello: Hello = read(check(request.call())?)?;
+    if hello.key == hub_key && super::verify_hex(hub_key, &super::hub_hello_message(&challenge), &hello.signature) {
+        Ok(())
+    } else {
+        Err(format!("{base} isn't your hub"))
+    }
+}
+
+/// A request to a hub (at `base`, its key `hub_key`), signed by
+/// `identity`, from `device`.
+fn hub_request(base: &str, hub_key: &str, identity: &Identity, device: &str, method: &str, path: &str, timeout: Option<Duration>) -> ureq::RequestBuilder<ureq::typestate::WithBody> {
+    let path = format!("/hub/v1/{path}");
+    let request = match method {
+        "PUT" => agent().put(format!("{base}{path}")),
+        _ => agent().post(format!("{base}{path}")),
+    };
+    signed(request.config().timeout_global(timeout).build(), hub_key, identity, method, &path, &[]).header(super::DEVICE_HEADER, device)
+}
+
+/// What a hub made of a song sent to it.
+#[derive(Debug, PartialEq)]
+pub enum HubPut {
+    /// It took it.
+    Taken,
+    /// It has it already.
+    Has,
+    /// Another device is sending it now.
+    Busy,
+}
+
+/// Send the song at `file` (as `key`) to the hub, sealed with the sync key.
+pub fn hub_put(base: &str, hub_key: &str, identity: &Identity, device: &str, sync_key: &[u8; 32], key: &str, file: &std::path::Path) -> Result<HubPut, String> {
+    let response = send_song(hub_request(base, hub_key, identity, device, "PUT", &format!("songs/{key}"), send_timeout(file)), sync_key, file)?;
+    match response.status().as_u16() {
+        200 => Ok(HubPut::Has),
+        409 => Ok(HubPut::Busy),
+        _ => check(Ok(response)).map(|_| HubPut::Taken),
+    }
+}
+
+/// Fetch the song `key` from the hub, opened with the sync key, into `to`:
+/// whether it had it.
+pub fn hub_get(base: &str, hub_key: &str, identity: &Identity, device: &str, sync_key: &[u8; 32], key: &str, to: impl std::io::Write) -> Result<bool, String> {
+    let response = hub_request(base, hub_key, identity, device, "POST", &format!("songs/{key}/get"), Some(RELAY_TIMEOUT))
+        .send_empty()
+        .map_err(|e| format!("couldn't reach the hub ({e})"))?;
+    if response.status().as_u16() == 404 {
+        return Ok(false);
+    }
+    open_song(sync_key, check(Ok(response))?, to)
 }
 
 /// Park a sealed sign-in handoff on a server, for another device to take.

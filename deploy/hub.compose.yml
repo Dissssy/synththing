@@ -34,6 +34,13 @@ services:
       # `docker exec synththing-hub synththing hub token <name> --grant ...`:
       # true lets in other containers on its network.
       - SYNTHTHING_API_LAN=false
+      # Where your devices reach it to send and take songs directly
+      # (comma-separated, nearest first): this machine's address on your
+      # network, and your public address if port 7390 is forwarded to it.
+      # Without one, songs go through the relay only.
+      - SYNTHTHING_HUB_URL=http://192.168.1.20:7390
+    ports:
+      - "7390:7390"
     volumes:
       - ./hub:/data
     # (Watchtower, as in docker-compose.yml, only updates containers with

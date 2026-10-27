@@ -9,6 +9,6 @@ RUN apt-get update \
 COPY synththing-linux-x86_64 /usr/local/bin/synththing
 ENV SYNTHTHING_DOCKER=1
 VOLUME /data
-EXPOSE 7381
+EXPOSE 7381 7390
 ENTRYPOINT ["synththing"]
 CMD ["serve", "--data", "/data", "--bind", "0.0.0.0:7381"]
