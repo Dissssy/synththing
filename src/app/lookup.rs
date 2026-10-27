@@ -296,11 +296,14 @@ impl App {
         };
         ui.add_space(4.0);
         let mut wrong = false;
+        let lookups = self.config.online_lookup && build_info::online(build_info::Online::Lookup);
+        let mut wish = super::wishlist::album_ask(&self.songs, &self.lookup.kept, &self.wishlist.list, lookups, &[key]);
         egui::Grid::new("online_match").num_columns(2).show(ui, |ui| {
             ui.strong("Matched to");
             ui.horizontal(|ui| {
                 ui.hyperlink_to("Release on MusicBrainz", format!("https://musicbrainz.org/release/{release}"));
                 wrong = ui.button("Wrong match").on_hover_text("It isn't this album: look it up again, leaving this one out").clicked();
+                wish = super::wishlist::album_wish_button(ui, wish.take());
             });
             ui.end_row();
             if let Some(recording) = &online.recording {
@@ -312,6 +315,9 @@ impl App {
             ui.label(format!("{} on {}", if online.by_user { "By you" } else { "By the lookup" }, crate::fields::date(online.at)));
             ui.end_row();
         });
+        if let Some(wish) = wish {
+            self.wish_for_album(ui.ctx(), wish);
+        }
         if wrong {
             self.wrong_match(&release);
         }

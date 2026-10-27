@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use eframe::egui;
 
-use super::{icon_button, is_midi_path, naming, App, PrefTab};
+use super::{icon_button, is_midi_path, naming, toast, App, PrefTab};
 use crate::album_art::{AlbumArt, Source as AlbumArtSource};
 use crate::fields::{self, Facts, Field};
 use crate::select_list;
@@ -39,6 +39,16 @@ pub(super) const PLAYLISTS: &str = "playlists";
 pub(super) const TOGETHER: &str = "together";
 /// The ruleset shown first.
 const FIRST: &str = PLAYLISTS;
+/// The built-in ruleset of albums, where the wishlist's albums show.
+const ALBUMS: &str = "albums";
+/// What a wished album's key starts with, among By Album's groups (it
+/// stands in for an album none of is here: `App::with_wished`).
+const WISHED: &str = "wish:";
+
+/// The wish a group stands in for (its ID), if it does.
+fn wished(group: &Group) -> Option<&str> {
+    group.key.strip_prefix(WISHED)
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Sort {
@@ -88,6 +98,9 @@ struct Track {
     starred: bool,
     /// Its file's here (it can play).
     here: bool,
+    /// It isn't in the library at all: it's on the album's track list at
+    /// MusicBrainz (its `path` only names it).
+    missing: bool,
 }
 
 /// The Groupings' state, for the session.
@@ -103,9 +116,18 @@ pub(super) struct Groupings {
     /// The playlists as groups, and the fingerprint of the playlists
     /// they were made from.
     playlists: Option<(u64, Arc<Vec<Group>>)>,
+    /// By Album's groups with the wished albums among them, and the
+    /// fingerprint of what they were made from.
+    with_wished: Option<(u64, Arc<Vec<Group>>)>,
 }
 
 impl Groupings {
+    /// Make the open group's songs again: an album's track list at
+    /// MusicBrainz is newly kept.
+    pub(super) fn tracks_changed(&mut self) {
+        self.page = None;
+    }
+
     fn shown(&self) -> &str {
         self.shown.as_deref().unwrap_or(FIRST)
     }
@@ -143,6 +165,9 @@ enum Act {
     /// Make the set of songs that play together with this ID these, in
     /// order.
     Together(String, Vec<String>),
+    Wish(super::wishlist::AlbumAsk),
+    Unwish(String),
+    GoToWishlist,
 }
 
 /// "3 songs": how many of `what` (singular) there are.
@@ -189,6 +214,17 @@ fn smart_badge(ui: &egui::Ui, rect: egui::Rect) {
     let font = egui::FontId::new(size * 0.62, egui::FontFamily::Name(super::fonts::PHOSPHOR_FILL.into()));
     let color = ui.visuals().selection.stroke.color.gamma_multiply(0.85);
     painter.text(notch.center(), egui::Align2::CENTER_CENTER, super::icon(super::smart::SMART_ICON), font, color);
+}
+
+/// A wished album's mark on its tile at `rect`: dimmed, with a gift in the
+/// corner, so it reads as one that isn't here.
+fn wished_veil(ui: &egui::Ui, rect: egui::Rect) {
+    let painter = ui.painter();
+    painter.rect_filled(rect, 4.0, ui.visuals().panel_fill.gamma_multiply(0.6));
+    let size = (rect.height() * 0.3).clamp(14.0, 40.0);
+    let font = egui::FontId::new(size * 0.7, egui::FontFamily::Name(super::fonts::PHOSPHOR_FILL.into()));
+    let at = rect.right_top() + egui::vec2(-size * 0.6, size * 0.6);
+    painter.text(at, egui::Align2::CENTER_CENTER, super::icon("gift"), font, ui.visuals().selection.stroke.color);
 }
 
 /// Draw only the rows of `heights` in sight, in a scroll area filling
@@ -285,6 +321,9 @@ impl App {
                 self.songs.set_together(&id, keys);
                 self.songs_changed();
             }
+            Some(Act::Wish(ask)) => self.wish_for_album(ui.ctx(), ask),
+            Some(Act::Unwish(id)) => self.unwish(&id),
+            Some(Act::GoToWishlist) => self.go_to_wishlist(),
             Some(Act::Shuffle(_)) | None => {}
         }
     }
@@ -296,7 +335,10 @@ impl App {
         } else {
             let rulesets = self.all_rulesets();
             let (id, ruleset) = rulesets.iter().find(|(id, _)| id == self.groupings.shown()).or(rulesets.first()).cloned()?;
-            let groups = self.groups_of(&id, &ruleset.rules);
+            let mut groups = self.groups_of(&id, &ruleset.rules);
+            if id == ALBUMS && !self.config.hide_wished {
+                groups = self.with_wished(groups);
+            }
             (id, ruleset.clone(), what(&ruleset), groups)
         };
         self.groupings.shown = Some(id.clone());
@@ -305,6 +347,42 @@ impl App {
             Some(group) => self.group_page_ui(ui, &id, &ruleset, &group),
             None => self.groups_ui(ui, &id, what, albums(&ruleset), self.songs.revision(), &groups),
         }
+    }
+
+    /// By Album's `groups` with the albums on the wishlist none of are
+    /// here among them, by title, made again when either changes.
+    fn with_wished(&mut self, groups: Arc<Vec<Group>>) -> Arc<Vec<Group>> {
+        let wanted = self.wanted_albums();
+        if wanted.is_empty() {
+            return groups;
+        }
+        let fingerprint = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (Arc::as_ptr(&groups) as usize, groups.len(), self.config.sort_with_articles).hash(&mut hasher);
+            for (id, wish) in &wanted {
+                (id, &wish.title, &wish.artist).hash(&mut hasher);
+            }
+            hasher.finish()
+        };
+        if let Some((seen, made)) = &self.groupings.with_wished
+            && *seen == fingerprint
+        {
+            return made.clone();
+        }
+        let mut all = (*groups).clone();
+        all.extend(wanted.iter().map(|(id, wish)| Group {
+            key: format!("{WISHED}{id}"),
+            title: wish.title.clone(),
+            sort: fields::sort_text(&wish.title, self.config.sort_with_articles),
+            subtitle: wish.artist.clone(),
+            artists: Vec::new(),
+            songs: Vec::new(),
+        }));
+        all.sort_by(|a, b| a.sort.cmp(&b.sort));
+        let all = Arc::new(all);
+        self.groupings.with_wished = Some((fingerprint, all.clone()));
+        all
     }
 
     /// The songs that play together as groups: each set titled by its
@@ -460,6 +538,9 @@ impl App {
         if !albums {
             return AlbumArtSource::default();
         }
+        if let Some(wish) = wished(group).and_then(|id| self.wishlist.list.wishes.get(id)) {
+            return super::wishlist::source(wish);
+        }
         let file = group.songs.iter().filter(|key| self.songs.has(key)).map(|key| self.songs.path(key)).find(|p| !is_midi_path(p));
         let release = group
             .songs
@@ -482,10 +563,21 @@ impl App {
             if id == PLAYLISTS {
                 self.new_playlist_menu_ui(ui);
             }
-            let view = self.groupings.view();
             play_all = ui.add(icon_button("play")).on_hover_text("Play them all").clicked();
-            ui.weak(count(groups.len(), what));
+            ui.weak(count(groups.iter().filter(|g| wished(g).is_none()).count(), what));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if id == ALBUMS && !self.wishlist.list.wishes.is_empty() {
+                    let shown = !self.config.hide_wished;
+                    let hover = "Wished albums: show the albums on your wishlist that none of are here yet, dimmed";
+                    if ui.add(icon_button("gift").selected(shown)).on_hover_text(hover).clicked() {
+                        self.config.hide_wished = shown;
+                        toast::show(ui.ctx(), if shown { "Wished albums: hidden" } else { "Wished albums: shown" });
+                        if let Err(e) = self.config.save() {
+                            log::warn!("saving the config: {e}");
+                        }
+                    }
+                }
+                let view = self.groupings.view();
                 if ui.add(icon_button("list").selected(list)).on_hover_text("As a list").clicked() {
                     list = true;
                 }
@@ -558,6 +650,16 @@ impl App {
             if smart.contains(&group.key) {
                 smart_badge(ui, rect);
             }
+            if wished(group).is_some() {
+                wished_veil(ui, rect);
+            }
+        };
+        // (A wished album's menu: what's on it is on the wishlist.)
+        let wished_menu = |ui: &mut egui::Ui, id: &str| {
+            if ui.button("Show in the wishlist").clicked() {
+                return Some(Act::GoToWishlist);
+            }
+            ui.button("Take off the wishlist").clicked().then(|| Act::Unwish(id.to_string()))
         };
 
         // (Art's looked for only for the tiles in sight. Each row's drawn
@@ -566,6 +668,8 @@ impl App {
         // told.)
         let mut opened = None;
         let mut queued = None;
+        let mut menu_act = None;
+        let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
         if list {
             let height = 56.0;
             let rows = shown.len();
@@ -591,7 +695,7 @@ impl App {
                     ui.scope_builder(egui::UiBuilder::new().max_rect(text).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
                         ui.style_mut().interaction.selectable_labels = false;
                         ui.add(egui::Label::new(egui::RichText::new(&group.title).strong()).truncate());
-                        let mut detail = count(group.songs.len(), "song");
+                        let mut detail = if wished(group).is_some() { "On your wishlist".to_string() } else { count(group.songs.len(), "song") };
                         if let Some(subtitle) = &group.subtitle {
                             detail = format!("{subtitle} \u{b7} {detail}");
                         }
@@ -601,8 +705,15 @@ impl App {
                         opened = Some(group.key.clone());
                     }
                     crate::menu::context(&response, |ui| {
+                        if let Some(wish) = wished(group) {
+                            menu_act = wished_menu(ui, wish);
+                            return;
+                        }
                         if let Some(next) = super::queue::menu(ui) {
                             queued = Some((shown[row], next));
+                        }
+                        if albums && let Some(wish) = super::wishlist::album_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs) {
+                            menu_act = Some(Act::Wish(wish));
                         }
                     });
                 }
@@ -640,14 +751,22 @@ impl App {
                             ui.style_mut().interaction.selectable_labels = false;
                             ui.add(egui::Label::new(&group.title).truncate());
                             let detail = group.subtitle.clone().unwrap_or_else(|| count(group.songs.len(), "song"));
+                            let detail = if wished(group).is_some() { format!("{detail} \u{b7} wished") } else { detail };
                             ui.add(egui::Label::new(egui::RichText::new(detail).weak()).truncate());
                         });
                         if response.clicked() {
                             opened = Some(group.key.clone());
                         }
                         crate::menu::context(&response, |ui| {
+                            if let Some(wish) = wished(group) {
+                                menu_act = wished_menu(ui, wish);
+                                return;
+                            }
                             if let Some(next) = super::queue::menu(ui) {
                                 queued = Some((i, next));
+                            }
+                            if albums && let Some(wish) = super::wishlist::album_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs) {
+                                menu_act = Some(Act::Wish(wish));
                             }
                         });
                     }
@@ -655,7 +774,10 @@ impl App {
             });
         }
         if let Some(key) = opened {
-            act = Some(Act::Open(id.to_string(), key));
+            act = Some(if key.starts_with(WISHED) { Act::GoToWishlist } else { Act::Open(id.to_string(), key) });
+        }
+        if menu_act.is_some() {
+            act = menu_act;
         }
         if let Some((i, next)) = queued {
             act = Some(Act::Queue(self.playable(&groups[i]), next));
@@ -696,12 +818,53 @@ impl App {
                     length: facts.number(Field::Length),
                     starred: facts.starred(),
                     here,
+                    missing: false,
                     path,
                 }
             })
             .collect();
-        let tracks = Arc::new(tracks);
+        let tracks = Arc::new(self.with_missing(id, group, tracks));
         self.groupings.page = Some((revision, id.to_string(), group.key.clone(), tracks.clone()));
+        tracks
+    }
+
+    /// `tracks` of an album, with those of its release at MusicBrainz
+    /// (when this device keeps its track list) that aren't in the library
+    /// in their places.
+    fn with_missing(&self, id: &str, group: &Group, mut tracks: Vec<Track>) -> Vec<Track> {
+        if id != ALBUMS {
+            return tracks;
+        }
+        let Some(release) = group.songs.iter().find_map(|key| crate::wishlist::release_of(&self.songs, key)).and_then(|r| self.lookup.kept.release(r)) else {
+            return tracks;
+        };
+        let facts: Vec<Facts> = group.songs.iter().filter_map(|key| self.songs.get_by_key(key)).map(Facts::of).collect();
+        let on_it: Vec<&Facts> = facts.iter().filter(|f| f.release() == Some(release.id.as_str())).collect();
+        let missing: Vec<Track> = release
+            .tracks
+            .iter()
+            .filter(|t| {
+                let recorded = |f: &&Facts| t.recording.is_some() && f.recording() == t.recording.as_deref();
+                let placed = |f: &&Facts| f.number(Field::Disc).unwrap_or(1.0) as u32 == t.disc && f.number(Field::Track).map(|n| n as u32) == Some(t.position);
+                !on_it.iter().any(|f| recorded(f) || placed(f))
+            })
+            .map(|t| Track {
+                path: PathBuf::from(format!("musicbrainz:{}/{}/{}", release.id, t.disc, t.position)),
+                name: t.title.clone(),
+                artists: Vec::new(),
+                album: Some(release.title.clone()),
+                disc: Some(t.disc),
+                number: Some(t.position),
+                length: t.length,
+                starred: false,
+                here: false,
+                missing: true,
+            })
+            .collect();
+        if !missing.is_empty() {
+            tracks.extend(missing);
+            tracks.sort_by_key(|t| (t.disc.unwrap_or(1), t.number.unwrap_or(u32::MAX)));
+        }
         tracks
     }
 
@@ -714,6 +877,8 @@ impl App {
         let albums = albums(ruleset);
         let art_from = self.art_from(albums, group);
         let current = self.current_song.clone();
+        let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
+        let mut wish = albums.then(|| super::wishlist::album_ask(&self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs)).flatten();
         let links_to_artist = albums && id == "albums";
         let ignore = self.config.group_ignore.clone();
         let view = self.groupings.view();
@@ -773,8 +938,9 @@ impl App {
         }
 
         let playable: Vec<PathBuf> = tracks.iter().filter(|t| t.here).map(|t| t.path.clone()).collect();
-        let all_starred = tracks.iter().all(|t| t.starred);
-        let length: f64 = tracks.iter().filter_map(|t| t.length).sum();
+        let all_starred = tracks.iter().filter(|t| !t.missing).all(|t| t.starred);
+        let length: f64 = tracks.iter().filter(|t| !t.missing).filter_map(|t| t.length).sum();
+        let songs = tracks.iter().filter(|t| !t.missing).count();
         let art_cache = &mut self.groupings.art;
         let view = self.groupings.views.entry(id.to_string()).or_default();
         let mut act = None;
@@ -806,7 +972,7 @@ impl App {
                             ui.label(subtitle);
                         }
                     }
-                    ui.weak(format!("{} \u{b7} {}", count(tracks.len(), "song"), format_length(length)));
+                    ui.weak(format!("{} \u{b7} {}", count(songs, "song"), format_length(length)));
                     ui.horizontal(|ui| {
                         if ui.add(icon_button("play")).on_hover_text("Play").clicked() {
                             act = Some(Act::Play(playable.clone(), 0));
@@ -823,6 +989,9 @@ impl App {
                         }
                         if albums && ui.add(icon_button("image")).on_hover_text("Choose art").clicked() {
                             choose_art = true;
+                        }
+                        if let Some(ask) = super::wishlist::album_wish_button(ui, wish.take()) {
+                            act = Some(Act::Wish(ask));
                         }
                     });
                 });
@@ -886,6 +1055,9 @@ impl App {
 /// What a song not here yet says on hover.
 const NOT_HERE: &str = "Not on this device yet: it's coming from your other devices";
 
+/// What a song of an album that isn't in the library says on hover.
+const MISSING: &str = "Not in your library: it's on this album at MusicBrainz";
+
 /// What happened on a track's row.
 #[derive(Default)]
 struct RowOutput {
@@ -924,7 +1096,7 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
     };
     let mut response = ui.interact(rect, ui.id().with(("track", &track.path)), sense - egui::Sense::FOCUSABLE);
     if !track.here {
-        response = response.on_hover_text(NOT_HERE);
+        response = response.on_hover_text(if track.missing { MISSING } else { NOT_HERE });
     }
     let pick = !touch && ui.input(|i| i.modifiers.command || i.modifiers.shift);
     let mut output = RowOutput { picked: response.clicked() && pick, play: response.clicked() && !pick && !response.double_clicked(), ..RowOutput::default() };
@@ -970,7 +1142,8 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
             let (icon, _) = ui.allocate_exact_size(egui::vec2(select_list::STAR_WIDTH, ui.available_height()), egui::Sense::hover());
             let font = egui::TextStyle::Body.resolve(ui.style());
             let color = ui.visuals().weak_text_color();
-            ui.painter().text(icon.center(), egui::Align2::CENTER_CENTER, super::icon("cloud-arrow-down"), font, color);
+            let glyph = super::icon(if track.missing { "circle-dashed" } else { "cloud-arrow-down" });
+            ui.painter().text(icon.center(), egui::Align2::CENTER_CENTER, glyph, font, color);
         }
         let number = track.number.map_or(String::new(), |n| n.to_string());
         ui.add_sized([24.0, rect.height()], egui::Label::new(egui::RichText::new(number).weak()));

@@ -153,6 +153,12 @@ impl App {
         }
     }
 
+    /// Go to `page`.
+    pub(super) fn show_mobile_page(&mut self, page: Page) {
+        self.mobile_state.page = page;
+        self.mobile_state.drawer_open = false;
+    }
+
     /// Whether the mobile layout is showing: always on Android, else as
     /// chosen (View > Mobile layout).
     pub(super) fn mobile(&self) -> bool {
