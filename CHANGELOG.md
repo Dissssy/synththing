@@ -8,6 +8,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - The local API says which tracks of an album partly got are still `missing` (`GET /v1/wishlist`), and a staged song's `duplicates` already in the library (and whether it's `better` than them), so a program can fetch just what's missing and leave out what you have.
 
 ### Fixed
+- A hub works out what of a wished album is here as the app does: it asks MusicBrainz for the album's tracks, so programs reading its wishlist (`got`, `missing`) no longer see an album you have as still wanted.
 - A wished album's count ("101 of 109") goes by the edition its page lists, the same tracks it shows as here, rather than by an edition this device doesn't know.
 
 ## 1.7.4 (2026-10-27)

@@ -9,8 +9,11 @@
 //! containers are). Programs' panels it hosts for the user's devices
 //! (`panel_share.rs`), as the app does: a hub shows none itself.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::time::{Instant, SystemTime};
 
 use eframe::egui;
@@ -53,7 +56,15 @@ pub struct HubApi {
     kept: Kept,
     /// What of each wish is here, worked out for these revisions (the
     /// wishlist's and the songs').
-    progress: Option<((u64, u64), BTreeMap<String, Progress>)>,
+    progress: Option<(Revisions, BTreeMap<String, Progress>)>,
+    /// Whether it may ask MusicBrainz (the settings' online lookups).
+    online: bool,
+    /// Wished releases asked of MusicBrainz for their tracks (`kept`
+    /// lacking them), once a run, on a thread of their own; how many have
+    /// come.
+    asked: HashSet<String>,
+    ask: Option<Sender<String>>,
+    fetched: Arc<AtomicU64>,
     /// What the last events told of: the songs' revision, the playlists
     /// and the wishlist (hashes).
     seen: Option<(u64, u64, u64)>,
@@ -63,6 +74,9 @@ pub struct HubApi {
     host: Host,
     outbox: Outbox,
 }
+
+/// The wishlist's, the songs' and the fetched track lists' revisions.
+type Revisions = (u64, u64, u64);
 
 /// Where the hub's live messages go, and as which device: the server,
 /// and the devices listening to the hub (`serving`) while it serves.
@@ -77,6 +91,7 @@ impl HubApi {
     /// answered, events sent.
     pub fn tick(&mut self, here: &mut Here) {
         self.read_apps(here.config);
+        self.online = here.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
         let (port, lan) = where_to_listen(here.config);
         if self.apps.is_empty() {
             self.server = None;
@@ -175,12 +190,47 @@ impl HubApi {
         };
     }
 
+    /// What of each wish is here, as the app works it out: an album by its
+    /// wished release's tracks, which the hub asks MusicBrainz for (it
+    /// never opens the album's page, which is where the app asks).
     fn progress(&mut self, songs: &SongStore, wishlist: &Wishlist) -> &BTreeMap<String, Progress> {
-        let revisions = (wishlist.revision(), songs.revision());
+        let revisions = (wishlist.revision(), songs.revision(), self.fetched.load(Ordering::Relaxed));
         if self.progress.as_ref().is_none_or(|(at, _)| *at != revisions) {
+            if self.online {
+                let wanted: Vec<String> = wishlist.wishes.values().filter(|w| w.kind == crate::wishlist::Kind::Album).filter_map(|w| w.release.clone()).filter(|r| self.kept.release(r).is_none()).collect();
+                for release in wanted {
+                    if self.asked.insert(release.clone()) {
+                        self.ask_tracks(release);
+                    }
+                }
+            }
             self.progress = Some((revisions, crate::wishlist::progress(wishlist, songs, &self.kept)));
         }
         &self.progress.as_ref().expect("just worked out").1
+    }
+
+    fn ask_tracks(&mut self, release: String) {
+        let ask = self.ask.get_or_insert_with(|| {
+            let (tx, rx) = mpsc::channel::<String>();
+            let (kept, fetched) = (self.kept.clone(), self.fetched.clone());
+            let spawned = std::thread::Builder::new().name("wished tracks".into()).spawn(move || {
+                let mut musicbrainz = crate::lookup::musicbrainz::MusicBrainz::new();
+                for release in rx {
+                    match musicbrainz.fresh_release(&release) {
+                        Ok(found) => kept.keep_release(found),
+                        Err(e) => log::warn!("asking MusicBrainz for a wished album's tracks: {e:#}"),
+                    }
+                    fetched.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+            if let Err(e) = spawned {
+                log::warn!("couldn't ask MusicBrainz for wished albums' tracks: {e}");
+            }
+            tx
+        });
+        if ask.send(release).is_err() {
+            self.ask = None;
+        }
     }
 
     fn answer(&mut self, call: Call, here: &mut Here) {
