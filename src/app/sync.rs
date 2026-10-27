@@ -40,7 +40,7 @@ impl App {
     }
 
     /// The authority and who's signed in, for syncing.
-    fn sync_link(&self) -> Link {
+    pub(super) fn sync_link(&self) -> Link {
         let (server, server_key) = self.authority();
         let relay_song_mb = self.library_server_info().map(|i| i.relay_song_mb);
         Link { server, server_key, identity: self.library_identity(), relay_song_mb }

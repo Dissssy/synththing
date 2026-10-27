@@ -30,7 +30,7 @@ use crate::song_list::Autoplay;
 
 use crate::commands::Command;
 use crate::fields::{Facts, Field};
-use crate::panel::Panel;
+use crate::panel::{Given, Panel};
 use crate::smart::{Group, Order, Rules, Ruleset, Split, SplitBy};
 use crate::song_store::{self, Song, SongStore, Stored};
 use crate::visualizer_stream::Format;
@@ -110,6 +110,9 @@ pub struct Access {
     /// May show a panel in the Apps tab (`PUT /v1/panel`). Never on unless
     /// the user ticks it.
     pub panel: bool,
+    /// Its panel shows on the user's other devices too (`panel_share.rs`),
+    /// which can use it there. Never on unless the user ticks it.
+    pub share: bool,
 }
 
 impl Access {
@@ -128,6 +131,7 @@ impl Access {
             edit_library: false,
             download_songs: false,
             panel: false,
+            share: false,
         };
         (access, token)
     }
@@ -609,11 +613,19 @@ impl Stream {
 }
 
 /// The programs' panels, in the order they first came, and a count that
-/// goes up with every change, so the app only looks again after one.
-#[derive(Default)]
+/// goes up with every change, so the app only looks again after one. It
+/// starts at the time (in ms), so a value given after a restart counts as
+/// newer on other devices too.
 struct Panels {
     revision: u64,
     shown: Vec<ShownPanel>,
+}
+
+impl Default for Panels {
+    fn default() -> Self {
+        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        Panels { revision: ms, shown: Vec::new() }
+    }
 }
 
 /// A program's panel, as the Apps tab shows it.
@@ -624,13 +636,25 @@ pub struct ShownPanel {
     /// The program's name, as the user typed it.
     pub name: String,
     pub panel: Panel,
-    /// Textboxes (by ID) the program has given a value since the app last
-    /// looked, with the latest value: each is taken once, so a later
-    /// change elsewhere in the panel doesn't put it back over what's been
-    /// typed since.
-    pub fresh: Vec<(String, String)>,
-    /// The panel as sent, for `PATCH` to change.
-    source: serde_json::Value,
+    /// The latest value the program gave each textbox, and when: each is
+    /// taken once (by whoever shows the panel), so a later change elsewhere
+    /// in the panel doesn't put it back over what's been typed since.
+    pub given: Vec<Given>,
+    /// The panel as sent, for `PATCH` to change (and other devices to
+    /// show).
+    pub source: serde_json::Value,
+    /// It shows on the user's other devices too (`Access::share`).
+    pub share: bool,
+}
+
+impl ShownPanel {
+    /// Note the values given to textboxes, as of `revision`.
+    fn give(&mut self, values: Vec<(String, String)>, revision: u64) {
+        for (id, value) in values {
+            self.given.retain(|g| g.id != id);
+            self.given.push(Given { id, value, revision });
+        }
+    }
 }
 
 /// The library's revisions while synththing runs: each song as it was
@@ -737,9 +761,12 @@ impl Server {
         if *self.shared.apps.read().unwrap_or_else(|p| p.into_inner()) != apps {
             *self.shared.apps.write().unwrap_or_else(|p| p.into_inner()) = apps.to_vec();
             let mut panels = lock(&self.shared.panels);
-            let before = panels.shown.len();
+            let before = panels.shown.clone();
             panels.shown.retain(|shown| apps.iter().any(|a| a.token == shown.app && a.panel));
-            if panels.shown.len() != before {
+            for shown in &mut panels.shown {
+                shown.share = apps.iter().any(|a| a.token == shown.app && a.share);
+            }
+            if panels.shown != before {
                 panels.revision += 1;
             }
         }
@@ -748,14 +775,10 @@ impl Server {
     /// The programs' panels, if they changed since `revision` (which then
     /// moves on to now).
     pub fn panels(&self, revision: &mut u64) -> Option<Vec<ShownPanel>> {
-        let mut panels = lock(&self.shared.panels);
+        let panels = lock(&self.shared.panels);
         (panels.revision != *revision).then(|| {
             *revision = panels.revision;
-            let shown = panels.shown.clone();
-            for panel in &mut panels.shown {
-                panel.fresh.clear();
-            }
-            shown
+            panels.shown.clone()
         })
     }
 
@@ -928,6 +951,7 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
                 "edit_library": access.edit_library,
                 "download_songs": access.download_songs,
                 "panel": access.panel,
+                "share": access.share,
             }),
         )),
         (Method::Get, ["v1", "events"]) => match needs(access.read, "read").map_or_else(|| wanted_events(&query), Err) {
@@ -1802,15 +1826,19 @@ fn set_panel(shared: &Shared, request: &mut Request, access: &Access) -> Reply {
         Err(why) => return error(400, why),
     };
     let mut panels = lock(&shared.panels);
-    let fresh = panel.values();
-    match panels.shown.iter_mut().find(|s| s.app == access.token) {
-        Some(had) => {
-            had.fresh.extend(fresh);
-            (had.name, had.panel, had.source) = (access.name.clone(), panel, source);
-        }
-        None => panels.shown.push(ShownPanel { app: access.token.clone(), name: access.name.clone(), panel, fresh, source }),
-    }
     panels.revision += 1;
+    let revision = panels.revision;
+    let values = panel.values();
+    let shown = match panels.shown.iter().position(|s| s.app == access.token) {
+        Some(at) => &mut panels.shown[at],
+        None => {
+            let (app, name, share) = (access.token.clone(), access.name.clone(), access.share);
+            panels.shown.push(ShownPanel { app, name, panel: panel.clone(), given: Vec::new(), source: source.clone(), share });
+            panels.shown.last_mut().expect("just pushed")
+        }
+    };
+    (shown.name, shown.panel, shown.source) = (access.name.clone(), panel, source);
+    shown.give(values, revision);
     shared.waker.request_repaint();
     Response::from_data(Vec::new()).with_status_code(204)
 }
@@ -1832,8 +1860,10 @@ fn patch_panel(shared: &Shared, request: &mut Request, access: &Access, id: &str
         Ok(panel) => (shown.panel, shown.source) = (panel, source),
         Err(why) => return error(400, why),
     }
-    shown.fresh.extend(value.map(|value| (id.to_string(), value)));
-    panels.revision += 1;
+    let revision = panels.revision + 1;
+    let shown = panels.shown.iter_mut().find(|s| s.app == access.token).expect("found above");
+    shown.give(value.map(|value| (id.to_string(), value)).into_iter().collect(), revision);
+    panels.revision = revision;
     shared.waker.request_repaint();
     Response::from_data(Vec::new()).with_status_code(204)
 }
@@ -2394,10 +2424,11 @@ mod tests {
         assert_eq!(patch("nope", r#"{"hint": "x"}"#), 404);
         assert_eq!(patch("q", r#"{"multiline": "yes"}"#), 400);
         let shown = server.panels(&mut revision).unwrap();
-        assert_eq!(shown[0].fresh, vec![("q".to_string(), "overworld".to_string())]);
+        let given = &shown[0].given;
+        assert_eq!((given.len(), given[0].id.as_str(), given[0].value.as_str(), given[0].revision), (1, "q", "overworld", revision));
         assert!(matches!(&shown[0].panel.elements[0].kind, crate::panel::Kind::Textbox { value: Some(v), .. } if v == "overworld"));
         assert_eq!(patch("q", r#"{"hint": "Search"}"#), 204);
-        assert!(server.panels(&mut revision).unwrap()[0].fresh.is_empty(), "a value is handed over once");
+        assert_eq!(server.panels(&mut revision).unwrap()[0].given[0].revision, revision - 1, "a value given once stays given once");
         assert!(!server.connected(&finder_hash));
 
         // (The reader's stream hears nothing of Finder's panel; Finder's own
@@ -2421,6 +2452,11 @@ mod tests {
         server.event("seeked", &serde_json::json!({ "position": 1.0 }));
         assert_eq!(reader_stream.join().unwrap(), "event: seeked");
 
+        // (The first stream goes at its next ping, its reader gone: wait,
+        // so the one opened next is the one the goodbye has to close.)
+        while server.connected(&finder_hash) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         let finder_stream = listen(finder_token.clone());
         while !server.connected(&finder_hash) {
             std::thread::sleep(Duration::from_millis(5));

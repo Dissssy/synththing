@@ -27,6 +27,10 @@ enum Event {
     New(Notification),
     /// Synced data changed on the server (`sync.rs`).
     Synced(library::sync::Changed),
+    /// The stream opened: live messages (`device_messages.rs`) come now.
+    Opened,
+    /// A live message, sealed.
+    Live(String),
 }
 
 pub struct NotificationsState {
@@ -237,6 +241,8 @@ impl App {
                     }
                 }
                 Event::Synced(changed) => self.sync_server_seen(Some(changed)),
+                Event::Opened => self.live_opened(),
+                Event::Live(sealed) => self.live_heard(&sealed),
             }
             let items = &mut self.notifications.items;
             items.sort_by(|a, b| b.created.cmp(&a.created).then(b.id.cmp(&a.id)));
@@ -497,6 +503,8 @@ fn listen(server: &str, key: &str, identity: &Identity, stop: &AtomicBool, tx: &
             let _ = tx.send(match event {
                 client::StreamEvent::Notification(n) => Event::New(n),
                 client::StreamEvent::Sync(changed) => Event::Synced(changed),
+                client::StreamEvent::Opened => Event::Opened,
+                client::StreamEvent::Live(sealed) => Event::Live(sealed),
             });
             ctx.request_repaint();
             true

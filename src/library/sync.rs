@@ -73,6 +73,18 @@ pub struct ChangedEvent {
     pub sync: Changed,
 }
 
+/// On the notification stream: a message between an identity's devices
+/// while they're online (`POST /api/v1/live`, signed, with this as the
+/// body), sealed with the sync key (`device_messages.rs`). The server
+/// passes it to the identity's open streams and keeps nothing.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LiveEvent {
+    pub live: String,
+}
+
+/// The most a live message can be, sealed and in base64.
+pub const MAX_LIVE: usize = 192 * 1024;
+
 /// `plain` (a blob's JSON) deflated, as it's sealed: the song library's
 /// index takes a few hundred bytes a song as JSON, and a blob is capped at
 /// `MAX_DATA`.

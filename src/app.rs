@@ -57,6 +57,7 @@ mod welcome;
 mod which_key;
 mod wishlist;
 mod panels;
+mod device_messages;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
@@ -519,6 +520,7 @@ pub struct App {
     wishlist: wishlist::WishlistState,
     /// The Apps tab's panels (`panels.rs`).
     panels: panels::PanelsState,
+    live: device_messages::LiveState,
     /// The Up next tab's rows as last described, and what from (a hash).
     queue_rows: Option<(u64, Vec<(PathBuf, song_list::Described)>)>,
     /// Becomes true once the current playlist track is seen playing (not
@@ -806,6 +808,7 @@ impl App {
             queue_selection: Default::default(),
             wishlist: Default::default(),
             panels: Default::default(),
+            live: Default::default(),
             queue_rows: None,
             advance_armed: false,
             song_loads: 0,

@@ -206,6 +206,16 @@ Your panel hears the user on your event stream (`GET /v1/events`, which needs Re
 
 While none of your event streams is open, your panel is greyed out with "isn't running", and the user can close it. Send `DELETE /v1/events` as your program closes down and it greys at once; if your program stops without saying so, it greys within a few seconds. It comes back as it was when you open a stream again, or as you send it next.
 
+### On the user's other devices
+
+A program the user also allows to **Show on my other devices** has its panel shown in the Apps tab of every device signed in as the same identity with sync on, under a chip with the program's name and the device it runs on ("Finder · desk-pc"). Nothing changes for your program: you send your panel to the synththing whose API you use, and what the user does on another device reaches you as the same `panel` events with that device added:
+
+```json
+{"element": "q", "kind": "submitted", "value": "overworld", "device": {"id": "3f9c0a7d1e2b4c56", "name": "Pixel 8"}}
+```
+
+Events without `device` happened on the device your program talks to. Each device tells you `shown` and `hidden` for itself, so your panel can be in view on one and not another. A `value` you send reaches every device's textbox the same way (never while the user's typing in it). The panel goes from the other devices as it goes from this one, and greys there too while your program isn't listening; the other devices show it while they're online, and forget it if this device goes quiet for a minute or so.
+
 ## The visualizer, live
 
 `/v1/visualizer/stream` sends the visualizer's pictures as they're drawn, as MJPEG (`multipart/x-mixed-replace`), at most `fps` a second (1 to 60, 30 if not given). `format=png` sends PNG pictures instead of JPEG ones (`format=jpeg`, the default): bigger and slower to make, but a visualizer with see-through frames (`script_options({ transparent = true })`) stays see-through. JPEG shows those parts over black. With `width` and `height` (64 to 4096 each, made even), the script draws at exactly that size and synththing's own window just says it's streaming instead of showing it. Without them, you get whatever size it's showing at. A recording's size wins while one is going. Scripts can tell they're being watched: `playback().streaming` is true.

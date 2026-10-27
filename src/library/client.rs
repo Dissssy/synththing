@@ -569,6 +569,11 @@ pub enum StreamEvent {
     Notification(super::Notification),
     /// Synced data changed (`sync_get` it, if this device is behind).
     Sync(super::sync::Changed),
+    /// A live message from one of the identity's devices (or this one),
+    /// sealed (`device_messages::open`).
+    Live(String),
+    /// The stream is open: anything from now on comes on it.
+    Opened,
 }
 
 /// Listen for new notifications (and synced data changing), calling
@@ -598,19 +603,32 @@ pub fn notification_stream(
     let reader = std::io::BufReader::new(response.into_body().into_reader());
     for line in reader.lines() {
         let line = line.map_err(|e| format!("the stream ended ({e})"))?;
+        if line == ": open" && !each(StreamEvent::Opened) {
+            return Ok(());
+        }
         let Some(data) = line.strip_prefix("data: ") else { continue };
-        let event = match serde_json::from_str::<super::sync::ChangedEvent>(data) {
-            Ok(changed) => StreamEvent::Sync(changed.sync),
-            Err(_) => match serde_json::from_str(data) {
-                Ok(notification) => StreamEvent::Notification(notification),
-                Err(_) => continue,
-            },
+        let event = if let Ok(changed) = serde_json::from_str::<super::sync::ChangedEvent>(data) {
+            StreamEvent::Sync(changed.sync)
+        } else if let Ok(live) = serde_json::from_str::<super::sync::LiveEvent>(data) {
+            StreamEvent::Live(live.live)
+        } else if let Ok(notification) = serde_json::from_str(data) {
+            StreamEvent::Notification(notification)
+        } else {
+            continue;
         };
         if !each(event) {
             return Ok(());
         }
     }
     Ok(())
+}
+
+/// Pass a sealed message to `identity`'s devices listening now (their
+/// notification streams): how many streams it reached.
+pub fn live_send(base: &str, server_key: &str, identity: &Identity, sealed: String) -> Result<usize, String> {
+    let body = serde_json::to_value(super::sync::LiveEvent { live: sealed }).map_err(|e| e.to_string())?;
+    let reply: serde_json::Value = signed_post(base, server_key, identity, "/api/v1/live", &body)?;
+    Ok(reply["reached"].as_u64().unwrap_or(0) as usize)
 }
 
 /// File a copyright notice: its number, and `"taken_down"` (or
@@ -1307,7 +1325,7 @@ mod tests {
         {
             let (base, key, alice) = (base.clone(), key.clone(), alice.clone());
             std::thread::spawn(move || {
-                let _ = notification_stream(&base, &key, &alice, |event| tx.send(event).is_ok());
+                let _ = notification_stream(&base, &key, &alice, |event| event == StreamEvent::Opened || tx.send(event).is_ok());
             });
         }
         std::thread::sleep(Duration::from_millis(300));
@@ -1317,6 +1335,10 @@ mod tests {
         assert_eq!((first.stored, first.revision), (true, 1));
         let changed = crate::library::sync::Changed { name: "settings".into(), revision: 1 };
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), StreamEvent::Sync(changed));
+        // A live message: passed on to her listening device, not kept.
+        assert_eq!(live_send(&base, &key, &alice, "sealed".into()).unwrap(), 1);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), StreamEvent::Live("sealed".into()));
+        assert_eq!(live_send(&base, &key, &Identity::generate().unwrap(), "x".into()).unwrap(), 0, "only to hers");
         // Made from an older revision: refused, with the server's.
         let stale = sync_write(&base, &key, &alice, &sync_key, "settings", 0, b"stale").unwrap();
         assert_eq!((stale.stored, stale.revision), (false, 1));
@@ -1370,7 +1392,7 @@ mod tests {
             std::thread::spawn(move || {
                 let _ = notification_stream(&base, &key, &alice, |event| match event {
                     StreamEvent::Notification(n) => tx.send(n).is_ok(),
-                    StreamEvent::Sync(_) => true,
+                    StreamEvent::Sync(_) | StreamEvent::Live(_) | StreamEvent::Opened => true,
                 });
             });
         }

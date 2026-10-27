@@ -765,7 +765,7 @@ impl App {
         let mut remove_songs = None;
         if !settings.apps.is_empty() {
             // (Programs down the side, what each may do across the top.)
-            let permissions: [(&str, &str, fn(&mut Access) -> &mut bool); 6] = [
+            let permissions: [(&str, &str, fn(&mut Access) -> &mut bool); 7] = [
                 ("eye", "Read: see the library, what's playing, and events", |a| &mut a.read),
                 ("play-pause", "Control: run commands (play, pause, next track...)", |a| &mut a.control),
                 ("pencil-simple", "Edit library: star and tag songs; make, rename, delete and reorder playlists, and add songs to them or take them out", |a| &mut a.edit_library),
@@ -776,6 +776,7 @@ impl App {
                     |a| &mut a.add_songs,
                 ),
                 ("app-window", "Show a panel: put a panel of its own in the Apps tab, and hear what you do in it", |a| &mut a.panel),
+                ("devices", "Show on my other devices: its panel shows in the Apps tab on your other devices too (with sync on), and hears what you do there", |a| &mut a.share),
             ];
             // (Every cell the same small box with its contents in the
             // middle, so the columns line up and stay narrow.)

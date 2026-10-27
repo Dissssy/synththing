@@ -177,6 +177,15 @@ impl Panel {
     }
 }
 
+/// A value a program gave a textbox, as of which panels revision (`api.rs`):
+/// whoever shows the panel takes each once.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Given {
+    pub id: String,
+    pub value: String,
+    pub revision: u64,
+}
+
 /// Change the fields in `changes` (a JSON object) of the element `id` in
 /// `panel` (a panel's JSON): `Err` with its status if there's no such
 /// element (404) or the change can't be made (400). The panel is checked
@@ -204,7 +213,8 @@ pub fn patch(panel: &mut serde_json::Value, id: &str, changes: serde_json::Value
 }
 
 /// What the user did with a panel, as its program's `panel` event says.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Event {
     /// The element (none for `shown` and `hidden`, about the panel).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -219,6 +229,10 @@ pub struct Event {
     /// The item's action clicked (none: the item itself).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
+    /// The device it happened on, when that's another of the user's
+    /// (`panel_share.rs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<crate::device::Device>,
 }
 
 impl Event {
@@ -227,7 +241,7 @@ impl Event {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     /// A textbox's text changed.
