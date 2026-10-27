@@ -877,8 +877,11 @@ impl SongList {
     /// around), right-click for the view's menu.
     fn header_ui(&mut self, ui: &mut egui::Ui, view: &mut View, shown: &[(&Def, f32)]) -> bool {
         let height = ui.spacing().interact_size.y;
-        // The whole row first, under the headers, for right-clicks between them.
-        let (rect, background) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
+        // The whole row first, under the headers, for right-clicks between
+        // them. (Its ID stays put whatever the columns, so the view's menu
+        // stays open while they're ticked on and off.)
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+        let background = ui.interact(rect, egui::Id::new(HEADER).with("row"), egui::Sense::click());
         let arrow = format!(" {}", crate::app::icon(if view.descending { "caret-down" } else { "caret-up" }));
         let title = |key: &str, title: &str| {
             let text = if view.sort == key { format!("{title}{arrow}") } else { title.to_string() };
@@ -889,14 +892,16 @@ impl SongList {
         let mut changed = view.resize(output.resized);
         let mut sort_by = None;
         let keys = shown.iter().map(|(c, _)| c.key).chain(["name"]);
+        let mut whole = background;
         for (key, response) in keys.zip(output.columns.iter().chain([&output.main])) {
             let response = response.clone().on_hover_text(hint);
             if response.clicked() {
                 sort_by = Some(key);
             }
-            crate::menu::context(&response, |ui| changed |= view_menu(ui, view, false));
+            whole |= response;
         }
-        crate::menu::context(&background, |ui| changed |= view_menu(ui, view, false));
+        // (One menu for the whole header, under the row's ID.)
+        crate::menu::context(&whole, |ui| changed |= view_menu(ui, view, false));
         if let Some(key) = sort_by {
             if view.sort == key {
                 view.descending = !view.descending;
@@ -1245,6 +1250,67 @@ mod tests {
             list.ui(ui, &mut Fixed(songs.to_vec()), revision, &mut view, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
         });
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn the_view_menu_stays_open_on_a_shift_click() {
+        let ctx = egui::Context::default();
+        let songs: Vec<PathBuf> = (0..3).map(|n| PathBuf::from(n.to_string())).collect();
+        let mut list = SongList::default();
+        let mut view = View::default();
+        let mut frame = |view: &mut View, events: Vec<egui::Event>, modifiers: egui::Modifiers| {
+            let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), events, ..Default::default() };
+            let mut output = ctx.run_ui(input, |ui| {
+                let mut describe = |_: &Path, keys: &[&str]| Described { name: "Song".into(), file_name: String::new(), values: vec![None; keys.len()], tags: Vec::new(), plays: Plays::default() };
+                let mut changed = view.clone();
+                if list.ui(ui, &mut Fixed(songs.clone()), 1, &mut changed, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {}).view_changed {
+                    *view = changed;
+                }
+            });
+            output.textures_delta.clear();
+            output
+                .shapes
+                .into_iter()
+                .filter_map(|s| match s.shape {
+                    egui::epaint::Shape::Text(t) => Some((t.galley.text().to_string(), t.pos + egui::vec2(4.0, 6.0))),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // (The last drawn: a menu's over the list.)
+        let at = |texts: &[(String, egui::Pos2)], text: &str| texts.iter().rfind(|(t, _)| t == text).map(|(_, p)| *p);
+        let click = |pos: egui::Pos2, button: egui::PointerButton, modifiers: egui::Modifiers| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton { pos, button, pressed: true, modifiers },
+                egui::Event::PointerButton { pos, button, pressed: false, modifiers },
+            ]
+        };
+        let none = egui::Modifiers::NONE;
+        frame(&mut view, Vec::new(), none);
+        let mut texts = frame(&mut view, Vec::new(), none);
+        // Right-click the names' header (after the columns, so drawn in
+        // another place once one's ticked on), then open Columns.
+        let name = texts.iter().find(|(t, _)| t.starts_with("Name")).map(|(_, p)| *p).unwrap();
+        frame(&mut view, click(name, egui::PointerButton::Secondary, none), none);
+        for _ in 0..3 {
+            texts = frame(&mut view, Vec::new(), none);
+        }
+        let columns = at(&texts, "Columns").expect("the view's menu opened");
+        for _ in 0..3 {
+            texts = frame(&mut view, vec![egui::Event::PointerMoved(columns)], none);
+        }
+        // Shift+click two columns on, one after the other.
+        for label in ["Album artist", "Year"] {
+            let pos = at(&texts, label).expect("the Columns menu open");
+            frame(&mut view, click(pos, egui::PointerButton::Primary, egui::Modifiers::SHIFT), egui::Modifiers::SHIFT);
+            for _ in 0..3 {
+                texts = frame(&mut view, vec![egui::Event::PointerMoved(pos)], egui::Modifiers::SHIFT);
+            }
+        }
+        assert!(view.columns.iter().any(|k| k == "album_artist") && view.columns.iter().any(|k| k == "year"), "both ticked: {:?}", view.columns);
+        assert!(at(&texts, "Columns").is_some(), "the menu still open");
     }
 
     #[test]
