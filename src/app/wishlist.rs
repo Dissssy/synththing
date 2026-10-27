@@ -172,6 +172,12 @@ impl App {
         self.wishlist.progress = Some((revisions, progress));
     }
 
+    /// What of each wish is here, as last worked out for the wishlist's
+    /// and the songs' `revisions` (none if they've changed since).
+    pub(super) fn wishlist_progress(&self, revisions: (u64, u64)) -> Option<&BTreeMap<String, Progress>> {
+        self.wishlist.progress.as_ref().filter(|(seen, _)| *seen == revisions).map(|(_, progress)| progress)
+    }
+
     /// Wish for `wish`, and send it to the other devices.
     pub(super) fn wish_for(&mut self, wish: Wish) {
         self.wishlist.list.add(wish);

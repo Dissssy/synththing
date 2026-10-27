@@ -33,6 +33,9 @@ use crate::fields::{Facts, Field};
 use crate::smart::{Group, Order, Rules, Ruleset, Split, SplitBy};
 use crate::song_store::{self, Song, SongStore, Stored};
 use crate::visualizer_stream::Format;
+use crate::lookup::matching::Release;
+use crate::lookup::musicbrainz::MusicBrainz;
+use crate::wishlist::{Kind, Wish};
 
 /// The port it listens on unless it's given another.
 pub const DEFAULT_PORT: u16 = 7340;
@@ -49,7 +52,8 @@ const FRAME_WAIT: Duration = Duration::from_secs(3);
 /// How long a request waits for the app to answer.
 const APP_WAIT: Duration = Duration::from_secs(5);
 /// The events there are (`GET /v1/events?events=` picks among them).
-const EVENTS: [&str; 7] = ["now_playing", "seeked", "library_changed", "playlists_changed", "queue_changed", "soundfonts_changed", "scripts_changed"];
+const EVENTS: [&str; 8] =
+    ["now_playing", "seeked", "library_changed", "playlists_changed", "queue_changed", "soundfonts_changed", "scripts_changed", "wishlist_changed"];
 /// Songs in one page of a list, unless the request asks for fewer.
 const MOST_SONGS: usize = 500;
 /// The largest song a program can send (as the relay's limit).
@@ -158,6 +162,35 @@ pub enum Call {
         program: String,
         reply: Sender<Result<(SongInfo, bool), String>>,
     },
+    /// The wishlist, those `query` keeps (`wishlist_search`): its wishes
+    /// with what of each is here, an artist's albums under them.
+    Wishlist(String, Sender<Vec<WishInfo>>),
+    /// Wish for `wish`, for `program` (`release` its album's edition, as
+    /// MusicBrainz said, to keep): it, and whether it's new to the
+    /// wishlist; `Err` (with its status) if it can't be.
+    Wish {
+        wish: Wish,
+        release: Option<Release>,
+        program: String,
+        reply: Sender<Result<(WishInfo, bool), (u16, String)>>,
+    },
+}
+
+/// A wish, as `/v1/wishlist` has it: what was wished for (`Wish`'s
+/// fields), its ID, and what of it is here: how much (`got`: no, partly
+/// or yes; `have` of `total` tracks, or an artist's albums), its songs
+/// (by key) and an artist's albums wished for.
+#[derive(Clone, Debug, Serialize)]
+pub struct WishInfo {
+    pub id: String,
+    #[serde(flatten)]
+    pub wish: Wish,
+    pub got: &'static str,
+    pub have: usize,
+    pub total: usize,
+    pub songs: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub albums: Vec<WishInfo>,
 }
 
 /// A change to the play queue a program asks for (`Call::Queue`).
@@ -190,6 +223,10 @@ pub enum Edit {
     /// Move the entry at `from` of playlist `playlist` so it ends up at
     /// `to`.
     Move { playlist: String, from: usize, to: usize },
+    /// Take wish `id` off the wishlist (an artist's albums with them).
+    Unwish { id: String },
+    /// Write `note` on wish `id`.
+    Note { id: String, note: String },
 }
 
 /// What `Call::Set` sets.
@@ -866,6 +903,40 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             Err(reply) => reply,
             Ok(by) => ask(shared, Call::Library).map_or_else(|reply| reply, |library| groups(&library, by, query.get("q").map_or("", String::as_str))),
         })),
+        (Method::Get, ["v1", "wishlist"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            let q = query.get("q").cloned().unwrap_or_default();
+            ask(shared, |reply| Call::Wishlist(q, reply)).map_or_else(|reply| reply, |wishes| json(200, &wishes))
+        })),
+        (Method::Post, ["v1", "wishlist"]) => Some(match needs(access.edit_library, "edit the library") {
+            Some(reply) => reply,
+            None => wish_for(shared, &mut request, &access),
+        }),
+        (Method::Delete, ["v1", "wishlist", id]) => Some(needs(access.edit_library, "edit the library").unwrap_or_else(|| {
+            let edit = Edit::Unwish { id: id.to_string() };
+            answered(ask(shared, |reply| Call::Edit(edit, reply)))
+        })),
+        (Method::Post, ["v1", "wishlist", id, "note"]) => Some(needs(access.edit_library, "edit the library").unwrap_or_else(|| {
+            let edit = Edit::Note { id: id.to_string(), note: query.get("text").map(|t| t.trim().to_string()).unwrap_or_default() };
+            answered(ask(shared, |reply| Call::Edit(edit, reply)))
+        })),
+        (Method::Get, ["v1", "musicbrainz", "search"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            let q = query.get("q").map(|q| q.trim().to_string()).filter(|q| !q.is_empty());
+            match (q, query.get("kind").map(String::as_str)) {
+                (None, _) => error(400, "say what to search for: ?q="),
+                (_, Some(kind)) if !["artist", "album", "song"].contains(&kind) => error(400, "?kind= is artist, album or song"),
+                (Some(q), kind) => online(shared).unwrap_or_else(|| musicbrainz_search(&q, kind)),
+            }
+        })),
+        (Method::Get, ["v1", "musicbrainz", "artists", id, "albums"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
+            online(shared).unwrap_or_else(|| match MusicBrainz::new().discography(id) {
+                Ok(albums) => {
+                    // (Each as the wish for it would be, under none yet.)
+                    let wishes: Vec<Wish> = albums.iter().map(|a| Wish { under: None, artist: None, ..crate::wishlist::album_wish(a, "", "") }).collect();
+                    json(200, &wishes)
+                }
+                Err(e) => error(502, format!("couldn't ask MusicBrainz: {e:#}")),
+            })
+        })),
         (Method::Get, ["v1", "soundfonts"]) => {
             Some(needs(access.read, "read").unwrap_or_else(|| ask(shared, Call::Library).map_or_else(|reply| reply, |library| json(200, &library.soundfonts))))
         }
@@ -915,6 +986,82 @@ fn add_song(shared: &Shared, request: &mut Request, access: &Access, query: &Has
     match ask(shared, |reply| Call::Add { stored, program: access.name.clone(), reply }) {
         Ok(Ok((song, new))) => json(if new { 201 } else { 200 }, &song),
         Ok(Err(why)) => error(503, why),
+        Err(reply) => reply,
+    }
+}
+
+/// `None` if MusicBrainz may be asked from here (Online album art and
+/// details on), else why not.
+fn online(shared: &Shared) -> Option<Reply> {
+    match ask(shared, Call::Library) {
+        Err(reply) => Some(reply),
+        Ok(library) if !library.online => Some(error(409, "asking MusicBrainz needs Online album art and details on (Preferences > Songs)")),
+        Ok(_) => None,
+    }
+}
+
+/// `GET /v1/musicbrainz/search?q=&kind=`: the artists, albums and songs
+/// (or only those of `kind`) MusicBrainz finds, each as the wish for it.
+fn musicbrainz_search(q: &str, kind: Option<&str>) -> Reply {
+    let mut musicbrainz = MusicBrainz::new();
+    let found = (|| {
+        let mut found = serde_json::Map::new();
+        if kind.is_none_or(|k| k == "artist") {
+            found.insert("artists".into(), serde_json::to_value(musicbrainz.find_artists(q)?)?);
+        }
+        if kind.is_none_or(|k| k == "album") {
+            found.insert("albums".into(), serde_json::to_value(musicbrainz.find_albums(q)?)?);
+        }
+        if kind.is_none_or(|k| k == "song") {
+            found.insert("songs".into(), serde_json::to_value(musicbrainz.find_songs(q)?)?);
+        }
+        Ok::<_, anyhow::Error>(found)
+    })();
+    match found {
+        Ok(found) => json(200, &found),
+        Err(e) => error(502, format!("couldn't ask MusicBrainz: {e:#}")),
+    }
+}
+
+/// `POST /v1/wishlist`, the wish as a JSON body (as `/v1/musicbrainz/search`
+/// gives it, or written out): onto the wishlist (`Call::Wish`). An album
+/// by its MusicBrainz group without its tracks gets them from there
+/// first, when it may be asked. 201 with the wish if it's new, 200 if it
+/// was wished for already.
+fn wish_for(shared: &Shared, request: &mut Request, access: &Access) -> Reply {
+    let mut body = Vec::new();
+    if let Err(e) = request.as_reader().take(64 * 1024).read_to_end(&mut body) {
+        return error(400, format!("couldn't read the wish: {e}"));
+    }
+    let mut wish: Wish = match serde_json::from_slice(&body) {
+        Ok(wish) => wish,
+        Err(e) => return error(400, format!("send the wish as JSON, like {{\"kind\": \"album\", \"title\": \"Modal Soul\", \"artist\": \"Nujabes\"}}: {e}")),
+    };
+    wish.title = wish.title.trim().to_string();
+    if wish.title.is_empty() && !(wish.kind == Kind::Text && wish.artist.is_some()) {
+        return error(400, "say what it's called: \"title\" (or for a wish by name, at least \"artist\")");
+    }
+    let mut release = None;
+    if let (Kind::Album, Some(group), 0) = (wish.kind, wish.musicbrainz.clone(), wish.tracks)
+        && online(shared).is_none()
+    {
+        match MusicBrainz::new().album(&group) {
+            // (As it was asked for, its tracks as MusicBrainz says.)
+            Ok((found, edition)) => {
+                let asked = std::mem::replace(&mut wish, found);
+                wish.title = asked.title;
+                wish.artist = asked.artist.or(wish.artist.take());
+                wish.year = asked.year.or(wish.year.take());
+                wish.release_type = asked.release_type.or(wish.release_type.take());
+                (wish.under, wish.note, wish.skipped) = (asked.under, asked.note, asked.skipped);
+                release = Some(edition);
+            }
+            Err(e) => return error(502, format!("couldn't ask MusicBrainz about that album: {e:#}")),
+        }
+    }
+    match ask(shared, |reply| Call::Wish { wish, release, program: access.name.clone(), reply }) {
+        Ok(Ok((wish, new))) => json(if new { 201 } else { 200 }, &wish),
+        Ok(Err((status, why))) => error(status, why),
         Err(reply) => reply,
     }
 }
@@ -1229,6 +1376,14 @@ mod tests {
                         reply.send(Ok(())).unwrap()
                     }
                     Call::Add { .. } => unreachable!("no test adds songs here"),
+                    Call::Wishlist(query, reply) => {
+                        let wish = Wish { note: query, ..Wish::new(Kind::Album, "Modal Soul") };
+                        reply.send(vec![WishInfo { id: "w1".into(), wish, got: "partly", have: 7, total: 12, songs: Vec::new(), albums: Vec::new() }]).unwrap()
+                    }
+                    Call::Wish { wish, program, reply, .. } => {
+                        let wish = Wish { added_by: Some(program), ..wish };
+                        reply.send(Ok((WishInfo { id: "w2".into(), wish, got: "no", have: 0, total: 1, songs: Vec::new(), albums: Vec::new() }, true))).unwrap()
+                    }
                 }
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -1355,6 +1510,43 @@ mod tests {
         assert_eq!(answering(&server, empty, edit(false, "playlists/p1/songs/move?to=0", &edit_token)), 400);
         assert_eq!(answering(&server, empty, edit(true, "playlists/p1", &control_token)), 403);
         assert_eq!(answering(&server, empty, edit(true, "playlists/p1", &edit_token)), 204);
+
+        let (status, body) = answering(&server, empty, fetch_as(&server, "/v1/wishlist?q=got:partly", &read_token));
+        assert_eq!(status, 200);
+        assert!(body.contains(r#""id":"w1","kind":"album","title":"Modal Soul""#) && body.contains(r#""got":"partly","have":7,"total":12"#), "{body}");
+        assert!(body.contains(r#""note":"got:partly""#), "the query is the app's to filter by: {body}");
+        assert_eq!(answering(&server, empty, edit(true, "wishlist/w1", &control_token)), 403);
+        assert_eq!(answering(&server, empty, edit(true, "wishlist/w1", &edit_token)), 204);
+        assert_eq!(answering(&server, empty, edit(false, "wishlist/w1/note?text=from%20Willy", &edit_token)), 204);
+        let (status, body) = answering(&server, empty, wish_json(&server, r#"{"kind": "song", "title": "Feather", "musicbrainz": "c1"}"#, &edit_token));
+        assert_eq!(status, 201);
+        assert!(body.contains(r#""added_by":"editor""#), "the program's: {body}");
+        assert_eq!(answering(&server, empty, wish_json(&server, r#"{"kind": "song", "title": " "}"#, &edit_token)).0, 400);
+        assert_eq!(answering(&server, empty, wish_json(&server, r#"{"kind": "playlist"}"#, &edit_token)).0, 400);
+        assert_eq!(answering(&server, empty, wish_json(&server, r#"{"kind": "text", "title": "", "artist": "Toby Fox"}"#, &edit_token)).0, 201);
+        assert_eq!(answering(&server, empty, wish_json(&server, r#"{"kind": "text", "title": "x"}"#, &control_token)).0, 403);
+        assert_eq!(answering(&server, empty, fetch_as(&server, "/v1/musicbrainz/search", &read_token)).0, 400);
+        assert_eq!(answering(&server, empty, fetch_as(&server, "/v1/musicbrainz/search?q=nujabes&kind=label", &read_token)).0, 400);
+        assert_eq!(answering(&server, empty, fetch_as(&server, "/v1/musicbrainz/search?q=nujabes", &read_token)).0, 409, "online lookups are off");
+        assert_eq!(answering(&server, empty, fetch_as(&server, "/v1/musicbrainz/artists/a1/albums", &read_token)).0, 409);
+    }
+
+    /// A GET of `path` with `token`, for [`answering`].
+    fn fetch_as(server: &Server, path: &str, token: &str) -> impl FnOnce() -> (u16, String) + Send + 'static {
+        let (url, token) = (format!("http://{}{path}", server.addr()), format!("Bearer {token}"));
+        move || {
+            let mut response = agent().get(url).header("Authorization", token).call().unwrap();
+            (response.status().as_u16(), response.body_mut().read_to_string().unwrap())
+        }
+    }
+
+    /// A `POST /v1/wishlist` of `body` with `token`, for [`answering`].
+    fn wish_json(server: &Server, body: &str, token: &str) -> impl FnOnce() -> (u16, String) + Send + 'static {
+        let (url, body, token) = (format!("http://{}/v1/wishlist", server.addr()), body.to_string(), format!("Bearer {token}"));
+        move || {
+            let mut response = agent().post(url).header("Authorization", token).send(body).unwrap();
+            (response.status().as_u16(), response.body_mut().read_to_string().unwrap())
+        }
     }
 
     #[test]
