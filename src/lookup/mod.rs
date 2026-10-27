@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::fields::{self, Facts, Field};
 use crate::song_store::{self, SongStore};
-use matching::{Album, Release, Verdict};
+use matching::{Album, ArtistAlbum, Release, Verdict};
 
 /// How long an album that wasn't found (or wasn't surely found) waits
 /// to be tried again.
@@ -212,6 +212,7 @@ pub struct Kept(Arc<Mutex<KeptById>>);
 struct KeptById {
     releases: HashMap<String, Option<Arc<Release>>>,
     artists: HashMap<String, Option<Arc<artists::Artist>>>,
+    discographies: HashMap<String, Option<Arc<Vec<ArtistAlbum>>>>,
 }
 
 impl Kept {
@@ -242,6 +243,19 @@ impl Kept {
 
     pub fn keep_artist(&self, artist: artists::Artist) {
         self.lock().artists.insert(artist.id.clone(), Some(Arc::new(artist)));
+    }
+
+    /// The albums of the artist `id`, for the wishlist's watch on them.
+    pub fn discography(&self, id: &str) -> Option<Arc<Vec<ArtistAlbum>>> {
+        if let Some(kept) = self.lock().discographies.get(id) {
+            return kept.clone();
+        }
+        let read = musicbrainz::kept_discography(id).map(Arc::new);
+        self.lock().discographies.entry(id.to_string()).or_insert(read).clone()
+    }
+
+    pub fn keep_discography(&self, id: &str, albums: Vec<ArtistAlbum>) {
+        self.lock().discographies.insert(id.to_string(), Some(Arc::new(albums)));
     }
 }
 

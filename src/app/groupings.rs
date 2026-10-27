@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use eframe::egui;
 
+use super::wishlist::AlbumAsk;
 use super::{icon_button, is_midi_path, naming, toast, App, PrefTab};
 use crate::album_art::{AlbumArt, Source as AlbumArtSource};
 use crate::fields::{self, Facts, Field};
@@ -99,8 +100,12 @@ struct Track {
     /// Its file's here (it can play).
     here: bool,
     /// It isn't in the library at all: it's on the album's track list at
-    /// MusicBrainz (its `path` only names it).
+    /// MusicBrainz, or it's an album of a watched artist's (its `path`
+    /// only names it).
     missing: bool,
+    /// A watched artist's album not here: the wish for it, if it isn't
+    /// wished for yet.
+    wish: Option<crate::wishlist::Wish>,
 }
 
 /// The Groupings' state, for the session.
@@ -112,7 +117,7 @@ pub(super) struct Groupings {
     pub(super) art: AlbumArt,
     /// The open group's songs, and what they were made from (the songs'
     /// revision, the ruleset and the group).
-    page: Option<(u64, String, String, Arc<Vec<Track>>)>,
+    page: Option<((u64, u64), String, String, Arc<Vec<Track>>)>,
     /// The playlists as groups, and the fingerprint of the playlists
     /// they were made from.
     playlists: Option<(u64, Arc<Vec<Group>>)>,
@@ -165,7 +170,8 @@ enum Act {
     /// Make the set of songs that play together with this ID these, in
     /// order.
     Together(String, Vec<String>),
-    Wish(super::wishlist::AlbumAsk),
+    Wish(AlbumAsk),
+    WishArtist(crate::wishlist::Wish),
     Unwish(String),
     GoToWishlist,
 }
@@ -322,6 +328,7 @@ impl App {
                 self.songs_changed();
             }
             Some(Act::Wish(ask)) => self.wish_for_album(ui.ctx(), ask),
+            Some(Act::WishArtist(wish)) => self.wish_for_artist(ui.ctx(), wish),
             Some(Act::Unwish(id)) => self.unwish(&id),
             Some(Act::GoToWishlist) => self.go_to_wishlist(),
             Some(Act::Shuffle(_)) | None => {}
@@ -715,6 +722,11 @@ impl App {
                         if albums && let Some(wish) = super::wishlist::album_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs) {
                             menu_act = Some(Act::Wish(wish));
                         }
+                        if id == ARTISTS
+                            && let Some(wish) = super::wishlist::artist_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, &group.title, &group.songs)
+                        {
+                            menu_act = Some(Act::WishArtist(wish));
+                        }
                     });
                 }
             });
@@ -768,6 +780,11 @@ impl App {
                             if albums && let Some(wish) = super::wishlist::album_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs) {
                                 menu_act = Some(Act::Wish(wish));
                             }
+                            if id == ARTISTS
+                                && let Some(wish) = super::wishlist::artist_wish_menu(ui, &self.songs, &self.lookup.kept, &self.wishlist.list, &group.title, &group.songs)
+                            {
+                                menu_act = Some(Act::WishArtist(wish));
+                            }
                         });
                     }
                 }
@@ -786,9 +803,9 @@ impl App {
     }
 
     /// The songs of `group` as its page lists them, made again when the
-    /// songs change.
+    /// songs or the wishlist change.
     fn group_tracks(&mut self, id: &str, group: &Group) -> Arc<Vec<Track>> {
-        let revision = self.songs_revision();
+        let revision = (self.songs_revision(), self.wishlist.list.revision());
         if let Some((seen, ruleset, key, tracks)) = &self.groupings.page
             && *seen == revision
             && ruleset == id
@@ -819,6 +836,7 @@ impl App {
                     starred: facts.starred(),
                     here,
                     missing: false,
+                    wish: None,
                     path,
                 }
             })
@@ -832,6 +850,10 @@ impl App {
     /// (when this device keeps its track list) that aren't in the library
     /// in their places.
     fn with_missing(&self, id: &str, group: &Group, mut tracks: Vec<Track>) -> Vec<Track> {
+        if id == ARTISTS {
+            tracks.extend(self.missing_albums(group));
+            return tracks;
+        }
         if id != ALBUMS {
             return tracks;
         }
@@ -859,6 +881,7 @@ impl App {
                 starred: false,
                 here: false,
                 missing: true,
+                wish: None,
             })
             .collect();
         if !missing.is_empty() {
@@ -866,6 +889,43 @@ impl App {
             tracks.sort_by_key(|t| (t.disc.unwrap_or(1), t.number.unwrap_or(u32::MAX)));
         }
         tracks
+    }
+
+    /// The albums of the artist `group` (if they're watched) that none of
+    /// is here, as rows of their page.
+    fn missing_albums(&self, group: &Group) -> Vec<Track> {
+        let kept = &self.lookup.kept;
+        let artist = crate::wishlist::artist_of(&self.songs, kept, &group.songs, &group.title);
+        let watch = self.wishlist.list.wishes.values().find(|w| {
+            w.kind == crate::wishlist::Kind::Artist
+                && match &artist {
+                    Some((id, _)) => w.musicbrainz.as_deref() == Some(id.as_str()),
+                    None => crate::matching::close(&w.title, &group.title),
+                }
+        });
+        let Some(watch) = watch else { return Vec::new() };
+        let wished: HashSet<&str> =
+            self.wishlist.list.wishes.values().filter(|w| w.kind == crate::wishlist::Kind::Album).filter_map(|w| w.musicbrainz.as_deref()).collect();
+        crate::wishlist::missing_albums(watch, &self.songs, kept)
+            .into_iter()
+            .map(|album| {
+                let wish = (!wished.contains(album.id.as_str())).then(|| crate::wishlist::album_wish(&album, &watch.title));
+                let detail = [album.year.clone(), Some(album.kind.to_string()), wish.is_none().then(|| "wished".to_string())];
+                Track {
+                    path: PathBuf::from(format!("musicbrainz:{}", album.id)),
+                    name: format!("{} ({})", album.title, detail.into_iter().flatten().collect::<Vec<_>>().join(" \u{b7} ")),
+                    artists: Vec::new(),
+                    album: Some(album.title),
+                    disc: None,
+                    number: None,
+                    length: None,
+                    starred: false,
+                    here: false,
+                    missing: true,
+                    wish,
+                }
+            })
+            .collect()
     }
 
     /// A group's page: its art, title, its artist (a link, for an album),
@@ -879,6 +939,7 @@ impl App {
         let current = self.current_song.clone();
         let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
         let mut wish = albums.then(|| super::wishlist::album_ask(&self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs)).flatten();
+        let mut more = (id == ARTISTS).then(|| super::wishlist::artist_ask(&self.songs, &self.lookup.kept, &self.wishlist.list, &group.title, &group.songs)).flatten();
         let links_to_artist = albums && id == "albums";
         let ignore = self.config.group_ignore.clone();
         let view = self.groupings.view();
@@ -923,6 +984,8 @@ impl App {
             // of songs that play together as it is).
             let this = if id == TOGETHER {
                 None
+            } else if track.missing && !albums {
+                Some("Not in your library".to_string())
             } else if albums {
                 discs.then(|| format!("Disc {}", track.disc.unwrap_or(1)))
             } else {
@@ -993,6 +1056,9 @@ impl App {
                         if let Some(ask) = super::wishlist::album_wish_button(ui, wish.take()) {
                             act = Some(Act::Wish(ask));
                         }
+                        if let Some(wish) = super::wishlist::artist_wish_button(ui, more.take()) {
+                            act = Some(Act::WishArtist(wish));
+                        }
                     });
                 });
             }
@@ -1037,6 +1103,11 @@ impl App {
                 if output.star {
                     act = Some(Act::Star(vec![track.path.clone()], !track.starred));
                 }
+                if output.wish
+                    && let Some(wish) = &track.wish
+                {
+                    act = Some(Act::Wish(if online { AlbumAsk::Group(wish.clone()) } else { AlbumAsk::Wish(wish.clone()) }));
+                }
                 if output.info {
                     act = Some(Act::Info(track.path.clone()));
                 }
@@ -1058,6 +1129,9 @@ const NOT_HERE: &str = "Not on this device yet: it's coming from your other devi
 /// What a song of an album that isn't in the library says on hover.
 const MISSING: &str = "Not in your library: it's on this album at MusicBrainz";
 
+/// What a watched artist's album not here says on hover.
+const MISSING_ALBUM: &str = "Not in your library: one of their albums at MusicBrainz (right-click to wish for it)";
+
 /// What happened on a track's row.
 #[derive(Default)]
 struct RowOutput {
@@ -1068,6 +1142,8 @@ struct RowOutput {
     /// Queue it: next, or at the end.
     queue: Option<bool>,
     change: Option<Change>,
+    /// Wish for the album it is (a watched artist's, not here).
+    wish: bool,
 }
 
 /// A change to where a song is in the set it plays together with.
@@ -1096,7 +1172,13 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
     };
     let mut response = ui.interact(rect, ui.id().with(("track", &track.path)), sense - egui::Sense::FOCUSABLE);
     if !track.here {
-        response = response.on_hover_text(if track.missing { MISSING } else { NOT_HERE });
+        let hover = match (track.missing, &track.wish, track.number) {
+            (true, Some(_), _) => MISSING_ALBUM,
+            (true, None, None) => "Not in your library: it's on your wishlist",
+            (true, ..) => MISSING,
+            (false, ..) => NOT_HERE,
+        };
+        response = response.on_hover_text(hover);
     }
     let pick = !touch && ui.input(|i| i.modifiers.command || i.modifiers.shift);
     let mut output = RowOutput { picked: response.clicked() && pick, play: response.clicked() && !pick && !response.double_clicked(), ..RowOutput::default() };
@@ -1123,6 +1205,10 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
             if ui.button("Song info").clicked() {
                 output.info = true;
             }
+        });
+    } else if track.wish.is_some() {
+        crate::menu::context(&response, |ui| {
+            output.wish = ui.button("Wish for this album").clicked();
         });
     }
     let builder = egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center));

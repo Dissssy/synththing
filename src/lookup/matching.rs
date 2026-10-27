@@ -55,6 +55,18 @@ impl Song {
     }
 }
 
+/// One of an artist's albums (a release group) at MusicBrainz, as their
+/// discography lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArtistAlbum {
+    pub id: String,
+    pub title: String,
+    pub year: Option<String>,
+    /// "Album", "EP", "Single", "Compilation", "Live" or "Other"
+    /// (`crate::wishlist::KINDS`).
+    pub kind: &'static str,
+}
+
 /// A release at MusicBrainz, with its tracks.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Release {
