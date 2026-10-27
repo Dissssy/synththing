@@ -58,6 +58,13 @@ pub(super) struct ApiState {
     media_failed: Option<String>,
 }
 
+impl ApiState {
+    /// The server, while the API's on.
+    pub(super) fn server(&self) -> Option<&api::Server> {
+        self.server.as_ref()
+    }
+}
+
 /// How often the app looks in on the visualizer drawn off screen (passing
 /// it the playlist, carrying out what the script asked for).
 const UNSEEN_CHECKS: Duration = Duration::from_millis(100);
@@ -163,8 +170,11 @@ impl App {
         #[cfg(not(target_os = "android"))]
         self.media_tick(ctx, view);
         self.integration_changes(view);
+        if let Some(server) = &self.api.server {
+            server.set_apps(&self.config.api.apps);
+        }
+        self.panels_tick(ctx);
         let Some(server) = &self.api.server else { return };
-        server.set_apps(&self.config.api.apps);
         let calls: Vec<Call> = server.calls().collect();
         // (What a call changed lands in the engine's view a little later:
         // a frame then tells of it, even with nothing being drawn, before
@@ -755,7 +765,7 @@ impl App {
         let mut remove_songs = None;
         if !settings.apps.is_empty() {
             // (Programs down the side, what each may do across the top.)
-            let permissions: [(&str, &str, fn(&mut Access) -> &mut bool); 5] = [
+            let permissions: [(&str, &str, fn(&mut Access) -> &mut bool); 7] = [
                 ("eye", "Read: see the library, what's playing, and events", |a| &mut a.read),
                 ("play-pause", "Control: run commands (play, pause, next track...)", |a| &mut a.control),
                 ("pencil-simple", "Edit library: star and tag songs; make, rename, delete and reorder playlists, and add songs to them or take them out", |a| &mut a.edit_library),
@@ -765,6 +775,8 @@ impl App {
                     "Add songs: send songs into your library. Each one is marked as this program's (search addedby:name)",
                     |a| &mut a.add_songs,
                 ),
+                ("app-window", "Show a panel: put a panel of its own in the Apps tab, and hear what you do in it", |a| &mut a.panel),
+                ("devices", "Show on my other devices: its panel shows in the Apps tab on your other devices too (with sync on), and hears what you do there", |a| &mut a.share),
             ];
             // (Every cell the same small box with its contents in the
             // middle, so the columns line up and stay narrow.)

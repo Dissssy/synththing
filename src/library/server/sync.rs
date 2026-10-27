@@ -6,7 +6,7 @@ use rusqlite::{params, OptionalExtension};
 use tiny_http::Request;
 
 use super::{error, json, notifications, now, read_body_or, signer, Reply, State};
-use crate::library::sync::{valid_name, Blob, Changed, ChangedEvent, Write, Written, MAX_BLOBS, MAX_DATA};
+use crate::library::sync::{valid_name, Blob, Changed, ChangedEvent, LiveEvent, Write, Written, MAX_BLOBS, MAX_DATA, MAX_LIVE};
 
 pub(super) const SCHEMA_V16: &str = "
 BEGIN;
@@ -33,6 +33,33 @@ fn signed(state: &State, request: &mut Request, path: &str, name: &str, limit: u
     let body = read_body_or(request, limit, "that's too much to sync")?;
     let key = signer(state, request, "POST", path, &body)?.ok_or_else(|| error(401, "that needs your signature"))?;
     Ok((key, body))
+}
+
+/// `POST /api/v1/live`, signed: a sealed message (`LiveEvent`) passed to
+/// the signer's open notification streams, its own devices', and never
+/// kept. Answers how many streams it reached.
+pub(super) fn live(state: &State, request: &mut Request) -> Reply {
+    if !state.config.sync {
+        return error(404, "this server doesn't sync");
+    }
+    let body = match read_body_or(request, MAX_LIVE + 1024, "that's too big a live message") {
+        Ok(body) => body,
+        Err(reply) => return reply,
+    };
+    let key = match signer(state, request, "POST", "/api/v1/live", &body) {
+        Ok(Some(key)) => key,
+        Ok(None) => return error(401, "that needs your signature"),
+        Err(reply) => return reply,
+    };
+    let event: LiveEvent = match serde_json::from_slice(&body) {
+        Ok(event) => event,
+        Err(e) => return error(400, format!("not understood: {e}")),
+    };
+    if event.live.is_empty() || event.live.len() > MAX_LIVE {
+        return error(400, "the live message is empty or too big");
+    }
+    let reached = notifications::push(state, &key, &serde_json::to_string(&event).unwrap_or_default());
+    json(200, &serde_json::json!({ "reached": reached }))
 }
 
 /// `POST /api/v1/sync/{name}`, signed: write the blob, if it was made

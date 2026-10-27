@@ -894,6 +894,7 @@ fn handle(state: &Arc<State>, mut request: Request) {
             let id = id.to_string();
             pairing::take(state, &mut request, &id)
         }
+        (Method::Post, ["api", "v1", "live"]) => sync::live(state, &mut request),
         (Method::Post, ["api", "v1", "sync", name]) => {
             let name = name.to_string();
             sync::write(state, &mut request, &name)

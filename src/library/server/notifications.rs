@@ -8,7 +8,8 @@
 //! ever gain more. They're listed (`POST /api/v1/notifications`, signed)
 //! and pushed while the app's open (`GET /api/v1/notifications/stream`,
 //! signed, Server-Sent Events), and marked read or handled by the app.
-//! The stream also says when synced data changed (`sync.rs`), unstored.
+//! The stream also says when synced data changed (`sync.rs`), and carries
+//! live messages between an identity's devices, unstored.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -108,12 +109,12 @@ pub(super) fn notify(state: &State, db: &Connection, key: &str, kind: &str, data
     push(state, key, &serde_json::to_string(&notification).unwrap_or_default());
 }
 
-/// Send `message` (one event's JSON) to `key`'s open streams.
-pub(super) fn push(state: &State, key: &str, message: &str) {
+/// Send `message` (one event's JSON) to `key`'s open streams: how many.
+pub(super) fn push(state: &State, key: &str, message: &str) -> usize {
     let mut streams = state.streams.lock().unwrap_or_else(|p| p.into_inner());
-    if let Some(senders) = streams.senders.get_mut(key) {
-        senders.retain(|sender| sender.send(message.to_string()).is_ok());
-    }
+    let Some(senders) = streams.senders.get_mut(key) else { return 0 };
+    senders.retain(|sender| sender.send(message.to_string()).is_ok());
+    senders.len()
 }
 
 /// Tell every admin (moderators' notifications).
