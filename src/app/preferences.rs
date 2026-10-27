@@ -170,7 +170,7 @@ impl App {
         let mut beat_pulse = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE) * 100.0;
         let mut pulse_length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH) * 100.0;
         let mut script_log = self.config.script_log_to_app;
-        let mut visualizer_scale = config::visualizer_scale_down(self.config.visualizer_scale.unwrap_or(1));
+        let mut visualizer_scale = config::visualizer_scale_down(self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE));
         let mut channel_chips = self.config.channel_chips;
         let mut buffer_ms = self.buffer_ms;
         let mut remember = self.config.remember;
@@ -423,7 +423,8 @@ impl App {
                     ui,
                     "How many screen pixels each visualizer pixel covers, across and down. 1x draws at \
                      your screen's full resolution; higher draws fewer, chunkier pixels, so scripts run \
-                     faster (useful fullscreen on a large or high-DPI screen). Kept on this device only.",
+                     faster (useful fullscreen on a large or high-DPI screen). 4x by default on phones, \
+                     1x elsewhere. Kept on this device only.",
                     |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Pixel scale");
@@ -556,7 +557,7 @@ impl App {
             || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
             || (pulse_length / 100.0 - self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH)).abs() > 1e-4
             || script_log != self.config.script_log_to_app
-            || visualizer_scale != self.config.visualizer_scale.unwrap_or(1)
+            || visualizer_scale != self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE)
             || channel_chips != self.config.channel_chips
             || buffer_ms != self.buffer_ms
             || remember != self.config.remember
@@ -577,7 +578,7 @@ impl App {
             self.config.buffer_ms = (buffer_ms != DEFAULT_BUFFER_MS).then_some(buffer_ms);
             self.config.channel_chips = channel_chips;
             self.config.script_log_to_app = script_log;
-            self.config.visualizer_scale = (visualizer_scale != 1).then_some(visualizer_scale);
+            self.config.visualizer_scale = (visualizer_scale != config::DEFAULT_VISUALIZER_SCALE).then_some(visualizer_scale);
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
             self.config.beat_pulse = Some(beat_pulse / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE).abs() > 1e-4);
             self.config.beat_pulse_length =

@@ -450,7 +450,7 @@ impl VisualizerPanel {
             spare: Vec::new(),
             width,
             height,
-            pixel_scale: 1,
+            pixel_scale: crate::config::DEFAULT_VISUALIZER_SCALE,
             texture: None,
             focus_requested: false,
             pending_input: None,

@@ -17,6 +17,9 @@ use crate::playlist::LoopMode;
 /// `beat_pulse_length`) unless they're changed.
 pub const DEFAULT_BEAT_PULSE: f32 = 0.3;
 pub const DEFAULT_BEAT_PULSE_LENGTH: f32 = 0.35;
+/// The visualizer pixel scale when `visualizer_scale` isn't set: 4x on
+/// phones, whose screens are dense and hardware slow, 1x elsewhere.
+pub const DEFAULT_VISUALIZER_SCALE: u32 = if cfg!(target_os = "android") { 4 } else { 1 };
 /// The visualizer pixel scales offered (`visualizer_scale`).
 pub const VISUALIZER_SCALES: [u32; 11] = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
 
@@ -144,7 +147,7 @@ pub struct Config {
     #[serde(default)]
     pub visualizer_see_through: bool,
     /// How many output pixels each visualizer buffer pixel covers per side.
-    /// `None` means 1x.
+    /// `None` means [`DEFAULT_VISUALIZER_SCALE`].
     #[serde(default)]
     pub visualizer_scale: Option<u32>,
     /// Experimental preference: start loading a song when the pointer rests
