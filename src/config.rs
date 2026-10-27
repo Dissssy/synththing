@@ -17,6 +17,17 @@ use crate::playlist::LoopMode;
 /// `beat_pulse_length`) unless they're changed.
 pub const DEFAULT_BEAT_PULSE: f32 = 0.3;
 pub const DEFAULT_BEAT_PULSE_LENGTH: f32 = 0.35;
+/// The visualizer pixel scale when `visualizer_scale` isn't set: 4x on
+/// phones, whose screens are dense and hardware slow, 1x elsewhere.
+pub const DEFAULT_VISUALIZER_SCALE: u32 = if cfg!(target_os = "android") { 4 } else { 1 };
+/// The visualizer pixel scales offered (`visualizer_scale`).
+pub const VISUALIZER_SCALES: [u32; 11] = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
+
+/// `scale` rounded down to one of [`VISUALIZER_SCALES`] (1 below them all),
+/// for a hand-edited config.
+pub fn visualizer_scale_down(scale: u32) -> u32 {
+    VISUALIZER_SCALES.into_iter().take_while(|&choice| choice <= scale).last().unwrap_or(1)
+}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -135,6 +146,10 @@ pub struct Config {
     /// What goes out through the local API keeps its transparency either way.
     #[serde(default)]
     pub visualizer_see_through: bool,
+    /// How many output pixels each visualizer buffer pixel covers per side.
+    /// `None` means [`DEFAULT_VISUALIZER_SCALE`].
+    #[serde(default)]
+    pub visualizer_scale: Option<u32>,
     /// Experimental preference: start loading a song when the pointer rests
     /// on it, so clicking it plays sooner.
     #[serde(default)]
@@ -660,8 +675,17 @@ mod tests {
         let config: Config = serde_json::from_str(r#"{ "soundfonts": [] }"#).unwrap();
         assert_eq!(config.remember, Remember { volume: true, soundfont: true, script: true, speed: false, modes: true });
         assert!(config.session.volume.is_none() && config.session.script.is_none());
+        assert!(config.visualizer_scale.is_none());
         let partial: Config = serde_json::from_str(r#"{ "remember": { "speed": true } }"#).unwrap();
         assert!(partial.remember.speed && partial.remember.volume, "left out: the default");
+    }
+
+    #[test]
+    fn visualizer_scale_rounds_down_to_a_power_of_two() {
+        assert_eq!(visualizer_scale_down(0), 1);
+        assert_eq!(visualizer_scale_down(3), 2);
+        assert_eq!(visualizer_scale_down(16), 16);
+        assert_eq!(visualizer_scale_down(2048), 1024);
     }
 
     /// A file that can't be read is moved aside rather than left to be

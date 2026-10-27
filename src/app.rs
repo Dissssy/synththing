@@ -157,7 +157,7 @@ impl song_list::Source for Listed<'_> {
     fn songs(&mut self, query: &str) -> (Vec<PathBuf>, crate::search::Search) {
         let search = crate::search::parse(query, self.store.tags());
         let songs = {
-            let matches = search.rules.matcher(crate::settings_sync::now());
+            let matches = search.rules.matcher(self.store, crate::settings_sync::now());
             self.store
                 .songs()
                 .filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song))
@@ -170,7 +170,7 @@ impl song_list::Source for Listed<'_> {
 
     fn values(&mut self, field: crate::fields::Field, query: &str) -> Vec<String> {
         let rules = crate::search::parse(query, self.store.tags()).rules;
-        let matches = rules.matcher(crate::settings_sync::now());
+        let matches = rules.matcher(self.store, crate::settings_sync::now());
         let songs = self.store.songs().filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song)).map(|(_, song)| song);
         if field == crate::fields::Field::Tag {
             let used: std::collections::BTreeSet<&str> = songs.flat_map(|song| song.tags.iter().map(String::as_str)).collect();
@@ -1968,6 +1968,19 @@ impl App {
         }
     }
 
+    /// An update is offered (the Updates window or page is open with one
+    /// available) or downloading: sync and the online lookup wait, so the
+    /// download has the connection. Closing it, or installing it (the app
+    /// restarts without it open), lets them go on.
+    pub(super) fn update_offered(&self) -> bool {
+        match self.updater.state() {
+            UpdateState::Downloading { .. } => true,
+            UpdateState::Available(_) if self.mobile() => self.on_updates_page(),
+            UpdateState::Available(_) => self.updates_open,
+            _ => false,
+        }
+    }
+
     /// What the update check found, release notes, and installing. On a
     /// page there's no Close (back leaves), and the release notes aren't
     /// a scroll area of their own; whether a way out (Close, Not now,
@@ -3193,6 +3206,7 @@ impl App {
             panel.set_pads(self.pad_frame.clone());
             panel.set_mobile(self.mobile());
             panel.set_see_through(self.config.visualizer_see_through);
+            panel.set_pixel_scale(self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE));
         }
         // (A program watching through the API: drawn at the size it asked
         // for, unless a recording has a size already.)
@@ -4089,8 +4103,10 @@ impl App {
         frame_timing::time("poll_identity", || self.poll_identity());
         frame_timing::time("poll_pairing", || self.poll_pairing());
         frame_timing::time("poll_notifications", || self.poll_notifications(ctx));
-        frame_timing::time("poll_sync", || self.poll_sync());
-        frame_timing::time("lookup_tick", || self.lookup_tick(ctx));
+        // (The update download gets the connection.)
+        let held = self.update_offered();
+        frame_timing::time("poll_sync", || self.poll_sync(held));
+        frame_timing::time("lookup_tick", || self.lookup_tick(ctx, held));
         frame_timing::time("api_tick", || self.api_tick(ctx, &view));
         // (Minimized, eframe still draws the window, but only 10 times a
         // second.)
