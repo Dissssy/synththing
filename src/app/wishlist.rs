@@ -457,8 +457,8 @@ impl App {
                             if wishes.is_empty() {
                                 ui.weak("Nothing found.");
                             }
-                            for wish in wishes {
-                                match found_row_ui(ui, art, wish, list.find(wish).is_some()) {
+                            for (i, wish) in wishes.iter().enumerate() {
+                                match found_row_ui(ui, art, wish, list.find(wish).is_some(), i % 2 == 1) {
                                     Some(FoundAct::Add) => add = Some(wish.clone()),
                                     Some(FoundAct::Open) => open = Some(wish.clone()),
                                     None => {}
@@ -1251,7 +1251,9 @@ enum FoundAct {
     Open,
 }
 
-fn found_row_ui(ui: &mut egui::Ui, art: &mut AlbumArt, wish: &Wish, wished: bool) -> Option<FoundAct> {
+/// A search result, `striped` (every other one) like a list's rows, to
+/// tell which Add is whose.
+fn found_row_ui(ui: &mut egui::Ui, art: &mut AlbumArt, wish: &Wish, wished: bool, striped: bool) -> Option<FoundAct> {
     // (An artist's albums, or an album's songs, to pick from: its picture
     // and name open them.)
     let opens = match wish.kind {
@@ -1263,7 +1265,8 @@ fn found_row_ui(ui: &mut egui::Ui, art: &mut AlbumArt, wish: &Wish, wished: bool
     let hover = if wish.kind == Kind::Artist { "See their albums" } else { "See its songs" };
     let mut add = false;
     let mut open = false;
-    ui.horizontal(|ui| {
+    let fill = if striped { ui.visuals().faint_bg_color } else { egui::Color32::TRANSPARENT };
+    egui::Frame::new().fill(fill).show(ui, |ui| ui.horizontal(|ui| {
         let side = 2.0 * ui.spacing().interact_size.y;
         let (rect, tile) = ui.allocate_exact_size(egui::vec2(side, side), sense);
         art.tile(ui, rect, &source(wish), &wish.title);
@@ -1287,7 +1290,7 @@ fn found_row_ui(ui: &mut egui::Ui, art: &mut AlbumArt, wish: &Wish, wished: bool
                 ui.add(egui::Label::new(egui::RichText::new(detail.join(" · ")).small().weak()).truncate());
             });
         });
-    });
+    }));
     if add {
         Some(FoundAct::Add)
     } else {
