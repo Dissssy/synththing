@@ -357,9 +357,7 @@ pub(super) fn kind_option(ui: &egui::Ui, kind: &str, title: &str) -> egui::text:
 }
 
 /// A server's address as shown: its host.
-pub(super) fn host(url: &str) -> &str {
-    url.split("://").nth(1).unwrap_or(url)
-}
+pub(super) use crate::library::host;
 
 impl App {
     fn spawn_request(&self, job: impl FnOnce() -> Event + Send + 'static) {

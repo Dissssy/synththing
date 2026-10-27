@@ -30,6 +30,11 @@ pub fn official_url() -> String {
         .unwrap_or_else(|_| OFFICIAL_URL.to_string())
 }
 
+/// A server's address without its scheme, for showing.
+pub fn host(url: &str) -> &str {
+    url.split("://").nth(1).unwrap_or(url)
+}
+
 /// The server's key (hex), which signs what it serves and which signed
 /// requests name: built in (`rotation::OFFICIAL_AUTHORITY`), so nothing
 /// has to be fetched before talking to it, unless the

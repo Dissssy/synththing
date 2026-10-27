@@ -8,6 +8,13 @@
 
 ## Tier 2 - solid value, moderate effort
 
+[M][.] Sign in a device by code (only once someone needs it; Ethan
+    2026-10-27): the device that isn't signed in (a hub, a TV) shows a
+    short code, typed into Sign in a device on a signed-in one, which
+    then sends it the sign-in, like a TV's sign-in. The server hands out
+    the codes, each bound to the waiting device's key; the hub pastes a
+    link (docker attach) or reads SYNTHTHING_PAIR_LINK until then.
+
 [M][.] Soundfonts in the song library (intentionally deferred, Ethan
     2026-10-20): soundfonts could go into the hashed store and sync like
     songs (song_store.rs, song_sync.rs), so a playlist entry's soundfont
@@ -664,8 +671,9 @@ Smaller:
     (identity keys, authorities, previews, encores, moderation, the
     Library tab; built in the order listed there). Original note:
 [M][.] server-only build (for official container images)
-    The Docker image carries GTK, ALSA and udev (about 300 MB) only because
-    the server is the app's binary. Plan: a default `gui` feature making
+    The Docker image (published with each release, for servers and hubs)
+    carries GTK, ALSA and udev (about 300 MB) only because the server is
+    the app's binary. Plan: a default `gui` feature making
     eframe, rfd, rodio and gilrs optional (egui and egui_dock are pure Rust
     and stay, as a direct egui dependency instead of eframe::egui), so
     `cargo build --release --no-default-features` gives serve,

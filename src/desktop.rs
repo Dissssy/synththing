@@ -6,9 +6,9 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 use eframe::egui;
 
-use crate::cli::{self, Cli, Command};
+use crate::cli::{self, Cli, Command, HubCommand};
 use crate::config::{self, Config};
-use crate::{app, applog, build_info, channels, headless, instance, library, lua_visualizer, preview, startup};
+use crate::{app, applog, build_info, channels, headless, hub, instance, library, lua_visualizer, preview, startup};
 
 /// `synththing preview`: 0 made (an animation, or a still), 1 the script
 /// has an error, 2 something couldn't be loaded.
@@ -104,6 +104,18 @@ pub fn main() -> Result<()> {
             std::process::exit(1);
         }
         return Ok(());
+    }
+    if let Some(Command::Hub(args)) = &cli.command {
+        match &args.command {
+            Some(HubCommand::Pair { link, name }) => {
+                if let Err(e) = hub::pair(link, name.as_deref()) {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            None => std::process::exit(hub::run()),
+        }
     }
     if let Some(Command::Serve(args)) = &cli.command {
         let data = args.data.clone().unwrap_or_else(library::server::default_data_dir);

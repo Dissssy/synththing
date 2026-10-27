@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Run a hub: `synththing hub` is one of your devices with no window that keeps every song, for an always-on machine (a home server, a NAS, a VPS, or Docker with deploy/hub.compose.yml). Sign it in with `synththing hub pair '<link>'` and your devices' songs stream to it, and from it to each device once that's open. See docs/HUB.md.
 - The local API tells programs only what changed: `GET /v1/songs?since=<revision>` gives the songs that came or changed since an earlier answer, and the keys of those that left. See docs/API.md.
 - Programs can check songs before adding them: `/v1/staged` takes a file and reads it without putting it in the library, `/v1/staged/check` matches what's staged at MusicBrainz (and says which wishes it would fill), and `/v1/staged/{key}/import` adds it as checked without sending it again. See docs/API.md.
 - The local API has the wishlist: `GET`, `POST` and `DELETE /v1/wishlist` (an artist comes with the albums of theirs wished for), notes, `GET /v1/musicbrainz/search` and an artist's albums and a release's track list at MusicBrainz to wish from, and a `wishlist_changed` event. See docs/API.md.

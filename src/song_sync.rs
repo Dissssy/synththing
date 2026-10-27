@@ -418,15 +418,19 @@ pub fn run_all(relay: &Relay, tasks: &[Task], room: Room, mut done: impl FnMut(M
 }
 
 /// Listen for a while (as `device`) for a song streamed to this device,
-/// taking it if it's one of `wanted` (by relay ID: `wanted_ids`): what came
-/// of it, if one came, or why it couldn't listen.
-pub fn listen(relay: &Relay, device: &str, wanted: &HashMap<String, String>) -> Result<Option<Moved>, String> {
+/// taking it if `wanted` gives its key for its relay ID (`wanted_ids`),
+/// asked as the song comes: what came of it, if one came, or why it
+/// couldn't listen.
+pub fn listen(relay: &Relay, device: &str, wanted: impl Fn(&str) -> Option<String>) -> Result<Option<Moved>, String> {
     let inbox = crate::library::sync::inbox_id(&relay.sync_key, device);
-    let take = |id: &str| song_store::Incoming::new(wanted.get(id)?, &relay.dir).ok();
-    let Some((id, incoming)) = client::relay_inbox(&relay.server, &relay.server_key, &relay.identity, &relay.sync_key, &inbox, take)? else {
+    let mut key = String::new();
+    let take = |id: &str| {
+        key = wanted(id)?;
+        song_store::Incoming::new(&key, &relay.dir).ok()
+    };
+    let Some((_, incoming)) = client::relay_inbox(&relay.server, &relay.server_key, &relay.identity, &relay.sync_key, &inbox, take)? else {
         return Ok(None);
     };
-    let key = wanted.get(&id).cloned().unwrap_or_default();
     Ok(Some(incoming.finish().map_or_else(failed(&key), |()| Moved::Fetched(key.clone()))))
 }
 
@@ -843,7 +847,7 @@ mod tests {
         let huge = song_store::write_in(&vec![6; 3 * mb as usize], "Huge.wav", &root.join("desktop")).unwrap();
         let wanted = wanted_ids(&[7; 32], &BTreeSet::from([huge.key.clone()]));
         let phone = relay("phone");
-        let listener = std::thread::spawn(move || listen(&phone, "phone", &wanted));
+        let listener = std::thread::spawn(move || listen(&phone, "phone", |id| wanted.get(id).cloned()));
         let inbox = crate::library::sync::inbox_id(&[7; 32], "phone");
         while client::relay_listening(&server, &server_key, &identity, std::slice::from_ref(&inbox)).unwrap().is_empty() {
             std::thread::sleep(std::time::Duration::from_millis(20));
