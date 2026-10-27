@@ -148,7 +148,15 @@ pub struct Wishlist {
 impl Wishlist {
     pub fn load() -> Self {
         let path = crate::config::config_dir().ok().map(|d| d.join("wishlist.json"));
-        let wishes = path.as_ref().and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        // (One that can't be read is set aside, not saved over by the next
+        // change; the wishes that can be are kept.)
+        let wishes = path
+            .as_ref()
+            .and_then(|p| crate::config::read_json_or_set_aside(p).unwrap_or_else(|e| {
+                log::warn!("{e:#}");
+                None
+            }))
+            .unwrap_or_default();
         Self { wishes, path, revision: 0 }
     }
 
