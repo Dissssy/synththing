@@ -94,6 +94,9 @@ struct Channel {
     revision: i64,
     /// A sync is running.
     running: bool,
+    /// The newest revision the server announced while it ran: maybe this
+    /// device's own write, known once it's done.
+    heard: i64,
     /// It changed here then: send it once it's settled.
     dirty_since: Option<Instant>,
     /// Sync as soon as it can (after this, for a retry).
@@ -452,8 +455,15 @@ impl DeviceSync {
                 Some(changed) => changed.name == blob.name() && changed.revision > self.channels[blob.index()].revision,
                 None => true,
             };
-            if newer && self.syncing(blob) {
-                self.channel(blob).wanted = Some(Instant::now());
+            if !newer || !self.syncing(blob) {
+                continue;
+            }
+            match &changed {
+                Some(changed) if self.channel(blob).running => {
+                    let channel = self.channel(blob);
+                    channel.heard = channel.heard.max(changed.revision);
+                }
+                _ => self.channel(blob).wanted = Some(Instant::now()),
             }
         }
     }
@@ -540,9 +550,17 @@ impl DeviceSync {
             if let Ok(outcome) = &result {
                 log::info!("{} synced: revision {}, {} changed", blob.name(), outcome.revision, outcome.changes.len());
             }
-            self.channel(blob).running = false;
-            if result.is_ok() {
-                self.channel(blob).adopt = false;
+            let channel = self.channel(blob);
+            channel.running = false;
+            let heard = std::mem::take(&mut channel.heard);
+            if let Ok(outcome) = &result {
+                channel.adopt = false;
+                // (Noted now, not once the worker's taken it in: the server
+                // announces this write meanwhile.)
+                channel.revision = channel.revision.max(outcome.revision);
+                if heard > outcome.revision {
+                    channel.wanted = Some(Instant::now());
+                }
             }
             match result {
                 Ok(outcome) => match blob {
