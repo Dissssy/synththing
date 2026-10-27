@@ -125,6 +125,15 @@ scripts.example.org {
 }
 ```
 
+## hub: run your hub
+
+```
+synththing hub
+synththing hub pair <LINK> [--name NAME]
+```
+
+Runs this config folder as your hub (docs/HUB.md): a device with no window that syncs like the app and keeps every song, so your devices' songs have somewhere to go when the others are closed. `hub pair` signs it in first, with a link from a signed-in device's Preferences > Online Library > Sign in another device (quote it: it has a `#` in it); `--name` is what your other devices show for it, by default the computer's name. `hub` runs until stopped (Ctrl+C), logging to the terminal; exit code 2 if it can't start (not signed in, or already running with this config folder).
+
 ## admin: moderate a library server
 
 ```

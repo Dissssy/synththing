@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use crate::config::Config;
 use crate::device::Device;
 use crate::frame_timing;
 use crate::library::identity::{self, Identity};
@@ -338,6 +339,16 @@ pub fn describe(what: &str, changes: &[Change], title: impl Fn(&str) -> String) 
         })
         .collect();
     format!("{what} sync changed: {}", parts.join(", "))
+}
+
+/// `config` with the settings synced (`Report::Settings`) put in, and how
+/// it then reads as synced leaves (for `DeviceSync::settings_applied`).
+pub fn synced_config(config: &Config, synced: &Synced) -> Result<(Config, BTreeMap<String, Value>), String> {
+    let mut json = config.to_json().map_err(|e| e.to_string())?;
+    settings_sync::apply::<Config>(&mut json, &synced.result, synced.choices());
+    let config: Config = serde_json::from_value(json).map_err(|e| e.to_string())?;
+    let applied = settings_sync::synced_leaves(&config.to_json().unwrap_or_default(), synced.choices());
+    Ok((config, applied))
 }
 
 /// A song's name, by key.
@@ -907,8 +918,10 @@ impl DeviceSync {
         let (device, wanted, tx, stopped) = (device.to_string(), Arc::clone(&self.wanted_ids), self.moves.0.clone(), Arc::clone(&stop));
         let spawned = std::thread::Builder::new().name("song inbox".into()).spawn(move || {
             while !stopped.load(Ordering::Relaxed) {
-                let wanted = wanted.lock().unwrap_or_else(|p| p.into_inner()).clone();
-                match song_sync::listen(&relay, &device, &wanted) {
+                // (Looked up as a song comes, not as listening starts: the
+                // songs wanted may change while it waits.)
+                let wanted = |id: &str| wanted.lock().unwrap_or_else(|p| p.into_inner()).get(id).cloned();
+                match song_sync::listen(&relay, &device, wanted) {
                     Ok(None) => {}
                     Ok(Some(moved)) => {
                         if tx.send(Moving::Received(moved)).is_err() {

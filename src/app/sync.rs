@@ -9,7 +9,6 @@ use std::time::Instant;
 use eframe::egui;
 
 use super::App;
-use crate::config::Config;
 use crate::device_sync::{self, DeviceSync, Here, Link, Report, Synced};
 use crate::library;
 use crate::settings_sync;
@@ -88,29 +87,22 @@ impl App {
     /// A settings sync is done: take its settings, with whatever was
     /// changed here while it ran.
     fn settings_synced(&mut self, synced: Synced) {
-        let mut json = match self.config.to_json() {
-            Ok(json) => json,
+        let (config, applied) = match device_sync::synced_config(&self.config, &synced) {
+            Ok(done) => done,
             Err(e) => return log::warn!("settings sync: {e}"),
         };
-        settings_sync::apply::<Config>(&mut json, &synced.result, synced.choices());
-        match serde_json::from_value::<Config>(json) {
-            Ok(config) => {
-                let before = self.current_theme();
-                let modes_changed = (config.loop_mode, config.shuffle) != (self.config.loop_mode, self.config.shuffle);
-                self.config = config;
-                if self.current_theme() != before {
-                    self.reapply_theme();
-                }
-                // (Loop and Shuffle in use are the app's own, saved as they
-                // change: take the synced ones where they're remembered.)
-                if modes_changed && self.config.remember.modes {
-                    self.loop_mode = self.config.loop_mode;
-                    self.shuffle = self.config.shuffle;
-                }
-            }
-            Err(e) => return log::warn!("settings sync: {e}"),
+        let before = self.current_theme();
+        let modes_changed = (config.loop_mode, config.shuffle) != (self.config.loop_mode, self.config.shuffle);
+        self.config = config;
+        if self.current_theme() != before {
+            self.reapply_theme();
         }
-        let applied = settings_sync::synced_leaves(&self.config.to_json().unwrap_or_default(), synced.choices());
+        // (Loop and Shuffle in use are the app's own, saved as they change:
+        // take the synced ones where they're remembered.)
+        if modes_changed && self.config.remember.modes {
+            self.loop_mode = self.config.loop_mode;
+            self.shuffle = self.config.shuffle;
+        }
         let toast = (self.config.sync_debug && !synced.changes().is_empty())
             .then(|| device_sync::describe("Settings", synced.changes(), str::to_string));
         self.sync.engine.settings_applied(synced, applied);

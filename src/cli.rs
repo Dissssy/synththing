@@ -66,6 +66,17 @@ pub enum Command {
     /// set behind_proxy in server.json.
     Serve(ServeArgs),
 
+    /// Run as your hub: a device with no window that keeps every song.
+    ///
+    /// For an always-on machine (a home server, a NAS, a VPS, in Docker:
+    /// docs/HUB.md). Sign it in first with `hub pair`. It syncs like the
+    /// app (settings, playlists, wishlist, songs) and wants every song, so
+    /// your devices' songs stream straight to it and it sends them on to
+    /// each device that wants them. Its songs, playlists and sign-in live
+    /// in the config folder (--config-dir or SYNTHTHING_CONFIG_DIR). Runs
+    /// until stopped (Ctrl+C), logging to the terminal.
+    Hub(HubArgs),
+
     /// Make a script's preview: a short looping animation and a still.
     ///
     /// The script plays a stretch of each starter song at 320x180, in Auto
@@ -117,6 +128,26 @@ pub enum Command {
         /// something this build doesn't know is skipped.
         #[arg(long, value_name = "DIR")]
         dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct HubArgs {
+    #[command(subcommand)]
+    pub command: Option<HubCommand>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HubCommand {
+    /// Sign the hub in, with a link from a signed-in device's Preferences >
+    /// Online Library > Sign in another device.
+    Pair {
+        /// The link (quote it: it has a # in it).
+        link: String,
+        /// The name your other devices show for it (default: the
+        /// computer's name).
+        #[arg(long)]
+        name: Option<String>,
     },
 }
 

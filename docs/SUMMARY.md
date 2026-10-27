@@ -17,6 +17,7 @@
 
 - [Running a server](DEPLOY.md)
 - [How the server works](SERVER.md)
+- [Running a hub](HUB.md)
 
 # Maintaining
 

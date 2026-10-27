@@ -1,0 +1,30 @@
+# Your hub (docs/HUB.md): a synththing device with no window that keeps
+# every song, from the published image.
+#
+# Sign it in once, before starting it, with a link from a signed-in
+# device (Preferences > Online Library > Sign in another device):
+#
+#   docker compose -f hub.compose.yml run --rm hub hub pair '<link>' --name "Home hub"
+#
+# then start it:
+#
+#   docker compose -f hub.compose.yml up -d
+#
+# Its songs, playlists, settings and sign-in are in ./hub (songs in
+# ./hub/music); its log is `docker logs synththing-hub` (and
+# ./hub/synththing.log).
+
+services:
+  hub:
+    image: ghcr.io/dissssy/synththing:latest
+    container_name: synththing-hub
+    restart: unless-stopped
+    command: ["hub"]
+    environment:
+      - SYNTHTHING_CONFIG_DIR=/data
+    volumes:
+      - ./hub:/data
+    # (Watchtower, as in docker-compose.yml, only updates containers with
+    # this label.)
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
