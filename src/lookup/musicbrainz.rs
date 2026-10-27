@@ -17,8 +17,9 @@ use musicbrainz_rs::entity::artist_credit::ArtistCredit;
 use musicbrainz_rs::entity::genre::Genre;
 use musicbrainz_rs::entity::recording::Recording;
 use musicbrainz_rs::entity::release::{Release as Entity, ReleaseStatus};
-use musicbrainz_rs::entity::release_group::{ReleaseGroupPrimaryType, ReleaseGroupSecondaryType};
+use musicbrainz_rs::entity::release_group::{ReleaseGroup, ReleaseGroupPrimaryType, ReleaseGroupSecondaryType};
 use musicbrainz_rs::entity::search::SearchResult;
+use musicbrainz_rs::entity::BrowseResult;
 use musicbrainz_rs::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -26,9 +27,14 @@ use sha2::Digest;
 
 use super::Outcome;
 use super::artists::Artist;
-use super::matching::{self, Album, Credit, Hit, HitRelease, Release, Track};
+use super::matching::{self, Album, ArtistAlbum, Credit, Hit, HitRelease, Release, Track};
 use crate::wishlist::{Kind, Wish};
 
+/// How many of an artist's albums are asked for at a time, and at most.
+const PAGE: u8 = 100;
+const DISCOGRAPHY: usize = 500;
+/// How many releases of an album are looked at, to wish for it.
+const EDITIONS: u8 = 25;
 /// How many search hits are looked at.
 const HITS: u8 = 10;
 /// How many releases' track lists are fetched at most, for one album.
@@ -90,6 +96,11 @@ fn cache() -> Cache {
 /// asked for again when its match is refreshed, `lookup::REFRESH`).
 pub fn kept_release(id: &str) -> Option<Release> {
     cache().get_any::<Entity>("release", id).map(|e| converted(&e))
+}
+
+/// The albums of the artist `id` as they were kept, if they were.
+pub fn kept_discography(id: &str) -> Option<Vec<ArtistAlbum>> {
+    cache().get_any::<Vec<ReleaseGroup>>("discography", id).map(|groups| discography(&groups))
 }
 
 /// The artist `id` as they were kept, if they were.
@@ -187,6 +198,70 @@ impl MusicBrainz {
             return Ok(Vec::new());
         }
         Ok(self.search_recordings(format!("recording:({words}) OR artist:({words})"), false)?.iter().map(song_wish).collect())
+    }
+
+    /// Artists named like `words`, for the wishlist: a wish to watch each.
+    pub fn find_artists(&mut self, words: &str) -> Result<Vec<Wish>> {
+        let words = lucene_words(words);
+        if words.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query = format!("artist:({words}) OR alias:({words})");
+        let name = crate::library::hex(&sha2::Sha256::digest(query.as_bytes())[..16]);
+        let hits = match self.cache.get::<Vec<ArtistEntity>>("artist-search", &name) {
+            Some(hits) => hits,
+            None => {
+                self.wait_turn();
+                let found: SearchResult<ArtistEntity> =
+                    ArtistEntity::search(query).limit(HITS).execute_with_client(&self.client).context("searching MusicBrainz")?;
+                self.cache.put("artist-search", &name, &found.entities);
+                found.entities
+            }
+        };
+        Ok(hits.iter().map(artist_wish).collect())
+    }
+
+    /// The albums of the artist `id` as MusicBrainz has them now (and
+    /// kept).
+    pub fn discography(&mut self, id: &str) -> Result<Vec<ArtistAlbum>> {
+        let mut groups: Vec<ReleaseGroup> = Vec::new();
+        loop {
+            self.wait_turn();
+            let page: BrowseResult<ReleaseGroup> = ReleaseGroup::browse()
+                .by_artist(id)
+                .limit(PAGE)
+                .offset(groups.len() as u16)
+                .execute_with_client(&self.client)
+                .with_context(|| format!("fetching the albums of artist {id}"))?;
+            let more = !page.entities.is_empty();
+            groups.extend(page.entities);
+            if !more || groups.len() >= page.count.max(0) as usize || groups.len() >= DISCOGRAPHY {
+                break;
+            }
+        }
+        self.cache.put("discography", id, &groups);
+        Ok(discography(&groups))
+    }
+
+    /// A wish for the album (release group) `group`, and the release it's
+    /// from, with its tracks: its first official release (else its first).
+    /// Each of its releases is kept.
+    pub fn album(&mut self, group: &str) -> Result<(Wish, Release)> {
+        self.wait_turn();
+        let found: BrowseResult<Entity> = Entity::browse()
+            .by_release_group(group)
+            .with_recordings()
+            .with_artist_credits()
+            .with_release_groups()
+            .limit(EDITIONS)
+            .execute_with_client(&self.client)
+            .with_context(|| format!("fetching the releases of album {group}"))?;
+        for release in &found.entities {
+            self.cache.put("release", &release.id, release);
+        }
+        let wish = album_wishes(&found.entities).into_iter().next().with_context(|| format!("album {group} has no releases"))?;
+        let release = found.entities.iter().find(|r| wish.release.as_deref() == Some(r.id.as_str())).map(converted).unwrap_or_default();
+        Ok((wish, release))
     }
 
     /// The release `id` as MusicBrainz has it now (and kept).
@@ -324,6 +399,49 @@ fn album_wishes(hits: &[Entity]) -> Vec<Wish> {
     wishes.into_iter().map(|(_, w)| w).collect()
 }
 
+/// An artist a search found, as a wish to watch them.
+fn artist_wish(entity: &ArtistEntity) -> Wish {
+    let mut wish = Wish { musicbrainz: Some(entity.id.clone()), ..Wish::new(Kind::Artist, &entity.name) };
+    if !entity.disambiguation.is_empty() {
+        wish.artist = Some(entity.disambiguation.clone());
+    }
+    wish
+}
+
+/// An artist's albums, as browsed, oldest first.
+fn discography(groups: &[ReleaseGroup]) -> Vec<ArtistAlbum> {
+    let mut albums: Vec<ArtistAlbum> = groups
+        .iter()
+        .map(|g| ArtistAlbum { id: g.id.clone(), title: g.title.clone(), year: g.first_release_date.as_ref().and_then(|d| year(&d.0)), kind: album_kind(g) })
+        .collect();
+    albums.sort_by(|a, b| (a.year.is_none(), &a.year, &a.title).cmp(&(b.year.is_none(), &b.year, &b.title)));
+    albums
+}
+
+/// What kind of album a release group is, as the wishlist counts them:
+/// a compilation or live one before what it is otherwise, and a remix,
+/// a mixtape, a demo, spoken word and the like as Other. (A soundtrack is
+/// what it is otherwise.)
+fn album_kind(group: &ReleaseGroup) -> &'static str {
+    use ReleaseGroupSecondaryType as Secondary;
+    let secondary = &group.secondary_types;
+    if secondary.contains(&Secondary::Compilation) {
+        return "Compilation";
+    }
+    if secondary.contains(&Secondary::Live) {
+        return "Live";
+    }
+    if secondary.iter().any(|t| *t != Secondary::Soundtrack) {
+        return "Other";
+    }
+    match group.primary_type {
+        Some(ReleaseGroupPrimaryType::Album) => "Album",
+        Some(ReleaseGroupPrimaryType::Ep) => "EP",
+        Some(ReleaseGroupPrimaryType::Single) => "Single",
+        _ => "Other",
+    }
+}
+
 /// A recording a search found, as a wish for it: its cover from the first
 /// album it's on.
 fn song_wish(recording: &Recording) -> Wish {
@@ -345,7 +463,7 @@ fn quoted(text: &str) -> String {
 }
 
 /// MusicBrainz's Various Artists.
-pub(super) const VARIOUS_ARTISTS: &str = "89ad4ac3-39f7-470e-963a-56509c546377";
+pub const VARIOUS_ARTISTS: &str = "89ad4ac3-39f7-470e-963a-56509c546377";
 
 fn artist(entity: &ArtistEntity) -> Artist {
     Artist { id: entity.id.clone(), name: entity.name.clone(), aliases: entity.aliases.iter().flatten().map(|a| a.name.clone()).collect() }
@@ -498,6 +616,22 @@ mod tests {
         assert_eq!(wishes.len(), 2, "one for each group");
         assert_eq!(wishes[0].release.as_deref(), Some("r2"), "its official release over a bootleg");
         assert_eq!((wishes[0].artist.as_deref(), wishes[0].year.as_deref(), wishes[0].release_type.as_deref(), wishes[0].tracks), (Some("Daft Punk"), Some("2001"), Some("Album"), 14));
+    }
+
+    #[test]
+    fn an_artists_albums_are_counted_by_kind() {
+        let json = r#"[
+            {"id":"g1","title":"Modal Soul","primary-type":"Album","secondary-types":[],"first-release-date":"2005-11-11"},
+            {"id":"g2","title":"Samurai Champloo","primary-type":"Album","secondary-types":["Soundtrack"],"first-release-date":"2004"},
+            {"id":"g3","title":"Best Of","primary-type":"Album","secondary-types":["Compilation"],"first-release-date":"2010"},
+            {"id":"g4","title":"Live in Tokyo","primary-type":"Album","secondary-types":["Live"]},
+            {"id":"g5","title":"Remixes","primary-type":"EP","secondary-types":["Remix"],"first-release-date":"2003"},
+            {"id":"g6","title":"Luv(sic)","primary-type":"Single","secondary-types":[],"first-release-date":"2001"}]"#;
+        let groups: Vec<ReleaseGroup> = serde_json::from_str(json).expect("release groups");
+        let albums = discography(&groups);
+        let kinds: Vec<(&str, &str)> = albums.iter().map(|a| (a.id.as_str(), a.kind)).collect();
+        assert_eq!(kinds, [("g6", "Single"), ("g5", "Other"), ("g2", "Album"), ("g1", "Album"), ("g3", "Compilation"), ("g4", "Live")], "oldest first, undated last");
+        assert_eq!(albums[3].year.as_deref(), Some("2005"));
     }
 
     #[test]

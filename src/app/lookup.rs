@@ -297,7 +297,9 @@ impl App {
         ui.add_space(4.0);
         let mut wrong = false;
         let lookups = self.config.online_lookup && build_info::online(build_info::Online::Lookup);
-        let mut wish = super::wishlist::album_ask(&self.songs, &self.lookup.kept, &self.wishlist.list, lookups, &[key]);
+        let mut wish = super::wishlist::album_ask(&self.songs, &self.lookup.kept, &self.wishlist.list, lookups, &[key.clone()]);
+        let artist = self.songs.get_by_key(&key).and_then(|song| Facts::of(song).items(Field::Artist).into_iter().next().map(|a| a.into_owned()));
+        let mut more = artist.as_deref().and_then(|a| super::wishlist::artist_ask(&self.songs, &self.lookup.kept, &self.wishlist.list, a, &[key.clone()]));
         egui::Grid::new("online_match").num_columns(2).show(ui, |ui| {
             ui.strong("Matched to");
             ui.horizontal(|ui| {
@@ -314,9 +316,20 @@ impl App {
             ui.strong("Matched");
             ui.label(format!("{} on {}", if online.by_user { "By you" } else { "By the lookup" }, crate::fields::date(online.at)));
             ui.end_row();
+            if let Some(artist) = &artist {
+                ui.strong("Artist");
+                ui.horizontal(|ui| {
+                    ui.label(artist);
+                    more = super::wishlist::artist_wish_button(ui, more.take());
+                });
+                ui.end_row();
+            }
         });
         if let Some(wish) = wish {
             self.wish_for_album(ui.ctx(), wish);
+        }
+        if let Some(wish) = more {
+            self.wish_for_artist(ui.ctx(), wish);
         }
         if wrong {
             self.wrong_match(&release);

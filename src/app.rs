@@ -3875,7 +3875,7 @@ impl App {
                             Some(instrument) => format!("{} \u{b7} {instrument}", channel + 1),
                             None => format!("Channel {}", channel + 1),
                         };
-                        let response = channel_chip(ui, enabled, &text, color).on_hover_ui(about);
+                        let response = toggle_chip(ui, enabled, &text, color).on_hover_ui(about);
                         if response.clicked() {
                             toggle = Some((channel, !enabled));
                         }
@@ -4598,11 +4598,11 @@ fn channel_toggle(ui: &mut egui::Ui, on: &mut bool, label: &str, color: egui::Co
     .inner
 }
 
-/// A channel's toggle as a chip (`Config::channel_chips`), like the
-/// library's: filled with the channel's color while it's on, washed out to
-/// grey while it's off, outlined in the theme's hover color while hovered.
+/// A toggle as a chip (a channel's, `Config::channel_chips`), like the
+/// library's: filled with its color while it's on, washed out to grey
+/// while it's off, outlined in the theme's hover color while hovered.
 /// Clicking it toggles.
-fn channel_chip(ui: &mut egui::Ui, on: bool, text: &str, color: egui::Color32) -> egui::Response {
+pub(super) fn toggle_chip(ui: &mut egui::Ui, on: bool, text: &str, color: egui::Color32) -> egui::Response {
     let fill = if on { color } else { washed_out(color, ui.visuals().dark_mode) };
     let font = egui::TextStyle::Button.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, on_color(fill));
