@@ -20,6 +20,7 @@ use crate::config::Config;
 use crate::device::Device;
 use crate::device_messages::{self, Envelope, Outbox, Route};
 use crate::device_sync::DeviceSync;
+use crate::hub_server::HubServer;
 use crate::lookup::Kept;
 use crate::panel_share::{self, Host, Message, Out};
 use crate::playlist::{Library, PlaylistEntry};
@@ -63,10 +64,12 @@ pub struct HubApi {
     outbox: Outbox,
 }
 
-/// Where the hub's live messages go, and as which device.
+/// Where the hub's live messages go, and as which device: the server,
+/// and the devices listening to the hub (`serving`) while it serves.
 pub struct Live<'a> {
     pub route: &'a Route,
     pub me: &'a Device,
+    pub serving: Option<&'a HubServer>,
 }
 
 impl HubApi {
@@ -83,7 +86,7 @@ impl HubApi {
         {
             self.server = None;
             let staging = crate::config::config_dir().map_or_else(|_| std::env::temp_dir().join("synththing-staged"), |dir| dir.join("staged"));
-            match api::Server::start(port, lan, self.apps.clone(), egui::Context::default(), staging) {
+            match api::Server::start(port, lan, self.apps.clone(), egui::Context::default(), staging, None) {
                 Ok(server) => {
                     log::info!("api: listening on {} for {} program(s)", server.addr(), self.apps.len());
                     self.server = Some(server);
@@ -147,7 +150,12 @@ impl HubApi {
     fn send(&mut self, live: &Live, out: Vec<Out>) {
         for Out { to, message } in out {
             match serde_json::to_value(&message) {
-                Ok(body) => self.outbox.send(live.route, &Envelope { from: live.me.clone(), to, topic: panel_share::TOPIC.to_string(), body }),
+                Ok(body) => {
+                    let sent = self.outbox.send(live.route, &Envelope { from: live.me.clone(), to, topic: panel_share::TOPIC.to_string(), body });
+                    if let (Some(sealed), Some(server)) = (sent, live.serving) {
+                        server.pass_on(&sealed);
+                    }
+                }
                 Err(e) => log::warn!("a panels message: {e}"),
             }
         }

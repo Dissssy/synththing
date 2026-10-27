@@ -13,8 +13,18 @@
 //!   another device sends it (so devices split what they send between
 //!   them), 507 when its disk is nearly full.
 //! - `POST /hub/v1/songs/{key}/get`: the song, sealed (404: not here).
+//! - `POST /hub/v1/live`: a live message (`device_messages.rs`), sealed,
+//!   for the user's devices: passed to those listening here, and to the
+//!   hub itself (`Came::Live`), which passes it on to the server for those
+//!   listening there (`hub.rs`).
+//! - `POST /hub/v1/live/listen`: the live messages as they come, as the
+//!   server's notification stream has them (`: open`, then
+//!   `data: {"live": ...}`), for `client::STREAM_FOR`. A device listening
+//!   here takes live messages from here only: the hub passes on those that
+//!   come to the server (`HubServer::pass_on`), once each.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -31,11 +41,26 @@ const WORKERS: usize = 8;
 /// Songs aren't taken in below this much free space (bytes).
 const FREE_FLOOR: u64 = 2 * 1024 * 1024 * 1024;
 const CHALLENGE_MAX: usize = 128;
+/// Devices listening for live messages at once, at most.
+const MOST_LISTENING: usize = 32;
+/// Live messages remembered, not to pass one on twice.
+const SEEN: usize = 512;
+const KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(25);
+
+/// What came to the hub.
+#[derive(Debug, PartialEq)]
+pub enum Came {
+    /// A song, by key, now in the library's folder.
+    Song(String),
+    /// A live message, sealed, from a device listening here.
+    Live(String),
+}
 
 /// The hub's server, running until it's dropped.
 pub struct HubServer {
     addr: SocketAddr,
     http: Arc<tiny_http::Server>,
+    shared: Arc<Shared>,
 }
 
 impl Drop for HubServer {
@@ -56,15 +81,18 @@ struct Shared {
     incoming: Mutex<BTreeSet<String>>,
     /// Nonces seen, and when, within the time a signed request is good for.
     nonces: Mutex<HashMap<String, i64>>,
-    /// Songs that came, by key.
-    came: Mutex<Sender<String>>,
+    /// What came.
+    came: Mutex<Sender<Came>>,
+    /// The devices listening for live messages.
+    listening: Mutex<Vec<(u64, Sender<String>)>>,
+    /// The live messages passed on lately (by their SHA-256), oldest first.
+    seen: Mutex<(HashSet<String>, VecDeque<String>)>,
 }
 
 impl HubServer {
     /// Listen on `port` (every network), as the hub (its own key `key`) for
-    /// `identity`, keeping songs in `dir`: the server, and the songs that
-    /// come (by key).
-    pub fn start(port: u16, key: Identity, identity: &Identity, sync_key: [u8; 32], dir: PathBuf) -> Result<(HubServer, Receiver<String>), String> {
+    /// `identity`, keeping songs in `dir`: the server, and what comes to it.
+    pub fn start(port: u16, key: Identity, identity: &Identity, sync_key: [u8; 32], dir: PathBuf) -> Result<(HubServer, Receiver<Came>), String> {
         let http = tiny_http::Server::http(("0.0.0.0", port)).map_err(|e| format!("couldn't listen on port {port}: {e}"))?;
         let addr = http.server_addr().to_ip().ok_or("not listening on an IP address")?;
         let http = Arc::new(http);
@@ -77,6 +105,8 @@ impl HubServer {
             incoming: Mutex::default(),
             nonces: Mutex::default(),
             came: Mutex::new(tx),
+            listening: Mutex::default(),
+            seen: Mutex::default(),
         });
         for _ in 0..WORKERS {
             let (http, shared) = (Arc::clone(&http), Arc::clone(&shared));
@@ -86,14 +116,22 @@ impl HubServer {
                     while let Ok(request) = http.recv() {
                         handle(&shared, request);
                     }
+                    // (Stopped: the streams end too.)
+                    lock(&shared.listening).clear();
                 })
                 .map_err(|e| format!("couldn't start: {e}"))?;
         }
-        Ok((HubServer { addr, http }, came))
+        Ok((HubServer { addr, http, shared }, came))
     }
 
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// Pass a sealed live message on to the devices listening here, unless
+    /// it was already: whether it was new.
+    pub fn pass_on(&self, sealed: &str) -> bool {
+        pass_on(&self.shared, sealed)
     }
 }
 
@@ -124,7 +162,7 @@ fn error(status: u16, text: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     json(status, serde_json::json!({ "error": text }))
 }
 
-fn handle(shared: &Shared, mut request: Request) {
+fn handle(shared: &Arc<Shared>, mut request: Request) {
     let url = request.url().to_string();
     let (path, query) = url.split_once('?').unwrap_or((&url, ""));
     let path = path.to_string();
@@ -138,6 +176,14 @@ fn handle(shared: &Shared, mut request: Request) {
         },
         (Method::Post, ["songs", key, "get"]) => match signed(shared, &request, "POST", &path) {
             Ok(()) => return give(shared, request, key),
+            Err(reply) => reply,
+        },
+        (Method::Post, ["live"]) => match signed(shared, &request, "POST", &path) {
+            Ok(()) => live(shared, &mut request),
+            Err(reply) => reply,
+        },
+        (Method::Post, ["live", "listen"]) => match signed(shared, &request, "POST", &path) {
+            Ok(()) => return listen(shared, request),
             Err(reply) => reply,
         },
         _ => error(404, "not found"),
@@ -230,7 +276,7 @@ fn take(shared: &Shared, request: &mut Request, key: &str) -> Response<std::io::
         return error(400, &format!("{e:#}"));
     }
     log::info!("{} sent {key}", from(request));
-    let _ = lock(&shared.came).send(key.to_string());
+    let _ = lock(&shared.came).send(Came::Song(key.to_string()));
     json(201, serde_json::json!({}))
 }
 
@@ -251,6 +297,75 @@ fn give(shared: &Shared, request: Request, key: &str) {
     let size = sync::sealed_len(len) as usize;
     let header = Header::from_bytes("Content-Type", "application/octet-stream").expect("a valid header");
     let _ = request.respond(Response::new(tiny_http::StatusCode(200), vec![header], sealed, Some(size), None));
+}
+
+/// Pass `sealed` on to the devices listening, unless it was already:
+/// whether it was new.
+fn pass_on(shared: &Shared, sealed: &str) -> bool {
+    let hash = library::sha256_hex(sealed.as_bytes());
+    {
+        let (set, order) = &mut *lock(&shared.seen);
+        if !set.insert(hash.clone()) {
+            return false;
+        }
+        order.push_back(hash);
+        if order.len() > SEEN
+            && let Some(oldest) = order.pop_front()
+        {
+            set.remove(&oldest);
+        }
+    }
+    let event = format!("data: {}\n\n", serde_json::json!({ "live": sealed }));
+    lock(&shared.listening).retain(|(_, tx)| tx.send(event.clone()).is_ok());
+    true
+}
+
+fn live(shared: &Shared, request: &mut Request) -> Response<std::io::Cursor<Vec<u8>>> {
+    let mut sealed = String::new();
+    let read = request.as_reader().take(sync::MAX_LIVE as u64 + 1).read_to_string(&mut sealed);
+    if read.is_err() || sealed.len() > sync::MAX_LIVE || sealed.trim().is_empty() {
+        return error(400, "that's not a live message");
+    }
+    if pass_on(shared, sealed.trim()) {
+        let _ = lock(&shared.came).send(Came::Live(sealed.trim().to_string()));
+    }
+    json(200, serde_json::json!({}))
+}
+
+/// Stream the live messages to a device, on a thread of its own, for
+/// `client::STREAM_FOR` (it listens again then).
+fn listen(shared: &Arc<Shared>, request: Request) {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let (tx, rx) = mpsc::channel::<String>();
+    {
+        let mut listening = lock(&shared.listening);
+        if listening.len() >= MOST_LISTENING {
+            drop(listening);
+            let _ = request.respond(error(503, "too many devices listening"));
+            return;
+        }
+        listening.push((id, tx));
+    }
+    let closing = Arc::clone(shared);
+    let spawned = std::thread::Builder::new().name("hub live".into()).spawn(move || {
+        let until = std::time::Instant::now() + crate::library::client::STREAM_FOR;
+        let mut writer = request.into_writer();
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n: open\n\n";
+        let mut ok = writer.write_all(head.as_bytes()).and_then(|()| writer.flush()).is_ok();
+        while ok && std::time::Instant::now() < until {
+            let chunk = match rx.recv_timeout(KEEP_ALIVE) {
+                Ok(event) => event,
+                Err(mpsc::RecvTimeoutError::Timeout) => ": keep-alive\n\n".to_string(),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+            ok = writer.write_all(chunk.as_bytes()).and_then(|()| writer.flush()).is_ok();
+        }
+        lock(&closing.listening).retain(|(listener, _)| *listener != id);
+    });
+    if spawned.is_err() {
+        log::warn!("couldn't start a live message stream");
+    }
 }
 
 #[cfg(test)]
@@ -279,7 +394,7 @@ mod tests {
         let song = song_store::write_in(b"a song for the hub", "Song.mid", &root.join("desktop")).unwrap();
         let file = song_store::path_of(&root.join("desktop"), &song.key);
         assert_eq!(client::hub_put(&base, &key, &me, "desktop", &sync_key, &song.key, &file), Ok(HubPut::Taken));
-        assert_eq!(came.try_recv(), Ok(song.key.clone()));
+        assert_eq!(came.try_recv(), Ok(Came::Song(song.key.clone())));
         assert_eq!(client::hub_put(&base, &key, &me, "desktop", &sync_key, &song.key, &file), Ok(HubPut::Has));
         // Not from someone else, nor sealed with another key.
         assert!(client::hub_put(&base, &key, &Identity::generate().unwrap(), "x", &sync_key, &song.key, &file).is_err());
@@ -316,4 +431,34 @@ mod tests {
         drop(server);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn the_hub_passes_live_messages_on() {
+        let root = std::env::temp_dir().join(format!("synththing-hub-live-{}", std::process::id()));
+        let (me, hub_key) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (server, came) = HubServer::start(0, Identity::from_secret_hex(&hub_key.secret_hex()).unwrap(), &me, [5; 32], root.clone()).unwrap();
+        let base = format!("http://127.0.0.1:{}", server.addr().port());
+        let key = hub_key.public();
+        let (tx, heard) = mpsc::channel();
+        let listening = {
+            let (base, key, me) = (base.clone(), key.clone(), me.clone());
+            std::thread::spawn(move || client::hub_live_listen(&base, &key, &me, "phone", |event| tx.send(event).is_ok()))
+        };
+        assert_eq!(heard.recv_timeout(std::time::Duration::from_secs(5)), Ok(client::StreamEvent::Opened));
+
+        // From a device: to those listening, and to the hub itself.
+        client::hub_live_send(&base, &key, &me, "desktop", "sealed-1").unwrap();
+        assert_eq!(heard.recv_timeout(std::time::Duration::from_secs(5)), Ok(client::StreamEvent::Live("sealed-1".into())));
+        assert_eq!(came.recv_timeout(std::time::Duration::from_secs(5)), Ok(Came::Live("sealed-1".into())));
+        // Back from the server: not again. Another from there: passed on.
+        assert!(!server.pass_on("sealed-1"));
+        assert!(server.pass_on("sealed-2"));
+        assert_eq!(heard.recv_timeout(std::time::Duration::from_secs(5)), Ok(client::StreamEvent::Live("sealed-2".into())));
+        assert!(client::hub_live_send(&base, &key, &Identity::generate().unwrap(), "x", "sealed-3").is_err(), "only the user's devices");
+        drop(server);
+        drop(heard);
+        let _ = listening;
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
 }

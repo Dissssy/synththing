@@ -303,6 +303,8 @@ pub struct App {
     /// Selected rows of the Soundfonts list.
     soundfont_selection: Selection,
     tap: SampleTap,
+    /// Whoever listens to what plays, through the API.
+    listeners: Arc<crate::audio_stream::Listeners>,
     /// The visualizer's picture, shared with the windows that show it
     /// (`lock_panel`).
     visualizer: Arc<Mutex<VisualizerPanel>>,
@@ -637,6 +639,7 @@ impl App {
         shared: Arc<Mutex<PlaybackShared>>,
         config: Config,
         tap: SampleTap,
+        listeners: Arc<crate::audio_stream::Listeners>,
         sample_rate: u32,
     ) -> Self {
         let songs_dir = config::music_dir().unwrap_or_else(|_| PathBuf::from("music"));
@@ -708,6 +711,7 @@ impl App {
             active_sf: None,
             soundfont_selection: Selection::default(),
             tap,
+            listeners,
             visualizer: Arc::clone(&visualizer),
             script,
             scripts_dir,
@@ -4146,6 +4150,7 @@ impl App {
         frame_timing::time("poll_identity", || self.poll_identity());
         frame_timing::time("poll_pairing", || self.poll_pairing());
         frame_timing::time("poll_notifications", || self.poll_notifications(ctx));
+        frame_timing::time("poll_hub_live", || self.poll_hub_live(ctx));
         // (The update download gets the connection.)
         let held = self.update_offered();
         frame_timing::time("poll_sync", || self.poll_sync(held));

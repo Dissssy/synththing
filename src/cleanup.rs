@@ -40,6 +40,9 @@ pub enum Kind {
     /// One recording in several files (`duplicates`): keep the best,
     /// remove the others.
     Duplicate,
+    /// Songs of one title and artist and about as long: likely one
+    /// recording, to look at before keeping one.
+    PossibleDuplicate,
     /// Tags from a song's file name, for one with no title.
     FileName,
     /// A title starting with its track number.
@@ -66,6 +69,7 @@ impl Kind {
         match self {
             Kind::Junk => "Not songs",
             Kind::Duplicate => "Duplicate",
+            Kind::PossibleDuplicate => "Possible duplicate",
             Kind::FileName => "From file name",
             Kind::NumberInTitle => "Number in title",
             Kind::VideoTitle => "Video title",
@@ -211,8 +215,8 @@ pub fn suggest(store: &SongStore, ignore: &str) -> Vec<Suggestion> {
     if !junk.is_empty() {
         suggestions.push(Suggestion { kind: Kind::Junk, what: What::AppleDouble, to: String::new(), keys: junk });
     }
-    suggestions.extend(duplicates::groups(store).into_iter().map(|group| Suggestion {
-        kind: Kind::Duplicate,
+    suggestions.extend(duplicates::groups(store, ignore).into_iter().map(|group| Suggestion {
+        kind: if group.sure { Kind::Duplicate } else { Kind::PossibleDuplicate },
         what: What::Duplicates { title: group.title },
         to: String::new(),
         keys: group.keys,

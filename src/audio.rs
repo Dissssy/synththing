@@ -6,23 +6,30 @@
 //! * [`AudioEngine::run`] is the render-thread loop. It owns the [`Engine`],
 //!   applies [`AudioCommand`]s from the GUI, keeps the [`AudioRing`] filled to
 //!   `buffer_ms` of audio, and publishes playback state into [`PlaybackShared`].
-//! * [`SynthSource`] is what rodio pulls from, a pure ring-buffer consumer.
+//! * [`Output`] is what rodio pulls from, a pure consumer of the song's ring
+//!   and the live synth's, mixed. It applies the volume slider, and hands
+//!   what it plays, before the slider, to the API's listeners
+//!   (`audio_stream.rs`).
 //! * The visualizer tap is fed with the *pre-volume* signal, so the volume
-//!   slider changes what you hear without changing what the visualizer sees.
+//!   slider and a song's volume adjust change what you hear without changing
+//!   what the visualizer sees.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rustysynth::{MidiFile, SoundFont};
 
+use crate::audio_stream::{CHUNK_FRAMES, Listeners};
 use crate::decoded_audio::DecodedAudio;
 use crate::engine::{Engine, EngineView, Snapshot};
 use crate::live::LiveCommand;
 use crate::visualizer::{NotesSnapshot, SampleTap};
 
+/// The rate everything's rendered and played at.
+pub const SAMPLE_RATE: u32 = 44_100;
 /// How many stereo frames the consumer pulls from the ring at a time.
 const CONSUMER_CHUNK_FRAMES: usize = 1024;
 /// How many stereo frames the render thread synthesizes per block.
@@ -52,9 +59,13 @@ pub enum AudioCommand {
     EnableAllChannels,
     SoloChannel(u8),
     SetLoopEnabled(bool),
-    /// Output gain, 0.0..=2.0 (a song's volume adjust can double the
-    /// slider's). Does not affect the visualizer tap.
+    /// The volume slider, 0.0..=1.0: applied as the audio goes out, so
+    /// neither the visualizer nor the API's listeners hear it.
     SetVolume(f32),
+    /// The playing song's volume adjust, as a gain (0.0..=2.0): applied as
+    /// the song renders, so the API's listeners hear it, the visualizer
+    /// doesn't.
+    SetSongGain(f32),
     /// Target cushion in milliseconds.
     SetBufferMs(u32),
     /// Notes a script plays (`live.rs`).
@@ -159,32 +170,21 @@ impl AudioRing {
     }
 }
 
-/// The rodio `Source`: pulls from the ring, emits silence when it's empty or
-/// when a flush has just discarded stale audio (seek / pause / load).
-pub struct SynthSource {
+/// One ring, as the output takes from it: silence when it's empty or when
+/// a flush has just discarded stale audio (seek / pause / load).
+struct RingReader {
     ring: AudioRing,
     flush: Arc<AtomicBool>,
-    sample_rate: u32,
     buf: Vec<f32>,
     pos: usize,
 }
 
-impl SynthSource {
-    pub fn new(ring: AudioRing, flush: Arc<AtomicBool>, sample_rate: u32) -> Self {
-        Self {
-            ring,
-            flush,
-            sample_rate,
-            buf: Vec::with_capacity(CONSUMER_CHUNK_FRAMES * 2),
-            pos: 0,
-        }
+impl RingReader {
+    fn new(ring: AudioRing, flush: Arc<AtomicBool>) -> Self {
+        Self { ring, flush, buf: Vec::with_capacity(CONSUMER_CHUNK_FRAMES * 2), pos: 0 }
     }
-}
 
-impl Iterator for SynthSource {
-    type Item = f32;
-
-    fn next(&mut self) -> Option<f32> {
+    fn next(&mut self) -> f32 {
         // A flush: the render thread already emptied the ring, drop what we
         // took from it before.
         if self.flush.swap(false, Ordering::Relaxed) {
@@ -196,17 +196,80 @@ impl Iterator for SynthSource {
             self.pos = 0;
             if got == 0 {
                 self.ring.backlog.local.store(0, Ordering::Relaxed);
-                return Some(0.0); // underrun / idle -> silence
+                return 0.0; // underrun / idle -> silence
             }
         }
         let sample = self.buf[self.pos];
         self.pos += 1;
         self.ring.backlog.local.store(self.buf.len() - self.pos, Ordering::Relaxed);
-        Some(sample)
+        sample
     }
 }
 
-impl rodio::Source for SynthSource {
+/// The volume slider, as `f32` bits: set by the render thread (which is
+/// told it), applied by the output.
+#[derive(Clone)]
+pub struct Volume(Arc<AtomicU32>);
+
+impl Default for Volume {
+    fn default() -> Self {
+        Self(Arc::new(AtomicU32::new(1.0f32.to_bits())))
+    }
+}
+
+impl Volume {
+    fn get(&self) -> f32 {
+        f32::from_bits(self.0.load(Ordering::Relaxed))
+    }
+
+    fn set(&self, volume: f32) {
+        self.0.store(volume.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// The rodio `Source`: the song's ring and the live synth's, mixed, at the
+/// slider's volume. What it plays, before the slider, goes to the API's
+/// listeners while there are any.
+pub struct Output {
+    song: RingReader,
+    live: RingReader,
+    volume: Volume,
+    listeners: Arc<Listeners>,
+    /// Played since it was last handed to the listeners.
+    heard: Vec<f32>,
+    sample_rate: u32,
+}
+
+impl Output {
+    pub fn new(song: AudioRing, flush: Arc<AtomicBool>, live: AudioRing, volume: Volume, listeners: Arc<Listeners>, sample_rate: u32) -> Self {
+        Self {
+            song: RingReader::new(song, flush),
+            live: RingReader::new(live, Arc::new(AtomicBool::new(false))),
+            volume,
+            listeners,
+            heard: Vec::with_capacity(CHUNK_FRAMES * 2),
+            sample_rate,
+        }
+    }
+}
+
+impl Iterator for Output {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        let sample = self.song.next() + self.live.next();
+        if self.listeners.listening() {
+            self.heard.push(sample);
+            if self.heard.len() >= CHUNK_FRAMES * 2 {
+                self.listeners.send(&self.heard);
+                self.heard.clear();
+            }
+        }
+        Some((sample * self.volume.get()).clamp(-1.0, 1.0))
+    }
+}
+
+impl rodio::Source for Output {
     fn current_span_len(&self) -> Option<usize> {
         None
     }
@@ -231,7 +294,9 @@ pub struct AudioEngine {
     commands: Receiver<AudioCommand>,
     shared: Arc<Mutex<PlaybackShared>>,
     sample_rate: u32,
-    volume: f32,
+    volume: Volume,
+    /// The playing song's volume adjust.
+    song_gain: f32,
     buffer_ms: u32,
     block: Vec<f32>,
     live_block: Vec<f32>,
@@ -260,6 +325,7 @@ impl AudioEngine {
         flush: Arc<AtomicBool>,
         commands: Receiver<AudioCommand>,
         shared: Arc<Mutex<PlaybackShared>>,
+        volume: Volume,
         sample_rate: u32,
     ) -> Self {
         Self {
@@ -271,7 +337,8 @@ impl AudioEngine {
             commands,
             shared,
             sample_rate,
-            volume: 1.0,
+            volume,
+            song_gain: 1.0,
             buffer_ms: DEFAULT_BUFFER_MS,
             block: vec![0.0; RENDER_BLOCK_FRAMES * 2],
             live_block: vec![0.0; LIVE_BLOCK_FRAMES * 2],
@@ -342,7 +409,8 @@ impl AudioEngine {
             AudioCommand::EnableAllChannels => self.rerender(Engine::enable_all_channels),
             AudioCommand::SoloChannel(channel) => self.rerender(|engine| engine.solo_channel(channel)),
             AudioCommand::SetLoopEnabled(enabled) => self.engine.set_loop_enabled(enabled),
-            AudioCommand::SetVolume(volume) => self.volume = volume.clamp(0.0, 2.0),
+            AudioCommand::SetVolume(volume) => self.volume.set(volume.clamp(0.0, 1.0)),
+            AudioCommand::SetSongGain(gain) => self.song_gain = gain.clamp(0.0, 2.0),
             AudioCommand::SetBufferMs(ms) => {
                 self.buffer_ms = ms.clamp(MIN_BUFFER_MS, MAX_BUFFER_MS);
             }
@@ -414,9 +482,9 @@ impl AudioEngine {
         let from = (skip * 2).min(self.block.len());
         let fresh = &mut self.block[from..];
         self.tap.push(fresh); // pre-volume, for the visualizer
-        if (self.volume - 1.0).abs() > f32::EPSILON {
+        if (self.song_gain - 1.0).abs() > f32::EPSILON {
             for sample in fresh.iter_mut() {
-                *sample = (*sample * self.volume).clamp(-1.0, 1.0);
+                *sample = (*sample * self.song_gain).clamp(-1.0, 1.0);
             }
         }
         self.ring.push(fresh);
@@ -476,9 +544,6 @@ impl AudioEngine {
         while self.engine.live_busy() && self.live_ring.len() < target_samples {
             self.engine.render_live(&mut self.live_block);
             self.tap.push_live(&self.live_block); // pre-volume, like the song's
-            for sample in &mut self.live_block {
-                *sample = (*sample * self.volume).clamp(-1.0, 1.0);
-            }
             self.live_ring.push(&self.live_block);
         }
     }
@@ -564,6 +629,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             rx,
             Arc::default(),
+            Volume::default(),
             rate,
         );
         drop(tx);

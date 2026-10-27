@@ -23,6 +23,7 @@ mod app;
 mod android_id;
 mod applog;
 mod audio;
+mod audio_stream;
 mod build_info;
 mod changelog;
 mod channels;

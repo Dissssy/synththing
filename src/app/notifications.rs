@@ -242,7 +242,12 @@ impl App {
                 }
                 Event::Synced(changed) => self.sync_server_seen(Some(changed)),
                 Event::Opened => self.live_opened(),
-                Event::Live(sealed) => self.live_heard(&sealed),
+                // (Those come from the hub while it's listened to.)
+                Event::Live(sealed) => {
+                    if !self.live_from_hub() {
+                        self.live_heard(&sealed);
+                    }
+                }
             }
             let items = &mut self.notifications.items;
             items.sort_by(|a, b| b.created.cmp(&a.created).then(b.id.cmp(&a.id)));
