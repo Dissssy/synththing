@@ -125,23 +125,23 @@ A wish is what was wished for and what of it is here:
 {"id": "8c41...", "kind": "album", "title": "Modal Soul", "artist": "Nujabes", "year": "2005",
  "musicbrainz": "<release group ID>", "release": "<release ID>", "release_type": "Album", "tracks": 14,
  "skipped": ["<recording ID>"], "note": "from Willy", "added": 1761000000, "added_by": "my-program",
- "got": "partly", "have": 7, "total": 13, "songs": ["3f2a..."]}
+ "got": "partly", "have": 7, "total": 13, "songs": ["3f2a..."], "missing": ["Luv(sic) Part 3", "..."]}
 ```
 
-`kind` is `album` (a MusicBrainz release group: any edition of it does), `song` (a recording), `artist` (the albums of theirs picked, each an album wish with `"under"` its ID: `have` of `total` is how many are got) or `text` (just a name: a song or an album named `title`, by `artist` if it gives one). `got` is `no`, `partly` or `yes`, worked out from the songs on this computer, and `songs` are those (by key). An album's `skipped` songs aren't wanted: it's got without them. Fields that say nothing are left out.
+`kind` is `album` (a MusicBrainz release group: any edition of it does), `song` (a recording), `artist` (the albums of theirs picked, each an album wish with `"under"` its ID: `have` of `total` is how many are got) or `text` (just a name: a song or an album named `title`, by `artist` if it gives one). `got` is `no`, `partly` or `yes`, worked out from the songs on this computer, and `songs` are those (by key). An album's `skipped` songs aren't wanted: it's got without them. An album partly got lists the titles of its tracks still `missing`, when its track list is known (its page has been opened, or a song of it matched), so a program can look for just those. Fields that say nothing are left out.
 
 To wish, `POST /v1/wishlist` a wish with at least `kind` and `title` (or for `text`, `artist`), such as one `/v1/musicbrainz/search` gave. An album by its `musicbrainz` group without `tracks` gets them from MusicBrainz first, when online lookups are on. Wishes a program makes are marked with its name (`added_by`), and the wishlist syncs to your other devices.
 
 ## Checking songs before they're added
 
-A program that isn't sure a file is what it wants (a download that might be the wrong edition, say) can stage it first: `POST /v1/staged?name=` with the file, as for `POST /v1/songs`. A staged song is read (its tags, length and so on) but kept out of everything else: it isn't in the library, Songs, search, playlists or events, and it doesn't sync. Each comes back as a song of the library would, plus `here` (the library has this very file already) and `fills` (the IDs of the wishes it would fill).
+A program that isn't sure a file is what it wants (a download that might be the wrong edition, say) can stage it first: `POST /v1/staged?name=` with the file, as for `POST /v1/songs`. A staged song is read (its tags, length and so on) but kept out of everything else: it isn't in the library, Songs, search, playlists or events, and it doesn't sync. Each comes back as a song of the library would, plus `here` (the library has this very file already), `fills` (the IDs of the wishes it would fill), `duplicates` (the library's other copies of the song: each `{"key", "sure"}`, sure when they're one recording at MusicBrainz, else guessed from title, artist and length, as Clean up finds duplicates) and `better` (it's a better copy than all of them: lossless, or a higher bitrate).
 
 `POST /v1/staged/check` then matches the staged songs at MusicBrainz as synththing's own lookup matches the library's: grouped into albums by their tags, each album against MusicBrainz's releases (a song on no album by its recording). It waits for MusicBrainz, a second or so for each album it hasn't asked about before. For each album it answers:
 
 ```json
 {"album": "Modal Soul", "artist": "Nujabes", "outcome": "matched",
  "release": {"id": "...", "group": "...", "title": "Modal Soul", "artist": "Nujabes", "date": "2005-11-11", "tracks": [...]},
- "songs": [{"key": "3f2a...", "title": "Feather", "recording": "...", "release": "...", "release_group": "...", "here": false, "fills": ["8c41..."]}]}
+ "songs": [{"key": "3f2a...", "title": "Feather", "recording": "...", "release": "...", "release_group": "...", "here": false, "fills": ["8c41..."], "duplicates": [], "better": true}]}
 ```
 
 `outcome` is `matched` (to `release`: each song has its `recording`, `release` and `release_group` now, and `fills` says which wishes it would fill), `unsure` (it might be one of `candidates`), `not_found` or `failed` (`error` says why). Staging more songs of an album and checking again checks them together.

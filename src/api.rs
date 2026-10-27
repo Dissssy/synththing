@@ -214,6 +214,10 @@ pub struct WishInfo {
     pub have: usize,
     pub total: usize,
     pub songs: Vec<String>,
+    /// An album's tracks still missing, by title, when its track list is
+    /// known.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub albums: Vec<WishInfo>,
 }
@@ -305,7 +309,7 @@ fn info_of(id: &str, wish: &Wish, progress: Option<&crate::wishlist::Progress>, 
         State::Partly => "partly",
         State::Got => "yes",
     };
-    WishInfo { id: id.to_string(), wish: wish.clone(), got, have: progress.have, total: progress.total, songs: progress.songs, albums }
+    WishInfo { id: id.to_string(), wish: wish.clone(), got, have: progress.have, total: progress.total, songs: progress.songs, missing: progress.missing, albums }
 }
 
 /// The playlists of `playlists` as the API has them, their songs by key
@@ -1360,19 +1364,33 @@ fn song_sent(request: &mut Request, query: &HashMap<String, String>) -> Result<(
 
 /// A staged song as the API gives it: as a song of the library would be
 /// (its match at MusicBrainz too, once it's checked), whether the library
-/// has it already, and the wishes it would fill (by ID).
+/// has it already, the wishes it would fill (by ID), and the library's
+/// other copies of it (`duplicates::copies_of`), with whether it's better
+/// than all of them.
 #[derive(Serialize)]
 struct StagedInfo {
     #[serde(flatten)]
     song: SongInfo,
     here: bool,
     fills: Vec<String>,
+    duplicates: Vec<Duplicate>,
+    better: bool,
+}
+
+#[derive(Serialize)]
+struct Duplicate {
+    key: String,
+    /// One recording at MusicBrainz, not guessed from title, artist and length.
+    sure: bool,
 }
 
 impl StagedInfo {
     fn of(key: &str, song: &Song, library: &Library) -> Self {
         let fills = crate::wishlist::Index::new(&library.wishes).fills(song).into_iter().map(str::to_string).collect();
-        StagedInfo { song: SongInfo::of(key, song, &library.store), here: library.store.has(key), fills }
+        let here = library.store.has(key);
+        let (copies, better) = if here { (Vec::new(), false) } else { crate::duplicates::copies_of(&library.store, song, &library.group_ignore) };
+        let duplicates = copies.into_iter().map(|(key, sure)| Duplicate { key, sure }).collect();
+        StagedInfo { song: SongInfo::of(key, song, &library.store), here, fills, duplicates, better }
     }
 }
 
@@ -2088,11 +2106,11 @@ mod tests {
                     Call::Add { .. } => unreachable!("no test adds songs here"),
                     Call::Wishlist(query, reply) => {
                         let wish = Wish { note: query, ..Wish::new(Kind::Album, "Modal Soul") };
-                        reply.send(vec![WishInfo { id: "w1".into(), wish, got: "partly", have: 7, total: 12, songs: Vec::new(), albums: Vec::new() }]).unwrap()
+                        reply.send(vec![WishInfo { id: "w1".into(), wish, got: "partly", have: 7, total: 12, songs: Vec::new(), missing: Vec::new(), albums: Vec::new() }]).unwrap()
                     }
                     Call::Wish { wish, program, reply, .. } => {
                         let wish = Wish { added_by: Some(program), ..wish };
-                        reply.send(Ok((WishInfo { id: "w2".into(), wish, got: "no", have: 0, total: 1, songs: Vec::new(), albums: Vec::new() }, true))).unwrap()
+                        reply.send(Ok((WishInfo { id: "w2".into(), wish, got: "no", have: 0, total: 1, songs: Vec::new(), missing: Vec::new(), albums: Vec::new() }, true))).unwrap()
                     }
                 }
             }
