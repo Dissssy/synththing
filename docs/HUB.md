@@ -34,6 +34,8 @@ Where your devices find it goes in the synced song transfers: its address on its
 
 It takes no songs while its disk has under 2 GB free.
 
+Live messages between your devices (panels shared to your other devices, say) go through the hub too while a device reaches it, and through the official server when it doesn't. The hub passes each one on both ways, so devices that reach it and devices that don't still hear each other.
+
 One device is the hub at a time. Starting a hub makes it the hub; the one before stops serving songs (its log says "another device is the hub now") and carries on as an ordinary device until you stop it.
 
 ## Its local API

@@ -20,10 +20,10 @@ use std::time::{Duration, Instant};
 
 use crate::config::{self, Config};
 use crate::device::Device;
-use crate::device_messages::Route;
+use crate::device_messages::{Outbox, Route};
 use crate::device_sync::{self, DeviceSync, Here, Link, Report};
 use crate::hub_api::{self, HubApi};
-use crate::hub_server::{self, HubServer};
+use crate::hub_server::{self, Came, HubServer};
 use crate::song_sync::HubLeaf;
 use crate::library::identity::{self, Identity};
 use crate::library::{self, client, pairing};
@@ -107,8 +107,9 @@ pub fn run() -> i32 {
     let server = library::official_url();
     let mut link = Link { server: server.clone(), server_key: library::server_key(), identity: Some(identity.clone()), relay_song_mb: None };
     let mut info_read: Option<Instant> = None;
-    let route = Route { server: server.clone(), server_key: link.server_key.clone(), identity: identity.clone(), sync_key };
-    let live = hub_api::Live { route: &route, me: &device };
+    let route = Route { server: server.clone(), server_key: link.server_key.clone(), identity: identity.clone(), sync_key, hub: None };
+    // (Live messages from devices listening here, passed on to the server.)
+    let mut outbox = Outbox::default();
     let heard = watch_server(&link, &identity);
     let (mut serving, came) = match serve(&identity, sync_key, &songs, &device) {
         Ok((server, came, leaf)) => (Some((server, leaf)), Some(came)),
@@ -133,10 +134,26 @@ pub fn run() -> i32 {
                 Err(e) => log::warn!("reading {}'s info: {e}", library::host(&server)),
             }
         }
+        let live = hub_api::Live { route: &route, me: &device, serving: serving.as_ref().map(|(server, _)| server) };
         while let Ok(heard) = heard.try_recv() {
             match heard {
                 Heard::Sync(changed) => sync.server_seen(changed),
-                Heard::Live(sealed) => api.live_heard(&live, &sealed),
+                // (Passed on to the devices listening here, once: the server
+                // sends back those passed on to it from here.)
+                Heard::Live(sealed) => {
+                    if live.serving.is_none_or(|server| server.pass_on(&sealed)) {
+                        api.live_heard(&live, &sealed);
+                    }
+                }
+            }
+        }
+        for came in came.iter().flat_map(|came| came.try_iter()) {
+            match came {
+                Came::Song(key) => sync.received(&mut songs, key),
+                Came::Live(sealed) => {
+                    api.live_heard(&live, &sealed);
+                    outbox.send_sealed(&route, sealed);
+                }
             }
         }
         let here = &mut Here { songs: &mut songs, playlists: &mut playlists, wishlist: &mut wishlist };
@@ -148,9 +165,6 @@ pub fn run() -> i32 {
                 sync.be_hub(leaf.clone());
             }
         }
-        for key in came.iter().flat_map(|came| came.try_iter()) {
-            sync.received(&mut songs, key);
-        }
         match sync.hub() {
             Some(hub) if hub.device == device.id => named = true,
             Some(_) if named && serving.is_some() => {
@@ -159,6 +173,7 @@ pub fn run() -> i32 {
             }
             _ => {}
         }
+        let live = hub_api::Live { route: &route, me: &device, serving: serving.as_ref().map(|(server, _)| server) };
         for report in reports {
             match report {
                 Report::Settings(synced) => match device_sync::synced_config(&config, &synced) {
@@ -271,7 +286,7 @@ fn read_links() -> Receiver<String> {
 /// Serve the songs in `songs` to the user's devices directly: the server,
 /// the songs that come to it, and the hub's leaf, saying where it's
 /// reached.
-fn serve(identity: &Identity, sync_key: [u8; 32], songs: &SongStore, device: &Device) -> Result<(HubServer, Receiver<String>, HubLeaf), String> {
+fn serve(identity: &Identity, sync_key: [u8; 32], songs: &SongStore, device: &Device) -> Result<(HubServer, Receiver<Came>, HubLeaf), String> {
     let port = match std::env::var(PORT_VAR) {
         Ok(port) => port.trim().parse().map_err(|_| format!("{PORT_VAR} isn't a port: {port}"))?,
         Err(_) => PORT,

@@ -592,6 +592,21 @@ pub fn hub_get(base: &str, hub_key: &str, identity: &Identity, device: &str, syn
     open_song(sync_key, check(Ok(response))?, to)
 }
 
+/// Pass a sealed live message to the user's devices through the hub.
+pub fn hub_live_send(base: &str, hub_key: &str, identity: &Identity, device: &str, sealed: &str) -> Result<(), String> {
+    let request = hub_request(base, hub_key, identity, device, "POST", "live", Some(HUB_FAR));
+    check(request.header("Content-Type", "text/plain").send(sealed)).map(|_| ())
+}
+
+/// Listen to the hub for live messages, as `notification_stream` listens
+/// to the server (`Opened`, then `Live` ones), until it ends,
+/// `STREAM_FOR` is up, or `each` says to stop.
+pub fn hub_live_listen(base: &str, hub_key: &str, identity: &Identity, device: &str, each: impl FnMut(StreamEvent) -> bool) -> Result<(), String> {
+    let request = hub_request(base, hub_key, identity, device, "POST", "live/listen", None);
+    let request = request.config().timeout_connect(Some(HUB_FAR)).timeout_recv_body(Some(STREAM_FOR)).build();
+    read_stream(check(request.send_empty())?, each)
+}
+
 /// Park a sealed sign-in handoff on a server, for another device to take.
 pub fn pair_park(base: &str, server_key: &str, identity: &Identity, sealed: &str) -> Result<super::pairing::Parked, String> {
     signed_post(base, server_key, identity, "/api/v1/pair", &serde_json::json!({ "sealed": sealed }))
@@ -654,9 +669,8 @@ pub fn notification_stream(
     base: &str,
     server_key: &str,
     identity: &Identity,
-    mut each: impl FnMut(StreamEvent) -> bool,
+    each: impl FnMut(StreamEvent) -> bool,
 ) -> Result<(), String> {
-    use std::io::BufRead;
     static STREAMING: OnceLock<Agent> = OnceLock::new();
     let agent = STREAMING.get_or_init(|| {
         Agent::config_builder()
@@ -670,6 +684,14 @@ pub fn notification_stream(
     });
     let path = "/api/v1/notifications/stream";
     let response = check(signed(agent.get(format!("{base}{path}")), server_key, identity, "GET", path, &[]).call())?;
+    read_stream(response, each)
+}
+
+/// Read a stream of events (the server's notification stream, or a hub's
+/// live one) as it comes, calling `each` with each, until it ends or
+/// `each` says to stop.
+fn read_stream(response: Reply, mut each: impl FnMut(StreamEvent) -> bool) -> Result<(), String> {
+    use std::io::BufRead;
     let reader = std::io::BufReader::new(response.into_body().into_reader());
     for line in reader.lines() {
         let line = line.map_err(|e| format!("the stream ended ({e})"))?;

@@ -4136,6 +4136,7 @@ impl App {
         frame_timing::time("poll_identity", || self.poll_identity());
         frame_timing::time("poll_pairing", || self.poll_pairing());
         frame_timing::time("poll_notifications", || self.poll_notifications(ctx));
+        frame_timing::time("poll_hub_live", || self.poll_hub_live(ctx));
         // (The update download gets the connection.)
         let held = self.update_offered();
         frame_timing::time("poll_sync", || self.poll_sync(held));

@@ -859,6 +859,11 @@ impl DeviceSync {
         self.hub.as_ref()
     }
 
+    /// Where this device reaches the hub directly, if it does.
+    pub fn hub_reached(&self) -> Option<&song_sync::Hub> {
+        self.hub_reached.as_ref()
+    }
+
     /// A song sent straight here (to the hub, `hub_server.rs`), now in the
     /// library's folder.
     pub fn received(&mut self, songs: &mut SongStore, key: String) {
