@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Your hub checks that its address works from the internet, as it starts and every 6 hours, and logs what to fix if it doesn't (the port isn't forwarded, the name points at an old address, ...). `synththing hub check` checks now. Update the server first: the check comes from it.
+
 ## 1.7.6 (2026-10-27)
 
 ### Fixed

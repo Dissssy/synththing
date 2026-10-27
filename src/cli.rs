@@ -169,6 +169,11 @@ pub enum HubCommand {
         #[arg(long)]
         remove: bool,
     },
+    /// Check that the addresses SYNTHTHING_HUB_URL gives work from the
+    /// internet: the server fetches the hub's hello from outside, and says
+    /// what to fix if it can't. The hub checks this itself as it starts and
+    /// every 6 hours.
+    Check,
 }
 
 #[derive(Args, Debug)]

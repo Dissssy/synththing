@@ -130,9 +130,10 @@ scripts.example.org {
 ```
 synththing hub
 synththing hub pair <LINK> [--name NAME]
+synththing hub check
 ```
 
-Runs this config folder as your hub (docs/HUB.md): a device with no window that syncs like the app and keeps every song, so your devices' songs have somewhere to go when the others are closed. `hub pair` signs it in first, with a link from a signed-in device's Preferences > Online Library > Sign in another device (quote it: it has a `#` in it); `--name` is what your other devices show for it, by default the computer's name. `hub` runs until stopped (Ctrl+C), logging to the terminal; not signed in yet, it waits for `hub pair` (a link pasted into its terminal, or signs in with the link in `SYNTHTHING_PAIR_LINK`, as `SYNTHTHING_HUB_NAME`); exit code 2 if it's already running with this config folder. It serves songs to your devices directly on port 7390 (`SYNTHTHING_HUB_PORT`), at its address on its network and those in `SYNTHTHING_HUB_URL` (comma-separated).
+Runs this config folder as your hub (docs/HUB.md): a device with no window that syncs like the app and keeps every song, so your devices' songs have somewhere to go when the others are closed. `hub pair` signs it in first, with a link from a signed-in device's Preferences > Online Library > Sign in another device (quote it: it has a `#` in it); `--name` is what your other devices show for it, by default the computer's name. `hub` runs until stopped (Ctrl+C), logging to the terminal; not signed in yet, it waits for `hub pair` (a link pasted into its terminal, or signs in with the link in `SYNTHTHING_PAIR_LINK`, as `SYNTHTHING_HUB_NAME`); exit code 2 if it's already running with this config folder. It serves songs to your devices directly on port 7390 (`SYNTHTHING_HUB_PORT`), at its address on its network and those in `SYNTHTHING_HUB_URL` (comma-separated). `hub check` has the server check now that those addresses work from the internet, and says what to fix where they don't; exit code 1 if one doesn't (the running hub checks as it starts and every 6 hours, and logs it).
 
 ## admin: moderate a library server
 

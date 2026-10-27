@@ -548,6 +548,16 @@ pub fn hub_hello(base: &str, hub_key: &str, near: bool) -> Result<(), String> {
     }
 }
 
+/// Whether the hub with `hub_key` answers at `url` from the internet, as
+/// the server finds (`library::reach`): it tries each address family in
+/// turn, so this waits longer than most.
+pub fn reach(base: &str, server_key: &str, identity: &Identity, url: &str, hub_key: &str) -> Result<super::reach::Reach, String> {
+    let path = "/api/v1/reach";
+    let body = serde_json::to_vec(&super::reach::Ask { url: url.to_string(), hub_key: hub_key.to_string() }).map_err(|e| e.to_string())?;
+    let request = agent().post(format!("{base}{path}")).config().timeout_global(Some(Duration::from_secs(45))).build().header("Content-Type", "application/json");
+    read(check(signed(request, server_key, identity, "POST", path, &body).send(&body[..]))?)
+}
+
 /// A request to a hub (at `base`, its key `hub_key`), signed by
 /// `identity`, from `device`.
 fn hub_request(base: &str, hub_key: &str, identity: &Identity, device: &str, method: &str, path: &str, timeout: Option<Duration>) -> ureq::RequestBuilder<ureq::typestate::WithBody> {
@@ -1291,6 +1301,31 @@ mod tests {
     /// they happen, listed, marked read.
     /// Feedback: sent unsigned, the admins hear, listed with its build,
     /// marked done; a gone branch's goes, the rest stays.
+    #[test]
+    fn the_server_checks_hub_addresses_within_limits() {
+        let dir = std::env::temp_dir().join(format!("synththing-reach-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false, "check_uploads": false, "sync": true }"#).unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let me = Identity::generate().unwrap();
+
+        // A private address isn't tried; it says where the asking came from.
+        let found = reach(&base, &key, &me, "http://127.0.0.1:7390", &me.public()).unwrap();
+        assert_eq!(found.v4.map(|probe| probe.verdict), Some(crate::library::reach::Verdict::Private));
+        assert_eq!(found.from, "127.0.0.1");
+        assert!(reach(&base, &key, &me, "file:///etc/passwd", &me.public()).is_err());
+        assert!(reach(&base, &key, &Identity::generate().unwrap(), "http://127.0.0.1:7390", "").is_ok(), "anyone signed in may ask");
+        // Six an hour from each.
+        for _ in 0..5 {
+            reach(&base, &key, &me, "http://127.0.0.2:7390", &me.public()).unwrap();
+        }
+        assert!(reach(&base, &key, &me, "http://127.0.0.3:7390", &me.public()).unwrap_err().contains("for now"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn feedback_reaches_the_admins() {
         use crate::library::{AdminAction, Feedback, FeedbackRequest};

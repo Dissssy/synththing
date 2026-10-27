@@ -144,6 +144,7 @@ pub fn main() -> Result<()> {
                 }
                 return Ok(());
             }
+            Some(HubCommand::Check) => std::process::exit(hub::check_now()),
             None => std::process::exit(hub::run()),
         }
     }

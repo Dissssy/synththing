@@ -13,6 +13,9 @@
 //! with the port forwarded to it). Devices that reach it take the songs it
 //! has from it, and send it those it lacks; the relay stays for the rest.
 //! Another device made the hub after it, it stops serving and says so.
+//! As it starts and every 6 hours, it has the server check that its
+//! addresses work from the internet (`library::reach`), and logs what to
+//! fix if they don't (`hub check` does it now).
 
 use std::io::IsTerminal;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -26,7 +29,7 @@ use crate::hub_api::{self, HubApi};
 use crate::hub_server::{self, Came, HubServer};
 use crate::song_sync::HubLeaf;
 use crate::library::identity::{self, Identity};
-use crate::library::{self, client, pairing};
+use crate::library::{self, client, pairing, reach};
 use crate::playlist::Library;
 use crate::settings_sync;
 use crate::song_store::SongStore;
@@ -50,6 +53,8 @@ const URL_VAR: &str = "SYNTHTHING_HUB_URL";
 const PORT: u16 = 7390;
 /// How long before listening to the server again after it failed.
 const RETRY: Duration = Duration::from_secs(30);
+/// How often the server checks that its addresses work from the internet.
+const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Sign this config folder in with a link from Sign in another device, as
 /// `name` (else the computer's name).
@@ -125,6 +130,7 @@ pub fn run() -> i32 {
     let mut api = HubApi::default();
     let mut started = false;
     let mut error = None;
+    let mut checked: Option<Instant> = None;
     loop {
         if info_read.is_none_or(|t| t.elapsed() >= INFO_EVERY) {
             info_read = Some(Instant::now());
@@ -164,6 +170,24 @@ pub fn run() -> i32 {
             if let Some((_, leaf)) = &serving {
                 sync.be_hub(leaf.clone());
             }
+        }
+        if let Some((_, leaf)) = &serving
+            && checked.is_none_or(|t| t.elapsed() >= CHECK_EVERY)
+        {
+            checked = Some(Instant::now());
+            let (identity, leaf) = (identity.clone(), leaf.clone());
+            std::thread::Builder::new()
+                .name("hub check".into())
+                .spawn(move || {
+                    for (works, line) in check(&identity, &leaf.key, &leaf.addrs) {
+                        if works {
+                            log::info!("{line}");
+                        } else {
+                            log::warn!("{line}");
+                        }
+                    }
+                })
+                .ok();
         }
         match sync.hub() {
             Some(hub) if hub.device == device.id => named = true,
@@ -295,7 +319,7 @@ fn serve(identity: &Identity, sync_key: [u8; 32], songs: &SongStore, device: &De
     let hub_key = key.public();
     let (server, came) = HubServer::start(port, key, identity, sync_key, songs.dir().to_path_buf())?;
     let port = server.addr().port();
-    let given: Vec<String> = std::env::var(URL_VAR).unwrap_or_default().split(',').map(|url| url.trim().trim_end_matches('/').to_string()).filter(|url| !url.is_empty()).collect();
+    let given = given();
     // (In a container, its own address is the container's: only those
     // given reach it.)
     let own = (std::env::var_os("SYNTHTHING_DOCKER").is_none()).then(own_address).flatten().map(|ip| format!("http://{}", std::net::SocketAddr::new(ip, port)));
@@ -307,6 +331,61 @@ fn serve(identity: &Identity, sync_key: [u8; 32], songs: &SongStore, device: &De
     }
     let leaf = HubLeaf { device: device.id.clone(), key: hub_key, addrs };
     Ok((server, came, leaf))
+}
+
+/// The addresses `URL_VAR` gives.
+fn given() -> Vec<String> {
+    std::env::var(URL_VAR).unwrap_or_default().split(',').map(|url| url.trim().trim_end_matches('/').to_string()).filter(|url| !url.is_empty()).collect()
+}
+
+/// `synththing hub check`: whether the addresses `URL_VAR` gives work from
+/// the internet, as the server finds now: the exit code.
+pub fn check_now() -> i32 {
+    let Some(identity) = Identity::load() else {
+        eprintln!("error: the hub isn't signed in yet");
+        return 2;
+    };
+    let hub_key = match hub_server::hub_key() {
+        Ok(key) => key.public(),
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    };
+    let lines = check(&identity, &hub_key, &given());
+    if lines.is_empty() {
+        println!("No address to check: {URL_VAR} gives none the internet reaches.");
+    }
+    lines.iter().for_each(|(_, line)| println!("{line}"));
+    i32::from(lines.iter().any(|(works, _)| !works))
+}
+
+/// Whether each of `addrs` the internet should reach (not those on a
+/// network of their own) works from it, as the server finds: a line on
+/// each, and whether it works.
+fn check(identity: &Identity, hub_key: &str, addrs: &[String]) -> Vec<(bool, String)> {
+    let server = library::official_url();
+    let server_key = library::server_key();
+    addrs
+        .iter()
+        .filter(|url| !reach::local(url))
+        .map(|url| match client::reach(&server, &server_key, identity, url, hub_key) {
+            Ok(found) => match reach::hint(url, &found) {
+                None => {
+                    let times: Vec<String> = [("IPv4", &found.v4), ("IPv6", &found.v6)]
+                        .into_iter()
+                        .filter_map(|(family, probe)| match probe.as_ref()?.verdict {
+                            reach::Verdict::Ok { ms } => Some(format!("{family} {ms} ms")),
+                            _ => None,
+                        })
+                        .collect();
+                    (true, format!("{url} works from the internet ({})", times.join(", ")))
+                }
+                Some(hint) => (false, format!("{url} doesn't work from the internet: {hint}")),
+            },
+            Err(e) => (false, format!("couldn't check {url}: {e}")),
+        })
+        .collect()
 }
 
 /// This computer's address on its network (the one it reaches the internet
