@@ -547,7 +547,7 @@ impl App {
         let Some((_, progress)) = &self.wishlist.progress else { return };
         let wishes = &self.wishlist.list.wishes;
         let state_of = |id: &String| progress.get(id).map_or(State::Wanted, Progress::state);
-        let got = wishes.keys().filter(|id| state_of(id) == State::Got).count();
+        // let got = wishes.keys().filter(|id| state_of(id) == State::Got).count();
         let mut act = None;
         // (The filter, parsed again when the query changes.)
         let query = &self.wishlist.filter_box.query;
@@ -568,10 +568,10 @@ impl App {
                 return;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let clear = ui.add_enabled(got > 0, egui::Button::new(format!("Clear got it ({got})")));
-                if clear.on_hover_text("Take the wishes that came true off the wishlist").clicked() {
-                    act = Some(Act::Remove(wishes.keys().filter(|id| state_of(id) == State::Got).cloned().collect()));
-                }
+                // let clear = ui.add_enabled(got > 0, egui::Button::new(format!("Clear got it ({got})")));
+                // if clear.on_hover_text("Take the wishes that came true off the wishlist").clicked() {
+                //     act = Some(Act::Remove(wishes.keys().filter(|id| state_of(id) == State::Got).cloned().collect()));
+                // }
                 let artists: Vec<String> = wishes.values().filter_map(|w| if w.kind == Kind::Artist { Some(&w.title) } else { w.artist.as_ref() }).cloned().collect::<BTreeSet<_>>().into_iter().collect();
                 let programs: Vec<String> = wishes.values().filter_map(|w| w.added_by.clone()).collect::<BTreeSet<_>>().into_iter().collect();
                 let mut complete = |query: &str, cursor, mode| crate::wishlist_search::complete(query, cursor, mode, &artists, &programs);
