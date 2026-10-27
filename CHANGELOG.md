@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.7.5 (2026-10-27)
+
 ### Added
 - The local API says which tracks of an album partly got are still `missing` (`GET /v1/wishlist`), and a staged song's `duplicates` already in the library (and whether it's `better` than them), so a program can fetch just what's missing and leave out what you have.
 
