@@ -205,7 +205,7 @@ impl App {
                             if ui.add(icon_button("x")).on_hover_text("Dismiss: leave it as it is").clicked() {
                                 dismiss.push(id.clone());
                             }
-                            let fixed = matches!(suggestion.kind, Kind::Compilation | Kind::Junk | Kind::Duplicate)
+                            let fixed = matches!(suggestion.kind, Kind::Compilation | Kind::Junk | Kind::Duplicate | Kind::PossibleDuplicate)
                                 || matches!(suggestion.what, What::Fields { .. } | What::Online { .. });
                             let look = suggestion.kind == Kind::LengthDiffers;
                             if !look && ui.add_enabled(fixed || !to.trim().is_empty(), icon_button("check")).on_hover_text("Apply").clicked() {
@@ -215,7 +215,7 @@ impl App {
                                 ui.add(egui::Label::new(to.as_str()).truncate());
                             } else if suggestion.kind == Kind::Junk {
                                 ui.label("Remove from the library");
-                            } else if suggestion.kind == Kind::Duplicate {
+                            } else if matches!(suggestion.kind, Kind::Duplicate | Kind::PossibleDuplicate) {
                                 let keep = cleanup.keep.entry(id.clone()).or_default();
                                 let copy = |key: &String| self.songs.get_by_key(key).map(duplicates::describe).unwrap_or_default();
                                 egui::ComboBox::from_id_salt(("duplicate", id))
@@ -247,7 +247,12 @@ impl App {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     close |= ui.button("Close").clicked();
-                    let applicable: Vec<usize> = shown.iter().map(|(i, _)| *i).filter(|&i| cleanup.suggestions[i].kind != Kind::LengthDiffers).collect();
+                    // (Possible duplicates are guesses: each one's applied alone.)
+                    let applicable: Vec<usize> = shown
+                        .iter()
+                        .map(|(i, _)| *i)
+                        .filter(|&i| !matches!(cleanup.suggestions[i].kind, Kind::LengthDiffers | Kind::PossibleDuplicate))
+                        .collect();
                     if !applicable.is_empty() && ui.button(format!("Apply all {}", applicable.len())).clicked() {
                         apply = applicable;
                     }
@@ -268,7 +273,7 @@ impl App {
         for i in junk {
             self.remove_songs.extend(cleanup.suggestions[i].keys.iter().map(|k| self.songs.path(k)));
         }
-        let (copies, apply): (Vec<usize>, Vec<usize>) = apply.into_iter().partition(|&i| cleanup.suggestions[i].kind == Kind::Duplicate);
+        let (copies, apply): (Vec<usize>, Vec<usize>) = apply.into_iter().partition(|&i| matches!(cleanup.suggestions[i].kind, Kind::Duplicate | Kind::PossibleDuplicate));
         for i in copies {
             let keys = &cleanup.suggestions[i].keys;
             let keep = cleanup.keep.get(&cleanup.suggestions[i].id(&ignore)).copied().unwrap_or_default().min(keys.len() - 1);
@@ -408,8 +413,13 @@ fn describe(suggestion: &Suggestion) -> (String, String) {
         What::Duplicates { title } => (
             format!("{title} ({} copies)", suggestion.keys.len()),
             format!(
-                "{title} is in your library {} times, as one recording at MusicBrainz. Applying keeps the copy picked, puts what the others have onto it (playlists, tags and stars, edits, its match), then asks to remove the others.",
-                suggestion.keys.len()
+                "{title} is in your library {} times, {}. Applying keeps the copy picked, puts what the others have onto it (playlists, tags and stars, edits, its match), then asks to remove the others.",
+                suggestion.keys.len(),
+                if suggestion.kind == Kind::Duplicate {
+                    "as one recording at MusicBrainz"
+                } else {
+                    "by one artist and about as long: likely one recording, but have a listen first (Apply all leaves these)"
+                }
             ),
         ),
         What::AppleDouble => {
