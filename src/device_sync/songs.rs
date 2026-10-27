@@ -13,7 +13,7 @@ use super::{sync, Blob, Done, Job, Outcome};
 use crate::library::identity;
 use crate::settings_sync::{self, State};
 use crate::song_store::SongStore;
-use crate::song_sync::{self, Moved, SyncedDevice, SyncedLibrary, Task};
+use crate::song_sync::{self, HubLeaf, HubPlan, Moved, SyncedDevice, SyncedLibrary, Task};
 
 /// The songs as the device has them, for the worker to go by.
 pub(super) struct Songs {
@@ -30,6 +30,11 @@ pub(super) struct Songs {
     pub busy: BTreeSet<String>,
     /// A move failed a moment ago: plan, but move nothing yet.
     pub paused: bool,
+    /// This device reaches the hub directly now.
+    pub hub_direct: bool,
+    /// This device is the hub: its leaf, and whether to name it the hub
+    /// even if another is (as it starts).
+    pub hub: Option<(HubLeaf, bool)>,
     pub library: bool,
     pub transfers: bool,
 }
@@ -65,8 +70,9 @@ pub(super) enum Reply {
     Changed(Blob),
     /// What to move now (nothing while moves are going or paused).
     Planned(Vec<Task>),
-    /// The devices in the transfers, as of now.
-    Devices(Vec<SyncedDevice>),
+    /// The devices in the transfers, as of now, and the hub, as the
+    /// server last had it (one named here waits for it to say so).
+    Devices(Vec<SyncedDevice>, Option<HubLeaf>),
     /// The songs in the library no device has (`song_sync::unheld`).
     Unheld(Vec<String>),
     /// The blob's sync didn't start: it has no state (turned off meanwhile).
@@ -134,11 +140,11 @@ impl Worker {
             Request::Forget(device) => {
                 let Some(state) = &mut self.transfers else { return };
                 let leaves = song_sync::forget(&state.applied, &device);
-                let devices = state.record_leaves(leaves, settings_sync::now()).then(|| song_sync::devices(&state.fields));
-                if let Some(devices) = devices {
+                let devices = state.record_leaves(leaves, settings_sync::now()).then(|| (song_sync::devices(&state.fields), song_sync::hub(&state.base)));
+                if let Some((devices, hub)) = devices {
                     self.save(Blob::Transfers);
                     self.reply(Reply::Changed(Blob::Transfers));
-                    self.reply(Reply::Devices(devices));
+                    self.reply(Reply::Devices(devices, hub));
                 }
             }
             Request::Clear(keys) => {
@@ -232,17 +238,26 @@ impl Worker {
         for device in song_sync::gone_quiet(&state.fields, &songs.device, now) {
             applied = song_sync::forget(&applied, &device);
         }
-        let mut plan = song_sync::plan(&applied, &songs.device, &songs.store, &songs.wanted, &songs.busy, &songs.given);
-        song_sync::note_device(&mut plan.leaves, &songs.device, &songs.device_name, now);
+        let hub = song_sync::hub(&state.fields);
+        let hub_plan = hub.as_ref().map(|hub| HubPlan { device: hub.device.clone(), direct: songs.hub_direct });
+        let pulls = hub_plan.as_ref().is_some_and(|hub| hub.direct && hub.device != songs.device);
+        let mut plan = song_sync::plan(&applied, &songs.device, &songs.store, &songs.wanted, &songs.busy, &songs.given, hub_plan.as_ref());
+        song_sync::note_device(&mut plan.leaves, &songs.device, &songs.device_name, pulls, now);
         song_sync::note_have(&mut plan.leaves, &songs.device, &songs.store);
+        if let Some((leaf, take_over)) = &songs.hub
+            && (*take_over || hub.as_ref().is_none_or(|hub| hub.device == songs.device))
+        {
+            song_sync::note_hub(&mut plan.leaves, leaf);
+        }
         let changed = state.record_leaves(plan.leaves, now);
         let devices = song_sync::devices(&state.fields);
+        let hub = song_sync::hub(&state.base);
         let unheld = song_sync::unheld(&state.fields, &songs.device, &songs.store);
         if changed {
             self.save(Blob::Transfers);
             self.reply(Reply::Changed(Blob::Transfers));
         }
-        self.reply(Reply::Devices(devices));
+        self.reply(Reply::Devices(devices, hub));
         self.reply(Reply::Unheld(unheld));
         if plan.tasks.is_empty() || !songs.busy.is_empty() || songs.paused {
             return nothing;

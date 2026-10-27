@@ -884,6 +884,16 @@ pub fn request_message(server_key: &str, method: &str, path: &str, time: i64, no
     format!("synththing/request/v1\n{server_key}\n{method}\n{path}\n{time}\n{nonce}\n{}", sha256_hex(body)).into_bytes()
 }
 
+/// What a hub signs to answer `hello` (`hub_server.rs`): the challenge it
+/// was asked, so an old answer can't be played back.
+pub fn hub_hello_message(challenge: &str) -> Vec<u8> {
+    format!("synththing/hub-hello/v1\n{challenge}").into_bytes()
+}
+
+/// The header a request to a hub names the device sending it in (the
+/// user's devices share one key, so its signature can't).
+pub const DEVICE_HEADER: &str = "X-Synththing-Device";
+
 /// A fresh nonce for a signed request.
 pub fn new_nonce() -> String {
     let mut bytes = [0u8; 16];

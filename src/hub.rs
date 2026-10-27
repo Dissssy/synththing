@@ -5,6 +5,14 @@
 //! library (`device_sync.rs`, the same as the app) and wants every song, so
 //! each song a device sends streams straight to it, and it sends them on to
 //! each device that wants them once that one's open.
+//!
+//! It names itself the hub in the transfers (`song_sync::HubLeaf`: its own
+//! key, and where it's reached), and serves the songs to the user's devices
+//! directly (`hub_server.rs`), on `PORT_VAR` (7390), at its address on its
+//! network and at the addresses `URL_VAR` gives (its public address, say,
+//! with the port forwarded to it). Devices that reach it take the songs it
+//! has from it, and send it those it lacks; the relay stays for the rest.
+//! Another device made the hub after it, it stops serving and says so.
 
 use std::io::IsTerminal;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -15,6 +23,8 @@ use crate::device::Device;
 use crate::device_messages::Route;
 use crate::device_sync::{self, DeviceSync, Here, Link, Report};
 use crate::hub_api::{self, HubApi};
+use crate::hub_server::{self, HubServer};
+use crate::song_sync::HubLeaf;
 use crate::library::identity::{self, Identity};
 use crate::library::{self, client, pairing};
 use crate::playlist::Library;
@@ -33,6 +43,11 @@ const PAIR_LINK_VAR: &str = "SYNTHTHING_PAIR_LINK";
 const NAME_VAR: &str = "SYNTHTHING_HUB_NAME";
 /// How often it looks for a sign-in while it waits for one.
 const SIGN_IN_CHECK: Duration = Duration::from_secs(5);
+/// The port it serves songs on, and the addresses devices reach it at
+/// (comma-separated, nearest first) besides its own on its network.
+const PORT_VAR: &str = "SYNTHTHING_HUB_PORT";
+const URL_VAR: &str = "SYNTHTHING_HUB_URL";
+const PORT: u16 = 7390;
 /// How long before listening to the server again after it failed.
 const RETRY: Duration = Duration::from_secs(30);
 
@@ -95,7 +110,17 @@ pub fn run() -> i32 {
     let route = Route { server: server.clone(), server_key: link.server_key.clone(), identity: identity.clone(), sync_key };
     let live = hub_api::Live { route: &route, me: &device };
     let heard = watch_server(&link, &identity);
+    let (mut serving, came) = match serve(&identity, sync_key, &songs, &device) {
+        Ok((server, came, leaf)) => (Some((server, leaf)), Some(came)),
+        Err(e) => {
+            log::error!("couldn't serve songs to your devices directly: {e}");
+            (None, None)
+        }
+    };
     let mut sync = DeviceSync::default();
+    // (Named the hub in the transfers yet: until then, another named there
+    // is the one before it.)
+    let mut named = false;
     let mut api = HubApi::default();
     let mut started = false;
     let mut error = None;
@@ -119,6 +144,20 @@ pub fn run() -> i32 {
         if !started {
             started = true;
             start(&mut sync, &link, here, &config);
+            if let Some((_, leaf)) = &serving {
+                sync.be_hub(leaf.clone());
+            }
+        }
+        for key in came.iter().flat_map(|came| came.try_iter()) {
+            sync.received(&mut songs, key);
+        }
+        match sync.hub() {
+            Some(hub) if hub.device == device.id => named = true,
+            Some(_) if named && serving.is_some() => {
+                log::warn!("another device is the hub now: not serving songs any more");
+                serving = None;
+            }
+            _ => {}
         }
         for report in reports {
             match report {
@@ -176,10 +215,9 @@ fn signed_in() -> Identity {
     let name = std::env::var(NAME_VAR).ok().filter(|n| !n.trim().is_empty());
     if let Ok(link) = std::env::var(PAIR_LINK_VAR)
         && !link.trim().is_empty()
+        && let Err(e) = pair(link.trim(), name.as_deref())
     {
-        if let Err(e) = pair(link.trim(), name.as_deref()) {
-            log::error!("signing in with {PAIR_LINK_VAR}: {e}");
-        }
+        log::error!("signing in with {PAIR_LINK_VAR}: {e}");
     }
     let pasted = std::io::stdin().is_terminal().then(read_links);
     let mut told = false;
@@ -228,6 +266,40 @@ fn read_links() -> Receiver<String> {
         })
         .ok();
     rx
+}
+
+/// Serve the songs in `songs` to the user's devices directly: the server,
+/// the songs that come to it, and the hub's leaf, saying where it's
+/// reached.
+fn serve(identity: &Identity, sync_key: [u8; 32], songs: &SongStore, device: &Device) -> Result<(HubServer, Receiver<String>, HubLeaf), String> {
+    let port = match std::env::var(PORT_VAR) {
+        Ok(port) => port.trim().parse().map_err(|_| format!("{PORT_VAR} isn't a port: {port}"))?,
+        Err(_) => PORT,
+    };
+    let key = hub_server::hub_key()?;
+    let hub_key = key.public();
+    let (server, came) = HubServer::start(port, key, identity, sync_key, songs.dir().to_path_buf())?;
+    let port = server.addr().port();
+    let given: Vec<String> = std::env::var(URL_VAR).unwrap_or_default().split(',').map(|url| url.trim().trim_end_matches('/').to_string()).filter(|url| !url.is_empty()).collect();
+    // (In a container, its own address is the container's: only those
+    // given reach it.)
+    let own = (std::env::var_os("SYNTHTHING_DOCKER").is_none()).then(own_address).flatten().map(|ip| format!("http://{}", std::net::SocketAddr::new(ip, port)));
+    let addrs: Vec<String> = own.into_iter().chain(given).collect();
+    if addrs.is_empty() {
+        log::warn!("serving songs on port {port}, but your devices can't reach it directly until {URL_VAR} says where (http://192.168.1.20:{port}, say)");
+    } else {
+        log::info!("serving songs on port {port}, for your devices at {}", addrs.join(", "));
+    }
+    let leaf = HubLeaf { device: device.id.clone(), key: hub_key, addrs };
+    Ok((server, came, leaf))
+}
+
+/// This computer's address on its network (the one it reaches the internet
+/// from: nothing is sent to find it).
+fn own_address() -> Option<std::net::IpAddr> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("192.0.2.1:9").ok()?;
+    socket.local_addr().ok().map(|addr| addr.ip()).filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
 }
 
 /// Turn sync on here if it isn't, and want every song.
