@@ -1535,7 +1535,6 @@ impl App {
         let mobile = self.mobile();
         let mut browse = false;
         let count = match self.config.soundfonts.len() {
-            0 => "No soundfonts yet. Add one to play MIDI songs.".to_string(),
             1 => "1 soundfont".to_string(),
             n => format!("{n} soundfonts"),
         };
@@ -1556,7 +1555,10 @@ impl App {
         let active_sf = self.active_sf;
         let touch = select_list::touch(ui.ctx());
         // The header, as Up next's (Name, then the size at the right).
-        let size_width = if touch {
+        let size_width = if self.config.soundfonts.is_empty() {
+            placeholder(ui, "No soundfonts yet.\nAdd one with + to play MIDI songs.");
+            0.0
+        } else if touch {
             0.0
         } else {
             let id = egui::Id::new("soundfonts_header");
@@ -2525,12 +2527,7 @@ impl App {
     fn dock_ui(&mut self, ui: &mut egui::Ui, shared: &PlaybackShared) {
         if self.open_sections.is_empty() {
             egui::CentralPanel::default().show(ui, |ui| {
-                ui.centered_and_justified(|ui| {
-                    ui.weak(
-                        "Nothing open. Use the View menu at the top to show Songs (pick something \
-                         to play), Playlists, the Visualizer, and more.",
-                    );
-                });
+                placeholder(ui, "Nothing open.\nUse the View menu at the top to show Songs (pick something to play), Playlists, the Visualizer, and more.");
             });
             return;
         }
@@ -4277,6 +4274,18 @@ fn fit_width(ui: &egui::Ui, width: f32) -> f32 {
 /// past its edges, so none of them is cut off by the screen's side.
 fn window_room(ctx: &egui::Context) -> egui::Rect {
     ctx.content_rect().shrink(ctx.global_style().interaction.resize_grab_radius_corner)
+}
+
+/// What an empty panel shows: `text` in weak text, centered in the room
+/// left in `ui`, wrapped to a readable width (a line break in it starts a
+/// new line). Only painted, so a list drawn after it (a drop target, say)
+/// still gets the room.
+pub fn placeholder(ui: &egui::Ui, text: &str) {
+    let rect = ui.available_rect_before_wrap();
+    let mut job = egui::text::LayoutJob::simple(text.to_string(), egui::TextStyle::Body.resolve(ui.style()), ui.visuals().weak_text_color(), (rect.width() - 32.0).clamp(80.0, 420.0));
+    job.halign = egui::Align::Center;
+    let galley = ui.painter().layout_job(job);
+    ui.painter().galley(rect.center() - egui::vec2(0.0, galley.size().y / 2.0), galley, ui.visuals().weak_text_color());
 }
 
 /// A Phosphor icon by its name (`shield-check`, `SCROLL`), for text: the

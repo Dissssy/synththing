@@ -77,7 +77,6 @@ impl App {
     pub(super) fn queue_ui(&mut self, ui: &mut egui::Ui) {
         let count = self.queue.len();
         let text = match count {
-            0 => "Nothing queued. Right-click songs to play them next or add them to the queue.".to_string(),
             1 => "1 song".to_string(),
             n => format!("{n} songs"),
         };
@@ -87,6 +86,9 @@ impl App {
         });
         if clear {
             self.queue.clear();
+        }
+        if count == 0 {
+            super::placeholder(ui, "Nothing queued.\nRight-click songs to play them next or add them to the queue, or drag them here.");
         }
         let mut view = self.config.songs_view.clone();
         let keys = song_list::column_keys(&view);

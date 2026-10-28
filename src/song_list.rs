@@ -829,7 +829,7 @@ impl SongList {
         let built = self.built.as_ref().expect("the rows were just made");
         let items = built.items.as_slice();
         if built.empty {
-            ui.weak("No songs yet: import some, or download them from the Library.");
+            crate::app::placeholder(ui, "No songs yet.\nImport some with +, or download them from the Library.");
         }
         let active = *self.active_row.get_or_insert_with(|| self.active.as_ref().and_then(|(path, group)| active_row(items, path, group.as_deref())));
         let mut toggle = None;
@@ -1368,9 +1368,11 @@ mod tests {
                 .collect();
         }
         let x = |text: &str| texts.iter().find(|(t, _)| t == text).map(|(_, x)| *x).unwrap();
+        // (Numbers sit at their column's right: their text is placed by its
+        // right end.)
         assert_eq!(x("Year"), x("2024"), "the year column's title over its values");
         assert!(texts.iter().filter(|(t, _)| t == "Artist").all(|(_, at)| *at == x("Artist")), "the artist column's title over its values");
-        assert_eq!(x("2024") + 45.0 + select_list::EDGE, 800.0, "the last column at the row's end");
+        assert_eq!(x("2024") + select_list::EDGE, 800.0, "the last column at the row's end");
     }
 
     #[test]

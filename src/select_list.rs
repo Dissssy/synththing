@@ -242,7 +242,7 @@ pub struct ListOutput {
 /// Draw `items` as a scrolling list filling `ui`, each row's contents drawn
 /// left to right by `draw` on top of the row's own click-and-drag area
 /// (widgets it adds, such as buttons, take their clicks first), clear of
-/// the row's right end by `EDGE`. The row
+/// the row's ends by `EDGE`. The row
 /// `playing` is outlined in the theme's playing color, over any
 /// selection or hover (tinted in it, without either).
 pub fn show<T>(
@@ -344,9 +344,8 @@ pub fn show_tall<T>(
                     } else if marked {
                         ui.visuals_mut().override_text_color = Some(playing_color);
                     }
-                    if touch {
-                        ui.add_space(EDGE);
-                    }
+                    // (In from the left as from the right.)
+                    ui.add_space(EDGE);
                     draw(ui, &row, &items[idx]);
                 });
             }
@@ -434,9 +433,7 @@ pub fn cell(ui: &mut egui::Ui, width: f32, text: impl Into<egui::WidgetText>, sc
         })
         .response;
     let x = response.rect.left() - ui.spacing().item_spacing.x / 2.0;
-    // (Over the gaps between rows too, so the line runs unbroken.)
-    let y = ui.max_rect().expand2(egui::vec2(0.0, ui.spacing().item_spacing.y / 2.0)).y_range();
-    ui.painter().vline(x, y, ui.visuals().widgets.noninteractive.bg_stroke);
+    ui.painter().vline(x, ui.max_rect().y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
     response
 }
 
@@ -521,7 +518,7 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, rect: egui::Rect, header: Header)
                 cells.push(response);
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add_space(lead);
+                ui.add_space(EDGE + lead);
                 let size = ui.available_size();
                 ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.set_min_size(size);
