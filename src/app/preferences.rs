@@ -6,7 +6,7 @@
 
 use eframe::egui;
 
-use super::{categories_body, icon_button, row_icon_button, nice_name, setting_label, setting_row, settings_group, settings_group_closed, with_info, App, CONTROL_WIDTH};
+use super::{categories_body, icon_button, row_icon_button, nice_name, setting_label, setting_row, settings_group, toggle_chip, with_info, App, CONTROL_WIDTH};
 use crate::audio::{AudioCommand, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
 
@@ -161,7 +161,7 @@ impl App {
             0 => "Loaded right now".to_string(),
             n => format!("Loaded right now ({n}, {})", crate::storage::size_text(total as u64)),
         };
-        settings_group_closed(ui, "loaded_files", &title, |ui| {
+        settings_group(&title).icon("memory").closable("loaded_files").show(ui, |ui| {
             if loaded.is_empty() {
                 setting_row(ui, |ui| ui.weak("Nothing"));
             }
@@ -237,7 +237,7 @@ impl App {
         ui.spacing_mut().slider_width = CONTROL_WIDTH;
         match tab {
             PrefTab::Appearance => {
-                settings_group(ui, "Look", |ui| {
+                settings_group("Look").icon("palette").show(ui, |ui| {
                     let current = self.current_theme().name;
                     let mut picked = None;
                     setting_row(ui, |ui| {
@@ -258,7 +258,7 @@ impl App {
                     }
                     self.ui_scale_ui(ui);
                 });
-                settings_group(ui, "Seek bar", |ui| {
+                settings_group("Seek bar").icon("sliders-horizontal").show(ui, |ui| {
                     with_info(
                         ui,
                         "The seek bar is colored by the song's tempo (slow songs blue, fast ones pink), \
@@ -283,7 +283,7 @@ impl App {
                     );
                 });
                 if cfg!(target_os = "android") {
-                    settings_group(ui, "Full screen", |ui| {
+                    settings_group("Full screen").icon("corners-out").show(ui, |ui| {
                         with_info(
                             ui,
                             "With the controls hidden, the visualizer fills the screen. On: it goes \
@@ -294,7 +294,7 @@ impl App {
                 }
             }
             PrefTab::Playback => {
-                settings_group(ui, "Sound", |ui| {
+                settings_group("Sound").icon("speaker-high").show(ui, |ui| {
                     with_info(
                         ui,
                         &format!(
@@ -309,7 +309,7 @@ impl App {
                         },
                     );
                 });
-                settings_group(ui, "What plays", |ui| {
+                settings_group("What plays").icon("playlist").show(ui, |ui| {
                     with_info(
                         ui,
                         &format!(
@@ -335,7 +335,7 @@ impl App {
                         |ui| ui.checkbox(&mut warn_heavy, "Warn before playing a very large MIDI file"),
                     );
                 });
-                settings_group(ui, "Start with what was set last time", |ui| {
+                settings_group("Start with what was set last time").icon("clock-counter-clockwise").show(ui, |ui| {
                     for (on, label, info) in [
                         (&mut remember.volume, "Volume", "Off: full volume every time."),
                         (
@@ -351,7 +351,7 @@ impl App {
                     }
                 });
                 if cfg!(target_os = "android") {
-                    settings_group(ui, "Leaving the app", |ui| {
+                    settings_group("Leaving the app").icon("picture-in-picture").show(ui, |ui| {
                         with_info(
                             ui,
                             "Leaving synththing while a song plays (home, or switching apps) shrinks it \
@@ -375,7 +375,7 @@ impl App {
                         });
                     });
                 }
-                settings_group(ui, "Loading", |ui| {
+                settings_group("Loading").icon("hourglass").show(ui, |ui| {
                     // (No pointer to rest on a touch screen.)
                     if !cfg!(target_os = "android") {
                         with_info(
@@ -400,7 +400,7 @@ impl App {
             }
             PrefTab::Browsing => {
                 self.song_names_ui(ui);
-                settings_group(ui, "Sorting and grouping", |ui| {
+                settings_group("Sorting and grouping").icon("sort-ascending").show(ui, |ui| {
                     with_info(
                         ui,
                         "Sorting by a name (the Songs list, smart playlists, Groupings) passes over a leading \
@@ -430,27 +430,41 @@ impl App {
                         },
                     );
                 });
-                settings_group(ui, "Search looks in", |ui| {
-                    ui.weak(
-                        "Searching Songs looks in what's lit up: each song's name, and these. A filter \
-                         (artist:...) still goes by what's off.",
-                    );
-                    ui.horizontal_wrapped(|ui| {
-                        let columns = crate::fields::columns().filter(|d| d.key != "file_name").map(|d| (d.key, d.label));
-                        for (key, label) in [("file_name", "File name"), ("tag", "Tags")].into_iter().chain(columns) {
-                            let on = !unsearched.iter().any(|k| k == key);
-                            if ui.add(egui::Button::selectable(on, label).corner_radius(12.0)).clicked() {
-                                unsearched.retain(|k| k != key);
-                                if on {
-                                    unsearched.push(key.to_string());
-                                }
-                            }
-                        }
-                    });
+                let hint = "What searching Songs looks in, besides each song's name. A filter (artist:...) goes by what's off too.";
+                settings_group("Search looks in").icon("funnel").hint(hint).show(ui, |ui| {
+                    let fields = || crate::fields::columns().filter(|d| d.key != "file_name");
+                    let info = fields().filter(|d| d.editable && !d.key.starts_with("sort_")).map(|d| (d.key, d.label));
+                    let sort = fields().filter(|d| d.key.starts_with("sort_")).map(|d| (d.key, d.label));
+                    let file = fields().filter(|d| !d.editable).map(|d| (d.key, d.label));
+                    let sections: [(&str, Vec<(&str, &str)>); 3] = [
+                        ("Song info", [("tag", "Tags")].into_iter().chain(info).collect()),
+                        ("Sort names", sort.collect()),
+                        ("The file", [("file_name", "File name")].into_iter().chain(file).collect()),
+                    ];
+                    for (title, chips) in sections {
+                        let accent = ui.visuals().selection.bg_fill;
+                        setting_row(ui, |ui| {
+                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                                setting_label(ui, title);
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 4.0;
+                                    for (key, label) in chips {
+                                        let on = !unsearched.iter().any(|k| k == key);
+                                        if toggle_chip(ui, on, label, accent).clicked() {
+                                            unsearched.retain(|k| k != key);
+                                            if on {
+                                                unsearched.push(key.to_string());
+                                            }
+                                        }
+                                    }
+                                });
+                            });
+                        });
+                    }
                 });
             }
             PrefTab::Library => {
-                settings_group(ui, "Adding songs", |ui| {
+                settings_group("Adding songs").icon("plus-circle").show(ui, |ui| {
                     with_info(
                         ui,
                         "Songs dragged onto the window are always imported into the library. Then they're queued, \
@@ -469,7 +483,7 @@ impl App {
                         },
                     );
                 });
-                settings_group(ui, "Album art and details", |ui| {
+                settings_group("Album art and details").icon("vinyl-record").show(ui, |ui| {
                     self.lookup_preferences_ui(ui);
                 });
                 self.rulesets_ui(ui);
@@ -484,7 +498,7 @@ impl App {
                 }
             }
             PrefTab::Visualizer => {
-                settings_group(ui, "Display", |ui| {
+                settings_group("Display").icon("monitor").show(ui, |ui| {
                     with_info(
                         ui,
                         "How many screen pixels each visualizer pixel covers, across and down. 1x draws at \
@@ -513,7 +527,7 @@ impl App {
                         |ui| ui.checkbox(&mut channel_chips, "Channel toggles as chips with instrument names"),
                     );
                 });
-                settings_group(ui, "Scripts", |ui| {
+                settings_group("Scripts").icon("code").show(ui, |ui| {
                     with_info(
                         ui,
                         "What visualizer scripts log() shows in their Debug window; with this \
@@ -524,7 +538,7 @@ impl App {
                     );
                 });
                 if !cfg!(target_os = "android") {
-                    settings_group(ui, "Recording", |ui| self.recording_preferences_ui(ui));
+                    settings_group("Recording").icon("record").show(ui, |ui| self.recording_preferences_ui(ui));
                 }
             }
             PrefTab::Account => self.library_preferences_ui(ui),
@@ -532,7 +546,7 @@ impl App {
             PrefTab::Integrations => self.api_preferences_ui(ui),
             PrefTab::App => {
                 if !cfg!(target_os = "android") {
-                    settings_group(ui, "Window", |ui| {
+                    settings_group("Window").icon("app-window").show(ui, |ui| {
                         with_info(
                             ui,
                             "On: the window has your system's title bar and borders. Off: synththing \
@@ -552,7 +566,7 @@ impl App {
                         }
                     });
                 }
-                settings_group(ui, "Updates", |ui| {
+                settings_group("Updates").icon("arrows-clockwise").show(ui, |ui| {
                     with_info(
                         ui,
                         "Looks for a newer release on GitHub and asks before installing anything. \
@@ -580,7 +594,7 @@ impl App {
                         );
                     }
                 });
-                settings_group(ui, "Getting started", |ui| {
+                settings_group("Getting started").icon("rocket-launch").show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         if ui
                             .button("Welcome & starter pack...")

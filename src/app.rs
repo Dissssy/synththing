@@ -4307,62 +4307,94 @@ const GROUP_MARGIN: i8 = 8;
 const GROUP_ROW_MARGIN: i8 = 3;
 
 /// A box of settings under a heading, drawn as a list is: outlined, the
-/// heading on the header's color, the rows (`setting_row`) striped.
-fn settings_group<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    group_ui(ui, title, None, add).expect("an open group's contents are drawn")
+/// heading (an icon, the title, a line of hint under it) on the header's
+/// color, the rows (`setting_row`) striped. Built up, then drawn by `show`.
+#[derive(Clone, Copy)]
+struct SettingsGroup<'a> {
+    title: &'a str,
+    icon: Option<&'a str>,
+    hint: Option<&'a str>,
+    /// Opens and closes by its heading (closed at first), kept by this
+    /// whatever the title says.
+    closable: Option<&'a str>,
 }
 
-/// A `settings_group` that opens and closes by its heading (closed at
-/// first): its contents are only drawn while it's open.
-/// `id_salt` keeps it open or closed whatever the title says.
-fn settings_group_closed<R>(ui: &mut egui::Ui, id_salt: &str, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
-    let id = ui.make_persistent_id(("settings_group_open", id_salt));
-    group_ui(ui, title, Some(id), add)
+fn settings_group(title: &str) -> SettingsGroup<'_> {
+    SettingsGroup { title, icon: None, hint: None, closable: None }
 }
 
-fn group_ui<R>(ui: &mut egui::Ui, title: &str, toggle: Option<egui::Id>, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
-    let id = egui::Id::new(SETTINGS_GROUP);
-    let visuals = ui.visuals().clone();
-    let radius = 6u8;
-    let open = toggle.is_none_or(|toggle| ui.ctx().data_mut(|d| *d.get_persisted_mut_or_default::<bool>(toggle)));
-    // (No room of its own around it: the item spacing between groups is
-    // about the room at its sides.)
-    let group = ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing.y = 0.0;
-        let bottom = if open { 0 } else { radius };
-        let header = egui::Frame::new()
-            .fill(visuals.extreme_bg_color)
-            .corner_radius(egui::CornerRadius { nw: radius, ne: radius, sw: bottom, se: bottom })
-            .inner_margin(egui::Margin::symmetric(GROUP_MARGIN, 5))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    if toggle.is_some() {
-                        ui.label(icon(if open { "caret-down" } else { "caret-right" }));
-                    }
-                    ui.strong(title);
+impl<'a> SettingsGroup<'a> {
+    fn icon(self, icon: &'a str) -> Self {
+        Self { icon: Some(icon), ..self }
+    }
+
+    fn hint(self, hint: &'a str) -> Self {
+        Self { hint: Some(hint), ..self }
+    }
+
+    fn closable(self, id_salt: &'a str) -> Self {
+        Self { closable: Some(id_salt), ..self }
+    }
+
+    /// Draw it, `add` drawing its contents (unless it's closed: `None`).
+    fn show<R>(self, ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+        let id = egui::Id::new(SETTINGS_GROUP);
+        let visuals = ui.visuals().clone();
+        let radius = 6u8;
+        let toggle = self.closable.map(|salt| ui.make_persistent_id(("settings_group_open", salt)));
+        let open = toggle.is_none_or(|toggle| ui.ctx().data_mut(|d| *d.get_persisted_mut_or_default::<bool>(toggle)));
+        // (No room of its own around it: the item spacing between groups
+        // is about the room at its sides.)
+        let group = ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let bottom = if open { 0 } else { radius };
+            let header = egui::Frame::new()
+                .fill(visuals.extreme_bg_color)
+                .corner_radius(egui::CornerRadius { nw: radius, ne: radius, sw: bottom, se: bottom })
+                .inner_margin(egui::Margin::symmetric(GROUP_MARGIN, 5))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        if let Some(name) = self.icon {
+                            ui.label(egui::RichText::new(icon(name)).size(16.0).color(visuals.weak_text_color()));
+                        }
+                        ui.vertical(|ui| {
+                            ui.strong(self.title);
+                            if let Some(hint) = self.hint {
+                                ui.add(egui::Label::new(egui::RichText::new(hint).weak()).wrap());
+                            }
+                        });
+                        if toggle.is_some() {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(icon(if open { "caret-up" } else { "caret-down" }));
+                            });
+                        }
+                    });
                 });
+            if let Some(toggle) = toggle
+                && ui
+                    .interact(header.response.rect, toggle, egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+            {
+                ui.ctx().data_mut(|d| d.insert_persisted(toggle, !open));
+            }
+            if !open {
+                return None;
+            }
+            let outer = ui.ctx().data_mut(|d| d.get_temp::<Option<usize>>(id)).flatten();
+            ui.ctx().data_mut(|d| d.insert_temp(id, Some(0usize)));
+            let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(GROUP_MARGIN, 2)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                add(ui)
             });
-        if let Some(toggle) = toggle
-            && ui.interact(header.response.rect, toggle, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
-        {
-            ui.ctx().data_mut(|d| d.insert_persisted(toggle, !open));
-        }
-        if !open {
-            return None;
-        }
-        let outer = ui.ctx().data_mut(|d| d.get_temp::<Option<usize>>(id)).flatten();
-        ui.ctx().data_mut(|d| d.insert_temp(id, Some(0usize)));
-        let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(GROUP_MARGIN, 2)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            add(ui)
+            ui.ctx().data_mut(|d| d.insert_temp(id, outer));
+            Some(inner.inner)
         });
-        ui.ctx().data_mut(|d| d.insert_temp(id, outer));
-        Some(inner.inner)
-    });
-    let rect = group.response.rect;
-    ui.painter().rect_stroke(rect, radius, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
-    group.inner
+        let rect = group.response.rect;
+        ui.painter().rect_stroke(rect, radius, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+        group.inner
+    }
 }
 
 /// How wide a setting's label is (`setting_label`), so the controls after
