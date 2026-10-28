@@ -27,7 +27,7 @@ use crate::device_messages::{Outbox, Route};
 use crate::device_sync::{self, DeviceSync, Here, Link, Report};
 use crate::hub_api::{self, HubApi};
 use crate::hub_server::{self, Came, HubServer};
-use crate::song_sync::HubLeaf;
+use crate::song_sync::{AddressCheck, HubLeaf};
 use crate::library::identity::{self, Identity};
 use crate::library::{self, client, pairing, reach};
 use crate::playlist::Library;
@@ -131,6 +131,7 @@ pub fn run() -> i32 {
     let mut started = false;
     let mut error = None;
     let mut checked: Option<Instant> = None;
+    let checks = mpsc::channel();
     loop {
         if info_read.is_none_or(|t| t.elapsed() >= INFO_EVERY) {
             info_read = Some(Instant::now());
@@ -175,19 +176,25 @@ pub fn run() -> i32 {
             && checked.is_none_or(|t| t.elapsed() >= CHECK_EVERY)
         {
             checked = Some(Instant::now());
-            let (identity, leaf) = (identity.clone(), leaf.clone());
+            let (identity, leaf, tx) = (identity.clone(), leaf.clone(), checks.0.clone());
             std::thread::Builder::new()
                 .name("hub check".into())
                 .spawn(move || {
-                    for (works, line) in check(&identity, &leaf.key, &leaf.addrs) {
-                        if works {
+                    let checked = check(&identity, &leaf.key, &leaf.addrs);
+                    for (checked, line) in &checked {
+                        if checked.works {
                             log::info!("{line}");
                         } else {
                             log::warn!("{line}");
                         }
                     }
+                    let _ = tx.send(checked.into_iter().map(|(checked, _)| checked).collect());
                 })
                 .ok();
+        }
+        // (For the other devices to show.)
+        while let Ok(checked) = checks.1.try_recv() {
+            sync.hub_checks(checked);
         }
         match sync.hub() {
             Some(hub) if hub.device == device.id => named = true,
@@ -329,7 +336,7 @@ fn serve(identity: &Identity, sync_key: [u8; 32], songs: &SongStore, device: &De
     } else {
         log::info!("serving songs on port {port}, for your devices at {}", addrs.join(", "));
     }
-    let leaf = HubLeaf { device: device.id.clone(), key: hub_key, addrs };
+    let leaf = HubLeaf { device: device.id.clone(), key: hub_key, addrs, checks: Vec::new() };
     Ok((server, came, leaf))
 }
 
@@ -357,33 +364,40 @@ pub fn check_now() -> i32 {
         println!("No address to check: {URL_VAR} gives none the internet reaches.");
     }
     lines.iter().for_each(|(_, line)| println!("{line}"));
-    i32::from(lines.iter().any(|(works, _)| !works))
+    i32::from(lines.iter().any(|(checked, _)| !checked.works))
 }
 
 /// Whether each of `addrs` the internet should reach (not those on a
-/// network of their own) works from it, as the server finds: a line on
-/// each, and whether it works.
-fn check(identity: &Identity, hub_key: &str, addrs: &[String]) -> Vec<(bool, String)> {
+/// network of their own) works from it, as the server finds: each check,
+/// and a line on it.
+fn check(identity: &Identity, hub_key: &str, addrs: &[String]) -> Vec<(AddressCheck, String)> {
     let server = library::official_url();
     let server_key = library::server_key();
     addrs
         .iter()
         .filter(|url| !reach::local(url))
-        .map(|url| match client::reach(&server, &server_key, identity, url, hub_key) {
-            Ok(found) => match reach::hint(url, &found) {
-                None => {
-                    let times: Vec<String> = [("IPv4", &found.v4), ("IPv6", &found.v6)]
-                        .into_iter()
-                        .filter_map(|(family, probe)| match probe.as_ref()?.verdict {
-                            reach::Verdict::Ok { ms } => Some(format!("{family} {ms} ms")),
-                            _ => None,
-                        })
-                        .collect();
-                    (true, format!("{url} works from the internet ({})", times.join(", ")))
-                }
-                Some(hint) => (false, format!("{url} doesn't work from the internet: {hint}")),
-            },
-            Err(e) => (false, format!("couldn't check {url}: {e}")),
+        .map(|url| {
+            let at = settings_sync::now();
+            let checked = |works, hint| AddressCheck { url: url.clone(), at, works, hint };
+            match client::reach(&server, &server_key, identity, url, hub_key) {
+                Ok(found) => match reach::hint(url, &found) {
+                    None => {
+                        let times: Vec<String> = [("IPv4", &found.v4), ("IPv6", &found.v6)]
+                            .into_iter()
+                            .filter_map(|(family, probe)| match probe.as_ref()?.verdict {
+                                reach::Verdict::Ok { ms } => Some(format!("{family} {ms} ms")),
+                                _ => None,
+                            })
+                            .collect();
+                        (checked(true, None), format!("{url} works from the internet ({})", times.join(", ")))
+                    }
+                    Some(hint) => {
+                        let line = format!("{url} doesn't work from the internet: {hint}");
+                        (checked(false, Some(hint)), line)
+                    }
+                },
+                Err(e) => (checked(false, Some(format!("couldn't check it: {e}"))), format!("couldn't check {url}: {e}")),
+            }
         })
         .collect()
 }

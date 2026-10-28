@@ -215,6 +215,30 @@ pub struct HubLeaf {
     pub device: String,
     pub key: String,
     pub addrs: Vec<String>,
+    /// Whether its addresses work from the internet, as the server last
+    /// found (`hub.rs`: those on a network of their own aren't checked).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<AddressCheck>,
+}
+
+impl HubLeaf {
+    /// The same hub, at the same addresses (whatever its checks say).
+    pub fn same_place(&self, other: &HubLeaf) -> bool {
+        (&self.device, &self.key, &self.addrs) == (&other.device, &other.key, &other.addrs)
+    }
+}
+
+/// Whether one of the hub's addresses works from the internet.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AddressCheck {
+    pub url: String,
+    /// When (Unix seconds).
+    pub at: i64,
+    pub works: bool,
+    /// What to fix, where it doesn't (`library::reach::hint`), or why it
+    /// couldn't be checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 const HUB: &str = "hub";
@@ -1004,6 +1028,16 @@ mod tests {
         assert_eq!(run_all("desktop", &tasks), [Moved::TooBig(huge.key.clone())]);
         running.stop();
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_hubs_checks_ride_along_in_its_leaf() {
+        let leaf: HubLeaf = serde_json::from_str(r#"{"device":"hub","key":"k","addrs":["http://203.0.113.5:7390"]}"#).unwrap();
+        assert!(leaf.checks.is_empty(), "a leaf from before checks");
+        let checked = HubLeaf { checks: vec![AddressCheck { url: leaf.addrs[0].clone(), at: 1, works: true, hint: None }], ..leaf.clone() };
+        assert!(checked.same_place(&leaf), "new checks don't make it another hub to reach");
+        assert!(!HubLeaf { addrs: Vec::new(), ..leaf.clone() }.same_place(&leaf));
+        assert_eq!(serde_json::from_value::<HubLeaf>(serde_json::to_value(&checked).unwrap()).unwrap(), checked);
     }
 
     #[test]

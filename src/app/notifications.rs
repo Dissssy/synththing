@@ -76,6 +76,8 @@ fn wording(kind: &str) -> Option<&'static str> {
         "takedown_stood" => "The takedown of \"{name}\" stands ({how})",
         "new_notice" => "New copyright notice on \"{name}\"",
         "new_dispute" => "A copyright notice on \"{name}\" was disputed",
+        "hub_unreachable" => "Your hub at {url} hasn't been reachable from the internet for a while: {hint}",
+        "hub_reachable" => "Your hub at {url} is reachable from the internet again",
         _ => return None,
     })
 }
@@ -94,6 +96,8 @@ fn icon_of(kind: &str) -> &'static str {
         "copyright_notice" | "takedown_stood" | "new_notice" => "copyright",
         "notice_disputed" | "new_dispute" | "notice_rejected" => "scales",
         "dispute_upheld" | "notice_withdrawn" => "check-circle",
+        "hub_unreachable" => "wifi-x",
+        "hub_reachable" => "wifi-high",
         _ => "bell",
     })
 }
@@ -104,9 +108,9 @@ fn icon_of(kind: &str) -> &'static str {
 fn tier_of(kind: &str) -> u8 {
     match kind {
         "encore_milestone" | "download_milestone" | "remixed" => 1,
-        "reinstated" | "dispute_upheld" | "notice_withdrawn" | "report_handled" | "notice_rejected" => 2,
+        "reinstated" | "dispute_upheld" | "notice_withdrawn" | "report_handled" | "notice_rejected" | "hub_reachable" => 2,
         "new_report" | "new_feedback" | "new_notice" | "new_dispute" | "notice_disputed" | "hidden" => 3,
-        "copyright_notice" | "takedown_stood" | "removed" => 4,
+        "copyright_notice" | "takedown_stood" | "removed" | "hub_unreachable" => 4,
         _ => 0,
     }
 }

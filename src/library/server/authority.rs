@@ -148,6 +148,8 @@ pub(super) fn apply_rotation(db: &Connection, record: &Rotation) -> rusqlite::Re
     tx.execute("DELETE FROM sync WHERE key = ?", [old])?;
     tx.execute("UPDATE OR IGNORE relay SET key = ?1 WHERE key = ?2", params![new, old])?;
     tx.execute("DELETE FROM relay WHERE key = ?", [old])?;
+    tx.execute("UPDATE OR IGNORE hubs SET key = ?1 WHERE key = ?2", params![new, old])?;
+    tx.execute("DELETE FROM hubs WHERE key = ?", [old])?;
     tx.execute("DELETE FROM codes WHERE key = ?", [old])?;
     tx.execute(
         "INSERT INTO rotations (old, new, time, how, authority, signature, applied) VALUES (?, ?, ?, ?, ?, ?, ?)",
