@@ -6,7 +6,7 @@
 
 use eframe::egui;
 
-use super::{categories_body, fit_width, icon_button, nice_name, setting_label, setting_row, settings_group, with_info, App, CONTROL_WIDTH};
+use super::{categories_body, icon_button, nice_name, setting_label, setting_row, settings_group, with_info, App, CONTROL_WIDTH};
 use crate::audio::{AudioCommand, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
 
@@ -100,37 +100,55 @@ pub(super) enum PrefJump {
 }
 
 impl App {
-    /// The desktop's Preferences, as a modal over everything else.
-    pub(super) fn preferences_ui(&mut self, ctx: &egui::Context) {
-        if !self.preferences_open {
-            return;
-        }
+    /// The desktop's Preferences, as a page in the panels' place: the title
+    /// bar and the bottom bar stay, and playback goes on.
+    pub(super) fn preferences_ui(&mut self, ui: &mut egui::Ui) {
         let tabs = PrefTab::available();
         let mut close = false;
         let mut jump = None;
-        let response = egui::Modal::new(egui::Id::new("preferences")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 720.0));
-            ui.horizontal(|ui| {
-                ui.heading("Preferences");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    close = ui.add(icon_button("x")).on_hover_text("Close (Esc)").clicked();
+        let outer = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 8 });
+        egui::CentralPanel::default().frame(outer).show(ui, |ui| {
+            let page = egui::Frame::new().fill(ui.visuals().window_fill).corner_radius(6).inner_margin(12);
+            page.show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
+                ui.horizontal(|ui| {
+                    ui.heading("Preferences");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        close = ui.add(icon_button("x")).on_hover_text("Close (Esc)").clicked();
+                    });
                 });
+                ui.add_space(6.0);
+                let titles: Vec<String> = tabs.iter().map(|t| format!("{}  {}", super::icon(t.icon()), t.title())).collect();
+                let mut index = tabs.iter().position(|&t| t == self.preferences_tab).unwrap_or(0);
+                let height = ui.available_height();
+                categories_body(ui, "preferences", &titles, &mut index, height, |ui, index| {
+                    jump = self.preference_tab_ui(ui, tabs[index]);
+                });
+                self.preferences_tab = tabs[index];
             });
-            ui.add_space(6.0);
-            let titles: Vec<String> = tabs.iter().map(|t| format!("{}  {}", super::icon(t.icon()), t.title())).collect();
-            let mut index = tabs.iter().position(|&t| t == self.preferences_tab).unwrap_or(0);
-            categories_body(ui, "preferences", &titles, &mut index, |ui, index| {
-                jump = self.preference_tab_ui(ui, tabs[index]);
-            });
-            self.preferences_tab = tabs[index];
         });
-        if close || jump.is_some() || response.should_close() {
-            self.preferences_open = false;
-            self.keymap_capture = None;
-            self.api_preferences_closed();
+        // (Esc closes an open dropdown, or ends waiting for keys, first.)
+        let ctx = ui.ctx().clone();
+        if self.keymap_capture.is_none()
+            && !egui::Popup::is_any_open(&ctx)
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            close = true;
+        }
+        if close || jump.is_some() {
+            self.toggle_preferences();
         }
         if let Some(jump) = jump {
             self.preference_jump(jump);
+        }
+    }
+
+    /// Open Preferences, or close it (letting go of what it was doing).
+    pub(super) fn toggle_preferences(&mut self) {
+        self.preferences_open = !self.preferences_open;
+        if !self.preferences_open {
+            self.keymap_capture = None;
+            self.api_preferences_closed();
         }
     }
 

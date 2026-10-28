@@ -359,11 +359,6 @@ pub struct App {
     /// The song the pointer's been resting on, and since when (egui time),
     /// for hover preloading's dwell delay.
     hover_since: Option<(PathBuf, f64)>,
-    /// Preferences opened while playing: playback was paused for it and
-    /// resumes when it closes.
-    paused_for_preferences: bool,
-    /// Whether the preferences modal was open last frame.
-    preferences_were_open: bool,
     /// Set while the dedicated visualizer fullscreen is up.
     dedicated: Option<Dedicated>,
     /// What the visualizer reported this frame (focus, cursor request);
@@ -735,8 +730,6 @@ impl App {
             skips_in_a_row: 0,
             hovered_playlist_entry: None,
             hover_since: None,
-            paused_for_preferences: false,
-            preferences_were_open: false,
             dedicated: None,
             visualizer_output: ShowOutput::default(),
             visualizer_drawn: false,
@@ -2387,11 +2380,11 @@ impl App {
         });
     }
 
-    /// Whether one of the app's modals (Preferences, Log, Updates, Rename
-    /// script) is up. They get the keyboard: app shortcuts and the global
+    /// Whether one of the app's modals (Log, Updates, Rename script) is up,
+    /// or Preferences is waiting for keys. They get the keyboard: app shortcuts and the global
     /// keys pause.
     fn any_modal_open(&self) -> bool {
-        self.preferences_open
+        self.keymap_capture.is_some()
             || self.log_open
             || self.updates_open
             || self.rename.is_some()
@@ -3051,7 +3044,7 @@ impl App {
             notes,
             playback,
             transport,
-            self.preferences_open,
+            false,
             mode,
             fixed_size,
             hold,
@@ -3230,7 +3223,6 @@ impl App {
             scripts: self.available_scripts.iter().map(|p| nice_name(p)).collect(),
             active_script: self.active_script,
             transport: self.script_transport(),
-            frozen: self.preferences_open,
             main_shows_visualizer: !self.hidden && self.visualizer_was_drawn,
         }
     }
@@ -3515,8 +3507,7 @@ impl App {
         let window_focused = ctx.input(|i| i.focused);
         let want = self.visualizer_output.focused
             && self.visualizer_output.cursor.confined
-            && window_focused
-            && !self.preferences_open;
+            && window_focused;
         if want != self.cursor_confined {
             self.cursor_confined = want;
             let grab = if want { egui::viewport::CursorGrab::Confined } else { egui::viewport::CursorGrab::None };
@@ -3717,24 +3708,6 @@ impl App {
         }
     }
 
-    /// While Preferences is open, playback and the visualizer script pause;
-    /// closing it resumes playback only if it was playing beforehand.
-    fn pause_for_preferences(&mut self, view: &EngineView) {
-        if self.preferences_open && !self.preferences_were_open {
-            let playing = !view.paused && !view.finished && (view.has_midi || view.has_audio_file);
-            if playing {
-                self.send(AudioCommand::TogglePause);
-            }
-            self.paused_for_preferences = playing;
-        } else if !self.preferences_open && self.preferences_were_open {
-            if self.paused_for_preferences && view.paused {
-                self.send(AudioCommand::TogglePause);
-            }
-            self.paused_for_preferences = false;
-        }
-        self.preferences_were_open = self.preferences_open;
-    }
-
     /// The scripting-API reference: one embedded, structured page (see
     /// `lua_docs.rs`) rather than a hosted wiki, the whole API is a few
     /// dozen functions, not a sprawling product.
@@ -3918,9 +3891,7 @@ impl App {
             self.poll_repair();
             self.suggest_repair();
         });
-        if !self.preferences_open {
-            frame_timing::time("playlist_tick", || self.playlist_tick(&view));
-        }
+        frame_timing::time("playlist_tick", || self.playlist_tick(&view));
         frame_timing::time("poll_library", || self.poll_library(ctx));
         frame_timing::time("poll_moderation", || self.poll_moderation());
         frame_timing::time("poll_feedback", || self.poll_feedback());
@@ -4022,7 +3993,6 @@ impl eframe::App for App {
         }
         self.visualizer_output = ShowOutput::default();
 
-        self.pause_for_preferences(view);
         self.handle_os_file_drops(&ctx);
 
         self.apply_window_frame(&ctx);
@@ -4056,10 +4026,13 @@ impl eframe::App for App {
                 self.controls_bar_ui(ui, view);
                 self.tour.mark(tour::Target::Controls, ui.min_rect());
             });
-            frame_timing::time("dock", || self.dock_ui(ui, &shared));
+            if self.preferences_open {
+                self.preferences_ui(ui);
+            } else {
+                frame_timing::time("dock", || self.dock_ui(ui, &shared));
+            }
             frame_timing::time("autosave_layout", || self.autosave_layout(&ctx));
             let windows = frame_timing::scope("windows");
-            self.preferences_ui(&ctx);
             self.updates_ui(&ctx);
             self.log_ui(&ctx);
             self.rename_ui(&ctx);
@@ -4226,26 +4199,30 @@ impl TabViewer for SectionTabs<'_> {
     }
 }
 
-/// The body of a window laid out like Preferences: `categories` down the
+/// How tall a window's `categories_body` is.
+const CATEGORIES_HEIGHT: f32 = 340.0;
+
+/// The body of a page laid out like Preferences: `categories` down the
 /// side (`selected` the one picked), and `body` drawing the picked one's
-/// contents beside them. Each side scrolls by itself, in a fixed height.
+/// contents beside them. Each side scrolls by itself, `height` tall.
+
 fn categories_body<S: AsRef<str>>(
     ui: &mut egui::Ui,
     id: &str,
     categories: &[S],
     selected: &mut usize,
+    height: f32,
     body: impl FnOnce(&mut egui::Ui, usize),
 ) {
-    // A fixed height: the divider takes the height it's given, so left to
-    // size itself, the window grows a little every frame.
-    const BODY_HEIGHT: f32 = 340.0;
+    // A fixed height: the divider takes the height it's given, so in a
+    // window left to size itself, it grows a little every frame.
     *selected = (*selected).min(categories.len().saturating_sub(1));
-    let size = egui::vec2(ui.available_width(), BODY_HEIGHT);
+    let size = egui::vec2(ui.available_width(), height);
     ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Min), |ui| {
-        ui.set_height(BODY_HEIGHT);
+        ui.set_height(height);
         ui.vertical(|ui| {
             ui.set_width(140.0);
-            egui::ScrollArea::vertical().id_salt((id, "categories")).max_height(BODY_HEIGHT).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt((id, "categories")).max_height(height).show(ui, |ui| {
                 for (i, title) in categories.iter().enumerate() {
                     let pill = egui::Button::selectable(*selected == i, title.as_ref()).corner_radius(12.0);
                     if ui.add(pill).clicked() {
@@ -4258,7 +4235,7 @@ fn categories_body<S: AsRef<str>>(
         ui.vertical(|ui| {
             egui::ScrollArea::vertical()
                 .id_salt((id, "body"))
-                .max_height(BODY_HEIGHT)
+                .max_height(height)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 8.0;

@@ -850,8 +850,7 @@ impl App {
         // Preferences.)
         if let Some(paths) = remove_songs {
             self.remove_songs = paths;
-            self.preferences_open = false;
-            self.api_preferences_closed();
+            self.toggle_preferences();
         }
         if self.config.api != before {
             if self.config.api.port() != before.port() || self.config.api.lan != before.lan {

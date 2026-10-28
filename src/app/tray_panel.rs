@@ -86,8 +86,6 @@ pub(super) struct Snapshot {
     pub active_script: Option<usize>,
     /// What the script sees of the playlist and modes.
     pub transport: Transport,
-    /// The visualizer is paused (Preferences is open).
-    pub frozen: bool,
     /// The main window is up and showing the visualizer: it runs the
     /// script, and the mini player just shows its latest picture (two
     /// windows running it would resize it back and forth between them).
@@ -376,7 +374,7 @@ fn picture_ui(ui: &mut egui::Ui, picture: &Picture, state: &mut State, act: &imp
     let shown = picture.panel.try_lock().ok().and_then(|mut panel| {
         // While the main window's showing the visualizer too, it's the one
         // running the script; this just shows the latest picture.
-        let frozen = snapshot.frozen || snapshot.main_shows_visualizer;
+        let frozen = snapshot.main_shows_visualizer;
         panel.show(&mut inside, &picture.tap, &notes, &view, snapshot.transport.clone(), frozen, DisplayMode::Mini, None, false, None);
         let effects = panel.take_effects();
         if !effects.is_empty() {

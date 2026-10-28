@@ -165,8 +165,8 @@ impl App {
                 response.on_hover_text("Record the visualizer");
             }
             Item::Preferences => {
-                if ui.add(button).on_hover_text(item.label()).clicked() {
-                    self.preferences_open = true;
+                if ui.add(button.selected(self.preferences_open)).on_hover_text(item.label()).clicked() {
+                    self.toggle_preferences();
                 }
             }
             Item::Feedback => {
@@ -205,8 +205,8 @@ impl App {
                         ui.menu_button(text, |ui| self.notifications_list_ui(ui));
                     }
                     Item::Preferences => {
-                        if ui.button(text).clicked() {
-                            self.preferences_open = true;
+                        if ui.add(egui::Button::selectable(self.preferences_open, text)).clicked() {
+                            self.toggle_preferences();
                         }
                     }
                     Item::Feedback => {

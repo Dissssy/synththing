@@ -211,7 +211,7 @@ impl App {
         self.recording.step = step;
         self.recording.last_feed = Some(now);
         let recorder = match &self.recording.recorder {
-            Some(recorder) if !recorder.paused() && !self.preferences_open => recorder,
+            Some(recorder) if !recorder.paused() => recorder,
             _ => return (false, None),
         };
         let due = recorder.frames_due(step, self.tap.ready_frames());
@@ -655,10 +655,7 @@ impl App {
     pub(super) fn feed_recording(&mut self, ui: &egui::Ui) {
         let Some(recorder) = &mut self.recording.recorder else { return };
         let dt = self.recording.step;
-        // Frozen behind Preferences: nothing's happening, record nothing.
-        let result = if self.preferences_open {
-            Ok(())
-        } else if self.visualizer_output.rendered {
+        let result = if self.visualizer_output.rendered {
             let mut panel = super::lock_panel(&self.visualizer);
             let (samples, pixels) = panel.recording_parts();
             recorder.feed(dt, samples, Some(pixels))
