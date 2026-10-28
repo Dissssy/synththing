@@ -47,7 +47,7 @@ pub struct Config {
     /// same arrangement back. `None` means `layout::fullscreen_default()`.
     #[serde(default)]
     pub fullscreen_layout: Option<DockState<Section>>,
-    /// Layouts saved under a name (View > Layout). They keep changes made
+    /// Layouts saved under a name (the Layout menu). They keep changes made
     /// while they're active.
     #[serde(default)]
     pub layout_presets: Vec<crate::layout::SavedLayout>,
@@ -55,6 +55,10 @@ pub struct Config {
     /// Reset, or when changed back to the original).
     #[serde(default)]
     pub layout_overrides: std::collections::BTreeMap<String, DockState<Section>>,
+    /// The layouts (built-in or saved, by name) locked from being moved
+    /// around or resized (Layout > Lock layout). Saving one locks it.
+    #[serde(default)]
+    pub locked_layouts: std::collections::BTreeSet<String>,
     /// The layout (built-in or saved, by name) the window and fullscreen
     /// are showing, which changes are saved into. `None`: an arrangement of
     /// the user's own that isn't a named layout.

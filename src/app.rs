@@ -50,6 +50,7 @@ mod song_names;
 mod storage;
 mod sprite_editor;
 mod themes;
+mod layouts;
 mod title_bar;
 mod toast;
 mod tray_panel;
@@ -569,8 +570,10 @@ pub struct App {
     /// i.e. which config slot it's saved to. See `sync_layout_slot`.
     dock_is_fullscreen_layout: bool,
     preferences_open: bool,
-    /// View > Layout > Save current layout as...: the name being typed.
+    /// Layout > Save current layout as...: the name being typed.
     layout_save: Option<String>,
+    /// Layout > Edit layouts...: open, and what's being done in it.
+    layout_edit: Option<layouts::Editing>,
     /// A very large MIDI waiting for "play anyway" (path, notes), and the
     /// last one that got it.
     heavy_prompt: Option<(PathBuf, usize)>,
@@ -838,6 +841,7 @@ impl App {
             dock_is_fullscreen_layout: false,
             preferences_open: false,
             layout_save: None,
+            layout_edit: None,
             heavy_prompt: None,
             heavy_confirmed: None,
             gamepads: crate::gamepad::Gamepads::new(),
@@ -1174,81 +1178,6 @@ impl App {
         }
     }
 
-    /// View > Layout: the built-in arrangements (with Reset when changed),
-    /// the user's saved ones, and saving the current one. The active one is
-    /// marked; changes made while it's active are kept in it.
-    fn layout_menu_ui(&mut self, ui: &mut egui::Ui) {
-        let active = self.active_layout().cloned();
-        let mut switch = None;
-        let mut reset = None;
-        for preset in layout::PRESETS {
-            let changed = self.config.layout_overrides.contains_key(preset.name);
-            ui.horizontal(|ui| {
-                let label = if changed { format!("{} (changed)", preset.name) } else { preset.name.to_string() };
-                if ui
-                    .selectable_label(active.as_deref() == Some(preset.name), label)
-                    .on_hover_text(preset.description)
-                    .clicked()
-                {
-                    switch = Some(preset.name.to_string());
-                    ui.close();
-                }
-                if changed && ui.small_button("Reset").on_hover_text("Back to how this layout comes").clicked() {
-                    reset = Some(preset.name.to_string());
-                }
-            });
-        }
-        let mut remove = None;
-        if !self.config.layout_presets.is_empty() {
-            ui.separator();
-            for (n, saved) in self.config.layout_presets.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    if ui.selectable_label(active.as_deref() == Some(saved.name.as_str()), &saved.name).clicked() {
-                        switch = Some(saved.name.clone());
-                        ui.close();
-                    }
-                    if ui.small_button("x").on_hover_text("Remove this saved layout").clicked() {
-                        remove = Some(n);
-                    }
-                });
-            }
-        }
-        if active.is_none() {
-            ui.separator();
-            ui.weak("Showing: your own arrangement (Custom)");
-        }
-        ui.separator();
-        if ui.button("Save current layout as...").clicked() {
-            self.layout_save = Some(String::new());
-            ui.close();
-        }
-
-        if let Some(name) = reset {
-            self.config.layout_overrides.remove(&name);
-            if active.as_deref() == Some(name.as_str())
-                && let Some(preset) = layout::PRESETS.iter().find(|p| p.name == name)
-            {
-                self.apply_layout((preset.build)());
-            } else if let Err(e) = self.config.save() {
-                self.status = format!("Couldn't save the layouts: {e}");
-            }
-            self.status = format!("Reset the {name} layout.");
-        }
-        if let Some(n) = remove {
-            let removed = self.config.layout_presets.remove(n);
-            if active.as_deref() == Some(removed.name.as_str()) {
-                self.set_active_layout(None);
-            }
-            self.status = format!("Removed the saved layout \"{}\".", removed.name);
-            if let Err(e) = self.config.save() {
-                self.status = format!("Couldn't save the layout list: {e}");
-            }
-        }
-        if let Some(name) = switch {
-            self.switch_layout(&name);
-        }
-    }
-
     /// Show the named layout (as the user last left it), after keeping the
     /// current arrangement in the layout it belongs to.
     fn switch_layout(&mut self, name: &str) {
@@ -1285,57 +1214,6 @@ impl App {
 
     fn is_open_in_dock(&self, section: Section) -> bool {
         layout::is_open(&self.dock, section)
-    }
-
-    /// View > Layout > Save current layout as...: name it.
-    fn layout_save_ui(&mut self, ctx: &egui::Context) {
-        let Some(name) = &mut self.layout_save else { return };
-        let mut save = false;
-        let mut close = false;
-        let taken = self.config.layout_presets.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()));
-        let built_in = layout::PRESETS.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()));
-        let response = egui::Modal::new(egui::Id::new("save_layout")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 320.0));
-            ui.heading("Save layout");
-            ui.label("Name:");
-            let field = ui.text_edit_singleline(name);
-            field.request_focus();
-            if built_in {
-                ui.colored_label(ui.visuals().warn_fg_color, "That's a built-in layout's name; pick another.");
-            } else if taken {
-                ui.weak("A saved layout has this name; saving replaces it.");
-            }
-            if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                save = true;
-            }
-            ui.add_space(8.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if ui.button("Cancel").clicked() {
-                    close = true;
-                }
-                if ui.add_enabled(!name.trim().is_empty() && !built_in, egui::Button::new("Save")).clicked() {
-                    save = true;
-                }
-            });
-        });
-        if save && !name.trim().is_empty() && !built_in {
-            let name = name.trim().to_string();
-            let saved = layout::SavedLayout { name: name.clone(), dock: self.dock.clone() };
-            match self.config.layout_presets.iter_mut().find(|p| p.name.eq_ignore_ascii_case(&name)) {
-                Some(existing) => *existing = saved,
-                None => self.config.layout_presets.push(saved),
-            }
-            // From now on, changes go into it.
-            self.set_active_layout(Some(name.clone()));
-            self.status = match self.config.save() {
-                Ok(()) => format!("Saved the layout \"{name}\" (View > Layout)."),
-                Err(e) => format!("Couldn't save the layout: {e}"),
-            };
-            close = true;
-        }
-        if close || response.should_close() {
-            self.layout_save = None;
-        }
     }
 
     /// Enter or leave true OS fullscreen. The layout shown is the windowed
@@ -2605,6 +2483,7 @@ impl App {
             || self.copyright.open()
             || self.editor.history_open
             || self.layout_save.is_some()
+            || self.layout_edit.is_some()
             || self.heavy_prompt.is_some()
             || self.sprite.new_sprite.is_some()
             || self.close_prompt.is_some()
@@ -2726,28 +2605,57 @@ impl App {
         // handle drawn on it) drags it instead.
         // The open tab joins its body, so where it's the first one the
         // body's corner under it is square.
+        // A locked layout shows no handles, and its panels neither move
+        // nor resize: what dragging a divider did is put back after.
+        let locked = self.layout_locked();
         let (mut alone, mut joined) = (Vec::new(), Vec::new());
         for (_, leaf) in dock.iter_leaves_mut() {
             leaf.tab_bar_hidden = leaf.len() == 1;
             if leaf.tab_bar_hidden {
-                alone.extend(leaf.tabs().first().copied());
+                alone.extend(leaf.tabs().first().copied().filter(|_| !locked));
             } else if leaf.active.0 == 0 {
                 joined.extend(leaf.tabs().first().copied());
             }
         }
+        let fractions = |dock: &mut DockState<Section>| -> Vec<f32> {
+            dock.iter_all_nodes_mut()
+                .filter_map(|(_, node)| match node {
+                    egui_dock::Node::Horizontal(split) | egui_dock::Node::Vertical(split) => Some(split.fraction),
+                    _ => None,
+                })
+                .collect()
+        };
+        let before = if locked { fractions(&mut dock) } else { Vec::new() };
         let mut tabs = SectionTabs { app: self, shared, alone, joined };
         // (Nothing over the panels: the title bar has room below its buttons.)
         let frame = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 8 });
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             DockArea::new(&mut dock)
                 .id(egui::Id::new("section_dock"))
-                .style(crate::theme::dock_style(ui.style()))
+                .style({
+                    let mut style = crate::theme::dock_style(ui.style());
+                    if locked {
+                        style.separator.color_hovered = egui::Color32::TRANSPARENT;
+                        style.separator.color_dragged = egui::Color32::TRANSPARENT;
+                    }
+                    style
+                })
                 .hidable_tab_bars(true)
+                .draggable_tabs(!locked)
                 .show_add_buttons(false)
                 .show_leaf_close_all_buttons(false)
                 .show_leaf_collapse_buttons(false)
                 .show_inside(ui, &mut tabs);
         });
+        if locked {
+            let splits = dock.iter_all_nodes_mut().filter_map(|(_, node)| match node {
+                egui_dock::Node::Horizontal(split) | egui_dock::Node::Vertical(split) => Some(split),
+                _ => None,
+            });
+            for (split, fraction) in splits.zip(before) {
+                split.fraction = fraction;
+            }
+        }
         self.dock_in_use = false;
         self.dock = dock;
 
@@ -4252,6 +4160,7 @@ impl eframe::App for App {
             self.song_details_ui(&ctx);
             self.history_ui(&ctx);
             self.layout_save_ui(&ctx);
+            self.layout_edit_ui(&ctx);
             self.new_sprite_ui(&ctx);
             drop(windows);
         }

@@ -41,8 +41,7 @@ impl App {
             self.wordmark_ui(ui);
             let menus = crate::menu::config(ui.ctx());
                 let mut toggled = Vec::new();
-                let mut switch_to_mobile = false;
-                egui::containers::menu::MenuButton::from_button(bar_button("View")).config(menus.clone()).ui(ui, |ui| {
+                egui::containers::menu::MenuButton::from_button(bar_menu("squares-four", "View")).config(menus.clone()).ui(ui, |ui| {
                     let mut section_checkbox = |ui: &mut egui::Ui, section: Section| {
                         let mut open = self.open_sections.contains(&section);
                         if ui.checkbox(&mut open, section.title()).changed() {
@@ -61,20 +60,14 @@ impl App {
                     section_checkbox(ui, Section::Reference);
                     section_checkbox(ui, Section::Sprites);
                     section_checkbox(ui, Section::Library);
-                    ui.separator();
-                    ui.menu_button("Layout", |ui| self.layout_menu_ui(ui));
-                    if ui.button("Mobile layout").on_hover_text("The Android app's layout, one page at a time, in a phone-sized window").clicked() {
-                        switch_to_mobile = true;
-                    }
                 });
-                if switch_to_mobile {
-                    let ctx = ui.ctx().clone();
-                    self.set_mobile_layout(&ctx, true);
-                }
                 for (section, open) in toggled {
                     self.set_open(section, open);
                 }
-                egui::containers::menu::MenuButton::from_button(bar_button("Help")).config(menus).ui(ui, |ui| {
+                egui::containers::menu::MenuButton::from_button(bar_menu("layout", "Layout"))
+                    .config(menus.clone())
+                    .ui(ui, |ui| self.layout_menu_ui(ui));
+                egui::containers::menu::MenuButton::from_button(bar_menu("question", "Help")).config(menus).ui(ui, |ui| {
                     if ui.button("Welcome...").on_hover_text("The welcome window, and the starter pack").clicked() {
                         self.open_welcome();
                     }
@@ -174,6 +167,11 @@ impl App {
 /// it's hovered.
 pub(super) fn bar_button(text: impl Into<egui::WidgetText>) -> egui::Button<'static> {
     egui::Button::new(text).frame_when_inactive(false).min_size(egui::vec2(36.0, 26.0))
+}
+
+/// A [`bar_button`] opening a menu: icon `name` and `text`.
+fn bar_menu(name: &str, text: &str) -> egui::Button<'static> {
+    bar_button(format!("{}  {text}", icon(name)))
 }
 
 /// A [`bar_button`] showing icon `name`.

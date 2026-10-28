@@ -140,7 +140,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         title: "That's the tour",
-        text: "The View menu brings back any tab you close, and View > Layout has ready-made arrangements. \
+        text: "The View menu shows and hides panels, and the Layout menu has ready-made arrangements. \
                Help > Tour runs this again, and Help > Welcome... has the starter pack. Have fun!",
         target: None,
         tabs: &[],
