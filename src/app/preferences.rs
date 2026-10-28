@@ -6,7 +6,7 @@
 
 use eframe::egui;
 
-use super::{categories_body, icon_button, row_icon_button, nice_name, setting_label, setting_row, settings_group, with_info, App, CONTROL_WIDTH};
+use super::{categories_body, icon_button, row_icon_button, nice_name, setting_label, setting_row, settings_group, settings_group_closed, with_info, App, CONTROL_WIDTH};
 use crate::audio::{AudioCommand, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
 
@@ -150,6 +150,50 @@ impl App {
             self.keymap_capture = None;
             self.api_preferences_closed();
         }
+    }
+
+    /// Playback > Loaded right now: each file in memory, with what it takes
+    /// and how long since anything needed it.
+    fn loaded_files_ui(&self, ui: &mut egui::Ui) {
+        let loaded = self.assets.summary(std::time::Instant::now());
+        let total: usize = loaded.iter().filter_map(|l| l.memory).sum();
+        let title = match loaded.len() {
+            0 => "Loaded right now".to_string(),
+            n => format!("Loaded right now ({n}, {})", crate::storage::size_text(total as u64)),
+        };
+        settings_group_closed(ui, "loaded_files", &title, |ui| {
+            if loaded.is_empty() {
+                setting_row(ui, |ui| ui.weak("Nothing"));
+            }
+            for file in &loaded {
+                setting_row(ui, |ui| {
+                    let kind = match file.kind {
+                        crate::loader::AssetKind::Midi => "music-notes",
+                        crate::loader::AssetKind::Audio => "waveform",
+                        crate::loader::AssetKind::SoundFont => "piano-keys",
+                    };
+                    ui.label(super::icon(kind)).on_hover_text(format!("{:?}", file.kind));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let idle = file.idle.as_secs();
+                        if idle < 2 {
+                            ui.label("in use");
+                        } else {
+                            let text = if idle < 60 { format!("unused {idle} s") } else { format!("unused {} min", idle / 60) };
+                            ui.weak(text)
+                                .on_hover_text("Since anything needed it: playing, up next or hovered");
+                        }
+                        let size = match file.memory {
+                            Some(bytes) => crate::storage::size_text(bytes as u64),
+                            None => file.state.to_string(),
+                        };
+                        ui.add_sized([80.0, ui.available_height()], egui::Label::new(size));
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add(egui::Label::new(nice_name(&file.path)).truncate()).on_hover_text(file.path.display().to_string());
+                        });
+                    });
+                });
+            }
+        });
     }
 
     pub(super) fn preference_jump(&mut self, jump: PrefJump) {
@@ -351,19 +395,8 @@ impl App {
                             label | ui.add(egui::Slider::new(&mut expiry, PRELOAD_EXPIRY_RANGE).suffix(" s").logarithmic(true))
                         },
                     );
-                    let loaded = self.assets.summary();
-                    egui::CollapsingHeader::new(format!("Loaded right now ({})", loaded.len()))
-                        .id_salt("preferences_loaded_files")
-                        .show(ui, |ui| {
-                            if loaded.is_empty() {
-                                ui.weak("(nothing)");
-                            }
-                            for (path, kind, state) in &loaded {
-                                ui.label(format!("{} ({kind:?}, {state})", nice_name(path)))
-                                    .on_hover_text(path.display().to_string());
-                            }
-                        });
                 });
+                self.loaded_files_ui(ui);
             }
             PrefTab::Browsing => {
                 self.song_names_ui(ui);

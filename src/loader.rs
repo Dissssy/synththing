@@ -72,6 +72,28 @@ pub enum Asset {
     SoundFont(Arc<SoundFont>),
 }
 
+impl Asset {
+    /// About how much memory it takes, in bytes.
+    pub fn memory(&self) -> usize {
+        match self {
+            Self::Midi(midi) => midi.notes.note_count() * std::mem::size_of::<crate::midi_notes::Note>(),
+            Self::Audio(audio) => audio.memory(),
+            Self::SoundFont(font) => std::mem::size_of_val(font.get_wave_data()),
+        }
+    }
+}
+
+/// What `AssetCache::summary` says of a file.
+pub struct Loaded {
+    pub path: PathBuf,
+    pub kind: AssetKind,
+    pub state: &'static str,
+    /// Once it's ready.
+    pub memory: Option<usize>,
+    /// Since anything last said it needed it.
+    pub idle: Duration,
+}
+
 #[derive(Clone)]
 pub enum LoadState {
     /// Queued or being loaded right now.
@@ -241,21 +263,21 @@ impl AssetCache {
         self.entries.values().any(|e| matches!(e.state, LoadState::Loading))
     }
 
-    /// (path, kind, state) for every entry, for showing what's loaded.
-    pub fn summary(&self) -> Vec<(PathBuf, AssetKind, &'static str)> {
-        let mut list: Vec<_> = self
+    /// Every entry, for showing what's loaded, by path.
+    pub fn summary(&self, now: Instant) -> Vec<Loaded> {
+        let mut list: Vec<Loaded> = self
             .entries
             .iter()
-            .map(|(p, e)| {
-                let state = match e.state {
-                    LoadState::Loading => "loading",
-                    LoadState::Ready(_) => "ready",
-                    LoadState::Failed(_) => "failed",
+            .map(|(path, e)| {
+                let (state, memory) = match &e.state {
+                    LoadState::Loading => ("loading", None),
+                    LoadState::Ready(asset) => ("ready", Some(asset.memory())),
+                    LoadState::Failed(_) => ("failed", None),
                 };
-                (p.clone(), e.kind, state)
+                Loaded { path: path.clone(), kind: e.kind, state, memory, idle: now.saturating_duration_since(e.last_wanted) }
             })
             .collect();
-        list.sort_by(|a, b| a.0.cmp(&b.0));
+        list.sort_by(|a, b| a.path.cmp(&b.path));
         list
     }
 

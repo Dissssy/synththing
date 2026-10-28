@@ -4309,21 +4309,48 @@ const GROUP_ROW_MARGIN: i8 = 3;
 /// A box of settings under a heading, drawn as a list is: outlined, the
 /// heading on the header's color, the rows (`setting_row`) striped.
 fn settings_group<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    group_ui(ui, title, None, add).expect("an open group's contents are drawn")
+}
+
+/// A `settings_group` that opens and closes by its heading (closed at
+/// first): its contents are only drawn while it's open.
+/// `id_salt` keeps it open or closed whatever the title says.
+fn settings_group_closed<R>(ui: &mut egui::Ui, id_salt: &str, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    let id = ui.make_persistent_id(("settings_group_open", id_salt));
+    group_ui(ui, title, Some(id), add)
+}
+
+fn group_ui<R>(ui: &mut egui::Ui, title: &str, toggle: Option<egui::Id>, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
     let id = egui::Id::new(SETTINGS_GROUP);
     let visuals = ui.visuals().clone();
     let radius = 6u8;
+    let open = toggle.is_none_or(|toggle| ui.ctx().data_mut(|d| *d.get_persisted_mut_or_default::<bool>(toggle)));
     // (No room of its own around it: the item spacing between groups is
     // about the room at its sides.)
     let group = ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
-        egui::Frame::new()
+        let bottom = if open { 0 } else { radius };
+        let header = egui::Frame::new()
             .fill(visuals.extreme_bg_color)
-            .corner_radius(egui::CornerRadius { nw: radius, ne: radius, sw: 0, se: 0 })
+            .corner_radius(egui::CornerRadius { nw: radius, ne: radius, sw: bottom, se: bottom })
             .inner_margin(egui::Margin::symmetric(GROUP_MARGIN, 5))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.strong(title);
+                ui.horizontal(|ui| {
+                    if toggle.is_some() {
+                        ui.label(icon(if open { "caret-down" } else { "caret-right" }));
+                    }
+                    ui.strong(title);
+                });
             });
+        if let Some(toggle) = toggle
+            && ui.interact(header.response.rect, toggle, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+        {
+            ui.ctx().data_mut(|d| d.insert_persisted(toggle, !open));
+        }
+        if !open {
+            return None;
+        }
         let outer = ui.ctx().data_mut(|d| d.get_temp::<Option<usize>>(id)).flatten();
         ui.ctx().data_mut(|d| d.insert_temp(id, Some(0usize)));
         let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(GROUP_MARGIN, 2)).show(ui, |ui| {
@@ -4331,7 +4358,7 @@ fn settings_group<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui:
             add(ui)
         });
         ui.ctx().data_mut(|d| d.insert_temp(id, outer));
-        inner.inner
+        Some(inner.inner)
     });
     let rect = group.response.rect;
     ui.painter().rect_stroke(rect, radius, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
