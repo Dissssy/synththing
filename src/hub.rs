@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::{self, Config};
 use crate::device::Device;
-use crate::device_messages::{Outbox, Route};
+use crate::device_messages::{self, Outbox, Route};
 use crate::device_sync::{self, DeviceSync, Here, Link, Report};
 use crate::hub_api::{self, HubApi};
 use crate::hub_server::{self, Came, HubServer};
@@ -55,6 +55,12 @@ const PORT: u16 = 7390;
 const RETRY: Duration = Duration::from_secs(30);
 /// How often the server checks that its addresses work from the internet.
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// What a device sends the hub, as a live message, to have it check its
+/// addresses from the internet again (its sync settings' Check again).
+pub const CHECK_TOPIC: &str = "hub check";
+/// The soonest a device's asking checks again (the server allows an
+/// identity 6 checks an hour).
+const ASKED_GAP: Duration = Duration::from_secs(10 * 60);
 
 /// Sign this config folder in with a link from Sign in another device, as
 /// `name` (else the computer's name).
@@ -148,6 +154,9 @@ pub fn run() -> i32 {
                 // (Passed on to the devices listening here, once: the server
                 // sends back those passed on to it from here.)
                 Heard::Live(sealed) => {
+                    if asks_check(&route, &device, &sealed) && checked.is_some_and(|t| t.elapsed() >= ASKED_GAP) {
+                        checked = None;
+                    }
                     if live.serving.is_none_or(|server| server.pass_on(&sealed)) {
                         api.live_heard(&live, &sealed);
                     }
@@ -158,6 +167,9 @@ pub fn run() -> i32 {
             match came {
                 Came::Song(key) => sync.received(&mut songs, key),
                 Came::Live(sealed) => {
+                    if asks_check(&route, &device, &sealed) && checked.is_some_and(|t| t.elapsed() >= ASKED_GAP) {
+                        checked = None;
+                    }
                     api.live_heard(&live, &sealed);
                     outbox.send_sealed(&route, sealed);
                 }
@@ -338,6 +350,11 @@ fn serve(identity: &Identity, sync_key: [u8; 32], songs: &SongStore, device: &De
     }
     let leaf = HubLeaf { device: device.id.clone(), key: hub_key, addrs, checks: Vec::new() };
     Ok((server, came, leaf))
+}
+
+/// Whether `sealed` asks this hub to check its addresses again.
+fn asks_check(route: &Route, me: &Device, sealed: &str) -> bool {
+    device_messages::open(&route.sync_key, &me.id, sealed).is_some_and(|envelope| envelope.topic == CHECK_TOPIC)
 }
 
 /// The addresses `URL_VAR` gives.

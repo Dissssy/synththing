@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- Check again under your hub, in the sync settings, also has the hub check its addresses from the internet again, instead of only after its next 6-hourly check.
+
 ## 1.8.3 (2026-10-28)
 - Added a docker image for the websites so i can be lazy. if you screenshot this changelog entry and send it to me on discord i'll give you a thumbs up emoji reaction.
 
