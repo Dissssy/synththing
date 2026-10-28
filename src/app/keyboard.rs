@@ -5,7 +5,7 @@
 
 use eframe::egui;
 
-use super::App;
+use super::{row_icon_button, setting_row, settings_group, App};
 use crate::commands::{self, Command, Keymap, Sequence, MAX_PRESSES};
 
 /// How long after a press its sequence is taken as finished, when it
@@ -55,11 +55,10 @@ enum Edit {
 
 impl App {
     pub(super) fn keyboard_preferences_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label(
+        ui.weak(
             "Click a key to change it, or + to add another. For a sequence (like Ctrl+G then S), press its keys \
              one after another: it's set a moment after the last. Esc stops waiting for keys.",
         );
-        ui.add_space(4.0);
         let keymap = Keymap::of(ui.ctx());
         let mut edit = None;
 
@@ -117,61 +116,13 @@ impl App {
             }
         }
 
-        egui::Grid::new("keyboard_preferences").num_columns(3).spacing([12.0, 6.0]).striped(true).show(ui, |ui| {
-            for command in Command::ALL {
-                ui.label(command.name());
-                ui.horizontal(|ui| {
-                    // One line: wrapped, the grid's column stays as narrow as
-                    // it started, splitting "Space" and pushing + under it.
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                    let keys: Vec<Sequence> = keymap.keys(command).cloned().collect();
-                    for (slot, sequence) in keys.iter().enumerate() {
-                        if let Some(capture) = self.keymap_capture.as_ref().filter(|c| c.is(command, Some(slot))) {
-                            capture.ui(ui);
-                            continue;
-                        }
-                        let others = keymap.clashes(sequence, command);
-                        let mut text = egui::RichText::new(commands::display(ui.ctx(), sequence));
-                        if !others.is_empty() {
-                            text = text.color(ui.visuals().warn_fg_color);
-                        }
-                        let mut hover = String::from("Click to change it, right-click to remove it");
-                        if !others.is_empty() {
-                            let names: Vec<&str> = others.iter().map(|c| c.name()).collect();
-                            hover = format!(
-                                "Clashes with {}: the same keys, or one starts the other, so only one of them works. {hover}",
-                                names.join(", ")
-                            );
-                        }
-                        let button = ui.button(text).on_hover_text(hover);
-                        if button.clicked() {
-                            edit = Some(Edit::Capture(Capture::new(command, Some(slot))));
-                        }
-                        if button.secondary_clicked() {
-                            let rest = keys.iter().enumerate().filter(|&(i, _)| i != slot).map(|(_, k)| k.clone()).collect();
-                            edit = Some(Edit::Set(command, rest));
-                        }
-                    }
-                    if let Some(capture) = self.keymap_capture.as_ref().filter(|c| c.is(command, None)) {
-                        capture.ui(ui);
-                    } else if ui.small_button("+").on_hover_text("Add keys").clicked() {
-                        edit = Some(Edit::Capture(Capture::new(command, None)));
-                    }
-                    if keys != commands::defaults(command) && ui.small_button("Reset").on_hover_text("Back to its default keys").clicked() {
-                        edit = Some(Edit::Reset(command));
-                    }
-                });
-                let mut local = self.config.local_keymap.contains_key(command.id());
-                if ui
-                    .checkbox(&mut local, "This device only")
-                    .on_hover_text("Keep this command's keys on this device, not synced with your other devices")
-                    .changed()
-                {
-                    edit = Some(Edit::Local(command, local));
+        for (title, icon) in GROUPS {
+            settings_group(title).icon(icon).show(ui, |ui| {
+                for command in Command::ALL.into_iter().filter(|c| group(*c) == title) {
+                    setting_row(ui, |ui| self.command_row_ui(ui, &keymap, command, &mut edit));
                 }
-                ui.end_row();
-            }
-        });
+            });
+        }
 
         let Some(edit) = edit else { return };
         if let Edit::Capture(capture) = edit {
@@ -182,6 +133,100 @@ impl App {
         if let Err(e) = self.config.save() {
             self.status = format!("Couldn't save preferences: {e}");
         }
+    }
+}
+
+impl App {
+    /// A command's row: its name, its keys (each a button: click to
+    /// change, right-click to remove), +, and at the right reset and
+    /// "This device only".
+    fn command_row_ui(&self, ui: &mut egui::Ui, keymap: &Keymap, command: Command, edit: &mut Option<Edit>) {
+        let width = 220.0f32.min(ui.available_width() * 0.4);
+        ui.allocate_ui_with_layout(egui::vec2(width, ui.spacing().interact_size.y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_min_width(width);
+            ui.add(egui::Label::new(command.name()).truncate());
+        });
+        let keys: Vec<Sequence> = keymap.keys(command).cloned().collect();
+        for (slot, sequence) in keys.iter().enumerate() {
+            if let Some(capture) = self.keymap_capture.as_ref().filter(|c| c.is(command, Some(slot))) {
+                capture.ui(ui);
+                continue;
+            }
+            let others = keymap.clashes(sequence, command);
+            let mut text = egui::RichText::new(commands::display(ui.ctx(), sequence));
+            if !others.is_empty() {
+                text = text.color(ui.visuals().warn_fg_color);
+            }
+            let mut hover = String::from("Click to change it, right-click to remove it");
+            if !others.is_empty() {
+                let names: Vec<&str> = others.iter().map(|c| c.name()).collect();
+                hover = format!("Clashes with {}: the same keys, or one starts the other, so only one of them works. {hover}", names.join(", "));
+            }
+            let button = ui.button(text).on_hover_text(hover);
+            if button.clicked() {
+                *edit = Some(Edit::Capture(Capture::new(command, Some(slot))));
+            }
+            if button.secondary_clicked() {
+                let rest = keys.iter().enumerate().filter(|&(i, _)| i != slot).map(|(_, k)| k.clone()).collect();
+                *edit = Some(Edit::Set(command, rest));
+            }
+        }
+        if let Some(capture) = self.keymap_capture.as_ref().filter(|c| c.is(command, None)) {
+            capture.ui(ui);
+        } else if ui.add(row_icon_button(ui, "plus")).on_hover_text("Add keys").clicked() {
+            *edit = Some(Edit::Capture(Capture::new(command, None)));
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let local = self.config.local_keymap.contains_key(command.id());
+            if ui
+                .add(row_icon_button(ui, "desktop").selected(local))
+                .on_hover_text(if local {
+                    "Kept on this device only: click to sync it with your other devices again"
+                } else {
+                    "Keep this command's keys on this device only, not synced with your other devices"
+                })
+                .clicked()
+            {
+                *edit = Some(Edit::Local(command, !local));
+            }
+            let reset = row_icon_button(ui, "arrow-counter-clockwise");
+            if keys != commands::defaults(command) {
+                if ui.add(reset).on_hover_text("Back to its default keys").clicked() {
+                    *edit = Some(Edit::Reset(command));
+                }
+            } else {
+                ui.add_visible(false, reset);
+            }
+        });
+    }
+}
+
+/// The Keyboard page's sections, in order, with their icons.
+const GROUPS: [(&str, &str); 5] =
+    [("Playback", "play"), ("Visualizer and recording", "waveform"), ("Panels", "squares-four"), ("Lists", "list"), ("App", "app-window")];
+
+/// Which of `GROUPS` a command is listed in.
+fn group(command: Command) -> &'static str {
+    match command {
+        Command::TogglePause
+        | Command::Play
+        | Command::Pause
+        | Command::SeekBack
+        | Command::SeekForward
+        | Command::SeekBackLong
+        | Command::SeekForwardLong
+        | Command::RestartSong
+        | Command::NextTrack
+        | Command::PreviousTrack => "Playback",
+        Command::ToggleVisualizer
+        | Command::ExitFullscreen
+        | Command::DedicatedVisualizer
+        | Command::RestartScript
+        | Command::ToggleRecording
+        | Command::PauseRecording => "Visualizer and recording",
+        Command::GoTo(_) | Command::NextSection | Command::PreviousSection => "Panels",
+        Command::Cursor(_) => "Lists",
+        Command::Quit | Command::CommandPalette => "App",
     }
 }
 
