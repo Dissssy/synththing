@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 1.8.1 (2026-10-28)
+
 ### Added
 - Only through my hub, once I have one (under Songs in What this device syncs): the device sends its songs only to your hub and takes songs only from it, directly or through the relay, and your other devices send it none.
 
