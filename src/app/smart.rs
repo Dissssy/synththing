@@ -277,7 +277,7 @@ impl App {
         let revision = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            (self.groups_revision(), serde_json::to_string(&self.config.rulesets).unwrap_or_default()).hash(&mut hasher);
+            (self.groups_revision(), serde_json::to_string(&self.config.rulesets).unwrap_or_default(), &self.config.hidden_rulesets).hash(&mut hasher);
             hasher.finish()
         };
         if let Some((seen, missing)) = &self.missing_info
@@ -287,7 +287,7 @@ impl App {
         }
         let now = settings_sync::now();
         let missing: Vec<Missing> = self
-            .all_rulesets()
+            .shown_rulesets()
             .into_iter()
             .filter_map(|(id, ruleset)| {
                 let by = ruleset.rules.split.as_ref()?.by;
@@ -305,6 +305,13 @@ impl App {
         smart::rulesets(&self.config.rulesets)
     }
 
+    /// The rulesets Groupings shows: all but the hidden ones.
+    pub(super) fn shown_rulesets(&self) -> Vec<(String, Ruleset)> {
+        let mut rulesets = self.all_rulesets();
+        rulesets.retain(|(id, _)| !self.config.hidden_rulesets.contains(id));
+        rulesets
+    }
+
     /// Preferences' Rulesets: a row for each, built-in ones then the
     /// user's, with how many playlists it makes; New ruleset; what they
     /// leave out.
@@ -312,15 +319,21 @@ impl App {
         let builtin = smart::builtin().map(|(id, ruleset)| (id.to_string(), ruleset, true));
         let own = self.config.rulesets.iter().map(|(id, ruleset)| (id.clone(), ruleset.clone(), false));
         let all: Vec<(String, Ruleset, bool)> = builtin.into_iter().chain(own).collect();
-        let (mut open, mut delete, mut new, mut edit) = (None, None, false, None);
+        let (mut open, mut delete, mut new, mut edit, mut hide) = (None, None, false, None, None);
         let (_, missing) = self.missing_info();
         let hint = "A ruleset makes a playlist for each artist, album, genre... of the songs its rules pick. By Artist and By Album are built in.";
         super::settings_group("Rulesets").icon(SMART_ICON).hint(hint).show(ui, |ui| {
             let editable = rules_editable(ui.ctx());
             for (id, ruleset, builtin) in all {
                 let groups = self.groups_of(&id, &ruleset.rules).len();
+                let hidden = self.config.hidden_rulesets.contains(&id);
                 super::setting_row(ui, |ui| {
-                    ui.label(&ruleset.name);
+                    let (eye, hover) = if hidden { ("eye-slash", "Hidden from Groupings: click to show it") } else { ("eye", "Shown in Groupings: click to hide it") };
+                    if ui.add(super::row_icon_button(ui, eye)).on_hover_text(hover).clicked() {
+                        hide = Some((id.clone(), !hidden));
+                    }
+                    let name = egui::RichText::new(&ruleset.name);
+                    ui.label(if hidden { name.weak() } else { name });
                     if builtin {
                         ui.label(egui::RichText::new(super::icon("lock-simple")).color(ui.visuals().weak_text_color()))
                             .on_hover_text("Built in: its rules can be viewed, not changed");
@@ -342,7 +355,7 @@ impl App {
                         if !builtin && ui.add(super::row_icon_button(ui, "trash")).on_hover_text("Delete").clicked() {
                             delete = Some(id.clone());
                         }
-                        let (name, hover) = if builtin || !editable { ("eye", "View rules") } else { ("pencil-simple", "Edit rules") };
+                        let (name, hover) = if builtin || !editable { ("list-magnifying-glass", "View rules") } else { ("pencil-simple", "Edit rules") };
                         if ui.add(super::row_icon_button(ui, name)).on_hover_text(hover).clicked() {
                             open = Some((id.clone(), ruleset.clone(), builtin));
                         }
@@ -357,6 +370,14 @@ impl App {
         if edit.is_some() {
             self.details_for = edit;
         }
+        if let Some((id, hidden)) = hide {
+            if hidden {
+                self.config.hidden_rulesets.insert(id);
+            } else {
+                self.config.hidden_rulesets.remove(&id);
+            }
+            self.save_config();
+        }
         if new {
             let rules = Rules { split: Some(Split { by: SplitBy::Genre, min: 1 }), ..Rules::default() };
             self.open_rules_editor(ui.ctx(), Editing::Ruleset(None), "By Genre".into(), rules, false);
@@ -365,6 +386,7 @@ impl App {
             self.open_rules_editor(ui.ctx(), Editing::Ruleset(Some(id)), ruleset.name, ruleset.rules, builtin);
         }
         if let Some(id) = delete {
+            self.config.hidden_rulesets.remove(&id);
             self.config.rulesets.remove(&id);
             self.ruleset_groups.remove(&id);
             self.save_config();

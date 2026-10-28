@@ -118,7 +118,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("preload", "Preload songs on hover", &["preload_on_hover"]),
             setting("autoplay_collapsed", "Autoplay skips closed groups", &["autoplay_skip_collapsed"]),
             setting("unload", "Unload preloaded files after", &["preload_expiry_secs"]),
-            setting("rulesets", "Rulesets", &["rulesets"]),
+            setting("rulesets", "Rulesets", &["rulesets", "hidden_rulesets"]),
             setting("group_ignore", "Characters ignored when grouping", &["group_ignore"]),
             setting("sort_articles", "Sorting past a leading The, A or An", &["sort_with_articles"]),
             setting("cleanup_dismissed", "Dismissed clean-up suggestions", &["cleanup_dismissed"]),

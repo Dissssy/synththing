@@ -275,7 +275,7 @@ fn virtual_rows(ui: &mut egui::Ui, id: impl egui::AsIdSalt, heights: &[f32], mut
 impl App {
     /// The Groupings tab: the rulesets along the top, then the one picked.
     pub(super) fn groupings_ui(&mut self, ui: &mut egui::Ui) {
-        let rulesets = self.all_rulesets();
+        let rulesets = self.shown_rulesets();
         let mut pick = None;
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -362,7 +362,7 @@ impl App {
         let (id, ruleset, what, groups) = if self.groupings.shown() == TOGETHER && !self.songs.together().is_empty() {
             (TOGETHER.to_string(), together_ruleset(), "set", self.together_groups())
         } else {
-            let rulesets = self.all_rulesets();
+            let rulesets = self.shown_rulesets();
             let (id, ruleset) = rulesets.iter().find(|(id, _)| id == self.groupings.shown()).or(rulesets.first()).cloned()?;
             let mut groups = self.groups_of(&id, &ruleset.rules);
             if id == ALBUMS && !self.config.hide_wished {

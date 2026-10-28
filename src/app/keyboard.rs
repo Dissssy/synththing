@@ -56,7 +56,7 @@ enum Edit {
 impl App {
     pub(super) fn keyboard_preferences_ui(&mut self, ui: &mut egui::Ui) {
         ui.weak(
-            "Click a key to change it, or + to add another. For a sequence (like Ctrl+G then S), press its keys \
+            "Click a key to change it, or + to add another (right-click a key to remove it). For a sequence (like Ctrl+G then S), press its keys \
              one after another: it's set a moment after the last. Esc stops waiting for keys.",
         );
         let keymap = Keymap::of(ui.ctx());
@@ -137,8 +137,8 @@ impl App {
 }
 
 impl App {
-    /// A command's row: its name, its keys (each a button: click to
-    /// change, right-click to remove), +, and at the right reset and
+    /// A command's row: its name, + (to add keys), its keys (each a
+    /// button: click to change, right-click to remove), and at the right reset and
     /// "This device only".
     fn command_row_ui(&self, ui: &mut egui::Ui, keymap: &Keymap, command: Command, edit: &mut Option<Edit>) {
         let width = 220.0f32.min(ui.available_width() * 0.4);
@@ -147,6 +147,10 @@ impl App {
             ui.add(egui::Label::new(command.name()).truncate());
         });
         let keys: Vec<Sequence> = keymap.keys(command).cloned().collect();
+        let adding = self.keymap_capture.as_ref().is_some_and(|c| c.is(command, None));
+        if ui.add(row_icon_button(ui, "plus").selected(adding)).on_hover_text("Add keys").clicked() {
+            *edit = Some(Edit::Capture(Capture::new(command, None)));
+        }
         for (slot, sequence) in keys.iter().enumerate() {
             if let Some(capture) = self.keymap_capture.as_ref().filter(|c| c.is(command, Some(slot))) {
                 capture.ui(ui);
@@ -171,10 +175,9 @@ impl App {
                 *edit = Some(Edit::Set(command, rest));
             }
         }
-        if let Some(capture) = self.keymap_capture.as_ref().filter(|c| c.is(command, None)) {
+        let adding = self.keymap_capture.as_ref().filter(|c| c.is(command, None));
+        if let Some(capture) = adding {
             capture.ui(ui);
-        } else if ui.add(row_icon_button(ui, "plus")).on_hover_text("Add keys").clicked() {
-            *edit = Some(Edit::Capture(Capture::new(command, None)));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let local = self.config.local_keymap.contains_key(command.id());

@@ -690,7 +690,7 @@ impl App {
                 {
                     ruleset = Some(super::groupings::TOGETHER.to_string());
                 }
-                for (id, set) in self.all_rulesets() {
+                for (id, set) in self.shown_rulesets() {
                     if ui.add(drawer_item(ui, showing.as_deref() == Some(id.as_str()), Page::Grouping.icon(), &set.name)).clicked() {
                         ruleset = Some(id);
                     }

@@ -218,6 +218,9 @@ pub struct Config {
     /// ones (`smart::builtin`).
     #[serde(default)]
     pub rulesets: std::collections::BTreeMap<String, crate::smart::Ruleset>,
+    /// Rulesets (built-in or the user's), by ID, left out of Groupings.
+    #[serde(default)]
+    pub hidden_rulesets: std::collections::BTreeSet<String>,
     /// Recording size and frame rate (`None`: the default, 60).
     #[serde(default)]
     pub record_resolution: crate::recorder::Resolution,
