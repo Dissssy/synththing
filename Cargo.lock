@@ -5902,7 +5902,7 @@ dependencies = [
 
 [[package]]
 name = "synththing"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "ab_glyph_rasterizer",
  "android-activity",
