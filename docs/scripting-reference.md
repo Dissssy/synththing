@@ -680,11 +680,11 @@ Mouse state is reported while the pointer is over the visualizer (and while it h
 
 For the keyboard, see Controls (rebindable actions) and Typing (text entry) below.
 
-Five keys always belong to the app, and are never reported to a script in any mode: Escape means "get me out" (releases focus, and goes from either fullscreen straight back to windowed), F11 toggles the dedicated fullscreen, F5 restarts the running script, F9 starts and stops recording, and F10 pauses recording.
+Five keys always belong to the app, and are never reported to a script in any mode: Escape means "get me out" (releases focus, and leaves the dedicated fullscreen), F11 toggles the dedicated fullscreen, F5 restarts the running script, F9 starts and stops recording, and F10 pauses recording.
 
 While the visualizer is being recorded (synththing > Record...), `render()` gets the recording's size as `width` and `height` (1920 x 1080, say) whatever the panel's size, and the picture is shown letterboxed in the panel, with `mouse()` still in the picture's own pixels. It's also called once per video frame rather than once per screen refresh, with `DT` the video time that passed (1/60 s at 60 fps, more if it had to catch up), so motion in the video is perfectly even. A script that lays itself out from `width` and `height` and moves things by `DT` needs nothing special; a bigger recording size just costs more time per frame, and a script too slow for it makes the video repeat frames.
 
-`display_mode()` tells a script where it's being shown: `"window"` (a tab in the normal window), `"fullscreen"` (a tab, with the whole app fullscreen), or `"dedicated"` (the Fullscreen visualizer button or F11: nothing but the visualizer, filling the screen, with focus), or `"mini"` (in the mini player, the tray panel pinned and expanded: about 711 by 400 points, a fraction of a screen, where fine detail and small text are hard to make out, so a script might leave them out or draw bigger; the bundled visualizers do: fewer frequency labels in `fft.lua` and `spectrogram.lua`, just the tempo in `pulse.lua`, no panel titles or legend in `dashboard.lua`, no help line in `keyboard.lua`). `"mini"` is since 0.7.0. On Android, `"pip"` is picture-in-picture: the app shrunk to a small floating window over other apps, often under 300 by 200 points, smaller than the mini player, so draw only the essentials there, bigger (the bundled visualizers treat it like `"mini"`). `"pip"` is since 1.1.0.
+`display_mode()` tells a script where it's being shown: `"window"` (a tab in the normal window), `"dedicated"` (the Fullscreen visualizer button or F11: nothing but the visualizer, filling the screen, with focus), or `"mini"` (in the mini player, the tray panel pinned and expanded: about 711 by 400 points, a fraction of a screen, where fine detail and small text are hard to make out, so a script might leave them out or draw bigger; the bundled visualizers do: fewer frequency labels in `fft.lua` and `spectrogram.lua`, just the tempo in `pulse.lua`, no panel titles or legend in `dashboard.lua`, no help line in `keyboard.lua`). `"mini"` is since 0.7.0. On Android, `"pip"` is picture-in-picture: the app shrunk to a small floating window over other apps, often under 300 by 200 points, smaller than the mini player, so draw only the essentials there, bigger (the bundled visualizers treat it like `"mini"`). `"pip"` is since 1.1.0.
 
 `is_mobile()` is true when the app is in its mobile layout: always on Android, and on desktop after View > Mobile layout (handy for trying a script out). A phone has less to spare than a desktop and a smaller screen, so a script might draw a lighter, less demanding picture: fewer particles, a lower-detail history, bigger text. Since 1.1.0.
 
@@ -1334,7 +1334,7 @@ mouse_delta() --> 0, 0
 scroll() --> 0, -2.5              -- arrives smoothed: a little each frame
 mouse_down() --> false
 has_focus() --> false
-display_mode() --> "window"       -- or "fullscreen", "dedicated", "mini", "pip"
+display_mode() --> "window"       -- or "dedicated", "mini", "pip"
 is_mobile() --> false             -- true on a phone
 touches() --> { { id = 0, x = 120, y = 88.5, dx = 0, dy = -3, force = nil, pressed = false, released = false } }
 input_register("jump", { "space", "w" }) --> 1   -- an id, 1, 2, 3, ... in order

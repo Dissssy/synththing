@@ -182,9 +182,7 @@ impl App {
         if let Err(e) = self.config.save() {
             self.status = format!("Couldn't save preferences: {e}");
         }
-        if !self.fullscreen {
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(if on { PHONE_SIZE } else { DESKTOP_SIZE }));
-        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(if on { PHONE_SIZE } else { DESKTOP_SIZE }));
     }
 
     pub(super) fn mobile_ui(&mut self, ui: &mut egui::Ui, shared: &PlaybackShared) {

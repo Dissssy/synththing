@@ -38,15 +38,6 @@ pub struct Config {
     /// launch) means `layout::default_layout()`.
     #[serde(default)]
     pub layout: Option<DockState<Section>>,
-    /// Preference: fullscreen keeps its own layout. Off (the default), going
-    /// fullscreen shows and edits the same layout as the window.
-    #[serde(default)]
-    pub separate_fullscreen_layout: bool,
-    /// Fullscreen's own layout, only used while `separate_fullscreen_layout`
-    /// is on. Kept when that's turned off, so turning it back on brings the
-    /// same arrangement back. `None` means `layout::fullscreen_default()`.
-    #[serde(default)]
-    pub fullscreen_layout: Option<DockState<Section>>,
     /// Layouts saved under a name (the Layout menu). They keep changes made
     /// while they're active.
     #[serde(default)]
@@ -55,13 +46,10 @@ pub struct Config {
     /// (Layout > Lock layout). A new one starts locked.
     #[serde(default)]
     pub locked_layouts: std::collections::BTreeSet<String>,
-    /// The layout (built-in or saved, by name) the window and fullscreen
-    /// are showing, which changes are saved into. `None`: an arrangement of
+    /// The layout (by name) the window is showing, which changes are saved into. `None`: an arrangement of
     /// the user's own that isn't a named layout.
     #[serde(default)]
     pub active_layout: Option<String>,
-    #[serde(default)]
-    pub fullscreen_active_layout: Option<String>,
     /// Preference: preloaded files nothing has needed for this many seconds
     /// are unloaded. `None` means `DEFAULT_PRELOAD_EXPIRY_SECS`.
     #[serde(default)]

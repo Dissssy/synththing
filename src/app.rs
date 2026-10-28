@@ -250,9 +250,6 @@ const DEDICATED_HINT_SECS: f64 = 3.0;
 
 /// The dedicated visualizer fullscreen: just the visualizer, nothing else.
 struct Dedicated {
-    /// Whether the app was already fullscreen before, so leaving goes back
-    /// to exactly that.
-    was_fullscreen: bool,
     /// egui time it was entered, for the exit hint.
     since: f64,
 }
@@ -340,9 +337,6 @@ pub struct App {
     /// `sync_engine_loop`.
     engine_loop: bool,
     status: String,
-    /// True OS fullscreen. Still the docked tabs, from the windowed layout
-    /// or fullscreen's own (see `sync_layout_slot`).
-    fullscreen: bool,
     /// Path of the soundfont the engine currently has loaded, the selected
     /// one (`active_sf`), or a playlist entry's override.
     loaded_sf: Option<PathBuf>,
@@ -566,9 +560,6 @@ pub struct App {
     /// The layout as last saved, to tell when it's changed.
     saved_layout_json: String,
     last_layout_check: f64,
-    /// Whether `dock` is fullscreen's own layout (true) or the windowed one,
-    /// i.e. which config slot it's saved to. See `sync_layout_slot`.
-    dock_is_fullscreen_layout: bool,
     preferences_open: bool,
     /// Layout > New layout...: what it's being made as.
     layout_new: Option<layouts::NewLayout>,
@@ -736,7 +727,6 @@ impl App {
             shuffle,
             engine_loop: false,
             status,
-            fullscreen: false,
             loaded_sf: None,
             assets: AssetCache::new(),
             pending_play: None,
@@ -840,7 +830,6 @@ impl App {
             pending_layout: Vec::new(),
             saved_layout_json,
             last_layout_check: 0.0,
-            dock_is_fullscreen_layout: false,
             preferences_open: false,
             layout_new: None,
             layout_edit: None,
@@ -1100,12 +1089,7 @@ impl App {
     /// so it's reported but not fatal.
     fn save_layout(&mut self) {
         self.saved_layout_json = serde_json::to_string(&self.dock).unwrap_or_default();
-        let slot = if self.dock_is_fullscreen_layout {
-            &mut self.config.fullscreen_layout
-        } else {
-            &mut self.config.layout
-        };
-        *slot = Some(self.dock.clone());
+        self.config.layout = Some(self.dock.clone());
         self.store_in_active_layout();
         if let Err(e) = self.config.save() {
             self.status = format!("Couldn't save layout: {e}");
@@ -1114,19 +1098,11 @@ impl App {
 
     /// The named layout the showing slot is on, if any.
     fn active_layout(&self) -> Option<&String> {
-        if self.dock_is_fullscreen_layout {
-            self.config.fullscreen_active_layout.as_ref()
-        } else {
-            self.config.active_layout.as_ref()
-        }
+        self.config.active_layout.as_ref()
     }
 
     fn set_active_layout(&mut self, name: Option<String>) {
-        if self.dock_is_fullscreen_layout {
-            self.config.fullscreen_active_layout = name;
-        } else {
-            self.config.active_layout = name;
-        }
+        self.config.active_layout = name;
     }
 
     /// Changes to the arrangement go into the active named layout.
@@ -1135,28 +1111,6 @@ impl App {
         if let Some(saved) = self.config.layout_presets.iter_mut().find(|p| p.name == name) {
             saved.dock = self.dock.clone();
         }
-    }
-
-    /// Swap in the fullscreen layout or the windowed one, if the one showing
-    /// isn't the one that should be: fullscreen's own only while fullscreen
-    /// with the separate-layout preference on, the windowed one otherwise.
-    /// The outgoing layout is saved to its own slot first, so neither ever
-    /// overwrites the other; with the preference off, the fullscreen layout
-    /// just sits untouched in the config until it's turned back on.
-    pub(super) fn sync_layout_slot(&mut self) {
-        let want_fullscreen_layout = self.fullscreen && self.config.separate_fullscreen_layout;
-        if want_fullscreen_layout == self.dock_is_fullscreen_layout || self.dock_in_use {
-            return;
-        }
-        self.save_layout();
-        self.dock = if want_fullscreen_layout {
-            self.config.fullscreen_layout.clone().map(layout::sanitize).unwrap_or_else(layout::fullscreen_default)
-        } else {
-            self.config.layout.clone().map(layout::sanitize).unwrap_or_else(layout::default_layout)
-        };
-        self.dock_is_fullscreen_layout = want_fullscreen_layout;
-        self.refresh_open_sections();
-        self.save_layout();
     }
 
     /// Save the layout if it's changed (tabs dragged, dividers moved),
@@ -1203,13 +1157,6 @@ impl App {
 
     fn is_open_in_dock(&self, section: Section) -> bool {
         layout::is_open(&self.dock, section)
-    }
-
-    /// Enter or leave true OS fullscreen. The layout shown is the windowed
-    /// one, or fullscreen's own if that preference is on (`sync_layout_slot`).
-    fn set_fullscreen(&mut self, ctx: &egui::Context, fullscreen: bool) {
-        self.fullscreen = fullscreen;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
     }
 
     // --- actions -------------------------------------------------------
@@ -1560,15 +1507,9 @@ impl App {
         }
     }
 
-    /// Fullscreen and the toggles for the Visualizer, Playlists, Up next
+    /// The toggles for the Visualizer, Playlists, Up next
     /// and other devices.
     fn views_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
-        let (glyph, hover) = if self.fullscreen { ("corners-in", "Exit fullscreen") } else { ("corners-out", "Fullscreen") };
-        let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::ToggleFullscreen));
-        if ui.add(icon_button(glyph)).on_hover_text(hover).clicked() {
-            let ctx = ui.ctx().clone();
-            self.set_fullscreen(&ctx, !self.fullscreen);
-        }
         let visualizer = self.is_open(Section::Visualizer);
         if ui.add(icon_button("monitor-play").selected(visualizer)).on_hover_text(format!("Visualizer{}", commands::hint(ui.ctx(), Command::ToggleVisualizer))).clicked() {
             self.set_open(Section::Visualizer, !visualizer);
@@ -3072,8 +3013,7 @@ impl App {
         let channels = ui.scope(|ui| self.channels_ui(ui, &mut notes, playback.position)).response.rect;
         self.tour.mark(tour::Target::Channels, channels);
 
-        let mode = if self.fullscreen { DisplayMode::Fullscreen } else { DisplayMode::Window };
-        self.show_visualizer(ui, &notes, &playback, mode);
+        self.show_visualizer(ui, &notes, &playback, DisplayMode::Window);
     }
 
     /// Draw (and run) the visualizer into the rest of `ui`, and pass on
@@ -3412,11 +3352,7 @@ impl App {
             }
             Command::PreviousTrack => self.previous_track(view.position),
             Command::ToggleVisualizer => self.set_open(Section::Visualizer, !self.is_open(Section::Visualizer)),
-            Command::ToggleFullscreen => self.set_fullscreen(ctx, !self.fullscreen),
-            Command::ExitFullscreen => {
-                self.dedicated = None;
-                self.set_fullscreen(ctx, false);
-            }
+            Command::ExitFullscreen => self.exit_dedicated(ctx),
             Command::DedicatedVisualizer => {
                 if self.dedicated.is_some() {
                     self.exit_dedicated(ctx);
@@ -3477,7 +3413,7 @@ impl App {
     /// its key alone and stays out of the palette.
     fn command_available(&self, command: Command) -> bool {
         match command {
-            Command::ExitFullscreen => self.fullscreen || self.dedicated.is_some(),
+            Command::ExitFullscreen => self.dedicated.is_some(),
             Command::NextTrack => self.has_next() || self.following(),
             // (The mobile layout has pages, not tabs.)
             Command::GoTo(section) => !self.mobile() && self.dedicated.is_none() && section != Section::Removed,
@@ -3491,10 +3427,8 @@ impl App {
     /// the visualizer, which gets keyboard focus.
     fn enter_dedicated(&mut self, ctx: &egui::Context) {
         let since = ctx.input(|i| i.time);
-        self.dedicated = Some(Dedicated { was_fullscreen: self.fullscreen, since });
-        if !self.fullscreen {
-            self.set_fullscreen(ctx, true);
-        }
+        self.dedicated = Some(Dedicated { since });
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
         lock_panel(&self.visualizer).request_focus();
     }
 
@@ -3509,14 +3443,10 @@ impl App {
         };
     }
 
-    /// F11 out of the dedicated fullscreen: back to the normal layout, and
-    /// out of OS fullscreen too unless the app was fullscreen before. (Esc
-    /// skips that and always goes straight back to windowed.)
+    /// Out of the dedicated fullscreen (F11 or Esc): back to the window.
     fn exit_dedicated(&mut self, ctx: &egui::Context) {
-        if let Some(dedicated) = self.dedicated.take()
-            && !dedicated.was_fullscreen
-        {
-            self.set_fullscreen(ctx, false);
+        if self.dedicated.take().is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
         }
     }
 
@@ -4060,12 +3990,6 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
 
-        // The OS is the final authority on fullscreen state, e.g. the user
-        // could leave it some way other than our own button/key.
-        if let Some(actual) = ctx.input(|i| i.viewport().fullscreen) {
-            self.fullscreen = actual;
-        }
-
         // The keymap (commands.rs). Keys with a modifier and the function
         // keys work from anywhere: while typing, with the visualizer
         // focused, in either fullscreen (scripts never see the unmodified
@@ -4084,7 +4008,7 @@ impl eframe::App for App {
             let keymap = self.keymap.clone();
             let mut pending = self.keymap_pending.take();
             // Run outside `ctx.input_mut`: `send_viewport_cmd` (inside
-            // `set_fullscreen`) takes the lock that closure holds, and
+            // `enter_dedicated`) takes the lock that closure holds, and
             // calling it from in there deadlocks.
             let pressed = ctx.input_mut(|i| {
                 keymap.pressed(i, typing, |command| available.contains(&command), &mut pending)
@@ -4101,10 +4025,6 @@ impl eframe::App for App {
         self.pause_for_preferences(view);
         self.handle_os_file_drops(&ctx);
 
-        // Which layout the dock shows depends on fullscreen (when the
-        // separate-fullscreen-layout preference is on), so settle that before
-        // drawing anything.
-        self.sync_layout_slot();
         self.apply_window_frame(&ctx);
 
         self.song_list.clear_hovered();
@@ -4415,7 +4335,8 @@ fn settings_group<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui:
     let id = egui::Id::new(SETTINGS_GROUP);
     let visuals = ui.visuals().clone();
     let radius = 6u8;
-    ui.add_space(4.0);
+    // (No room of its own around it: the item spacing between groups is
+    // about the room at its sides.)
     let group = ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         egui::Frame::new()
@@ -4437,7 +4358,6 @@ fn settings_group<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui:
     });
     let rect = group.response.rect;
     ui.painter().rect_stroke(rect, radius, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
-    ui.add_space(6.0);
     group.inner
 }
 
@@ -4767,7 +4687,7 @@ const TRANSPORT_WIDTH: f32 = 5.0 * 28.0 + PLAY_WIDTH + 5.0 * 8.0;
 /// How wide each side of it has to be for the bar to fit on one line.
 const SIDE_WIDTH: f32 = 380.0;
 /// How wide the view toggles (`App::views_ui`) are, at most.
-const VIEWS_WIDTH: f32 = 5.0 * 28.0 + 4.0 * 8.0;
+const VIEWS_WIDTH: f32 = 4.0 * 28.0 + 3.0 * 8.0;
 const PLAY_WIDTH: f32 = 44.0;
 const TRANSPORT_HEIGHT: f32 = 28.0;
 

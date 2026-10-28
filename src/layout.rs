@@ -176,12 +176,6 @@ pub struct SavedLayout {
     pub dock: DockState<Section>,
 }
 
-/// A separate fullscreen layout's starting point: just the visualizer, which
-/// is what fullscreen showed before it became a layout of its own.
-pub fn fullscreen_default() -> DockState<Section> {
-    DockState::new(vec![Section::Visualizer])
-}
-
 /// A layout loaded from the config, cleaned up: a section appearing more
 /// than once (hand-edited config, say) keeps only its first copy, and
 /// removed tabs go.

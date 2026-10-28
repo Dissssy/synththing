@@ -63,22 +63,6 @@ impl App {
         {
             ask = Some(Ask::Lock(name.clone(), locked));
         }
-        let mut separate = self.config.separate_fullscreen_layout;
-        if ui
-            .checkbox(&mut separate, "Own arrangement in fullscreen")
-            .on_hover_text(
-                "On: fullscreen remembers its own arrangement (starting with just the visualizer). \
-                 Off: fullscreen shows the same panels as the window.",
-            )
-            .changed()
-        {
-            self.config.separate_fullscreen_layout = separate;
-            // (Saves the config along the way when the layout switches.)
-            self.sync_layout_slot();
-            if let Err(e) = self.config.save() {
-                self.status = format!("Couldn't save preferences: {e}");
-            }
-        }
         if ui.button("New layout...").on_hover_text("From this arrangement, or from a template").clicked() {
             self.layout_new = Some(NewLayout::default());
         }
@@ -184,10 +168,8 @@ impl App {
                 if self.config.locked_layouts.remove(&old) {
                     self.config.locked_layouts.insert(name.clone());
                 }
-                for slot in [&mut self.config.active_layout, &mut self.config.fullscreen_active_layout] {
-                    if slot.as_deref() == Some(old.as_str()) {
-                        *slot = Some(name.clone());
-                    }
+                if self.config.active_layout.as_deref() == Some(old.as_str()) {
+                    self.config.active_layout = Some(name.clone());
                 }
                 self.status = match self.config.save() {
                     Ok(()) => format!("Renamed the layout \"{old}\" to \"{name}\"."),
@@ -197,10 +179,8 @@ impl App {
             Ask::Delete(n) => {
                 let removed = self.config.layout_presets.remove(n);
                 self.config.locked_layouts.remove(&removed.name);
-                for slot in [&mut self.config.active_layout, &mut self.config.fullscreen_active_layout] {
-                    if slot.as_deref() == Some(removed.name.as_str()) {
-                        *slot = None;
-                    }
+                if self.config.active_layout.as_deref() == Some(removed.name.as_str()) {
+                    self.config.active_layout = None;
                 }
                 self.status = match self.config.save() {
                     Ok(()) => format!("Deleted the layout \"{}\".", removed.name),
