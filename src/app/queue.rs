@@ -8,8 +8,7 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
-use super::{icon_button, layout, toast, App};
-use crate::layout::Section;
+use super::{icon_button, toast, App};
 use crate::song_list;
 use crate::playlist::{NowPlaying, Rng};
 
@@ -68,23 +67,6 @@ impl App {
     /// (its playlist carries on after the queue).
     pub(super) fn playing_entry(&self) -> Option<&NowPlaying> {
         self.now_playing.as_ref().filter(|_| !self.playing_queued)
-    }
-
-    /// The controls' Up next button: shows or hides the Up next tab.
-    pub(super) fn queue_button_ui(&mut self, ui: &mut egui::Ui) {
-        let count = self.queue.len();
-        let open = self.is_open(Section::Queue);
-        let hover = match count {
-            0 => "Up next: nothing queued (right-click songs to play them next or add them to the queue)".to_string(),
-            1 => "Up next: 1 song".to_string(),
-            n => format!("Up next: {n} songs"),
-        };
-        if ui.add(icon_button("list-numbers").selected(open)).on_hover_text(hover).clicked() {
-            self.set_open(Section::Queue, !open);
-            if !open {
-                layout::focus(&mut self.dock, Section::Queue);
-            }
-        }
     }
 
     /// The Up next tab: the queue's songs, shown as the Songs list shows

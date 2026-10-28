@@ -208,12 +208,18 @@ impl App {
         });
     }
 
-    /// View: a checkbox for each section.
+    /// View: a checkbox for each section, all disabled while the layout is
+    /// locked (which sections show is part of the layout).
     fn view_menu_ui(&mut self, ui: &mut egui::Ui) {
+        let locked = self.layout_locked();
         let mut toggled = Vec::new();
         let mut section_checkbox = |ui: &mut egui::Ui, section: Section| {
             let mut open = self.open_sections.contains(&section);
-            if ui.checkbox(&mut open, section.title()).changed() {
+            if ui
+                .add_enabled(!locked, egui::Checkbox::new(&mut open, section.title()))
+                .on_disabled_hover_text("The layout is locked (Layout > Lock layout)")
+                .changed()
+            {
                 toggled.push((section, open));
             }
         };

@@ -1397,7 +1397,7 @@ impl App {
         });
         ui.add_space(2.0);
 
-        // The view toggles at the left, the transport centred, speed and
+        // The devices button at the left, the transport centred, speed and
         // volume at the right; when they don't fit, the transport centred
         // over the rest.
         let width = ui.available_width();
@@ -1412,20 +1412,20 @@ impl App {
         let (left, right) = (egui::Layout::left_to_right(egui::Align::Center), egui::Layout::right_to_left(egui::Align::Center));
         if side >= SIDE_WIDTH {
             let rect = line(ui);
-            ui.scope_builder(zone(rect, 0.0, side, left), |ui| self.views_ui(ui, view));
+            ui.scope_builder(zone(rect, 0.0, side, left), |ui| self.devices_button_ui(ui, view));
             ui.scope_builder(zone(rect, side, center, left), |ui| self.transport_ui(ui, view));
             ui.scope_builder(zone(rect, side + center, side, right), |ui| self.speed_volume_ui(ui, view));
         } else {
             let rect = line(ui);
             ui.scope_builder(zone(rect, side.max(0.0), center, left), |ui| self.transport_ui(ui, view));
             ui.add_space(4.0);
-            if width >= VIEWS_WIDTH + SIDE_WIDTH {
+            if width >= DEVICES_WIDTH + SIDE_WIDTH {
                 let rect = line(ui);
-                ui.scope_builder(zone(rect, 0.0, VIEWS_WIDTH, left), |ui| self.views_ui(ui, view));
-                ui.scope_builder(zone(rect, VIEWS_WIDTH, width - VIEWS_WIDTH, right), |ui| self.speed_volume_ui(ui, view));
+                ui.scope_builder(zone(rect, 0.0, DEVICES_WIDTH, left), |ui| self.devices_button_ui(ui, view));
+                ui.scope_builder(zone(rect, DEVICES_WIDTH, width - DEVICES_WIDTH, right), |ui| self.speed_volume_ui(ui, view));
             } else {
                 ui.horizontal_wrapped(|ui| {
-                    self.views_ui(ui, view);
+                    self.devices_button_ui(ui, view);
                     self.speed_volume_ui(ui, view);
                 });
             }
@@ -1502,27 +1502,6 @@ impl App {
             self.set_loop_mode(self.loop_mode.cycle());
             toast::show(ui.ctx(), loop_text(self.loop_mode));
         }
-    }
-
-    /// The toggles for the Visualizer, Playlists, Up next
-    /// and other devices.
-    fn views_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
-        let visualizer = self.is_open(Section::Visualizer);
-        if ui.add(icon_button("monitor-play").selected(visualizer)).on_hover_text(format!("Visualizer{}", commands::hint(ui.ctx(), Command::ToggleVisualizer))).clicked() {
-            self.set_open(Section::Visualizer, !visualizer);
-        }
-        let playlists = self.is_open(Section::Groupings) && self.groupings.shown_id() == groupings::PLAYLISTS;
-        if ui.add(icon_button("playlist").selected(playlists)).on_hover_text("Playlists").clicked() {
-            if playlists {
-                self.set_open(Section::Groupings, false);
-            } else {
-                self.groupings.show(groupings::PLAYLISTS);
-                self.set_open(Section::Groupings, true);
-                layout::focus(&mut self.dock, Section::Groupings);
-            }
-        }
-        self.queue_button_ui(ui);
-        self.devices_button_ui(ui, view);
     }
 
     /// Speed and volume, each an icon, a slider and its value (in a
@@ -3347,6 +3326,7 @@ impl App {
                 }
             }
             Command::PreviousTrack => self.previous_track(view.position),
+            Command::ToggleVisualizer if self.layout_locked() => toast::show(ctx, "The layout is locked (Layout > Lock layout)"),
             Command::ToggleVisualizer => self.set_open(Section::Visualizer, !self.is_open(Section::Visualizer)),
             Command::ExitFullscreen => self.exit_dedicated(ctx),
             Command::DedicatedVisualizer => {
@@ -4734,8 +4714,8 @@ pub(crate) fn row_icon_button(ui: &egui::Ui, name: &str) -> egui::Button<'static
 const TRANSPORT_WIDTH: f32 = 5.0 * 28.0 + PLAY_WIDTH + 5.0 * 8.0;
 /// How wide each side of it has to be for the bar to fit on one line.
 const SIDE_WIDTH: f32 = 380.0;
-/// How wide the view toggles (`App::views_ui`) are, at most.
-const VIEWS_WIDTH: f32 = 4.0 * 28.0 + 3.0 * 8.0;
+/// How wide the devices button (`App::devices_button_ui`) is.
+const DEVICES_WIDTH: f32 = 28.0;
 const PLAY_WIDTH: f32 = 44.0;
 const TRANSPORT_HEIGHT: f32 = 28.0;
 
