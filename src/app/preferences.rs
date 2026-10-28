@@ -94,7 +94,6 @@ impl PrefTab {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum PrefJump {
     Welcome,
-    Tour,
     Themes,
 }
 
@@ -198,7 +197,6 @@ impl App {
     pub(super) fn preference_jump(&mut self, jump: PrefJump) {
         match jump {
             PrefJump::Welcome => self.open_welcome(),
-            PrefJump::Tour => self.start_tour(),
             PrefJump::Themes if self.mobile() => self.open_mobile_themes(),
             PrefJump::Themes => self.themes.open = true,
         }
@@ -584,21 +582,16 @@ impl App {
                         );
                     }
                 });
-                settings_group("Getting started").icon("rocket-launch").show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        if ui
-                            .button("Welcome & starter pack...")
-                            .on_hover_text("The first-run window: starter songs and soundfonts")
-                            .clicked()
-                        {
-                            jump = Some(PrefJump::Welcome);
-                        }
-                        // (The tour shows the desktop's panels.)
-                        if !self.mobile() && ui.button("Take the tour").on_hover_text("A walk through the app").clicked() {
-                            jump = Some(PrefJump::Tour);
-                        }
+                // (The desktop has these in Help.)
+                if self.mobile() {
+                    settings_group("Getting started").icon("rocket-launch").show(ui, |ui| {
+                        setting_row(ui, |ui| {
+                            if ui.button("Welcome & starter pack...").on_hover_text("The first-run window: starter songs and soundfonts").clicked() {
+                                jump = Some(PrefJump::Welcome);
+                            }
+                        });
                     });
-                });
+                }
             }
         }
 
