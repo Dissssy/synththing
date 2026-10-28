@@ -6,7 +6,7 @@
 
 use eframe::egui;
 
-use super::{categories_body, fit_width, icon_button, nice_name, setting_label, setting_section, with_info, App, CONTROL_WIDTH};
+use super::{categories_body, fit_width, icon_button, nice_name, setting_label, setting_row, settings_group, with_info, App, CONTROL_WIDTH};
 use crate::audio::{AudioCommand, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
 
@@ -175,240 +175,252 @@ impl App {
         ui.spacing_mut().slider_width = CONTROL_WIDTH;
         match tab {
             PrefTab::Appearance => {
-                setting_section(ui, "Look");
-                let current = self.current_theme().name;
-                let mut picked = None;
-                ui.horizontal(|ui| {
-                    setting_label(ui, "Theme");
-                    egui::ComboBox::from_id_salt("preferences_theme").width(CONTROL_WIDTH).selected_text(&current).show_ui(ui, |ui| {
-                        for name in self.theme_names() {
-                            if ui.selectable_label(name == current, &name).clicked() {
-                                picked = Some(name);
+                settings_group(ui, "Look", |ui| {
+                    let current = self.current_theme().name;
+                    let mut picked = None;
+                    setting_row(ui, |ui| {
+                        setting_label(ui, "Theme");
+                        egui::ComboBox::from_id_salt("preferences_theme").width(CONTROL_WIDTH).selected_text(&current).show_ui(ui, |ui| {
+                            for name in self.theme_names() {
+                                if ui.selectable_label(name == current, &name).clicked() {
+                                    picked = Some(name);
+                                }
                             }
+                        });
+                        if ui.add(icon_button("pencil-simple")).on_hover_text("Edit themes: make your own").clicked() {
+                            jump = Some(PrefJump::Themes);
                         }
                     });
-                    if ui.add(icon_button("pencil-simple")).on_hover_text("Edit themes: make your own").clicked() {
-                        jump = Some(PrefJump::Themes);
+                    if let Some(name) = picked {
+                        self.pick_theme(ui.ctx(), name);
                     }
+                    self.ui_scale_ui(ui);
                 });
-                if let Some(name) = picked {
-                    self.pick_theme(ui.ctx(), name);
-                }
-                self.ui_scale_ui(ui);
-                setting_section(ui, "Seek bar");
-                with_info(
-                    ui,
-                    "The seek bar is colored by the song's tempo (slow songs blue, fast ones pink), \
-                     and flashes toward white on each beat while the song plays: 100% is white, \
-                     0% doesn't flash. Each bar's first beat flashes for longer.",
-                    |ui| {
-                        let label = setting_label(ui, "Pulse with the beat");
-                        label | ui.add(egui::Slider::new(&mut beat_pulse, 0.0..=100.0).suffix("%").fixed_decimals(0))
-                    },
-                );
-                with_info(
-                    ui,
-                    "How long each beat's flash takes to fade, as a share of the beat: short is a \
-                     quick tick, 100% fades right up to the next beat.",
-                    |ui| {
-                        ui.add_enabled_ui(beat_pulse > 0.0, |ui| {
-                            let label = setting_label(ui, "Flash length");
-                            label | ui.add(egui::Slider::new(&mut pulse_length, 10.0..=100.0).suffix("%").fixed_decimals(0))
-                        })
-                        .inner
-                    },
-                );
-                if cfg!(target_os = "android") {
-                    setting_section(ui, "Full screen");
+                settings_group(ui, "Seek bar", |ui| {
                     with_info(
                         ui,
-                        "With the controls hidden, the visualizer fills the screen. On: it goes \
-                         under the notch or camera hole as well. Off: that strip stays black.",
-                        |ui| ui.checkbox(&mut over_cutout, "Cover the notch"),
+                        "The seek bar is colored by the song's tempo (slow songs blue, fast ones pink), \
+                         and flashes toward white on each beat while the song plays: 100% is white, \
+                         0% doesn't flash. Each bar's first beat flashes for longer.",
+                        |ui| {
+                            let label = setting_label(ui, "Pulse with the beat");
+                            label | ui.add(egui::Slider::new(&mut beat_pulse, 0.0..=100.0).suffix("%").fixed_decimals(0))
+                        },
                     );
+                    with_info(
+                        ui,
+                        "How long each beat's flash takes to fade, as a share of the beat: short is a \
+                         quick tick, 100% fades right up to the next beat.",
+                        |ui| {
+                            ui.add_enabled_ui(beat_pulse > 0.0, |ui| {
+                                let label = setting_label(ui, "Flash length");
+                                label | ui.add(egui::Slider::new(&mut pulse_length, 10.0..=100.0).suffix("%").fixed_decimals(0))
+                            })
+                            .inner
+                        },
+                    );
+                });
+                if cfg!(target_os = "android") {
+                    settings_group(ui, "Full screen", |ui| {
+                        with_info(
+                            ui,
+                            "With the controls hidden, the visualizer fills the screen. On: it goes \
+                             under the notch or camera hole as well. Off: that strip stays black.",
+                            |ui| ui.checkbox(&mut over_cutout, "Cover the notch"),
+                        );
+                    });
                 }
             }
             PrefTab::Playback => {
-                setting_section(ui, "Sound");
-                with_info(
-                    ui,
-                    &format!(
-                        "How much sound is made ahead of what's heard. More holds up better in busy \
-                         songs and on a busy computer (crackles and gaps mean it's too low); less \
-                         makes pausing, seeking and the channel toggles answer sooner. Visualizers \
-                         stay in step with the sound either way. {DEFAULT_BUFFER_MS} ms unless changed."
-                    ),
-                    |ui| {
-                        let label = setting_label(ui, "Audio buffer");
-                        label | ui.add(egui::Slider::new(&mut buffer_ms, MIN_BUFFER_MS..=MAX_BUFFER_MS).suffix(" ms"))
-                    },
-                );
-                setting_section(ui, "What plays");
-                with_info(
-                    ui,
-                    &format!(
-                        "Shuffle, autoplay and playlists playing on go only to songs you've starred (the {} at the left of \
-                         a song). A song you pick yourself still plays.",
-                        super::icon(crate::select_list::STAR_ICON)
-                    ),
-                    |ui| ui.checkbox(&mut only_starred, "Only play starred songs"),
-                );
-                with_info(
-                    ui,
-                    "Autoplay (the button at the top of Songs) goes on to the next song in the list when \
-                     one ends. On: it leaves out the songs in groups you've closed.",
-                    |ui| ui.checkbox(&mut skip_collapsed, "Autoplay skips closed groups"),
-                );
-                with_info(
-                    ui,
-                    &format!(
-                        "Over {} notes: visualizer scripts that go through every note can stall on \
-                         them. Asks before playing one (they're marked with a red ! in the lists).",
-                        crate::song_info::thousands(crate::song_info::HEAVY_MIDI_NOTES)
-                    ),
-                    |ui| ui.checkbox(&mut warn_heavy, "Warn before playing a very large MIDI file"),
-                );
-                setting_section(ui, "Start with what was set last time");
-                for (on, label, info) in [
-                    (&mut remember.volume, "Volume", "Off: full volume every time."),
-                    (
-                        &mut remember.soundfont,
-                        "Soundfont",
-                        "The one selected in Soundfonts (not a song's own). Off: the first in the list.",
-                    ),
-                    (&mut remember.script, "Visualizer script", "Off: the first script in the list."),
-                    (&mut remember.speed, "Speed", "Off: normal speed every time."),
-                    (&mut remember.modes, "Loop, shuffle and autoplay", "Off: all three off every time."),
-                ] {
-                    with_info(ui, info, |ui| ui.checkbox(on, label));
-                }
-                if cfg!(target_os = "android") {
-                    setting_section(ui, "Leaving the app");
+                settings_group(ui, "Sound", |ui| {
                     with_info(
                         ui,
-                        "Leaving synththing while a song plays (home, or switching apps) shrinks it \
-                         into a small floating window of the visualizer, with play, pause and skip. \
-                         Drag it around, pinch to resize it, or swipe it away. Off: it plays on in \
-                         the background, with only the notification.",
-                        |ui| ui.checkbox(&mut mini_player, "Mini player"),
+                        &format!(
+                            "How much sound is made ahead of what's heard. More holds up better in busy \
+                             songs and on a busy computer (crackles and gaps mean it's too low); less \
+                             makes pausing, seeking and the channel toggles answer sooner. Visualizers \
+                             stay in step with the sound either way. {DEFAULT_BUFFER_MS} ms unless changed."
+                        ),
+                        |ui| {
+                            let label = setting_label(ui, "Audio buffer");
+                            label | ui.add(egui::Slider::new(&mut buffer_ms, MIN_BUFFER_MS..=MAX_BUFFER_MS).suffix(" ms"))
+                        },
                     );
-                    ui.add_enabled_ui(mini_player, |ui| {
-                        ui.horizontal(|ui| {
-                            setting_label(ui, "Mini player shape");
-                            egui::ComboBox::from_id_salt("mini_player_shape")
-                                .width(CONTROL_WIDTH)
-                                .selected_text(mini_player_shape.name())
-                                .show_ui(ui, |ui| {
-                                    for shape in crate::config::MiniPlayerShape::ALL {
-                                        ui.selectable_value(&mut mini_player_shape, shape, shape.name());
-                                    }
-                                });
+                });
+                settings_group(ui, "What plays", |ui| {
+                    with_info(
+                        ui,
+                        &format!(
+                            "Shuffle, autoplay and playlists playing on go only to songs you've starred (the {} at the left of \
+                             a song). A song you pick yourself still plays.",
+                            super::icon(crate::select_list::STAR_ICON)
+                        ),
+                        |ui| ui.checkbox(&mut only_starred, "Only play starred songs"),
+                    );
+                    with_info(
+                        ui,
+                        "Autoplay (the button at the top of Songs) goes on to the next song in the list when \
+                         one ends. On: it leaves out the songs in groups you've closed.",
+                        |ui| ui.checkbox(&mut skip_collapsed, "Autoplay skips closed groups"),
+                    );
+                    with_info(
+                        ui,
+                        &format!(
+                            "Over {} notes: visualizer scripts that go through every note can stall on \
+                             them. Asks before playing one (they're marked with a red ! in the lists).",
+                            crate::song_info::thousands(crate::song_info::HEAVY_MIDI_NOTES)
+                        ),
+                        |ui| ui.checkbox(&mut warn_heavy, "Warn before playing a very large MIDI file"),
+                    );
+                });
+                settings_group(ui, "Start with what was set last time", |ui| {
+                    for (on, label, info) in [
+                        (&mut remember.volume, "Volume", "Off: full volume every time."),
+                        (
+                            &mut remember.soundfont,
+                            "Soundfont",
+                            "The one selected in Soundfonts (not a song's own). Off: the first in the list.",
+                        ),
+                        (&mut remember.script, "Visualizer script", "Off: the first script in the list."),
+                        (&mut remember.speed, "Speed", "Off: normal speed every time."),
+                        (&mut remember.modes, "Loop, shuffle and autoplay", "Off: all three off every time."),
+                    ] {
+                        with_info(ui, info, |ui| ui.checkbox(on, label));
+                    }
+                });
+                if cfg!(target_os = "android") {
+                    settings_group(ui, "Leaving the app", |ui| {
+                        with_info(
+                            ui,
+                            "Leaving synththing while a song plays (home, or switching apps) shrinks it \
+                             into a small floating window of the visualizer, with play, pause and skip. \
+                             Drag it around, pinch to resize it, or swipe it away. Off: it plays on in \
+                             the background, with only the notification.",
+                            |ui| ui.checkbox(&mut mini_player, "Mini player"),
+                        );
+                        ui.add_enabled_ui(mini_player, |ui| {
+                            setting_row(ui, |ui| {
+                                setting_label(ui, "Mini player shape");
+                                egui::ComboBox::from_id_salt("mini_player_shape")
+                                    .width(CONTROL_WIDTH)
+                                    .selected_text(mini_player_shape.name())
+                                    .show_ui(ui, |ui| {
+                                        for shape in crate::config::MiniPlayerShape::ALL {
+                                            ui.selectable_value(&mut mini_player_shape, shape, shape.name());
+                                        }
+                                    });
+                            });
                         });
                     });
                 }
-                setting_section(ui, "Loading");
-                // (No pointer to rest on a touch screen.)
-                if !cfg!(target_os = "android") {
+                settings_group(ui, "Loading", |ui| {
+                    // (No pointer to rest on a touch screen.)
+                    if !cfg!(target_os = "android") {
+                        with_info(
+                            ui,
+                            "Start loading a song once the pointer rests on it in Songs or a playlist, \
+                             so it starts sooner when clicked. Uses more memory while browsing.",
+                            |ui| ui.checkbox(&mut hover_preload, "Preload songs on hover"),
+                        );
+                    }
                     with_info(
                         ui,
-                        "Start loading a song once the pointer rests on it in Songs or a playlist, \
-                         so it starts sooner when clicked. Uses more memory while browsing.",
-                        |ui| ui.checkbox(&mut hover_preload, "Preload songs on hover"),
+                        "Songs and soundfonts load in the background, and the next playlist track is \
+                         loaded ahead of time. Anything loaded that nothing has needed for this long \
+                         (not playing, not up next, not hovered) is unloaded to free memory.",
+                        |ui| {
+                            let label = setting_label(ui, "Unload unused files after");
+                            label | ui.add(egui::Slider::new(&mut expiry, PRELOAD_EXPIRY_RANGE).suffix(" s").logarithmic(true))
+                        },
                     );
-                }
-                with_info(
-                    ui,
-                    "Songs and soundfonts load in the background, and the next playlist track is \
-                     loaded ahead of time. Anything loaded that nothing has needed for this long \
-                     (not playing, not up next, not hovered) is unloaded to free memory.",
-                    |ui| {
-                        let label = setting_label(ui, "Unload unused files after");
-                        label | ui.add(egui::Slider::new(&mut expiry, PRELOAD_EXPIRY_RANGE).suffix(" s").logarithmic(true))
-                    },
-                );
-                let loaded = self.assets.summary();
-                egui::CollapsingHeader::new(format!("Loaded right now ({})", loaded.len()))
-                    .id_salt("preferences_loaded_files")
-                    .show(ui, |ui| {
-                        if loaded.is_empty() {
-                            ui.weak("(nothing)");
-                        }
-                        for (path, kind, state) in &loaded {
-                            ui.label(format!("{} ({kind:?}, {state})", nice_name(path)))
-                                .on_hover_text(path.display().to_string());
-                        }
-                    });
+                    let loaded = self.assets.summary();
+                    egui::CollapsingHeader::new(format!("Loaded right now ({})", loaded.len()))
+                        .id_salt("preferences_loaded_files")
+                        .show(ui, |ui| {
+                            if loaded.is_empty() {
+                                ui.weak("(nothing)");
+                            }
+                            for (path, kind, state) in &loaded {
+                                ui.label(format!("{} ({kind:?}, {state})", nice_name(path)))
+                                    .on_hover_text(path.display().to_string());
+                            }
+                        });
+                });
             }
             PrefTab::Browsing => {
                 self.song_names_ui(ui);
-                setting_section(ui, "Sorting and grouping");
-                with_info(
-                    ui,
-                    "Sorting by a name (the Songs list, smart playlists, Groupings) passes over a leading \
-                     \"The\", \"A\" or \"An\", so The Beatles are with the Bs. A song's own \"sort as\" \
-                     (Song info) goes first.",
-                    |ui| ui.checkbox(&mut past_articles, "Sort past a leading The, A or An"),
-                );
-                with_info(
-                    ui,
-                    "Grouping by a name (the Songs list's groups, the playlists of Artists, Albums and \
-                     other rulesets) already sees past case, spacing, punctuation and symbols, so \
-                     \"<OST>\" and \"OST\" are one group, shown as its best spelling. These characters \
-                     are passed over too.",
-                    |ui| {
-                        let label = setting_label(ui, "Also ignore when grouping");
-                        label | ui.add(egui::TextEdit::singleline(&mut group_ignore).hint_text("e.g. ー").desired_width(CONTROL_WIDTH))
-                    },
-                );
-                with_info(
-                    ui,
-                    "A playlist in Groupings with no art (or while its art is read) shows the first \
-                     letters of its name's words on a color of its own: one to three letters in a row, \
-                     or four in a square.",
-                    |ui| {
-                        let label = setting_label(ui, "Letters on tiles without art");
-                        label | ui.add(egui::Slider::new(&mut tile_letters, 1..=4))
-                    },
-                );
-                setting_section(ui, "Search looks in");
-                ui.weak(
-                    "Searching Songs looks in what's lit up: each song's name, and these. A filter \
-                     (artist:...) still goes by what's off.",
-                );
-                ui.horizontal_wrapped(|ui| {
-                    let columns = crate::fields::columns().filter(|d| d.key != "file_name").map(|d| (d.key, d.label));
-                    for (key, label) in [("file_name", "File name"), ("tag", "Tags")].into_iter().chain(columns) {
-                        let on = !unsearched.iter().any(|k| k == key);
-                        if ui.add(egui::Button::selectable(on, label).corner_radius(12.0)).clicked() {
-                            unsearched.retain(|k| k != key);
-                            if on {
-                                unsearched.push(key.to_string());
+                settings_group(ui, "Sorting and grouping", |ui| {
+                    with_info(
+                        ui,
+                        "Sorting by a name (the Songs list, smart playlists, Groupings) passes over a leading \
+                         \"The\", \"A\" or \"An\", so The Beatles are with the Bs. A song's own \"sort as\" \
+                         (Song info) goes first.",
+                        |ui| ui.checkbox(&mut past_articles, "Sort past a leading The, A or An"),
+                    );
+                    with_info(
+                        ui,
+                        "Grouping by a name (the Songs list's groups, the playlists of Artists, Albums and \
+                         other rulesets) already sees past case, spacing, punctuation and symbols, so \
+                         \"<OST>\" and \"OST\" are one group, shown as its best spelling. These characters \
+                         are passed over too.",
+                        |ui| {
+                            let label = setting_label(ui, "Also ignore when grouping");
+                            label | ui.add(egui::TextEdit::singleline(&mut group_ignore).hint_text("e.g. ー").desired_width(CONTROL_WIDTH))
+                        },
+                    );
+                    with_info(
+                        ui,
+                        "A playlist in Groupings with no art (or while its art is read) shows the first \
+                         letters of its name's words on a color of its own: one to three letters in a row, \
+                         or four in a square.",
+                        |ui| {
+                            let label = setting_label(ui, "Letters on tiles without art");
+                            label | ui.add(egui::Slider::new(&mut tile_letters, 1..=4))
+                        },
+                    );
+                });
+                settings_group(ui, "Search looks in", |ui| {
+                    ui.weak(
+                        "Searching Songs looks in what's lit up: each song's name, and these. A filter \
+                         (artist:...) still goes by what's off.",
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        let columns = crate::fields::columns().filter(|d| d.key != "file_name").map(|d| (d.key, d.label));
+                        for (key, label) in [("file_name", "File name"), ("tag", "Tags")].into_iter().chain(columns) {
+                            let on = !unsearched.iter().any(|k| k == key);
+                            if ui.add(egui::Button::selectable(on, label).corner_radius(12.0)).clicked() {
+                                unsearched.retain(|k| k != key);
+                                if on {
+                                    unsearched.push(key.to_string());
+                                }
                             }
                         }
-                    }
+                    });
                 });
             }
             PrefTab::Library => {
-                setting_section(ui, "Adding songs");
-                with_info(
-                    ui,
-                    "Songs dragged onto the window are always imported into the library. Then they're queued, \
-                     or, just importing, added to the playlist on screen if one is.",
-                    |ui| {
-                        let label = setting_label(ui, "Dropped songs");
-                        let combo = egui::ComboBox::from_id_salt("dropped_songs")
-                            .width(CONTROL_WIDTH)
-                            .selected_text(dropped_songs.name())
-                            .show_ui(ui, |ui| {
-                                for choice in crate::config::DroppedSongs::ALL {
-                                    ui.selectable_value(&mut dropped_songs, choice, choice.name());
-                                }
-                            });
-                        label | combo.response
-                    },
-                );
-                setting_section(ui, "Album art and details");
-                self.lookup_preferences_ui(ui);
+                settings_group(ui, "Adding songs", |ui| {
+                    with_info(
+                        ui,
+                        "Songs dragged onto the window are always imported into the library. Then they're queued, \
+                         or, just importing, added to the playlist on screen if one is.",
+                        |ui| {
+                            let label = setting_label(ui, "Dropped songs");
+                            let combo = egui::ComboBox::from_id_salt("dropped_songs")
+                                .width(CONTROL_WIDTH)
+                                .selected_text(dropped_songs.name())
+                                .show_ui(ui, |ui| {
+                                    for choice in crate::config::DroppedSongs::ALL {
+                                        ui.selectable_value(&mut dropped_songs, choice, choice.name());
+                                    }
+                                });
+                            label | combo.response
+                        },
+                    );
+                });
+                settings_group(ui, "Album art and details", |ui| {
+                    self.lookup_preferences_ui(ui);
+                });
                 self.rulesets_ui(ui);
                 ui.add_space(6.0);
                 self.storage_ui(ui);
@@ -421,46 +433,47 @@ impl App {
                 }
             }
             PrefTab::Visualizer => {
-                setting_section(ui, "Display");
-                with_info(
-                    ui,
-                    "How many screen pixels each visualizer pixel covers, across and down. 1x draws at \
-                     your screen's full resolution; higher draws fewer, chunkier pixels, so scripts run \
-                     faster (useful fullscreen on a large or high-DPI screen). 4x by default on phones, \
-                     1x elsewhere. Kept on this device only.",
-                    |ui| {
-                        let label = setting_label(ui, "Pixel scale");
-                        let combo = egui::ComboBox::from_id_salt("visualizer_pixel_scale")
-                            .width(CONTROL_WIDTH)
-                            .selected_text(format!("{visualizer_scale}x"))
-                            .show_ui(ui, |ui| {
-                                for scale in config::VISUALIZER_SCALES {
-                                    ui.selectable_value(&mut visualizer_scale, scale, format!("{scale}x"));
-                                }
-                            });
-                        label | combo.response
-                    },
-                );
-                with_info(
-                    ui,
-                    "The channel toggles above the visualizer as chips in each channel's color, \
-                     saying what it plays (\"3 \u{b7} Violin\"): click one to turn its channel off \
-                     (it goes grey) or back on, right-click to hear only that one. Off: small \
-                     numbered checkboxes, with the instrument when you hover one.",
-                    |ui| ui.checkbox(&mut channel_chips, "Channel toggles as chips with instrument names"),
-                );
-                setting_section(ui, "Scripts");
-                with_info(
-                    ui,
-                    "What visualizer scripts log() shows in their Debug window; with this \
-                     on, it also goes to Help > Log... (and the log file), labelled with the \
-                     script's name. A script can turn it on for itself (script_options), or for \
-                     single messages (log_app).",
-                    |ui| ui.checkbox(&mut script_log, "Copy script logs to the app log"),
-                );
+                settings_group(ui, "Display", |ui| {
+                    with_info(
+                        ui,
+                        "How many screen pixels each visualizer pixel covers, across and down. 1x draws at \
+                         your screen's full resolution; higher draws fewer, chunkier pixels, so scripts run \
+                         faster (useful fullscreen on a large or high-DPI screen). 4x by default on phones, \
+                         1x elsewhere. Kept on this device only.",
+                        |ui| {
+                            let label = setting_label(ui, "Pixel scale");
+                            let combo = egui::ComboBox::from_id_salt("visualizer_pixel_scale")
+                                .width(CONTROL_WIDTH)
+                                .selected_text(format!("{visualizer_scale}x"))
+                                .show_ui(ui, |ui| {
+                                    for scale in config::VISUALIZER_SCALES {
+                                        ui.selectable_value(&mut visualizer_scale, scale, format!("{scale}x"));
+                                    }
+                                });
+                            label | combo.response
+                        },
+                    );
+                    with_info(
+                        ui,
+                        "The channel toggles above the visualizer as chips in each channel's color, \
+                         saying what it plays (\"3 \u{b7} Violin\"): click one to turn its channel off \
+                         (it goes grey) or back on, right-click to hear only that one. Off: small \
+                         numbered checkboxes, with the instrument when you hover one.",
+                        |ui| ui.checkbox(&mut channel_chips, "Channel toggles as chips with instrument names"),
+                    );
+                });
+                settings_group(ui, "Scripts", |ui| {
+                    with_info(
+                        ui,
+                        "What visualizer scripts log() shows in their Debug window; with this \
+                         on, it also goes to Help > Log... (and the log file), labelled with the \
+                         script's name. A script can turn it on for itself (script_options), or for \
+                         single messages (log_app).",
+                        |ui| ui.checkbox(&mut script_log, "Copy script logs to the app log"),
+                    );
+                });
                 if !cfg!(target_os = "android") {
-                    setting_section(ui, "Recording");
-                    self.recording_preferences_ui(ui);
+                    settings_group(ui, "Recording", |ui| self.recording_preferences_ui(ui));
                 }
             }
             PrefTab::Account => self.library_preferences_ui(ui),
@@ -468,65 +481,68 @@ impl App {
             PrefTab::Integrations => self.api_preferences_ui(ui),
             PrefTab::App => {
                 if !cfg!(target_os = "android") {
-                    setting_section(ui, "Window");
-                    with_info(
-                        ui,
-                        "On: the window has your system's title bar and borders. Off: synththing \
-                         draws its own, the menu bar doubling as the title bar (drag its empty \
-                         middle to move the window, double-click it to maximize).",
-                        |ui| ui.checkbox(&mut native_frame, "Use the system's window frame"),
-                    );
-                    if self.tray.is_some() {
+                    settings_group(ui, "Window", |ui| {
                         with_info(
                             ui,
-                            "On: closing the window hides synththing in the tray (by the clock), still \
-                             playing. Click its icon for the mini player, right-click it to bring the \
-                             window back. Quit, in the synththing menu or the mini player, closes it \
-                             completely. Off: closing the window quits.",
-                            |ui| ui.checkbox(&mut close_to_tray, "Keep running in the tray when the window's closed"),
+                            "On: the window has your system's title bar and borders. Off: synththing \
+                             draws its own, the menu bar doubling as the title bar (drag its empty \
+                             middle to move the window, double-click it to maximize).",
+                            |ui| ui.checkbox(&mut native_frame, "Use the system's window frame"),
+                        );
+                        if self.tray.is_some() {
+                            with_info(
+                                ui,
+                                "On: closing the window hides synththing in the tray (by the clock), still \
+                                 playing. Click its icon for the mini player, right-click it to bring the \
+                                 window back. Quit, in the synththing menu or the mini player, closes it \
+                                 completely. Off: closing the window quits.",
+                                |ui| ui.checkbox(&mut close_to_tray, "Keep running in the tray when the window's closed"),
+                            );
+                        }
+                    });
+                }
+                settings_group(ui, "Updates", |ui| {
+                    with_info(
+                        ui,
+                        "Looks for a newer release on GitHub and asks before installing anything. \
+                         Help > Check for updates does it any time.",
+                        |ui| ui.checkbox(&mut check_updates, "Check for updates when synththing starts"),
+                    );
+                    // (A branch build follows its branch.)
+                    if !matches!(crate::build_info::channel(), crate::build_info::Channel::Branch(_)) {
+                        with_info(
+                            ui,
+                            "Canary: the newest build from master, minutes after every change, and \
+                             releases once they're out. For testing new things early: it can be broken. \
+                             Turning it off keeps the build you have until the next release.",
+                            |ui| ui.checkbox(&mut canary, "Canary updates (test builds)"),
                         );
                     }
-                }
-                setting_section(ui, "Updates");
-                with_info(
-                    ui,
-                    "Looks for a newer release on GitHub and asks before installing anything. \
-                     Help > Check for updates does it any time.",
-                    |ui| ui.checkbox(&mut check_updates, "Check for updates when synththing starts"),
-                );
-                // (A branch build follows its branch.)
-                if !matches!(crate::build_info::channel(), crate::build_info::Channel::Branch(_)) {
-                    with_info(
-                        ui,
-                        "Canary: the newest build from master, minutes after every change, and \
-                         releases once they're out. For testing new things early: it can be broken. \
-                         Turning it off keeps the build you have until the next release.",
-                        |ui| ui.checkbox(&mut canary, "Canary updates (test builds)"),
-                    );
-                }
-                if cfg!(target_os = "android") {
-                    with_info(
-                        ui,
-                        "Download new versions and hand them to Android to install (it asks you \
-                         first). Android has to allow synththing to install apps: Settings > Apps > \
-                         Special app access > Install unknown apps. Off: a new version is only \
-                         announced, once, with a link to get it.",
-                        |ui| ui.checkbox(&mut install_updates, "Install updates in the app"),
-                    );
-                }
-                setting_section(ui, "Getting started");
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .button("Welcome & starter pack...")
-                        .on_hover_text("The first-run window: starter songs and soundfonts")
-                        .clicked()
-                    {
-                        jump = Some(PrefJump::Welcome);
+                    if cfg!(target_os = "android") {
+                        with_info(
+                            ui,
+                            "Download new versions and hand them to Android to install (it asks you \
+                             first). Android has to allow synththing to install apps: Settings > Apps > \
+                             Special app access > Install unknown apps. Off: a new version is only \
+                             announced, once, with a link to get it.",
+                            |ui| ui.checkbox(&mut install_updates, "Install updates in the app"),
+                        );
                     }
-                    // (The tour shows the desktop's panels.)
-                    if !self.mobile() && ui.button("Take the tour").on_hover_text("A walk through the app").clicked() {
-                        jump = Some(PrefJump::Tour);
-                    }
+                });
+                settings_group(ui, "Getting started", |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui
+                            .button("Welcome & starter pack...")
+                            .on_hover_text("The first-run window: starter songs and soundfonts")
+                            .clicked()
+                        {
+                            jump = Some(PrefJump::Welcome);
+                        }
+                        // (The tour shows the desktop's panels.)
+                        if !self.mobile() && ui.button("Take the tour").on_hover_text("A walk through the app").clicked() {
+                            jump = Some(PrefJump::Tour);
+                        }
+                    });
                 });
             }
         }

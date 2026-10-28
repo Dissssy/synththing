@@ -4374,10 +4374,71 @@ pub fn icon(name: &str) -> &'static str {
 /// shows `info`, the longer explanation.
 /// The (i) sits at the row's right end, so they line up down a page.
 fn with_info(ui: &mut egui::Ui, info: &str, add: impl FnOnce(&mut egui::Ui) -> egui::Response) {
-    ui.horizontal(|ui| {
+    setting_row(ui, |ui| {
         add(ui).on_hover_text(info);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| info_icon(ui, info));
     });
+}
+
+/// One line of settings, across the whole width. In a `settings_group`,
+/// every other one is on the striped background, as a list's rows are.
+fn setting_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let id = egui::Id::new(SETTINGS_GROUP);
+    let striped = ui.ctx().data_mut(|d| {
+        d.get_temp_mut_or_default::<Option<usize>>(id).as_mut().map(|rows| {
+            *rows += 1;
+            *rows % 2 == 0
+        })
+    });
+    let background = ui.painter().add(egui::Shape::Noop);
+    let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(0, GROUP_ROW_MARGIN)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(add).inner
+    });
+    if striped == Some(true) {
+        let rect = inner.response.rect.expand2(egui::vec2(GROUP_MARGIN as f32, 0.0));
+        ui.painter().set(background, egui::Shape::rect_filled(rect, 0.0, ui.visuals().faint_bg_color));
+    }
+    inner.inner
+}
+
+/// Where `setting_row` counts the rows of the `settings_group` being drawn.
+const SETTINGS_GROUP: &str = "settings_group";
+/// The room around a settings group's contents, and above and below each
+/// of its rows.
+const GROUP_MARGIN: i8 = 8;
+const GROUP_ROW_MARGIN: i8 = 3;
+
+/// A box of settings under a heading, drawn as a list is: outlined, the
+/// heading on the header's color, the rows (`setting_row`) striped.
+fn settings_group<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let id = egui::Id::new(SETTINGS_GROUP);
+    let visuals = ui.visuals().clone();
+    let radius = 6u8;
+    ui.add_space(4.0);
+    let group = ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        egui::Frame::new()
+            .fill(visuals.extreme_bg_color)
+            .corner_radius(egui::CornerRadius { nw: radius, ne: radius, sw: 0, se: 0 })
+            .inner_margin(egui::Margin::symmetric(GROUP_MARGIN, 5))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.strong(title);
+            });
+        let outer = ui.ctx().data_mut(|d| d.get_temp::<Option<usize>>(id)).flatten();
+        ui.ctx().data_mut(|d| d.insert_temp(id, Some(0usize)));
+        let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(GROUP_MARGIN, 2)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(id, outer));
+        inner.inner
+    });
+    let rect = group.response.rect;
+    ui.painter().rect_stroke(rect, radius, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+    ui.add_space(6.0);
+    group.inner
 }
 
 /// How wide a setting's label is (`setting_label`), so the controls after
