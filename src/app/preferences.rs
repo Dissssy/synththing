@@ -129,6 +129,7 @@ impl App {
         let ctx = ui.ctx().clone();
         if self.keymap_capture.is_none()
             && !egui::Popup::is_any_open(&ctx)
+            && ctx.memory(|m| m.top_modal_layer()).is_none()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             close = true;

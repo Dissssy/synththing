@@ -49,6 +49,8 @@ pub(super) struct ApiState {
     new_token: Option<(String, String)>,
     /// The name being typed for a new app.
     new_name: String,
+    /// The program asked to be removed, by name, waiting to be confirmed.
+    removing: Option<String>,
     /// The main window's handle (an HWND on Windows), for the media
     /// controls.
     pub(super) window: Option<usize>,
@@ -776,12 +778,13 @@ impl App {
             if settings.apps.is_empty() {
                 setting_row(ui, |ui| ui.weak("None yet. Add one below to get its token."));
             } else {
-                programs_ui(ui, settings, &added, &mut remove, &mut remove_songs);
+                ui.scope(|ui| programs_ui(ui, settings, &added, &mut remove, &mut remove_songs));
             }
             setting_row(ui, |ui| {
                 let field = ui.add(egui::TextEdit::singleline(new_name).hint_text("Program name").desired_width(super::CONTROL_WIDTH));
                 let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let name = new_name.trim().to_string();
+                ui.add_space(6.0);
                 let add = ui.add_enabled(!name.is_empty(), egui::Button::new(format!("{}  Add", super::icon("plus"))));
                 if !name.is_empty() && (add.clicked() || entered) {
                     let (access, token) = Access::new(&name);
@@ -793,17 +796,37 @@ impl App {
             if let Some((name, token)) = &*new_token {
                 setting_row(ui, |ui| ui.label(format!("{name}'s token. Copy it now: it isn't shown again.")));
                 setting_row(ui, |ui| {
-                    let mut shown = token.as_str();
-                    ui.add(egui::TextEdit::singleline(&mut shown).font(egui::TextStyle::Monospace).desired_width(260.0));
                     if ui.add(super::row_icon_button(ui, "copy")).on_hover_text("Copy").clicked() {
                         ui.ctx().copy_text(token.clone());
                     }
+                    ui.add(egui::Label::new(egui::RichText::new(token.as_str()).monospace()).truncate());
                 });
             }
         });
         let remove_songs: Option<Vec<std::path::PathBuf>> = remove_songs.map(|keys| keys.iter().map(|k| self.songs.path(k)).collect());
-        if let Some(i) = remove {
-            self.config.api.apps.remove(i);
+        if remove.is_some() {
+            self.api.removing = remove;
+        }
+        if let Some(name) = self.api.removing.clone() {
+            let mut close = false;
+            let modal = egui::Modal::new(egui::Id::new("remove_program")).show(ui.ctx(), |ui| {
+                ui.set_width(super::fit_width(ui, 360.0));
+                ui.heading(format!("Remove {name}?"));
+                ui.label("Its token stops working. The songs it added stay.");
+                ui.add_space(8.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                    if ui.add(egui::Button::new(egui::RichText::new("Remove").color(ui.visuals().error_fg_color))).clicked() {
+                        self.config.api.apps.retain(|app| app.name != name);
+                        close = true;
+                    }
+                });
+            });
+            if close || modal.should_close() {
+                self.api.removing = None;
+            }
         }
         // (The usual Remove dialog, over the library, in place of
         // Preferences.)
@@ -917,13 +940,13 @@ const PERMISSIONS: [(&str, &str, fn(&mut Access) -> &mut bool); 8] = [
 ];
 
 /// The programs down the side, what each may do across the top, the cells
-/// in a checkerboard so a tick's row and column are easy to follow; then
-/// remove, and remove the songs it added.
+/// in a checkerboard so a tick's row and column are easy to follow. By
+/// each name, remove it (asked first) and remove the songs it added.
 fn programs_ui<'a>(
     ui: &mut egui::Ui,
     settings: &mut api::Settings,
     added: &std::collections::BTreeMap<&str, Vec<&'a str>>,
-    remove: &mut Option<usize>,
+    remove: &mut Option<String>,
     remove_songs: &mut Option<Vec<&'a str>>,
 ) {
     let height = ui.spacing().interact_size.y + 6.0;
@@ -938,7 +961,6 @@ fn programs_ui<'a>(
         }
         (rect, response)
     };
-    let any_added = settings.apps.iter().any(|app| added.contains_key(app.name.as_str()));
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
     ui.horizontal(|ui| {
         square(ui, 0, 0, name_width);
@@ -953,24 +975,22 @@ fn programs_ui<'a>(
         let row = i + 1;
         ui.horizontal(|ui| {
             let (rect, _) = square(ui, row, 0, name_width);
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(6.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
-            child.add(egui::Label::new(&app.name).truncate());
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(6.0, 0.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
+            if child.add(super::row_icon_button(&child, "trash")).on_hover_text("Remove this program...").clicked() {
+                *remove = Some(app.name.clone());
+            }
+            if let Some(keys) = added.get(app.name.as_str()) {
+                let plural = if keys.len() == 1 { "" } else { "s" };
+                let hover = format!("Remove the {} song{plural} {} added...", keys.len(), app.name);
+                if child.add(super::row_icon_button(&child, "broom")).on_hover_text(hover).clicked() {
+                    *remove_songs = Some(keys.clone());
+                }
+            }
+            child.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(egui::Label::new(&app.name).truncate()));
             for (column, (_, info, field)) in PERMISSIONS.iter().enumerate() {
                 let (rect, _) = square(ui, row, column + 1, cell.x);
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight)));
                 child.add(egui::Checkbox::without_text(field(app))).on_hover_text(*info);
-            }
-            ui.add_space(8.0);
-            let trash = super::row_icon_button(ui, "trash");
-            if ui.add(trash).on_hover_text("Remove this program: its token stops working. The songs it added stay").clicked() {
-                *remove = Some(i);
-            }
-            if any_added && let Some(keys) = added.get(app.name.as_str()) {
-                let plural = if keys.len() == 1 { "" } else { "s" };
-                let hover = format!("Remove the {} song{plural} {} added...", keys.len(), app.name);
-                if ui.add(super::row_icon_button(ui, "broom")).on_hover_text(hover).clicked() {
-                    *remove_songs = Some(keys.clone());
-                }
             }
         });
     }
