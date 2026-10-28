@@ -289,48 +289,15 @@ impl App {
         let missing: Vec<Missing> = self
             .all_rulesets()
             .into_iter()
-            .filter_map(|(_, ruleset)| {
+            .filter_map(|(id, ruleset)| {
                 let by = ruleset.rules.split.as_ref()?.by;
                 let keys = ruleset.rules.missing(&self.songs, &self.wishlist.list.wishes, now);
-                (!keys.is_empty()).then_some(Missing { name: ruleset.name, by, keys })
+                (!keys.is_empty()).then_some(Missing { id, by, keys })
             })
             .collect();
         let missing = Arc::new(missing);
         self.missing_info = Some((revision, missing.clone()));
         (revision, missing)
-    }
-
-    /// The last row of Rulesets: the songs each ruleset leaves out, to
-    /// fill in what they lack in Song info.
-    fn missing_ui(&mut self, ui: &mut egui::Ui) {
-        let (_, missing) = self.missing_info();
-        if missing.is_empty() {
-            super::setting_row(ui, |ui| {
-                ui.label(egui::RichText::new(super::icon("check-circle")).color(ui.visuals().weak_text_color()));
-                ui.weak("Every song has what your rulesets split by.");
-            });
-            return;
-        }
-        let mut edit = None;
-        for each in missing.iter() {
-            super::with_info(
-                ui,
-                "Songs a ruleset leaves out, as they don't say what it splits by. The filter button in Songs shows only them.",
-                |ui| {
-                    let n = each.keys.len();
-                    let warn = ui.label(egui::RichText::new(super::icon("warning")).color(ui.visuals().warn_fg_color));
-                    let text = ui.label(format!("{}: {n} song{} without {}", each.name, if n == 1 { "" } else { "s" }, lacking(each.by)));
-                    let button = ui.button("Edit them").on_hover_text("Open them in Song info, to fill it in for them all at once");
-                    if button.clicked() {
-                        edit = Some(each.keys.iter().map(|k| self.songs.path(k)).collect());
-                    }
-                    warn | text
-                },
-            );
-        }
-        if edit.is_some() {
-            self.details_for = edit;
-        }
     }
 
     /// Every ruleset: the built-in ones, then the user's, by ID.
@@ -345,7 +312,8 @@ impl App {
         let builtin = smart::builtin().map(|(id, ruleset)| (id.to_string(), ruleset, true));
         let own = self.config.rulesets.iter().map(|(id, ruleset)| (id.clone(), ruleset.clone(), false));
         let all: Vec<(String, Ruleset, bool)> = builtin.into_iter().chain(own).collect();
-        let (mut open, mut delete, mut new) = (None, None, false);
+        let (mut open, mut delete, mut new, mut edit) = (None, None, false, None);
+        let (_, missing) = self.missing_info();
         let hint = "A ruleset makes a playlist for each artist, album, genre... of the songs its rules pick. By Artist and By Album are built in.";
         super::settings_group("Rulesets").icon(SMART_ICON).hint(hint).show(ui, |ui| {
             let editable = rules_editable(ui.ctx());
@@ -356,6 +324,19 @@ impl App {
                     if builtin {
                         ui.label(egui::RichText::new(super::icon("lock-simple")).color(ui.visuals().weak_text_color()))
                             .on_hover_text("Built in: its rules can be viewed, not changed");
+                    }
+                    if let Some(each) = missing.iter().find(|m| m.id == id) {
+                        let n = each.keys.len();
+                        let warning = egui::Button::new(egui::RichText::new(super::icon("warning")).color(ui.visuals().warn_fg_color)).frame(false);
+                        let hover = format!(
+                            "{n} song{} without {}, which it leaves out. Click to fill it in for them all at once in Song info; \
+                             the filter button in Songs shows only them.",
+                            if n == 1 { "" } else { "s" },
+                            lacking(each.by)
+                        );
+                        if ui.add(warning).on_hover_text(hover).clicked() {
+                            edit = Some(each.keys.iter().map(|k| self.songs.path(k)).collect());
+                        }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if !builtin && ui.add(super::row_icon_button(ui, "trash")).on_hover_text("Delete").clicked() {
@@ -372,8 +353,10 @@ impl App {
             if editable {
                 super::setting_row(ui, |ui| new = ui.button(format!("{}  New ruleset...", super::icon("plus"))).clicked());
             }
-            self.missing_ui(ui);
         });
+        if edit.is_some() {
+            self.details_for = edit;
+        }
         if new {
             let rules = Rules { split: Some(Split { by: SplitBy::Genre, min: 1 }), ..Rules::default() };
             self.open_rules_editor(ui.ctx(), Editing::Ruleset(None), "By Genre".into(), rules, false);
@@ -389,10 +372,10 @@ impl App {
     }
 }
 
-/// What a ruleset leaves out for want of what it splits by: its name, what
+/// What a ruleset leaves out for want of what it splits by: its ID, what
 /// it splits by, and the songs (keys).
 pub(super) struct Missing {
-    pub name: String,
+    pub id: String,
     pub by: SplitBy,
     pub keys: Vec<String>,
 }

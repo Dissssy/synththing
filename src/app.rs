@@ -303,6 +303,8 @@ pub struct App {
     tap: SampleTap,
     /// Whoever listens to what plays, through the API.
     listeners: Arc<crate::audio_stream::Listeners>,
+    /// The audio output, for sounds the app itself makes.
+    mixer: rodio::mixer::Mixer,
     /// The visualizer's picture, shared with the windows that show it
     /// (`lock_panel`).
     visualizer: Arc<Mutex<VisualizerPanel>>,
@@ -632,6 +634,7 @@ impl App {
         config: Config,
         tap: SampleTap,
         listeners: Arc<crate::audio_stream::Listeners>,
+        mixer: rodio::mixer::Mixer,
         sample_rate: u32,
     ) -> Self {
         let songs_dir = config::music_dir().unwrap_or_else(|_| PathBuf::from("music"));
@@ -706,6 +709,7 @@ impl App {
             soundfont_selection: Selection::default(),
             tap,
             listeners,
+            mixer,
             visualizer: Arc::clone(&visualizer),
             script,
             scripts_dir,

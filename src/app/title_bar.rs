@@ -1,5 +1,5 @@
 //! The title bar along the top of the desktop layout: the wordmark (which
-//! just hops when clicked), then at the right the View, Layout,
+//! just hops, with a sound, when clicked), then at the right the View, Layout,
 //! Preferences, Help, Feedback and Notifications buttons (labelled when
 //! there's room, else icons, else all in one menu), and, while the window
 //! draws its own frame (`App::wants_native_frame` off), the window's
@@ -267,7 +267,7 @@ impl App {
         ui.weak(format!("synththing v{}", crate::build_info::describe()));
     }
 
-    /// The wordmark, which does nothing but hop when clicked (or the name,
+    /// The wordmark, which does nothing but hop (with a sound) when clicked (or the name,
     /// if it can't be drawn).
     fn wordmark_ui(&mut self, ui: &mut egui::Ui) {
         let height = ui.text_style_height(&egui::TextStyle::Button) * 1.25;
@@ -281,6 +281,7 @@ impl App {
         let now = ui.input(|i| i.time);
         if response.clicked() {
             ui.data_mut(|d| d.insert_temp(id, now));
+            self.play_hop();
         }
         let since = ui.data(|d| d.get_temp::<f64>(id)).map(|at| (now - at) as f32);
         let lift = match since {
@@ -294,6 +295,20 @@ impl App {
         ui.add_space(4.0);
     }
 }
+
+impl App {
+    /// The wordmark's hop sound, at the volume slider's volume.
+    fn play_hop(&self) {
+        use rodio::Source as _;
+        match rodio::Decoder::new(std::io::Cursor::new(HOP_SOUND)) {
+            Ok(sound) => self.mixer.add(sound.amplify(self.volume)),
+            Err(e) => log::warn!("the hop sound: {e}"),
+        }
+    }
+}
+
+/// What the wordmark's hop sounds like.
+const HOP_SOUND: &[u8] = include_bytes!("../../assets/sounds/hop.wav");
 
 /// A button on the bar, every one alike: `text` without a frame until
 /// it's hovered.
