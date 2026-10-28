@@ -1955,7 +1955,7 @@ impl App {
         let mut changed = false;
         with_info(ui, "The name your uploads show. Each upload can use a different one.", |ui| {
             let label = super::setting_label(ui, "Post as");
-            label | ui.add(egui::TextEdit::singleline(&mut self.config.library.author_name).desired_width(super::CONTROL_WIDTH))
+            label | ui.add(egui::TextEdit::singleline(&mut self.config.library.author_name).desired_width(super::control_width(ui, 0.0)))
         });
         with_info(
             ui,

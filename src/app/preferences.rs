@@ -6,7 +6,7 @@
 
 use eframe::egui;
 
-use super::{categories_body, icon_button, row_icon_button, nice_name, setting_label, setting_row, settings_group, toggle_chip, with_info, App, CONTROL_WIDTH};
+use super::{categories_body, icon_button, row_icon_button, row_icon_button_room, nice_name, setting_label, control_width, setting_row, setting_slider, settings_group, toggle_chip, with_info, App};
 use crate::audio::{AudioCommand, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
 
@@ -231,7 +231,6 @@ impl App {
         let mut mini_player = self.config.mini_player.unwrap_or(true);
         let mut mini_player_shape = self.config.mini_player_shape;
         let mut jump = None;
-        ui.spacing_mut().slider_width = CONTROL_WIDTH;
         match tab {
             PrefTab::Appearance => {
                 settings_group("Look").icon("palette").show(ui, |ui| {
@@ -239,7 +238,7 @@ impl App {
                     let mut picked = None;
                     setting_row(ui, |ui| {
                         setting_label(ui, "Theme");
-                        egui::ComboBox::from_id_salt("preferences_theme").width(CONTROL_WIDTH).selected_text(&current).show_ui(ui, |ui| {
+                        egui::ComboBox::from_id_salt("preferences_theme").width(control_width(ui, row_icon_button_room(ui))).selected_text(&current).show_ui(ui, |ui| {
                             for name in self.theme_names() {
                                 if ui.selectable_label(name == current, &name).clicked() {
                                     picked = Some(name);
@@ -263,7 +262,7 @@ impl App {
                          0% doesn't flash. Each bar's first beat flashes for longer.",
                         |ui| {
                             let label = setting_label(ui, "Pulse with the beat");
-                            label | ui.add(egui::Slider::new(&mut beat_pulse, 0.0..=100.0).suffix("%").fixed_decimals(0))
+                            label | setting_slider(ui, egui::Slider::new(&mut beat_pulse, 0.0..=100.0).suffix("%").fixed_decimals(0), 0.0)
                         },
                     );
                     with_info(
@@ -273,7 +272,7 @@ impl App {
                         |ui| {
                             ui.add_enabled_ui(beat_pulse > 0.0, |ui| {
                                 let label = setting_label(ui, "Flash length");
-                                label | ui.add(egui::Slider::new(&mut pulse_length, 10.0..=100.0).suffix("%").fixed_decimals(0))
+                                label | setting_slider(ui, egui::Slider::new(&mut pulse_length, 10.0..=100.0).suffix("%").fixed_decimals(0), 0.0)
                             })
                             .inner
                         },
@@ -302,7 +301,7 @@ impl App {
                         ),
                         |ui| {
                             let label = setting_label(ui, "Audio buffer");
-                            label | ui.add(egui::Slider::new(&mut buffer_ms, MIN_BUFFER_MS..=MAX_BUFFER_MS).suffix(" ms"))
+                            label | setting_slider(ui, egui::Slider::new(&mut buffer_ms, MIN_BUFFER_MS..=MAX_BUFFER_MS).suffix(" ms"), 0.0)
                         },
                     );
                 });
@@ -361,7 +360,7 @@ impl App {
                             setting_row(ui, |ui| {
                                 setting_label(ui, "Mini player shape");
                                 egui::ComboBox::from_id_salt("mini_player_shape")
-                                    .width(CONTROL_WIDTH)
+                                    .width(control_width(ui, 0.0))
                                     .selected_text(mini_player_shape.name())
                                     .show_ui(ui, |ui| {
                                         for shape in crate::config::MiniPlayerShape::ALL {
@@ -389,7 +388,7 @@ impl App {
                          (not playing, not up next, not hovered) is unloaded to free memory.",
                         |ui| {
                             let label = setting_label(ui, "Unload unused files after");
-                            label | ui.add(egui::Slider::new(&mut expiry, PRELOAD_EXPIRY_RANGE).suffix(" s").logarithmic(true))
+                            label | setting_slider(ui, egui::Slider::new(&mut expiry, PRELOAD_EXPIRY_RANGE).suffix(" s").logarithmic(true), 0.0)
                         },
                     );
                 });
@@ -413,7 +412,7 @@ impl App {
                          are passed over too.",
                         |ui| {
                             let label = setting_label(ui, "Also ignore when grouping");
-                            label | ui.add(egui::TextEdit::singleline(&mut group_ignore).hint_text("e.g. ー").desired_width(CONTROL_WIDTH))
+                            label | ui.add(egui::TextEdit::singleline(&mut group_ignore).hint_text("e.g. ー").desired_width(control_width(ui, 0.0)))
                         },
                     );
                     with_info(
@@ -423,7 +422,7 @@ impl App {
                          or four in a square.",
                         |ui| {
                             let label = setting_label(ui, "Letters on tiles without art");
-                            label | ui.add(egui::Slider::new(&mut tile_letters, 1..=4))
+                            label | setting_slider(ui, egui::Slider::new(&mut tile_letters, 1..=4), 0.0)
                         },
                     );
                 });
@@ -469,7 +468,7 @@ impl App {
                         |ui| {
                             let label = setting_label(ui, "Dropped songs");
                             let combo = egui::ComboBox::from_id_salt("dropped_songs")
-                                .width(CONTROL_WIDTH)
+                                .width(control_width(ui, 0.0))
                                 .selected_text(dropped_songs.name())
                                 .show_ui(ui, |ui| {
                                     for choice in crate::config::DroppedSongs::ALL {
@@ -497,7 +496,7 @@ impl App {
                         |ui| {
                             let label = setting_label(ui, "Pixel scale");
                             let combo = egui::ComboBox::from_id_salt("visualizer_pixel_scale")
-                                .width(CONTROL_WIDTH)
+                                .width(control_width(ui, 0.0))
                                 .selected_text(format!("{visualizer_scale}x"))
                                 .show_ui(ui, |ui| {
                                     for scale in config::VISUALIZER_SCALES {

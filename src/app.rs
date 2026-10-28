@@ -4301,15 +4301,19 @@ pub fn icon(name: &str) -> &'static str {
 /// A setting on one line (`add`), with an (i) after it: hovering either
 /// shows `info`, the longer explanation.
 /// The (i) sits at the row's right end, so they line up down a page.
+/// The (i) goes in first, so the setting gets only the room left of it.
 fn with_info(ui: &mut egui::Ui, info: &str, add: impl FnOnce(&mut egui::Ui) -> egui::Response) {
     setting_row(ui, |ui| {
-        add(ui).on_hover_text(info);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| info_icon(ui, info));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            info_icon(ui, info);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| add(ui).on_hover_text(info));
+        });
     });
 }
 
-/// One line of settings, across the whole width. In a `settings_group`,
-/// every other one is on the striped background, as a list's rows are.
+/// One line of settings, across the whole width (text too long for it
+/// wraps). In a `settings_group`, every other one is on the striped
+/// background, as a list's rows are.
 fn setting_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let id = egui::Id::new(SETTINGS_GROUP);
     let striped = ui.ctx().data_mut(|d| {
@@ -4321,7 +4325,11 @@ fn setting_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R 
     let background = ui.painter().add(egui::Shape::Noop);
     let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(0, GROUP_ROW_MARGIN)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.horizontal(add).inner
+        ui.horizontal(|ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+            add(ui)
+        })
+        .inner
     });
     if striped == Some(true) {
         let rect = inner.response.rect.expand2(egui::vec2(GROUP_MARGIN as f32, 0.0));
@@ -4431,8 +4439,25 @@ impl<'a> SettingsGroup<'a> {
 /// How wide a setting's label is (`setting_label`), so the controls after
 /// the labels line up.
 const LABEL_WIDTH: f32 = 160.0;
-/// How wide a setting's dropdown or slider is.
+/// How wide a setting's dropdown or slider is, where there's room.
 const CONTROL_WIDTH: f32 = 180.0;
+/// The room a slider's value box (`setting_slider`) takes after it: the
+/// widest of them ("1000 ms"), and the gap before it.
+const SLIDER_VALUE_WIDTH: f32 = 64.0;
+
+/// How wide a setting's control is, after its `setting_label`: its usual
+/// width, less on a narrow screen, so it and the `beside` points after it
+/// fit in the row.
+fn control_width(ui: &egui::Ui, beside: f32) -> f32 {
+    CONTROL_WIDTH.min(ui.available_width() - beside).max(0.0)
+}
+
+/// A setting's slider, as wide as `control_width` makes it with its value
+/// box after it (and `beside` points more).
+fn setting_slider(ui: &mut egui::Ui, slider: egui::Slider, beside: f32) -> egui::Response {
+    ui.spacing_mut().slider_width = control_width(ui, SLIDER_VALUE_WIDTH + beside);
+    ui.add(slider)
+}
 
 /// A setting's name, in a column of its own width (less on a narrow
 /// screen): the control goes after it.
@@ -4754,6 +4779,12 @@ pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
 pub(crate) fn row_icon_button(ui: &egui::Ui, name: &str) -> egui::Button<'static> {
     let height = ui.spacing().interact_size.y;
     egui::Button::new(egui::RichText::new(icon(name)).size(height - 4.0)).min_size(egui::vec2(height + 6.0, height))
+}
+
+/// The room a `row_icon_button` takes in a row, with the gap before it:
+/// what to leave for one after a setting's control (`control_width`).
+pub(crate) fn row_icon_button_room(ui: &egui::Ui) -> f32 {
+    ui.spacing().interact_size.y + 6.0 + ui.spacing().item_spacing.x
 }
 
 /// How wide the transport (`App::transport_ui`) is: five icon buttons and

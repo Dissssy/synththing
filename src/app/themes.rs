@@ -272,10 +272,12 @@ impl App {
             |ui| {
                 let label = super::setting_label(ui, "UI scale");
                 let mut scale = self.themes.scale_drag.unwrap_or_else(|| ctx.zoom_factor());
-                let slider = ui.add(
+                let slider = super::setting_slider(
+                    ui,
                     egui::Slider::new(&mut scale, MIN_SCALE..=MAX_SCALE)
                         .step_by(0.05)
                         .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+                    super::row_icon_button_room(ui),
                 );
                 if slider.dragged() {
                     self.themes.scale_drag = Some(scale);

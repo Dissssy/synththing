@@ -82,7 +82,8 @@ impl App {
 fn row(ui: &mut egui::Ui, name: &str, size: Size, total: u64) -> egui::Response {
     super::setting_row(ui, |ui| {
         let label = super::setting_label(ui, name);
-        let width = super::CONTROL_WIDTH;
+        // (Leaving room for the size and the count after it.)
+        let width = super::control_width(ui, 120.0);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 6.0), egui::Sense::hover());
         let visuals = ui.visuals();
         ui.painter().rect_filled(rect, 3.0, visuals.extreme_bg_color);

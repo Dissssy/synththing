@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Fixed
+- Preferences fits on a phone's screen again: sliders, dropdowns and the (i) buttons no longer run off the right edge.
+
 ### Changed
 - Check again under your hub, in the sync settings, also has the hub check its addresses from the internet again, instead of only after its next 6-hourly check.
 
