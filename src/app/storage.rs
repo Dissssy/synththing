@@ -36,28 +36,31 @@ impl App {
             }
         }
 
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Storage").strong().size(15.0));
-            if let Some(Ok(usage)) = &state.usage {
-                ui.label(storage::size_text(usage.total()));
+        let title = match &state.usage {
+            Some(Ok(usage)) => format!("Storage \u{b7} {}", storage::size_text(usage.total())),
+            _ if state.counting.is_some() => "Storage \u{b7} counting...".into(),
+            _ => "Storage".into(),
+        };
+        let mut repair = false;
+        super::settings_group(&title).icon("hard-drives").show(ui, |ui| {
+            match &state.usage {
+                Some(Ok(usage)) => {
+                    let total = usage.total().max(1);
+                    row(ui, "Songs", usage.songs, total);
+                    row(ui, "Soundfonts", usage.soundfonts, total);
+                    row(ui, "Everything else", usage.other, total).on_hover_text("Settings, playlists, scripts, the log and sync state");
+                }
+                Some(Err(e)) => {
+                    super::setting_row(ui, |ui| ui.colored_label(ui.visuals().warn_fg_color, format!("Couldn't count it: {e}")));
+                }
+                None => {}
             }
-            if state.counting.is_some() {
-                ui.spinner();
-            }
+            super::with_info(ui, "Check every song: damaged ones are fetched again, unplayable ones can be removed.", |ui| {
+                let button = ui.button(format!("{}  Repair library...", super::icon("wrench")));
+                repair = button.clicked();
+                button
+            });
         });
-        match &state.usage {
-            Some(Ok(usage)) => {
-                egui::Grid::new("preferences_storage").num_columns(2).show(ui, |ui| {
-                    row(ui, "Songs", usage.songs);
-                    row(ui, "Soundfonts", usage.soundfonts);
-                    row(ui, "Settings, playlists and the rest", usage.other);
-                });
-            }
-            Some(Err(e)) => {
-                ui.colored_label(ui.visuals().warn_fg_color, format!("Couldn't count it: {e}"));
-            }
-            None => {}
-        }
 
         if (reopened || state.usage.is_none()) && state.counting.is_none() {
             let (tx, rx) = mpsc::channel();
@@ -68,16 +71,28 @@ impl App {
                 ctx.request_repaint();
             });
         }
+        if repair {
+            self.open_repair();
+        }
     }
 }
 
-fn row(ui: &mut egui::Ui, name: &str, size: Size) {
-    ui.label(name);
-    ui.label(format!(
-        "{} ({} file{})",
-        storage::size_text(size.bytes),
-        size.files,
-        if size.files == 1 { "" } else { "s" }
-    ));
-    ui.end_row();
+/// A kind of file: its name, a bar of its share of `total`, its size and
+/// how many files.
+fn row(ui: &mut egui::Ui, name: &str, size: Size, total: u64) -> egui::Response {
+    super::setting_row(ui, |ui| {
+        let label = super::setting_label(ui, name);
+        let width = super::CONTROL_WIDTH;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 6.0), egui::Sense::hover());
+        let visuals = ui.visuals();
+        ui.painter().rect_filled(rect, 3.0, visuals.extreme_bg_color);
+        let share = size.bytes as f32 / total as f32;
+        let filled = egui::Rect::from_min_size(rect.min, egui::vec2((width * share).max(if size.bytes > 0 { 2.0 } else { 0.0 }), rect.height()));
+        ui.painter().rect_filled(filled, 3.0, visuals.selection.bg_fill);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.weak(format!("{} file{}", size.files, if size.files == 1 { "" } else { "s" }));
+            ui.label(storage::size_text(size.bytes));
+        });
+        label
+    })
 }
