@@ -1,5 +1,5 @@
 //! The title bar along the top of the desktop layout: the wordmark (which
-//! just hops when clicked), then at the right the View, Layout, Record,
+//! just hops when clicked), then at the right the View, Layout,
 //! Preferences, Help, Feedback and Notifications buttons (labelled when
 //! there's room, else icons, else all in one menu), and, while the window
 //! draws its own frame (`App::wants_native_frame` off), the window's
@@ -24,7 +24,6 @@ const GRIP: f32 = 48.0;
 enum Item {
     View,
     Layout,
-    Record,
     Preferences,
     Help,
     Feedback,
@@ -32,13 +31,12 @@ enum Item {
 }
 
 impl Item {
-    const ALL: [Item; 7] = [Item::View, Item::Layout, Item::Record, Item::Preferences, Item::Help, Item::Feedback, Item::Notifications];
+    const ALL: [Item; 6] = [Item::View, Item::Layout, Item::Preferences, Item::Help, Item::Feedback, Item::Notifications];
 
     fn icon(self) -> &'static str {
         match self {
             Item::View => "squares-four",
             Item::Layout => "layout",
-            Item::Record => "record",
             Item::Preferences => "gear",
             Item::Help => "question",
             Item::Feedback => "chat-circle-dots",
@@ -50,7 +48,6 @@ impl Item {
         match self {
             Item::View => "View",
             Item::Layout => "Layout",
-            Item::Record => "Record",
             Item::Preferences => "Preferences",
             Item::Help => "Help",
             Item::Feedback => "Feedback",
@@ -159,11 +156,6 @@ impl App {
             Item::Help => {
                 menu(button).ui(ui, |ui| self.help_menu_ui(ui));
             }
-            Item::Record => {
-                let busy = self.recording.recorder.is_some() || self.recording.render.is_some();
-                let (response, _) = menu(button.selected(busy)).ui(ui, |ui| self.recording_menu_ui(ui));
-                response.on_hover_text("Record the visualizer");
-            }
             Item::Preferences => {
                 if ui.add(button.selected(self.preferences_open)).on_hover_text(item.label()).clicked() {
                     self.toggle_preferences();
@@ -193,9 +185,6 @@ impl App {
                     }
                     Item::Help => {
                         ui.menu_button(text, |ui| self.help_menu_ui(ui));
-                    }
-                    Item::Record => {
-                        ui.menu_button(text, |ui| self.recording_menu_ui(ui));
                     }
                     Item::Notifications => {
                         let text = match self.notifications_unread() {

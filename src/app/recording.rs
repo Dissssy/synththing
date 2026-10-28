@@ -774,28 +774,7 @@ impl App {
         }
     }
 
-    /// The synththing menu's recording items.
-    pub(super) fn recording_menu_ui(&mut self, ui: &mut egui::Ui) {
-        if let Some(render) = &self.recording.render {
-            if ui.add_enabled(!render.stopping(), egui::Button::new("Stop rendering")).clicked() {
-                render.stop();
-            }
-            return;
-        }
-        match &self.recording.recorder {
-            None => {
-                if ui.button("Record...").on_hover_text("Record the visualizer to a video. F9 starts a free recording straight away.").clicked() {
-                    self.open_record_window();
-                }
-            }
-            Some(_) => {
-                self.recording_controls_ui(ui);
-            }
-        }
-    }
-
-    /// Start now / Pause / Stop while recording: above the visualizer, and
-    /// in the synththing menu.
+    /// Start now / Pause / Stop while recording, above the visualizer.
     fn recording_controls_ui(&mut self, ui: &mut egui::Ui) {
         let Some(recorder) = &self.recording.recorder else { return };
         let paused = recorder.paused();
@@ -816,9 +795,27 @@ impl App {
         }
     }
 
-    /// Above the visualizer: a recording's controls while there is one,
-    /// saving, and the last recording (shown in its folder).
+    /// Above the visualizer: Record (or a recording's controls while there
+    /// is one, or Stop rendering), saving, and the last recording (shown in
+    /// its folder).
     pub(super) fn recording_buttons_ui(&mut self, ui: &mut egui::Ui) {
+        if let Some(render) = &self.recording.render {
+            if ui.add_enabled(!render.stopping(), egui::Button::new("Stop rendering")).clicked() {
+                render.stop();
+            }
+        } else if self.recording.recorder.is_none() {
+            let record = super::colored_icon_button("record", egui::Color32::from_rgb(230, 70, 70));
+            if ui
+                .add(record)
+                .on_hover_text(format!(
+                    "Record the visualizer to a video. Start/stop recording{} starts a free one straight away.",
+                    super::commands::hint(ui.ctx(), super::Command::ToggleRecording)
+                ))
+                .clicked()
+            {
+                self.open_record_window();
+            }
+        }
         self.recording_controls_ui(ui);
         if !self.recording.finishing.is_empty() {
             ui.add(egui::Spinner::new());
@@ -913,36 +910,24 @@ impl App {
     /// The Recording section of Preferences.
     pub(super) fn recording_preferences_ui(&mut self, ui: &mut egui::Ui) {
         self.record_format_ui(ui);
-        let dir = self.config.recordings_dir();
         let mut pick_folder = false;
-        ui.horizontal(|ui| {
-            ui.label("Saved to");
-            ui.weak(dir.display().to_string());
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Change...").clicked() {
-                pick_folder = true;
-            }
-            if ui.button("Open").clicked() {
-                let _ = std::fs::create_dir_all(&dir);
-                open_in_file_manager(&dir.join("."));
-            }
-        });
-        match ffmpeg::find() {
-            Some(path) => {
-                ui.weak(format!("Encoding with {}", path.display()));
-            }
-            None => {
-                ui.horizontal(|ui| {
-                    ui.weak("ffmpeg isn't set up yet.");
-                    if ffmpeg::CAN_DOWNLOAD && ui.small_button("Get ffmpeg...").clicked() {
+        self.saved_to_ui(ui, Some(&mut pick_folder));
+        super::setting_row(ui, |ui| {
+            super::setting_label(ui, "Encoder");
+            match ffmpeg::find() {
+                Some(path) => {
+                    ui.add(egui::Label::new(egui::RichText::new(path.display().to_string()).weak()).truncate());
+                }
+                None => {
+                    ui.weak("ffmpeg isn't set up yet");
+                    if ffmpeg::CAN_DOWNLOAD && ui.button("Get ffmpeg...").clicked() {
                         self.recording.prompt_open = true;
                     }
-                });
+                }
             }
-        }
+        });
         #[cfg(not(target_os = "android"))]
-        if pick_folder && let Some(folder) = rfd::FileDialog::new().set_directory(&dir).pick_folder() {
+        if pick_folder && let Some(folder) = rfd::FileDialog::new().set_directory(self.config.recordings_dir()).pick_folder() {
             self.config.record_dir = Some(folder);
             if let Err(e) = self.config.save() {
                 self.status = format!("Couldn't save preferences: {e}");
@@ -950,61 +935,88 @@ impl App {
         }
     }
 
-    /// Size, frame rate and quality (Preferences, and the Record window).
+    /// Where videos go, opened from the folder button; with `pick`, a
+    /// button to change it too.
+    fn saved_to_ui(&self, ui: &mut egui::Ui, pick: Option<&mut bool>) {
+        let dir = self.config.recordings_dir();
+        super::setting_row(ui, |ui| {
+            super::setting_label(ui, "Saved to");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(super::row_icon_button(ui, "folder-open")).on_hover_text("Open the folder").clicked() {
+                    let _ = std::fs::create_dir_all(&dir);
+                    open_in_file_manager(&dir.join("."));
+                }
+                if let Some(pick) = pick {
+                    *pick = ui.add(super::row_icon_button(ui, "pencil-simple")).on_hover_text("Save them somewhere else").clicked();
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(egui::Label::new(egui::RichText::new(dir.display().to_string()).weak()).truncate());
+                });
+            });
+        });
+    }
+
+    /// Size, frame rate and quality (Preferences, and the Record window),
+    /// a row each.
     fn record_format_ui(&mut self, ui: &mut egui::Ui) {
         let mut resolution = self.config.record_resolution;
         let mut fps = self.config.record_fps.filter(|f| FRAME_RATES.contains(f)).unwrap_or(recorder::DEFAULT_FPS);
         let mut quality = self.config.record_quality;
         let recording = self.recording.recorder.is_some();
         if recording {
-            ui.weak("(Can't be changed while recording.)");
+            super::setting_row(ui, |ui| ui.weak("These can't be changed while recording."));
         }
         ui.add_enabled_ui(!recording, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Size");
-                egui::ComboBox::from_id_salt("record_resolution")
-                    .selected_text(resolution.label())
-                    .show_ui(ui, |ui| {
-                        for option in Resolution::ALL {
-                            if option == Resolution::V720 {
-                                ui.separator();
+            super::with_info(
+                ui,
+                "Records just the visualizer, at this size whatever the window's size, with what you \
+                 hear (your own notes included, before the volume slider). Bigger sizes cost the script \
+                 more time per frame.",
+                |ui| {
+                    let label = super::setting_label(ui, "Size");
+                    let combo = egui::ComboBox::from_id_salt("record_resolution")
+                        .width(super::CONTROL_WIDTH)
+                        .selected_text(resolution.label())
+                        .show_ui(ui, |ui| {
+                            for option in Resolution::ALL {
+                                if option == Resolution::V720 {
+                                    ui.separator();
+                                }
+                                ui.selectable_value(&mut resolution, option, option.label());
                             }
-                            ui.selectable_value(&mut resolution, option, option.label());
-                        }
-                        ui.separator();
-                        let custom = matches!(resolution, Resolution::Custom(..));
-                        if ui.selectable_label(custom, "Custom...").clicked() && !custom {
-                            // (starting from the size picked so far)
-                            let (w, h) = resolution.size();
-                            resolution = Resolution::custom(w as u32, h as u32);
-                        }
-                    });
-                ui.label("at");
-                egui::ComboBox::from_id_salt("record_fps").selected_text(format!("{fps} fps")).show_ui(ui, |ui| {
-                    for option in FRAME_RATES {
-                        ui.selectable_value(&mut fps, option, format!("{option} fps"));
-                    }
-                });
-                super::info_icon(ui, 
-                    "Records just the visualizer, at this size whatever the window's size, with what you \
-                     hear (your own notes included, before the volume slider). F9 starts and stops, F10 \
-                     pauses. Bigger sizes cost the script more time per frame.",
-                );
-            });
+                            ui.separator();
+                            let custom = matches!(resolution, Resolution::Custom(..));
+                            if ui.selectable_label(custom, "Custom...").clicked() && !custom {
+                                // (starting from the size picked so far)
+                                let (w, h) = resolution.size();
+                                resolution = Resolution::custom(w as u32, h as u32);
+                            }
+                        });
+                    label | combo.response
+                },
+            );
             if let Resolution::Custom(w, h) = resolution {
                 let (mut w, mut h) = (w, h);
-                ui.horizontal(|ui| {
-                    ui.add_space(24.0);
+                super::setting_row(ui, |ui| {
+                    super::setting_label(ui, "Custom size");
                     let range = CUSTOM_SIZES;
                     ui.add(egui::DragValue::new(&mut w).range(range.clone()).speed(2.0).suffix(" wide"));
                     ui.label("x");
                     ui.add(egui::DragValue::new(&mut h).range(range).speed(2.0).suffix(" high"));
-                    if ui.small_button("Swap").on_hover_text("Landscape to portrait, or back").clicked() {
+                    if ui.add(super::row_icon_button(ui, "arrows-left-right")).on_hover_text("Swap: landscape to portrait, or back").clicked() {
                         std::mem::swap(&mut w, &mut h);
                     }
                 });
                 resolution = Resolution::custom(w, h);
             }
+            super::setting_row(ui, |ui| {
+                super::setting_label(ui, "Frame rate");
+                egui::ComboBox::from_id_salt("record_fps").width(super::CONTROL_WIDTH).selected_text(format!("{fps} fps")).show_ui(ui, |ui| {
+                    for option in FRAME_RATES {
+                        ui.selectable_value(&mut fps, option, format!("{option} fps"));
+                    }
+                });
+            });
             let quality_info = match quality {
                 Quality::Standard => {
                     "Standard plays everywhere (browsers, Discord, phones). Color is stored at half \
@@ -1020,8 +1032,8 @@ impl App {
                 }
             };
             super::with_info(ui, quality_info, |ui| {
-                let label = ui.label("Quality");
-                let combo = egui::ComboBox::from_id_salt("record_quality").selected_text(quality.label()).show_ui(
+                let label = super::setting_label(ui, "Quality");
+                let combo = egui::ComboBox::from_id_salt("record_quality").width(super::CONTROL_WIDTH).selected_text(quality.label()).show_ui(
                     ui,
                     |ui| {
                         for option in Quality::ALL {
@@ -1034,15 +1046,18 @@ impl App {
         });
         let (width, height) = resolution.size();
         if width * height > 1920 * 1080 {
-            ui.colored_label(
-                ui.visuals().warn_fg_color,
-                format!(
-                    "{:.1}x the pixels of 1080p: most scripts can't draw that {fps} times a second. \
-                     When one can't keep up, the video repeats frames (the REC badge says so); \
-                     try it with `run-script --video` first, or record at 30 fps.",
-                    (width * height) as f32 / (1920.0 * 1080.0)
-                ),
-            );
+            super::setting_row(ui, |ui| {
+                ui.add(
+                    egui::Label::new(egui::RichText::new(format!(
+                        "{:.1}x the pixels of 1080p: most scripts can't draw that {fps} times a second. \
+                         When one can't keep up, the video repeats frames (the REC badge says so); \
+                         try it with `run-script --video` first, or record at 30 fps.",
+                        (width * height) as f32 / (1920.0 * 1080.0)
+                    ))
+                    .color(ui.visuals().warn_fg_color))
+                    .wrap(),
+                );
+            });
         }
         let fps_setting = (fps != recorder::DEFAULT_FPS).then_some(fps);
         let changed = resolution != self.config.record_resolution
@@ -1076,38 +1091,40 @@ impl App {
             .or(self.viewed_playlist)
             .is_some_and(|l| self.playlists.lists.get(l).is_some_and(|l| !l.playlist.entries.is_empty()));
         let response = egui::Modal::new(egui::Id::new("record_window")).show(ctx, |ui| {
-            ui.set_width(super::fit_width(ui, 460.0));
+            ui.set_width(super::fit_width(ui, 540.0));
             ui.heading("Record");
             ui.add_space(6.0);
-            egui::Grid::new("record_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                ui.label("What");
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.radio_value(&mut draft.kind, RecordKind::Song, "A song, from the start")
-                            .on_hover_text("Plays the song from the top and records until it ends.");
-                        let name = song_name.clone();
-                        let playing = draft.song.is_some() && draft.song == self.current_song;
-                        match name {
-                            Some(name) if playing => ui.label(format!("{name} (playing)")),
-                            Some(name) => ui.label(name),
-                            None => ui.weak("(none yet)"),
-                        };
+            ui.spacing_mut().item_spacing.y = 8.0;
+            super::settings_group("What").icon("music-notes").show(ui, |ui| {
+                super::setting_row(ui, |ui| {
+                    ui.radio_value(&mut draft.kind, RecordKind::Song, "A song, from the start")
+                        .on_hover_text("Plays the song from the top and records until it ends.");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Choose...").clicked() {
                             choose_song = true;
                         }
+                        let playing = draft.song.is_some() && draft.song == self.current_song;
+                        let text = match song_name.clone() {
+                            Some(name) if playing => format!("{name} (playing)"),
+                            Some(name) => name,
+                            None => "(none yet)".to_string(),
+                        };
+                        ui.add(egui::Label::new(egui::RichText::new(text).weak()).truncate());
                     });
-                    if draft.song.as_deref().is_some_and(is_midi_path) && !self.config.soundfonts.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.add_space(24.0);
-                            ui.label("Soundfont");
-                            let shown = draft.soundfont.as_deref().map(nice_name).unwrap_or_else(|| "(none)".to_string());
-                            egui::ComboBox::from_id_salt("record_soundfont").selected_text(shown).show_ui(ui, |ui| {
-                                for sf in &self.config.soundfonts {
-                                    ui.selectable_value(&mut draft.soundfont, Some(sf.clone()), nice_name(sf));
-                                }
-                            });
+                });
+                if draft.song.as_deref().is_some_and(is_midi_path) && !self.config.soundfonts.is_empty() {
+                    super::setting_row(ui, |ui| {
+                        ui.add_space(24.0);
+                        super::setting_label(ui, "Soundfont");
+                        let shown = draft.soundfont.as_deref().map(nice_name).unwrap_or_else(|| "(none)".to_string());
+                        egui::ComboBox::from_id_salt("record_soundfont").width(super::CONTROL_WIDTH).selected_text(shown).show_ui(ui, |ui| {
+                            for sf in &self.config.soundfonts {
+                                ui.selectable_value(&mut draft.soundfont, Some(sf.clone()), nice_name(sf));
+                            }
                         });
-                    }
+                    });
+                }
+                super::setting_row(ui, |ui| {
                     ui.add_enabled_ui(has_playlist, |ui| {
                         ui.radio_value(&mut draft.kind, RecordKind::Playlist, "This playlist, from the start")
                             .on_hover_text(
@@ -1115,51 +1132,30 @@ impl App {
                             )
                             .on_disabled_hover_text("Open a playlist with songs in it (View > Playlists).");
                     });
+                });
+                super::setting_row(ui, |ui| {
                     ui.radio_value(&mut draft.kind, RecordKind::Free, "Free: start now, stop it yourself (F9)");
                 });
-                ui.end_row();
-
-                ui.label("Script");
-                ui.vertical(|ui| {
+            });
+            super::settings_group("Script").icon("code").hint("Picking one here switches the visualizer to it.").show(ui, |ui| {
+                super::setting_row(ui, |ui| {
+                    super::setting_label(ui, "Script");
                     let current = self
                         .active_script
                         .and_then(|i| self.available_scripts.get(i))
                         .map(|p| lua_visualizer::display_name(p))
                         .unwrap_or_else(|| "(none)".to_string());
-                    egui::ComboBox::from_id_salt("record_script").selected_text(current).height(f32::INFINITY).show_ui(ui, |ui| {
-                        picked_script = self.script_list_ui(ui, false);
-                    });
-                    ui.weak("Picking one here switches the visualizer to it.");
+                    egui::ComboBox::from_id_salt("record_script")
+                        .width(super::CONTROL_WIDTH)
+                        .selected_text(current)
+                        .height(f32::INFINITY)
+                        .show_ui(ui, |ui| {
+                            picked_script = self.script_list_ui(ui, false);
+                        });
                 });
-                ui.end_row();
-
-                ui.label("How");
-                ui.vertical(|ui| {
-                    let free = draft.kind == RecordKind::Free;
-                    ui.radio_value(&mut draft.render, false, "Live: recorded as it plays")
-                        .on_hover_text("What you see and hear, as it happens; you can play along.");
-                    ui.add_enabled_ui(!free, |ui| {
-                        ui.radio_value(&mut draft.render, true, "Render: made in the background")
-                            .on_hover_text(
-                                "Every frame drawn, however long each takes, with the sound exactly in step: no \
-                                 repeated frames at any size. Faster or slower than real time; the visualizer \
-                                 shows its progress meanwhile. Nothing to play along with.",
-                            )
-                            .on_disabled_hover_text("A song or a playlist, not a free recording.");
-                    });
-                });
-                ui.end_row();
-
-                ui.label("Video");
-                ui.vertical(|ui| {
-                    self.record_format_ui(ui);
-                    ui.weak(format!("Saved to {} (Preferences > Visualizer)", self.config.recordings_dir().display()));
-                });
-                ui.end_row();
-
-                ui.label("Playing");
-                ui.vertical(|ui| {
+                super::setting_row(ui, |ui| {
                     let rendering = draft.render && draft.kind != RecordKind::Free;
+                    super::setting_label(ui, "Playing");
                     if options.record_auto && rendering {
                         ui.weak("Rendered, it plays itself (Auto).");
                     } else if options.record_auto {
@@ -1170,11 +1166,32 @@ impl App {
                     } else {
                         ui.weak("This script doesn't play itself: what you do is what's recorded.");
                     }
-                    if options.record_prepare {
-                        ui.weak("It gets ready before each song; the video starts when it is.");
-                    }
                 });
-                ui.end_row();
+                if options.record_prepare {
+                    super::setting_row(ui, |ui| ui.weak("It gets ready before each song; the video starts when it is."));
+                }
+            });
+            super::settings_group("How").icon("lightning").show(ui, |ui| {
+                let free = draft.kind == RecordKind::Free;
+                super::setting_row(ui, |ui| {
+                    ui.radio_value(&mut draft.render, false, "Live: recorded as it plays")
+                        .on_hover_text("What you see and hear, as it happens; you can play along.");
+                });
+                super::setting_row(ui, |ui| {
+                    ui.add_enabled_ui(!free, |ui| {
+                        ui.radio_value(&mut draft.render, true, "Render: made in the background")
+                            .on_hover_text(
+                                "Every frame drawn, however long each takes, with the sound exactly in step: no \
+                                 repeated frames at any size. Faster or slower than real time; the visualizer \
+                                 shows its progress meanwhile. Nothing to play along with.",
+                            )
+                            .on_disabled_hover_text("A song or a playlist, not a free recording.");
+                    });
+                });
+            });
+            super::settings_group("Video").icon("film-strip").show(ui, |ui| {
+                self.record_format_ui(ui);
+                self.saved_to_ui(ui, None);
             });
             ui.add_space(10.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
