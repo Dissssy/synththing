@@ -347,6 +347,8 @@ impl App {
                         ui.spinner();
                     } else if ui.add(row_icon_button(ui, "arrows-clockwise")).on_hover_text("Check again").clicked() {
                         self.sync.engine.check_hub_now();
+                        // (And the hub its addresses from the internet.)
+                        self.send_live(Some(hub.device.clone()), crate::hub::CHECK_TOPIC, serde_json::Value::Null);
                     }
                 });
             });
