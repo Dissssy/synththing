@@ -118,12 +118,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" synththing-android-arm64.apk
 
-  # The docs as a website (book.toml), added to the release as
-  # synththing-docs.tar.gz; the official server's update script puts them
-  # at synththing.p51.nl/docs/ (docs/DEPLOY.md).
-  docs:
+  # The website (deploy/website.Dockerfile): the front page and the docs
+  # rendered by mdBook (book.toml), pushed to
+  # ghcr.io/<owner>/synththing-website as :<version> and :latest, which
+  # the official server's stack runs at synththing.p51.nl (docs/DEPLOY.md).
+  website:
     needs: windows
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v5
 
@@ -132,14 +136,33 @@ jobs:
           tool: mdbook@0.4.40
 
       - name: Build
-        run: mdbook build
-
-      - name: Add to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          tar -czf synththing-docs.tar.gz -C target/book .
-          gh release upload "$GITHUB_REF_NAME" synththing-docs.tar.gz
+          mdbook build
+          mkdir site
+          cp deploy/website/index.html site/
+          cp -r target/book site/docs
+
+      - name: Image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/synththing-website" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: site
+          file: deploy/website.Dockerfile
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ github.ref_name }}
+            ${{ steps.image.outputs.name }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=synththing website and docs
 
   # The container image for servers and hubs (docs/DEPLOY.md, docs/HUB.md):
   # the Linux build just added, in deploy/release.Dockerfile's runtime,
@@ -188,7 +211,7 @@ jobs:
   # Linux build just made (it knows every function they use, so their
   # minimum app versions come out right). The server works those out too,
   # with its own binary, so this waits until it's running this release
-  # (its update timer installs it within the hour). Without the
+  # (Watchtower pulls the new image within the hour). Without the
   # SYNTHTHING_PUBLISH_KEY secret, this does nothing.
   scripts:
     needs: linux
