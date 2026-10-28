@@ -6,7 +6,7 @@
 
 use eframe::egui;
 
-use super::{categories_body, icon_button, nice_name, setting_label, setting_row, settings_group, with_info, App, CONTROL_WIDTH};
+use super::{categories_body, icon_button, row_icon_button, nice_name, setting_label, setting_row, settings_group, with_info, App, CONTROL_WIDTH};
 use crate::audio::{AudioCommand, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
 
@@ -205,7 +205,7 @@ impl App {
                                 }
                             }
                         });
-                        if ui.add(icon_button("pencil-simple")).on_hover_text("Edit themes: make your own").clicked() {
+                        if ui.add(row_icon_button(ui, "pencil-simple")).on_hover_text("Edit themes: make your own").clicked() {
                             jump = Some(PrefJump::Themes);
                         }
                     });

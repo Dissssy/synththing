@@ -283,7 +283,7 @@ impl App {
                     self.themes.scale_drag = None;
                     ctx.set_zoom_factor(scale);
                 }
-                if ui.add(super::icon_button("arrow-counter-clockwise")).on_hover_text("Back to 100%").clicked() {
+                if ui.add(super::row_icon_button(ui, "arrow-counter-clockwise")).on_hover_text("Back to 100%").clicked() {
                     ctx.set_zoom_factor(1.0);
                 }
                 label | slider

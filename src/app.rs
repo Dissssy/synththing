@@ -4658,6 +4658,14 @@ pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(icon(name)).size(16.0)).min_size(egui::vec2(28.0, 24.0))
 }
 
+/// An icon button as tall as the other controls in a row of settings (or
+/// any row of text-sized widgets), so everything in the row lines up on
+/// its middle. Give it a hover text saying what it does.
+pub(crate) fn row_icon_button(ui: &egui::Ui, name: &str) -> egui::Button<'static> {
+    let height = ui.spacing().interact_size.y;
+    egui::Button::new(egui::RichText::new(icon(name)).size(height - 4.0)).min_size(egui::vec2(height + 6.0, height))
+}
+
 /// How wide the transport (`App::transport_ui`) is: five icon buttons and
 /// play, with the gaps between.
 const TRANSPORT_WIDTH: f32 = 5.0 * 28.0 + PLAY_WIDTH + 5.0 * 8.0;
