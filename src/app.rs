@@ -2736,7 +2736,9 @@ impl App {
             }
         }
         let mut tabs = SectionTabs { app: self, shared, alone, joined };
-        egui::CentralPanel::default().show(ui, |ui| {
+        // (Nothing over the panels: the title bar has room below its buttons.)
+        let frame = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 8 });
+        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             DockArea::new(&mut dock)
                 .id(egui::Id::new("section_dock"))
                 .style(crate::theme::dock_style(ui.style()))
