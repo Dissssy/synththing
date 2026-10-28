@@ -1397,7 +1397,7 @@ impl App {
         });
         ui.add_space(2.0);
 
-        // The view toggles at the left, the transport centred, speed and
+        // The devices button at the left, the transport centred, speed and
         // volume at the right; when they don't fit, the transport centred
         // over the rest.
         let width = ui.available_width();
@@ -1412,20 +1412,20 @@ impl App {
         let (left, right) = (egui::Layout::left_to_right(egui::Align::Center), egui::Layout::right_to_left(egui::Align::Center));
         if side >= SIDE_WIDTH {
             let rect = line(ui);
-            ui.scope_builder(zone(rect, 0.0, side, left), |ui| self.views_ui(ui, view));
+            ui.scope_builder(zone(rect, 0.0, side, left), |ui| self.devices_button_ui(ui, view));
             ui.scope_builder(zone(rect, side, center, left), |ui| self.transport_ui(ui, view));
             ui.scope_builder(zone(rect, side + center, side, right), |ui| self.speed_volume_ui(ui, view));
         } else {
             let rect = line(ui);
             ui.scope_builder(zone(rect, side.max(0.0), center, left), |ui| self.transport_ui(ui, view));
             ui.add_space(4.0);
-            if width >= VIEWS_WIDTH + SIDE_WIDTH {
+            if width >= DEVICES_WIDTH + SIDE_WIDTH {
                 let rect = line(ui);
-                ui.scope_builder(zone(rect, 0.0, VIEWS_WIDTH, left), |ui| self.views_ui(ui, view));
-                ui.scope_builder(zone(rect, VIEWS_WIDTH, width - VIEWS_WIDTH, right), |ui| self.speed_volume_ui(ui, view));
+                ui.scope_builder(zone(rect, 0.0, DEVICES_WIDTH, left), |ui| self.devices_button_ui(ui, view));
+                ui.scope_builder(zone(rect, DEVICES_WIDTH, width - DEVICES_WIDTH, right), |ui| self.speed_volume_ui(ui, view));
             } else {
                 ui.horizontal_wrapped(|ui| {
-                    self.views_ui(ui, view);
+                    self.devices_button_ui(ui, view);
                     self.speed_volume_ui(ui, view);
                 });
             }
@@ -1504,27 +1504,6 @@ impl App {
         }
     }
 
-    /// The toggles for the Visualizer, Playlists, Up next
-    /// and other devices.
-    fn views_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
-        let visualizer = self.is_open(Section::Visualizer);
-        if ui.add(icon_button("monitor-play").selected(visualizer)).on_hover_text(format!("Visualizer{}", commands::hint(ui.ctx(), Command::ToggleVisualizer))).clicked() {
-            self.set_open(Section::Visualizer, !visualizer);
-        }
-        let playlists = self.is_open(Section::Groupings) && self.groupings.shown_id() == groupings::PLAYLISTS;
-        if ui.add(icon_button("playlist").selected(playlists)).on_hover_text("Playlists").clicked() {
-            if playlists {
-                self.set_open(Section::Groupings, false);
-            } else {
-                self.groupings.show(groupings::PLAYLISTS);
-                self.set_open(Section::Groupings, true);
-                layout::focus(&mut self.dock, Section::Groupings);
-            }
-        }
-        self.queue_button_ui(ui);
-        self.devices_button_ui(ui, view);
-    }
-
     /// Speed and volume, each an icon, a slider and its value (in a
     /// right-to-left layout). The speed's icon puts it back to 1x.
     fn speed_volume_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
@@ -1553,18 +1532,52 @@ impl App {
 
     fn soundfont_ui(&mut self, ui: &mut egui::Ui) {
         self.starter_progress_ui(ui);
-        ui.horizontal(|ui| {
-            if self.mobile() {
+        let mobile = self.mobile();
+        let mut browse = false;
+        let count = match self.config.soundfonts.len() {
+            1 => "1 soundfont".to_string(),
+            n => format!("{n} soundfonts"),
+        };
+        let left = |ui: &mut egui::Ui| {
+            if mobile {
                 if ui.button(format!("{}  Import soundfonts...", icon("plus"))).on_hover_text("Copy soundfonts into synththing").clicked() {
                     crate::import::start(crate::import::Kind::Soundfonts, &["sf2"]);
                 }
-            } else if ui.add(icon_button("plus")).on_hover_text("Add a soundfont...").clicked() {
-                self.open_soundfont_browser();
+            } else {
+                browse = ui.add(icon_button("plus")).on_hover_text("Add a soundfont...").clicked();
             }
-        });
+        };
+        select_list::toolbar(ui, left, count, |_| {});
+        if browse {
+            self.open_soundfont_browser();
+        }
 
         let active_sf = self.active_sf;
         let touch = select_list::touch(ui.ctx());
+        // The header, as Up next's (Name, then the size at the right).
+        let size_width = if self.config.soundfonts.is_empty() {
+            placeholder(ui, "No soundfonts yet.\nAdd one with + to play MIDI songs.");
+            0.0
+        } else if touch {
+            0.0
+        } else {
+            let id = egui::Id::new("soundfonts_header");
+            let widths: select_list::Widths = ui.ctx().data_mut(|d| d.get_persisted(id.with("widths"))).unwrap_or_default();
+            let width = select_list::column_width(ui.ctx(), id, "size", &widths, SOUNDFONT_SIZE_WIDTH);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y), egui::Sense::hover());
+            let strong = |text: &str| egui::RichText::new(text).strong();
+            let columns = [select_list::Column { key: "size", title: strong("Size"), width, numeric: true }];
+            let header = select_list::Header { title: strong("Name"), columns: &columns, lead: 0.0, trail: 0.0, min_main: 120.0 };
+            if let Some((key, width)) = select_list::header(ui, id, rect, header).resized {
+                let mut widths = widths;
+                match width {
+                    Some(width) => widths.insert(key, width),
+                    None => widths.remove(&key),
+                };
+                ui.ctx().data_mut(|d| d.insert_persisted(id.with("widths"), widths));
+            }
+            width
+        };
         let mut remove = None;
         let mut use_idx = None;
         let output = select_list::show(ui, "soundfonts", &self.config.soundfonts, &mut self.soundfont_selection, active_sf, |ui, row, path| {
@@ -1593,7 +1606,7 @@ impl App {
                     select_list::two_lines(ui, std::iter::empty(), text, Some(detail), scroll);
                     return;
                 }
-                ui.weak(size);
+                select_list::cell(ui, size_width, egui::RichText::new(size).weak(), false, true);
                 let hover = format!(
                     "{}\nClick to use; drag onto a MIDI playlist entry to override its soundfont",
                     path.display()
@@ -2514,12 +2527,7 @@ impl App {
     fn dock_ui(&mut self, ui: &mut egui::Ui, shared: &PlaybackShared) {
         if self.open_sections.is_empty() {
             egui::CentralPanel::default().show(ui, |ui| {
-                ui.centered_and_justified(|ui| {
-                    ui.weak(
-                        "Nothing open. Use the View menu at the top to show Songs (pick something \
-                         to play), Playlists, the Visualizer, and more.",
-                    );
-                });
+                placeholder(ui, "Nothing open.\nUse the View menu at the top to show Songs (pick something to play), Playlists, the Visualizer, and more.");
             });
             return;
         }
@@ -2650,17 +2658,23 @@ impl App {
         let autoplay = self.autoplay;
         let mut autoplay_clicked = false;
         let mut tools = |ui: &mut egui::Ui| {
+            #[cfg(target_os = "android")]
             if ui.add(icon_button("plus")).on_hover_text("Import songs: copy them into synththing's library").clicked() {
                 crate::import::start(crate::import::Kind::Songs, SONG_EXTENSIONS);
             }
             #[cfg(not(target_os = "android"))]
-            if ui
-                .add(icon_button("folder-plus"))
-                .on_hover_text("Import a folder: every song in it and in the folders inside it")
-                .clicked()
-            {
-                crate::import::start_folder(SONG_EXTENSIONS);
-            }
+            egui::containers::menu::MenuButton::from_button(icon_button("plus"))
+                .config(crate::menu::config(ui.ctx()))
+                .ui(ui, |ui| {
+                    if ui.button("Songs...").on_hover_text("Copy songs into synththing's library").clicked() {
+                        crate::import::start(crate::import::Kind::Songs, SONG_EXTENSIONS);
+                    }
+                    if ui.button("A folder...").on_hover_text("Every song in a folder and in the folders inside it").clicked() {
+                        crate::import::start_folder(SONG_EXTENSIONS);
+                    }
+                })
+                .0
+                .on_hover_text("Import songs");
             #[cfg(not(target_os = "android"))]
             if ui
                 .add_enabled(!selected.is_empty(), icon_button("info"))
@@ -3347,6 +3361,7 @@ impl App {
                 }
             }
             Command::PreviousTrack => self.previous_track(view.position),
+            Command::ToggleVisualizer if self.layout_locked() => toast::show(ctx, "The layout is locked (Layout > Lock layout)"),
             Command::ToggleVisualizer => self.set_open(Section::Visualizer, !self.is_open(Section::Visualizer)),
             Command::ExitFullscreen => self.exit_dedicated(ctx),
             Command::DedicatedVisualizer => {
@@ -4261,6 +4276,18 @@ fn window_room(ctx: &egui::Context) -> egui::Rect {
     ctx.content_rect().shrink(ctx.global_style().interaction.resize_grab_radius_corner)
 }
 
+/// What an empty panel shows: `text` in weak text, centered in the room
+/// left in `ui`, wrapped to a readable width (a line break in it starts a
+/// new line). Only painted, so a list drawn after it (a drop target, say)
+/// still gets the room.
+pub fn placeholder(ui: &egui::Ui, text: &str) {
+    let rect = ui.available_rect_before_wrap();
+    let mut job = egui::text::LayoutJob::simple(text.to_string(), egui::TextStyle::Body.resolve(ui.style()), ui.visuals().weak_text_color(), (rect.width() - 32.0).clamp(80.0, 420.0));
+    job.halign = egui::Align::Center;
+    let galley = ui.painter().layout_job(job);
+    ui.painter().galley(rect.center() - egui::vec2(0.0, galley.size().y / 2.0), galley, ui.visuals().weak_text_color());
+}
+
 /// A Phosphor icon by its name (`shield-check`, `SCROLL`), for text: the
 /// scroll if there's no such icon.
 pub fn icon(name: &str) -> &'static str {
@@ -4734,9 +4761,11 @@ pub(crate) fn row_icon_button(ui: &egui::Ui, name: &str) -> egui::Button<'static
 const TRANSPORT_WIDTH: f32 = 5.0 * 28.0 + PLAY_WIDTH + 5.0 * 8.0;
 /// How wide each side of it has to be for the bar to fit on one line.
 const SIDE_WIDTH: f32 = 380.0;
-/// How wide the view toggles (`App::views_ui`) are, at most.
-const VIEWS_WIDTH: f32 = 4.0 * 28.0 + 3.0 * 8.0;
+/// How wide the devices button (`App::devices_button_ui`) is.
+const DEVICES_WIDTH: f32 = 28.0;
 const PLAY_WIDTH: f32 = 44.0;
+/// The Soundfonts list's Size column's own width.
+const SOUNDFONT_SIZE_WIDTH: f32 = 72.0;
 const TRANSPORT_HEIGHT: f32 = 28.0;
 
 /// The handle on the top edge of a section without a tab bar (in the

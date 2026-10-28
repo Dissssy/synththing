@@ -8,9 +8,8 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
-use super::{icon_button, layout, toast, App};
-use crate::layout::Section;
-use crate::song_list;
+use super::{icon_button, toast, App};
+use crate::{select_list, song_list};
 use crate::playlist::{NowPlaying, Rng};
 
 impl App {
@@ -70,42 +69,27 @@ impl App {
         self.now_playing.as_ref().filter(|_| !self.playing_queued)
     }
 
-    /// The controls' Up next button: shows or hides the Up next tab.
-    pub(super) fn queue_button_ui(&mut self, ui: &mut egui::Ui) {
-        let count = self.queue.len();
-        let open = self.is_open(Section::Queue);
-        let hover = match count {
-            0 => "Up next: nothing queued (right-click songs to play them next or add them to the queue)".to_string(),
-            1 => "Up next: 1 song".to_string(),
-            n => format!("Up next: {n} songs"),
-        };
-        if ui.add(icon_button("list-numbers").selected(open)).on_hover_text(hover).clicked() {
-            self.set_open(Section::Queue, !open);
-            if !open {
-                layout::focus(&mut self.dock, Section::Queue);
-            }
-        }
-    }
-
     /// The Up next tab: the queue's songs, shown as the Songs list shows
     /// songs (its columns, without its search or sorting). A click plays
     /// one now (taking it out); right-click to move songs to the top or
     /// take them out, and Delete takes the selected ones out. Songs drag
     /// in from Songs (or anywhere songs drag from), and rows drag to move.
     pub(super) fn queue_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            let count = self.queue.len();
-            ui.weak(match count {
-                0 => "Nothing queued. Right-click songs to play them next or add them to the queue.".to_string(),
-                1 => "1 song".to_string(),
-                n => format!("{n} songs"),
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled(count > 0, icon_button("trash")).on_hover_text("Clear the queue").clicked() {
-                    self.queue.clear();
-                }
-            });
+        let count = self.queue.len();
+        let text = match count {
+            1 => "1 song".to_string(),
+            n => format!("{n} songs"),
+        };
+        let mut clear = false;
+        select_list::toolbar(ui, |_| {}, text, |ui| {
+            clear = ui.add_enabled(count > 0, icon_button("trash")).on_hover_text("Clear the queue").clicked();
         });
+        if clear {
+            self.queue.clear();
+        }
+        if count == 0 {
+            super::placeholder(ui, "Nothing queued.\nRight-click songs to play them next or add them to the queue, or drag them here.");
+        }
         let mut view = self.config.songs_view.clone();
         let keys = song_list::column_keys(&view);
         let revision = {

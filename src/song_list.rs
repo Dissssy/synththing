@@ -20,7 +20,7 @@ use std::sync::Arc;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
-use crate::fields::{self, Def, Field, Value};
+use crate::fields::{self, Def, Field, Kind, Value};
 use crate::matching::Term;
 use crate::search::{Problem, Search};
 use crate::search_box::{self, SearchBox};
@@ -269,6 +269,8 @@ struct Built {
     problems: Vec<Problem>,
     /// How many songs the query found.
     found: usize,
+    /// How many songs there are without the query.
+    total: usize,
 }
 
 enum Item {
@@ -449,8 +451,9 @@ fn song_row(
             return;
         }
         let hits = |i: usize| hits.values.get(i).map_or(&[][..], Vec::as_slice);
-        for (i, ((_, width), value)) in shown.iter().zip(&song.values).enumerate().rev() {
-            select_list::cell(ui, *width, highlighted(ui, value.as_ref().map_or("", |v| v.text.as_str()), hits(i), true), scroll);
+        for (i, ((def, width), value)) in shown.iter().zip(&song.values).enumerate().rev() {
+            let text = highlighted(ui, value.as_ref().map_or("", |v| v.text.as_str()), hits(i), true);
+            select_list::cell(ui, *width, text, scroll, def.kind == Kind::Number);
         }
         select_list::chips(ui, tags());
         marked(ui);
@@ -463,7 +466,7 @@ fn song_row(
 /// columns (at their widths) and the names, titled by `title` (given a
 /// column's key and label).
 fn header(ui: &mut egui::Ui, id: egui::Id, rect: egui::Rect, shown: &[(&Def, f32)], title: impl Fn(&str, &str) -> egui::RichText) -> select_list::HeaderOutput {
-    let columns: Vec<_> = shown.iter().map(|(c, width)| select_list::Column { key: c.key, title: title(c.key, c.label), width: *width }).collect();
+    let columns: Vec<_> = shown.iter().map(|(c, width)| select_list::Column { key: c.key, title: title(c.key, c.label), width: *width, numeric: c.kind == Kind::Number }).collect();
     // (Over the rows' notes.)
     let lead = select_list::STAR_WIDTH + ui.spacing().item_spacing.x;
     let header = select_list::Header { title: title("name", "Name"), columns: &columns, lead, trail: 0.0, min_main: MIN_NAME_WIDTH };
@@ -710,7 +713,11 @@ impl SongList {
         let mut search = |list: &mut Self, ui: &mut egui::Ui| {
             let built = list.built.as_ref();
             let problems = built.map_or(&[][..], |b| b.problems.as_slice());
-            let found = built.filter(|b| !b.query.trim().is_empty()).map(|b| if b.found == 1 { "1 song".to_string() } else { format!("{} songs", b.found) });
+            let found = built.map(|b| match (b.found, b.total) {
+                (found, total) if found != total => format!("{found} of {total} songs"),
+                (1, _) => "1 song".to_string(),
+                (found, _) => format!("{found} songs"),
+            });
             // (A field's values read once for each rest of the query and
             // library revision.)
             let cache = &mut list.values;
@@ -812,16 +819,17 @@ impl SongList {
                 let queue = matches.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false, plays: e.song.plays.clone() }).collect();
                 (matches.into_iter().map(Item::Song).collect(), queue)
             };
+            let total = if query.trim().is_empty() { songs.len() } else { source.songs("").0.len() };
             let empty = songs.is_empty() && query.trim().is_empty();
             let query = query.to_string();
             self.generation += 1;
-            self.built = Some(Built { revision, view: view.listing(), keys: keys.clone(), query, empty, items, queue, problems: search.problems, found });
+            self.built = Some(Built { revision, view: view.listing(), keys: keys.clone(), query, empty, items, queue, problems: search.problems, found, total });
             self.active_row = None;
         }
         let built = self.built.as_ref().expect("the rows were just made");
         let items = built.items.as_slice();
         if built.empty {
-            ui.weak("No songs yet: import some, or download them from the Library.");
+            crate::app::placeholder(ui, "No songs yet.\nImport some with +, or download them from the Library.");
         }
         let active = *self.active_row.get_or_insert_with(|| self.active.as_ref().and_then(|(path, group)| active_row(items, path, group.as_deref())));
         let mut toggle = None;
@@ -1360,9 +1368,11 @@ mod tests {
                 .collect();
         }
         let x = |text: &str| texts.iter().find(|(t, _)| t == text).map(|(_, x)| *x).unwrap();
+        // (Numbers sit at their column's right: their text is placed by its
+        // right end.)
         assert_eq!(x("Year"), x("2024"), "the year column's title over its values");
         assert!(texts.iter().filter(|(t, _)| t == "Artist").all(|(_, at)| *at == x("Artist")), "the artist column's title over its values");
-        assert_eq!(x("2024") + 45.0 + select_list::EDGE, 800.0, "the last column at the row's end");
+        assert_eq!(x("2024") + select_list::EDGE, 800.0, "the last column at the row's end");
     }
 
     #[test]

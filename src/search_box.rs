@@ -43,7 +43,7 @@ pub struct Output {
 
 impl SearchBox {
     /// Draw it (filling the rest of the row), `problems` and `found` (how
-    /// many it found, said so, when there's a query) from the query as
+    /// many it found, said at its right end) from the query as
     /// last parsed, `complete` giving the completion of a query at a
     /// cursor, its values written as a mode says.
     pub fn ui(
