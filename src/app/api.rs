@@ -781,7 +781,7 @@ impl App {
                 ui.scope(|ui| programs_ui(ui, settings, &added, &mut remove, &mut remove_songs));
             }
             setting_row(ui, |ui| {
-                let field = ui.add(egui::TextEdit::singleline(new_name).hint_text("Program name").desired_width(super::CONTROL_WIDTH));
+                let field = ui.add(egui::TextEdit::singleline(new_name).hint_text("Program name").desired_width(super::control_width(ui, 0.0)));
                 let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let name = new_name.trim().to_string();
                 ui.add_space(6.0);

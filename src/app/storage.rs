@@ -77,12 +77,16 @@ impl App {
     }
 }
 
+/// The room a `row`'s size and file count take after its bar: about
+/// "123.4 MB  1234 files", and the gaps.
+const COUNTS_WIDTH: f32 = 120.0;
+
 /// A kind of file: its name, a bar of its share of `total`, its size and
 /// how many files.
 fn row(ui: &mut egui::Ui, name: &str, size: Size, total: u64) -> egui::Response {
     super::setting_row(ui, |ui| {
         let label = super::setting_label(ui, name);
-        let width = super::CONTROL_WIDTH;
+        let width = super::control_width(ui, COUNTS_WIDTH);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 6.0), egui::Sense::hover());
         let visuals = ui.visuals();
         ui.painter().rect_filled(rect, 3.0, visuals.extreme_bg_color);

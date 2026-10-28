@@ -47,8 +47,14 @@ built entirely from these pieces.
 ## Settings
 
 - One setting per row. A label column (`setting_label`, a fixed width) then
-  the control at a fixed width (`CONTROL_WIDTH`), so controls line up down
-  the page.
+  the control at one width (`control_width`; dropdowns through
+  `setting_combo`, sliders through `setting_slider`), so controls line up
+  down the page. That's 180 pt where the row has room and less on a narrow
+  screen, leaving room for what comes after it (an icon button:
+  `row_icon_button_room`), so nothing runs off a phone's screen. Never give
+  a settings control a fixed width of its own.
+- Text in a setting row (a checkbox's label, say) wraps to the room it has
+  instead of running past the row; a dropdown's choice is cut off instead.
 - The longer explanation is an (i) at the right end of the row
   (`with_info`); hovering the row or the (i) shows it. No paragraphs of help
   text above settings.

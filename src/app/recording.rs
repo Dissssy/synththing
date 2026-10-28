@@ -974,8 +974,7 @@ impl App {
                  more time per frame.",
                 |ui| {
                     let label = super::setting_label(ui, "Size");
-                    let combo = egui::ComboBox::from_id_salt("record_resolution")
-                        .width(super::CONTROL_WIDTH)
+                    let combo = super::setting_combo(ui, "record_resolution", 0.0)
                         .selected_text(resolution.label())
                         .show_ui(ui, |ui| {
                             for option in Resolution::ALL {
@@ -1011,7 +1010,7 @@ impl App {
             }
             super::setting_row(ui, |ui| {
                 super::setting_label(ui, "Frame rate");
-                egui::ComboBox::from_id_salt("record_fps").width(super::CONTROL_WIDTH).selected_text(format!("{fps} fps")).show_ui(ui, |ui| {
+                super::setting_combo(ui, "record_fps", 0.0).selected_text(format!("{fps} fps")).show_ui(ui, |ui| {
                     for option in FRAME_RATES {
                         ui.selectable_value(&mut fps, option, format!("{option} fps"));
                     }
@@ -1033,7 +1032,7 @@ impl App {
             };
             super::with_info(ui, quality_info, |ui| {
                 let label = super::setting_label(ui, "Quality");
-                let combo = egui::ComboBox::from_id_salt("record_quality").width(super::CONTROL_WIDTH).selected_text(quality.label()).show_ui(
+                let combo = super::setting_combo(ui, "record_quality", 0.0).selected_text(quality.label()).show_ui(
                     ui,
                     |ui| {
                         for option in Quality::ALL {
@@ -1117,7 +1116,7 @@ impl App {
                         ui.add_space(24.0);
                         super::setting_label(ui, "Soundfont");
                         let shown = draft.soundfont.as_deref().map(nice_name).unwrap_or_else(|| "(none)".to_string());
-                        egui::ComboBox::from_id_salt("record_soundfont").width(super::CONTROL_WIDTH).selected_text(shown).show_ui(ui, |ui| {
+                        super::setting_combo(ui, "record_soundfont", 0.0).selected_text(shown).show_ui(ui, |ui| {
                             for sf in &self.config.soundfonts {
                                 ui.selectable_value(&mut draft.soundfont, Some(sf.clone()), nice_name(sf));
                             }
@@ -1145,8 +1144,7 @@ impl App {
                         .and_then(|i| self.available_scripts.get(i))
                         .map(|p| lua_visualizer::display_name(p))
                         .unwrap_or_else(|| "(none)".to_string());
-                    egui::ComboBox::from_id_salt("record_script")
-                        .width(super::CONTROL_WIDTH)
+                    super::setting_combo(ui, "record_script", 0.0)
                         .selected_text(current)
                         .height(f32::INFINITY)
                         .show_ui(ui, |ui| {
