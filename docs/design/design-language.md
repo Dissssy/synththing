@@ -21,6 +21,12 @@ built entirely from these pieces.
   checkerboard, so a cell's row and column are easy to follow.
 - Shared list behavior (column headers, resizing, widths) lives in the
   shared list code (`select_list`), never per list.
+- Lines between columns run down the rows, with a small gap between rows.
+  Number columns (and their headings) sit at the right of their column.
+- Over a list, one toolbar row (`select_list::toolbar`): its buttons, how
+  many it holds in weak text, then any buttons at the right end.
+- An empty panel says so in the middle (`placeholder`): a short first
+  line, then what to do on the next, wrapped to fit.
 
 ## Sections
 
