@@ -254,6 +254,9 @@ pub struct HubPlan {
     pub device: String,
     /// This device reaches it directly now.
     pub direct: bool,
+    /// This device moves songs only to and from it (Only through my hub),
+    /// directly or through the relay.
+    pub only: bool,
 }
 
 /// The path of `device`'s want of the song `key`.
@@ -297,13 +300,16 @@ pub fn plan(
         .collect();
     let holds = |who: &str, key: &str| key.get(..HAVE_PREFIX).is_some_and(|p| has.get(who).is_some_and(|have| have.contains(p)));
     let hub_has = |key: &str| hub.is_some_and(|hub| holds(&hub.device, key));
-    let pullers: BTreeSet<&str> = leaves
+    let devices: BTreeMap<&str, DeviceLeaf> = leaves
         .iter()
-        .filter_map(|(path, value)| Some((path.strip_prefix("device/")?, value)))
-        .filter(|(_, value)| serde_json::from_value::<DeviceLeaf>((*value).clone()).is_ok_and(|leaf| leaf.pulls))
-        .map(|(id, _)| id)
+        .filter_map(|(path, value)| Some((path.strip_prefix("device/")?, serde_json::from_value::<DeviceLeaf>(value.clone()).ok()?)))
         .collect();
     let pulls = hub.is_some_and(|hub| hub.direct && hub.device != device);
+    // (Songs go to a device that moves them only through the hub from the
+    // hub alone, and from it to the hub alone.)
+    let hub_device = hub.map(|hub| hub.device.as_str());
+    let only_hub = |who: &str| hub_device.is_some_and(|hub| hub != who) && devices.get(who).is_some_and(|leaf| leaf.hub_only);
+    let only = hub.is_some_and(|hub| hub.only && hub.device != device);
     let mut tasks = Vec::new();
     for &key in &waiting {
         if !wanters.contains_key(key) && !busy.contains(key) {
@@ -323,7 +329,9 @@ pub fn plan(
             tasks.push(Task::Pull(key.to_string()));
         } else if store.has(key) {
             // (A device taking songs from the hub takes this one there.)
-            let to: Vec<String> = who.iter().filter(|&&w| w != device && !(pullers.contains(w) && hub_has(key))).map(|w| w.to_string()).collect();
+            let pulled = |w: &str| devices.get(w).is_some_and(|leaf| leaf.pulls) && hub_has(key);
+            let allowed = |w: &str| if only || only_hub(w) { hub_device == Some(device) || hub_device == Some(w) } else { true };
+            let to: Vec<String> = who.iter().filter(|&&w| w != device && !pulled(w) && allowed(w)).map(|w| w.to_string()).collect();
             if !to.is_empty() {
                 sends.push(Task::Send { key: key.to_string(), to });
             }
@@ -619,6 +627,10 @@ struct DeviceLeaf {
     /// directly: no one sends those to it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pulls: bool,
+    /// It moves songs only to and from the hub (Only through my hub): no
+    /// one else sends it any.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    hub_only: bool,
 }
 
 /// A device in the transfers.
@@ -672,13 +684,13 @@ pub fn gone_quiet(fields: &Fields, me: &str, now: i64) -> Vec<String> {
 /// Note in the transfers' `leaves` that `device` is there, as `name`,
 /// and whether it `pulls` songs from the hub (once a day, or when one of
 /// those changes: not to write the transfers over and over).
-pub fn note_device(leaves: &mut BTreeMap<String, Value>, device: &str, name: &str, pulls: bool, now: i64) {
+pub fn note_device(leaves: &mut BTreeMap<String, Value>, device: &str, name: &str, pulls: bool, hub_only: bool, now: i64) {
     let path = format!("device/{device}");
     let noted = leaves.get(&path).and_then(|v| serde_json::from_value::<DeviceLeaf>(v.clone()).ok());
-    if noted.is_some_and(|leaf| leaf.name == name && leaf.pulls == pulls && now - leaf.seen < SEEN_EVERY) {
+    if noted.is_some_and(|leaf| leaf.name == name && leaf.pulls == pulls && leaf.hub_only == hub_only && now - leaf.seen < SEEN_EVERY) {
         return;
     }
-    leaves.insert(path, serde_json::to_value(DeviceLeaf { name: name.to_string(), seen: now, pulls }).unwrap_or_default());
+    leaves.insert(path, serde_json::to_value(DeviceLeaf { name: name.to_string(), seen: now, pulls, hub_only }).unwrap_or_default());
 }
 
 /// Name `hub` the hub in the transfers' `leaves` (it's the only one: a
@@ -923,11 +935,11 @@ mod tests {
         let field = |value: Value, changed| crate::settings_sync::Field { value, changed };
         let day = 24 * 60 * 60;
         let mut leaves = BTreeMap::new();
-        note_device(&mut leaves, "desk", "Desktop", false, 10 * day);
+        note_device(&mut leaves, "desk", "Desktop", false, false, 10 * day);
         let noted = leaves.clone();
-        note_device(&mut leaves, "desk", "Desktop", false, 10 * day + 60);
+        note_device(&mut leaves, "desk", "Desktop", false, false, 10 * day + 60);
         assert_eq!(leaves, noted, "once a day");
-        note_device(&mut leaves, "desk", "Desktop", false, 11 * day);
+        note_device(&mut leaves, "desk", "Desktop", false, false, 11 * day);
         assert_ne!(leaves, noted);
         let mut fields: Fields = leaves.iter().map(|(k, v)| (k.clone(), field(v.clone(), 11 * day))).collect();
         // One from before devices said: known by its wants alone.
@@ -1051,7 +1063,7 @@ mod tests {
         let (laptop, phone) = (SongStore::open(root.join("laptop")), SongStore::open(root.join("phone")));
         let none = BTreeSet::new();
         let have = |keys: &[&str]| serde_json::json!(keys.iter().map(|k| &k[..HAVE_PREFIX]).collect::<Vec<_>>());
-        let device = |pulls: bool| serde_json::to_value(DeviceLeaf { name: "Phone".into(), seen: 1, pulls }).unwrap();
+        let device = |pulls: bool| serde_json::to_value(DeviceLeaf { name: "Phone".into(), seen: 1, pulls, hub_only: false }).unwrap();
         let mut leaves = BTreeMap::from([
             (want("hub", &common.key), Value::Bool(true)),
             (want("hub", &rare.key), Value::Bool(true)),
@@ -1061,7 +1073,7 @@ mod tests {
             (format!("{HAVE}hub"), have(&[])),
             ("device/phone".into(), device(true)),
         ]);
-        let hub_plan = |direct: bool| HubPlan { device: "hub".into(), direct };
+        let hub_plan = |direct: bool| HubPlan { device: "hub".into(), direct, only: false };
 
         // The hub lacks both: the desktop sends them, the one only it has
         // first, and the rare one to the phone too, the hub not having it.
@@ -1082,6 +1094,37 @@ mod tests {
         leaves.insert("device/phone".into(), device(false));
         let to_phone = [Task::Send { key: rare.key.clone(), to: vec!["phone".into()] }];
         assert_eq!(plan(&leaves, "desktop", &desktop, &none, &none, &none, Some(&hub_plan(true))).tasks, to_phone);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_device_only_through_the_hub_trades_with_it_alone() {
+        let root = std::env::temp_dir().join(format!("synththing-hub-only-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut desktop = SongStore::open(root.join("desktop"));
+        let mut phone = SongStore::open(root.join("phone"));
+        let mut hub = SongStore::open(root.join("hub"));
+        let ours = song_store::write_in(b"desktop's", "Desk.mid", desktop.dir()).unwrap();
+        let theirs = song_store::write_in(b"phone's", "Phone.mid", phone.dir()).unwrap();
+        desktop.add(ours.clone());
+        phone.add(theirs.clone());
+        let none = BTreeSet::new();
+        let leaves = BTreeMap::from([
+            (want("hub", &ours.key), Value::Bool(true)),
+            (want("phone", &ours.key), Value::Bool(true)),
+            (want("hub", &theirs.key), Value::Bool(true)),
+            (want("desktop", &theirs.key), Value::Bool(true)),
+            ("device/phone".into(), serde_json::to_value(DeviceLeaf { name: "Phone".into(), seen: 1, pulls: false, hub_only: true }).unwrap()),
+        ]);
+        let hub_plan = |only: bool| HubPlan { device: "hub".into(), direct: false, only };
+        let sends = |device: &str, store: &SongStore, only: bool| plan(&leaves, device, store, &none, &none, &none, Some(&hub_plan(only))).tasks;
+        let to = |key: &str, to: &[&str]| vec![Task::Send { key: key.to_string(), to: to.iter().map(|d| d.to_string()).collect() }];
+        assert_eq!(sends("desktop", &desktop, false), to(&ours.key, &["hub"]), "not to the phone");
+        assert_eq!(sends("phone", &phone, true), to(&theirs.key, &["hub"]), "nor from it but to the hub");
+        hub.add(song_store::write_in(b"desktop's", "Desk.mid", hub.dir()).unwrap());
+        assert_eq!(sends("hub", &hub, false), to(&ours.key, &["phone"]), "the hub sends it on");
+        // With no hub, it trades as any device does.
+        assert_eq!(plan(&leaves, "desktop", &desktop, &none, &none, &none, None).tasks, to(&ours.key, &["hub", "phone"]));
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -748,6 +748,7 @@ impl DeviceSync {
             busy: self.busy.clone(),
             paused: self.moves_paused.is_some_and(|t| Instant::now() < t),
             hub_direct: self.hub_reached.is_some(),
+            hub_only: settings_sync::syncs(&self.choices, &settings_sync::HUB_ONLY),
             hub: hub_offer,
             library: self.syncing(Blob::Library),
             transfers: self.syncing(Blob::Transfers),
@@ -1124,11 +1125,12 @@ impl DeviceSync {
             settings_sync::SONGS.key,
             settings_sync::STARRED_SONGS.key,
             settings_sync::EVERY_SONG.key,
+            settings_sync::HUB_ONLY.key,
         ];
         let any_on = chosen.iter().any(|(setting, on)| *on && !own.contains(&setting.key));
         let toggled = |of: &settings_sync::Setting| chosen.iter().find(|(setting, _)| setting.key == of.key).map(|(_, on)| *on);
         let (playlists, wishes, songs) = (toggled(&settings_sync::PLAYLISTS), toggled(&settings_sync::WISHLIST), toggled(&settings_sync::SONGS));
-        if toggled(&settings_sync::EVERY_SONG).is_some() || toggled(&settings_sync::STARRED_SONGS).is_some() {
+        if [&settings_sync::EVERY_SONG, &settings_sync::STARRED_SONGS, &settings_sync::HUB_ONLY].into_iter().any(|s| toggled(s).is_some()) {
             self.songs_dirty = true;
         }
         for (setting, on) in chosen {

@@ -38,6 +38,8 @@ The hub can't tell from inside your network whether its public address works, so
 
 Live messages between your devices (panels shared to your other devices, say) go through the hub too while a device reaches it, and through the official server when it doesn't. The hub passes each one on both ways, so devices that reach it and devices that don't still hear each other.
 
+A device can move its songs only through the hub: tick **Only through my hub, once I have one** under Songs in its sync settings (What this device syncs). It then sends its songs to the hub alone and takes the songs it wants from the hub alone, directly when it reaches it and through the relay when it doesn't, and your other devices send it nothing: the hub passes their songs on. Your other devices keep trading among themselves as before. It suits a phone, say, that should only ever talk to your hub. Until you have a hub, it trades with every device as usual.
+
 One device is the hub at a time. Starting a hub makes it the hub; the one before stops serving songs (its log says "another device is the hub now") and carries on as an ordinary device until you stop it.
 
 ## Its local API

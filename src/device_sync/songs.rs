@@ -32,6 +32,9 @@ pub(super) struct Songs {
     pub paused: bool,
     /// This device reaches the hub directly now.
     pub hub_direct: bool,
+    /// This device moves songs only to and from the hub, once there is one
+    /// (`settings_sync::HUB_ONLY`).
+    pub hub_only: bool,
     /// This device is the hub: its leaf, and whether to name it the hub
     /// even if another is (as it starts).
     pub hub: Option<(HubLeaf, bool)>,
@@ -239,10 +242,11 @@ impl Worker {
             applied = song_sync::forget(&applied, &device);
         }
         let hub = song_sync::hub(&state.fields);
-        let hub_plan = hub.as_ref().map(|hub| HubPlan { device: hub.device.clone(), direct: songs.hub_direct });
+        let hub_plan = hub.as_ref().map(|hub| HubPlan { device: hub.device.clone(), direct: songs.hub_direct, only: songs.hub_only });
         let pulls = hub_plan.as_ref().is_some_and(|hub| hub.direct && hub.device != songs.device);
+        let hub_only = hub_plan.as_ref().is_some_and(|hub| hub.only && hub.device != songs.device);
         let mut plan = song_sync::plan(&applied, &songs.device, &songs.store, &songs.wanted, &songs.busy, &songs.given, hub_plan.as_ref());
-        song_sync::note_device(&mut plan.leaves, &songs.device, &songs.device_name, pulls, now);
+        song_sync::note_device(&mut plan.leaves, &songs.device, &songs.device_name, pulls, hub_only, now);
         song_sync::note_have(&mut plan.leaves, &songs.device, &songs.store);
         if let Some((leaf, take_over)) = &songs.hub
             && (*take_over || hub.as_ref().is_none_or(|hub| hub.device == songs.device))

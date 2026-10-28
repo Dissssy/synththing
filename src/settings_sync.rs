@@ -128,6 +128,7 @@ pub const CATEGORIES: &[Category] = &[
             SONGS,
             STARRED_SONGS,
             EVERY_SONG,
+            HUB_ONLY,
         ],
     },
     Category {
@@ -196,6 +197,9 @@ pub const STARRED_SONGS: Setting =
     Setting { key: "starred_songs", name: "Starred songs, not only those in playlists", paths: &[], on: false };
 pub const EVERY_SONG: Setting =
     Setting { key: "every_song", name: "Every song, not only those in playlists", paths: &[], on: false };
+/// Moving songs only to and from the hub, once there is one
+/// (`song_sync::plan`): the other devices send this one none.
+pub const HUB_ONLY: Setting = Setting { key: "hub_only", name: "Only through my hub, once I have one", paths: &[], on: false };
 
 fn under(path: &str, prefix: &str) -> bool {
     path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
