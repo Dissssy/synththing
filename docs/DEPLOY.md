@@ -148,9 +148,44 @@ Check it from anywhere with `curl https://scripts.example.org/api/v1/info`, then
 
 ## The official server
 
-synththing.p51.nl runs the systemd setup above, with the update timer, behind Caddy. It's the identity authority (with SendGrid mail, from synththing@p51.nl), and its publisher is the official one (the default), whose key `.github/workflows/scripts.yml` publishes the bundled scripts with (the `SYNTHTHING_PUBLISH_KEY` secret).
+synththing.p51.nl runs in Docker, as services in the Portainer stack on its VPS, behind Caddy on the host. It's the identity authority (with SendGrid mail, from synththing@p51.nl), and its publisher is the official one (the default), whose key `.github/workflows/scripts.yml` publishes the bundled scripts with (the `SYNTHTHING_PUBLISH_KEY` secret).
 
-Its front page is `deploy/website/index.html`, a plain-language tour of what the app does, copied to `/var/www/synththing/`. Caddy sends the server's own paths to it and serves the page for the rest:
+Its services, with the stack's `ROOT` folder holding the data:
+
+```yaml
+  server:
+    image: ghcr.io/dissssy/synththing:latest
+    container_name: synththing
+    ports:
+      - "127.0.0.1:7381:7381"
+    volumes:
+      - ${ROOT}/server:/data
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+    restart: unless-stopped
+
+  website:
+    image: ghcr.io/dissssy/synththing-website:latest
+    container_name: synththing-website
+    ports:
+      - "127.0.0.1:7382:80"
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+    restart: unless-stopped
+
+  # Pulls new images of the labelled containers every hour and recreates them.
+  watchtower:
+    image: nickfedor/watchtower
+    container_name: watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --label-enable --cleanup --interval 3600
+    restart: unless-stopped
+```
+
+The website image (`deploy/website.Dockerfile`, pushed by `release.yml`'s `website` job) holds the front page, `deploy/website/index.html`, a plain-language tour of what the app does, and the docs at `/docs/`: this folder's Markdown, rendered by [mdBook](https://rust-lang.github.io/mdBook/) (`book.toml`, with `docs/SUMMARY.md` as the table of contents). Each release pushes a new one, so update the page in the repo when a release adds something worth telling people about. To see the docs locally: `mdbook serve --open`. A new page goes in `docs/SUMMARY.md` too.
+
+Caddy sends the server's own paths to the server and the rest to the website:
 
 ```
 synththing.p51.nl {
@@ -159,17 +194,12 @@ synththing.p51.nl {
         reverse_proxy localhost:7381
     }
     handle {
-        root * /var/www/synththing
-        file_server
+        reverse_proxy localhost:7382
     }
 }
 ```
 
-The update script keeps it at the newest release's copy once `/var/www/synththing` exists, so update the page in the repo when a release adds something worth telling people about.
-
-The docs are at `/docs/` beside it: this folder's Markdown, rendered by [mdBook](https://rust-lang.github.io/mdBook/) (`book.toml`, with `docs/SUMMARY.md` as the table of contents). Each release carries them as `synththing-docs.tar.gz`, and the update script unpacks the newest into `/var/www/synththing/docs/`. To see them locally: `mdbook serve --open`. A new page goes in `docs/SUMMARY.md` too.
-
-Its EULA and privacy policy are `deploy/official/eula.md` and `privacy.md`, copied to `/var/lib/synththing/` and listed in its `server.json`:
+Its EULA and privacy policy are `deploy/official/eula.md` and `privacy.md`, copied to its data folder and listed in its `server.json`:
 
 ```json
 "documents": [
@@ -182,4 +212,4 @@ They're read fresh each time, so an edit shows straight away (no restart needed 
 
 ### Replacing the publisher key
 
-If the publisher key might have got out, `deploy/rotate-publisher.sh` (copied to `/opt/synththing/`) moves the official publisher to a new key: run `sh /opt/synththing/rotate-publisher.sh` as root on the VPS and paste the current secret key when asked (it isn't shown). The official scripts move to the new key, the old one stops working, and apps follow along the next time they talk to the server. The new secret goes to GitHub's `SYNTHTHING_PUBLISH_KEY` with `gh` if it's installed and signed in there, and into `/root/synththing-publish.key` either way: put it in Bitwarden (and GitHub, if `gh` didn't), then `shred -u` the file. This is for the official server's setup; elsewhere, `synththing publisher-rotate` does the same (docs/cli.md).
+If the publisher key might have got out, `deploy/rotate-publisher.sh` moves the official publisher to a new key: copy it to the VPS and run `sh rotate-publisher.sh` as root there, and paste the current secret key when asked (it isn't shown). The official scripts move to the new key, the old one stops working, and apps follow along the next time they talk to the server. The new secret goes to GitHub's `SYNTHTHING_PUBLISH_KEY` with `gh` if it's installed and signed in there, and into `/root/synththing-publish.key` either way: put it in Bitwarden (and GitHub, if `gh` didn't), then `shred -u` the file. This is for the official server's setup; elsewhere, `synththing publisher-rotate` does the same (docs/cli.md).

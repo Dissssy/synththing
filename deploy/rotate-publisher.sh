@@ -9,10 +9,12 @@
 # signed in, or else leaves it in a file only root can read. Either way:
 # keep the new key somewhere safe too (Bitwarden).
 #
-#   sh /opt/synththing/rotate-publisher.sh
+# It runs the server container's own binary (the stack in docs/DEPLOY.md).
+#
+#   sh rotate-publisher.sh
 set -eu
 
-BINARY=/opt/synththing/synththing
+CONTAINER=synththing
 SERVER=https://synththing.p51.nl
 REPO=Dissssy/synththing
 OUT=/root/synththing-publish.key
@@ -24,7 +26,7 @@ stty echo
 printf '\n'
 
 umask 077
-NEW=$(SYNTHTHING_PUBLISH_KEY="$OLD" "$BINARY" publisher-rotate --server "$SERVER")
+NEW=$(SYNTHTHING_PUBLISH_KEY="$OLD" docker exec -e SYNTHTHING_PUBLISH_KEY "$CONTAINER" synththing publisher-rotate --server "$SERVER")
 OLD=
 
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
