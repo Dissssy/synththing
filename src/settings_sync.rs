@@ -43,7 +43,6 @@ const LOCAL: &[&str] = &[
     "separate_fullscreen_layout",
     "fullscreen_layout",
     "layout_presets",
-    "layout_overrides",
     "active_layout",
     "fullscreen_active_layout",
     "library/official_publishers",

@@ -13,7 +13,7 @@ What changed in each version of synththing, newest first. The app shows the new 
   - Up next clears with an icon button, and shows no column headings while it's empty.
   - The window draws its own frame: the menu bar is the title bar (drag its empty middle to move the window, double-click it to maximize), with minimize, maximize and close at its right, and the window's edges resize it. Preferences > App > "Use the system's window frame" brings the system's back. The synththing menu is gone: Preferences and Record are buttons on the bar, Quit is Ctrl+Q, the tray's menu, or closing the window.
   - The star column sits closer to the song names.
-  - Layouts have their own menu on the title bar (View, Layout and Help have icons): pick a layout like a panel in View, lock it ("Lock layout": no moving or resizing panels; saving a layout locks it), save the current one, or open Edit layouts... to reset a changed built-in one, or rename or delete (after asking) a saved one. Mobile layout moved there too.
+  - Layouts have their own menu on the title bar (View, Layout and Help have icons). Every layout is one of yours: Listening is the one you start with, and Watching, Script writing and Sprite editing are templates in Layout > New layout..., which makes a layout from one of them or from the current arrangement. "Lock layout" keeps a layout's panels from being moved or resized, without the handles or their room (a new layout starts locked). Edit layouts... renames and deletes them (deleting asks first). Mobile layout moved there too.
 
 ## 1.7.6 (2026-10-27)
 

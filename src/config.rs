@@ -51,12 +51,8 @@ pub struct Config {
     /// while they're active.
     #[serde(default)]
     pub layout_presets: Vec<crate::layout::SavedLayout>,
-    /// Built-in layouts as the user has changed them, by name (removed by
-    /// Reset, or when changed back to the original).
-    #[serde(default)]
-    pub layout_overrides: std::collections::BTreeMap<String, DockState<Section>>,
-    /// The layouts (built-in or saved, by name) locked from being moved
-    /// around or resized (Layout > Lock layout). Saving one locks it.
+    /// The layouts (by name) locked from being moved around or resized
+    /// (Layout > Lock layout). A new one starts locked.
     #[serde(default)]
     pub locked_layouts: std::collections::BTreeSet<String>,
     /// The layout (built-in or saved, by name) the window and fullscreen

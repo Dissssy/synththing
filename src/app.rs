@@ -570,8 +570,8 @@ pub struct App {
     /// i.e. which config slot it's saved to. See `sync_layout_slot`.
     dock_is_fullscreen_layout: bool,
     preferences_open: bool,
-    /// Layout > Save current layout as...: the name being typed.
-    layout_save: Option<String>,
+    /// Layout > New layout...: what it's being made as.
+    layout_new: Option<layouts::NewLayout>,
     /// Layout > Edit layouts...: open, and what's being done in it.
     layout_edit: Option<layouts::Editing>,
     /// A very large MIDI waiting for "play anyway" (path, notes), and the
@@ -681,8 +681,10 @@ impl App {
             Library::load(config::playlists_dir().unwrap_or_else(|_| PathBuf::from("playlists")), songs_dir);
         let mut config = config;
         if config.layout.is_none() && config.active_layout.is_none() {
-            // A first launch starts on the Listening layout.
-            config.active_layout = layout::PRESETS.first().map(|p| p.name.to_string());
+            // A first launch starts on the first template's layout, unlocked.
+            let first = &layout::TEMPLATES[0];
+            config.layout_presets.push(layout::SavedLayout { name: first.name.to_string(), dock: (first.build)() });
+            config.active_layout = Some(first.name.to_string());
         }
         let dock = config.layout.clone().map(layout::sanitize).unwrap_or_else(layout::default_layout);
         let saved_layout_json = serde_json::to_string(&dock).unwrap_or_default();
@@ -840,7 +842,7 @@ impl App {
             last_layout_check: 0.0,
             dock_is_fullscreen_layout: false,
             preferences_open: false,
-            layout_save: None,
+            layout_new: None,
             layout_edit: None,
             heavy_prompt: None,
             heavy_confirmed: None,
@@ -1127,18 +1129,10 @@ impl App {
         }
     }
 
-    /// Changes to the arrangement go into the active named layout: a
-    /// built-in's override (dropped when it matches the original again),
-    /// or a saved layout itself.
+    /// Changes to the arrangement go into the active named layout.
     fn store_in_active_layout(&mut self) {
         let Some(name) = self.active_layout().cloned() else { return };
-        if let Some(preset) = layout::PRESETS.iter().find(|p| p.name == name) {
-            if layout::same_arrangement(&self.dock, &(preset.build)()) {
-                self.config.layout_overrides.remove(&name);
-            } else {
-                self.config.layout_overrides.insert(name, self.dock.clone());
-            }
-        } else if let Some(saved) = self.config.layout_presets.iter_mut().find(|p| p.name == name) {
+        if let Some(saved) = self.config.layout_presets.iter_mut().find(|p| p.name == name) {
             saved.dock = self.dock.clone();
         }
     }
@@ -1185,13 +1179,8 @@ impl App {
             return;
         }
         self.save_layout();
-        let dock = if let Some(preset) = layout::PRESETS.iter().find(|p| p.name == name) {
-            self.config.layout_overrides.get(name).cloned().map(layout::sanitize).unwrap_or_else(preset.build)
-        } else if let Some(saved) = self.config.layout_presets.iter().find(|p| p.name == name) {
-            layout::sanitize(saved.dock.clone())
-        } else {
-            return;
-        };
+        let Some(saved) = self.config.layout_presets.iter().find(|p| p.name == name) else { return };
+        let dock = layout::sanitize(saved.dock.clone());
         self.set_active_layout(Some(name.to_string()));
         self.apply_layout(dock);
         self.status = format!("Layout: {name}.");
@@ -2482,7 +2471,7 @@ impl App {
             || self.notifications.open()
             || self.copyright.open()
             || self.editor.history_open
-            || self.layout_save.is_some()
+            || self.layout_new.is_some()
             || self.layout_edit.is_some()
             || self.heavy_prompt.is_some()
             || self.sprite.new_sprite.is_some()
@@ -2626,7 +2615,8 @@ impl App {
                 .collect()
         };
         let before = if locked { fractions(&mut dock) } else { Vec::new() };
-        let mut tabs = SectionTabs { app: self, shared, alone, joined };
+        let top = if locked { f32::from(crate::theme::DOCK_MARGIN) } else { crate::theme::DOCK_HANDLE };
+        let mut tabs = SectionTabs { app: self, shared, alone, joined, top };
         // (Nothing over the panels: the title bar has room below its buttons.)
         let frame = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 8 });
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
@@ -2637,6 +2627,8 @@ impl App {
                     if locked {
                         style.separator.color_hovered = egui::Color32::TRANSPARENT;
                         style.separator.color_dragged = egui::Color32::TRANSPARENT;
+                        // (No handles, so no room for them.)
+                        style.tab.tab_body.inner_margin.top = crate::theme::DOCK_MARGIN;
                     }
                     style
                 })
@@ -4159,7 +4151,7 @@ impl eframe::App for App {
             self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);
             self.history_ui(&ctx);
-            self.layout_save_ui(&ctx);
+            self.layout_new_ui(&ctx);
             self.layout_edit_ui(&ctx);
             self.new_sprite_ui(&ctx);
             drop(windows);
@@ -4258,6 +4250,8 @@ struct SectionTabs<'a> {
     alone: Vec<Section>,
     /// The sections open as the first of their spots' tabs.
     joined: Vec<Section>,
+    /// How tall the top margin of the sections' bodies is.
+    top: f32,
 }
 
 impl TabViewer for SectionTabs<'_> {
@@ -4278,7 +4272,7 @@ impl TabViewer for SectionTabs<'_> {
         if self.alone.contains(tab) {
             drag_handle(ui);
         } else if self.joined.contains(tab) {
-            square_corner(ui);
+            square_corner(ui, self.top);
         }
         match tab {
             Section::Songs => app.songs_ui(ui),
@@ -4703,10 +4697,11 @@ fn drag_handle(ui: &egui::Ui) {
     ui.ctx().layer_painter(ui.layer_id()).rect_filled(line, 1.5, color);
 }
 
-/// Square off the top left corner of the body around `ui`, under its tab.
-fn square_corner(ui: &egui::Ui) {
+/// Square off the top left corner of the body around `ui` (its top margin
+/// `top` tall), under its tab.
+fn square_corner(ui: &egui::Ui, top: f32) {
     let content = ui.max_rect();
-    let corner = egui::pos2(content.left() - f32::from(crate::theme::DOCK_MARGIN), content.top() - crate::theme::DOCK_HANDLE);
+    let corner = egui::pos2(content.left() - f32::from(crate::theme::DOCK_MARGIN), content.top() - top);
     let patch = egui::Rect::from_min_size(corner, egui::Vec2::splat(8.0));
     ui.ctx().layer_painter(ui.layer_id()).rect_filled(patch, 0.0, ui.visuals().window_fill);
 }

@@ -1,7 +1,7 @@
-//! The Layout menu on the title bar: the built-in arrangements and the
-//! ones saved under a name, to switch between, saving the current one,
-//! the Edit layouts window (reset a changed built-in, rename or delete a
-//! saved one), and the mobile layout.
+//! The Layout menu on the title bar: the layouts (arrangements under a
+//! name) to switch between, locking one, making a new one (from the
+//! current arrangement or a template), the Edit layouts window (rename or
+//! delete one), and the mobile layout.
 
 use eframe::egui;
 
@@ -16,10 +16,17 @@ pub(super) struct Editing {
     deleting: Option<usize>,
 }
 
+/// Layout > New layout...: its name so far, and what it starts from (a
+/// template, by index, or the current arrangement).
+#[derive(Default)]
+pub(super) struct NewLayout {
+    name: String,
+    from: Option<usize>,
+}
+
 /// What the menu or the window asked for.
 enum Ask {
     Switch(String),
-    Reset(String),
     Rename(usize, String),
     Delete(usize),
     Lock(String, bool),
@@ -31,28 +38,14 @@ impl App {
         self.active_layout().is_some_and(|name| self.config.locked_layouts.contains(name))
     }
 
-    /// The Layout menu: the layouts, the showing one marked (a built-in
-    /// changed since is marked so), then Save, Edit and the mobile layout.
+    /// The Layout menu: the layouts, the showing one marked, then Lock,
+    /// New, Edit and the mobile layout.
     pub(super) fn layout_menu_ui(&mut self, ui: &mut egui::Ui) {
         let active = self.active_layout().cloned();
         let mut ask = None;
-        for preset in layout::PRESETS {
-            let mut text = egui::text::LayoutJob::default();
-            let style = ui.style();
-            egui::RichText::new(preset.name).append_to(&mut text, style, egui::FontSelection::Default, egui::Align::Center);
-            if self.config.layout_overrides.contains_key(preset.name) {
-                egui::RichText::new("  changed").weak().append_to(&mut text, style, egui::FontSelection::Default, egui::Align::Center);
-            }
-            if ui.radio(active.as_deref() == Some(preset.name), text).on_hover_text(preset.description).clicked() {
-                ask = Some(Ask::Switch(preset.name.to_string()));
-            }
-        }
-        if !self.config.layout_presets.is_empty() {
-            ui.separator();
-            for saved in &self.config.layout_presets {
-                if ui.radio(active.as_deref() == Some(saved.name.as_str()), &saved.name).clicked() {
-                    ask = Some(Ask::Switch(saved.name.clone()));
-                }
+        for saved in &self.config.layout_presets {
+            if ui.radio(active.as_deref() == Some(saved.name.as_str()), &saved.name).clicked() {
+                ask = Some(Ask::Switch(saved.name.clone()));
             }
         }
         if active.is_none() {
@@ -70,14 +63,12 @@ impl App {
         {
             ask = Some(Ask::Lock(name.clone(), locked));
         }
-        if ui.button("Save current layout as...").clicked() {
-            self.layout_save = Some(String::new());
+        if ui.button("New layout...").on_hover_text("From this arrangement, or from a template").clicked() {
+            self.layout_new = Some(NewLayout::default());
         }
-        let editable = !self.config.layout_presets.is_empty() || !self.config.layout_overrides.is_empty();
         if ui
-            .add_enabled(editable, egui::Button::new("Edit layouts..."))
-            .on_hover_text("Reset a changed built-in layout, rename or delete a saved one")
-            .on_disabled_hover_text("Nothing to edit: save a layout, or change a built-in one")
+            .add_enabled(!self.config.layout_presets.is_empty(), egui::Button::new("Edit layouts..."))
+            .on_hover_text("Rename or delete layouts")
             .clicked()
         {
             self.layout_edit = Some(Editing::default());
@@ -91,8 +82,7 @@ impl App {
         }
     }
 
-    /// Edit layouts: each changed built-in with Reset, each saved one with
-    /// Rename and Delete (which asks first).
+    /// Edit layouts: each layout with Rename and Delete (which asks first).
     pub(super) fn layout_edit_ui(&mut self, ctx: &egui::Context) {
         let Some(editing) = &mut self.layout_edit else { return };
         let mut ask = None;
@@ -104,20 +94,10 @@ impl App {
                 let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
                 ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), add);
             };
-            for preset in layout::PRESETS.iter().filter(|p| self.config.layout_overrides.contains_key(p.name)) {
-                row(ui, &mut |ui| {
-                    if ui.button("Reset").on_hover_text("Back to how this layout comes").clicked() {
-                        ask = Some(Ask::Reset(preset.name.to_string()));
-                    }
-                    ui.weak("built-in, changed");
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.label(preset.name));
-                });
-            }
             for (n, saved) in self.config.layout_presets.iter().enumerate() {
                 row(ui, &mut |ui| match (&mut editing.renaming, editing.deleting) {
                     (Some((at, name)), _) if *at == n => {
-                        let taken = layout::PRESETS.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()))
-                            || self.config.layout_presets.iter().enumerate().any(|(i, p)| i != n && p.name.eq_ignore_ascii_case(name.trim()));
+                        let taken = self.config.layout_presets.iter().enumerate().any(|(i, p)| i != n && p.name.eq_ignore_ascii_case(name.trim()));
                         let fine = !name.trim().is_empty() && !taken;
                         if ui.button("Cancel").clicked() {
                             editing.renaming = None;
@@ -171,21 +151,8 @@ impl App {
     }
 
     fn layouts_do(&mut self, ask: Ask) {
-        let active = self.active_layout().cloned();
         match ask {
             Ask::Switch(name) => self.switch_layout(&name),
-            Ask::Reset(name) => {
-                self.config.layout_overrides.remove(&name);
-                if active.as_deref() == Some(name.as_str())
-                    && let Some(preset) = layout::PRESETS.iter().find(|p| p.name == name)
-                {
-                    self.apply_layout((preset.build)());
-                } else if let Err(e) = self.config.save() {
-                    self.status = format!("Couldn't save the layouts: {e}");
-                    return;
-                }
-                self.status = format!("Reset the {name} layout.");
-            }
             Ask::Lock(name, locked) => {
                 if locked {
                     self.config.locked_layouts.insert(name);
@@ -227,55 +194,56 @@ impl App {
         }
     }
 
-    /// Layout > Save current layout as...: name it.
-    pub(super) fn layout_save_ui(&mut self, ctx: &egui::Context) {
-        let Some(name) = &mut self.layout_save else { return };
-        let mut save = false;
+    /// Layout > New layout...: name it and pick what it starts from. It
+    /// shows straight away, locked.
+    pub(super) fn layout_new_ui(&mut self, ctx: &egui::Context) {
+        let Some(new) = &mut self.layout_new else { return };
+        let mut make = false;
         let mut close = false;
-        let taken = self.config.layout_presets.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()));
-        let built_in = layout::PRESETS.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()));
-        let response = egui::Modal::new(egui::Id::new("save_layout")).show(ctx, |ui| {
+        let name = new.name.trim().to_string();
+        let taken = self.config.layout_presets.iter().any(|p| p.name.eq_ignore_ascii_case(&name));
+        let fine = !name.is_empty() && !taken;
+        let response = egui::Modal::new(egui::Id::new("new_layout")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 320.0));
-            ui.heading("Save layout");
+            ui.heading("New layout");
             ui.label("Name:");
-            let field = ui.text_edit_singleline(name);
-            field.request_focus();
-            if built_in {
-                ui.colored_label(ui.visuals().warn_fg_color, "That's a built-in layout's name; pick another.");
-            } else if taken {
-                ui.weak("A saved layout has this name; saving replaces it.");
-            }
+            let field = ui.text_edit_singleline(&mut new.name);
             if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                save = true;
+                make = true;
             }
+            if taken {
+                ui.colored_label(ui.visuals().warn_fg_color, "A layout has this name; pick another.");
+            }
+            ui.label("Start from:");
+            let from = |from: Option<usize>| from.map_or("This arrangement", |i| layout::TEMPLATES[i].name);
+            egui::ComboBox::from_id_salt("new_layout_from").selected_text(from(new.from)).show_ui(ui, |ui| {
+                ui.selectable_value(&mut new.from, None, from(None)).on_hover_text("The panels as they are now");
+                for (i, template) in layout::TEMPLATES.iter().enumerate() {
+                    ui.selectable_value(&mut new.from, Some(i), template.name).on_hover_text(template.description);
+                }
+            });
             ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 if ui.button("Cancel").clicked() {
                     close = true;
                 }
-                if ui.add_enabled(!name.trim().is_empty() && !built_in, egui::Button::new("Save")).clicked() {
-                    save = true;
+                if ui.add_enabled(fine, egui::Button::new("Make")).clicked() {
+                    make = true;
                 }
             });
         });
-        if save && !name.trim().is_empty() && !built_in {
-            let name = name.trim().to_string();
-            let saved = layout::SavedLayout { name: name.clone(), dock: self.dock.clone() };
-            match self.config.layout_presets.iter_mut().find(|p| p.name.eq_ignore_ascii_case(&name)) {
-                Some(existing) => *existing = saved,
-                None => self.config.layout_presets.push(saved),
-            }
-            // From now on, changes go into it, but it starts locked.
+        if make && fine {
+            let dock = new.from.map_or_else(|| self.dock.clone(), |i| (layout::TEMPLATES[i].build)());
+            self.save_layout();
+            self.config.layout_presets.push(layout::SavedLayout { name: name.clone(), dock: dock.clone() });
             self.config.locked_layouts.insert(name.clone());
             self.set_active_layout(Some(name.clone()));
-            self.status = match self.config.save() {
-                Ok(()) => format!("Saved the layout \"{name}\" (Layout menu)."),
-                Err(e) => format!("Couldn't save the layout: {e}"),
-            };
+            self.apply_layout(dock);
+            self.status = format!("Made the layout \"{name}\" (Layout menu).");
             close = true;
         }
         if close || response.should_close() {
-            self.layout_save = None;
+            self.layout_new = None;
         }
     }
 }
