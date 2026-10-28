@@ -100,13 +100,12 @@ impl App {
         setting_row(ui, |ui| {
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                 setting_label(ui, "Preview");
-                ui.vertical(|ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(named).on_hover_text("A song with every field");
-                    });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(named).on_hover_text("A song with every field");
                     for song in songs {
+                        ui.weak("\u{b7}");
                         let name = title_of(&mut self.song_info, &naming, &song);
-                        ui.add(egui::Label::new(egui::RichText::new(name).weak()).truncate()).on_hover_text(naming.song(&song, None).file_name);
+                        ui.weak(name).on_hover_text(naming.song(&song, None).file_name);
                     }
                 });
             });
