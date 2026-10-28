@@ -74,6 +74,8 @@ pub struct Setting {
 /// Settings as Preferences groups them.
 pub struct Category {
     pub name: &'static str,
+    /// Its Phosphor icon, by name.
+    pub icon: &'static str,
     pub settings: &'static [Setting],
 }
 
@@ -86,6 +88,7 @@ const fn setting(key: &'static str, name: &'static str, paths: &'static [&'stati
 pub const CATEGORIES: &[Category] = &[
     Category {
         name: "Appearance",
+        icon: "palette",
         settings: &[
             setting("theme", "Theme", &["theme", "custom_themes"]),
             setting("beat_pulse", "Beat pulse", &["beat_pulse", "beat_pulse_length"]),
@@ -95,6 +98,7 @@ pub const CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Playback",
+        icon: "play",
         settings: &[
             setting("remember", "What's remembered between launches", &["remember"]),
             setting("modes", "Loop, Shuffle and Autoplay", &["loop_mode", "shuffle", "autoplay"]),
@@ -108,6 +112,7 @@ pub const CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Songs",
+        icon: "music-notes",
         settings: &[
             setting("songs_view", "Columns, sorting and grouping", &["songs_view"]),
             setting("preload", "Preload songs on hover", &["preload_on_hover"]),
@@ -127,6 +132,7 @@ pub const CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Visualizers",
+        icon: "waveform",
         settings: &[
             setting("mini_player", "Mini player", &["mini_player"]),
             setting("mini_player_shape", "Mini player shape", &["mini_player_shape"]),
@@ -135,6 +141,7 @@ pub const CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Script editor",
+        icon: "code",
         settings: &[
             setting("editor_apply", "Apply", &["editor_apply"]),
             setting("editor_font_size", "Text size", &["editor_font_size"]),
@@ -143,6 +150,7 @@ pub const CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Recording",
+        icon: "record",
         settings: &[
             setting("record_resolution", "Resolution", &["record_resolution"]),
             setting("record_fps", "Frame rate", &["record_fps"]),
@@ -152,6 +160,7 @@ pub const CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Online Library",
+        icon: "storefront",
         settings: &[
             setting("author_name", "Name to post under", &["library/author_name"]),
             setting("notifications", "Notifications", &["library/notifications"]),
@@ -159,6 +168,7 @@ pub const CATEGORIES: &[Category] = &[
     },
     Category {
         name: "App",
+        icon: "app-window",
         settings: &[
             setting("tray", "Keep running in the tray", &["close_to_tray"]),
             setting("keymap", "Keyboard shortcuts", &["keymap"]),

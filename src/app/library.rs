@@ -1940,7 +1940,7 @@ impl App {
         self.branch_online_ui(ui);
         if self.online_ui(ui, Online::Sync) {
             self.identity_card_ui(ui);
-            super::settings_group("Sync").icon("arrows-clockwise").show(ui, |ui| self.sync_ui(ui));
+            self.sync_ui(ui);
         }
         super::settings_group("Online Library").icon("storefront").hint("Visualizer scripts people share, and yours.").show(ui, |ui| {
             if self.online_ui(ui, Online::Scripts) {
