@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use eframe::egui;
 
 use super::{icon_button, toast, App};
-use crate::song_list;
+use crate::{select_list, song_list};
 use crate::playlist::{NowPlaying, Rng};
 
 impl App {
@@ -75,19 +75,19 @@ impl App {
     /// take them out, and Delete takes the selected ones out. Songs drag
     /// in from Songs (or anywhere songs drag from), and rows drag to move.
     pub(super) fn queue_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            let count = self.queue.len();
-            ui.weak(match count {
-                0 => "Nothing queued. Right-click songs to play them next or add them to the queue.".to_string(),
-                1 => "1 song".to_string(),
-                n => format!("{n} songs"),
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled(count > 0, icon_button("trash")).on_hover_text("Clear the queue").clicked() {
-                    self.queue.clear();
-                }
-            });
+        let count = self.queue.len();
+        let text = match count {
+            0 => "Nothing queued. Right-click songs to play them next or add them to the queue.".to_string(),
+            1 => "1 song".to_string(),
+            n => format!("{n} songs"),
+        };
+        let mut clear = false;
+        select_list::toolbar(ui, |_| {}, text, |ui| {
+            clear = ui.add_enabled(count > 0, icon_button("trash")).on_hover_text("Clear the queue").clicked();
         });
+        if clear {
+            self.queue.clear();
+        }
         let mut view = self.config.songs_view.clone();
         let keys = song_list::column_keys(&view);
         let revision = {

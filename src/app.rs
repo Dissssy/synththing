@@ -1532,18 +1532,50 @@ impl App {
 
     fn soundfont_ui(&mut self, ui: &mut egui::Ui) {
         self.starter_progress_ui(ui);
-        ui.horizontal(|ui| {
-            if self.mobile() {
+        let mobile = self.mobile();
+        let mut browse = false;
+        let count = match self.config.soundfonts.len() {
+            0 => "No soundfonts yet. Add one to play MIDI songs.".to_string(),
+            1 => "1 soundfont".to_string(),
+            n => format!("{n} soundfonts"),
+        };
+        let left = |ui: &mut egui::Ui| {
+            if mobile {
                 if ui.button(format!("{}  Import soundfonts...", icon("plus"))).on_hover_text("Copy soundfonts into synththing").clicked() {
                     crate::import::start(crate::import::Kind::Soundfonts, &["sf2"]);
                 }
-            } else if ui.add(icon_button("plus")).on_hover_text("Add a soundfont...").clicked() {
-                self.open_soundfont_browser();
+            } else {
+                browse = ui.add(icon_button("plus")).on_hover_text("Add a soundfont...").clicked();
             }
-        });
+        };
+        select_list::toolbar(ui, left, count, |_| {});
+        if browse {
+            self.open_soundfont_browser();
+        }
 
         let active_sf = self.active_sf;
         let touch = select_list::touch(ui.ctx());
+        // The header, as Up next's (Name, then the size at the right).
+        let size_width = if touch {
+            0.0
+        } else {
+            let id = egui::Id::new("soundfonts_header");
+            let widths: select_list::Widths = ui.ctx().data_mut(|d| d.get_persisted(id.with("widths"))).unwrap_or_default();
+            let width = select_list::column_width(ui.ctx(), id, "size", &widths, SOUNDFONT_SIZE_WIDTH);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y), egui::Sense::hover());
+            let strong = |text: &str| egui::RichText::new(text).strong();
+            let columns = [select_list::Column { key: "size", title: strong("Size"), width, numeric: true }];
+            let header = select_list::Header { title: strong("Name"), columns: &columns, lead: 0.0, trail: 0.0, min_main: 120.0 };
+            if let Some((key, width)) = select_list::header(ui, id, rect, header).resized {
+                let mut widths = widths;
+                match width {
+                    Some(width) => widths.insert(key, width),
+                    None => widths.remove(&key),
+                };
+                ui.ctx().data_mut(|d| d.insert_persisted(id.with("widths"), widths));
+            }
+            width
+        };
         let mut remove = None;
         let mut use_idx = None;
         let output = select_list::show(ui, "soundfonts", &self.config.soundfonts, &mut self.soundfont_selection, active_sf, |ui, row, path| {
@@ -1572,7 +1604,7 @@ impl App {
                     select_list::two_lines(ui, std::iter::empty(), text, Some(detail), scroll);
                     return;
                 }
-                ui.weak(size);
+                select_list::cell(ui, size_width, egui::RichText::new(size).weak(), false, true);
                 let hover = format!(
                     "{}\nClick to use; drag onto a MIDI playlist entry to override its soundfont",
                     path.display()
@@ -4723,6 +4755,8 @@ const SIDE_WIDTH: f32 = 380.0;
 /// How wide the devices button (`App::devices_button_ui`) is.
 const DEVICES_WIDTH: f32 = 28.0;
 const PLAY_WIDTH: f32 = 44.0;
+/// The Soundfonts list's Size column's own width.
+const SOUNDFONT_SIZE_WIDTH: f32 = 72.0;
 const TRANSPORT_HEIGHT: f32 = 28.0;
 
 /// The handle on the top edge of a section without a tab bar (in the

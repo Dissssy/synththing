@@ -440,6 +440,17 @@ pub fn cell(ui: &mut egui::Ui, width: f32, text: impl Into<egui::WidgetText>, sc
     response
 }
 
+/// The row over a list: its buttons (`left`), how many it holds in weak
+/// text, and `right`'s buttons at the right end. Every list panel uses it,
+/// so their toolbars match.
+pub fn toolbar(ui: &mut egui::Ui, left: impl FnOnce(&mut egui::Ui), count: impl Into<egui::RichText>, right: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        left(ui);
+        ui.weak(count);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
+    });
+}
+
 /// A list's [`header`]: the main column's title after `lead` points (over
 /// what the rows draw before their text), filling what `columns` leave
 /// (and at least `min_main` points), then the columns, and `trail` points
