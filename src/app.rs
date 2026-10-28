@@ -4452,6 +4452,12 @@ fn control_width(ui: &egui::Ui, beside: f32) -> f32 {
     CONTROL_WIDTH.min(ui.available_width() - beside).max(0.0)
 }
 
+/// A setting's dropdown, as wide as `control_width` makes it: a choice too
+/// long for it is cut off (not wrapped, as the rest of a `setting_row` is).
+fn setting_combo(ui: &egui::Ui, id_salt: &str, beside: f32) -> egui::ComboBox {
+    egui::ComboBox::from_id_salt(id_salt).width(control_width(ui, beside)).truncate()
+}
+
 /// A setting's slider, as wide as `control_width` makes it with its value
 /// box after it (and `beside` points more).
 fn setting_slider(ui: &mut egui::Ui, slider: egui::Slider, beside: f32) -> egui::Response {

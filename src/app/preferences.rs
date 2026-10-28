@@ -6,7 +6,7 @@
 
 use eframe::egui;
 
-use super::{categories_body, icon_button, row_icon_button, row_icon_button_room, nice_name, setting_label, control_width, setting_row, setting_slider, settings_group, toggle_chip, with_info, App};
+use super::{categories_body, icon_button, row_icon_button, row_icon_button_room, nice_name, control_width, setting_label, setting_combo, setting_row, setting_slider, settings_group, toggle_chip, with_info, App};
 use crate::audio::{AudioCommand, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
 
@@ -238,7 +238,7 @@ impl App {
                     let mut picked = None;
                     setting_row(ui, |ui| {
                         setting_label(ui, "Theme");
-                        egui::ComboBox::from_id_salt("preferences_theme").width(control_width(ui, row_icon_button_room(ui))).selected_text(&current).show_ui(ui, |ui| {
+                        setting_combo(ui, "preferences_theme", row_icon_button_room(ui)).selected_text(&current).show_ui(ui, |ui| {
                             for name in self.theme_names() {
                                 if ui.selectable_label(name == current, &name).clicked() {
                                     picked = Some(name);
@@ -359,8 +359,7 @@ impl App {
                         ui.add_enabled_ui(mini_player, |ui| {
                             setting_row(ui, |ui| {
                                 setting_label(ui, "Mini player shape");
-                                egui::ComboBox::from_id_salt("mini_player_shape")
-                                    .width(control_width(ui, 0.0))
+                                setting_combo(ui, "mini_player_shape", 0.0)
                                     .selected_text(mini_player_shape.name())
                                     .show_ui(ui, |ui| {
                                         for shape in crate::config::MiniPlayerShape::ALL {
@@ -467,8 +466,7 @@ impl App {
                          or, just importing, added to the playlist on screen if one is.",
                         |ui| {
                             let label = setting_label(ui, "Dropped songs");
-                            let combo = egui::ComboBox::from_id_salt("dropped_songs")
-                                .width(control_width(ui, 0.0))
+                            let combo = setting_combo(ui, "dropped_songs", 0.0)
                                 .selected_text(dropped_songs.name())
                                 .show_ui(ui, |ui| {
                                     for choice in crate::config::DroppedSongs::ALL {
@@ -495,8 +493,7 @@ impl App {
                          1x elsewhere. Kept on this device only.",
                         |ui| {
                             let label = setting_label(ui, "Pixel scale");
-                            let combo = egui::ComboBox::from_id_salt("visualizer_pixel_scale")
-                                .width(control_width(ui, 0.0))
+                            let combo = setting_combo(ui, "visualizer_pixel_scale", 0.0)
                                 .selected_text(format!("{visualizer_scale}x"))
                                 .show_ui(ui, |ui| {
                                     for scale in config::VISUALIZER_SCALES {
