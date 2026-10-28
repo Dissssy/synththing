@@ -353,23 +353,13 @@ pub struct Hub {
 /// Where `hub` answers, trying its addresses in order (those on this
 /// network given less time), if anywhere.
 pub fn reach(hub: &HubLeaf) -> Option<Hub> {
-    hub.addrs.iter().find_map(|base| match client::hub_hello(base, &hub.key, near(base)) {
+    hub.addrs.iter().find_map(|base| match client::hub_hello(base, &hub.key, crate::library::reach::local(base)) {
         Ok(()) => Some(Hub { device: hub.device.clone(), base: base.clone(), key: hub.key.clone() }),
         Err(e) => {
             log::info!("the hub at {base}: {e}");
             None
         }
     })
-}
-
-/// Whether `base` is on a network of its own (a private address).
-fn near(base: &str) -> bool {
-    let host = base.split("://").nth(1).unwrap_or(base).split(['/', ':']).next().unwrap_or_default();
-    match host.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(ip)) => ip.is_private() || ip.is_loopback() || ip.is_link_local(),
-        Ok(std::net::IpAddr::V6(ip)) => ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local(),
-        Err(_) => host.ends_with(".local") || host == "localhost",
-    }
 }
 
 /// What came of a task.

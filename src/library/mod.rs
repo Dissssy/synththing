@@ -11,6 +11,7 @@ pub mod fingerprint;
 pub mod rotation;
 pub mod identity;
 pub mod pairing;
+pub mod reach;
 pub mod server;
 pub mod sync;
 

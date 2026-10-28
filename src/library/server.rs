@@ -36,6 +36,7 @@ pub use mail::Mail;
 mod moderation;
 mod notifications;
 mod pairing;
+mod reach;
 mod remixes;
 mod relay;
 mod sync;
@@ -895,6 +896,7 @@ fn handle(state: &Arc<State>, mut request: Request) {
             pairing::take(state, &mut request, &id)
         }
         (Method::Post, ["api", "v1", "live"]) => sync::live(state, &mut request),
+        (Method::Post, ["api", "v1", "reach"]) => reach::reach(state, &mut request),
         (Method::Post, ["api", "v1", "sync", name]) => {
             let name = name.to_string();
             sync::write(state, &mut request, &name)

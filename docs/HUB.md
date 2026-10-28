@@ -34,6 +34,8 @@ Where your devices find it goes in the synced song transfers: its address on its
 
 It takes no songs while its disk has under 2 GB free.
 
+The hub can't tell from inside your network whether its public address works, so the official server checks it from outside: as the hub starts and every 6 hours, it fetches the hub's hello at each address in `SYNTHTHING_HUB_URL` that isn't on your own network. The log says `http://203.0.113.5:7390 works from the internet`, or what to fix: the port isn't forwarded or the firewall blocks it, the name points at an old address, another machine answers, and so on. To check now, after changing your router, say, run `synththing hub check` (in Docker: `docker exec synththing-hub synththing hub check`).
+
 Live messages between your devices (panels shared to your other devices, say) go through the hub too while a device reaches it, and through the official server when it doesn't. The hub passes each one on both ways, so devices that reach it and devices that don't still hear each other.
 
 One device is the hub at a time. Starting a hub makes it the hub; the one before stops serving songs (its log says "another device is the hub now") and carries on as an ordinary device until you stop it.
