@@ -34,8 +34,7 @@ pub enum Command {
     NextTrack,
     PreviousTrack,
     ToggleVisualizer,
-    ToggleFullscreen,
-    /// Back to windowed, from either fullscreen.
+    /// Back to the window, from the fullscreen visualizer.
     ExitFullscreen,
     DedicatedVisualizer,
     RestartScript,
@@ -55,7 +54,7 @@ pub enum Command {
 
 impl Command {
     /// Every command, in the order the palette and Preferences list them.
-    pub const ALL: [Command; 39] = [
+    pub const ALL: [Command; 38] = [
         Self::TogglePause,
         Self::Play,
         Self::Pause,
@@ -67,7 +66,6 @@ impl Command {
         Self::SeekForwardLong,
         Self::RestartSong,
         Self::ToggleVisualizer,
-        Self::ToggleFullscreen,
         Self::ExitFullscreen,
         Self::DedicatedVisualizer,
         Self::RestartScript,
@@ -111,7 +109,6 @@ impl Command {
             Self::NextTrack => "next_track",
             Self::PreviousTrack => "previous_track",
             Self::ToggleVisualizer => "toggle_visualizer",
-            Self::ToggleFullscreen => "toggle_fullscreen",
             Self::ExitFullscreen => "exit_fullscreen",
             Self::DedicatedVisualizer => "dedicated_visualizer",
             Self::RestartScript => "restart_script",
@@ -165,7 +162,6 @@ impl Command {
             Self::NextTrack => "Next track",
             Self::PreviousTrack => "Previous track",
             Self::ToggleVisualizer => "Show/hide visualizer",
-            Self::ToggleFullscreen => "Fullscreen on/off",
             Self::ExitFullscreen => "Exit fullscreen",
             Self::DedicatedVisualizer => "Fullscreen visualizer",
             Self::RestartScript => "Restart script",
@@ -226,7 +222,6 @@ const DEFAULTS: &[(Command, &[KeyboardShortcut])] = &[
     (Command::NextTrack, &[key(Key::N)]),
     (Command::PreviousTrack, &[key(Key::P)]),
     (Command::ToggleVisualizer, &[key(Key::V)]),
-    (Command::ToggleFullscreen, &[key(Key::F)]),
     (Command::ExitFullscreen, &[key(Key::Escape)]),
     (Command::DedicatedVisualizer, &[key(Key::F11)]),
     (Command::RestartScript, &[key(Key::F5)]),

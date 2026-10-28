@@ -23,5 +23,6 @@
 
 - [Releasing](RELEASING.md)
 - [Release channels](design/release-channels.md)
+- [Design language](design/design-language.md)
 - [Feedback intake](feedback-intake.md)
 - [Fixes for feedback](feedback-fixes.md)

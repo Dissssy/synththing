@@ -267,7 +267,7 @@ fn signed_in() -> Identity {
         if !told {
             told = true;
             log::warn!(
-                "not signed in: on a signed-in device, open Preferences > Online Library > Sign in another device, then run synththing hub pair '<link>' (in Docker: docker exec synththing-hub synththing hub pair '<link>'), or set {PAIR_LINK_VAR}. Waiting for it."
+                "not signed in: on a signed-in device, open Preferences > Account > Sign in another device, then run synththing hub pair '<link>' (in Docker: docker exec synththing-hub synththing hub pair '<link>'), or set {PAIR_LINK_VAR}. Waiting for it."
             );
             if pasted.is_some() {
                 println!("Or paste the link here:");

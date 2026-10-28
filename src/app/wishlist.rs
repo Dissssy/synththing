@@ -425,7 +425,7 @@ impl App {
     /// The search box, and what it found.
     fn wishlist_search_ui(&mut self, ui: &mut egui::Ui, online: bool) {
         if !self.config.online_lookup {
-            ui.weak("Searching MusicBrainz needs Online album art and details on (Preferences > Songs). You can still wish for music by name.");
+            ui.weak("Searching MusicBrainz needs Online album art and details on (Preferences > Library). You can still wish for music by name.");
         } else {
             // (Off in a branch build: it says so, with a button.)
             self.online_ui(ui, Online::Lookup);
@@ -668,14 +668,14 @@ impl App {
                 // (The title keeps half the row: the narrower it is, the
                 // fewer columns.)
                 let room = ui.available_width();
-                select_list::cell(ui, 70.0, egui::RichText::new(progress.text()).weak(), false);
+                select_list::cell(ui, 70.0, egui::RichText::new(progress.text()).weak(), false, false);
                 if room > 420.0 {
-                    select_list::cell(ui, 60.0, egui::RichText::new(kind).weak(), false);
+                    select_list::cell(ui, 60.0, egui::RichText::new(kind).weak(), false, false);
                 }
                 if room > 520.0 {
-                    select_list::cell(ui, 40.0, egui::RichText::new(wish.year.clone().unwrap_or_default()).weak(), false);
+                    select_list::cell(ui, 40.0, egui::RichText::new(wish.year.clone().unwrap_or_default()).weak(), false, true);
                 }
-                select_list::cell(ui, (room * 0.25).clamp(60.0, 200.0), wish.artist.clone().unwrap_or_default(), scroll);
+                select_list::cell(ui, (room * 0.25).clamp(60.0, 200.0), wish.artist.clone().unwrap_or_default(), scroll, false);
                 let mut hover = format!("Wished for {}", crate::library::ago(wish.added));
                 if let Some(by) = &wish.added_by {
                     hover.push_str(&format!(" by {by}"));
@@ -874,11 +874,11 @@ impl App {
                                 act = Some(ArtistAct::Album((*album).clone(), wished.cloned()));
                             }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                select_list::cell(ui, 70.0, egui::RichText::new(state).weak(), false);
+                                select_list::cell(ui, 70.0, egui::RichText::new(state).weak(), false, false);
                                 if !touch {
-                                    select_list::cell(ui, 90.0, egui::RichText::new(album.kind).weak(), false);
+                                    select_list::cell(ui, 90.0, egui::RichText::new(album.kind).weak(), false, false);
                                 }
-                                select_list::cell(ui, 40.0, egui::RichText::new(album.year.clone().unwrap_or_default()).weak(), false);
+                                select_list::cell(ui, 40.0, egui::RichText::new(album.year.clone().unwrap_or_default()).weak(), false, true);
                                 select_list::label(ui, &album.title, None, scroll);
                             });
                         }
@@ -901,7 +901,7 @@ impl App {
                             let is_here = recording.is_some_and(|r| songs_here.contains(r));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 here_cell(ui, is_here);
-                                select_list::cell(ui, 50.0, egui::RichText::new(track.length.map_or_else(String::new, crate::song_info::format_length)).weak(), false);
+                                select_list::cell(ui, 50.0, egui::RichText::new(track.length.map_or_else(String::new, crate::song_info::format_length)).weak(), false, true);
                                 let title = egui::RichText::new(format!("{}. {}", track.position, track.title));
                                 let title = if ticked && !is_here { title } else { title.color(ui.visuals().weak_text_color()) };
                                 select_list::label(ui, title, is_here.then(|| HERE.to_string()), scroll);
@@ -1027,7 +1027,7 @@ impl App {
                     let is_here = recording.is_some_and(|r| here.contains(r));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         here_cell(ui, is_here);
-                        select_list::cell(ui, 50.0, egui::RichText::new(track.length.map_or_else(String::new, crate::song_info::format_length)).weak(), false);
+                        select_list::cell(ui, 50.0, egui::RichText::new(track.length.map_or_else(String::new, crate::song_info::format_length)).weak(), false, true);
                         let title = egui::RichText::new(format!("{}. {}", track.position, track.title));
                         let title = if ticked && !is_here { title } else { title.color(ui.visuals().weak_text_color()) };
                         select_list::label(ui, title, is_here.then(|| HERE.to_string()), scroll);
@@ -1287,7 +1287,7 @@ const HERE: &str = "You have this song";
 /// The cell saying a song's here.
 fn here_cell(ui: &mut egui::Ui, here: bool) {
     let text = if here { format!("{} Here", icon("check")) } else { String::new() };
-    select_list::cell(ui, 70.0, egui::RichText::new(text).weak(), false);
+    select_list::cell(ui, 70.0, egui::RichText::new(text).weak(), false, false);
 }
 
 /// Whether a search result has a page: an artist's albums, or an album's

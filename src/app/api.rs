@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use super::App;
+use super::{setting_label, setting_row, settings_group, with_info, App};
 use crate::api::{self, Access, Call, NowPlaying, PlaylistInfo, PlaylistRef, SongInfo};
 use crate::audio::PlaybackShared;
 use crate::commands::Command;
@@ -49,6 +49,8 @@ pub(super) struct ApiState {
     new_token: Option<(String, String)>,
     /// The name being typed for a new app.
     new_name: String,
+    /// The program asked to be removed, by name, waiting to be confirmed.
+    removing: Option<String>,
     /// The main window's handle (an HWND on Windows), for the media
     /// controls.
     pub(super) window: Option<usize>,
@@ -707,54 +709,60 @@ impl App {
     pub(super) fn api_preferences_ui(&mut self, ui: &mut egui::Ui) {
         let before = self.config.api.clone();
         let settings = &mut self.config.api;
-        ui.label(
-            "Programs you run on this computer can use synththing's API: see what's playing, browse the \
-             library, follow events and run commands. Each program gets its own token.",
-        );
-        ui.hyperlink_to("How to use it (docs/API.md)", "https://github.com/Dissssy/synththing/blob/master/docs/API.md");
-        ui.add_space(4.0);
-        let mut media = settings.media_controls();
-        ui.checkbox(&mut media, "Show synththing in the system's media controls")
-            .on_hover_text("Media keys, the volume overlay on Windows, Now Playing on macOS, MPRIS on Linux");
-        settings.media_controls = (!media).then_some(false);
-        if let Some(why) = self.api.media_failed.as_ref().filter(|_| media) {
-            ui.colored_label(ui.visuals().error_fg_color, format!("They couldn't be reached: {why}"));
-        }
-        ui.add_space(4.0);
-        ui.checkbox(&mut settings.on, "Let programs on this computer use the API");
-        ui.checkbox(&mut settings.lan, "Let devices on the local network in too").on_hover_text(
-            "Other computers and phones on your network can use it with a program's token. Tokens and everything else go unencrypted, \
-             so only turn this on in a network you trust",
-        );
-        if settings.lan {
-            ui.colored_label(ui.visuals().warn_fg_color, "Anyone on this network who gets a token can use it, and traffic isn't encrypted.");
-        }
-        ui.horizontal(|ui| {
-            ui.label("Port");
-            let mut port = settings.port();
-            ui.add(egui::DragValue::new(&mut port).range(1024..=65535));
-            settings.port = Some(port).filter(|&p| p != api::DEFAULT_PORT);
+        let media_failed = self.api.media_failed.clone();
+        settings_group("Media controls").icon("play-circle").show(ui, |ui| {
+            let mut media = settings.media_controls();
+            with_info(ui, "Media keys, the volume overlay on Windows, Now Playing on macOS, MPRIS on Linux.", |ui| {
+                ui.checkbox(&mut media, "Show synththing in the system's media controls")
+            });
+            settings.media_controls = (!media).then_some(false);
+            if let Some(why) = media_failed.as_ref().filter(|_| media) {
+                setting_row(ui, |ui| ui.colored_label(ui.visuals().error_fg_color, format!("They couldn't be reached: {why}")));
+            }
         });
-        match (&self.api.server, &self.api.failed) {
-            (Some(server), _) => {
-                let addr = server.addr();
-                if addr.ip().is_loopback() {
-                    ui.weak(format!("Listening on http://{addr}"));
-                } else {
-                    ui.weak(format!("Listening on http://localhost:{0} here, and on port {0} of this computer's network address", addr.port()));
+        let hint = "Programs you run on this computer can see what's playing, browse the library, follow events and run commands.";
+        let (server, failed) = (&self.api.server, &self.api.failed);
+        settings_group("Local API").icon("plugs-connected").hint(hint).show(ui, |ui| {
+            with_info(ui, "Each program you add below gets its own token, and only what you tick for it.", |ui| {
+                ui.checkbox(&mut settings.on, "Let programs on this computer use the API")
+            });
+            with_info(
+                ui,
+                "Other computers and phones on your network can use it with a program's token. Tokens and everything else go \
+                 unencrypted, so only turn this on in a network you trust.",
+                |ui| ui.checkbox(&mut settings.lan, "Let devices on the local network in too"),
+            );
+            if settings.lan {
+                setting_row(ui, |ui| {
+                    ui.colored_label(ui.visuals().warn_fg_color, "Anyone on this network who gets a token can use it, and traffic isn't encrypted.")
+                });
+            }
+            setting_row(ui, |ui| {
+                setting_label(ui, "Port");
+                let mut port = settings.port();
+                ui.add(egui::DragValue::new(&mut port).range(1024..=65535));
+                settings.port = Some(port).filter(|&p| p != api::DEFAULT_PORT);
+                match (server, failed) {
+                    (Some(server), _) => {
+                        let addr = server.addr();
+                        if addr.ip().is_loopback() {
+                            ui.weak(format!("Listening on http://{addr}"));
+                        } else {
+                            ui.weak(format!("Listening on http://localhost:{0} here, and on port {0} of this computer's network address", addr.port()));
+                        }
+                    }
+                    (None, Some((_, why))) if settings.on => {
+                        ui.colored_label(ui.visuals().error_fg_color, why);
+                    }
+                    _ => {}
                 }
-            }
-            (None, Some((_, why))) if settings.on => {
-                ui.colored_label(ui.visuals().error_fg_color, why);
-            }
-            _ => {}
-        }
+            });
+            setting_row(ui, |ui| {
+                ui.label(egui::RichText::new(super::icon("book-open")).color(ui.visuals().weak_text_color()));
+                ui.hyperlink_to("How to use it (docs/API.md)", "https://github.com/Dissssy/synththing/blob/master/docs/API.md");
+            });
+        });
 
-        ui.separator();
-        ui.strong("Programs");
-        if settings.apps.is_empty() {
-            ui.weak("None yet. Add one below to get its token.");
-        }
         // (Each program's songs, by its name: what it added.)
         let mut added: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
         for (key, song) in self.songs.known() {
@@ -764,94 +772,67 @@ impl App {
         }
         let mut remove = None;
         let mut remove_songs = None;
-        if !settings.apps.is_empty() {
-            // (Programs down the side, what each may do across the top.)
-            let permissions: [(&str, &str, fn(&mut Access) -> &mut bool); 8] = [
-                ("eye", "Read: see the library, what's playing, and events", |a| &mut a.read),
-                ("play-pause", "Control: run commands (play, pause, next track...)", |a| &mut a.control),
-                ("pencil-simple", "Edit library: star and tag songs; make, rename, delete and reorder playlists, and add songs to them or take them out", |a| &mut a.edit_library),
-                ("download-simple", "Download songs: copy songs' files out of your library", |a| &mut a.download_songs),
-                ("headphones", "Listen: hear what synththing plays, as it plays it (before the volume slider)", |a| &mut a.listen),
-                (
-                    "music-notes-plus",
-                    "Add songs: send songs into your library. Each one is marked as this program's (search addedby:name)",
-                    |a| &mut a.add_songs,
-                ),
-                ("app-window", "Show a panel: put a panel of its own in the Apps tab, and hear what you do in it", |a| &mut a.panel),
-                ("devices", "Show on my other devices: its panel shows in the Apps tab on your other devices too (with sync on), and hears what you do there", |a| &mut a.share),
-            ];
-            // (Every cell the same small box with its contents in the
-            // middle, so the columns line up and stay narrow.)
-            let cell = egui::vec2(28.0, 24.0);
-            let any_added = settings.apps.iter().any(|app| added.contains_key(app.name.as_str()));
-            egui::Grid::new("api_programs").striped(true).spacing([6.0, 4.0]).min_col_width(cell.x).show(ui, |ui| {
-                ui.label("");
-                for (name, info, _) in &permissions {
-                    let (rect, response) = ui.allocate_exact_size(cell, egui::Sense::hover());
-                    let color = ui.visuals().text_color();
-                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, super::icon(name), egui::FontId::proportional(16.0), color);
-                    response.on_hover_text(*info);
-                }
-                ui.end_row();
-                for (i, app) in settings.apps.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.add_space(6.0);
-                        ui.label(&app.name);
-                    });
-                    for (_, info, field) in &permissions {
-                        ui.add_sized(cell, egui::Checkbox::without_text(field(app))).on_hover_text(*info);
-                    }
-                    let trash = egui::Button::new(egui::RichText::new(super::icon("trash")).size(16.0)).frame(false);
-                    if ui.add_sized(cell, trash).on_hover_text("Remove this program: its token stops working. The songs it added stay").clicked() {
-                        remove = Some(i);
-                    }
-                    if any_added {
-                        if let Some(keys) = added.get(app.name.as_str()) {
-                            let plural = if keys.len() == 1 { "" } else { "s" };
-                            let hover = format!("Remove the {} song{plural} {} added...", keys.len(), app.name);
-                            let broom = egui::Button::new(egui::RichText::new(super::icon("broom")).size(16.0)).frame(false);
-                            if ui.add_sized(cell, broom).on_hover_text(hover).clicked() {
-                                remove_songs = Some(keys.clone());
-                            }
-                        } else {
-                            ui.allocate_exact_size(cell, egui::Sense::hover());
-                        }
-                    }
-                    ui.end_row();
+        let new_name = &mut self.api.new_name;
+        let new_token = &mut self.api.new_token;
+        settings_group("Programs").icon("key").hint("What each program may do: hover an icon for what it allows.").show(ui, |ui| {
+            if settings.apps.is_empty() {
+                setting_row(ui, |ui| ui.weak("None yet. Add one below to get its token."));
+            } else {
+                ui.scope(|ui| programs_ui(ui, settings, &added, &mut remove, &mut remove_songs));
+            }
+            setting_row(ui, |ui| {
+                let field = ui.add(egui::TextEdit::singleline(new_name).hint_text("Program name").desired_width(super::CONTROL_WIDTH));
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let name = new_name.trim().to_string();
+                ui.add_space(6.0);
+                let add = ui.add_enabled(!name.is_empty(), egui::Button::new(format!("{}  Add", super::icon("plus"))));
+                if !name.is_empty() && (add.clicked() || entered) {
+                    let (access, token) = Access::new(&name);
+                    settings.apps.push(access);
+                    *new_token = Some((name, token));
+                    new_name.clear();
                 }
             });
-        }
-        let remove_songs: Option<Vec<std::path::PathBuf>> = remove_songs.map(|keys| keys.iter().map(|k| self.songs.path(k)).collect());
-        if let Some(i) = remove {
-            settings.apps.remove(i);
-        }
-        ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.api.new_name).hint_text("Program name").desired_width(160.0));
-            let name = self.api.new_name.trim().to_string();
-            if ui.add_enabled(!name.is_empty(), egui::Button::new("Add")).clicked() {
-                let (access, token) = Access::new(&name);
-                settings.apps.push(access);
-                self.api.new_token = Some((name, token));
-                self.api.new_name.clear();
+            if let Some((name, token)) = &*new_token {
+                setting_row(ui, |ui| ui.label(format!("{name}'s token. Copy it now: it isn't shown again.")));
+                setting_row(ui, |ui| {
+                    if ui.add(super::row_icon_button(ui, "copy")).on_hover_text("Copy").clicked() {
+                        ui.ctx().copy_text(token.clone());
+                    }
+                    ui.add(egui::Label::new(egui::RichText::new(token.as_str()).monospace()).truncate());
+                });
             }
         });
-        if let Some((name, token)) = &self.api.new_token {
-            ui.label(format!("{name}'s token. Copy it now: it isn't shown again."));
-            ui.horizontal(|ui| {
-                let mut shown = token.as_str();
-                ui.add(egui::TextEdit::singleline(&mut shown).font(egui::TextStyle::Monospace).desired_width(260.0));
-                if ui.button("Copy").clicked() {
-                    ui.ctx().copy_text(token.clone());
-                }
-            });
+        let remove_songs: Option<Vec<std::path::PathBuf>> = remove_songs.map(|keys| keys.iter().map(|k| self.songs.path(k)).collect());
+        if remove.is_some() {
+            self.api.removing = remove;
         }
-
+        if let Some(name) = self.api.removing.clone() {
+            let mut close = false;
+            let modal = egui::Modal::new(egui::Id::new("remove_program")).show(ui.ctx(), |ui| {
+                ui.set_width(super::fit_width(ui, 360.0));
+                ui.heading(format!("Remove {name}?"));
+                ui.label("Its token stops working. The songs it added stay.");
+                ui.add_space(8.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                    if ui.add(egui::Button::new(egui::RichText::new("Remove").color(ui.visuals().error_fg_color))).clicked() {
+                        self.config.api.apps.retain(|app| app.name != name);
+                        close = true;
+                    }
+                });
+            });
+            if close || modal.should_close() {
+                self.api.removing = None;
+            }
+        }
         // (The usual Remove dialog, over the library, in place of
         // Preferences.)
         if let Some(paths) = remove_songs {
             self.remove_songs = paths;
-            self.preferences_open = false;
-            self.api_preferences_closed();
+            self.toggle_preferences();
         }
         if self.config.api != before {
             if self.config.api.port() != before.port() || self.config.api.lan != before.lan {
@@ -944,4 +925,74 @@ impl App {
 /// folder, beside the library (so importing one is a move).
 fn staging() -> std::path::PathBuf {
     crate::config::config_dir().map_or_else(|_| std::env::temp_dir().join("synththing-staged"), |dir| dir.join("staged"))
+}
+
+/// What each program may do, across the top.
+const PERMISSIONS: [(&str, &str, fn(&mut Access) -> &mut bool); 8] = [
+    ("eye", "Read: see the library, what's playing, and events", |a| &mut a.read),
+    ("play-pause", "Control: run commands (play, pause, next track...)", |a| &mut a.control),
+    ("pencil-simple", "Edit library: star and tag songs; make, rename, delete and reorder playlists, and add songs to them or take them out", |a| &mut a.edit_library),
+    ("download-simple", "Download songs: copy songs' files out of your library", |a| &mut a.download_songs),
+    ("headphones", "Listen: hear what synththing plays, as it plays it (before the volume slider)", |a| &mut a.listen),
+    ("music-notes-plus", "Add songs: send songs into your library. Each one is marked as this program's (search addedby:name)", |a| &mut a.add_songs),
+    ("app-window", "Show a panel: put a panel of its own in the Apps tab, and hear what you do in it", |a| &mut a.panel),
+    ("devices", "Show on my other devices: its panel shows in the Apps tab on your other devices too (with sync on), and hears what you do there", |a| &mut a.share),
+];
+
+/// The programs down the side, what each may do across the top, the cells
+/// in a checkerboard so a tick's row and column are easy to follow. By
+/// each name, remove it (asked first) and remove the songs it added.
+fn programs_ui<'a>(
+    ui: &mut egui::Ui,
+    settings: &mut api::Settings,
+    added: &std::collections::BTreeMap<&str, Vec<&'a str>>,
+    remove: &mut Option<String>,
+    remove_songs: &mut Option<Vec<&'a str>>,
+) {
+    let height = ui.spacing().interact_size.y + 6.0;
+    let cell = egui::vec2(32.0, height);
+    let name_width = super::LABEL_WIDTH.min(ui.available_width() * 0.3);
+    let shade = ui.visuals().faint_bg_color;
+    // A cell at (row, column): shaded on alternate squares.
+    let square = |ui: &mut egui::Ui, row: usize, column: usize, width: f32| {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+        if (row + column) % 2 == 1 {
+            ui.painter().rect_filled(rect, 0.0, shade);
+        }
+        (rect, response)
+    };
+    ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+    ui.horizontal(|ui| {
+        square(ui, 0, 0, name_width);
+        for (column, (name, info, _)) in PERMISSIONS.iter().enumerate() {
+            let (rect, response) = square(ui, 0, column + 1, cell.x);
+            let color = ui.visuals().text_color();
+            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, super::icon(name), egui::FontId::proportional(16.0), color);
+            response.on_hover_text(*info);
+        }
+    });
+    for (i, app) in settings.apps.iter_mut().enumerate() {
+        let row = i + 1;
+        ui.horizontal(|ui| {
+            let (rect, _) = square(ui, row, 0, name_width);
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(6.0, 0.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
+            if child.add(super::row_icon_button(&child, "trash")).on_hover_text("Remove this program...").clicked() {
+                *remove = Some(app.name.clone());
+            }
+            if let Some(keys) = added.get(app.name.as_str()) {
+                let plural = if keys.len() == 1 { "" } else { "s" };
+                let hover = format!("Remove the {} song{plural} {} added...", keys.len(), app.name);
+                if child.add(super::row_icon_button(&child, "broom")).on_hover_text(hover).clicked() {
+                    *remove_songs = Some(keys.clone());
+                }
+            }
+            child.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(egui::Label::new(&app.name).truncate()));
+            for (column, (_, info, field)) in PERMISSIONS.iter().enumerate() {
+                let (rect, _) = square(ui, row, column + 1, cell.x);
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight)));
+                child.add(egui::Checkbox::without_text(field(app))).on_hover_text(*info);
+            }
+        });
+    }
+    ui.add_space(4.0);
 }

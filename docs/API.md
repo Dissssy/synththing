@@ -109,7 +109,7 @@ What's playing (`soundfont` is the one a MIDI song plays with, `null` for any ot
  "soundfont": {"id": "9c1e...", "name": "GeneralUser GS"}}
 ```
 
-Commands are the ones Preferences > Keyboard lists, by id: `play`, `pause`, `toggle_pause`, `next_track`, `previous_track`, `seek_back`, `seek_forward`, `restart_song`, `toggle_visualizer`, `toggle_fullscreen`, `go_to_songs` and so on. `GET /v1/commands` has them all.
+Commands are the ones Preferences > Keyboard lists, by id: `play`, `pause`, `toggle_pause`, `next_track`, `previous_track`, `seek_back`, `seek_forward`, `restart_song`, `toggle_visualizer`, `go_to_songs` and so on. `GET /v1/commands` has them all.
 
 ## Keeping up with the library
 

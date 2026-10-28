@@ -282,12 +282,22 @@ impl App {
         });
     }
 
-    /// The envelope, at the right of the header, and its list.
-    pub(super) fn notifications_button_ui(&mut self, ui: &mut egui::Ui) {
-        if self.library_identity().is_none() || !self.config.library.notifications {
+    /// Whether there are notifications to show (signed in, and wanted).
+    pub(super) fn notifications_shown(&self) -> bool {
+        self.library_identity().is_some() && self.config.library.notifications
+    }
+
+    pub(super) fn notifications_unread(&self) -> usize {
+        self.notifications.items.iter().filter(|n| !n.read).count()
+    }
+
+    /// `button` (the envelope), with a badge counting the unread ones, and
+    /// their list under it.
+    pub(super) fn notifications_button_ui(&mut self, ui: &mut egui::Ui, button: egui::Button<'static>) {
+        if !self.notifications_shown() {
             return;
         }
-        let unread = self.notifications.items.iter().filter(|n| !n.read).count();
+        let unread = self.notifications_unread();
         // (The badge in the color of the most serious one unread.)
         let worst = self
             .notifications
@@ -296,9 +306,8 @@ impl App {
             .filter(|n| !n.read)
             .max_by_key(|n| tier_of(&n.kind))
             .map(|n| color_of(ui, n));
-        let envelope = super::icon("envelope-simple");
         let button = ui
-            .add(egui::Button::new(egui::RichText::new(envelope).size(16.0)).frame(false))
+            .add(button)
             .on_hover_text(if unread == 0 { "Notifications".to_string() } else { format!("Notifications: {unread} unread") });
         if unread > 0 {
             let center = button.rect.right_top() + egui::vec2(-3.0, 4.0);
@@ -313,9 +322,15 @@ impl App {
                 super::on_color(badge),
             );
         }
+        egui::Popup::menu(&button).show(|ui| self.notifications_list_ui(ui));
+    }
+
+    /// The notifications, newest first: click one to read it all.
+    pub(super) fn notifications_list_ui(&mut self, ui: &mut egui::Ui) {
+        let unread = self.notifications_unread();
         let mut open: Option<i64> = None;
         let mut all_read = false;
-        egui::Popup::menu(&button).show(|ui| {
+        {
             // (Its lines wrap to that, so it fits a phone's screen.)
             ui.set_width(super::fit_width(ui, 340.0));
             ui.horizontal(|ui| {
@@ -366,7 +381,7 @@ impl App {
                     }
                 }
             });
-        });
+        }
         if all_read {
             let unread: Vec<i64> = self.notifications.items.iter().filter(|n| !n.read).map(|n| n.id).collect();
             self.mark_notifications(unread, false);

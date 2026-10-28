@@ -210,6 +210,26 @@ fn row_height(ui: &egui::Ui) -> f32 {
     if select_list::touch(ui.ctx()) { 44.0 } else { ui.spacing().interact_size.y }
 }
 
+/// A play button in the middle of the art at `cover`, over the art
+/// dimmed, while `shown` (under the pointer, or always on touch): whether
+/// it was clicked. It lights up in the selection's color under the pointer.
+fn art_play(ui: &egui::Ui, cover: egui::Rect, id: egui::Id, shown: bool) -> bool {
+    if !shown {
+        return false;
+    }
+    let painter = ui.painter();
+    painter.rect_filled(cover, 4.0, egui::Color32::from_black_alpha(90));
+    let size = (cover.width() * 0.4).clamp(24.0, 52.0);
+    let rect = egui::Rect::from_center_size(cover.center(), egui::Vec2::splat(size));
+    let response = ui.interact(rect, id, egui::Sense::click()).on_hover_text("Play");
+    let fill = if response.hovered() { ui.visuals().selection.bg_fill } else { egui::Color32::from_black_alpha(170) };
+    painter.circle_filled(rect.center(), size / 2.0, fill);
+    // (The triangle's middle sits left of its box's.)
+    let at = rect.center() + egui::vec2(size * 0.04, 0.0);
+    painter.text(at, egui::Align2::CENTER_CENTER, super::icon("play"), egui::FontId::proportional(size * 0.45), egui::Color32::WHITE);
+    response.clicked()
+}
+
 /// A smart playlist's mark on its tile at `rect`: its icon, in the
 /// theme's accent, on a dimmed notch in the bottom right corner (its inner
 /// corner rounded).
@@ -255,12 +275,12 @@ fn virtual_rows(ui: &mut egui::Ui, id: impl egui::AsIdSalt, heights: &[f32], mut
 impl App {
     /// The Groupings tab: the rulesets along the top, then the one picked.
     pub(super) fn groupings_ui(&mut self, ui: &mut egui::Ui) {
-        let rulesets = self.all_rulesets();
+        let rulesets = self.shown_rulesets();
         let mut pick = None;
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(icon_button("gear")).on_hover_text("Rulesets: make your own, or see their rules (Preferences > Songs)").clicked() {
-                    self.preferences_tab = PrefTab::Songs;
+                if ui.add(icon_button("gear")).on_hover_text("Rulesets: make your own, or see their rules (Preferences > Library)").clicked() {
+                    self.preferences_tab = PrefTab::Library;
                     self.preferences_open = true;
                 }
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -342,7 +362,7 @@ impl App {
         let (id, ruleset, what, groups) = if self.groupings.shown() == TOGETHER && !self.songs.together().is_empty() {
             (TOGETHER.to_string(), together_ruleset(), "set", self.together_groups())
         } else {
-            let rulesets = self.all_rulesets();
+            let rulesets = self.shown_rulesets();
             let (id, ruleset) = rulesets.iter().find(|(id, _)| id == self.groupings.shown()).or(rulesets.first()).cloned()?;
             let mut groups = self.groups_of(&id, &ruleset.rules);
             if id == ALBUMS && !self.config.hide_wished {
@@ -611,7 +631,7 @@ impl App {
         let view = self.groupings.view();
         view.list = Some(list);
         if groups.is_empty() {
-            ui.weak(if id == PLAYLISTS { "No playlists yet: make one with +, or drag songs here from Songs." } else { "Nothing here yet: these come from your songs' tags." });
+            super::placeholder(ui, if id == PLAYLISTS { "No playlists yet.\nMake one with +, or drag songs here from Songs." } else { "Nothing here yet.\nThese come from your songs' tags." });
             return None;
         }
 
@@ -679,8 +699,9 @@ impl App {
         let mut queued = None;
         let mut menu_act = None;
         let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
+        let mut play = None;
         if list {
-            let mut play = None;
+            let touch = select_list::touch(ui.ctx());
             // (Out of the view while the list's drawn: the rows see the rest.)
             let mut selection = std::mem::take(&mut self.groupings.view().selection);
             let output = select_list::show_tall(ui, ("grouping_list", id), &shown, &mut selection, None, 56.0, |ui, row, &i| {
@@ -689,20 +710,18 @@ impl App {
                 let (tile, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
                 let from = self.art_from(albums, group);
                 tile_ui(ui, &mut self.groupings.art, tile, from, group);
-                ui.add_space(4.0);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(icon_button("play")).on_hover_text("Play").clicked() {
-                        play = Some(i);
+                if wished(group).is_none() && art_play(ui, tile, row.response.id.with("play"), touch || row.response.contains_pointer()) {
+                    play = Some(i);
+                }
+                ui.add_space(8.0);
+                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.add_space(8.0);
+                    ui.add(egui::Label::new(egui::RichText::new(&group.title).strong()).truncate());
+                    let mut detail = if wished(group).is_some() { "On your wishlist".to_string() } else { count(group.songs.len(), "song") };
+                    if let Some(subtitle) = &group.subtitle {
+                        detail = format!("{subtitle} \u{b7} {detail}");
                     }
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                        ui.add_space(8.0);
-                        ui.add(egui::Label::new(egui::RichText::new(&group.title).strong()).truncate());
-                        let mut detail = if wished(group).is_some() { "On your wishlist".to_string() } else { count(group.songs.len(), "song") };
-                        if let Some(subtitle) = &group.subtitle {
-                            detail = format!("{subtitle} \u{b7} {detail}");
-                        }
-                        ui.add(egui::Label::new(egui::RichText::new(detail).weak()).truncate());
-                    });
+                    ui.add(egui::Label::new(egui::RichText::new(detail).weak()).truncate());
                 });
                 crate::menu::context(&row.response, |ui| {
                     if let Some(wish) = wished(group) {
@@ -726,9 +745,6 @@ impl App {
             if let Some(row) = output.activated {
                 opened = Some(groups[shown[row]].key.clone());
             }
-            if let Some(i) = play {
-                act = Some(if id == PLAYLISTS { Act::PlayPlaylist(groups[i].key.clone()) } else { Act::Play(self.playable(&groups[i]), 0) });
-            }
         } else {
             let gap = 12.0;
             let width = ui.available_width();
@@ -750,8 +766,11 @@ impl App {
                         let cover = egui::Rect::from_min_size(rect.min, egui::vec2(tile, tile));
                         let from = self.art_from(albums, group);
                         tile_ui(ui, &mut self.groupings.art, cover, from, group);
-                        if response.hovered() {
+                        if response.contains_pointer() {
                             ui.painter().rect_stroke(cover, 4.0, ui.visuals().widgets.hovered.fg_stroke, egui::StrokeKind::Inside);
+                        }
+                        if wished(group).is_none() && art_play(ui, cover, response.id.with("play"), phone || response.contains_pointer()) {
+                            play = Some(i);
                         }
                         let text = egui::Rect::from_min_max(egui::pos2(rect.left(), cover.bottom() + 2.0), rect.max);
                         ui.scope_builder(egui::UiBuilder::new().max_rect(text).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
@@ -785,6 +804,9 @@ impl App {
                     }
                 }
             });
+        }
+        if let Some(i) = play {
+            act = Some(if id == PLAYLISTS { Act::PlayPlaylist(groups[i].key.clone()) } else { Act::Play(self.playable(&groups[i]), 0) });
         }
         if let Some(key) = opened {
             act = Some(if key.starts_with(WISHED) { Act::GoToWishlist } else { Act::Open(id.to_string(), key) });

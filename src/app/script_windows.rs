@@ -190,7 +190,7 @@ impl App {
         let groups = groups(descriptors.iter().map(|d| &d.labels));
         let mut changed: Option<(String, SettingValue)> = None;
         let mut index = self.script_window_tab[ScriptWindow::Settings.slot()];
-        categories_body(ui, "script_settings", &groups, &mut index, |ui, index| {
+        categories_body(ui, "script_settings", &groups, &mut index, super::CATEGORIES_HEIGHT, |ui, index| {
             let group = &groups[index];
             egui::Grid::new(("script_settings_grid", index)).num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                 for d in descriptors.iter().filter(|d| in_group(&d.labels, group)) {
@@ -312,7 +312,7 @@ impl App {
         }
         let groups = groups(actions.iter().map(|a| &a.labels));
         let mut index = self.script_window_tab[ScriptWindow::Controls.slot()];
-        categories_body(ui, "script_controls", &groups, &mut index, |ui, index| {
+        categories_body(ui, "script_controls", &groups, &mut index, super::CATEGORIES_HEIGHT, |ui, index| {
             let shown: Vec<usize> = (0..actions.len()).filter(|&i| in_group(&actions[i].labels, &groups[index])).collect();
             self.controls_rows_ui(ui, &actions, &shown);
         });
@@ -325,7 +325,7 @@ impl App {
     fn script_debug_body_ui(&mut self, ui: &mut egui::Ui) {
         let mut index = self.script_window_tab[ScriptWindow::Debug.slot()];
         let mut clear_log = false;
-        categories_body(ui, "script_debug", &DEBUG_TABS, &mut index, |ui, index| match index {
+        categories_body(ui, "script_debug", &DEBUG_TABS, &mut index, super::CATEGORIES_HEIGHT, |ui, index| match index {
             VARIABLES => {
                 ui.weak(
                     "The script's variables (its top-level locals that its functions use, and globals it \

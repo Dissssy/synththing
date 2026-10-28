@@ -246,11 +246,11 @@ impl App {
     /// one's panel, greyed while its program isn't listening.
     pub(super) fn apps_ui(&mut self, ui: &mut egui::Ui) {
         if self.api.server().is_none() && self.panels.shown.is_empty() {
-            ui.weak("Programs can show panels here through the local API. Turn it on in Preferences > Integrations.");
+            super::placeholder(ui, "Programs can show panels here through the local API.\nTurn it on in Preferences > Integrations.");
             return;
         }
         if self.panels.shown.is_empty() {
-            ui.weak("No program has a panel here yet. A program allowed to Show a panel (Preferences > Integrations) puts one here with PUT /v1/panel.");
+            super::placeholder(ui, "No program has a panel here yet.\nA program allowed to Show a panel (Preferences > Integrations) puts one here with PUT /v1/panel.");
             return;
         }
         let state = &mut self.panels;

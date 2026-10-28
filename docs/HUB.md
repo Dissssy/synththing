@@ -2,11 +2,11 @@
 
 A hub is one of your devices, with no window, that keeps every song. Run it on something that's always on (a home server, a NAS, a VPS) and your devices' songs have somewhere to go even when none of your other devices is open: a song you add on your PC streams straight to the hub, and the hub sends it on to your phone once that's open.
 
-It's signed in like any other device, and syncs what the app does: settings, playlists, the wishlist and the song library. It always wants every song (as if Preferences > Online Library > "Every song, not only those in playlists" were ticked).
+It's signed in like any other device, and syncs what the app does: settings, playlists, the wishlist and the song library. It always wants every song (as if Preferences > Account > "Every song, not only those in playlists" were ticked).
 
 ## Signing it in
 
-On a signed-in device, open Preferences > Online Library > Sign in another device and copy the link. Then, on the hub's machine:
+On a signed-in device, open Preferences > Account > Sign in another device and copy the link. Then, on the hub's machine:
 
 ```
 synththing hub pair '<link>' --name "Home hub"

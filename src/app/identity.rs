@@ -1,4 +1,4 @@
-//! The identity's recovery and rotation, in Preferences > Online Library
+//! The identity's recovery and rotation, in Preferences > Account
 //! (docs/SERVER.md, Authorities): an email attached at the authority (the
 //! official server) for recovery, a new key in place of the old one, and
 //! recovering with the email when the key's lost. The records of each
@@ -223,9 +223,9 @@ impl App {
         }
     }
 
-    /// Preferences > Online Library, under the identity: its email, a new key,
-    /// recovery.
-    pub(super) fn recovery_ui(&mut self, ui: &mut egui::Ui, current: Option<&Identity>) {
+    /// On the identity card in Preferences > Account: whether a recovery
+    /// email is attached, and changing it.
+    pub(super) fn recovery_email_ui(&mut self, ui: &mut egui::Ui, current: Option<&Identity>) {
         let (authority, key) = self.authority();
         if let Some(identity) = current
             && !self.identity.asked
@@ -237,7 +237,7 @@ impl App {
         let mut open: Option<Flow> = None;
         if current.is_some() {
             ui.horizontal_wrapped(|ui| {
-                ui.label("Recovery email:");
+                ui.weak("Recovery email:");
                 match &self.identity.status {
                     None => {
                         ui.spinner();
@@ -293,43 +293,43 @@ impl App {
                 ));
             });
         }
-        ui.horizontal(|ui| {
-            if current.is_some()
-                && ui
-                    .button("New key...")
-                    .on_hover_text("Move your identity to a new key (if the old one might have got out)")
-                    .clicked()
-            {
-                open = Some(Flow::Rotate);
-            }
-            if ui
-                .button("Recover...")
-                .on_hover_text("Lost your key? Get your identity back with the email attached to it")
+        if let Some(flow) = open {
+            self.identity.flow = Some(FlowState { flow, busy: false, error: None });
+        }
+    }
+
+    /// In the identity card's menu: a new key, recovery, and deleting (or
+    /// restoring) what the server has.
+    pub(super) fn recovery_menu_ui(&mut self, ui: &mut egui::Ui, current: Option<&Identity>) {
+        let mut open: Option<Flow> = None;
+        if current.is_some()
+            && ui
+                .button("New key...")
+                .on_hover_text("Move your identity to a new key (if the old one might have got out)")
                 .clicked()
-            {
-                match Identity::generate() {
-                    Ok(new) => open = Some(Flow::Recover { address: String::new(), new, sent: false, code: String::new() }),
-                    Err(e) => self.library_identity_message(&format!("Couldn't make a key: {e}")),
+        {
+            open = Some(Flow::Rotate);
+        }
+        if ui
+            .button("Recover...")
+            .on_hover_text("Lost your key? Get your identity back with the email attached to it")
+            .clicked()
+        {
+            match Identity::generate() {
+                Ok(new) => open = Some(Flow::Recover { address: String::new(), new, sent: false, code: String::new() }),
+                Err(e) => self.library_identity_message(&format!("Couldn't make a key: {e}")),
+            }
+        }
+        if current.is_some() {
+            ui.separator();
+            for (restore, label, hover) in [
+                (false, "Delete my data...", "Have the server delete what it has of yours: your scripts, encores, email"),
+                (true, "Restore my data...", "Undo a deletion, within 30 days of it"),
+            ] {
+                if ui.button(label).on_hover_text(hover).clicked() {
+                    open = Some(Flow::Delete { restore, address: String::new(), sent: false, code: String::new(), done: None });
                 }
             }
-        });
-        if current.is_some() {
-            ui.horizontal(|ui| {
-                for (restore, label, hover) in [
-                    (false, "Delete my data...", "Have the server delete what it has of yours: your scripts, encores, email"),
-                    (true, "Restore my data...", "Undo a deletion, within 30 days of it"),
-                ] {
-                    if ui.button(label).on_hover_text(hover).clicked() {
-                        open = Some(Flow::Delete {
-                            restore,
-                            address: String::new(),
-                            sent: false,
-                            code: String::new(),
-                            done: None,
-                        });
-                    }
-                }
-            });
         }
         if let Some(flow) = open {
             self.identity.flow = Some(FlowState { flow, busy: false, error: None });

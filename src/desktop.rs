@@ -207,6 +207,7 @@ pub fn main() -> Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title(build_info::window_title())
             .with_inner_size(app.start_size())
+            .with_decorations(app.wants_native_frame())
             .with_icon(icon),
         ..Default::default()
     };
