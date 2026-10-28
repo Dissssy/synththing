@@ -398,8 +398,10 @@ pub fn paint_row(ui: &egui::Ui, rect: egui::Rect, response: &egui::Response, idx
         let stroke = if playing { egui::Stroke::NONE } else { visuals.bg_stroke };
         ui.painter().rect(rect.expand(visuals.expansion), visuals.corner_radius, visuals.weak_bg_fill, stroke, egui::StrokeKind::Inside);
     } else if idx % 2 == 1 {
-        // Striped, to tell the rows apart.
-        ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+        // Striped, to tell the rows apart: over half the gap either side
+        // too, so striped and plain rows are the same height.
+        let stripe = rect.expand2(egui::vec2(0.0, ui.spacing().item_spacing.y / 2.0));
+        ui.painter().rect_filled(stripe, 0.0, ui.visuals().faint_bg_color);
     }
     if playing {
         // Outlined, selected or not.
@@ -418,19 +420,23 @@ const COLUMN_WIDTHS: RangeInclusive<f32> = 24.0..=640.0;
 const GRAB: f32 = 3.0;
 
 /// A column's cell `width` wide (in a right-to-left layout), its text cut
-/// short to fit (or scrolling, while `scroll` is on), with a line before
-/// it. The whole cell's response.
-pub fn cell(ui: &mut egui::Ui, width: f32, text: impl Into<egui::WidgetText>, scroll: bool) -> egui::Response {
+/// short to fit (or scrolling, while `scroll` is on), at its left, or at
+/// its right when `numeric` (so numbers line up down the list), with a
+/// line before it. The whole cell's response.
+pub fn cell(ui: &mut egui::Ui, width: f32, text: impl Into<egui::WidgetText>, scroll: bool, numeric: bool) -> egui::Response {
     let size = egui::vec2(width, ui.available_height());
+    let layout = if numeric { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) };
     let response = ui
-        .allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        .allocate_ui_with_layout(size, layout, |ui| {
             ui.set_min_size(size);
             ui.set_width(width);
             crate::marquee::show(ui, text, scroll);
         })
         .response;
     let x = response.rect.left() - ui.spacing().item_spacing.x / 2.0;
-    ui.painter().vline(x, ui.max_rect().y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
+    // (Over the gaps between rows too, so the line runs unbroken.)
+    let y = ui.max_rect().expand2(egui::vec2(0.0, ui.spacing().item_spacing.y / 2.0)).y_range();
+    ui.painter().vline(x, y, ui.visuals().widgets.noninteractive.bg_stroke);
     response
 }
 
@@ -446,11 +452,13 @@ pub struct Header<'a> {
     pub min_main: f32,
 }
 
-/// A column of a [`header`]: its key, title and width.
+/// A column of a [`header`]: its key, title and width, and whether it
+/// holds numbers (its title then sits at the right, over them).
 pub struct Column<'a> {
     pub key: &'a str,
     pub title: egui::RichText,
     pub width: f32,
+    pub numeric: bool,
 }
 
 /// What [`header`] reports.
@@ -494,7 +502,7 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, rect: egui::Rect, header: Header)
                 ui.add_space(trail + spacing);
             }
             for c in columns.iter().rev() {
-                let response = cell(ui, c.width, c.title.clone(), false).interact(egui::Sense::click());
+                let response = cell(ui, c.width, c.title.clone(), false, c.numeric).interact(egui::Sense::click());
                 let widths = *COLUMN_WIDTHS.start()..=(c.width + slack.max(0.0)).clamp(*COLUMN_WIDTHS.start(), *COLUMN_WIDTHS.end());
                 if let Some(r) = resize(ui, id, c, response.rect, widths) {
                     resized = Some(r);

@@ -2629,17 +2629,23 @@ impl App {
         let autoplay = self.autoplay;
         let mut autoplay_clicked = false;
         let mut tools = |ui: &mut egui::Ui| {
+            #[cfg(target_os = "android")]
             if ui.add(icon_button("plus")).on_hover_text("Import songs: copy them into synththing's library").clicked() {
                 crate::import::start(crate::import::Kind::Songs, SONG_EXTENSIONS);
             }
             #[cfg(not(target_os = "android"))]
-            if ui
-                .add(icon_button("folder-plus"))
-                .on_hover_text("Import a folder: every song in it and in the folders inside it")
-                .clicked()
-            {
-                crate::import::start_folder(SONG_EXTENSIONS);
-            }
+            egui::containers::menu::MenuButton::from_button(icon_button("plus"))
+                .config(crate::menu::config(ui.ctx()))
+                .ui(ui, |ui| {
+                    if ui.button("Songs...").on_hover_text("Copy songs into synththing's library").clicked() {
+                        crate::import::start(crate::import::Kind::Songs, SONG_EXTENSIONS);
+                    }
+                    if ui.button("A folder...").on_hover_text("Every song in a folder and in the folders inside it").clicked() {
+                        crate::import::start_folder(SONG_EXTENSIONS);
+                    }
+                })
+                .0
+                .on_hover_text("Import songs");
             #[cfg(not(target_os = "android"))]
             if ui
                 .add_enabled(!selected.is_empty(), icon_button("info"))
