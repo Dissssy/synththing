@@ -386,7 +386,7 @@ mod tests {
         // It proves it's this hub; another key isn't it.
         client::hub_hello(&base, &key, true).unwrap();
         assert!(client::hub_hello(&base, &Identity::generate().unwrap().public(), true).is_err());
-        let leaf = HubLeaf { device: "hub".into(), key: key.clone(), addrs: vec!["http://127.0.0.1:9".into(), base.clone()] };
+        let leaf = HubLeaf { device: "hub".into(), key: key.clone(), addrs: vec!["http://127.0.0.1:9".into(), base.clone()], checks: Vec::new() };
         let reached = song_sync::reach(&leaf).unwrap();
         assert_eq!(reached, Hub { device: "hub".into(), base: base.clone(), key: key.clone() }, "the next address, the first not answering");
 

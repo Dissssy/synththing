@@ -284,7 +284,8 @@ impl App {
         if devices.is_empty() || !self.sync.engine.syncs_transfers() {
             return;
         }
-        let me = self.sync.engine.device_id().unwrap_or_default();
+        let me = self.sync.engine.device_id().unwrap_or_default().to_string();
+        let hub = self.sync.engine.hub().cloned();
         let mut forget = None;
         let info = format!(
             "The devices your songs move between. One that doesn't sync for {} days is removed by itself; one removed comes back if it syncs again.",
@@ -300,6 +301,9 @@ impl App {
                     Some(name) => name,
                     None => "A device on an older version",
                 });
+                if hub.as_ref().is_some_and(|hub| hub.device == device.id) {
+                    ui.weak("hub").on_hover_text("Your hub: songs go straight to and from it, from devices that reach it");
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if device.id == me {
                         ui.weak("this device");
@@ -314,6 +318,50 @@ impl App {
         }
         if let Some(device) = forget {
             self.sync.engine.forget_device(&device);
+        }
+        if let Some(hub) = &hub {
+            self.hub_ui(ui, hub, hub.device == me);
+        }
+    }
+
+    /// How this device reaches the hub, and whether its addresses work from
+    /// the internet, as the hub last had the server check.
+    fn hub_ui(&mut self, ui: &mut egui::Ui, hub: &song_sync::HubLeaf, is_me: bool) {
+        let weak = ui.visuals().weak_text_color();
+        if !is_me {
+            let checking = self.sync.engine.checking_hub();
+            setting_row(ui, |ui| {
+                ui.add_space(24.0);
+                match self.hub_reached() {
+                    Some(reached) => {
+                        ui.label(egui::RichText::new(icon("plugs-connected")).color(weak));
+                        ui.label(format!("This device reaches the hub directly, at {}", reached.base));
+                    }
+                    None => {
+                        ui.label(egui::RichText::new(icon("plugs")).color(weak));
+                        ui.label("This device doesn't reach the hub directly: songs go through the server");
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if checking {
+                        ui.spinner();
+                    } else if ui.add(row_icon_button(ui, "arrows-clockwise")).on_hover_text("Check again").clicked() {
+                        self.sync.engine.check_hub_now();
+                    }
+                });
+            });
+        }
+        for check in &hub.checks {
+            setting_row(ui, |ui| {
+                ui.add_space(24.0);
+                let (glyph, color) = if check.works { ("globe", weak) } else { ("warning", ui.visuals().warn_fg_color) };
+                ui.label(egui::RichText::new(icon(glyph)).color(color));
+                let text = match &check.hint {
+                    None => format!("{} works from the internet (checked {})", check.url, library::ago(check.at)),
+                    Some(hint) => format!("{} doesn't work from the internet (checked {}): {hint}", check.url, library::ago(check.at)),
+                };
+                ui.add(egui::Label::new(text).wrap());
+            });
         }
     }
 

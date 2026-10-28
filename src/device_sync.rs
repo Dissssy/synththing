@@ -798,12 +798,12 @@ impl DeviceSync {
                 {
                     *take_over = false;
                 }
-                if hub != self.hub {
+                if !matches!((&hub, &self.hub), (Some(new), Some(old)) if new.same_place(old)) {
                     // (Reached again, wherever it is now.)
                     self.hub_reached = None;
                     self.hub_checked = None;
-                    self.hub = hub;
                 }
+                self.hub = hub;
             }
             songs::Reply::Unheld(keys) => self.unheld = keys,
             songs::Reply::Error(e) => self.error = Some(e),
@@ -870,6 +870,26 @@ impl DeviceSync {
     pub fn be_hub(&mut self, leaf: HubLeaf) {
         self.hub_offer = Some((leaf, true));
         self.songs_dirty = true;
+    }
+
+    /// What the server found of this hub's addresses from the internet,
+    /// for the other devices to show.
+    pub fn hub_checks(&mut self, checks: Vec<song_sync::AddressCheck>) {
+        if let Some((leaf, _)) = &mut self.hub_offer {
+            leaf.checks = checks;
+            self.songs_dirty = true;
+        }
+    }
+
+    /// Check whether this device reaches the hub directly now, not when it's
+    /// next due.
+    pub fn check_hub_now(&mut self) {
+        self.hub_checked = None;
+    }
+
+    /// Whether it's checking that now.
+    pub fn checking_hub(&self) -> bool {
+        self.hub_checking
     }
 
     /// The hub, as the transfers name it.

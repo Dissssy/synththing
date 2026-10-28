@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Your devices show your hub under Your devices in the sync settings: whether this device reaches it directly or through the server (check again with the button), and whether each of its addresses works from the internet, with what to fix if one doesn't.
 - Your devices get a notification when your hub hasn't been reachable from the internet for about 18 hours (3 checks by the server in a row), saying what to fix, and another once it's back. The server keeps checking an address that has worked every 6 hours, even while the hub is down.
 
 ## 1.7.7 (2026-10-28)
