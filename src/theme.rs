@@ -362,6 +362,57 @@ impl Theme {
     }
 }
 
+/// How tall the top margin of a section's body is: where a section without
+/// a tab bar is dragged from (`App::dock_ui`).
+pub const DOCK_HANDLE: f32 = 10.0;
+/// The other sides' margins of a section's body.
+pub const DOCK_MARGIN: i8 = 6;
+
+/// The tabs' look, from the theme's (`style`): the open tab and its panel
+/// are one shape in the window's fill (the tab rounded on top, the panel
+/// all round), with no outlines; the
+/// other tabs are just their names until hovered. Between panels there's
+/// only a gap, the divider showing when it's hovered or dragged. Dragging
+/// a tab tints where it would land.
+pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
+    let v = &style.visuals;
+    let mut dock = egui_dock::Style::from_egui(style);
+    let radius = v.window_corner_radius.nw.min(8);
+    let top = CornerRadius { nw: radius, ne: radius, sw: 0, se: 0 };
+    dock.tab_bar.bg_fill = v.panel_fill;
+    dock.tab_bar.hline_color = Color32::TRANSPARENT;
+    dock.tab_bar.corner_radius = CornerRadius::ZERO;
+    dock.tab_bar.height = 28.0;
+    let open = egui_dock::TabInteractionStyle {
+        outline_color: Color32::TRANSPARENT,
+        corner_radius: top,
+        bg_fill: v.window_fill,
+        text_color: v.text_color(),
+    };
+    let tab = &mut dock.tab;
+    tab.inactive = egui_dock::TabInteractionStyle { bg_fill: Color32::TRANSPARENT, text_color: v.weak_text_color(), ..open.clone() };
+    tab.inactive_with_kb_focus = tab.inactive.clone();
+    tab.hovered = egui_dock::TabInteractionStyle { bg_fill: v.widgets.hovered.weak_bg_fill, text_color: v.strong_text_color(), ..open.clone() };
+    tab.focused = egui_dock::TabInteractionStyle { text_color: v.strong_text_color(), ..open.clone() };
+    tab.focused_with_kb_focus = tab.focused.clone();
+    tab.active_with_kb_focus = open.clone();
+    tab.active = open;
+    tab.spacing = 2.0;
+    tab.hline_below_active_tab_name = false;
+    tab.tab_body.stroke = Stroke::NONE;
+    tab.tab_body.bg_fill = v.window_fill;
+    // (Square under a first tab: `App::dock_ui`.)
+    tab.tab_body.corner_radius = CornerRadius::same(radius);
+    tab.tab_body.inner_margin = egui::Margin { left: DOCK_MARGIN, right: DOCK_MARGIN, top: DOCK_HANDLE as i8, bottom: DOCK_MARGIN };
+    dock.buttons.show_tab_bar_size = 0.0;
+    dock.buttons.show_tab_bar_hover_expand = 0.0;
+    dock.separator.color_idle = Color32::TRANSPARENT;
+    dock.buttons.close_tab_color = v.weak_text_color();
+    dock.overlay.overlay_type = egui_dock::OverlayType::HighlightedAreas;
+    dock.overlay.selection_color = v.selection.bg_fill.gamma_multiply(0.5);
+    dock
+}
+
 /// Whether `name` would do for a new theme: not empty, not taken (built-in
 /// or your own, ignoring case).
 pub fn check_name(name: &str, taken: &[String]) -> Result<()> {

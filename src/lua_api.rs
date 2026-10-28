@@ -191,7 +191,7 @@ pub const ITEMS: &[Item] = &[
     f("seek", PLAYBACK, "0.1.4", &[p("seconds", "number")], &[], "jump to a song position, seek(0) restarts (applied after this frame)"),
     f("set_speed", PLAYBACK, "0.2.0", &[d("speed", "number", "1.0 is normal")], &[], "playback speed (applied after this frame)"),
     f("script_options", PLAYBACK, "0.2.0", &[p("options", "ScriptOptions")], &[], "once, at the top: how the app treats this script"),
-    f("display_mode", INPUT, "0.1.1", &[], &[p("mode", "\"window\"|\"fullscreen\"|\"dedicated\"|\"mini\"|\"pip\"")], "where the visualizer is showing (\"mini\" is the mini player, \"pip\" picture-in-picture)"),
+    f("display_mode", INPUT, "0.1.1", &[], &[p("mode", "\"window\"|\"dedicated\"|\"mini\"|\"pip\"")], "where the visualizer is showing (\"mini\" is the mini player, \"pip\" picture-in-picture)"),
     f("is_mobile", INPUT, "1.1.0", &[], &[p("mobile", "boolean")], "the app is in its mobile layout (a phone), so maybe draw something lighter"),
     c("DT", PLAYBACK, "0.1.1", "number", "seconds since the previous render() call (0.0 on the first, at most 0.25)"),
     c("TIME", PLAYBACK, "0.1.4", "number", "seconds since this script started, wall clock, uncapped"),

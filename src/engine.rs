@@ -379,10 +379,6 @@ impl Engine {
         }
     }
 
-    pub fn nudge_speed(&mut self, delta: f64) {
-        self.set_speed(self.speed + delta);
-    }
-
     /// Seek to an absolute position in seconds. For MIDI, rustysynth has no
     /// seek, so we restart the sequence and fast-forward through it silently;
     /// for a decoded audio file it's just moving the read head.

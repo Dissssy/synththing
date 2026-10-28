@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use eframe::egui;
 
-use super::{icon, palette_color};
+use super::icon;
 use crate::audio::PlaybackShared;
 use crate::lua_visualizer::Transport;
 use crate::script_host::Effects;
@@ -86,8 +86,6 @@ pub(super) struct Snapshot {
     pub active_script: Option<usize>,
     /// What the script sees of the playlist and modes.
     pub transport: Transport,
-    /// The visualizer is paused (Preferences is open).
-    pub frozen: bool,
     /// The main window is up and showing the visualizer: it runs the
     /// script, and the mini player just shows its latest picture (two
     /// windows running it would resize it back and forth between them).
@@ -376,7 +374,7 @@ fn picture_ui(ui: &mut egui::Ui, picture: &Picture, state: &mut State, act: &imp
     let shown = picture.panel.try_lock().ok().and_then(|mut panel| {
         // While the main window's showing the visualizer too, it's the one
         // running the script; this just shows the latest picture.
-        let frozen = snapshot.frozen || snapshot.main_shows_visualizer;
+        let frozen = snapshot.main_shows_visualizer;
         panel.show(&mut inside, &picture.tap, &notes, &view, snapshot.transport.clone(), frozen, DisplayMode::Mini, None, false, None);
         let effects = panel.take_effects();
         if !effects.is_empty() {
@@ -556,13 +554,12 @@ fn controls_ui(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut State, act: &
         }
     }
     ui.horizontal(|ui| {
-        let button = |glyph: &str| egui::Button::new(egui::RichText::new(icon(glyph)).size(16.0)).min_size(egui::vec2(30.0, 26.0));
+        let button = super::icon_button;
         if ui.add(button("skip-back")).on_hover_text("Previous").clicked() {
             act(Action::Previous);
         }
-        let (glyph, color, hover) =
-            if snapshot.paused { ("play", palette_color(2), "Play") } else { ("pause", palette_color(1), "Pause") };
-        let play = egui::Button::new(egui::RichText::new(icon(glyph)).size(16.0).color(color)).min_size(egui::vec2(30.0, 26.0));
+        let hover = if snapshot.paused { "Play" } else { "Pause" };
+        let play = super::play_button(ui.ctx(), snapshot.paused, 16.0, egui::vec2(28.0, 24.0));
         if ui.add(play).on_hover_text(hover).clicked() {
             act(Action::TogglePause);
         }

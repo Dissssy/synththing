@@ -41,6 +41,11 @@ impl DecodedAudio {
         Self { sample_rate, song_id, expected_frames, frames: Mutex::default(), finished: Condvar::new() }
     }
 
+    /// About how much memory the frames decoded so far take.
+    pub fn memory(&self) -> usize {
+        self.frames.lock().map_or(0, |f| f.len) * std::mem::size_of::<StereoFrame>()
+    }
+
     /// A file decoded all at once.
     pub fn complete(samples: Vec<StereoFrame>, sample_rate: u32, song_id: String) -> Self {
         let audio = Self::new(sample_rate, song_id, Some(samples.len()));

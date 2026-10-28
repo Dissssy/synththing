@@ -203,8 +203,6 @@ pub enum DisplayMode {
     /// A tab in the normal window.
     #[default]
     Window,
-    /// A tab, with the whole app fullscreen.
-    Fullscreen,
     /// The dedicated visualizer fullscreen: nothing else on screen.
     Dedicated,
     /// Small, in the mini player.
@@ -217,7 +215,6 @@ impl DisplayMode {
     pub fn name(self) -> &'static str {
         match self {
             Self::Window => "window",
-            Self::Fullscreen => "fullscreen",
             Self::Dedicated => "dedicated",
             Self::Mini => "mini",
             Self::Pip => "pip",

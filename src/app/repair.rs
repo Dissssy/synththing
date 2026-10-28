@@ -1,4 +1,4 @@
-//! Repair library (Preferences > App): every song on this device checked
+//! Repair library (Preferences > Library): every song on this device checked
 //! (`song_repair`). Damaged files are deleted, to be fetched again from
 //! the other devices; songs that can't be read at all are listed, to
 //! remove and block. Suggested once, the first time a song in the library

@@ -50,6 +50,8 @@ mod song_names;
 mod storage;
 mod sprite_editor;
 mod themes;
+mod layouts;
+mod title_bar;
 mod toast;
 mod tray_panel;
 mod tour;
@@ -66,7 +68,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::{egui, Frame};
-use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{DockArea, DockState, TabViewer};
 
 use crate::applog;
@@ -111,7 +112,7 @@ const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 /// The songs listed and added from folders: MIDI files, plus audio files
 /// when that's turned on in Preferences.
 impl App {
-    /// The song at `path`'s name, from its tags (Preferences > Appearance).
+    /// The song at `path`'s name, from its tags (Preferences > Browsing).
     fn song_title(&mut self, path: &Path) -> String {
         title_of(&mut self.song_info, &naming(&self.config, &self.songs), path)
     }
@@ -249,9 +250,6 @@ const DEDICATED_HINT_SECS: f64 = 3.0;
 
 /// The dedicated visualizer fullscreen: just the visualizer, nothing else.
 struct Dedicated {
-    /// Whether the app was already fullscreen before, so leaving goes back
-    /// to exactly that.
-    was_fullscreen: bool,
     /// egui time it was entered, for the exit hint.
     since: f64,
 }
@@ -305,6 +303,8 @@ pub struct App {
     tap: SampleTap,
     /// Whoever listens to what plays, through the API.
     listeners: Arc<crate::audio_stream::Listeners>,
+    /// The audio output, for sounds the app itself makes.
+    mixer: rodio::mixer::Mixer,
     /// The visualizer's picture, shared with the windows that show it
     /// (`lock_panel`).
     visualizer: Arc<Mutex<VisualizerPanel>>,
@@ -339,9 +339,6 @@ pub struct App {
     /// `sync_engine_loop`.
     engine_loop: bool,
     status: String,
-    /// True OS fullscreen. Still the docked tabs, from the windowed layout
-    /// or fullscreen's own (see `sync_layout_slot`).
-    fullscreen: bool,
     /// Path of the soundfont the engine currently has loaded, the selected
     /// one (`active_sf`), or a playlist entry's override.
     loaded_sf: Option<PathBuf>,
@@ -364,11 +361,6 @@ pub struct App {
     /// The song the pointer's been resting on, and since when (egui time),
     /// for hover preloading's dwell delay.
     hover_since: Option<(PathBuf, f64)>,
-    /// Preferences opened while playing: playback was paused for it and
-    /// resumes when it closes.
-    paused_for_preferences: bool,
-    /// Whether the preferences modal was open last frame.
-    preferences_were_open: bool,
     /// Set while the dedicated visualizer fullscreen is up.
     dedicated: Option<Dedicated>,
     /// What the visualizer reported this frame (focus, cursor request);
@@ -466,7 +458,7 @@ pub struct App {
     /// Reports, and the Moderation window.
     moderation: moderation::ModerationState,
     feedback: feedback::FeedbackState,
-    /// Preferences > App > Storage.
+    /// Preferences > Library > Storage.
     storage: storage::StorageState,
     repair: repair::RepairState,
     /// The identity's recovery email, new keys and recovery.
@@ -555,6 +547,9 @@ pub struct App {
     /// (e.g. "Show in Songs" from inside a playlist) queue up in
     /// `pending_layout` and apply right after.
     dock_in_use: bool,
+    /// Whether the window has the system's frame, as last set
+    /// (`App::apply_window_frame`).
+    native_frame: Option<bool>,
     pending_layout: Vec<(Section, bool)>,
     /// Which sections are open, refreshed after every layout change, so
     /// `is_open` still answers correctly while `dock` is moved out.
@@ -562,12 +557,11 @@ pub struct App {
     /// The layout as last saved, to tell when it's changed.
     saved_layout_json: String,
     last_layout_check: f64,
-    /// Whether `dock` is fullscreen's own layout (true) or the windowed one,
-    /// i.e. which config slot it's saved to. See `sync_layout_slot`.
-    dock_is_fullscreen_layout: bool,
     preferences_open: bool,
-    /// View > Layout > Save current layout as...: the name being typed.
-    layout_save: Option<String>,
+    /// Layout > New layout...: what it's being made as.
+    layout_new: Option<layouts::NewLayout>,
+    /// Layout > Edit layouts...: open, and what's being done in it.
+    layout_edit: Option<layouts::Editing>,
     /// A very large MIDI waiting for "play anyway" (path, notes), and the
     /// last one that got it.
     heavy_prompt: Option<(PathBuf, usize)>,
@@ -640,6 +634,7 @@ impl App {
         config: Config,
         tap: SampleTap,
         listeners: Arc<crate::audio_stream::Listeners>,
+        mixer: rodio::mixer::Mixer,
         sample_rate: u32,
     ) -> Self {
         let songs_dir = config::music_dir().unwrap_or_else(|_| PathBuf::from("music"));
@@ -675,8 +670,10 @@ impl App {
             Library::load(config::playlists_dir().unwrap_or_else(|_| PathBuf::from("playlists")), songs_dir);
         let mut config = config;
         if config.layout.is_none() && config.active_layout.is_none() {
-            // A first launch starts on the Listening layout.
-            config.active_layout = layout::PRESETS.first().map(|p| p.name.to_string());
+            // A first launch starts on the first template's layout, unlocked.
+            let first = &layout::TEMPLATES[0];
+            config.layout_presets.push(layout::SavedLayout { name: first.name.to_string(), dock: (first.build)() });
+            config.active_layout = Some(first.name.to_string());
         }
         let dock = config.layout.clone().map(layout::sanitize).unwrap_or_else(layout::default_layout);
         let saved_layout_json = serde_json::to_string(&dock).unwrap_or_default();
@@ -712,6 +709,7 @@ impl App {
             soundfont_selection: Selection::default(),
             tap,
             listeners,
+            mixer,
             visualizer: Arc::clone(&visualizer),
             script,
             scripts_dir,
@@ -728,7 +726,6 @@ impl App {
             shuffle,
             engine_loop: false,
             status,
-            fullscreen: false,
             loaded_sf: None,
             assets: AssetCache::new(),
             pending_play: None,
@@ -737,8 +734,6 @@ impl App {
             skips_in_a_row: 0,
             hovered_playlist_entry: None,
             hover_since: None,
-            paused_for_preferences: false,
-            preferences_were_open: false,
             dedicated: None,
             visualizer_output: ShowOutput::default(),
             visualizer_drawn: false,
@@ -828,12 +823,13 @@ impl App {
             open_sections: Section::ALL.into_iter().filter(|&s| layout::is_open(&dock, s)).collect(),
             dock,
             dock_in_use: false,
+            native_frame: None,
             pending_layout: Vec::new(),
             saved_layout_json,
             last_layout_check: 0.0,
-            dock_is_fullscreen_layout: false,
             preferences_open: false,
-            layout_save: None,
+            layout_new: None,
+            layout_edit: None,
             heavy_prompt: None,
             heavy_confirmed: None,
             gamepads: crate::gamepad::Gamepads::new(),
@@ -1090,12 +1086,7 @@ impl App {
     /// so it's reported but not fatal.
     fn save_layout(&mut self) {
         self.saved_layout_json = serde_json::to_string(&self.dock).unwrap_or_default();
-        let slot = if self.dock_is_fullscreen_layout {
-            &mut self.config.fullscreen_layout
-        } else {
-            &mut self.config.layout
-        };
-        *slot = Some(self.dock.clone());
+        self.config.layout = Some(self.dock.clone());
         self.store_in_active_layout();
         if let Err(e) = self.config.save() {
             self.status = format!("Couldn't save layout: {e}");
@@ -1104,57 +1095,19 @@ impl App {
 
     /// The named layout the showing slot is on, if any.
     fn active_layout(&self) -> Option<&String> {
-        if self.dock_is_fullscreen_layout {
-            self.config.fullscreen_active_layout.as_ref()
-        } else {
-            self.config.active_layout.as_ref()
-        }
+        self.config.active_layout.as_ref()
     }
 
     fn set_active_layout(&mut self, name: Option<String>) {
-        if self.dock_is_fullscreen_layout {
-            self.config.fullscreen_active_layout = name;
-        } else {
-            self.config.active_layout = name;
-        }
+        self.config.active_layout = name;
     }
 
-    /// Changes to the arrangement go into the active named layout: a
-    /// built-in's override (dropped when it matches the original again),
-    /// or a saved layout itself.
+    /// Changes to the arrangement go into the active named layout.
     fn store_in_active_layout(&mut self) {
         let Some(name) = self.active_layout().cloned() else { return };
-        if let Some(preset) = layout::PRESETS.iter().find(|p| p.name == name) {
-            if layout::same_arrangement(&self.dock, &(preset.build)()) {
-                self.config.layout_overrides.remove(&name);
-            } else {
-                self.config.layout_overrides.insert(name, self.dock.clone());
-            }
-        } else if let Some(saved) = self.config.layout_presets.iter_mut().find(|p| p.name == name) {
+        if let Some(saved) = self.config.layout_presets.iter_mut().find(|p| p.name == name) {
             saved.dock = self.dock.clone();
         }
-    }
-
-    /// Swap in the fullscreen layout or the windowed one, if the one showing
-    /// isn't the one that should be: fullscreen's own only while fullscreen
-    /// with the separate-layout preference on, the windowed one otherwise.
-    /// The outgoing layout is saved to its own slot first, so neither ever
-    /// overwrites the other; with the preference off, the fullscreen layout
-    /// just sits untouched in the config until it's turned back on.
-    fn sync_layout_slot(&mut self) {
-        let want_fullscreen_layout = self.fullscreen && self.config.separate_fullscreen_layout;
-        if want_fullscreen_layout == self.dock_is_fullscreen_layout || self.dock_in_use {
-            return;
-        }
-        self.save_layout();
-        self.dock = if want_fullscreen_layout {
-            self.config.fullscreen_layout.clone().map(layout::sanitize).unwrap_or_else(layout::fullscreen_default)
-        } else {
-            self.config.layout.clone().map(layout::sanitize).unwrap_or_else(layout::default_layout)
-        };
-        self.dock_is_fullscreen_layout = want_fullscreen_layout;
-        self.refresh_open_sections();
-        self.save_layout();
     }
 
     /// Save the layout if it's changed (tabs dragged, dividers moved),
@@ -1170,81 +1123,6 @@ impl App {
         }
     }
 
-    /// View > Layout: the built-in arrangements (with Reset when changed),
-    /// the user's saved ones, and saving the current one. The active one is
-    /// marked; changes made while it's active are kept in it.
-    fn layout_menu_ui(&mut self, ui: &mut egui::Ui) {
-        let active = self.active_layout().cloned();
-        let mut switch = None;
-        let mut reset = None;
-        for preset in layout::PRESETS {
-            let changed = self.config.layout_overrides.contains_key(preset.name);
-            ui.horizontal(|ui| {
-                let label = if changed { format!("{} (changed)", preset.name) } else { preset.name.to_string() };
-                if ui
-                    .selectable_label(active.as_deref() == Some(preset.name), label)
-                    .on_hover_text(preset.description)
-                    .clicked()
-                {
-                    switch = Some(preset.name.to_string());
-                    ui.close();
-                }
-                if changed && ui.small_button("Reset").on_hover_text("Back to how this layout comes").clicked() {
-                    reset = Some(preset.name.to_string());
-                }
-            });
-        }
-        let mut remove = None;
-        if !self.config.layout_presets.is_empty() {
-            ui.separator();
-            for (n, saved) in self.config.layout_presets.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    if ui.selectable_label(active.as_deref() == Some(saved.name.as_str()), &saved.name).clicked() {
-                        switch = Some(saved.name.clone());
-                        ui.close();
-                    }
-                    if ui.small_button("x").on_hover_text("Remove this saved layout").clicked() {
-                        remove = Some(n);
-                    }
-                });
-            }
-        }
-        if active.is_none() {
-            ui.separator();
-            ui.weak("Showing: your own arrangement (Custom)");
-        }
-        ui.separator();
-        if ui.button("Save current layout as...").clicked() {
-            self.layout_save = Some(String::new());
-            ui.close();
-        }
-
-        if let Some(name) = reset {
-            self.config.layout_overrides.remove(&name);
-            if active.as_deref() == Some(name.as_str())
-                && let Some(preset) = layout::PRESETS.iter().find(|p| p.name == name)
-            {
-                self.apply_layout((preset.build)());
-            } else if let Err(e) = self.config.save() {
-                self.status = format!("Couldn't save the layouts: {e}");
-            }
-            self.status = format!("Reset the {name} layout.");
-        }
-        if let Some(n) = remove {
-            let removed = self.config.layout_presets.remove(n);
-            if active.as_deref() == Some(removed.name.as_str()) {
-                self.set_active_layout(None);
-            }
-            self.status = format!("Removed the saved layout \"{}\".", removed.name);
-            if let Err(e) = self.config.save() {
-                self.status = format!("Couldn't save the layout list: {e}");
-            }
-        }
-        if let Some(name) = switch {
-            self.switch_layout(&name);
-        }
-    }
-
     /// Show the named layout (as the user last left it), after keeping the
     /// current arrangement in the layout it belongs to.
     fn switch_layout(&mut self, name: &str) {
@@ -1252,13 +1130,8 @@ impl App {
             return;
         }
         self.save_layout();
-        let dock = if let Some(preset) = layout::PRESETS.iter().find(|p| p.name == name) {
-            self.config.layout_overrides.get(name).cloned().map(layout::sanitize).unwrap_or_else(preset.build)
-        } else if let Some(saved) = self.config.layout_presets.iter().find(|p| p.name == name) {
-            layout::sanitize(saved.dock.clone())
-        } else {
-            return;
-        };
+        let Some(saved) = self.config.layout_presets.iter().find(|p| p.name == name) else { return };
+        let dock = layout::sanitize(saved.dock.clone());
         self.set_active_layout(Some(name.to_string()));
         self.apply_layout(dock);
         self.status = format!("Layout: {name}.");
@@ -1281,64 +1154,6 @@ impl App {
 
     fn is_open_in_dock(&self, section: Section) -> bool {
         layout::is_open(&self.dock, section)
-    }
-
-    /// View > Layout > Save current layout as...: name it.
-    fn layout_save_ui(&mut self, ctx: &egui::Context) {
-        let Some(name) = &mut self.layout_save else { return };
-        let mut save = false;
-        let mut close = false;
-        let taken = self.config.layout_presets.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()));
-        let built_in = layout::PRESETS.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()));
-        let response = egui::Modal::new(egui::Id::new("save_layout")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 320.0));
-            ui.heading("Save layout");
-            ui.label("Name:");
-            let field = ui.text_edit_singleline(name);
-            field.request_focus();
-            if built_in {
-                ui.colored_label(ui.visuals().warn_fg_color, "That's a built-in layout's name; pick another.");
-            } else if taken {
-                ui.weak("A saved layout has this name; saving replaces it.");
-            }
-            if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                save = true;
-            }
-            ui.add_space(8.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if ui.button("Cancel").clicked() {
-                    close = true;
-                }
-                if ui.add_enabled(!name.trim().is_empty() && !built_in, egui::Button::new("Save")).clicked() {
-                    save = true;
-                }
-            });
-        });
-        if save && !name.trim().is_empty() && !built_in {
-            let name = name.trim().to_string();
-            let saved = layout::SavedLayout { name: name.clone(), dock: self.dock.clone() };
-            match self.config.layout_presets.iter_mut().find(|p| p.name.eq_ignore_ascii_case(&name)) {
-                Some(existing) => *existing = saved,
-                None => self.config.layout_presets.push(saved),
-            }
-            // From now on, changes go into it.
-            self.set_active_layout(Some(name.clone()));
-            self.status = match self.config.save() {
-                Ok(()) => format!("Saved the layout \"{name}\" (View > Layout)."),
-                Err(e) => format!("Couldn't save the layout: {e}"),
-            };
-            close = true;
-        }
-        if close || response.should_close() {
-            self.layout_save = None;
-        }
-    }
-
-    /// Enter or leave true OS fullscreen. The layout shown is the windowed
-    /// one, or fullscreen's own if that preference is on (`sync_layout_slot`).
-    fn set_fullscreen(&mut self, ctx: &egui::Context, fullscreen: bool) {
-        self.fullscreen = fullscreen;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
     }
 
     // --- actions -------------------------------------------------------
@@ -1535,176 +1350,205 @@ impl App {
         Some(egui::Color32::from_rgb(r, g, b))
     }
 
-    /// The bottom transport bar, VLC-style: track info, seek bar, then a
-    /// button row (play/restart/stop, view toggles, loop) with speed/volume/
-    /// buffer tucked underneath. Shown identically whether fullscreen or
+    /// The bottom transport bar, across the window's width: the song (title
+    /// over a weak detail line) with the status line at the right, the seek
+    /// bar between the times, then the view toggles, the transport in the
+    /// middle, and speed and volume. Shown identically whether fullscreen or
     /// not, so it's the one thing that's always reachable.
     fn controls_bar_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         if self.following() {
             return self.following_bar_ui(ui, view);
         }
-        ui.add_space(4.0);
+        ui.add_space(6.0);
 
-        ui.horizontal(|ui| {
-            ui.weak("Song:");
-            match self.current_song.clone() {
-                Some(path) => ui.label(self.song_title(&path)),
-                None => ui.label(view.track_name.as_deref().unwrap_or("(none)")),
-            };
-            if let Some(np) = self.playing_entry()
-                && let Some(list) = self.playlists.lists.get(np.list)
-            {
-                ui.weak(format!(
-                    "({} {}/{})",
-                    list.playlist.name,
-                    np.entry + 1,
-                    list.playlist.entries.len()
-                ));
-            }
-            if !view.has_audio_file {
-                ui.separator();
-                ui.weak("SoundFont:");
-                ui.label(view.soundfont_name.as_deref().unwrap_or("(none)"));
-            }
-            ui.separator();
-            if self.songs_moving().is_some() {
-                sync::songs_moving_ui(ui, self.songs_moving());
-                ui.separator();
-            }
-            if status_line_ui(ui, &self.status, &mut self.unseen_failure, applog::elapsed, applog::entries) {
-                self.log_search = STATUS_TARGET.to_string();
-                self.log_open = true;
-            }
+        let line = egui::vec2(ui.available_width(), 34.0);
+        ui.allocate_ui_with_layout(line, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.scope(|ui| {
+                    ui.set_max_width(ui.available_width() * 0.45);
+                    if status_line_ui(ui, &self.status, &mut self.unseen_failure, applog::elapsed, applog::entries) {
+                        self.log_search = STATUS_TARGET.to_string();
+                        self.log_open = true;
+                    }
+                });
+                ui.add_space(12.0);
+                let title = match self.current_song.clone() {
+                    Some(path) => self.song_title(&path),
+                    None => view.track_name.clone().unwrap_or_else(|| "Nothing playing".to_string()),
+                };
+                let detail = self.song_detail(view);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    select_list::two_lines(ui, std::iter::empty(), egui::RichText::new(title).strong(), Some(detail), true);
+                });
+            });
         });
 
         let accent = self.transport_accent(ui.ctx(), view);
         ui.horizontal(|ui| {
-            let mut position = view.position;
-            if seek_bar_ui(ui, &mut position, view.length, accent).changed() {
-                self.send(AudioCommand::Seek(position));
-            }
-            ui.monospace(format!("{} / {}", fmt_time(view.position), fmt_time(view.length)));
+            ui.weak(fmt_time(view.position));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.weak(fmt_time(view.length));
+                ui.spacing_mut().slider_width = ui.available_width();
+                let mut position = view.position;
+                if seek_bar_ui(ui, &mut position, view.length, accent).changed() {
+                    self.send(AudioCommand::Seek(position));
+                }
+            });
         });
+        ui.add_space(2.0);
 
-        ui.horizontal_wrapped(|ui| {
-            // Play is green, Pause orange (the channel palette's).
-            let (glyph, color, hover) = if view.paused {
-                ("play", palette_color(2), "Play")
+        // The view toggles at the left, the transport centred, speed and
+        // volume at the right; when they don't fit, the transport centred
+        // over the rest.
+        let width = ui.available_width();
+        let center = TRANSPORT_WIDTH;
+        let side = (width - center) / 2.0;
+        let line = |ui: &mut egui::Ui| ui.allocate_exact_size(egui::vec2(width, TRANSPORT_HEIGHT), egui::Sense::hover()).0;
+        let zone = |rect: egui::Rect, x: f32, width: f32, layout: egui::Layout| {
+            egui::UiBuilder::new()
+                .max_rect(egui::Rect::from_min_size(egui::pos2(rect.left() + x, rect.top()), egui::vec2(width, rect.height())))
+                .layout(layout)
+        };
+        let (left, right) = (egui::Layout::left_to_right(egui::Align::Center), egui::Layout::right_to_left(egui::Align::Center));
+        if side >= SIDE_WIDTH {
+            let rect = line(ui);
+            ui.scope_builder(zone(rect, 0.0, side, left), |ui| self.views_ui(ui, view));
+            ui.scope_builder(zone(rect, side, center, left), |ui| self.transport_ui(ui, view));
+            ui.scope_builder(zone(rect, side + center, side, right), |ui| self.speed_volume_ui(ui, view));
+        } else {
+            let rect = line(ui);
+            ui.scope_builder(zone(rect, side.max(0.0), center, left), |ui| self.transport_ui(ui, view));
+            ui.add_space(4.0);
+            if width >= VIEWS_WIDTH + SIDE_WIDTH {
+                let rect = line(ui);
+                ui.scope_builder(zone(rect, 0.0, VIEWS_WIDTH, left), |ui| self.views_ui(ui, view));
+                ui.scope_builder(zone(rect, VIEWS_WIDTH, width - VIEWS_WIDTH, right), |ui| self.speed_volume_ui(ui, view));
             } else {
-                ("pause", palette_color(1), "Pause")
-            };
-            let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::TogglePause));
-            if ui.add(colored_icon_button(glyph, color)).on_hover_text(hover).clicked() {
+                ui.horizontal_wrapped(|ui| {
+                    self.views_ui(ui, view);
+                    self.speed_volume_ui(ui, view);
+                });
+            }
+        }
+        ui.add_space(6.0);
+    }
+
+    /// The bar's detail line: where the song is on its playlist, its
+    /// soundfont, or why nothing plays.
+    fn song_detail(&self, view: &EngineView) -> String {
+        let mut parts = Vec::new();
+        if let Some(np) = self.playing_entry()
+            && let Some(list) = self.playlists.lists.get(np.list)
+        {
+            parts.push(format!("{} {}/{}", list.playlist.name, np.entry + 1, list.playlist.entries.len()));
+        }
+        if view.has_midi && view.has_soundfont {
+            parts.push(view.soundfont_name.clone().unwrap_or_default());
+        }
+        match playback_state_text(view) {
+            "no song" | "no soundfont" => parts.push(playback_state_text(view).to_string()),
+            _ => {}
+        }
+        parts.retain(|p| !p.is_empty());
+        parts.join("  ·  ")
+    }
+
+    /// Shuffle, stop, previous, play/pause, next and loop.
+    fn transport_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        let hover = shuffle_text(self.shuffle);
+        if ui.add(icon_button("shuffle").selected(self.shuffle)).on_hover_text(hover).clicked() {
+            self.set_shuffle(!self.shuffle);
+            toast::show(ui.ctx(), shuffle_text(self.shuffle));
+        }
+        if ui.add(icon_button("stop")).on_hover_text("Stop").clicked() {
+            self.send(AudioCommand::Seek(0.0));
+            if !view.paused {
                 self.send(AudioCommand::TogglePause);
             }
-            if ui
-                .add(icon_button("skip-back"))
-                .on_hover_text(format!(
-                    "Previous: the previous playlist track, or this one from the start if it's been playing a few seconds{}",
-                    commands::hint(ui.ctx(), Command::PreviousTrack)
-                ))
-                .clicked()
-            {
-                self.previous_track(view.position);
-            }
-            if ui.add(icon_button("stop")).on_hover_text("Stop").clicked() {
-                self.send(AudioCommand::Seek(0.0));
-                if !view.paused {
-                    self.send(AudioCommand::TogglePause);
-                }
-            }
-            if ui
-                .add_enabled(self.has_next(), icon_button("skip-forward"))
-                .on_hover_text(format!(
-                    "Next: the next queued song, else the next playlist track, or the next song autoplay plays{}",
-                    commands::hint(ui.ctx(), Command::NextTrack)
-                ))
-                .on_disabled_hover_text("Queue songs (right-click them), or play something from a playlist or from Songs with Autoplay on, to have a next track")
-                .clicked()
-            {
-                self.next_track();
-            }
+        }
+        if ui
+            .add(icon_button("skip-back"))
+            .on_hover_text(format!(
+                "Previous: the previous playlist track, or this one from the start if it's been playing a few seconds{}",
+                commands::hint(ui.ctx(), Command::PreviousTrack)
+            ))
+            .clicked()
+        {
+            self.previous_track(view.position);
+        }
+        let hover = if view.paused { "Play" } else { "Pause" };
+        let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::TogglePause));
+        let play = play_button(ui.ctx(), view.paused, 18.0, egui::vec2(PLAY_WIDTH, TRANSPORT_HEIGHT));
+        if ui.add(play).on_hover_text(hover).clicked() {
+            self.send(AudioCommand::TogglePause);
+        }
+        if ui
+            .add_enabled(self.has_next(), icon_button("skip-forward"))
+            .on_hover_text(format!(
+                "Next: the next queued song, else the next playlist track, or the next song autoplay plays{}",
+                commands::hint(ui.ctx(), Command::NextTrack)
+            ))
+            .on_disabled_hover_text("Queue songs (right-click them), or play something from a playlist or from Songs with Autoplay on, to have a next track")
+            .clicked()
+        {
+            self.next_track();
+        }
+        let (glyph, hover) = match self.loop_mode {
+            LoopMode::Off => ("repeat", "Loop: off (click: loop the playlist, or what autoplay plays)"),
+            LoopMode::All => ("repeat", "Loop: the playlist, or what autoplay plays (click: this track)"),
+            LoopMode::One => ("repeat-once", "Loop: this track (click: off)"),
+        };
+        if ui.add(icon_button(glyph).selected(self.loop_mode != LoopMode::Off)).on_hover_text(hover).clicked() {
+            self.set_loop_mode(self.loop_mode.cycle());
+            toast::show(ui.ctx(), loop_text(self.loop_mode));
+        }
+    }
 
-            ui.separator();
+    /// The toggles for the Visualizer, Playlists, Up next
+    /// and other devices.
+    fn views_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        let visualizer = self.is_open(Section::Visualizer);
+        if ui.add(icon_button("monitor-play").selected(visualizer)).on_hover_text(format!("Visualizer{}", commands::hint(ui.ctx(), Command::ToggleVisualizer))).clicked() {
+            self.set_open(Section::Visualizer, !visualizer);
+        }
+        let playlists = self.is_open(Section::Groupings) && self.groupings.shown_id() == groupings::PLAYLISTS;
+        if ui.add(icon_button("playlist").selected(playlists)).on_hover_text("Playlists").clicked() {
+            if playlists {
+                self.set_open(Section::Groupings, false);
+            } else {
+                self.groupings.show(groupings::PLAYLISTS);
+                self.set_open(Section::Groupings, true);
+                layout::focus(&mut self.dock, Section::Groupings);
+            }
+        }
+        self.queue_button_ui(ui);
+        self.devices_button_ui(ui, view);
+    }
 
-            let (glyph, hover) = if self.fullscreen { ("corners-in", "Exit fullscreen") } else { ("corners-out", "Fullscreen") };
-            let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::ToggleFullscreen));
-            if ui.add(icon_button(glyph)).on_hover_text(hover).clicked() {
-                let ctx = ui.ctx().clone();
-                self.set_fullscreen(&ctx, !self.fullscreen);
-            }
-            let visualizer = self.is_open(Section::Visualizer);
-            if ui.add(icon_button("monitor-play").selected(visualizer)).on_hover_text(format!("Visualizer{}", commands::hint(ui.ctx(), Command::ToggleVisualizer))).clicked() {
-                self.set_open(Section::Visualizer, !visualizer);
-            }
-            let playlists = self.is_open(Section::Groupings) && self.groupings.shown_id() == groupings::PLAYLISTS;
-            if ui.add(icon_button("playlist").selected(playlists)).on_hover_text("Playlists").clicked() {
-                if playlists {
-                    self.set_open(Section::Groupings, false);
-                } else {
-                    self.groupings.show(groupings::PLAYLISTS);
-                    self.set_open(Section::Groupings, true);
-                    layout::focus(&mut self.dock, Section::Groupings);
-                }
-            }
-            let (glyph, hover) = match self.loop_mode {
-                LoopMode::Off => ("repeat", "Loop: off (click: loop the playlist, or what autoplay plays)"),
-                LoopMode::All => ("repeat", "Loop: the playlist, or what autoplay plays (click: this track)"),
-                LoopMode::One => ("repeat-once", "Loop: this track (click: off)"),
-            };
-            if ui.add(icon_button(glyph).selected(self.loop_mode != LoopMode::Off)).on_hover_text(hover).clicked() {
-                self.set_loop_mode(self.loop_mode.cycle());
-                toast::show(ui.ctx(), loop_text(self.loop_mode));
-            }
-            let hover = shuffle_text(self.shuffle);
-            if ui.add(icon_button("shuffle").selected(self.shuffle)).on_hover_text(hover).clicked() {
-                self.set_shuffle(!self.shuffle);
-                toast::show(ui.ctx(), shuffle_text(self.shuffle));
-            }
-            self.queue_button_ui(ui);
-            self.devices_button_ui(ui, view);
+    /// Speed and volume, each an icon, a slider and its value (in a
+    /// right-to-left layout). The speed's icon puts it back to 1x.
+    fn speed_volume_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        ui.add_sized([36.0, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.0}%", self.volume * 100.0)).weak()));
+        ui.spacing_mut().slider_width = 96.0;
+        if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false)).changed() {
+            self.send_volume();
+        }
+        let speaker = match self.volume {
+            v if v <= 0.0 => "speaker-x",
+            v if v < 0.5 => "speaker-low",
+            _ => "speaker-high",
+        };
+        ui.label(egui::RichText::new(icon(speaker)).size(16.0)).on_hover_text("Volume");
 
-            ui.separator();
-            ui.weak(playback_state_text(view));
-        });
-
-        ui.horizontal_wrapped(|ui| {
-            ui.label(egui::RichText::new(icon("gauge")).size(15.0)).on_hover_text("Speed");
-            if ui.small_button("-").clicked() {
-                self.send(AudioCommand::NudgeSpeed(-0.05));
-            }
-            let mut speed = view.speed;
-            if ui
-                .add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED))
-                .changed()
-            {
-                self.send(AudioCommand::SetSpeed(speed));
-            }
-            if ui.small_button("+").clicked() {
-                self.send(AudioCommand::NudgeSpeed(0.05));
-            }
-            if ui.small_button("1x").clicked() {
-                self.send(AudioCommand::SetSpeed(1.0));
-            }
-
-            ui.separator();
-
-            let speaker = match self.volume {
-                v if v <= 0.0 => "speaker-x",
-                v if v < 0.5 => "speaker-low",
-                _ => "speaker-high",
-            };
-            ui.label(egui::RichText::new(icon(speaker)).size(15.0)).on_hover_text("Volume");
-            if ui
-                .add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false))
-                .changed()
-            {
-                self.send_volume();
-            }
-            ui.monospace(format!("{:>3.0}%", self.volume * 100.0));
-        });
-
-        ui.add_space(4.0);
+        ui.add_space(12.0);
+        ui.add_sized([40.0, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.2}x", view.speed)).weak()));
+        let mut speed = view.speed;
+        if ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).show_value(false)).changed() {
+            self.send(AudioCommand::SetSpeed(speed));
+        }
+        if ui.add(icon_button("gauge").selected(view.speed != 1.0)).on_hover_text("Speed (click: back to 1x)").clicked() {
+            self.send(AudioCommand::SetSpeed(1.0));
+        }
     }
 
     fn soundfont_ui(&mut self, ui: &mut egui::Ui) {
@@ -1769,111 +1613,6 @@ impl App {
         }
     }
 
-    /// Desktop-style menu bar. View holds one checkbox per section,
-    /// including the tool windows (Settings, Docs), so everything that can
-    /// be shown is switched on and off from one place.
-    fn top_bar_ui(&mut self, ui: &mut egui::Ui) {
-        egui::MenuBar::new().config(crate::menu::config(ui.ctx())).ui(ui, |ui| {
-            // The wordmark (a little taller than the menus' text: it has
-            // a note above and descenders below), or the name as text if
-            // it can't be drawn.
-            let height = ui.text_style_height(&egui::TextStyle::Button) * 1.25;
-            let button = match self.wordmark.image(ui.ctx(), height, ui.visuals().panel_fill) {
-                Some(image) => egui::Button::image(image),
-                None => egui::Button::new("synththing"),
-            };
-            egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
-                if ui.button("Preferences...").clicked() {
-                    self.preferences_open = true;
-                }
-                ui.separator();
-                self.recording_menu_ui(ui);
-                ui.separator();
-                let quit = egui::Button::new("Quit").shortcut_text(ui.ctx().format_shortcut(&egui::KeyboardShortcut::new(
-                    egui::Modifiers::COMMAND,
-                    egui::Key::Q,
-                )));
-                if ui.add(quit).on_hover_text("Close synththing completely, even with the tray in use").clicked() {
-                    let ctx = ui.ctx().clone();
-                    self.close_with(&ctx, close::CloseAction::Quit);
-                }
-            });
-            let mut toggled = Vec::new();
-            let mut switch_to_mobile = false;
-            ui.menu_button("View", |ui| {
-                let mut section_checkbox = |ui: &mut egui::Ui, section: Section| {
-                    let mut open = self.open_sections.contains(&section);
-                    if ui.checkbox(&mut open, section.title()).changed() {
-                        toggled.push((section, open));
-                    }
-                };
-                section_checkbox(ui, Section::Songs);
-                section_checkbox(ui, Section::Groupings);
-                section_checkbox(ui, Section::Soundfonts);
-                section_checkbox(ui, Section::Queue);
-                section_checkbox(ui, Section::Wishlist);
-                section_checkbox(ui, Section::Apps);
-                ui.separator();
-                section_checkbox(ui, Section::Visualizer);
-                section_checkbox(ui, Section::Editor);
-                section_checkbox(ui, Section::Reference);
-                section_checkbox(ui, Section::Sprites);
-                section_checkbox(ui, Section::Library);
-                ui.separator();
-                ui.menu_button("Layout", |ui| self.layout_menu_ui(ui));
-                if ui.button("Mobile layout").on_hover_text("The Android app's layout, one page at a time, in a phone-sized window").clicked() {
-                    switch_to_mobile = true;
-                }
-            });
-            if switch_to_mobile {
-                let ctx = ui.ctx().clone();
-                self.set_mobile_layout(&ctx, true);
-            }
-            for (section, open) in toggled {
-                self.set_open(section, open);
-            }
-            ui.menu_button("Help", |ui| {
-                if ui.button("Welcome...").on_hover_text("The welcome window, and the starter pack").clicked() {
-                    self.open_welcome();
-                }
-                if ui.button("Tour").on_hover_text("A walk through the app, one thing at a time").clicked() {
-                    self.start_tour();
-                }
-                if ui.button("Check for updates...").clicked() {
-                    self.launch_update_check = false;
-                    self.updates_open = true;
-                    self.updater.check(self.update_track());
-                }
-                if ui.button("Changelog...").clicked() {
-                    self.changelog = Some(None);
-                }
-                if ui.button("Send feedback...").on_hover_text("Tell us what's working and what isn't").clicked() {
-                    self.open_feedback();
-                }
-                if ui.button("Log...").clicked() {
-                    self.log_open = true;
-                }
-                let mut profiler = profiler::is_open();
-                if ui
-                    .checkbox(&mut profiler, "Profiler")
-                    .on_hover_text("How long each part of every frame takes, live, as a flame graph")
-                    .changed()
-                {
-                    profiler::set_open(profiler);
-                }
-                if ui.button("Credits & licenses...").clicked() {
-                    self.credits_open = true;
-                }
-                ui.separator();
-                ui.weak(format!("synththing v{}", crate::build_info::describe()));
-            });
-            // Notifications and feedback, at the far right.
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.notifications_button_ui(ui);
-                self.feedback_button_ui(ui);
-            });
-        });
-    }
 
     /// The app log viewer, as a modal (the mobile layout shows it as a
     /// page instead).
@@ -2030,7 +1769,7 @@ impl App {
             ));
             ui.add_space(4.0);
         } else if self.config.canary_updates() {
-            ui.weak("Canary updates: the newest build from master (Preferences > Updates).");
+            ui.weak("Canary updates: the newest build from master (Preferences > App).");
             ui.add_space(4.0);
         }
         match &state {
@@ -2645,11 +2384,11 @@ impl App {
         });
     }
 
-    /// Whether one of the app's modals (Preferences, Log, Updates, Rename
-    /// script) is up. They get the keyboard: app shortcuts and the global
+    /// Whether one of the app's modals (Log, Updates, Rename script) is up,
+    /// or Preferences is waiting for keys. They get the keyboard: app shortcuts and the global
     /// keys pause.
     fn any_modal_open(&self) -> bool {
-        self.preferences_open
+        self.keymap_capture.is_some()
             || self.log_open
             || self.updates_open
             || self.rename.is_some()
@@ -2670,7 +2409,8 @@ impl App {
             || self.notifications.open()
             || self.copyright.open()
             || self.editor.history_open
-            || self.layout_save.is_some()
+            || self.layout_new.is_some()
+            || self.layout_edit.is_some()
             || self.heavy_prompt.is_some()
             || self.sprite.new_sprite.is_some()
             || self.close_prompt.is_some()
@@ -2788,23 +2528,68 @@ impl App {
         // `&mut self`, so the layout is moved out for the duration.
         let mut dock = std::mem::replace(&mut self.dock, DockState::new(Vec::new()));
         self.dock_in_use = true;
-        let mut tabs = SectionTabs { app: self, shared, closed: false };
-        egui::CentralPanel::default().show(ui, |ui| {
+        // A section alone in its spot has no tab bar: its top edge (with a
+        // handle drawn on it) drags it instead.
+        // The open tab joins its body, so where it's the first one the
+        // body's corner under it is square.
+        // A locked layout shows no handles, and its panels neither move
+        // nor resize: what dragging a divider did is put back after.
+        let locked = self.layout_locked();
+        let (mut alone, mut joined) = (Vec::new(), Vec::new());
+        for (_, leaf) in dock.iter_leaves_mut() {
+            leaf.tab_bar_hidden = leaf.len() == 1;
+            if leaf.tab_bar_hidden {
+                alone.extend(leaf.tabs().first().copied().filter(|_| !locked));
+            } else if leaf.active.0 == 0 {
+                joined.extend(leaf.tabs().first().copied());
+            }
+        }
+        let fractions = |dock: &mut DockState<Section>| -> Vec<f32> {
+            dock.iter_all_nodes_mut()
+                .filter_map(|(_, node)| match node {
+                    egui_dock::Node::Horizontal(split) | egui_dock::Node::Vertical(split) => Some(split.fraction),
+                    _ => None,
+                })
+                .collect()
+        };
+        let before = if locked { fractions(&mut dock) } else { Vec::new() };
+        let top = if locked { f32::from(crate::theme::DOCK_MARGIN) } else { crate::theme::DOCK_HANDLE };
+        let mut tabs = SectionTabs { app: self, shared, alone, joined, top };
+        // (Nothing over the panels: the title bar has room below its buttons.)
+        let frame = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 8 });
+        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             DockArea::new(&mut dock)
                 .id(egui::Id::new("section_dock"))
+                .style({
+                    let mut style = crate::theme::dock_style(ui.style());
+                    if locked {
+                        style.separator.color_hovered = egui::Color32::TRANSPARENT;
+                        style.separator.color_dragged = egui::Color32::TRANSPARENT;
+                        // (No handles, so no room for them.)
+                        style.tab.tab_body.inner_margin.top = crate::theme::DOCK_MARGIN;
+                    }
+                    style
+                })
+                .hidable_tab_bars(true)
+                .draggable_tabs(!locked)
                 .show_add_buttons(false)
                 .show_leaf_close_all_buttons(false)
                 .show_leaf_collapse_buttons(false)
                 .show_inside(ui, &mut tabs);
         });
-        let closed = tabs.closed;
+        if locked {
+            let splits = dock.iter_all_nodes_mut().filter_map(|(_, node)| match node {
+                egui_dock::Node::Horizontal(split) | egui_dock::Node::Vertical(split) => Some(split),
+                _ => None,
+            });
+            for (split, fraction) in splits.zip(before) {
+                split.fraction = fraction;
+            }
+        }
         self.dock_in_use = false;
         self.dock = dock;
 
         self.refresh_open_sections();
-        if closed {
-            self.save_layout();
-        }
         for (section, open) in std::mem::take(&mut self.pending_layout) {
             self.set_open(section, open);
         }
@@ -2895,7 +2680,7 @@ impl App {
             if (any_missing || missing_only)
                 && ui
                     .add(icon_button("warning-circle").selected(missing_only))
-                    .on_hover_text("Missing info: show only the songs a ruleset leaves out, as they don't say what it splits by (Preferences > Songs lists them)")
+                    .on_hover_text("Missing info: show only the songs a ruleset leaves out, as they don't say what it splits by (Preferences > Library lists them)")
                     .clicked()
             {
                 missing_clicked = true;
@@ -3225,8 +3010,7 @@ impl App {
         let channels = ui.scope(|ui| self.channels_ui(ui, &mut notes, playback.position)).response.rect;
         self.tour.mark(tour::Target::Channels, channels);
 
-        let mode = if self.fullscreen { DisplayMode::Fullscreen } else { DisplayMode::Window };
-        self.show_visualizer(ui, &notes, &playback, mode);
+        self.show_visualizer(ui, &notes, &playback, DisplayMode::Window);
     }
 
     /// Draw (and run) the visualizer into the rest of `ui`, and pass on
@@ -3264,7 +3048,7 @@ impl App {
             notes,
             playback,
             transport,
-            self.preferences_open,
+            false,
             mode,
             fixed_size,
             hold,
@@ -3443,7 +3227,6 @@ impl App {
             scripts: self.available_scripts.iter().map(|p| nice_name(p)).collect(),
             active_script: self.active_script,
             transport: self.script_transport(),
-            frozen: self.preferences_open,
             main_shows_visualizer: !self.hidden && self.visualizer_was_drawn,
         }
     }
@@ -3565,11 +3348,7 @@ impl App {
             }
             Command::PreviousTrack => self.previous_track(view.position),
             Command::ToggleVisualizer => self.set_open(Section::Visualizer, !self.is_open(Section::Visualizer)),
-            Command::ToggleFullscreen => self.set_fullscreen(ctx, !self.fullscreen),
-            Command::ExitFullscreen => {
-                self.dedicated = None;
-                self.set_fullscreen(ctx, false);
-            }
+            Command::ExitFullscreen => self.exit_dedicated(ctx),
             Command::DedicatedVisualizer => {
                 if self.dedicated.is_some() {
                     self.exit_dedicated(ctx);
@@ -3630,7 +3409,7 @@ impl App {
     /// its key alone and stays out of the palette.
     fn command_available(&self, command: Command) -> bool {
         match command {
-            Command::ExitFullscreen => self.fullscreen || self.dedicated.is_some(),
+            Command::ExitFullscreen => self.dedicated.is_some(),
             Command::NextTrack => self.has_next() || self.following(),
             // (The mobile layout has pages, not tabs.)
             Command::GoTo(section) => !self.mobile() && self.dedicated.is_none() && section != Section::Removed,
@@ -3644,10 +3423,8 @@ impl App {
     /// the visualizer, which gets keyboard focus.
     fn enter_dedicated(&mut self, ctx: &egui::Context) {
         let since = ctx.input(|i| i.time);
-        self.dedicated = Some(Dedicated { was_fullscreen: self.fullscreen, since });
-        if !self.fullscreen {
-            self.set_fullscreen(ctx, true);
-        }
+        self.dedicated = Some(Dedicated { since });
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
         lock_panel(&self.visualizer).request_focus();
     }
 
@@ -3662,14 +3439,10 @@ impl App {
         };
     }
 
-    /// F11 out of the dedicated fullscreen: back to the normal layout, and
-    /// out of OS fullscreen too unless the app was fullscreen before. (Esc
-    /// skips that and always goes straight back to windowed.)
+    /// Out of the dedicated fullscreen (F11 or Esc): back to the window.
     fn exit_dedicated(&mut self, ctx: &egui::Context) {
-        if let Some(dedicated) = self.dedicated.take()
-            && !dedicated.was_fullscreen
-        {
-            self.set_fullscreen(ctx, false);
+        if self.dedicated.take().is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
         }
     }
 
@@ -3738,8 +3511,7 @@ impl App {
         let window_focused = ctx.input(|i| i.focused);
         let want = self.visualizer_output.focused
             && self.visualizer_output.cursor.confined
-            && window_focused
-            && !self.preferences_open;
+            && window_focused;
         if want != self.cursor_confined {
             self.cursor_confined = want;
             let grab = if want { egui::viewport::CursorGrab::Confined } else { egui::viewport::CursorGrab::None };
@@ -3940,24 +3712,6 @@ impl App {
         }
     }
 
-    /// While Preferences is open, playback and the visualizer script pause;
-    /// closing it resumes playback only if it was playing beforehand.
-    fn pause_for_preferences(&mut self, view: &EngineView) {
-        if self.preferences_open && !self.preferences_were_open {
-            let playing = !view.paused && !view.finished && (view.has_midi || view.has_audio_file);
-            if playing {
-                self.send(AudioCommand::TogglePause);
-            }
-            self.paused_for_preferences = playing;
-        } else if !self.preferences_open && self.preferences_were_open {
-            if self.paused_for_preferences && view.paused {
-                self.send(AudioCommand::TogglePause);
-            }
-            self.paused_for_preferences = false;
-        }
-        self.preferences_were_open = self.preferences_open;
-    }
-
     /// The scripting-API reference: one embedded, structured page (see
     /// `lua_docs.rs`) rather than a hosted wiki, the whole API is a few
     /// dozen functions, not a sprawling product.
@@ -4141,9 +3895,7 @@ impl App {
             self.poll_repair();
             self.suggest_repair();
         });
-        if !self.preferences_open {
-            frame_timing::time("playlist_tick", || self.playlist_tick(&view));
-        }
+        frame_timing::time("playlist_tick", || self.playlist_tick(&view));
         frame_timing::time("poll_library", || self.poll_library(ctx));
         frame_timing::time("poll_moderation", || self.poll_moderation());
         frame_timing::time("poll_feedback", || self.poll_feedback());
@@ -4213,12 +3965,6 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
 
-        // The OS is the final authority on fullscreen state, e.g. the user
-        // could leave it some way other than our own button/key.
-        if let Some(actual) = ctx.input(|i| i.viewport().fullscreen) {
-            self.fullscreen = actual;
-        }
-
         // The keymap (commands.rs). Keys with a modifier and the function
         // keys work from anywhere: while typing, with the visualizer
         // focused, in either fullscreen (scripts never see the unmodified
@@ -4237,7 +3983,7 @@ impl eframe::App for App {
             let keymap = self.keymap.clone();
             let mut pending = self.keymap_pending.take();
             // Run outside `ctx.input_mut`: `send_viewport_cmd` (inside
-            // `set_fullscreen`) takes the lock that closure holds, and
+            // `enter_dedicated`) takes the lock that closure holds, and
             // calling it from in there deadlocks.
             let pressed = ctx.input_mut(|i| {
                 keymap.pressed(i, typing, |command| available.contains(&command), &mut pending)
@@ -4251,13 +3997,9 @@ impl eframe::App for App {
         }
         self.visualizer_output = ShowOutput::default();
 
-        self.pause_for_preferences(view);
         self.handle_os_file_drops(&ctx);
 
-        // Which layout the dock shows depends on fullscreen (when the
-        // separate-fullscreen-layout preference is on), so settle that before
-        // drawing anything.
-        self.sync_layout_slot();
+        self.apply_window_frame(&ctx);
 
         self.song_list.clear_hovered();
         self.hovered_playlist_entry = None;
@@ -4279,16 +4021,22 @@ impl eframe::App for App {
             self.history_ui(&ctx);
             self.status_toast_ui(&ctx);
         } else {
-            egui::Panel::top("top_bar").show(ui, |ui| frame_timing::time("top bar", || self.top_bar_ui(ui)));
-            egui::Panel::bottom("controls_panel").show(ui, |ui| {
+            egui::Panel::top("top_bar")
+                .show_separator_line(false)
+                .exact_size(title_bar::HEIGHT)
+                .show(ui, |ui| frame_timing::time("top bar", || self.title_bar_ui(ui)));
+            egui::Panel::bottom("controls_panel").show_separator_line(false).show(ui, |ui| {
                 let _timing = frame_timing::scope("controls bar");
                 self.controls_bar_ui(ui, view);
                 self.tour.mark(tour::Target::Controls, ui.min_rect());
             });
-            frame_timing::time("dock", || self.dock_ui(ui, &shared));
+            if self.preferences_open {
+                self.preferences_ui(ui);
+            } else {
+                frame_timing::time("dock", || self.dock_ui(ui, &shared));
+            }
             frame_timing::time("autosave_layout", || self.autosave_layout(&ctx));
             let windows = frame_timing::scope("windows");
-            self.preferences_ui(&ctx);
             self.updates_ui(&ctx);
             self.log_ui(&ctx);
             self.rename_ui(&ctx);
@@ -4300,7 +4048,8 @@ impl eframe::App for App {
             self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);
             self.history_ui(&ctx);
-            self.layout_save_ui(&ctx);
+            self.layout_new_ui(&ctx);
+            self.layout_edit_ui(&ctx);
             self.new_sprite_ui(&ctx);
             drop(windows);
         }
@@ -4394,8 +4143,12 @@ impl eframe::App for App {
 struct SectionTabs<'a> {
     app: &'a mut App,
     shared: &'a PlaybackShared,
-    /// A tab was closed this frame, so the layout should be saved.
-    closed: bool,
+    /// The sections alone in their spots, so without a tab bar.
+    alone: Vec<Section>,
+    /// The sections open as the first of their spots' tabs.
+    joined: Vec<Section>,
+    /// How tall the top margin of the sections' bodies is.
+    top: f32,
 }
 
 impl TabViewer for SectionTabs<'_> {
@@ -4413,6 +4166,11 @@ impl TabViewer for SectionTabs<'_> {
         let app = &mut *self.app;
         let _timing = frame_timing::scope(tab.title());
         app.tour.mark(tour::Target::Tab(*tab), ui.max_rect());
+        if self.alone.contains(tab) {
+            drag_handle(ui);
+        } else if self.joined.contains(tab) {
+            square_corner(ui, self.top);
+        }
         match tab {
             Section::Songs => app.songs_ui(ui),
             Section::Groupings => app.groupings_ui(ui),
@@ -4432,11 +4190,10 @@ impl TabViewer for SectionTabs<'_> {
         }
     }
 
-    /// Closing a tab just hides the section, all its state lives in `App`,
-    /// not the tab, and View brings it back.
-    fn on_close(&mut self, _tab: &mut Section) -> OnCloseResponse {
-        self.closed = true;
-        OnCloseResponse::Close
+    /// Sections are shown and hidden from View (and the transport's
+    /// toggles), not closed from their tabs.
+    fn is_closeable(&self, _tab: &Section) -> bool {
+        false
     }
 
     /// Every section scrolls its own content where it needs to; a second,
@@ -4446,28 +4203,33 @@ impl TabViewer for SectionTabs<'_> {
     }
 }
 
-/// The body of a window laid out like Preferences: `categories` down the
+/// How tall a window's `categories_body` is.
+const CATEGORIES_HEIGHT: f32 = 340.0;
+
+/// The body of a page laid out like Preferences: `categories` down the
 /// side (`selected` the one picked), and `body` drawing the picked one's
-/// contents beside them. Each side scrolls by itself, in a fixed height.
+/// contents beside them. Each side scrolls by itself, `height` tall.
+
 fn categories_body<S: AsRef<str>>(
     ui: &mut egui::Ui,
     id: &str,
     categories: &[S],
     selected: &mut usize,
+    height: f32,
     body: impl FnOnce(&mut egui::Ui, usize),
 ) {
-    // A fixed height: the divider takes the height it's given, so left to
-    // size itself, the window grows a little every frame.
-    const BODY_HEIGHT: f32 = 340.0;
+    // A fixed height: the divider takes the height it's given, so in a
+    // window left to size itself, it grows a little every frame.
     *selected = (*selected).min(categories.len().saturating_sub(1));
-    let size = egui::vec2(ui.available_width(), BODY_HEIGHT);
+    let size = egui::vec2(ui.available_width(), height);
     ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Min), |ui| {
-        ui.set_height(BODY_HEIGHT);
+        ui.set_height(height);
         ui.vertical(|ui| {
-            ui.set_width(110.0);
-            egui::ScrollArea::vertical().id_salt((id, "categories")).max_height(BODY_HEIGHT).show(ui, |ui| {
+            ui.set_width(140.0);
+            egui::ScrollArea::vertical().id_salt((id, "categories")).max_height(height).show(ui, |ui| {
                 for (i, title) in categories.iter().enumerate() {
-                    if ui.selectable_label(*selected == i, title.as_ref()).clicked() {
+                    let pill = egui::Button::selectable(*selected == i, title.as_ref()).corner_radius(12.0);
+                    if ui.add(pill).clicked() {
                         *selected = i;
                     }
                 }
@@ -4477,7 +4239,7 @@ fn categories_body<S: AsRef<str>>(
         ui.vertical(|ui| {
             egui::ScrollArea::vertical()
                 .id_salt((id, "body"))
-                .max_height(BODY_HEIGHT)
+                .max_height(height)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 8.0;
@@ -4511,11 +4273,156 @@ pub fn icon(name: &str) -> &'static str {
 
 /// A setting on one line (`add`), with an (i) after it: hovering either
 /// shows `info`, the longer explanation.
+/// The (i) sits at the row's right end, so they line up down a page.
 fn with_info(ui: &mut egui::Ui, info: &str, add: impl FnOnce(&mut egui::Ui) -> egui::Response) {
-    ui.horizontal(|ui| {
+    setting_row(ui, |ui| {
         add(ui).on_hover_text(info);
-        info_icon(ui, info);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| info_icon(ui, info));
     });
+}
+
+/// One line of settings, across the whole width. In a `settings_group`,
+/// every other one is on the striped background, as a list's rows are.
+fn setting_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let id = egui::Id::new(SETTINGS_GROUP);
+    let striped = ui.ctx().data_mut(|d| {
+        d.get_temp_mut_or_default::<Option<usize>>(id).as_mut().map(|rows| {
+            *rows += 1;
+            *rows % 2 == 0
+        })
+    });
+    let background = ui.painter().add(egui::Shape::Noop);
+    let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(0, GROUP_ROW_MARGIN)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(add).inner
+    });
+    if striped == Some(true) {
+        let rect = inner.response.rect.expand2(egui::vec2(GROUP_MARGIN as f32, 0.0));
+        ui.painter().set(background, egui::Shape::rect_filled(rect, 0.0, ui.visuals().faint_bg_color));
+    }
+    inner.inner
+}
+
+/// Where `setting_row` counts the rows of the `settings_group` being drawn.
+const SETTINGS_GROUP: &str = "settings_group";
+/// The room around a settings group's contents, and above and below each
+/// of its rows.
+const GROUP_MARGIN: i8 = 8;
+const GROUP_ROW_MARGIN: i8 = 3;
+
+/// A box of settings under a heading, drawn as a list is: outlined, the
+/// heading (an icon, the title, a line of hint under it) on the header's
+/// color, the rows (`setting_row`) striped. Built up, then drawn by `show`.
+#[derive(Clone, Copy)]
+struct SettingsGroup<'a> {
+    title: &'a str,
+    icon: Option<&'a str>,
+    hint: Option<&'a str>,
+    /// Opens and closes by its heading (closed at first), kept by this
+    /// whatever the title says.
+    closable: Option<&'a str>,
+}
+
+fn settings_group(title: &str) -> SettingsGroup<'_> {
+    SettingsGroup { title, icon: None, hint: None, closable: None }
+}
+
+impl<'a> SettingsGroup<'a> {
+    fn icon(self, icon: &'a str) -> Self {
+        Self { icon: Some(icon), ..self }
+    }
+
+    fn hint(self, hint: &'a str) -> Self {
+        Self { hint: Some(hint), ..self }
+    }
+
+    fn closable(self, id_salt: &'a str) -> Self {
+        Self { closable: Some(id_salt), ..self }
+    }
+
+    /// Draw it, `add` drawing its contents (unless it's closed: `None`).
+    fn show<R>(self, ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+        let id = egui::Id::new(SETTINGS_GROUP);
+        let visuals = ui.visuals().clone();
+        let radius = 6u8;
+        let toggle = self.closable.map(|salt| ui.make_persistent_id(("settings_group_open", salt)));
+        let open = toggle.is_none_or(|toggle| ui.ctx().data_mut(|d| *d.get_persisted_mut_or_default::<bool>(toggle)));
+        // (No room of its own around it: the item spacing between groups
+        // is about the room at its sides.)
+        let group = ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let bottom = if open { 0 } else { radius };
+            let header = egui::Frame::new()
+                .fill(visuals.extreme_bg_color)
+                .corner_radius(egui::CornerRadius { nw: radius, ne: radius, sw: bottom, se: bottom })
+                .inner_margin(egui::Margin::symmetric(GROUP_MARGIN, 5))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        if let Some(name) = self.icon {
+                            ui.label(egui::RichText::new(icon(name)).size(16.0).color(visuals.weak_text_color()));
+                        }
+                        ui.vertical(|ui| {
+                            ui.strong(self.title);
+                            if let Some(hint) = self.hint {
+                                ui.add(egui::Label::new(egui::RichText::new(hint).weak()).wrap());
+                            }
+                        });
+                        if toggle.is_some() {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(icon(if open { "caret-up" } else { "caret-down" }));
+                            });
+                        }
+                    });
+                });
+            if let Some(toggle) = toggle
+                && ui
+                    .interact(header.response.rect, toggle, egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+            {
+                ui.ctx().data_mut(|d| d.insert_persisted(toggle, !open));
+            }
+            if !open {
+                return None;
+            }
+            let outer = ui.ctx().data_mut(|d| d.get_temp::<Option<usize>>(id)).flatten();
+            ui.ctx().data_mut(|d| d.insert_temp(id, Some(0usize)));
+            let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(GROUP_MARGIN, 2)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                add(ui)
+            });
+            ui.ctx().data_mut(|d| d.insert_temp(id, outer));
+            Some(inner.inner)
+        });
+        let rect = group.response.rect;
+        ui.painter().rect_stroke(rect, radius, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+        group.inner
+    }
+}
+
+/// How wide a setting's label is (`setting_label`), so the controls after
+/// the labels line up.
+const LABEL_WIDTH: f32 = 160.0;
+/// How wide a setting's dropdown or slider is.
+const CONTROL_WIDTH: f32 = 180.0;
+
+/// A setting's name, in a column of its own width (less on a narrow
+/// screen): the control goes after it.
+fn setting_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let width = LABEL_WIDTH.min(ui.available_width() * 0.4);
+    let height = ui.spacing().interact_size.y;
+    ui.allocate_ui_with_layout(egui::vec2(width, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_width(width);
+        ui.add(egui::Label::new(text).truncate())
+    })
+    .inner
+}
+
+/// A heading over a group of settings, with a little room above it.
+fn setting_section(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(title).strong().size(15.0));
 }
 
 /// A small circled "i": `info` on hover, and in the mobile layout's toast
@@ -4707,7 +4614,7 @@ fn status_line_ui(
     entries: impl FnOnce() -> Vec<applog::Entry>,
 ) -> bool {
     let button = ui
-        .add(egui::Button::new(egui::RichText::new(icon("clock-counter-clockwise")).size(14.0)).small())
+        .add(icon_button("clock-counter-clockwise"))
         .on_hover_text(if *unseen_failure {
             "Something failed: the recent messages"
         } else {
@@ -4812,6 +4719,60 @@ pub(super) fn palette_color(index: u8) -> egui::Color32 {
 /// Give it a hover text saying what it does.
 pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(icon(name)).size(16.0)).min_size(egui::vec2(28.0, 24.0))
+}
+
+/// An icon button as tall as the other controls in a row of settings (or
+/// any row of text-sized widgets), so everything in the row lines up on
+/// its middle. Give it a hover text saying what it does.
+pub(crate) fn row_icon_button(ui: &egui::Ui, name: &str) -> egui::Button<'static> {
+    let height = ui.spacing().interact_size.y;
+    egui::Button::new(egui::RichText::new(icon(name)).size(height - 4.0)).min_size(egui::vec2(height + 6.0, height))
+}
+
+/// How wide the transport (`App::transport_ui`) is: five icon buttons and
+/// play, with the gaps between.
+const TRANSPORT_WIDTH: f32 = 5.0 * 28.0 + PLAY_WIDTH + 5.0 * 8.0;
+/// How wide each side of it has to be for the bar to fit on one line.
+const SIDE_WIDTH: f32 = 380.0;
+/// How wide the view toggles (`App::views_ui`) are, at most.
+const VIEWS_WIDTH: f32 = 4.0 * 28.0 + 3.0 * 8.0;
+const PLAY_WIDTH: f32 = 44.0;
+const TRANSPORT_HEIGHT: f32 = 28.0;
+
+/// The handle on the top edge of a section without a tab bar (in the
+/// margin over `ui`, its body), where it's dragged from: a short line,
+/// brighter under the pointer.
+fn drag_handle(ui: &egui::Ui) {
+    let content = ui.max_rect();
+    let margin = crate::theme::DOCK_HANDLE;
+    let strip = egui::Rect::from_min_max(egui::pos2(content.left(), content.top() - margin), egui::pos2(content.right(), content.top()));
+    let weak = ui.visuals().weak_text_color();
+    let color = if ui.rect_contains_pointer(strip) { weak } else { weak.gamma_multiply(0.4) };
+    let line = egui::Rect::from_center_size(strip.center(), egui::vec2(32.0, 3.0));
+    ui.ctx().layer_painter(ui.layer_id()).rect_filled(line, 1.5, color);
+}
+
+/// Square off the top left corner of the body around `ui` (its top margin
+/// `top` tall), under its tab.
+fn square_corner(ui: &egui::Ui, top: f32) {
+    let content = ui.max_rect();
+    let corner = egui::pos2(content.left() - f32::from(crate::theme::DOCK_MARGIN), content.top() - top);
+    let patch = egui::Rect::from_min_size(corner, egui::Vec2::splat(8.0));
+    ui.ctx().layer_painter(ui.layer_id()).rect_filled(patch, 0.0, ui.visuals().window_fill);
+}
+
+/// The play/pause button: Play while `paused`, else Pause in the look of
+/// the playing row (`select_list::paint_row`): tinted and outlined in the
+/// theme's playing color.
+pub(super) fn play_button(ctx: &egui::Context, paused: bool, icon_size: f32, size: egui::Vec2) -> egui::Button<'static> {
+    if paused {
+        return egui::Button::new(egui::RichText::new(icon("play")).size(icon_size)).min_size(size);
+    }
+    let color = crate::theme::playing_color(ctx);
+    egui::Button::new(egui::RichText::new(icon("pause")).size(icon_size).color(color))
+        .min_size(size)
+        .fill(color.gamma_multiply(0.15))
+        .stroke(egui::Stroke::new(1.0, color))
 }
 
 /// What Loop is set to, for the toast its button shows.

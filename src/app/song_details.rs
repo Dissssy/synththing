@@ -102,7 +102,7 @@ impl App {
             match details.tab {
                 Tab::Details => self.details_tab_ui(ui, &mut details, Section::Details),
                 Tab::Sorting => {
-                    ui.weak("What each name sorts as, if not itself: \"Beatles\" for \"The Beatles\". Empty sorts it as it is (past a leading The, A or An, as Preferences > Songs says).");
+                    ui.weak("What each name sorts as, if not itself: \"Beatles\" for \"The Beatles\". Empty sorts it as it is (past a leading The, A or An, as Preferences > Browsing says).");
                     self.details_tab_ui(ui, &mut details, Section::Sorting);
                 }
                 Tab::Options => {

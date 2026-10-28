@@ -942,7 +942,7 @@ fn handle(state: &Arc<State>, mut request: Request) {
             authority::cancel(state, query.get("token").map(String::as_str).unwrap_or_default())
         }
         (Method::Get, [""]) => Response::from_string(format!(
-            "{}: a synththing script library. Add this address under Preferences > Online Library in the app.\n",
+            "{}: a synththing script library. Add this address under Preferences > Account in the app.\n",
             state.config.name
         ))
         .with_header(header("Content-Type", "text/plain; charset=utf-8")),
@@ -1282,7 +1282,7 @@ fn signer(state: &State, request: &Request, method: &str, path: &str, body: &[u8
         let left = crate::song_info::format_length((until - now()).max(0) as f64);
         return Err(error(
             403,
-            format!("your identity's data here is being deleted: restore it first (Preferences > Online Library) if you want it back (another {left} to change your mind)"),
+            format!("your identity's data here is being deleted: restore it first (Preferences > Account) if you want it back (another {left} to change your mind)"),
         ));
     }
     Ok(key)

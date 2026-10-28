@@ -82,7 +82,7 @@ synththing run-script my_script.lua --song song.mid
 
 ## Where things are kept
 
-Everything lives in `%APPDATA%\synththing\config` (`~/.config/synththing` on Linux; Preferences > App > Storage shows how much each part takes):
+Everything lives in `%APPDATA%\synththing\config` (`~/.config/synththing` on Linux; Preferences > Library > Storage shows how much each part takes):
 
 - `soundfonts.json`: settings (your own themes included), the soundfont list, the layout
 - `music\`: the song library: each song named by its contents, and `library.json` with their details, tags and stars
@@ -90,7 +90,7 @@ Everything lives in `%APPDATA%\synththing\config` (`~/.config/synththing` on Lin
 - `visualizers\`: scripts, plus each script's settings (`.settings.json`) and saved data (`.store.json`)
 - `soundfonts\`: the starter pack's soundfonts
 - `art\`, `musicbrainz\` and `lookup.json`: album covers and details found online, and what the lookup has matched
-- `identity.key`, `sync.key` and `device.json`: who you are online and on which device (back them up with Preferences > Online Library > Export)
+- `identity.key`, `sync.key` and `device.json`: who you are online and on which device (back them up with Preferences > Account > Export)
 - `synththing.log`: the app's log (also under Help > Log...); the previous run's is `synththing.prev.log`
 
 ## Building from source

@@ -1,4 +1,4 @@
-//! Signing in another device, in Preferences > Online Library
+//! Signing in another device, in Preferences > Account
 //! (`library/pairing.rs`): Sign in another device... shows a QR code and
 //! a link for the other device to open; Sign in with a link... takes one
 //! here. The handoff goes through the authority (the official server).
@@ -107,41 +107,41 @@ impl App {
         }
     }
 
-    /// Preferences > Online Library, under the identity: this device's
-    /// name, and signing in another device or this one.
-    pub(super) fn pairing_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label("This device");
-            let response = ui.add(
+    /// On the identity card: this device's name, saved once it's typed.
+    pub(super) fn device_name_ui(&mut self, ui: &mut egui::Ui) {
+        let response = ui
+            .add(
                 egui::TextEdit::singleline(&mut self.pairing.device.name)
                     .char_limit(pairing::MAX_DEVICE_NAME)
-                    .desired_width(160.0),
-            );
-            if response.lost_focus()
-                && let Err(e) = self.pairing.device.save()
-            {
-                self.library_identity_message(&format!("Couldn't save this device's name: {e:#}"));
-            }
-            super::info_icon(ui, "What another device shows when this one signs in with its code.");
-        });
+                    .hint_text("This device's name")
+                    .desired_width(180.0),
+            )
+            .on_hover_text("This device's name: what another device shows when this one signs in with its code");
+        if response.lost_focus()
+            && let Err(e) = self.pairing.device.save()
+        {
+            self.library_identity_message(&format!("Couldn't save this device's name: {e:#}"));
+        }
+    }
+
+    /// On the identity card: signing in another device, or this one.
+    pub(super) fn pairing_ui(&mut self, ui: &mut egui::Ui) {
         let mut open = None;
-        ui.horizontal(|ui| {
-            if self.library_identity().is_some()
-                && ui
-                    .button("Sign in another device...")
-                    .on_hover_text("Show a code your phone or another computer opens to sign in as you")
-                    .clicked()
-            {
-                open = Some(Flow::Show { code: None, taken: None, checked: None, checking: false });
-            }
-            if ui
-                .button("Sign in with a link...")
-                .on_hover_text("Sign in here with the link another device of yours shows")
+        if self.library_identity().is_some()
+            && ui
+                .button(format!("{}  Sign in another device...", super::icon("qr-code")))
+                .on_hover_text("Show a code your phone or another computer opens to sign in as you")
                 .clicked()
-            {
-                open = Some(Flow::Enter { link: String::new() });
-            }
-        });
+        {
+            open = Some(Flow::Show { code: None, taken: None, checked: None, checking: false });
+        }
+        if ui
+            .button(format!("{}  Sign in with a link...", super::icon("link")))
+            .on_hover_text("Sign in here with the link another device of yours shows")
+            .clicked()
+        {
+            open = Some(Flow::Enter { link: String::new() });
+        }
         if let Some(flow) = open {
             let show = matches!(flow, Flow::Show { .. });
             self.pairing.flow = Some(FlowState { flow, busy: false, error: None });

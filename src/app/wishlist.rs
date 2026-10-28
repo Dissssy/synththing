@@ -425,7 +425,7 @@ impl App {
     /// The search box, and what it found.
     fn wishlist_search_ui(&mut self, ui: &mut egui::Ui, online: bool) {
         if !self.config.online_lookup {
-            ui.weak("Searching MusicBrainz needs Online album art and details on (Preferences > Songs). You can still wish for music by name.");
+            ui.weak("Searching MusicBrainz needs Online album art and details on (Preferences > Library). You can still wish for music by name.");
         } else {
             // (Off in a branch build: it says so, with a button.)
             self.online_ui(ui, Online::Lookup);

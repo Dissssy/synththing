@@ -101,7 +101,7 @@ impl App {
                 n => format!("{n} songs"),
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled(count > 0, egui::Button::new("Clear")).clicked() {
+                if ui.add_enabled(count > 0, icon_button("trash")).on_hover_text("Clear the queue").clicked() {
                     self.queue.clear();
                 }
             });

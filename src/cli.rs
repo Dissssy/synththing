@@ -37,7 +37,7 @@ pub struct Cli {
 
     /// In a branch build, turn on these online features for this run
     /// (they start off there): scripts, sync, lookup, comma-separated.
-    /// The same as their switches in Preferences > Online Library.
+    /// The same as their switches in Preferences > Account.
     #[arg(long, value_enum, value_delimiter = ',', value_name = "KINDS")]
     pub online: Vec<crate::build_info::Online>,
 

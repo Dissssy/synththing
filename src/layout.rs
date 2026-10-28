@@ -115,31 +115,32 @@ pub fn default_layout() -> DockState<Section> {
     dock
 }
 
-/// A built-in arrangement to switch to from View > Layout. Add one by
-/// writing its `build` function and listing it in [`PRESETS`].
-pub struct Preset {
+/// An arrangement a new layout can start from (Layout > New layout...).
+/// Add one by writing its `build` function and listing it in
+/// [`TEMPLATES`]. The first is the layout a first launch starts on.
+pub struct Template {
     pub name: &'static str,
     pub description: &'static str,
     pub build: fn() -> DockState<Section>,
 }
 
-pub const PRESETS: &[Preset] = &[
-    Preset {
+pub const TEMPLATES: &[Template] = &[
+    Template {
         name: "Listening",
         description: "Songs and soundfonts on the left, the visualizer on the right",
         build: default_layout,
     },
-    Preset {
+    Template {
         name: "Watching",
         description: "The visualizer big in the middle, songs and soundfonts on the left, playlists and albums on the right",
         build: watching_layout,
     },
-    Preset {
+    Template {
         name: "Script writing",
         description: "The script editor with the reference beside it, the visualizer on the right",
         build: script_writing_layout,
     },
-    Preset {
+    Template {
         name: "Sprite editing",
         description: "The sprite editor big on the left, the script editor and the visualizer on the right",
         build: sprite_editing_layout,
@@ -168,50 +169,11 @@ fn script_writing_layout() -> DockState<Section> {
     dock
 }
 
-/// Whether two layouts are arranged the same: the same tabs in the same
-/// places, split the same ways in about the same proportions. Ignores
-/// what's only about the moment (which tab is showing in a group, on-screen
-/// sizes, scroll positions), which the saved form also holds.
-pub fn same_arrangement(a: &DockState<Section>, b: &DockState<Section>) -> bool {
-    arrangement(a) == arrangement(b)
-}
-
-fn arrangement(dock: &DockState<Section>) -> Vec<String> {
-    let mut parts = Vec::new();
-    for surface in dock.iter_surfaces() {
-        let Some(tree) = surface.node_tree() else {
-            parts.push("-".to_string());
-            continue;
-        };
-        parts.push("surface".to_string());
-        for node in tree.iter() {
-            parts.push(match node {
-                Node::Empty => "e".to_string(),
-                Node::Leaf(leaf) => format!("{:?}", leaf.tabs),
-                Node::Vertical(split) => format!("v{:.2}", split.fraction),
-                Node::Horizontal(split) => format!("h{:.2}", split.fraction),
-            });
-        }
-    }
-    // Trailing empty slots of the node array don't change anything.
-    while parts.last().is_some_and(|p| p == "e") {
-        parts.pop();
-    }
-    parts
-}
-
-/// A layout the user saved under a name (View > Layout > Save current
-/// layout as...), kept in the config.
+/// A layout under a name (Layout > New layout...), kept in the config.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedLayout {
     pub name: String,
     pub dock: DockState<Section>,
-}
-
-/// A separate fullscreen layout's starting point: just the visualizer, which
-/// is what fullscreen showed before it became a layout of its own.
-pub fn fullscreen_default() -> DockState<Section> {
-    DockState::new(vec![Section::Visualizer])
 }
 
 /// A layout loaded from the config, cleaned up: a section appearing more
@@ -439,8 +401,8 @@ mod tests {
     }
 
     #[test]
-    fn presets_hold_each_section_at_most_once() {
-        for preset in PRESETS {
+    fn templates_hold_each_section_at_most_once() {
+        for preset in TEMPLATES {
             let dock = (preset.build)();
             let tabs: Vec<Section> = dock.iter_all_tabs().map(|(_, tab)| *tab).collect();
             assert!(!tabs.is_empty(), "{}", preset.name);
@@ -454,22 +416,7 @@ mod tests {
                 assert!(is_open(&dock, section));
             }
         }
-        assert_eq!(open(&(PRESETS[2].build)()), [Section::Visualizer, Section::Editor, Section::Reference]);
-    }
-
-    #[test]
-    fn arrangement_ignores_the_moment_but_not_the_layout() {
-        let a = (PRESETS[2].build)();
-        let mut b = (PRESETS[2].build)();
-        assert!(same_arrangement(&a, &b));
-        // Switching the shown tab in a group isn't a change...
-        if let Some(path) = b.find_tab(&Section::Reference) {
-            b.set_active_tab(path).unwrap();
-        }
-        assert!(same_arrangement(&a, &b));
-        // ...closing a section is.
-        hide(&mut b, Section::Visualizer);
-        assert!(!same_arrangement(&a, &b));
+        assert_eq!(open(&(TEMPLATES[2].build)()), [Section::Visualizer, Section::Editor, Section::Reference]);
     }
 
     #[test]

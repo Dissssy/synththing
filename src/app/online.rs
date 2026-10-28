@@ -22,7 +22,7 @@ impl App {
         false
     }
 
-    /// Preferences > Online Library, in a branch build: every kind, to turn
+    /// Preferences > Account, in a branch build: every kind, to turn
     /// on or off for this run.
     pub(super) fn branch_online_ui(&mut self, ui: &mut egui::Ui) {
         if !matches!(build_info::channel(), Channel::Branch(_)) {

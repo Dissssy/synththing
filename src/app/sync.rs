@@ -1,4 +1,4 @@
-//! Sync in the app: the switch in Preferences > Online Library, and what
+//! Sync in the app: the switch in Preferences > Account, and what
 //! only the app does with what syncing brings (`device_sync.rs` does the
 //! syncing itself, the wishlist included): putting synced settings in the config, finding the
 //! playlist playing again once synced ones replace it, and saying what
@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use eframe::egui;
 
-use super::App;
+use super::{icon, row_icon_button, setting_row, settings_group, with_info, App};
 use crate::device_sync::{self, DeviceSync, Here, Link, Report, Synced};
 use crate::library;
 use crate::settings_sync;
@@ -166,12 +166,23 @@ impl App {
         self.plan_upcoming();
     }
 
-    /// The switch, under the identity in Preferences > Online Library.
+    /// Preferences > Account, under the identity: the switch and the
+    /// devices, what this device syncs, and the songs no device fetches.
     pub(super) fn sync_ui(&mut self, ui: &mut egui::Ui) {
+        settings_group("Sync").icon("arrows-clockwise").show(ui, |ui| self.sync_switch_ui(ui));
+        if self.sync.engine.on() {
+            self.sync_choices_ui(ui);
+            self.blocked_songs_ui(ui);
+            self.unheld_songs_ui(ui);
+        }
+    }
+
+    /// The switch, what it's doing, the devices, and the testing toast.
+    fn sync_switch_ui(&mut self, ui: &mut egui::Ui) {
         let signed_in = self.library_identity().is_some();
         let offered = self.library_server_info().is_none_or(|i| i.sync);
         let mut on = self.sync.engine.on();
-        super::with_info(
+        with_info(
             ui,
             "Keeps your settings and playlists the same on every device signed in as you that has \
              this on, and brings the songs in your playlists (or every song) over from your other \
@@ -183,7 +194,7 @@ impl App {
             |ui| ui.add_enabled(signed_in && offered, egui::Checkbox::new(&mut on, "Sync settings and playlists between my devices")),
         );
         if !offered {
-            ui.weak("The server doesn't sync yet.");
+            setting_row(ui, |ui| ui.weak("The server doesn't sync yet."));
         }
         if on != self.sync.engine.on() {
             if on {
@@ -194,60 +205,69 @@ impl App {
                 self.sync.engine.turn_off();
             }
         }
-        if self.sync.engine.on() {
-            if self.sync.engine.held() {
-                ui.weak("Paused while the update downloads.");
-            }
-            if let Some(error) = self.sync.engine.error() {
-                ui.weak(format!("Couldn't sync: {error}"));
-            }
-            if let Some((done, total)) = self.songs_moving() {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.weak(format!("Moving songs between your devices: {done} of {total}"));
-                });
-            }
-            self.sync_choices_ui(ui);
-            self.devices_ui(ui);
-            self.blocked_songs_ui(ui);
-            self.unheld_songs_ui(ui);
-            let mut debug = self.config.sync_debug;
-            if ui.checkbox(&mut debug, "Show what each sync changed (for testing)").changed() {
-                self.config.sync_debug = debug;
-                if let Err(e) = self.config.save() {
-                    log::warn!("saving the config: {e}");
-                }
+        if !self.sync.engine.on() {
+            return;
+        }
+        if self.sync.engine.held() {
+            setting_row(ui, |ui| ui.weak("Paused while the update downloads."));
+        }
+        if let Some(error) = self.sync.engine.error() {
+            setting_row(ui, |ui| ui.weak(format!("Couldn't sync: {error}")));
+        }
+        if let Some((done, total)) = self.songs_moving() {
+            setting_row(ui, |ui| {
+                ui.spinner();
+                ui.weak(format!("Moving songs between your devices: {done} of {total}"));
+            });
+        }
+        self.devices_ui(ui);
+        let mut debug = self.config.sync_debug;
+        if setting_row(ui, |ui| ui.checkbox(&mut debug, "Show what each sync changed (for testing)")).changed() {
+            self.config.sync_debug = debug;
+            if let Err(e) = self.config.save() {
+                log::warn!("saving the config: {e}");
             }
         }
     }
 
-    /// Which settings this device syncs: each category, opening to its
-    /// settings.
+    /// Which settings this device syncs: a row for each category, with
+    /// how many of its settings sync, opening to a row for each.
     fn sync_choices_ui(&mut self, ui: &mut egui::Ui) {
         let mut chosen: Vec<(&'static settings_sync::Setting, bool)> = Vec::new();
-        egui::CollapsingHeader::new("What this device syncs").id_salt("sync_choices").show(ui, |ui| {
-            ui.weak("Unticked: this device keeps its own, and doesn't change the others'.");
+        let hint = "Unticked: this device keeps its own, and doesn't change the others'.";
+        settings_group("What this device syncs").icon("sliders").hint(hint).closable("sync_choices").show(ui, |ui| {
+            let choices = self.sync.engine.choices();
             for category in settings_sync::CATEGORIES {
-                let choices = self.sync.engine.choices();
                 let on = category.settings.iter().filter(|s| settings_sync::syncs(choices, s)).count();
                 let id = ui.make_persistent_id(("sync_category", category.name));
-                egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
-                    .show_header(ui, |ui| {
-                        let mut all = on == category.settings.len();
-                        let mixed = on > 0 && !all;
-                        let checkbox = egui::Checkbox::new(&mut all, category.name).indeterminate(mixed);
-                        if ui.add(checkbox).changed() {
-                            chosen.extend(category.settings.iter().map(|s| (s, all)));
-                        }
-                    })
-                    .body(|ui| {
-                        for setting in category.settings {
-                            let mut on = settings_sync::syncs(choices, setting);
+                let open = ui.ctx().data_mut(|d| *d.get_persisted_mut_or_default::<bool>(id));
+                setting_row(ui, |ui| {
+                    let caret = egui::Button::new(icon(if open { "caret-down" } else { "caret-right" })).frame(false);
+                    if ui.add(caret).clicked() {
+                        ui.ctx().data_mut(|d| d.insert_persisted(id, !open));
+                    }
+                    ui.label(egui::RichText::new(icon(category.icon)).color(ui.visuals().weak_text_color()));
+                    let mut all = on == category.settings.len();
+                    let mixed = on > 0 && !all;
+                    let checkbox = egui::Checkbox::new(&mut all, category.name).indeterminate(mixed);
+                    if ui.add(checkbox).changed() {
+                        chosen.extend(category.settings.iter().map(|s| (s, all)));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.weak(format!("{on} of {}", category.settings.len()));
+                    });
+                });
+                if open {
+                    for setting in category.settings {
+                        let mut on = settings_sync::syncs(choices, setting);
+                        setting_row(ui, |ui| {
+                            ui.add_space(41.0);
                             if ui.checkbox(&mut on, setting.name).changed() {
                                 chosen.push((setting, on));
                             }
-                        }
-                    });
+                        });
+                    }
+                }
             }
         });
         if chosen.is_empty() {
@@ -258,7 +278,7 @@ impl App {
         self.sync.engine.choose(&link, &Here { songs: &mut self.songs, playlists: &mut self.playlists, wishlist: &mut self.wishlist.list }, chosen, &config);
     }
 
-    /// The devices syncing songs, each but this one removable.
+    /// The devices syncing songs, a row each, each but this one removable.
     fn devices_ui(&mut self, ui: &mut egui::Ui) {
         let devices = self.sync.engine.devices();
         if devices.is_empty() || !self.sync.engine.syncs_transfers() {
@@ -266,29 +286,32 @@ impl App {
         }
         let me = self.sync.engine.device_id().unwrap_or_default();
         let mut forget = None;
-        egui::CollapsingHeader::new(format!("Your devices ({})", devices.len())).id_salt("sync_devices").show(ui, |ui| {
-            ui.weak(format!(
-                "The devices your songs move between. One that doesn't sync for {} days is removed by itself; one removed comes back if it syncs again.",
-                song_sync::FORGET_AFTER / (24 * 60 * 60)
-            ));
-            for device in devices {
-                ui.horizontal(|ui| {
+        let info = format!(
+            "The devices your songs move between. One that doesn't sync for {} days is removed by itself; one removed comes back if it syncs again.",
+            song_sync::FORGET_AFTER / (24 * 60 * 60)
+        );
+        with_info(ui, &info, |ui| ui.label(format!("Your devices ({})", devices.len())));
+        for device in devices {
+            setting_row(ui, |ui| {
+                ui.add_space(24.0);
+                ui.label(egui::RichText::new(icon("devices")).color(ui.visuals().weak_text_color()));
+                ui.label(match device.name.as_deref() {
+                    Some("") => "A device with no name",
+                    Some(name) => name,
+                    None => "A device on an older version",
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if device.id == me {
-                        ui.weak("This device");
-                    } else if ui.small_button("Remove").on_hover_text("Stop moving songs to it").clicked() {
-                        forget = Some(device.id.clone());
-                    }
-                    ui.label(match device.name.as_deref() {
-                        Some("") => "A device with no name",
-                        Some(name) => name,
-                        None => "A device on an older version",
-                    });
-                    if device.id != me {
+                        ui.weak("this device");
+                    } else {
+                        if ui.add(row_icon_button(ui, "x")).on_hover_text("Remove: stop moving songs to it").clicked() {
+                            forget = Some(device.id.clone());
+                        }
                         ui.weak(format!("synced {}", library::ago(device.seen)));
                     }
                 });
-            }
-        });
+            });
+        }
         if let Some(device) = forget {
             self.sync.engine.forget_device(&device);
         }
@@ -305,19 +328,29 @@ impl App {
         let mut unblock = None;
         let mut everywhere = None;
         let library = self.sync.engine.syncs_library();
-        egui::CollapsingHeader::new(format!("Songs removed from this device ({})", blocked.len())).id_salt("sync_blocked").show(ui, |ui| {
-            ui.weak("This device doesn't fetch these from your other devices.");
-            for (key, name) in &blocked {
-                ui.horizontal(|ui| {
-                    if ui.small_button("Fetch again").clicked() {
-                        unblock = Some(key.clone());
-                    }
-                    if library && ui.small_button("Remove from all devices").on_hover_text("Your other devices delete it too, until one imports it again").clicked() {
-                        everywhere = Some(key.clone());
-                    }
-                    ui.label(name);
-                });
-            }
+        let title = format!("Songs removed from this device ({})", blocked.len());
+        let hint = "This device doesn't fetch these from your other devices.";
+        settings_group(&title).icon("prohibit").hint(hint).closable("sync_blocked").show(ui, |ui| {
+            egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                for (key, name) in &blocked {
+                    setting_row(ui, |ui| {
+                        ui.add(egui::Label::new(name.as_str()).truncate());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if library
+                                && ui
+                                    .add(row_icon_button(ui, "trash"))
+                                    .on_hover_text("Remove from all devices: your other devices delete it too, until one imports it again")
+                                    .clicked()
+                            {
+                                everywhere = Some(key.clone());
+                            }
+                            if ui.add(row_icon_button(ui, "download-simple")).on_hover_text("Fetch again").clicked() {
+                                unblock = Some(key.clone());
+                            }
+                        });
+                    });
+                }
+            });
         });
         if let Some(key) = unblock {
             self.songs.unblock(&key);
@@ -339,16 +372,18 @@ impl App {
             return;
         }
         let mut clear = false;
-        let header = format!("Songs on none of your devices ({})", unheld.len());
-        egui::CollapsingHeader::new(header).id_salt("sync_unheld").show(ui, |ui| {
-            ui.weak("Every device removed these, or only devices that are gone had them. Your library still lists them, as unavailable.");
-            clear = ui
-                .button("Clear them from your library")
-                .on_hover_text("Your other devices stop listing them too. Playlists keep them, as unavailable.")
-                .clicked();
-            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+        let title = format!("Songs on none of your devices ({})", unheld.len());
+        let hint = "Every device removed these, or only devices that are gone had them. Your library still lists them, as unavailable.";
+        settings_group(&title).icon("cloud-slash").hint(hint).closable("sync_unheld").show(ui, |ui| {
+            setting_row(ui, |ui| {
+                clear = ui
+                    .button(format!("{}  Clear them from your library", icon("trash")))
+                    .on_hover_text("Your other devices stop listing them too. Playlists keep them, as unavailable.")
+                    .clicked();
+            });
+            egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
                 for key in unheld {
-                    ui.label(self.songs.get_by_key(key).map_or(key.as_str(), |song| song.name.as_str()));
+                    setting_row(ui, |ui| ui.add(egui::Label::new(self.songs.get_by_key(key).map_or(key.as_str(), |song| song.name.as_str())).truncate()));
                 }
             });
         });

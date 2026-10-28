@@ -1,4 +1,4 @@
-//! A song's name: the first of the title patterns (Preferences > Appearance,
+//! A song's name: the first of the title patterns (Preferences > Browsing,
 //! `Config::title_patterns`) that every field it uses is there for, e.g.
 //! "{title} by {artist}" then "{title}". With none of them, the file's
 //! name (as it was before it went into the song library).
