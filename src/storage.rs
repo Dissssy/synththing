@@ -1,4 +1,4 @@
-//! How much space synththing's own files take (Preferences > App >
+//! How much space synththing's own files take (Preferences > Library >
 //! Storage): the song library, the soundfonts, and everything else in the
 //! config folder. On Android that's all of the app's storage.
 

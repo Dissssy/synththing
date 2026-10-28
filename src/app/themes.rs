@@ -265,28 +265,30 @@ impl App {
     /// 100% (Preferences > Appearance).
     pub(super) fn ui_scale_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        ui.horizontal(|ui| {
-            ui.label("UI scale");
-            let mut scale = self.themes.scale_drag.unwrap_or_else(|| ctx.zoom_factor());
-            let slider = ui.add(
-                egui::Slider::new(&mut scale, MIN_SCALE..=MAX_SCALE)
-                    .step_by(0.05)
-                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
-            );
-            if slider.dragged() {
-                self.themes.scale_drag = Some(scale);
-            } else if slider.changed() || slider.drag_stopped() {
-                self.themes.scale_drag = None;
-                ctx.set_zoom_factor(scale);
-            }
-            if ui.button("Reset").on_hover_text("Back to 100%").clicked() {
-                ctx.set_zoom_factor(1.0);
-            }
-            super::info_icon(ui, 
-                "How big everything is. Ctrl + and Ctrl - change it anywhere in synththing, Ctrl 0 \
-                 goes back to 100%. The visualizer's picture isn't affected.",
-            );
-        });
+        super::with_info(
+            ui,
+            "How big everything is. Ctrl + and Ctrl - change it anywhere in synththing, Ctrl 0 \
+             goes back to 100%. The visualizer's picture isn't affected.",
+            |ui| {
+                let label = super::setting_label(ui, "UI scale");
+                let mut scale = self.themes.scale_drag.unwrap_or_else(|| ctx.zoom_factor());
+                let slider = ui.add(
+                    egui::Slider::new(&mut scale, MIN_SCALE..=MAX_SCALE)
+                        .step_by(0.05)
+                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+                );
+                if slider.dragged() {
+                    self.themes.scale_drag = Some(scale);
+                } else if slider.changed() || slider.drag_stopped() {
+                    self.themes.scale_drag = None;
+                    ctx.set_zoom_factor(scale);
+                }
+                if ui.add(super::icon_button("arrow-counter-clockwise")).on_hover_text("Back to 100%").clicked() {
+                    ctx.set_zoom_factor(1.0);
+                }
+                label | slider
+            },
+        );
     }
 
     /// Carry out what was asked of the themes, or put an edit to the

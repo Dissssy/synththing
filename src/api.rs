@@ -1442,7 +1442,7 @@ fn stage_song(shared: &Shared, request: &mut Request, query: &HashMap<String, St
 /// imported. Waits for MusicBrainz (what it's answered before is kept).
 fn check_staged(shared: &Shared, query: &HashMap<String, String>) -> Reply {
     let library = match ask(shared, Call::Library) {
-        Ok(library) if !library.online => return error(409, "asking MusicBrainz needs Online album art and details on (Preferences > Songs)"),
+        Ok(library) if !library.online => return error(409, "asking MusicBrainz needs Online album art and details on (Preferences > Library)"),
         Ok(library) => library,
         Err(reply) => return reply,
     };
@@ -1514,7 +1514,7 @@ fn import_staged(shared: &Shared, access: &Access, key: &str) -> Reply {
 fn online(shared: &Shared) -> Option<Reply> {
     match ask(shared, Call::Library) {
         Err(reply) => Some(reply),
-        Ok(library) if !library.online => Some(error(409, "asking MusicBrainz needs Online album art and details on (Preferences > Songs)")),
+        Ok(library) if !library.online => Some(error(409, "asking MusicBrainz needs Online album art and details on (Preferences > Library)")),
         Ok(_) => None,
     }
 }

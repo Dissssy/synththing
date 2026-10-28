@@ -760,7 +760,7 @@ impl App {
     }
 
     /// An available update, on Android: unless installing in the app is
-    /// on (Preferences > Updates, or always in a branch build, which was
+    /// on (Preferences > App, or always in a branch build, which was
     /// installed by the app) and allowed, it's only announced, once. `None`
     /// on the desktop, and on Android when it can be installed (the usual
     /// Install buttons follow); `Some(true)` once the announcement's been

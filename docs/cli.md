@@ -13,7 +13,7 @@ synththing [--visualizer] [--console] [--config-dir DIR] [--online KINDS]
 - `--visualizer` (or `--viz`): open with the Visualizer tab showing.
 - `--console`: also print the app's log (what Help > Log... shows: script errors, warnings, panics) to the terminal as it happens. Handy for watching a release build, which otherwise has no console (see below).
 - `--config-dir DIR`: keep everything (preferences, scripts, soundfonts, playlists, the library identity, the log) in DIR instead of the usual config folder, made if it isn't there. For trying a test build without touching your real setup. It works with every command (`synththing --config-dir DIR serve` keeps the server's data in `DIR/server` by default, say), and so does the `SYNTHTHING_CONFIG_DIR` environment variable. Branch builds installed from Help > Check for updates go in `DIR/channels` then, each started with its own config folder there, so nothing outside DIR is touched.
-- `--online KINDS`: in a branch build, turn on these online features for this run, comma-separated: `scripts` (the Online Library), `sync` (sign-in and sync) and `lookup` (album art and details). Branch builds start with all of them off; this is the same as their switches in Preferences > Online Library, and like those it's never saved. Elsewhere they're always on and it does nothing.
+- `--online KINDS`: in a branch build, turn on these online features for this run, comma-separated: `scripts` (the Online Library), `sync` (sign-in and sync) and `lookup` (album art and details). Branch builds start with all of them off; this is the same as their switches in Preferences > Account, and like those it's never saved. Elsewhere they're always on and it does nothing.
 
 Only one app runs per config folder: starting it again while it's open brings the open one's window to the front and exits (the new launch's options, like `--visualizer`, aren't passed on). A different `--config-dir` runs alongside. The commands below don't count.
 - `--version` / `-V`: print the version.
@@ -44,7 +44,7 @@ It uses the same engine and script code as the app. Each frame it plays `1/fps` 
 | `--save-data` | off | Let the script write its saved data (`store_set`) to `<script>.lua.store.json`. Off by default so test runs don't overwrite real saved data; the script still reads what's saved either way. |
 | `--quiet`, `-q` | off | Print only errors and the summary, not the script's log. |
 | `--screenshot` | none | Save the last frame as a PNG image at this path, to see what the script drew. |
-| `--video` | none | Record the run to a video at this path (`.mp4`: H.264 video, AAC sound), the same way the app records. The video is `--video-size` instead of `--width`/`--height`, at `--fps` (a whole number). It's written as fast as the script and the encoder allow, faster or slower than real time, and every frame is in it: the same run gives the same video. Needs ffmpeg, on the PATH or downloaded by the app (Preferences > Recording). |
+| `--video` | none | Record the run to a video at this path (`.mp4`: H.264 video, AAC sound), the same way the app records. The video is `--video-size` instead of `--width`/`--height`, at `--fps` (a whole number). It's written as fast as the script and the encoder allow, faster or slower than real time, and every frame is in it: the same run gives the same video. Needs ffmpeg, on the PATH or downloaded by the app (Preferences > Visualizer). |
 | `--video-size` | 1080p | The video's size: `720p`, `1080p`, `1440p` or `4k`; `vertical` (1080 x 1920, for phone-shaped videos), `720p-vertical` or `square` (1080 x 1080); or any `WIDTHxHEIGHT` from 64 to 4096 a side (`800x600`; made even if odd). |
 | `--auto` | off | With `--video`: the script plays itself, if it can (`script_options({ record_auto = true })`; `recording().mode` is `"auto"`). |
 | `--video-quality` | standard | How it's encoded: `standard` (H.264 4:2:0, plays everywhere; single-pixel colored details soften slightly), `sharp` (H.264 4:4:4, exact pixel edges; plays in desktop players, not reliably in browsers or Discord) or `lossless` (every pixel exactly; big files, for editing). |
@@ -86,7 +86,7 @@ With `--check`, it only checks that the script runs: it compiles and plays a few
 synththing serve [--data DIR] [--bind ADDR]
 ```
 
-Runs a server (how it works is in docs/SERVER.md, running one for real in docs/DEPLOY.md): a script library, which the app's Online Library tab browses, installs and publishes scripts on once its address is added under Preferences > Online Library, and, with `authority` and `sync`, sign-in, sync and the song relay for apps that use it as their authority. It serves until stopped (Ctrl+C), printing a line per upload.
+Runs a server (how it works is in docs/SERVER.md, running one for real in docs/DEPLOY.md): a script library, which the app's Online Library tab browses, installs and publishes scripts on once its address is added under Preferences > Account, and, with `authority` and `sync`, sign-in, sync and the song relay for apps that use it as their authority. It serves until stopped (Ctrl+C), printing a line per upload.
 
 | Option | Default | |
 |---|---|---|
@@ -132,7 +132,7 @@ synththing hub
 synththing hub pair <LINK> [--name NAME]
 ```
 
-Runs this config folder as your hub (docs/HUB.md): a device with no window that syncs like the app and keeps every song, so your devices' songs have somewhere to go when the others are closed. `hub pair` signs it in first, with a link from a signed-in device's Preferences > Online Library > Sign in another device (quote it: it has a `#` in it); `--name` is what your other devices show for it, by default the computer's name. `hub` runs until stopped (Ctrl+C), logging to the terminal; not signed in yet, it waits for `hub pair` (a link pasted into its terminal, or signs in with the link in `SYNTHTHING_PAIR_LINK`, as `SYNTHTHING_HUB_NAME`); exit code 2 if it's already running with this config folder. It serves songs to your devices directly on port 7390 (`SYNTHTHING_HUB_PORT`), at its address on its network and those in `SYNTHTHING_HUB_URL` (comma-separated).
+Runs this config folder as your hub (docs/HUB.md): a device with no window that syncs like the app and keeps every song, so your devices' songs have somewhere to go when the others are closed. `hub pair` signs it in first, with a link from a signed-in device's Preferences > Account > Sign in another device (quote it: it has a `#` in it); `--name` is what your other devices show for it, by default the computer's name. `hub` runs until stopped (Ctrl+C), logging to the terminal; not signed in yet, it waits for `hub pair` (a link pasted into its terminal, or signs in with the link in `SYNTHTHING_PAIR_LINK`, as `SYNTHTHING_HUB_NAME`); exit code 2 if it's already running with this config folder. It serves songs to your devices directly on port 7390 (`SYNTHTHING_HUB_PORT`), at its address on its network and those in `SYNTHTHING_HUB_URL` (comma-separated).
 
 ## admin: moderate a library server
 

@@ -1,7 +1,7 @@
 //! The online lookup (`crate::lookup`) in the app: run on the one device
 //! chosen for it, an album at a time while the app's open, its matches
 //! saved to the songs (and so synced); its preference and status in
-//! Preferences > Songs; a song's match in Song info, with Wrong match; the
+//! Preferences > Library; a song's match in Song info, with Wrong match; the
 //! albums it wasn't sure of, for Clean up's Needs a look rows; artists'
 //! names as MusicBrainz has them, for its Same name rows.
 
@@ -171,7 +171,7 @@ impl App {
         self.lookup.state.get_or_insert_with(State::load).note(&album.id, tried);
     }
 
-    /// Preferences > Songs: whether albums are looked up, on which device,
+    /// Preferences > Library: whether albums are looked up, on which device,
     /// and how far it's got.
     pub(super) fn lookup_preferences_ui(&mut self, ui: &mut egui::Ui) {
         let mut on = self.config.online_lookup;
@@ -183,7 +183,7 @@ impl App {
              song titles are sent to musicbrainz.org; covers come from coverartarchive.org. Art in \
              your files always comes first, and your files are never changed. One of your devices \
              does the looking up, and its matches sync to the others.",
-            |ui| ui.checkbox(&mut on, "Album art and details from MusicBrainz"),
+            |ui| ui.checkbox(&mut on, "Look albums up at MusicBrainz"),
         );
         let mut changed = false;
         if on != self.config.online_lookup {

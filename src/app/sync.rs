@@ -1,4 +1,4 @@
-//! Sync in the app: the switch in Preferences > Online Library, and what
+//! Sync in the app: the switch in Preferences > Account, and what
 //! only the app does with what syncing brings (`device_sync.rs` does the
 //! syncing itself, the wishlist included): putting synced settings in the config, finding the
 //! playlist playing again once synced ones replace it, and saying what
@@ -166,7 +166,7 @@ impl App {
         self.plan_upcoming();
     }
 
-    /// The switch, under the identity in Preferences > Online Library.
+    /// The switch, under the identity in Preferences > Account.
     pub(super) fn sync_ui(&mut self, ui: &mut egui::Ui) {
         let signed_in = self.library_identity().is_some();
         let offered = self.library_server_info().is_none_or(|i| i.sync);

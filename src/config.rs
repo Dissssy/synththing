@@ -347,7 +347,7 @@ pub struct Session {
     pub script: Option<PathBuf>,
 }
 
-/// The script library (Preferences > Online Library).
+/// The script library (Preferences > Account).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LibrarySettings {

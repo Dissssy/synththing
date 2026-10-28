@@ -231,7 +231,7 @@ pub struct LibraryState {
     installed_by_slug: HashMap<(String, String), (PathBuf, u32)>,
     /// The user's identity, once there is one.
     identity: Option<Identity>,
-    /// Preferences > Online Library: the passphrase for exporting or
+    /// Preferences > Account: the passphrase for exporting or
     /// importing, and whether replacing the identity was clicked once
     /// (import confirms on the second).
     passphrase: String,
@@ -1771,7 +1771,7 @@ impl App {
             match (&my_id, draft.anonymous) {
                 (_, true) => ui.weak("Anonymous: once it's up, it can't be changed or taken down from here."),
                 (Some(id), false) => ui.weak(format!("Signed as #{id}: you can publish new versions or delete it later.")),
-                (None, false) => ui.weak("Signed with your identity, made now (Preferences > Online Library to back it up)."),
+                (None, false) => ui.weak("Signed with your identity, made now (Preferences > Account to back it up)."),
             };
             if let Some(info) = &self.library.info {
                 ui.weak(format!("Shared under {}. {}", info.license.replace('-', " "), info.rules));
@@ -1915,7 +1915,7 @@ impl App {
     /// first if there isn't one.
     pub(super) fn ensure_identity(&mut self) -> Result<Identity, String> {
         if !PUBLISHING && self.library.identity.is_none() {
-            return Err("sign in first: Preferences > Online Library > Sign in with a link...".to_string());
+            return Err("sign in first: Preferences > Account > Sign in with a link...".to_string());
         }
         if self.library.identity.is_none() {
             // A key file that's there but couldn't be read (kept differently
@@ -1934,7 +1934,7 @@ impl App {
         Identity::load().ok_or_else(|| "it wasn't saved".to_string())
     }
 
-    /// Preferences > Online Library: posting, notifications, the server's
+    /// Preferences > Account: posting, notifications, the server's
     /// key, and the identity.
     pub(super) fn library_preferences_ui(&mut self, ui: &mut egui::Ui) {
         self.branch_online_ui(ui);
@@ -2097,4 +2097,4 @@ impl App {
 
 /// Why Publish (and Remix) can't be used: the Online Library is off (a
 /// branch build's).
-const OFFLINE_HINT: &str = "The Online Library is off in branch builds: turn it on in Preferences > Online Library.";
+const OFFLINE_HINT: &str = "The Online Library is off in branch builds: turn it on in Preferences > Account.";

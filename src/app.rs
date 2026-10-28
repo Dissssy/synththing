@@ -112,7 +112,7 @@ const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 /// The songs listed and added from folders: MIDI files, plus audio files
 /// when that's turned on in Preferences.
 impl App {
-    /// The song at `path`'s name, from its tags (Preferences > Appearance).
+    /// The song at `path`'s name, from its tags (Preferences > Browsing).
     fn song_title(&mut self, path: &Path) -> String {
         title_of(&mut self.song_info, &naming(&self.config, &self.songs), path)
     }
@@ -467,7 +467,7 @@ pub struct App {
     /// Reports, and the Moderation window.
     moderation: moderation::ModerationState,
     feedback: feedback::FeedbackState,
-    /// Preferences > App > Storage.
+    /// Preferences > Library > Storage.
     storage: storage::StorageState,
     repair: repair::RepairState,
     /// The identity's recovery email, new keys and recovery.
@@ -1143,7 +1143,7 @@ impl App {
     /// The outgoing layout is saved to its own slot first, so neither ever
     /// overwrites the other; with the preference off, the fullscreen layout
     /// just sits untouched in the config until it's turned back on.
-    fn sync_layout_slot(&mut self) {
+    pub(super) fn sync_layout_slot(&mut self) {
         let want_fullscreen_layout = self.fullscreen && self.config.separate_fullscreen_layout;
         if want_fullscreen_layout == self.dock_is_fullscreen_layout || self.dock_in_use {
             return;
@@ -1831,7 +1831,7 @@ impl App {
             ));
             ui.add_space(4.0);
         } else if self.config.canary_updates() {
-            ui.weak("Canary updates: the newest build from master (Preferences > Updates).");
+            ui.weak("Canary updates: the newest build from master (Preferences > App).");
             ui.add_space(4.0);
         }
         match &state {
@@ -2742,7 +2742,7 @@ impl App {
             if (any_missing || missing_only)
                 && ui
                     .add(icon_button("warning-circle").selected(missing_only))
-                    .on_hover_text("Missing info: show only the songs a ruleset leaves out, as they don't say what it splits by (Preferences > Songs lists them)")
+                    .on_hover_text("Missing info: show only the songs a ruleset leaves out, as they don't say what it splits by (Preferences > Library lists them)")
                     .clicked()
             {
                 missing_clicked = true;
@@ -4324,10 +4324,11 @@ fn categories_body<S: AsRef<str>>(
     ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Min), |ui| {
         ui.set_height(BODY_HEIGHT);
         ui.vertical(|ui| {
-            ui.set_width(110.0);
+            ui.set_width(140.0);
             egui::ScrollArea::vertical().id_salt((id, "categories")).max_height(BODY_HEIGHT).show(ui, |ui| {
                 for (i, title) in categories.iter().enumerate() {
-                    if ui.selectable_label(*selected == i, title.as_ref()).clicked() {
+                    let pill = egui::Button::selectable(*selected == i, title.as_ref()).corner_radius(12.0);
+                    if ui.add(pill).clicked() {
                         *selected = i;
                     }
                 }
@@ -4371,11 +4372,36 @@ pub fn icon(name: &str) -> &'static str {
 
 /// A setting on one line (`add`), with an (i) after it: hovering either
 /// shows `info`, the longer explanation.
+/// The (i) sits at the row's right end, so they line up down a page.
 fn with_info(ui: &mut egui::Ui, info: &str, add: impl FnOnce(&mut egui::Ui) -> egui::Response) {
     ui.horizontal(|ui| {
         add(ui).on_hover_text(info);
-        info_icon(ui, info);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| info_icon(ui, info));
     });
+}
+
+/// How wide a setting's label is (`setting_label`), so the controls after
+/// the labels line up.
+const LABEL_WIDTH: f32 = 160.0;
+/// How wide a setting's dropdown or slider is.
+const CONTROL_WIDTH: f32 = 180.0;
+
+/// A setting's name, in a column of its own width (less on a narrow
+/// screen): the control goes after it.
+fn setting_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let width = LABEL_WIDTH.min(ui.available_width() * 0.4);
+    let height = ui.spacing().interact_size.y;
+    ui.allocate_ui_with_layout(egui::vec2(width, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_width(width);
+        ui.add(egui::Label::new(text).truncate())
+    })
+    .inner
+}
+
+/// A heading over a group of settings, with a little room above it.
+fn setting_section(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(title).strong().size(15.0));
 }
 
 /// A small circled "i": `info` on hover, and in the mobile layout's toast

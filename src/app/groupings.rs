@@ -279,8 +279,8 @@ impl App {
         let mut pick = None;
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(icon_button("gear")).on_hover_text("Rulesets: make your own, or see their rules (Preferences > Songs)").clicked() {
-                    self.preferences_tab = PrefTab::Songs;
+                if ui.add(icon_button("gear")).on_hover_text("Rulesets: make your own, or see their rules (Preferences > Library)").clicked() {
+                    self.preferences_tab = PrefTab::Library;
                     self.preferences_open = true;
                 }
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {

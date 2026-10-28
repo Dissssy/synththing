@@ -1,4 +1,4 @@
-//! Preferences > App > Storage: how much space synththing's own files
+//! Preferences > Library > Storage: how much space synththing's own files
 //! take (`crate::storage`), counted afresh each time it's shown.
 
 use std::sync::mpsc::{self, Receiver};
@@ -37,7 +37,7 @@ impl App {
         }
 
         ui.horizontal(|ui| {
-            ui.strong("Storage");
+            ui.label(egui::RichText::new("Storage").strong().size(15.0));
             if let Some(Ok(usage)) = &state.usage {
                 ui.label(storage::size_text(usage.total()));
             }

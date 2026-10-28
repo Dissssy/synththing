@@ -306,7 +306,7 @@ impl App {
     /// fill in what they lack in Song info.
     fn missing_ui(&mut self, ui: &mut egui::Ui) {
         ui.add_space(8.0);
-        ui.strong("Missing info");
+        super::setting_section(ui, "Missing info");
         let (_, missing) = self.missing_info();
         if missing.is_empty() {
             ui.weak("Every song has what your rulesets split by.");
@@ -336,7 +336,7 @@ impl App {
     /// Preferences' Rulesets: the built-in ones and the user's, each
     /// opening to the playlists it makes.
     pub(super) fn rulesets_ui(&mut self, ui: &mut egui::Ui) {
-        ui.strong("Rulesets");
+        super::setting_section(ui, "Rulesets");
         ui.weak("A ruleset makes a playlist for each artist, album, genre... of the songs its rules pick. By Artist and By Album are built in.");
         let builtin = smart::builtin().map(|(id, ruleset)| (id.to_string(), ruleset, true));
         let own = self.config.rulesets.iter().map(|(id, ruleset)| (id.clone(), ruleset.clone(), false));

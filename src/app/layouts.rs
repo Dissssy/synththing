@@ -63,6 +63,22 @@ impl App {
         {
             ask = Some(Ask::Lock(name.clone(), locked));
         }
+        let mut separate = self.config.separate_fullscreen_layout;
+        if ui
+            .checkbox(&mut separate, "Own arrangement in fullscreen")
+            .on_hover_text(
+                "On: fullscreen remembers its own arrangement (starting with just the visualizer). \
+                 Off: fullscreen shows the same panels as the window.",
+            )
+            .changed()
+        {
+            self.config.separate_fullscreen_layout = separate;
+            // (Saves the config along the way when the layout switches.)
+            self.sync_layout_slot();
+            if let Err(e) = self.config.save() {
+                self.status = format!("Couldn't save preferences: {e}");
+            }
+        }
         if ui.button("New layout...").on_hover_text("From this arrangement, or from a template").clicked() {
             self.layout_new = Some(NewLayout::default());
         }

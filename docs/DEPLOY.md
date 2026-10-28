@@ -144,7 +144,7 @@ server {
 }
 ```
 
-Check it from anywhere with `curl https://scripts.example.org/api/v1/info`, then add the address in the app under Preferences > Online Library.
+Check it from anywhere with `curl https://scripts.example.org/api/v1/info`, then add the address in the app under Preferences > Account.
 
 ## The official server
 

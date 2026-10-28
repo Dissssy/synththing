@@ -1,4 +1,4 @@
-//! Signing in another device, in Preferences > Online Library
+//! Signing in another device, in Preferences > Account
 //! (`library/pairing.rs`): Sign in another device... shows a QR code and
 //! a link for the other device to open; Sign in with a link... takes one
 //! here. The handoff goes through the authority (the official server).
@@ -107,7 +107,7 @@ impl App {
         }
     }
 
-    /// Preferences > Online Library, under the identity: this device's
+    /// Preferences > Account, under the identity: this device's
     /// name, and signing in another device or this one.
     pub(super) fn pairing_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {

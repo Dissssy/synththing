@@ -751,7 +751,7 @@ impl App {
         }
 
         ui.separator();
-        ui.strong("Programs");
+        super::setting_section(ui, "Programs");
         if settings.apps.is_empty() {
             ui.weak("None yet. Add one below to get its token.");
         }

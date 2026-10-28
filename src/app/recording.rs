@@ -1156,7 +1156,7 @@ impl App {
                 ui.label("Video");
                 ui.vertical(|ui| {
                     self.record_format_ui(ui);
-                    ui.weak(format!("Saved to {} (Preferences > Recording)", self.config.recordings_dir().display()));
+                    ui.weak(format!("Saved to {} (Preferences > Visualizer)", self.config.recordings_dir().display()));
                 });
                 ui.end_row();
 

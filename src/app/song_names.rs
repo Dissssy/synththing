@@ -1,4 +1,4 @@
-//! Preferences > Appearance > Song names: the title patterns (`song_title`),
+//! Preferences > Browsing > Song names: the title patterns (`song_title`),
 //! tried in order, with a preview: a made-up song with every tag, and a few
 //! of your own songs, a different few every few seconds.
 
@@ -19,7 +19,7 @@ const PREVIEW_SECS: f64 = 4.0;
 
 impl App {
     pub(super) fn song_names_ui(&mut self, ui: &mut egui::Ui) {
-        ui.strong("Song names");
+        super::setting_section(ui, "Song names");
         ui.weak(format!(
             "Each song is named by the first of these it has every field of, or else by its file's name \
              (as it was before it was imported). Fields: {}.",
