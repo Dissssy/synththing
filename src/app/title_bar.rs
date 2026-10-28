@@ -1,6 +1,7 @@
 //! The title bar along the top of the desktop layout: the wordmark (which
-//! just hops when clicked), the View and Help menus, the record,
-//! Preferences, feedback and notification buttons, and, while the window
+//! just hops when clicked), then at the right the View, Layout, Record,
+//! Preferences, Help, Feedback and Notifications buttons (labelled when
+//! there's room, else icons, else all in one menu), and, while the window
 //! draws its own frame (`App::wants_native_frame` off), the window's
 //! minimize, maximize and close buttons. The bar's empty middle moves the
 //! window (double-click: maximize), and the window's edges resize it.
@@ -15,6 +16,80 @@ pub(super) const HEIGHT: f32 = 30.0;
 const EDGE: f32 = 5.0;
 /// How long the wordmark's hop takes.
 const HOP: f32 = 0.35;
+/// How wide the empty middle that moves the window is at least.
+const GRIP: f32 = 48.0;
+
+/// The bar's buttons, in their order from the left.
+#[derive(Clone, Copy, PartialEq)]
+enum Item {
+    View,
+    Layout,
+    Record,
+    Preferences,
+    Help,
+    Feedback,
+    Notifications,
+}
+
+impl Item {
+    const ALL: [Item; 7] = [Item::View, Item::Layout, Item::Record, Item::Preferences, Item::Help, Item::Feedback, Item::Notifications];
+
+    fn icon(self) -> &'static str {
+        match self {
+            Item::View => "squares-four",
+            Item::Layout => "layout",
+            Item::Record => "record",
+            Item::Preferences => "gear",
+            Item::Help => "question",
+            Item::Feedback => "chat-circle-dots",
+            Item::Notifications => "envelope-simple",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Item::View => "View",
+            Item::Layout => "Layout",
+            Item::Record => "Record",
+            Item::Preferences => "Preferences",
+            Item::Help => "Help",
+            Item::Feedback => "Feedback",
+            Item::Notifications => "Notifications",
+        }
+    }
+}
+
+/// How the bar's buttons fit in its room: each with its label, as icons
+/// alone, or (not even those) all in one menu.
+#[derive(Clone, Copy, PartialEq)]
+enum Fit {
+    Labels,
+    Icons,
+    Menu,
+}
+
+impl Fit {
+    fn of(ui: &egui::Ui, items: &[Item], room: f32) -> Fit {
+        let gap = ui.spacing().item_spacing.x;
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let padding = 2.0 * ui.spacing().button_padding.x;
+        let labelled: f32 = items
+            .iter()
+            .map(|item| {
+                let text = format!("{}  {}", icon(item.icon()), item.label());
+                let width = ui.painter().layout_no_wrap(text, font.clone(), egui::Color32::WHITE).size().x + padding;
+                width.max(BUTTON.x) + gap
+            })
+            .sum();
+        if labelled <= room {
+            Fit::Labels
+        } else if items.len() as f32 * (BUTTON.x + gap) <= room {
+            Fit::Icons
+        } else {
+            Fit::Menu
+        }
+    }
+}
 
 impl App {
     /// Whether the window has the system's frame: when asked for in
@@ -39,80 +114,20 @@ impl App {
     pub(super) fn title_bar_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
             self.wordmark_ui(ui);
-            let menus = crate::menu::config(ui.ctx());
-                let mut toggled = Vec::new();
-                egui::containers::menu::MenuButton::from_button(bar_menu("squares-four", "View")).config(menus.clone()).ui(ui, |ui| {
-                    let mut section_checkbox = |ui: &mut egui::Ui, section: Section| {
-                        let mut open = self.open_sections.contains(&section);
-                        if ui.checkbox(&mut open, section.title()).changed() {
-                            toggled.push((section, open));
-                        }
-                    };
-                    section_checkbox(ui, Section::Songs);
-                    section_checkbox(ui, Section::Groupings);
-                    section_checkbox(ui, Section::Soundfonts);
-                    section_checkbox(ui, Section::Queue);
-                    section_checkbox(ui, Section::Wishlist);
-                    section_checkbox(ui, Section::Apps);
-                    ui.separator();
-                    section_checkbox(ui, Section::Visualizer);
-                    section_checkbox(ui, Section::Editor);
-                    section_checkbox(ui, Section::Reference);
-                    section_checkbox(ui, Section::Sprites);
-                    section_checkbox(ui, Section::Library);
-                });
-                for (section, open) in toggled {
-                    self.set_open(section, open);
-                }
-                egui::containers::menu::MenuButton::from_button(bar_menu("layout", "Layout"))
-                    .config(menus.clone())
-                    .ui(ui, |ui| self.layout_menu_ui(ui));
-                egui::containers::menu::MenuButton::from_button(bar_menu("question", "Help")).config(menus).ui(ui, |ui| {
-                    if ui.button("Welcome...").on_hover_text("The welcome window, and the starter pack").clicked() {
-                        self.open_welcome();
-                    }
-                    if ui.button("Tour").on_hover_text("A walk through the app, one thing at a time").clicked() {
-                        self.start_tour();
-                    }
-                    if ui.button("Check for updates...").clicked() {
-                        self.launch_update_check = false;
-                        self.updates_open = true;
-                        self.updater.check(self.update_track());
-                    }
-                    if ui.button("Changelog...").clicked() {
-                        self.changelog = Some(None);
-                    }
-                    if ui.button("Send feedback...").on_hover_text("Tell us what's working and what isn't").clicked() {
-                        self.open_feedback();
-                    }
-                    if ui.button("Log...").clicked() {
-                        self.log_open = true;
-                    }
-                    let mut profiler = profiler::is_open();
-                    if ui
-                        .checkbox(&mut profiler, "Profiler")
-                        .on_hover_text("How long each part of every frame takes, live, as a flame graph")
-                        .changed()
-                    {
-                        profiler::set_open(profiler);
-                    }
-                    if ui.button("Credits & licenses...").clicked() {
-                        self.credits_open = true;
-                    }
-                    ui.separator();
-                    ui.weak(format!("synththing v{}", crate::build_info::describe()));
-                });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if !self.wants_native_frame() {
                     window_buttons_ui(ui);
                 }
-                self.notifications_button_ui(ui);
-                self.feedback_button_ui(ui);
-                if ui.add(bar_icon("gear")).on_hover_text("Preferences").clicked() {
-                    self.preferences_open = true;
+                let items: Vec<Item> = Item::ALL.into_iter().filter(|&item| item != Item::Notifications || self.notifications_shown()).collect();
+                match Fit::of(ui, &items, ui.available_width() - GRIP) {
+                    Fit::Menu => self.bar_menu_ui(ui, &items),
+                    fit => {
+                        for &item in items.iter().rev() {
+                            self.bar_item_ui(ui, item, fit);
+                        }
+                    }
                 }
-                self.record_button_ui(ui);
-                // (What's left between the menus and the buttons.)
+                // (What's left between the wordmark and the buttons.)
                 let rest = ui.available_rect_before_wrap();
                 let grip = ui.interact(rest, ui.id().with("title_drag"), egui::Sense::click_and_drag());
                 if !self.wants_native_frame() {
@@ -125,6 +140,142 @@ impl App {
                 }
             });
         });
+    }
+
+    /// One of the bar's buttons, as `fit` says.
+    fn bar_item_ui(&mut self, ui: &mut egui::Ui, item: Item, fit: Fit) {
+        let button = match fit {
+            Fit::Labels => bar_button(format!("{}  {}", icon(item.icon()), item.label())),
+            _ => bar_icon(item.icon()),
+        };
+        let menu = |button| egui::containers::menu::MenuButton::from_button(button).config(crate::menu::config(ui.ctx()));
+        match item {
+            Item::View => {
+                menu(button).ui(ui, |ui| self.view_menu_ui(ui));
+            }
+            Item::Layout => {
+                menu(button).ui(ui, |ui| self.layout_menu_ui(ui));
+            }
+            Item::Help => {
+                menu(button).ui(ui, |ui| self.help_menu_ui(ui));
+            }
+            Item::Record => {
+                let busy = self.recording.recorder.is_some() || self.recording.render.is_some();
+                let (response, _) = menu(button.selected(busy)).ui(ui, |ui| self.recording_menu_ui(ui));
+                response.on_hover_text("Record the visualizer");
+            }
+            Item::Preferences => {
+                if ui.add(button).on_hover_text(item.label()).clicked() {
+                    self.preferences_open = true;
+                }
+            }
+            Item::Feedback => {
+                if ui.add(button).on_hover_text("Tell us what's working and what isn't").clicked() {
+                    self.open_feedback();
+                }
+            }
+            Item::Notifications => self.notifications_button_ui(ui, button),
+        }
+    }
+
+    /// When not even the icons fit: one button, everything in its menu.
+    fn bar_menu_ui(&mut self, ui: &mut egui::Ui, items: &[Item]) {
+        let menu = egui::containers::menu::MenuButton::from_button(bar_icon("list")).config(crate::menu::config(ui.ctx()));
+        menu.ui(ui, |ui| {
+            for &item in items {
+                let text = format!("{}  {}", icon(item.icon()), item.label());
+                match item {
+                    Item::View => {
+                        ui.menu_button(text, |ui| self.view_menu_ui(ui));
+                    }
+                    Item::Layout => {
+                        ui.menu_button(text, |ui| self.layout_menu_ui(ui));
+                    }
+                    Item::Help => {
+                        ui.menu_button(text, |ui| self.help_menu_ui(ui));
+                    }
+                    Item::Record => {
+                        ui.menu_button(text, |ui| self.recording_menu_ui(ui));
+                    }
+                    Item::Notifications => {
+                        let text = match self.notifications_unread() {
+                            0 => text,
+                            n => format!("{text} ({n})"),
+                        };
+                        ui.menu_button(text, |ui| self.notifications_list_ui(ui));
+                    }
+                    Item::Preferences => {
+                        if ui.button(text).clicked() {
+                            self.preferences_open = true;
+                        }
+                    }
+                    Item::Feedback => {
+                        if ui.button(text).clicked() {
+                            self.open_feedback();
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// View: a checkbox for each section.
+    fn view_menu_ui(&mut self, ui: &mut egui::Ui) {
+        let mut toggled = Vec::new();
+        let mut section_checkbox = |ui: &mut egui::Ui, section: Section| {
+            let mut open = self.open_sections.contains(&section);
+            if ui.checkbox(&mut open, section.title()).changed() {
+                toggled.push((section, open));
+            }
+        };
+        section_checkbox(ui, Section::Songs);
+        section_checkbox(ui, Section::Groupings);
+        section_checkbox(ui, Section::Soundfonts);
+        section_checkbox(ui, Section::Queue);
+        section_checkbox(ui, Section::Wishlist);
+        section_checkbox(ui, Section::Apps);
+        ui.separator();
+        section_checkbox(ui, Section::Visualizer);
+        section_checkbox(ui, Section::Editor);
+        section_checkbox(ui, Section::Reference);
+        section_checkbox(ui, Section::Sprites);
+        section_checkbox(ui, Section::Library);
+        for (section, open) in toggled {
+            self.set_open(section, open);
+        }
+    }
+
+    fn help_menu_ui(&mut self, ui: &mut egui::Ui) {
+        if ui.button("Welcome...").on_hover_text("The welcome window, and the starter pack").clicked() {
+            self.open_welcome();
+        }
+        if ui.button("Tour").on_hover_text("A walk through the app, one thing at a time").clicked() {
+            self.start_tour();
+        }
+        if ui.button("Check for updates...").clicked() {
+            self.launch_update_check = false;
+            self.updates_open = true;
+            self.updater.check(self.update_track());
+        }
+        if ui.button("Changelog...").clicked() {
+            self.changelog = Some(None);
+        }
+        if ui.button("Log...").clicked() {
+            self.log_open = true;
+        }
+        let mut profiler = profiler::is_open();
+        if ui
+            .checkbox(&mut profiler, "Profiler")
+            .on_hover_text("How long each part of every frame takes, live, as a flame graph")
+            .changed()
+        {
+            profiler::set_open(profiler);
+        }
+        if ui.button("Credits & licenses...").clicked() {
+            self.credits_open = true;
+        }
+        ui.separator();
+        ui.weak(format!("synththing v{}", crate::build_info::describe()));
     }
 
     /// The wordmark, which does nothing but hop when clicked (or the name,
@@ -153,26 +304,16 @@ impl App {
         image.paint_at(ui, rect.translate(egui::vec2(0.0, -lift)));
         ui.add_space(4.0);
     }
-
-    /// Record: the recording's menu (start one, or its controls while it
-    /// runs), lit while recording.
-    fn record_button_ui(&mut self, ui: &mut egui::Ui) {
-        let busy = self.recording.recorder.is_some() || self.recording.render.is_some();
-        let button = ui.add(bar_icon("record").selected(busy)).on_hover_text("Record the visualizer");
-        egui::Popup::menu(&button).show(|ui| self.recording_menu_ui(ui));
-    }
 }
 
 /// A button on the bar, every one alike: `text` without a frame until
 /// it's hovered.
 pub(super) fn bar_button(text: impl Into<egui::WidgetText>) -> egui::Button<'static> {
-    egui::Button::new(text).frame_when_inactive(false).min_size(egui::vec2(36.0, 26.0))
+    egui::Button::new(text).frame_when_inactive(false).min_size(BUTTON)
 }
 
-/// A [`bar_button`] opening a menu: icon `name` and `text`.
-fn bar_menu(name: &str, text: &str) -> egui::Button<'static> {
-    bar_button(format!("{}  {text}", icon(name)))
-}
+/// How big a [`bar_button`] is at least.
+const BUTTON: egui::Vec2 = egui::vec2(36.0, 26.0);
 
 /// A [`bar_button`] showing icon `name`.
 pub(super) fn bar_icon(name: &str) -> egui::Button<'static> {

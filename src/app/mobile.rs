@@ -293,7 +293,7 @@ impl App {
         // short) gets only the room they leave.
         let row = egui::vec2(ui.available_width(), 36.0);
         ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            self.notifications_button_ui(ui);
+            self.notifications_button_ui(ui, super::title_bar::bar_icon("envelope-simple"));
             self.feedback_button_ui(ui);
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| self.mobile_top_bar_left_ui(ui, library_details, grouping));
         });
