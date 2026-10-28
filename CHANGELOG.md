@@ -5,8 +5,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ## 1.8.3 (2026-10-28)
+- Added a docker image for the websites so i can be lazy. if you screenshot this changelog entry and send it to me on discord i'll give you a thumbs up emoji reaction.
 
 ## 1.8.2 (2026-10-28)
+- Nothing. Literally not a thing.
 
 ## 1.8.1 (2026-10-28)
 
