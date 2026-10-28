@@ -7,10 +7,10 @@
 
 use eframe::egui::{self, ResizeDirection, ViewportCommand};
 
-use super::{icon, icon_button, profiler, App, Section};
+use super::{icon, profiler, App, Section};
 
 /// How tall the bar is.
-pub(super) const HEIGHT: f32 = 36.0;
+pub(super) const HEIGHT: f32 = 30.0;
 /// How far in from the window's edges they resize it.
 const EDGE: f32 = 5.0;
 /// How long the wordmark's hop takes.
@@ -37,12 +37,12 @@ impl App {
     }
 
     pub(super) fn title_bar_ui(&mut self, ui: &mut egui::Ui) {
-        egui::MenuBar::new().config(crate::menu::config(ui.ctx())).ui(ui, |ui| {
-            ui.spacing_mut().button_padding.y = 5.0;
+        ui.horizontal_centered(|ui| {
             self.wordmark_ui(ui);
+            let menus = crate::menu::config(ui.ctx());
                 let mut toggled = Vec::new();
                 let mut switch_to_mobile = false;
-                ui.menu_button("View", |ui| {
+                egui::containers::menu::MenuButton::from_button(bar_button("View")).config(menus.clone()).ui(ui, |ui| {
                     let mut section_checkbox = |ui: &mut egui::Ui, section: Section| {
                         let mut open = self.open_sections.contains(&section);
                         if ui.checkbox(&mut open, section.title()).changed() {
@@ -74,7 +74,7 @@ impl App {
                 for (section, open) in toggled {
                     self.set_open(section, open);
                 }
-                ui.menu_button("Help", |ui| {
+                egui::containers::menu::MenuButton::from_button(bar_button("Help")).config(menus).ui(ui, |ui| {
                     if ui.button("Welcome...").on_hover_text("The welcome window, and the starter pack").clicked() {
                         self.open_welcome();
                     }
@@ -112,11 +112,10 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if !self.wants_native_frame() {
                     window_buttons_ui(ui);
-                    ui.add_space(8.0);
                 }
                 self.notifications_button_ui(ui);
                 self.feedback_button_ui(ui);
-                if ui.add(icon_button("gear").frame_when_inactive(false)).on_hover_text("Preferences").clicked() {
+                if ui.add(bar_icon("gear")).on_hover_text("Preferences").clicked() {
                     self.preferences_open = true;
                 }
                 self.record_button_ui(ui);
@@ -166,16 +165,26 @@ impl App {
     /// runs), lit while recording.
     fn record_button_ui(&mut self, ui: &mut egui::Ui) {
         let busy = self.recording.recorder.is_some() || self.recording.render.is_some();
-        let button = ui.add(icon_button("record").frame_when_inactive(false).selected(busy)).on_hover_text("Record the visualizer");
+        let button = ui.add(bar_icon("record").selected(busy)).on_hover_text("Record the visualizer");
         egui::Popup::menu(&button).show(|ui| self.recording_menu_ui(ui));
     }
+}
+
+/// A button on the bar, every one alike: `text` without a frame until
+/// it's hovered.
+pub(super) fn bar_button(text: impl Into<egui::WidgetText>) -> egui::Button<'static> {
+    egui::Button::new(text).frame_when_inactive(false).min_size(egui::vec2(36.0, 26.0))
+}
+
+/// A [`bar_button`] showing icon `name`.
+pub(super) fn bar_icon(name: &str) -> egui::Button<'static> {
+    bar_button(egui::RichText::new(icon(name)).size(16.0))
 }
 
 /// Minimize, maximize (or restore) and close, for a window without the
 /// system's frame. Close tints red under the pointer.
 fn window_buttons_ui(ui: &mut egui::Ui) {
-    let size = egui::vec2(40.0, 28.0);
-    let button = |name: &str| egui::Button::new(egui::RichText::new(icon(name)).size(15.0)).frame_when_inactive(false).min_size(size);
+    let button = bar_icon;
     ui.scope(|ui| {
         let red = egui::Color32::from_rgb(196, 43, 28);
         let w = &mut ui.visuals_mut().widgets;

@@ -81,9 +81,8 @@ impl App {
 
     /// The speech bubble in the menu bar.
     pub(super) fn feedback_button_ui(&mut self, ui: &mut egui::Ui) {
-        let bubble = super::icon("chat-circle-dots");
         if ui
-            .add(egui::Button::new(egui::RichText::new(bubble).size(16.0)).frame(false))
+            .add(super::title_bar::bar_icon("chat-circle-dots"))
             .on_hover_text("Send feedback")
             .clicked()
         {

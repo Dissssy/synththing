@@ -1587,27 +1587,37 @@ impl App {
         ui.add_space(2.0);
 
         // The view toggles at the left, the transport centred, speed and
-        // volume at the right; on top of each other when they don't fit.
+        // volume at the right; when they don't fit, the transport centred
+        // over the rest.
+        let width = ui.available_width();
         let center = TRANSPORT_WIDTH;
-        let side = (ui.available_width() - center) / 2.0;
-        if side < SIDE_WIDTH {
-            ui.horizontal_wrapped(|ui| {
-                self.transport_ui(ui, view);
-                self.views_ui(ui, view);
-                self.speed_volume_ui(ui, view);
-            });
+        let side = (width - center) / 2.0;
+        let line = |ui: &mut egui::Ui| ui.allocate_exact_size(egui::vec2(width, TRANSPORT_HEIGHT), egui::Sense::hover()).0;
+        let zone = |rect: egui::Rect, x: f32, width: f32, layout: egui::Layout| {
+            egui::UiBuilder::new()
+                .max_rect(egui::Rect::from_min_size(egui::pos2(rect.left() + x, rect.top()), egui::vec2(width, rect.height())))
+                .layout(layout)
+        };
+        let (left, right) = (egui::Layout::left_to_right(egui::Align::Center), egui::Layout::right_to_left(egui::Align::Center));
+        if side >= SIDE_WIDTH {
+            let rect = line(ui);
+            ui.scope_builder(zone(rect, 0.0, side, left), |ui| self.views_ui(ui, view));
+            ui.scope_builder(zone(rect, side, center, left), |ui| self.transport_ui(ui, view));
+            ui.scope_builder(zone(rect, side + center, side, right), |ui| self.speed_volume_ui(ui, view));
         } else {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), TRANSPORT_HEIGHT), egui::Sense::hover());
-            let zone = |x: f32, width: f32, layout: egui::Layout| {
-                egui::UiBuilder::new()
-                    .max_rect(egui::Rect::from_min_size(egui::pos2(rect.left() + x, rect.top()), egui::vec2(width, rect.height())))
-                    .layout(layout)
-            };
-            ui.scope_builder(zone(0.0, side, egui::Layout::left_to_right(egui::Align::Center)), |ui| self.views_ui(ui, view));
-            ui.scope_builder(zone(side, center, egui::Layout::left_to_right(egui::Align::Center)), |ui| self.transport_ui(ui, view));
-            ui.scope_builder(zone(side + center, side, egui::Layout::right_to_left(egui::Align::Center)), |ui| {
-                self.speed_volume_ui(ui, view)
-            });
+            let rect = line(ui);
+            ui.scope_builder(zone(rect, side.max(0.0), center, left), |ui| self.transport_ui(ui, view));
+            ui.add_space(4.0);
+            if width >= VIEWS_WIDTH + SIDE_WIDTH {
+                let rect = line(ui);
+                ui.scope_builder(zone(rect, 0.0, VIEWS_WIDTH, left), |ui| self.views_ui(ui, view));
+                ui.scope_builder(zone(rect, VIEWS_WIDTH, width - VIEWS_WIDTH, right), |ui| self.speed_volume_ui(ui, view));
+            } else {
+                ui.horizontal_wrapped(|ui| {
+                    self.views_ui(ui, view);
+                    self.speed_volume_ui(ui, view);
+                });
+            }
         }
         ui.add_space(6.0);
     }
@@ -4764,6 +4774,8 @@ pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
 const TRANSPORT_WIDTH: f32 = 5.0 * 28.0 + PLAY_WIDTH + 5.0 * 8.0;
 /// How wide each side of it has to be for the bar to fit on one line.
 const SIDE_WIDTH: f32 = 380.0;
+/// How wide the view toggles (`App::views_ui`) are, at most.
+const VIEWS_WIDTH: f32 = 5.0 * 28.0 + 4.0 * 8.0;
 const PLAY_WIDTH: f32 = 44.0;
 const TRANSPORT_HEIGHT: f32 = 28.0;
 

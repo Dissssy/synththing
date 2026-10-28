@@ -296,9 +296,8 @@ impl App {
             .filter(|n| !n.read)
             .max_by_key(|n| tier_of(&n.kind))
             .map(|n| color_of(ui, n));
-        let envelope = super::icon("envelope-simple");
         let button = ui
-            .add(egui::Button::new(egui::RichText::new(envelope).size(16.0)).frame(false))
+            .add(super::title_bar::bar_icon("envelope-simple"))
             .on_hover_text(if unread == 0 { "Notifications".to_string() } else { format!("Notifications: {unread} unread") });
         if unread > 0 {
             let center = button.rect.right_top() + egui::vec2(-3.0, 4.0);
