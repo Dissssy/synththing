@@ -375,6 +375,16 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
             })
             .map_err(|e| format!("couldn't start: {e}"))?;
     }
+    if state.config.sync {
+        let state = Arc::clone(&state);
+        std::thread::Builder::new()
+            .name("hub checks".into())
+            .spawn(move || loop {
+                std::thread::sleep(reach::RECHECK_LOOK);
+                reach::recheck(&state);
+            })
+            .map_err(|e| format!("couldn't start: {e}"))?;
+    }
     if previews {
         let state = Arc::clone(&state);
         std::thread::Builder::new()
@@ -691,6 +701,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     }
     if version < 19 {
         db.execute_batch(remixes::SCHEMA_V19)?;
+    }
+    if version < 20 {
+        db.execute_batch(reach::SCHEMA_V20)?;
     }
     remixes::fingerprint_stored(&db)?;
     Ok(db)

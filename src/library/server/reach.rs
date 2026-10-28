@@ -3,17 +3,25 @@
 //! `hello` itself, only from public addresses it resolved and checked (the
 //! connection goes to that very address, so the name can't be pointed
 //! elsewhere meanwhile), with no redirects, and within limits, so it
-//! can't be used to scan anyone. It keeps nothing but the counts.
+//! can't be used to scan anyone.
+//!
+//! Once an address has passed, the server remembers it (the `hubs` table)
+//! and checks it again itself when no one has for 6 hours, so it notices
+//! a hub that's down and can't ask. After 3 failed checks in a row it
+//! notifies the identity (`hub_unreachable`), and again once one passes
+//! (`hub_reachable`). A hub that hasn't asked for 30 days is forgotten, as
+//! is the address of a hub replaced by another.
 
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
+use rusqlite::{params, OptionalExtension};
 use tiny_http::Request;
 use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
 
-use super::{client_ip, error, json, moderation, read_body_or, signer, Reply, State};
+use super::{client_ip, error, json, moderation, notifications, now, read_body_or, signer, Reply, State};
 use crate::library::reach::{self, Ask, Probe, Reach, Verdict};
 
 const HOUR: Duration = Duration::from_secs(60 * 60);
@@ -22,6 +30,30 @@ const CONNECT: Duration = Duration::from_secs(5);
 const ALL: Duration = Duration::from_secs(10);
 /// The most of a `hello` read.
 const MOST: u64 = 4096;
+/// How long a remembered address goes unchecked before the server checks
+/// it itself, and how often it looks for those due.
+const RECHECK: i64 = 6 * 60 * 60;
+pub(super) const RECHECK_LOOK: Duration = Duration::from_secs(10 * 60);
+/// Failed checks in a row before the identity hears of it.
+const WARN_AFTER: i64 = 3;
+/// A remembered address whose hub hasn't asked this long is forgotten.
+const FORGET: i64 = 30 * 24 * 60 * 60;
+
+pub(super) const SCHEMA_V20: &str = "
+BEGIN;
+CREATE TABLE hubs (
+    key TEXT NOT NULL,              -- whose
+    url TEXT NOT NULL,
+    hub_key TEXT NOT NULL,
+    checked INTEGER NOT NULL,       -- the last check
+    asked INTEGER NOT NULL,         -- the last check someone asked for
+    failures INTEGER NOT NULL DEFAULT 0,  -- in a row
+    warned INTEGER NOT NULL DEFAULT 0,    -- hub_unreachable was sent
+    PRIMARY KEY (key, url)
+);
+PRAGMA user_version = 20;
+COMMIT;
+";
 
 pub(super) fn reach(state: &State, request: &mut Request) -> Reply {
     if !state.config.sync {
@@ -49,7 +81,78 @@ pub(super) fn reach(state: &State, request: &mut Request) -> Reply {
             return reply;
         }
     }
-    json(200, &probe(&base, &ask.hub_key, client_ip(state, request), reach::public))
+    let found = probe(&base, &ask.hub_key, client_ip(state, request), reach::public);
+    if let Err(e) = remember(state, &key, &base, &ask.hub_key, &found, true) {
+        log::warn!("remembering a hub's address: {e}");
+    }
+    json(200, &found)
+}
+
+/// A remembered address, as the `hubs` table has it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Standing {
+    failures: i64,
+    warned: bool,
+}
+
+/// What a check makes of an address's standing (`None`: not remembered),
+/// and what to tell the identity.
+fn after(standing: Option<Standing>, passed: bool) -> (Option<Standing>, Option<&'static str>) {
+    match (standing, passed) {
+        (Some(Standing { warned: true, .. }), true) => (Some(Standing { failures: 0, warned: false }), Some("hub_reachable")),
+        (_, true) => (Some(Standing { failures: 0, warned: false }), None),
+        (None, false) => (None, None),
+        (Some(Standing { failures, warned }), false) => {
+            let failures = failures + 1;
+            let warn = !warned && failures >= WARN_AFTER;
+            (Some(Standing { failures, warned: warned || warn }), warn.then_some("hub_unreachable"))
+        }
+    }
+}
+
+/// Note a check of `url` (the hub with `hub_key`, `key`'s) in the `hubs`
+/// table, telling `key` once it's failed 3 times in a row, and once it
+/// passes again. `asked`: someone asked for it (not the server's own).
+fn remember(state: &State, key: &str, url: &str, hub_key: &str, found: &Reach, asked: bool) -> rusqlite::Result<()> {
+    let db = state.db();
+    let row: Option<(String, i64, bool)> = db
+        .query_row("SELECT hub_key, failures, warned FROM hubs WHERE key = ? AND url = ?", params![key, url], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .optional()?;
+    // (Another hub's address, or an old one of this hub's: only a pass
+    // takes its place.)
+    let standing = row.filter(|(had, ..)| had == hub_key).map(|(_, failures, warned)| Standing { failures, warned });
+    let (next, tell) = after(standing, found.reachable());
+    let Some(next) = next else { return Ok(()) };
+    let now = now();
+    if standing.is_none() {
+        db.execute("DELETE FROM hubs WHERE key = ? AND hub_key != ?", params![key, hub_key])?;
+    }
+    db.execute(
+        "INSERT INTO hubs (key, url, hub_key, checked, asked, failures, warned) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6)
+         ON CONFLICT (key, url) DO UPDATE SET hub_key = ?3, checked = ?4, asked = CASE WHEN ?7 THEN ?4 ELSE asked END, failures = ?5, warned = ?6",
+        params![key, url, hub_key, now, next.failures, next.warned, asked],
+    )?;
+    if let Some(kind) = tell {
+        let hint = reach::hint(url, found).unwrap_or_default();
+        notifications::notify(state, &db, key, kind, serde_json::json!({ "url": url, "hint": hint }), false);
+    }
+    Ok(())
+}
+
+/// Check each remembered address no one has for 6 hours, and forget those
+/// whose hub hasn't asked for 30 days.
+pub(super) fn recheck(state: &State) {
+    let due: rusqlite::Result<Vec<(String, String, String)>> = (|| {
+        let db = state.db();
+        db.execute("DELETE FROM hubs WHERE asked < ?", [now() - FORGET])?;
+        db.prepare("SELECT key, url, hub_key FROM hubs WHERE checked < ?")?.query_map([now() - RECHECK], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect()
+    })();
+    for (key, url, hub_key) in due.unwrap_or_default() {
+        let found = probe(&url, &hub_key, String::new(), reach::public);
+        if let Err(e) = remember(state, &key, &url, &hub_key, &found, false) {
+            log::warn!("rechecking a hub's address: {e}");
+        }
+    }
 }
 
 /// `url` as `scheme://authority`, if it's a plain http(s) address.
@@ -143,6 +246,61 @@ impl Resolver for At {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn three_failures_in_a_row_warn_once_and_a_pass_says_so() {
+        let (mut standing, mut told) = (None, Vec::new());
+        assert_eq!(after(None, false), (None, None), "an address never passed isn't remembered");
+        for passed in [true, false, false, true, false, false, false, false, true, true] {
+            let (next, tell) = after(standing, passed);
+            standing = next;
+            told.extend(tell);
+        }
+        assert_eq!(told, ["hub_unreachable", "hub_reachable"]);
+        assert_eq!(standing, Some(Standing { failures: 0, warned: false }));
+    }
+
+    #[test]
+    fn the_server_remembers_a_passing_hub_and_warns_when_it_stops() {
+        let dir = std::env::temp_dir().join(format!("synththing-hubs-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false, "check_uploads": false, "sync": true }"#).unwrap();
+        let running = super::super::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let state = &running.state;
+        let url = "http://127.0.0.1:7390";
+        let found = |verdict| Reach { dns: None, v4: Some(Probe { addr: "127.0.0.1".into(), verdict }), v6: None, from: String::new() };
+        let kinds = || -> Vec<String> {
+            let db = state.db();
+            db.prepare("SELECT kind FROM notifications WHERE key = 'me' ORDER BY id").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        };
+        let failures = || state.db().query_row("SELECT failures FROM hubs WHERE key = 'me'", [], |r| r.get::<_, i64>(0)).optional().unwrap();
+
+        remember(state, "me", url, "hub", &found(Verdict::Refused), true).unwrap();
+        assert_eq!(failures(), None, "not remembered until it passes");
+        remember(state, "me", url, "hub", &found(Verdict::Ok { ms: 3 }), true).unwrap();
+        assert_eq!(failures(), Some(0));
+        // The server's own checks, once it's gone unchecked: it's a private
+        // address, so each fails.
+        for _ in 0..3 {
+            state.db().execute("UPDATE hubs SET checked = 0", []).unwrap();
+            recheck(state);
+        }
+        assert_eq!(failures(), Some(3));
+        assert_eq!(kinds(), ["hub_unreachable"]);
+        recheck(state);
+        assert_eq!(failures(), Some(3), "not due again yet");
+        remember(state, "me", url, "hub", &found(Verdict::Ok { ms: 3 }), true).unwrap();
+        assert_eq!(kinds(), ["hub_unreachable", "hub_reachable"]);
+        // Another hub takes the old one's place; one that hasn't asked for
+        // 30 days is forgotten.
+        remember(state, "me", "http://127.0.0.2:7390", "new hub", &found(Verdict::Ok { ms: 3 }), true).unwrap();
+        assert_eq!(state.db().query_row("SELECT COUNT(*), MIN(hub_key) FROM hubs", [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))).unwrap(), (1, "new hub".to_string()));
+        state.db().execute("UPDATE hubs SET asked = 0", []).unwrap();
+        recheck(state);
+        assert_eq!(failures(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn only_bare_web_addresses_are_checked() {

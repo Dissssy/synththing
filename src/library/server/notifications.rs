@@ -81,6 +81,8 @@ fn template(kind: &str) -> &'static str {
         "takedown_stood" => "The takedown of \"{name}\" stands ({how})",
         "new_notice" => "New copyright notice on \"{name}\"",
         "new_dispute" => "A copyright notice on \"{name}\" was disputed",
+        "hub_unreachable" => "Your hub at {url} hasn't been reachable from the internet for a while: {hint}",
+        "hub_reachable" => "Your hub at {url} is reachable from the internet again",
         _ => "{kind}",
     }
 }
