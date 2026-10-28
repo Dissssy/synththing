@@ -1938,14 +1938,15 @@ impl App {
     /// key, and the identity.
     pub(super) fn library_preferences_ui(&mut self, ui: &mut egui::Ui) {
         self.branch_online_ui(ui);
-        if self.online_ui(ui, Online::Scripts) {
-            self.library_settings_ui(ui);
-        }
-        ui.add_space(6.0);
-        ui.strong("Your identity");
         if self.online_ui(ui, Online::Sync) {
-            self.identity_ui(ui);
+            self.identity_card_ui(ui);
+            super::settings_group("Sync").icon("arrows-clockwise").show(ui, |ui| self.sync_ui(ui));
         }
+        super::settings_group("Online Library").icon("storefront").hint("Visualizer scripts people share, and yours.").show(ui, |ui| {
+            if self.online_ui(ui, Online::Scripts) {
+                self.library_settings_ui(ui);
+            }
+        });
     }
 
     /// The name to post as, and notifications.
@@ -1953,11 +1954,8 @@ impl App {
         let before = self.config.library.author_name.clone();
         let mut changed = false;
         with_info(ui, "The name your uploads show. Each upload can use a different one.", |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Post as");
-                ui.text_edit_singleline(&mut self.config.library.author_name);
-            })
-            .response
+            let label = super::setting_label(ui, "Post as");
+            label | ui.add(egui::TextEdit::singleline(&mut self.config.library.author_name).desired_width(super::CONTROL_WIDTH))
         });
         with_info(
             ui,
@@ -1980,67 +1978,111 @@ impl App {
         }
     }
 
-    /// The identity: its ID, made on request; export and import.
-    fn identity_ui(&mut self, ui: &mut egui::Ui) {
-        let lib = &mut self.library;
-        match &lib.identity {
-            Some(identity) => {
-                let id = identity.id();
-                ui.horizontal(|ui| {
-                    ui.label(format!("#{id}"));
-                    if ui.small_button("Copy").clicked() {
-                        ui.ctx().copy_text(format!("#{id}"));
-                    }
-                    info_icon(ui, 
-                        "A key made by this app, kept in its config folder: it signs what you publish, so only \
-                         you can change or delete it. No account, no email. Back it up with Export: lost, it \
-                         can't be replaced (your scripts stay up, but you can't change them).",
-                    );
-                });
-            }
-            None if !PUBLISHING => {
-                ui.weak("Not signed in: Sign in with a link... takes the link a signed-in device shows.");
-            }
-            None => {
-                ui.weak("None yet: one's made the first time you publish signed.");
-            }
-        }
-        let mut export = false;
-        let mut import = false;
-        let mut make = false;
-        // (Identity files are for the desktop: Android signs in with a link.)
-        if PUBLISHING {
-            ui.horizontal(|ui| {
-                ui.label("Passphrase");
-                ui.add(egui::TextEdit::singleline(&mut lib.passphrase).password(true).desired_width(160.0))
-                    .on_hover_text("Seals an exported identity (optional, but wise), or opens a sealed one being imported.");
-            });
-        }
-        ui.horizontal(|ui| {
-            if !PUBLISHING {
-                return;
-            }
-            if lib.identity.is_none() {
-                make = ui.button("Make one now").clicked();
-            }
-            export = ui.add_enabled(lib.identity.is_some(), egui::Button::new("Export...")).clicked();
-            let label = if lib.confirm_import { "Import... (replaces yours: click again)" } else { "Import..." };
-            if ui.button(label).clicked() {
-                if lib.identity.is_some() && !lib.confirm_import {
-                    lib.confirm_import = true;
-                } else {
-                    import = true;
-                }
-            }
-        });
-        if let Some(message) = &lib.identity_message {
-            ui.weak(message.as_str());
-        }
-        self.pairing_ui(ui);
-        self.sync_ui(ui);
+    /// The identity as a card: a badge in its color, its ID, this device's
+    /// name, whether it's syncing and has a recovery email, signing other
+    /// devices in, and the rarer things (export, import, a new key,
+    /// recovery, deleting) in its menu.
+    fn identity_card_ui(&mut self, ui: &mut egui::Ui) {
         let current = self.library.identity.clone();
-        ui.add_space(4.0);
-        self.recovery_ui(ui, current.as_ref());
+        let visuals = ui.visuals().clone();
+        let (mut make, mut export, mut import) = (false, false, false);
+        egui::Frame::new()
+            .fill(visuals.faint_bg_color)
+            .stroke(visuals.widgets.noninteractive.bg_stroke)
+            .corner_radius(10)
+            .inner_margin(14)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let id = current.as_ref().map(|i| i.id());
+                    badge_ui(ui, id.as_deref());
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        ui.horizontal(|ui| {
+                            match &id {
+                                Some(id) => {
+                                    ui.label(egui::RichText::new(format!("#{id}")).size(20.0).strong());
+                                    if ui.add(super::row_icon_button(ui, "copy")).on_hover_text("Copy your ID").clicked() {
+                                        ui.ctx().copy_text(format!("#{id}"));
+                                    }
+                                }
+                                None => {
+                                    ui.label(egui::RichText::new("Not signed in").size(20.0).strong());
+                                }
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let menu = egui::containers::menu::MenuButton::from_button(super::row_icon_button(ui, "dots-three"))
+                                    .config(crate::menu::config(ui.ctx()));
+                                let (response, _) = menu.ui(ui, |ui| {
+                                    (make, export, import) = self.identity_menu_ui(ui);
+                                    self.recovery_menu_ui(ui, current.as_ref());
+                                });
+                                response.on_hover_text("Back up, restore, a new key, recovery");
+                            });
+                        });
+                        let about = match &id {
+                            Some(_) => {
+                                "Your identity: a key made by this app and shared by your devices. It signs what you \
+                                 publish and syncs your settings. No account, no email needed. Back it up with \
+                                 Export (in the menu): lost, it can't be replaced."
+                            }
+                            None if !PUBLISHING => "Sign in with the link a signed-in device of yours shows.",
+                            None => "One's made the first time you publish signed, or with Make one now (in the menu).",
+                        };
+                        ui.add(egui::Label::new(egui::RichText::new(about).weak()).wrap());
+                        ui.horizontal(|ui| {
+                            ui.label(super::icon("device-mobile-camera"));
+                            self.device_name_ui(ui);
+                            let syncing = self.sync_on();
+                            status_pill(ui, if syncing { "Syncing" } else { "Sync off" }, syncing);
+                        });
+                        if current.is_some() {
+                            ui.horizontal_wrapped(|ui| self.recovery_email_ui(ui, current.as_ref()));
+                        }
+                        ui.horizontal_wrapped(|ui| self.pairing_ui(ui));
+                        if let Some(message) = &self.library.identity_message {
+                            ui.add(egui::Label::new(egui::RichText::new(message.as_str()).weak()).wrap());
+                        }
+                    });
+                });
+            });
+        self.identity_actions(make, export, import);
+    }
+
+    /// The identity menu's own items: the passphrase that seals an export
+    /// (or opens a sealed import), making one, exporting and importing.
+    /// Which of the last three was picked.
+    fn identity_menu_ui(&mut self, ui: &mut egui::Ui) -> (bool, bool, bool) {
+        let (mut make, mut export, mut import) = (false, false, false);
+        // (Identity files are for the desktop: Android signs in with a link.)
+        if !PUBLISHING {
+            return (make, export, import);
+        }
+        let lib = &mut self.library;
+        ui.horizontal(|ui| {
+            ui.label("Passphrase");
+            ui.add(egui::TextEdit::singleline(&mut lib.passphrase).password(true).desired_width(140.0))
+                .on_hover_text("Seals an exported identity (optional, but wise), or opens a sealed one being imported.");
+        });
+        if lib.identity.is_none() {
+            make = ui.button("Make one now").clicked();
+        }
+        export = ui.add_enabled(lib.identity.is_some(), egui::Button::new("Export...")).clicked();
+        let label = if lib.confirm_import { "Import... (replaces yours: click again)" } else { "Import..." };
+        if ui.button(label).clicked() {
+            if lib.identity.is_some() && !lib.confirm_import {
+                lib.confirm_import = true;
+            } else {
+                import = true;
+            }
+        }
+        ui.separator();
+        (make, export, import)
+    }
+
+    /// Carry out what the identity menu asked for.
+    fn identity_actions(&mut self, make: bool, export: bool, import: bool) {
         if make {
             self.library.identity_message = match self.ensure_identity() {
                 Ok(identity) => Some(format!("Made #{}: export it somewhere safe.", identity.id())),
@@ -2098,3 +2140,32 @@ impl App {
 /// Why Publish (and Remix) can't be used: the Online Library is off (a
 /// branch build's).
 const OFFLINE_HINT: &str = "The Online Library is off in branch builds: turn it on in Preferences > Account.";
+
+/// The identity card's badge: a circle in a color of the identity's own
+/// (from its ID), with a person in it; grey with none.
+fn badge_ui(ui: &mut egui::Ui, id: Option<&str>) {
+    let size = 56.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let fill = match id {
+        Some(id) => {
+            let hue = id.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b))) % 360;
+            egui::ecolor::Hsva::new(hue as f32 / 360.0, 0.45, 0.55, 1.0).into()
+        }
+        None => ui.visuals().widgets.inactive.bg_fill,
+    };
+    let painter = ui.painter();
+    painter.circle_filled(rect.center(), size / 2.0, fill);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, super::icon("user"), egui::FontId::proportional(30.0), egui::Color32::WHITE);
+}
+
+/// A small rounded label saying how something stands: in the playing
+/// color when it's `good`, weak otherwise.
+fn status_pill(ui: &mut egui::Ui, text: &str, good: bool) {
+    let color = if good { crate::theme::playing_color(ui.ctx()) } else { ui.visuals().weak_text_color() };
+    egui::Frame::new()
+        .fill(color.gamma_multiply(0.12))
+        .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.6)))
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(8, 1))
+        .show(ui, |ui| ui.label(egui::RichText::new(text).color(color)));
+}
