@@ -226,7 +226,7 @@ In OBS, add a **Media Source**, untick Local File and give it `http://127.0.0.1:
 
 ## Listening
 
-`/v1/audio/stream` sends what synththing plays, as it plays it: 16-bit stereo at 44.1 kHz, as a WAV that doesn't end (about 1.4 Mbit/s, fine on this computer or the local network). It's the sound before the volume slider, so turning synththing down or muting it doesn't change what listeners hear; a song's own Volume adjust does count. While nothing plays it sends silence. Up to 8 can listen at once (503 after that).
+`/v1/audio/stream` sends what synththing plays, as it plays it: 16-bit stereo at 44.1 kHz, as a WAV that doesn't end (about 1.4 Mbit/s, fine on this computer or the local network). It's the sound before the volume slider, so turning synththing down or muting it doesn't change what listeners hear; a song's own Volume adjust, and evening out its volume (Preferences > Playback), do count. While nothing plays it sends silence. Up to 8 can listen at once (503 after that).
 
 Players buffer it, so it comes a second or two late: VLC, ffmpeg or OBS's **Media Source** (untick Local File, give it `http://127.0.0.1:7340/v1/audio/stream?token=st_...`) play it as it is. For less delay, use the pages: `/v1/audio?token=st_...` plays it about 0.15 seconds behind, and `/v1/visualizer?...&audio=1` shows the visualizer and plays the sound with it, so one **Browser Source** gives OBS both (tick its **Control audio via OBS** to mix it like any other source). A browser only plays sound after a click, so the page shows a **Click to listen** button until then; OBS doesn't need one. Another device on the network can open the same pages with Preferences > Integrations letting the local network in.
 

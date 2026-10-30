@@ -36,6 +36,7 @@ mod palette;
 mod previews;
 mod library;
 mod lookup;
+mod loudness;
 mod groupings;
 mod recording;
 mod repair;
@@ -466,6 +467,8 @@ pub struct App {
     /// Signing in another device, or this one with a link.
     pairing: pairing::PairingState,
     lookup: lookup::LookupState,
+    /// Measuring how loud the songs here are.
+    loudness: loudness::MeasureState,
     choose_art: Option<choose_art::ChooseArt>,
     /// Settings sync between the identity's devices.
     sync: sync::SyncState,
@@ -787,6 +790,7 @@ impl App {
             identity: Default::default(),
             pairing: Default::default(),
             lookup: Default::default(),
+            loudness: Default::default(),
             choose_art: None,
             sync: Default::default(),
             notifications: Default::default(),
@@ -3922,6 +3926,7 @@ impl App {
         let held = self.update_offered();
         frame_timing::time("poll_sync", || self.poll_sync(held));
         frame_timing::time("lookup_tick", || self.lookup_tick(ctx, held));
+        frame_timing::time("measure_tick", || self.measure_tick(ctx));
         frame_timing::time("api_tick", || self.api_tick(ctx, &view));
         // (Minimized, eframe still draws the window, but only 10 times a
         // second.)

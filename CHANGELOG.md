@@ -4,6 +4,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Even out volume (Preferences > Playback, on by default): every song plays about as loud as the next, brought to -14 LUFS (or what you set). How loud a song is comes from its ReplayGain tags, else a computer measures it once in the background and your other devices use that. A song's Volume adjust goes on top. MIDI files aren't evened out yet.
+- A Loudness (LUFS) column in Songs, for smart playlists and sorting too.
+
 ### Fixed
 - Preferences fits on a phone's screen again: sliders, dropdowns and the (i) buttons no longer run off the right edge.
 

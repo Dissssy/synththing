@@ -34,6 +34,9 @@ pub const SAMPLE_RATE: u32 = 44_100;
 const CONSUMER_CHUNK_FRAMES: usize = 1024;
 /// How many stereo frames the render thread synthesizes per block.
 const RENDER_BLOCK_FRAMES: usize = 512;
+/// The most a song's gain goes: twice its volume (its volume adjust) over
+/// the most evening out boosts it.
+pub const MAX_SONG_GAIN: f32 = 2.0 * crate::loudness::MAX_GAIN;
 /// Allowed range for the user's buffer slider, in milliseconds.
 pub const MIN_BUFFER_MS: u32 = 40;
 pub const MAX_BUFFER_MS: u32 = 500;
@@ -61,9 +64,9 @@ pub enum AudioCommand {
     /// The volume slider, 0.0..=1.0: applied as the audio goes out, so
     /// neither the visualizer nor the API's listeners hear it.
     SetVolume(f32),
-    /// The playing song's volume adjust, as a gain (0.0..=2.0): applied as
-    /// the song renders, so the API's listeners hear it, the visualizer
-    /// doesn't.
+    /// The playing song's gain: its volume adjust, and what evens out its
+    /// volume (0.0..=`MAX_SONG_GAIN`). Applied as the song renders, so the
+    /// API's listeners hear it, the visualizer doesn't.
     SetSongGain(f32),
     /// Target cushion in milliseconds.
     SetBufferMs(u32),
@@ -294,7 +297,7 @@ pub struct AudioEngine {
     shared: Arc<Mutex<PlaybackShared>>,
     sample_rate: u32,
     volume: Volume,
-    /// The playing song's volume adjust.
+    /// The playing song's gain (`AudioCommand::SetSongGain`).
     song_gain: f32,
     buffer_ms: u32,
     block: Vec<f32>,
@@ -408,7 +411,7 @@ impl AudioEngine {
             AudioCommand::SoloChannel(channel) => self.rerender(|engine| engine.solo_channel(channel)),
             AudioCommand::SetLoopEnabled(enabled) => self.engine.set_loop_enabled(enabled),
             AudioCommand::SetVolume(volume) => self.volume.set(volume.clamp(0.0, 1.0)),
-            AudioCommand::SetSongGain(gain) => self.song_gain = gain.clamp(0.0, 2.0),
+            AudioCommand::SetSongGain(gain) => self.song_gain = gain.clamp(0.0, MAX_SONG_GAIN),
             AudioCommand::SetBufferMs(ms) => {
                 self.buffer_ms = ms.clamp(MIN_BUFFER_MS, MAX_BUFFER_MS);
             }

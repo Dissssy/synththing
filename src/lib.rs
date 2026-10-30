@@ -53,6 +53,7 @@ mod instance;
 mod layout;
 mod library;
 mod lookup;
+mod loudness;
 mod live;
 mod loader;
 mod lua_analysis;
