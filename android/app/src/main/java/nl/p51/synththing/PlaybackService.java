@@ -24,9 +24,9 @@ import android.os.SystemClock;
  * Keeps music going with the app in the background (a foreground service,
  * which Android doesn't stop; it stays one, paused too, until the app's
  * swiped away), with the media session that puts what's playing in the
- * notification, on the lock screen and on Bluetooth devices, and takes their buttons. Playback itself is the Rust app's: this
- * shows what it says is playing (update) and hands it the buttons pressed
- * (Native.mediaCommand). It also pauses for calls and other apps' sound
+ * notification, on the lock screen and on Bluetooth devices, and takes
+ * their buttons. Playback itself is the Rust app's: this shows what it says
+ * is playing (update) and hands it the buttons pressed (Native.mediaCommand). It also pauses for calls and other apps' sound
  * (audio focus), and when headphones come out.
  */
 public class PlaybackService extends Service {
