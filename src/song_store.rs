@@ -737,7 +737,7 @@ impl SongStore {
     }
 
     /// Every song's plays and skips, every device's.
-    pub fn stats(&self) -> &PlayStats {
+    pub fn stats(&self) -> &Arc<PlayStats> {
         &self.stats
     }
 
