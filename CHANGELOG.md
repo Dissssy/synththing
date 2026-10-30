@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- A playlist's page looks like an album's: its tile, name, count and length at the top, with Shuffle and Star them all next to Play, and a find-in-here box that narrows its songs.
+
 ### Fixed
 - Preferences fits on a phone's screen again: sliders, dropdowns and the (i) buttons no longer run off the right edge.
 
