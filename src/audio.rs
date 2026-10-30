@@ -48,8 +48,10 @@ const LIVE_WAKE: Duration = Duration::from_millis(4);
 /// How often playback is published (`AudioEngine::publish`) while it moves.
 const PUBLISH_EVERY: Duration = Duration::from_millis(16);
 /// How far apart, in frames, the engine snapshots `rerender` goes back to
-/// are taken (about 93 ms): each copies the whole synth, so not every block.
-const SNAPSHOT_EVERY_FRAMES: u64 = 4096;
+/// are taken (about 23 ms): each copies the whole synth, so not every
+/// block, but often enough that what `rerender` renders again before the
+/// first new sample (heard as silence meanwhile) stays short.
+const SNAPSHOT_EVERY_FRAMES: u64 = 1024;
 
 /// GUI -> render thread. Everything the GUI used to call on `Engine` directly.
 pub enum AudioCommand {
