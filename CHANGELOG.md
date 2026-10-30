@@ -4,10 +4,14 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Continue here, in the Devices popup and on the bar while following another device: plays that device's song on this one from where it is (through the same playlist, if you have it), and the other device follows this one.
+
 ### Fixed
 - Preferences fits on a phone's screen again: sliders, dropdowns and the (i) buttons no longer run off the right edge.
 
 ### Changed
+- While following another device, media keys, the phone's media buttons and the local API's seek drive that device's playing, as the transport does.
 - Check again under your hub, in the sync settings, also has the hub check its addresses from the internet again, instead of only after its next 6-hourly check.
 
 ## 1.8.3 (2026-10-28)
