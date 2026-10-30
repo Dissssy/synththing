@@ -790,6 +790,17 @@ pub fn feedback(base: &str, feedback: &FeedbackRequest) -> Result<i64, String> {
     reply["feedback"].as_i64().ok_or_else(|| "the server sent something unexpected".to_string())
 }
 
+/// The rules for which log lines the server wants in usage reports.
+pub fn usage_rules(base: &str) -> Result<Vec<String>, String> {
+    let reply: serde_json::Value = read(check(agent().get(format!("{base}/api/v1/usage/rules")).call())?)?;
+    serde_json::from_value(reply["rules"].clone()).map_err(|_| "the server sent something unexpected".to_string())
+}
+
+/// Send a usage report (`crate::usage`).
+pub fn usage(base: &str, report: &super::usage::UsageReport) -> Result<(), String> {
+    check(agent().post(format!("{base}/api/v1/usage")).send_json(report)).map(|_| ())
+}
+
 /// An admin action, signed by `identity` (an admin's, or the server's own).
 pub fn admin<T: serde::de::DeserializeOwned>(
     base: &str,
@@ -1323,6 +1334,44 @@ mod tests {
             reach(&base, &key, &me, "http://127.0.0.2:7390", &me.public()).unwrap();
         }
         assert!(reach(&base, &key, &me, "http://127.0.0.3:7390", &me.public()).unwrap_err().contains("for now"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn usage_reports_reach_the_admins_tree() {
+        use crate::library::usage::{UsageLine, UsageNode, UsageReport};
+        use crate::library::AdminAction;
+        let dir = std::env::temp_dir().join(format!("synththing-usage-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.json"), r#"{ "previews": false, "check_uploads": false }"#).unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let server_id = Identity::from_secret_hex(&std::fs::read_to_string(dir.join("server.key")).unwrap()).unwrap();
+        let admin_of = |action: &AdminAction| admin::<serde_json::Value>(&base, &key, &server_id, action).unwrap();
+
+        assert_eq!(usage_rules(&base).unwrap(), crate::library::usage::DEFAULT_USAGE_RULES.to_vec());
+        admin_of(&AdminAction::UsageRules { set: Some(vec!["warn * keep".into(), "info synththing::sync keep".into()]) });
+        assert_eq!(usage_rules(&base).unwrap(), vec!["warn * keep", "info synththing::sync keep"]);
+
+        let line = |level: &str, target: &str| UsageLine { level: level.into(), target: target.into(), signature: format!("{target}:1"), count: 2 };
+        let report = UsageReport {
+            version: "1.7.0".into(),
+            platform: "linux x86_64".into(),
+            sessions: 3,
+            lines: vec![line("warn", "wgpu_core"), line("info", "synththing::sync"), line("info", "synththing::app"), line("error", "x")],
+        };
+        usage(&base, &report).unwrap();
+        let tree = |path: &[&str]| -> Vec<UsageNode> {
+            serde_json::from_value(admin_of(&AdminAction::Usage { path: path.iter().map(|s| s.to_string()).collect() })).unwrap()
+        };
+        assert_eq!(tree(&[]), vec![UsageNode { name: "1.7.0".into(), total: 4, new: 4, sessions: Some(3) }]);
+        let levels: Vec<String> = tree(&["1.7.0", "linux x86_64"]).into_iter().map(|n| n.name).collect();
+        assert_eq!(levels.len(), 2, "the info line no rule keeps, and the error, are dropped: {levels:?}");
+        admin_of(&AdminAction::UsageClear { path: Vec::new() });
+        assert!(tree(&[]).is_empty());
+        running.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
