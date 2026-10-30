@@ -1,7 +1,7 @@
-//! Importing: copying songs into the song library (`song_store.rs`), and
+//! Importing: copying songs into the song library (`song_store.rs`),
 //! soundfonts the user picks into synththing's own folder (the mobile
 //! layout's way to get them, a phone having no disk to browse, only files
-//! apps hand over).
+//! apps hand over), and pictures into `images.rs`.
 //!
 //! [`start`] opens the platform's picker without waiting for it: on the
 //! desktop the file dialog, on another thread; on Android the system's
@@ -23,6 +23,8 @@ use crate::song_store::{self, Stored};
 pub enum Kind {
     Songs,
     Soundfonts,
+    /// A picture (for a playlist): the first one picked.
+    Image,
 }
 
 impl Kind {
@@ -32,6 +34,7 @@ impl Kind {
         match self {
             Self::Songs => Ok(crate::config::music_dir()?.join(".incoming")),
             Self::Soundfonts => crate::starter::soundfonts_dir(),
+            Self::Image => Ok(crate::images::dir()?.join(".incoming")),
         }
     }
 
@@ -41,6 +44,7 @@ impl Kind {
         match self {
             Self::Songs => 0,
             Self::Soundfonts => 1,
+            Self::Image => 2,
         }
     }
 
@@ -49,6 +53,7 @@ impl Kind {
         match code {
             0 => Some(Self::Songs),
             1 => Some(Self::Soundfonts),
+            2 => Some(Self::Image),
             _ => None,
         }
     }
@@ -81,6 +86,8 @@ pub struct Imported {
     pub songs: Vec<ImportedSong>,
     /// Soundfonts now in synththing's folder.
     pub soundfonts: Vec<PathBuf>,
+    /// Pictures now kept (`images.rs`), by their keys.
+    pub images: Vec<String>,
     /// The names of those picked that aren't of a type it takes.
     pub skipped: Vec<String>,
     /// Those that couldn't be brought in, and why.
@@ -143,6 +150,7 @@ pub fn start(kind: Kind, extensions: &[&str]) {
             let result = match kind {
                 Kind::Songs => import_songs(picked.into_iter().map(|p| (p, None)).collect(), &extensions),
                 Kind::Soundfonts => import_soundfonts(&picked, &extensions, &dir),
+                Kind::Image => Ok(images_in(picked, false)),
             };
             finish(Finished { kind, then: Then::Keep, result });
         });
@@ -222,6 +230,24 @@ pub fn songs_copied(copied: Vec<PathBuf>) -> Imported {
         match song_store::move_in(&file, &dir) {
             Ok(stored) => imported.songs.push(ImportedSong { stored, soundfont: None }),
             Err(e) => imported.failed.push(format!("{e:#}")),
+        }
+    }
+    imported
+}
+
+/// Keep the first picture of `files` (`images.rs`), removing each file
+/// after when they're only copies (`copies`).
+pub fn images_in(files: Vec<PathBuf>, copies: bool) -> Imported {
+    let mut imported = Imported::default();
+    for file in files {
+        if imported.images.is_empty() {
+            match crate::images::add_file(&file) {
+                Ok(key) => imported.images.push(key),
+                Err(e) => imported.failed.push(format!("{e:#}")),
+            }
+        }
+        if copies {
+            let _ = std::fs::remove_file(&file);
         }
     }
     imported
