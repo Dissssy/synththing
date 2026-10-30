@@ -46,6 +46,7 @@ mod choose_art;
 mod cleanup;
 mod song_meta;
 mod song_options;
+mod plays;
 mod song_names;
 mod storage;
 mod sprite_editor;
@@ -529,6 +530,9 @@ pub struct App {
     /// Where the current song is, and its length, while it plays: where
     /// it was left, for a song that remembers that (`song_options.rs`).
     playing_at: Option<(f64, f64)>,
+    /// The current song as it's listened to, for its plays and skips
+    /// (`plays.rs`).
+    listening: crate::play_stats::Listening,
     /// The engine's generation (`EngineView::generation`) the current song
     /// last got to its stop time in, so it's acted on once.
     stopped_in: Option<u64>,
@@ -815,6 +819,7 @@ impl App {
             advance_armed: false,
             song_loads: 0,
             playing_at: None,
+            listening: Default::default(),
             stopped_in: None,
             seek_on_load: None,
             rng: Rng::from_time(),

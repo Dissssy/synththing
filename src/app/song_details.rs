@@ -111,6 +111,8 @@ impl App {
                     self.details_tab_ui(ui, &mut details, Section::Options);
                     ui.separator();
                     self.together_ui(ui, &details);
+                    ui.separator();
+                    self.plays_ui(ui, &details);
                 }
                 Tab::File => {
                     self.file_tab_ui(ui, &details.paths[0]);
@@ -299,6 +301,34 @@ impl App {
         }
         self.songs.set_together(&id, keys);
         self.songs_changed();
+    }
+
+    /// How often the songs have been played and skipped, every device's,
+    /// with a button to count them from nothing again (at once, not on
+    /// saving).
+    fn plays_ui(&mut self, ui: &mut egui::Ui, details: &SongDetails) {
+        let totals: Vec<_> = details.keys.iter().map(|k| self.songs.totals(k)).collect();
+        let plays: u32 = totals.iter().map(|t| t.plays).sum();
+        let skips: u32 = totals.iter().map(|t| t.skips).sum();
+        let last = |time: Option<i64>| time.map_or_else(String::new, |t| format!(", last on {}", fields::date(t)));
+        let times = |n: u32| if n == 1 { "once".to_string() } else { format!("{n} times") };
+        ui.horizontal(|ui| {
+            ui.label(format!(
+                "Played {}{}. Skipped {}{}.",
+                times(plays),
+                last(totals.iter().filter_map(|t| t.last_played).max()),
+                times(skips),
+                last(totals.iter().filter_map(|t| t.last_skipped).max()),
+            ));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let reset = ui
+                    .add_enabled(plays + skips > 0, egui::Button::new("Reset"))
+                    .on_hover_text("Count plays and skips from nothing again");
+                if reset.clicked() && self.songs.reset_stats(&details.keys) {
+                    self.status = "Play counts reset.".to_string();
+                }
+            });
+        });
     }
 
     /// Play the song at `path` from `at` seconds, to hear its options.
