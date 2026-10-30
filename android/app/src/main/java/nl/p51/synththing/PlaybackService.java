@@ -19,6 +19,7 @@ import android.media.session.PlaybackState;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.SystemClock;
+import android.util.Log;
 
 /**
  * Keeps music going with the app in the background (a foreground service,
@@ -26,8 +27,9 @@ import android.os.SystemClock;
  * swiped away), with the media session that puts what's playing in the
  * notification, on the lock screen and on Bluetooth devices, and takes
  * their buttons. Playback itself is the Rust app's: this shows what it says
- * is playing (update) and hands it the buttons pressed (Native.mediaCommand). It also pauses for calls and other apps' sound
- * (audio focus), and when headphones come out.
+ * is playing (update) and hands it the buttons pressed (Native.mediaCommand).
+ * It also pauses for calls and other apps' sound (audio focus), and when
+ * headphones come out.
  */
 public class PlaybackService extends Service {
     // Media commands, as src/android.rs numbers them.
@@ -86,7 +88,15 @@ public class PlaybackService extends Service {
         if (service != null) {
             service.apply();
         } else if (playing) {
-            context.startForegroundService(new Intent(context, PlaybackService.class));
+            try {
+                context.startForegroundService(new Intent(context, PlaybackService.class));
+            } catch (IllegalStateException e) {
+                // Played from the background (the Local API, the hub) after
+                // the app was swiped away: Android won't start it from there
+                // (ForegroundServiceStartNotAllowedException), so no controls
+                // until the app's opened.
+                Log.w("synththing", "playback service not started", e);
+            }
         }
     }
 
