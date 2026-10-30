@@ -67,6 +67,8 @@
 //!   `set_channel_enabled` and carried out by the app.
 //! * `store_get(key)` / `store_set(key, value)`, the script's own saved data
 //!   (`<script>.lua.store.json`), separate from user-facing settings.
+//! * `shared_get(key)` / `shared_set(key, value)`, data shared with
+//!   Local API programs (`shared_data.rs`).
 //! * `FRAME` (frames since the script started) and `TIME` (seconds since
 //!   it started, wall clock, uncapped).
 //! * Cursor: `set_cursor_visible(visible)` (applies over the visualizer) and
@@ -2994,7 +2996,7 @@ fn register_live_notes(
 }
 
 /// `notes_between`, `set_paused`, `seek`, the playlist and transport
-/// controls, `store_get`, `store_set`.
+/// controls, `store_get`, `store_set`, `shared_get`, `shared_set`.
 fn register_song_and_state(
     lua: &Lua,
     note_list: &Rc<RefCell<Arc<NoteList>>>,
@@ -3184,6 +3186,21 @@ fn register_song_and_state(
                 changed
             };
             store.dirty |= changed;
+            Ok(())
+        })?,
+    )?;
+    globals.set(
+        "shared_get",
+        lua.create_function(|lua, key: String| match crate::shared_data::get(&key) {
+            Some(value) => json_to_lua(lua, &value),
+            None => Ok(Value::Nil),
+        })?,
+    )?;
+    globals.set(
+        "shared_set",
+        lua.create_function(|_, (key, value): (String, Value)| {
+            let json = if value.is_nil() { None } else { Some(lua_to_json(&value, 0)?) };
+            crate::shared_data::set(&key, json).map_err(mlua::Error::runtime)?;
             Ok(())
         })?,
     )?;
@@ -3765,7 +3782,7 @@ fn table_to_points(table: &Table) -> mlua::Result<Vec<(f32, f32)>> {
     Ok(points)
 }
 
-/// Deepest table nesting `store_set` accepts.
+/// Deepest table nesting `store_set` and `shared_set` accept.
 const MAX_STORE_DEPTH: usize = 16;
 
 /// A Lua value as JSON, for the store: booleans, numbers, strings and tables
@@ -3779,11 +3796,11 @@ fn lua_to_json(value: &Value, depth: usize) -> mlua::Result<serde_json::Value> {
         Value::Integer(i) => Json::from(*i),
         Value::Number(n) => serde_json::Number::from_f64(*n)
             .map(Json::Number)
-            .ok_or_else(|| mlua::Error::runtime("store_set can't save inf or nan"))?,
+            .ok_or_else(|| mlua::Error::runtime("can't save inf or nan"))?,
         Value::String(s) => Json::String(s.to_str()?.to_string()),
         Value::Table(table) => {
             if depth >= MAX_STORE_DEPTH {
-                return Err(mlua::Error::runtime("store_set: tables nested too deeply"));
+                return Err(mlua::Error::runtime("tables nested too deeply"));
             }
             let len = table.raw_len();
             let pairs: Vec<(Value, Value)> = table.pairs::<Value, Value>().collect::<mlua::Result<_>>()?;
@@ -3800,7 +3817,7 @@ fn lua_to_json(value: &Value, depth: usize) -> mlua::Result<serde_json::Value> {
                         Value::String(s) => s.to_str()?.to_string(),
                         Value::Integer(i) => i.to_string(),
                         Value::Number(n) => n.to_string(),
-                        _ => return Err(mlua::Error::runtime("store_set: table keys must be strings or numbers")),
+                        _ => return Err(mlua::Error::runtime("table keys must be strings or numbers")),
                     };
                     object.insert(key, lua_to_json(&v, depth + 1)?);
                 }
@@ -3808,7 +3825,7 @@ fn lua_to_json(value: &Value, depth: usize) -> mlua::Result<serde_json::Value> {
             }
         }
         other => {
-            return Err(mlua::Error::runtime(format!("store_set can't save a {}", other.type_name())));
+            return Err(mlua::Error::runtime(format!("can't save a {}", other.type_name())));
         }
     })
 }
@@ -6333,6 +6350,20 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         assert!(visualizer.error().unwrap_or_default().contains("true or false"), "{:?}", visualizer.error());
         visualizer.set_source("script_options({ autoplay = true }) function render() end".into());
         assert!(visualizer.error().unwrap_or_default().contains("no option `autoplay`"), "{:?}", visualizer.error());
+    }
+
+    #[test]
+    fn shared_data_reaches_the_api_and_back() {
+        crate::shared_data::set("lua test.in", Some(serde_json::json!({ "message": "hi" }))).unwrap();
+        let script = "function render()
+            log(shared_get('lua test.in').message .. ' ' .. tostring(shared_get('lua test.missing')))
+            shared_set('lua test.out', { 1, 2 })
+        end";
+        let mut visualizer = LuaVisualizer::new(script.to_string(), None, 44_100);
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(visualizer.error(), None);
+        assert_eq!(last_log(&visualizer), "hi nil");
+        assert_eq!(crate::shared_data::get("lua test.out"), Some(serde_json::json!([1, 2])));
     }
 
     #[test]

@@ -5930,6 +5930,7 @@ dependencies = [
  "mlua",
  "musicbrainz_rs",
  "notify",
+ "percent-encoding",
  "png 0.18.1",
  "puffin",
  "puffin_egui",

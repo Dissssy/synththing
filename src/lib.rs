@@ -83,6 +83,7 @@ mod search_box;
 mod wishlist_search;
 mod select_list;
 mod settings_sync;
+mod shared_data;
 mod smart;
 mod snippets;
 mod song_info;
