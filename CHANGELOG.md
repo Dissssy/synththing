@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Fixed
+- Playing music uses less power, so a phone playing in the background stays cooler: the audio thread now sleeps while nothing plays and wakes far less often while something does, and a MIDI song no longer copies the whole synth for every few milliseconds of sound.
 - Preferences fits on a phone's screen again: sliders, dropdowns and the (i) buttons no longer run off the right edge.
 
 ### Changed
