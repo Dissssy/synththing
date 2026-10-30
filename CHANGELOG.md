@@ -5,7 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
-- Play counts: a song counts as played once you've heard half of it (or it reaches its end), and as skipped when you move on to another song between 2 and 20 seconds in. Songs has Plays, Skips, Last played and Last skipped columns, and Song info's Options tab shows a song's counts with a Reset button. For now each device counts only its own.
+- Play counts: a song counts as played once you've heard half of it (or it reaches its end), and as skipped when you move on to another song between 2 and 20 seconds in. Songs has Plays, Skips, Last played and Last skipped columns, and Song info's Options tab shows a song's counts with a Reset button. With Songs from my other devices syncing, the counts add up across your devices, and Reset resets them on all of them.
 
 ### Fixed
 - Preferences fits on a phone's screen again: sliders, dropdowns and the (i) buttons no longer run off the right edge.

@@ -7,6 +7,11 @@
 //! (`PlayStats::reset`) is when a song's counting starts again: counts
 //! from before it are left out, and the device's own start over.
 //!
+//! Synced as a blob of its own (`NAME`): a leaf per song per device
+//! (`<key>/<device>`, its `Counts`) and per reset song (`<key>/reset`).
+//! Each device writes only its own counts, so no two write the same leaf
+//! but for a reset, where the latest wins.
+//!
 //! A play is getting past `PLAYED_AT` of the song (or to its end); a skip
 //! is leaving it for another between `SKIP_FROM` and `SKIP_UNTIL`
 //! seconds in, unplayed (`Listening`).
@@ -14,6 +19,14 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::settings_sync::Fields;
+
+/// The synced data's name on the server.
+pub const NAME: &str = "stats";
+/// A song's reset leaf, beside its devices' (`<key>/reset`).
+const RESET: &str = "reset";
 
 /// How far through a song it counts as played.
 pub const PLAYED_AT: f64 = 0.5;
@@ -119,6 +132,31 @@ impl PlayStats {
     }
 }
 
+/// The stats' leaves, to sync.
+pub fn leaves(stats: &PlayStats) -> BTreeMap<String, Value> {
+    let counts = stats.counts.iter().flat_map(|(key, devices)| {
+        devices.iter().map(move |(device, counts)| (format!("{key}/{device}"), serde_json::to_value(counts).unwrap_or_default()))
+    });
+    let resets = stats.resets.iter().map(|(key, at)| (format!("{key}/{RESET}"), Value::from(*at)));
+    counts.chain(resets).collect()
+}
+
+/// The stats `fields` say.
+pub fn read(fields: &Fields) -> PlayStats {
+    let mut stats = PlayStats::default();
+    for (path, field) in fields {
+        let Some((key, device)) = path.rsplit_once('/') else { continue };
+        if device == RESET {
+            if let Some(at) = field.value.as_i64() {
+                stats.resets.insert(key.to_string(), at);
+            }
+        } else if let Ok(counts) = serde_json::from_value(field.value.clone()) {
+            stats.counts.entry(key.to_string()).or_default().insert(device.to_string(), counts);
+        }
+    }
+    stats
+}
+
 /// What leaving a song, or listening on, counts as.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Heard {
@@ -171,6 +209,39 @@ mod tests {
         stats.skipped("a", "phone", 30);
         assert_eq!(stats.totals("a"), Totals { plays: 3, skips: 1, last_played: Some(20), last_skipped: Some(30) });
         assert_eq!(stats.totals("b"), Totals::default());
+    }
+
+    #[test]
+    fn leaves_read_back_as_they_were() {
+        let mut stats = PlayStats::default();
+        stats.played("a.mp3", "pc", 10);
+        stats.skipped("a.mp3", "phone", 20);
+        stats.reset("a.mp3", 30);
+        stats.played("a.mp3", "pc", 40);
+        let fields: Fields = leaves(&stats).into_iter().map(|(path, value)| (path, crate::settings_sync::Field { value, changed: 0 })).collect();
+        assert_eq!(fields.keys().collect::<Vec<_>>(), ["a.mp3/pc", "a.mp3/phone", "a.mp3/reset"]);
+        assert_eq!(read(&fields), stats);
+    }
+
+    #[test]
+    fn a_big_library_played_on_two_devices_fits_one_blob() {
+        // 5,000 songs, each counted on two devices: deflated and sealed,
+        // well within what a blob can be (about 430 KB of 768).
+        let mut stats = PlayStats::default();
+        for i in 0..5000u32 {
+            // (Hashes, as keys are: they don't compress.)
+            let key = format!("{}.mp3", crate::library::hex(&<sha2::Sha256 as sha2::Digest>::digest(i.to_le_bytes())));
+            for (device, plays) in [("0123456789abcdef", i % 40 + 1), ("fedcba9876543210", i % 7 + 1)] {
+                for n in 0..plays {
+                    stats.played(&key, device, 1_790_000_000 + i64::from(i * 97 + n));
+                }
+                stats.skipped(&key, device, 1_790_000_000 + i64::from(i * 31));
+            }
+        }
+        let fields: Fields = leaves(&stats).into_iter().map(|(path, value)| (path, crate::settings_sync::Field { value, changed: 1_790_000_000 })).collect();
+        let plain = serde_json::to_vec(&fields).unwrap();
+        let sealed = crate::library::sync::seal(&[1; 32], &crate::library::sync::pack(&plain)).unwrap();
+        assert!(sealed.len() < crate::library::sync::MAX_DATA * 3 / 4, "{} KB sealed, from {} KB", sealed.len() / 1024, plain.len() / 1024);
     }
 
     #[test]
