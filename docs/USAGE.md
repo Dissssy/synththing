@@ -12,7 +12,7 @@ A report (`library::usage::UsageReport`) holds:
 - how many times the app was started;
 - for each kind of line, its level (`panic`, `error`, `warn`, `info`), target (the log target, or the thread for a panic), signature and count.
 
-A log line's signature is where it was logged, module and line (`synththing::library::sync:212`), and its text only when that text is fixed in the code. What a message was filled in with (song names, paths, error details) never leaves the device, so the line has to be read in the code at that version. A panic's signature is its source file and line, from the crate's folder on, and its message with numbers turned into `#`, quoted text into `"…"`, and anything with a slash into `<path>`.
+A log line's signature is where it was logged, module and line, and the format string it was written with: `synththing::library::sync:212 couldn't send {name}: {e}`. build.rs makes a map of every log call in `src/` (`LOG_LINES`), built into the app, so each build carries its own and line numbers always match. What a message was filled in with (song names, paths, error details) never leaves the device. Another crate's line (wgpu, egui) has only its module and line, and its text when that's fixed. A panic's signature is its source file and line, from the crate's folder on, and its message with numbers turned into `#`, quoted text into `"…"`, and anything with a slash into `<path>`.
 
 Nothing in a report says which device or person sent it: no key, no install ID. Preferences > App > Usage data > See what's sent shows the next report so far.
 

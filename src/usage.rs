@@ -5,9 +5,10 @@
 //! rules (`library::usage::UsageRule`) say which lines it wants; the rest
 //! are counted and dropped.
 //!
-//! A line is sent as where it was logged (module and line) and its text
-//! only when that's fixed in the code, never what it was filled in with,
-//! so song names, paths and errors stay on the device. A panic carries its
+//! A line is sent as where it was logged (module and line) and the format
+//! string it was written with (from the map build.rs makes of every log
+//! call, `LOG_LINES`), never what it was filled in with, so song names,
+//! paths and errors stay on the device. A panic carries its
 //! message with numbers, quoted text and paths taken out. Nothing says
 //! which device or person it came from. Branch builds never send it.
 //!
@@ -182,10 +183,23 @@ pub fn panicked(info: &std::panic::PanicHookInfo) {
     save(counts);
 }
 
-/// Where a line was logged, and its text if it's fixed in the code.
+// `LOG_LINES`: every log call in `src/`, as (module, line, format string),
+// sorted (build.rs).
+include!(concat!(env!("OUT_DIR"), "/log_lines.rs"));
+
+/// The format string the log call at `module:line` was written with, if
+/// it's one of the app's own.
+fn template(module: &str, line: u32) -> Option<&'static str> {
+    LOG_LINES.binary_search_by(|&(m, l, _)| (m, l).cmp(&(module, line))).ok().map(|i| LOG_LINES[i].2)
+}
+
+/// Where a line was logged, and its text: the format string it was
+/// written with (`couldn't load {path}: {e}`), or the text itself when
+/// that's fixed (another crate's line without arguments).
 fn signature(module: &str, line: Option<u32>, fixed: Option<&str>) -> String {
-    let place = format!("{module}:{}", line.unwrap_or(0));
-    let signature = match fixed {
+    let line = line.unwrap_or(0);
+    let place = format!("{module}:{line}");
+    let signature = match template(module, line).or(fixed) {
         Some(text) => format!("{place} {}", text.lines().next().unwrap_or_default()),
         None => place,
     };
@@ -314,7 +328,17 @@ mod tests {
     #[test]
     fn signatures_keep_only_fixed_text() {
         assert_eq!(signature("synththing::library::sync", Some(42), None), "synththing::library::sync:42");
-        assert_eq!(signature("synththing::app", Some(7), Some("no soundfont loaded\nmore")), "synththing::app:7 no soundfont loaded");
+        assert_eq!(signature("wgpu_core::device", Some(7), Some("device lost\nmore")), "wgpu_core::device:7 device lost");
+    }
+
+    #[test]
+    fn the_apps_own_lines_carry_their_format_string() {
+        let &(module, line, format) = LOG_LINES.iter().find(|(_, _, f)| f.contains('{')).unwrap();
+        assert_eq!(signature(module, Some(line), None), clip(&format!("{module}:{line} {}", format.lines().next().unwrap()), MAX_USAGE_TEXT));
+        assert!(LOG_LINES.windows(2).all(|w| (w[0].0, w[0].1) < (w[1].0, w[1].1)), "sorted, for the lookup");
+        // This file's own call (in `start`) is in the map, at its line.
+        let here = include_str!("usage.rs").lines().position(|l| l.contains("couldn't start the usage data thread")).unwrap() + 1;
+        assert_eq!(template("synththing::usage", here as u32), Some("couldn't start the usage data thread: {e}"));
     }
 
     #[test]
