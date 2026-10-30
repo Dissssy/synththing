@@ -596,6 +596,7 @@ impl App {
             Rules,
             Freeze,
             Rename,
+            #[cfg(not(target_os = "android"))]
             Export,
             Delete,
         }
@@ -722,6 +723,7 @@ impl App {
             Some(Press::Rules) => self.edit_playlist_rules(ui.ctx(), Some(list)),
             Some(Press::Freeze) => self.freeze_playlist(list),
             Some(Press::Rename) => self.playlist_rename = Some(name),
+            #[cfg(not(target_os = "android"))]
             Some(Press::Export) => self.export_m3u(list),
             Some(Press::Delete) => self.delete_playlist(list),
             None => {}
