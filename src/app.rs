@@ -468,7 +468,7 @@ pub struct App {
     pairing: pairing::PairingState,
     lookup: lookup::LookupState,
     /// Measuring how loud the songs here are.
-    loudness: loudness::MeasureState,
+    loudness: Option<crate::loudness::Measuring>,
     choose_art: Option<choose_art::ChooseArt>,
     /// Settings sync between the identity's devices.
     sync: sync::SyncState,

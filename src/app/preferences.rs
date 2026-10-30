@@ -311,7 +311,7 @@ impl App {
                         ui,
                         "Plays every song about as loud as the next: each is turned up or down by how \
                          loud it is, as its ReplayGain tags say, else as measured (once, in the background, \
-                         on a computer; your other devices use what it measured). A song's own volume \
+                         by your hub, or a computer without one; your other devices use that). A song's own volume \
                          adjust (Song info) goes on top. Quiet songs are turned up only as far as they \
                          go without clipping. MIDI files aren't evened out yet.",
                         |ui| ui.checkbox(&mut even_volume, "Even out volume"),

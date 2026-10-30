@@ -15,7 +15,8 @@
 //! Another device made the hub after it, it stops serving and says so.
 //! As it starts and every 6 hours, it has the server check that its
 //! addresses work from the internet (`library::reach`), and logs what to
-//! fix if they don't (`hub check` does it now).
+//! fix if they don't (`hub check` does it now). While it's the hub, it
+//! measures how loud songs are (`loudness::Measuring`), for every device.
 
 use std::io::IsTerminal;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -30,6 +31,7 @@ use crate::hub_server::{self, Came, HubServer};
 use crate::song_sync::{AddressCheck, HubLeaf};
 use crate::library::identity::{self, Identity};
 use crate::library::{self, client, pairing, reach};
+use crate::loudness::Measuring;
 use crate::playlist::Library;
 use crate::settings_sync;
 use crate::song_store::SongStore;
@@ -138,6 +140,8 @@ pub fn run() -> i32 {
     let mut error = None;
     let mut checked: Option<Instant> = None;
     let checks = mpsc::channel();
+    // (Checked every tick: nothing to wake.)
+    let mut measuring = Measuring::new(|| ());
     loop {
         if info_read.is_none_or(|t| t.elapsed() >= INFO_EVERY) {
             info_read = Some(Instant::now());
@@ -248,6 +252,10 @@ pub fn run() -> i32 {
                 Report::LibraryChanged => {}
                 Report::Status(text) | Report::Debug(text) => log::info!("{text}"),
             }
+        }
+        // (The hub measures how loud songs are, for every device.)
+        if serving.is_some() && measuring.tick(&mut songs) {
+            sync.songs_changed();
         }
         api.tick(&mut hub_api::Here { songs: &mut songs, playlists: &mut playlists, wishlist: &mut wishlist, sync: &mut sync, config: &config });
         api.panels_tick(&live);

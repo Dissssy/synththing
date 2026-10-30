@@ -3,21 +3,26 @@
 //!
 //! A song's loudness comes from its ReplayGain tags when it has them
 //! (`song_store::Meta::replay_gain`), else from measuring it here, once,
-//! decoding the whole file on a thread of its own ([`Measurer`]); what's
+//! decoding the whole file on a thread of its own ([`Measuring`]); what's
 //! measured is kept in the synced library (`song_store::Song::loudness`),
 //! so one device measures each song for all of them. Playing, a song's
 //! gain brings it to the target loudness ([`gain`]).
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 use ebur128::{EbuR128, Mode};
 use rodio::Source as _;
 use serde::{Deserialize, Serialize};
+
+use crate::fields::Facts;
+use crate::song_store::{META_VERSION, Song, SongStore};
 
 /// The loudness songs are brought to unless changed, in LUFS (what most
 /// streaming services play at).
@@ -167,9 +172,82 @@ impl Meter {
     }
 }
 
+/// Measuring the songs here, one at a time, each its tags don't say it
+/// for and no device has measured yet, into the song store (and so
+/// synced). The app measures without a hub; with one, the hub does
+/// (it has every song, and it's always on).
+pub struct Measuring {
+    done: Arc<dyn Fn() + Send + Sync>,
+    measurer: Option<Measurer>,
+    /// The song being measured, by key.
+    measuring: Option<String>,
+    /// The songs left to measure, as of a songs revision.
+    left: Option<(u64, Vec<(String, PathBuf)>)>,
+    /// The songs that couldn't be measured (this session).
+    failed: HashSet<String>,
+}
+
+/// Whether `song` is still to be measured: its file's been read (by this
+/// version, so its ReplayGain tags would be known), they say nothing, and
+/// it's not MIDI (whose loudness is its soundfont's).
+fn unmeasured(song: &Song) -> bool {
+    song.loudness.is_none() && song.meta.as_ref().is_some_and(|m| m.version >= META_VERSION && m.replay_gain.is_none()) && !Facts::of(song).is_midi()
+}
+
+impl Measuring {
+    /// `done` is called after each song's measured (to `tick` soon).
+    pub fn new(done: impl Fn() + Send + Sync + 'static) -> Self {
+        Self { done: Arc::new(done), measurer: None, measuring: None, left: None, failed: HashSet::new() }
+    }
+
+    /// Save what's been measured to `songs`, and ask for the next song
+    /// once it's in. Whether any song was measured.
+    pub fn tick(&mut self, songs: &mut SongStore) -> bool {
+        let mut measured = false;
+        while let Some((key, loudness)) = self.measurer.as_ref().and_then(Measurer::answer) {
+            self.measuring = None;
+            match loudness {
+                Ok(loudness) => {
+                    songs.set_loudness(&key, loudness);
+                    measured = true;
+                }
+                Err(e) => {
+                    log::info!("couldn't measure how loud {key} is: {e}");
+                    self.failed.insert(key);
+                }
+            }
+        }
+        if self.measuring.is_some() {
+            return measured;
+        }
+        let revision = songs.revision();
+        if self.left.as_ref().is_none_or(|(seen, _)| *seen != revision) {
+            let left = songs.songs().filter(|(_, song)| unmeasured(song)).filter_map(|(path, _)| Some((songs.key(&path)?, path))).collect();
+            self.left = Some((revision, left));
+        }
+        let Some((_, left)) = self.left.as_mut() else { return measured };
+        let Some((key, path)) = std::iter::from_fn(|| left.pop()).find(|(key, _)| !self.failed.contains(key)) else { return measured };
+        if self.measurer.is_none() {
+            let done = Arc::clone(&self.done);
+            match Measurer::start(move || done()) {
+                Ok(measurer) => self.measurer = Some(measurer),
+                Err(e) => {
+                    log::warn!("couldn't start measuring songs' loudness: {e}");
+                    return measured;
+                }
+            }
+        }
+        if let Some(measurer) = &self.measurer {
+            measurer.ask(key.clone(), path);
+            self.measuring = Some(key);
+        }
+        measured
+    }
+}
+
 /// Measures songs on a thread of its own, one at a time, as asked: by
 /// key, with where the file is.
-pub struct Measurer {
+struct Measurer {
     requests: Sender<(String, PathBuf)>,
     results: Receiver<(String, Result<Loudness, String>)>,
 }
@@ -177,7 +255,7 @@ pub struct Measurer {
 impl Measurer {
     /// `done` is called after each song's measured (to look at the
     /// result soon).
-    pub fn start(done: impl Fn() + Send + 'static) -> Result<Self, String> {
+    fn start(done: impl Fn() + Send + 'static) -> Result<Self, String> {
         let (requests, asked) = mpsc::channel::<(String, PathBuf)>();
         let (answer, results) = mpsc::channel();
         thread::Builder::new()
@@ -194,12 +272,12 @@ impl Measurer {
         Ok(Self { requests, results })
     }
 
-    pub fn ask(&self, key: String, path: PathBuf) {
+    fn ask(&self, key: String, path: PathBuf) {
         let _ = self.requests.send((key, path));
     }
 
     /// A song measured since last asked, if one was.
-    pub fn answer(&self) -> Option<(String, Result<Loudness, String>)> {
+    fn answer(&self) -> Option<(String, Result<Loudness, String>)> {
         self.results.try_recv().ok()
     }
 }
