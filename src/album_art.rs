@@ -200,6 +200,12 @@ impl AlbumArt {
         }
     }
 
+    /// Look again for the pictures picked (`Source::image`) found
+    /// missing: one came from the other devices.
+    pub fn images_arrived(&mut self) {
+        self.kept.retain(|(source, _), k| source.image.is_none() || !matches!(k.slot, Slot::Missing));
+    }
+
     /// Draw the art of the album `name`, taken `from` a song of it and
     /// its release (neither: the album's all MIDI), filling `rect`.
     pub fn tile(&mut self, ui: &egui::Ui, rect: egui::Rect, from: &Source, name: &str) {

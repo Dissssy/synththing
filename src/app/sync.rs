@@ -79,6 +79,7 @@ impl App {
                 Report::Playlists(synced) => self.playlists_synced(synced),
                 Report::Fetched(stored) => self.add_to_library([stored]),
                 Report::LibraryChanged => self.refresh_missing(),
+                Report::ImageFetched => self.groupings.art.images_arrived(),
                 Report::Status(text) => self.status = text,
                 Report::Debug(text) => {
                     if self.config.sync_debug {

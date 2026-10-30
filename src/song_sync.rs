@@ -268,14 +268,14 @@ fn ready(key: &str) -> String {
     format!("ready/{key}")
 }
 
-/// What `device`, wanting `wanted`, does about the transfers synced so far
-/// (`applied`), leaving alone the songs `busy` already being moved, and
+/// What `device`, wanting `wanted` and having the files `here` says,
+/// does about the transfers synced so far (`applied`), leaving alone the songs `busy` already being moved, and
 /// the wants it already streamed a song for (`given`, as their paths: the
 /// device it went to says it has it next), with the `hub` if there is one.
 pub fn plan(
     applied: &BTreeMap<String, Value>,
     device: &str,
-    store: &SongStore,
+    here: impl Fn(&str) -> bool,
     wanted: &BTreeSet<String>,
     busy: &BTreeSet<String>,
     given: &BTreeSet<String>,
@@ -327,7 +327,7 @@ pub fn plan(
             }
         } else if who.contains(device) && pulls && hub_has(key) {
             tasks.push(Task::Pull(key.to_string()));
-        } else if store.has(key) {
+        } else if here(key) {
             // (A device taking songs from the hub takes this one there.)
             let pulled = |w: &str| devices.get(w).is_some_and(|leaf| leaf.pulls) && hub_has(key);
             let allowed = |w: &str| if only || only_hub(w) { hub_device == Some(device) || hub_device == Some(w) } else { true };
@@ -771,23 +771,23 @@ mod tests {
         assert_eq!(wants, BTreeSet::from([song.key.clone()]));
 
         let none = BTreeSet::new();
-        let asked = plan(&BTreeMap::new(), "phone", &phone, &wants, &none, &none, None);
+        let asked = plan(&BTreeMap::new(), "phone", |k| phone.has(k), &wants, &none, &none, None);
         assert!(asked.tasks.is_empty(), "no one has it to send yet");
         // The desktop sends it, and marks it ready.
-        let sending = plan(&asked.leaves, "desktop", &desktop, &none, &none, &none, None);
+        let sending = plan(&asked.leaves, "desktop", |k| desktop.has(k), &none, &none, &none, None);
         assert_eq!(sending.tasks, [Task::Send { key: song.key.clone(), to: vec!["phone".into()] }]);
-        assert!(plan(&asked.leaves, "desktop", &desktop, &none, &BTreeSet::from([song.key.clone()]), &none, None).tasks.is_empty(), "busy");
+        assert!(plan(&asked.leaves, "desktop", |k| desktop.has(k), &none, &BTreeSet::from([song.key.clone()]), &none, None).tasks.is_empty(), "busy");
         let given = BTreeSet::from([want("phone", &song.key)]);
-        assert!(plan(&asked.leaves, "desktop", &desktop, &none, &none, &given, None).tasks.is_empty(), "streamed to it already");
+        assert!(plan(&asked.leaves, "desktop", |k| desktop.has(k), &none, &none, &given, None).tasks.is_empty(), "streamed to it already");
         let sent = after(sending.leaves, &Moved::Sent(song.key.clone()));
         // The phone fetches it; once it has it, it stops wanting it, and
         // deletes it from the relay, as no one wants it now.
-        assert_eq!(plan(&sent, "phone", &phone, &wants, &none, &none, None).tasks, [Task::Fetch(song.key.clone())]);
+        assert_eq!(plan(&sent, "phone", |k| phone.has(k), &wants, &none, &none, None).tasks, [Task::Fetch(song.key.clone())]);
         let mut incoming = song_store::Incoming::new(&song.key, &phone_dir).unwrap();
         std::io::Write::write_all(&mut incoming, b"song").unwrap();
         incoming.finish().unwrap();
         phone.add(song_store::Stored { key: song.key.clone(), name: "Song.mid".into() });
-        let fetched = plan(&sent, "phone", &phone, &wanted(&phone, &playlists, every), &none, &none, None);
+        let fetched = plan(&sent, "phone", |k| phone.has(k), &wanted(&phone, &playlists, every), &none, &none, None);
         assert_eq!(fetched.tasks, [Task::Delete(song.key.clone())]);
         assert!(fetched.leaves.is_empty());
 
@@ -1077,23 +1077,23 @@ mod tests {
 
         // The hub lacks both: the desktop sends them, the one only it has
         // first, and the rare one to the phone too, the hub not having it.
-        let tasks = plan(&leaves, "desktop", &desktop, &none, &none, &none, Some(&hub_plan(true))).tasks;
+        let tasks = plan(&leaves, "desktop", |k| desktop.has(k), &none, &none, &none, Some(&hub_plan(true))).tasks;
         assert_eq!(tasks, [Task::Send { key: rare.key.clone(), to: vec!["hub".into(), "phone".into()] }, Task::Send { key: common.key.clone(), to: vec!["hub".into()] }]);
-        assert!(plan(&leaves, "laptop", &laptop, &none, &none, &none, Some(&hub_plan(true))).tasks.is_empty(), "the laptop has nothing it wants");
+        assert!(plan(&leaves, "laptop", |k| laptop.has(k), &none, &none, &none, Some(&hub_plan(true))).tasks.is_empty(), "the laptop has nothing it wants");
 
         // Once the hub has them, the phone takes the rare one from it, and
         // no one sends it there.
         leaves.retain(|path, _| !path.starts_with("want/hub/"));
         leaves.insert(format!("{HAVE}hub"), have(&[&common.key, &rare.key]));
         let wants = BTreeSet::from([rare.key.clone()]);
-        assert!(plan(&leaves, "desktop", &desktop, &none, &none, &none, Some(&hub_plan(true))).tasks.is_empty());
-        assert!(plan(&leaves, "hub", &desktop, &none, &none, &none, Some(&hub_plan(true))).tasks.is_empty(), "the hub doesn't send it either");
-        assert_eq!(plan(&leaves, "phone", &phone, &wants, &none, &none, Some(&hub_plan(true))).tasks, [Task::Pull(rare.key.clone())]);
+        assert!(plan(&leaves, "desktop", |k| desktop.has(k), &none, &none, &none, Some(&hub_plan(true))).tasks.is_empty());
+        assert!(plan(&leaves, "hub", |k| desktop.has(k), &none, &none, &none, Some(&hub_plan(true))).tasks.is_empty(), "the hub doesn't send it either");
+        assert_eq!(plan(&leaves, "phone", |k| phone.has(k), &wants, &none, &none, Some(&hub_plan(true))).tasks, [Task::Pull(rare.key.clone())]);
         // A phone that doesn't reach the hub gets it sent, from either.
-        assert!(plan(&leaves, "phone", &phone, &wants, &none, &none, Some(&hub_plan(false))).tasks.is_empty());
+        assert!(plan(&leaves, "phone", |k| phone.has(k), &wants, &none, &none, Some(&hub_plan(false))).tasks.is_empty());
         leaves.insert("device/phone".into(), device(false));
         let to_phone = [Task::Send { key: rare.key.clone(), to: vec!["phone".into()] }];
-        assert_eq!(plan(&leaves, "desktop", &desktop, &none, &none, &none, Some(&hub_plan(true))).tasks, to_phone);
+        assert_eq!(plan(&leaves, "desktop", |k| desktop.has(k), &none, &none, &none, Some(&hub_plan(true))).tasks, to_phone);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1117,14 +1117,14 @@ mod tests {
             ("device/phone".into(), serde_json::to_value(DeviceLeaf { name: "Phone".into(), seen: 1, pulls: false, hub_only: true }).unwrap()),
         ]);
         let hub_plan = |only: bool| HubPlan { device: "hub".into(), direct: false, only };
-        let sends = |device: &str, store: &SongStore, only: bool| plan(&leaves, device, store, &none, &none, &none, Some(&hub_plan(only))).tasks;
+        let sends = |device: &str, store: &SongStore, only: bool| plan(&leaves, device, |k| store.has(k), &none, &none, &none, Some(&hub_plan(only))).tasks;
         let to = |key: &str, to: &[&str]| vec![Task::Send { key: key.to_string(), to: to.iter().map(|d| d.to_string()).collect() }];
         assert_eq!(sends("desktop", &desktop, false), to(&ours.key, &["hub"]), "not to the phone");
         assert_eq!(sends("phone", &phone, true), to(&theirs.key, &["hub"]), "nor from it but to the hub");
         hub.add(song_store::write_in(b"desktop's", "Desk.mid", hub.dir()).unwrap());
         assert_eq!(sends("hub", &hub, false), to(&ours.key, &["phone"]), "the hub sends it on");
         // With no hub, it trades as any device does.
-        assert_eq!(plan(&leaves, "desktop", &desktop, &none, &none, &none, None).tasks, to(&ours.key, &["hub", "phone"]));
+        assert_eq!(plan(&leaves, "desktop", |k| desktop.has(k), &none, &none, &none, None).tasks, to(&ours.key, &["hub", "phone"]));
         let _ = std::fs::remove_dir_all(&root);
     }
 

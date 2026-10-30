@@ -1,7 +1,8 @@
 //! Syncing this device with the user's others (`settings_sync.rs`,
-//! `playlist_sync.rs`, `song_sync.rs`, `wishlist.rs`), with no window: each
-//! blob (the settings, the playlists, the song library and its transfers,
-//! the wishlist) syncs with
+//! `playlist_sync.rs`, `song_sync.rs`, `wishlist.rs`, `image_sync.rs`),
+//! with no window: each blob (the settings, the playlists, the song
+//! library and its transfers, the wishlist, the pictures' transfers)
+//! syncs with
 //! the authority on a thread of its own: at launch, a moment after it
 //! changes here, and when the notification stream says another device
 //! wrote. Songs move through the relay on a thread of their own too, one
@@ -25,6 +26,7 @@ use serde_json::Value;
 use crate::config::Config;
 use crate::device::Device;
 use crate::frame_timing;
+use crate::image_sync;
 use crate::library::identity::{self, Identity};
 use crate::library::{self, client};
 use crate::playlist::Library;
@@ -56,10 +58,11 @@ enum Blob {
     Library,
     Transfers,
     Wishlist,
+    Images,
 }
 
 impl Blob {
-    const ALL: [Blob; 5] = [Blob::Settings, Blob::Playlists, Blob::Library, Blob::Transfers, Blob::Wishlist];
+    const ALL: [Blob; 6] = [Blob::Settings, Blob::Playlists, Blob::Library, Blob::Transfers, Blob::Wishlist, Blob::Images];
 
     fn name(self) -> &'static str {
         match self {
@@ -68,6 +71,7 @@ impl Blob {
             Blob::Library => song_sync::LIBRARY,
             Blob::Transfers => song_sync::TRANSFERS,
             Blob::Wishlist => wishlist::NAME,
+            Blob::Images => image_sync::NAME,
         }
     }
 
@@ -83,6 +87,7 @@ impl Blob {
             Blob::Library => "library synced",
             Blob::Transfers => "transfers synced",
             Blob::Wishlist => "wishlist synced",
+            Blob::Images => "images synced",
         }
     }
 }
@@ -136,6 +141,8 @@ pub enum Report {
     Fetched(Stored),
     /// The synced library changed the songs here.
     LibraryChanged,
+    /// A playlist's picture came from the other devices.
+    ImageFetched,
     /// Something to tell the user.
     Status(String),
     /// What a sync or a song moved did, for the debug toast.
@@ -168,7 +175,7 @@ pub struct DeviceSync {
     for_identity: Option<String>,
     /// The kinds of settings this device syncs (`State::choices`).
     choices: settings_sync::Choices,
-    channels: [Channel; 5],
+    channels: [Channel; 6],
     events: (Sender<Done>, Receiver<Done>),
     error: Option<String>,
     /// The songs here or the playlists changed: say so in the library, and
@@ -215,6 +222,15 @@ pub struct DeviceSync {
     /// This device is the hub (`be_hub`): its leaf, and whether it's still
     /// to be named the hub over another.
     hub_offer: Option<(HubLeaf, bool)>,
+    /// The playlists' pictures or their transfers changed: see what to
+    /// fetch or send.
+    images_dirty: bool,
+    /// Pictures being moved through the relay, by key.
+    images_busy: BTreeSet<String>,
+    /// What came of each picture moved (`None`: they're all done).
+    image_moves: (Sender<Option<Moved>>, Receiver<Option<Moved>>),
+    /// A picture moved this round: see what's next once they're done.
+    images_moved: bool,
 }
 
 /// How a round of songs being moved is going: those to fetch or send, how
@@ -275,6 +291,10 @@ impl Default for DeviceSync {
             hub_checked: None,
             hub_checking: false,
             hub_offer: None,
+            images_dirty: false,
+            images_busy: BTreeSet::new(),
+            image_moves: mpsc::channel(),
+            images_moved: false,
         }
     }
 }
@@ -418,7 +438,7 @@ impl DeviceSync {
         self.on
             && match blob {
                 Blob::Settings => true,
-                Blob::Playlists => settings_sync::syncs(&self.choices, &settings_sync::PLAYLISTS),
+                Blob::Playlists | Blob::Images => settings_sync::syncs(&self.choices, &settings_sync::PLAYLISTS),
                 Blob::Library | Blob::Transfers => settings_sync::syncs(&self.choices, &settings_sync::SONGS),
                 Blob::Wishlist => settings_sync::syncs(&self.choices, &settings_sync::WISHLIST),
             }
@@ -472,6 +492,7 @@ impl DeviceSync {
     /// to send once it's settled.
     pub fn playlists_changed(&mut self, songs: &SongStore, playlists: &Library) {
         self.songs_dirty = true;
+        self.images_dirty = true;
         if !self.syncing(Blob::Playlists) {
             return;
         }
@@ -520,7 +541,7 @@ impl DeviceSync {
             let state = State::load(settings_sync::NAME);
             self.on = state.is_some() && link.identity.is_some();
             self.choices = state.map(|s| s.choices).unwrap_or_default();
-            for blob in [Blob::Settings, Blob::Playlists, Blob::Wishlist] {
+            for blob in [Blob::Settings, Blob::Playlists, Blob::Wishlist, Blob::Images] {
                 let state = State::load(blob.name());
                 let wanted = self.syncing(blob).then(Instant::now);
                 *self.channel(blob) = Channel { revision: state.as_ref().map_or(0, |s| s.revision), wanted, ..Channel::default() };
@@ -566,6 +587,7 @@ impl DeviceSync {
                 Ok(outcome) => match blob {
                     Blob::Settings | Blob::Playlists => self.blob_synced(blob, outcome),
                     Blob::Wishlist => self.wishlist_synced(here.wishlist, outcome),
+                    Blob::Images => self.images_synced(outcome),
                     Blob::Library | Blob::Transfers => {
                         self.error = None;
                         let songs = self.songs_now(link, here);
@@ -583,10 +605,15 @@ impl DeviceSync {
             frame_timing::time("sync worker replies", || self.take_reply(link, here, reply));
         }
         frame_timing::time("poll_moves", || self.poll_moves(here));
+        self.poll_image_moves();
         if held {
             return std::mem::take(&mut self.reports);
         }
         self.check_hub();
+        if self.images_dirty && self.syncing(Blob::Images) && self.images_busy.is_empty() {
+            self.images_dirty = false;
+            self.move_images(link, here.playlists);
+        }
         if self.songs_dirty && self.on && !self.songs_pending {
             self.songs_dirty = false;
             self.songs_pending = true;
@@ -685,6 +712,78 @@ impl DeviceSync {
         self.blob_taken(Blob::Wishlist, Synced { outcome, state, result }, applied);
     }
 
+    /// The pictures' transfers synced: take them, with whatever was changed
+    /// here while they ran, then see what to fetch or send.
+    fn images_synced(&mut self, outcome: Outcome) {
+        self.error = None;
+        let Some(state) = State::load(image_sync::NAME) else { return };
+        let result = settings_sync::merge_where(&outcome.local, &state.fields, &outcome.merged, |_| true).0;
+        let applied = result.iter().map(|(path, field)| (path.clone(), field.value.clone())).collect();
+        self.blob_taken(Blob::Images, Synced { outcome, state, result }, applied);
+        self.images_dirty = true;
+    }
+
+    /// Say which pictures the playlists here want, and move those the
+    /// transfers say to, one after another, on a thread of their own.
+    fn move_images(&mut self, link: &Link, playlists: &Library) {
+        let Some(mut state) = State::load(image_sync::NAME) else { return };
+        let device = self.device.get_or_insert_with(Device::load).id.clone();
+        let plan = image_sync::plan(&state.applied, &device, &image_sync::wanted(playlists), &self.images_busy);
+        if state.record_leaves(plan.leaves, settings_sync::now()) {
+            if let Err(e) = state.save(image_sync::NAME) {
+                log::warn!("image sync: {e}");
+            }
+            self.channel(Blob::Images).dirty_since = Some(Instant::now());
+        }
+        if plan.tasks.is_empty() || self.held() {
+            return;
+        }
+        let (Ok(dir), Some((server, server_key, identity, sync_key))) = (crate::images::dir(), self.sync_with(link)) else { return };
+        let relay = Relay { server, server_key, identity, sync_key, dir, device, hub: None };
+        self.images_busy = plan.tasks.iter().map(|t| t.key().to_string()).collect();
+        let tasks = plan.tasks;
+        let tx = self.image_moves.0.clone();
+        let spawned = std::thread::Builder::new().name("image transfers".into()).spawn(move || {
+            for task in &tasks {
+                if tx.send(Some(song_sync::run(&relay, task))).is_err() {
+                    return;
+                }
+            }
+            let _ = tx.send(None);
+        });
+        if let Err(e) = spawned {
+            log::warn!("couldn't start moving pictures: {e}");
+            self.images_busy.clear();
+        }
+    }
+
+    /// Take what came of the pictures moved: mark those sent ready, and once
+    /// they're all done, see what's next if any moved (one that failed
+    /// waits for the next change).
+    fn poll_image_moves(&mut self) {
+        while let Ok(moved) = self.image_moves.1.try_recv() {
+            let Some(moved) = moved else {
+                self.images_busy.clear();
+                self.images_dirty |= std::mem::take(&mut self.images_moved);
+                continue;
+            };
+            match &moved {
+                Moved::Failed(key, e) => log::info!("moving the picture {key}: {e}"),
+                _ => self.images_moved = true,
+            }
+            if let Moved::Fetched(_) = moved {
+                self.reports.push(Report::ImageFetched);
+            }
+            let Some(mut state) = State::load(image_sync::NAME) else { continue };
+            if state.record_leaves(song_sync::after(state.applied.clone(), &moved), settings_sync::now()) {
+                if let Err(e) = state.save(image_sync::NAME) {
+                    log::warn!("image sync: {e}");
+                }
+                self.channel(Blob::Images).dirty_since = Some(Instant::now());
+            }
+        }
+    }
+
     fn blob_taken(&mut self, blob: Blob, synced: Synced, applied: BTreeMap<String, Value>) {
         let Synced { outcome, mut state, result } = synced;
         state.applied = applied;
@@ -707,6 +806,10 @@ impl DeviceSync {
             Blob::Settings => return,
             Blob::Playlists => playlist_sync::leaves(here.playlists, here.songs),
             Blob::Wishlist => wishlist::leaves(here.wishlist),
+            Blob::Images => {
+                let device = self.device.get_or_insert_with(Device::load).id.clone();
+                image_sync::plan(&BTreeMap::new(), &device, &image_sync::wanted(here.playlists), &BTreeSet::new()).leaves
+            }
             Blob::Library | Blob::Transfers => {
                 let songs = self.songs_now(link, here);
                 return self.ask_worker(songs::Request::Start(blob, songs));
@@ -1096,7 +1199,7 @@ impl DeviceSync {
                 self.error = None;
                 *self.channel(Blob::Settings) = Channel::default();
                 self.start_sync(link, Blob::Settings, true);
-                for blob in [Blob::Playlists, Blob::Wishlist, Blob::Library, Blob::Transfers] {
+                for blob in [Blob::Playlists, Blob::Wishlist, Blob::Images, Blob::Library, Blob::Transfers] {
                     if self.syncing(blob) {
                         self.start_blob(link, here, blob);
                     }
@@ -1144,7 +1247,7 @@ impl DeviceSync {
         if any_on {
             self.channel(Blob::Settings).wanted = Some(Instant::now());
         }
-        for (blob, toggled) in [(Blob::Playlists, playlists), (Blob::Wishlist, wishes)] {
+        for (blob, toggled) in [(Blob::Playlists, playlists), (Blob::Images, playlists), (Blob::Wishlist, wishes)] {
             match toggled {
                 Some(true) => self.start_blob(link, here, blob),
                 Some(false) => self.stop_blob(blob),
@@ -1289,7 +1392,7 @@ mod tests {
         let relay = Relay { server: base.into(), server_key: key.into(), identity: me.clone(), sync_key: [4; 32], dir: store.dir().to_path_buf(), device: "test".into(), hub: None };
         let synced = sync(Job { blob: Blob::Transfers, ..job(base, key, me, &state, false) }).unwrap();
         let mut state = after(state, &synced);
-        let plan = song_sync::plan(&state.applied, device, store, wanted, &BTreeSet::new(), &BTreeSet::new(), None);
+        let plan = song_sync::plan(&state.applied, device, |k| store.has(k), wanted, &BTreeSet::new(), &BTreeSet::new(), None);
         let mut leaves = plan.leaves;
         for task in &plan.tasks {
             let moved = song_sync::run(&relay, task);
