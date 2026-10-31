@@ -6,6 +6,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Added
 - Pick a picture for a playlist with the picture button on its page: it shows on its tile and its page instead of its initials. It goes along with the playlist to your other devices.
+- Pick a picture of your own for an album (Choose art > Pick a picture...) or an artist (the picture button on their page); it syncs too.
 
 ### Changed
 - A playlist's page looks like an album's: its tile, name, count and length at the top, with Shuffle and Star them all next to Play, and a find-in-here box that narrows its songs.

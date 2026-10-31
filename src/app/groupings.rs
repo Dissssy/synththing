@@ -625,6 +625,10 @@ impl App {
             let image = self.playlists.find(&group.key).and_then(|l| self.playlists.lists[l].playlist.image.as_deref());
             return image.map(AlbumArtSource::image).unwrap_or_default();
         }
+        if id == ARTISTS {
+            let image = self.songs.artist_images().get(&fields::group_key(&group.title, &self.config.group_ignore));
+            return image.map(|key| AlbumArtSource::image(key)).unwrap_or_default();
+        }
         if !albums {
             return AlbumArtSource::default();
         }
@@ -1021,6 +1025,14 @@ impl App {
         let mut wish = albums.then(|| super::wishlist::album_ask(&self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs)).flatten();
         let mut more = (id == ARTISTS).then(|| super::wishlist::artist_ask(&self.songs, &self.lookup.kept, &self.wishlist.list, &group.title, &group.songs)).flatten();
         let links_to_artist = albums && id == "albums";
+        // (An artist's picture: by its name, and whether it has one.)
+        let artist = (id == ARTISTS).then(|| {
+            let name = fields::group_key(&group.title, &self.config.group_ignore);
+            let has = self.songs.artist_images().contains_key(&name);
+            (name, has)
+        });
+        // (Pick one: `Some(true)`; back to its initials: `Some(false)`.)
+        let mut artist_picture: Option<bool> = None;
         let ignore = self.config.group_ignore.clone();
         let view = self.groupings.view();
         ui.horizontal(|ui| {
@@ -1122,6 +1134,26 @@ impl App {
                     if albums && ui.add(icon_button("image")).on_hover_text("Choose art").clicked() {
                         choose_art = true;
                     }
+                    match &artist {
+                        Some((_, false)) => {
+                            if ui.add(icon_button("image")).on_hover_text("Pick a picture for them").clicked() {
+                                artist_picture = Some(true);
+                            }
+                        }
+                        Some((_, true)) => {
+                            egui::containers::menu::MenuButton::from_button(icon_button("image")).config(crate::menu::config(ui.ctx())).ui(ui, |ui| {
+                                if ui.button("Pick another picture...").clicked() {
+                                    artist_picture = Some(true);
+                                }
+                                if ui.button("Show their initials").clicked() {
+                                    artist_picture = Some(false);
+                                }
+                            })
+                            .0
+                            .on_hover_text("Their picture");
+                        }
+                        None => {}
+                    }
                     if let Some(ask) = super::wishlist::album_wish_button(ui, wish.take()) {
                         act = Some(Act::Wish(ask));
                     }
@@ -1184,6 +1216,13 @@ impl App {
                 }
             }
         });
+        if let (Some(pick), Some((name, _))) = (artist_picture, artist) {
+            if pick {
+                self.pick_picture(super::pictures::PictureFor::Artist(name));
+            } else {
+                self.set_artist_image(&name, None);
+            }
+        }
         if choose_art {
             self.open_choose_art(&group.title, group.subtitle.clone(), group.songs.clone(), art_from);
         }

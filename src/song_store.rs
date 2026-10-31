@@ -24,6 +24,9 @@
 //! and size), read on the device that has it (`App::note_song_meta`) and
 //! synced, so every device can list and sort the songs it doesn't have.
 //!
+//! An artist can have a picture the user picked (`artists.json`): its
+//! key (`images.rs`), by the artist's name as `fields::group_key` makes it.
+//!
 //! Songs can play together (`together.json`): an ordered set of them,
 //! by key, that shuffling treats as one and plays in order. A song is in
 //! at most one.
@@ -59,6 +62,7 @@ const INDEX: &str = "library.json";
 const BLOCKED: &str = "blocked.json";
 const TAGS: &str = "tags.json";
 const TOGETHER: &str = "together.json";
+const ARTISTS: &str = "artists.json";
 const REMOVED: &str = "removed.json";
 const STATS: &str = "stats.json";
 
@@ -139,6 +143,9 @@ pub enum Art {
     /// The picture at this address.
     #[serde(rename = "u")]
     Url(String),
+    /// A picture the user picked, kept as this key (`images.rs`).
+    #[serde(rename = "i")]
+    Image(String),
 }
 
 impl Song {
@@ -269,6 +276,9 @@ pub struct SongStore {
     tags: BTreeMap<String, Tag>,
     /// The songs that play together, by the set's ID: their keys, in order.
     together: BTreeMap<String, Vec<String>>,
+    /// The pictures picked for artists: their keys, by the artists' names
+    /// (`fields::group_key`).
+    artist_images: BTreeMap<String, String>,
     /// (Shared like `songs`.)
     stats: Arc<PlayStats>,
     /// Counts the changes made (`revision`).
@@ -304,6 +314,10 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{TOGETHER}: {e}")).ok())
             .unwrap_or_default();
+        let artist_images = std::fs::read_to_string(dir.join(ARTISTS))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{ARTISTS}: {e}")).ok())
+            .unwrap_or_default();
         let removed: BTreeMap<String, Removed> = std::fs::read_to_string(dir.join(REMOVED))
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{REMOVED}: {e}")).ok())
@@ -312,7 +326,7 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{STATS}: {e}")).ok())
             .unwrap_or_default();
-        let mut store = Self { dir, songs: Arc::new(songs), present, blocked, removed, tags, together, stats: Arc::new(stats), revision: 0 };
+        let mut store = Self { dir, songs: Arc::new(songs), present, blocked, removed, tags, together, stats: Arc::new(stats), artist_images, revision: 0 };
         // (A file that couldn't be deleted when it was removed everywhere,
         // or found again: it goes now.)
         let leftover: Vec<String> = store.removed.keys().filter(|key| store.songs.contains_key(*key)).cloned().collect();
@@ -832,6 +846,26 @@ impl SongStore {
         self.revision += 1;
         let tags = self.tags.clone();
         write_later(self.dir.join(TAGS), move || serde_json::to_string_pretty(&tags));
+    }
+
+    /// The pictures picked for artists: their keys, by the artists' names
+    /// (`fields::group_key`).
+    pub fn artist_images(&self) -> &BTreeMap<String, String> {
+        &self.artist_images
+    }
+
+    /// Show the artist `name` (a `fields::group_key`) with the picture kept
+    /// as `image` (`None`: its initials).
+    pub fn set_artist_image(&mut self, name: &str, image: Option<String>) {
+        let changed = match image {
+            Some(image) => self.artist_images.insert(name.to_string(), image.clone()).as_ref() != Some(&image),
+            None => self.artist_images.remove(name).is_some(),
+        };
+        if changed {
+            self.revision += 1;
+            let images = self.artist_images.clone();
+            write_later(self.dir.join(ARTISTS), move || serde_json::to_string_pretty(&images));
+        }
     }
 
     fn save_together(&mut self) {

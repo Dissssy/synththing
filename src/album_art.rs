@@ -200,10 +200,10 @@ impl AlbumArt {
         }
     }
 
-    /// Look again for the pictures picked (`Source::image`) found
-    /// missing: one came from the other devices.
+    /// Look again for the pictures picked (`Source::image`,
+    /// `Art::Image`) found missing: one came from the other devices.
     pub fn images_arrived(&mut self) {
-        self.kept.retain(|(source, _), k| source.image.is_none() || !matches!(k.slot, Slot::Missing));
+        self.kept.retain(|(source, _), k| (source.image.is_none() && !matches!(source.chosen, Some(Art::Image(_)))) || !matches!(k.slot, Slot::Missing));
     }
 
     /// Draw the art of the album `name`, taken `from` a song of it and
@@ -289,6 +289,7 @@ pub fn picture(source: &Source, online: bool) -> Option<Box<[u8]>> {
         // online lookups are on in this build.)
         Some(Art::Url(url)) => picture_at(url),
         Some(Art::Files) => source.file.as_deref().and_then(embedded_picture),
+        Some(Art::Image(key)) => crate::images::path(key).ok().and_then(|p| std::fs::read(p).ok()).map(Vec::into_boxed_slice),
         None => source
             .file
             .as_deref()

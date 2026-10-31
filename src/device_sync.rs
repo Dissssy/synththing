@@ -442,7 +442,9 @@ impl DeviceSync {
         self.on
             && match blob {
                 Blob::Settings => true,
-                Blob::Playlists | Blob::Images => settings_sync::syncs(&self.choices, &settings_sync::PLAYLISTS),
+                Blob::Playlists => settings_sync::syncs(&self.choices, &settings_sync::PLAYLISTS),
+                // (Playlists', albums' and artists' pictures.)
+                Blob::Images => settings_sync::syncs(&self.choices, &settings_sync::PLAYLISTS) || settings_sync::syncs(&self.choices, &settings_sync::SONGS),
                 Blob::Library | Blob::Transfers | Blob::Stats => settings_sync::syncs(&self.choices, &settings_sync::SONGS),
                 Blob::Wishlist => settings_sync::syncs(&self.choices, &settings_sync::WISHLIST),
             }
@@ -462,6 +464,7 @@ impl DeviceSync {
     /// The songs here changed.
     pub fn songs_changed(&mut self) {
         self.songs_dirty = true;
+        self.images_dirty = true;
     }
 
     fn channel(&mut self, blob: Blob) -> &mut Channel {
@@ -632,7 +635,7 @@ impl DeviceSync {
         self.check_hub();
         if self.images_dirty && self.syncing(Blob::Images) && self.images_busy.is_empty() {
             self.images_dirty = false;
-            self.move_images(link, here.playlists);
+            self.move_images(link, here.playlists, here.songs);
         }
         if self.songs_dirty && self.on && !self.songs_pending {
             self.songs_dirty = false;
@@ -745,10 +748,10 @@ impl DeviceSync {
 
     /// Say which pictures the playlists here want, and move those the
     /// transfers say to, one after another, on a thread of their own.
-    fn move_images(&mut self, link: &Link, playlists: &Library) {
+    fn move_images(&mut self, link: &Link, playlists: &Library, songs: &SongStore) {
         let Some(mut state) = State::load(image_sync::NAME) else { return };
         let device = self.device.get_or_insert_with(Device::load).id.clone();
-        let plan = image_sync::plan(&state.applied, &device, &image_sync::wanted(playlists), &self.images_busy);
+        let plan = image_sync::plan(&state.applied, &device, &image_sync::wanted(playlists, songs), &self.images_busy);
         if state.record_leaves(plan.leaves, settings_sync::now()) {
             if let Err(e) = state.save(image_sync::NAME) {
                 log::warn!("image sync: {e}");
@@ -840,7 +843,7 @@ impl DeviceSync {
             Blob::Stats => play_stats::leaves(here.songs.stats()),
             Blob::Images => {
                 let device = self.device.get_or_insert_with(Device::load).id.clone();
-                image_sync::plan(&BTreeMap::new(), &device, &image_sync::wanted(here.playlists), &BTreeSet::new()).leaves
+                image_sync::plan(&BTreeMap::new(), &device, &image_sync::wanted(here.playlists, here.songs), &BTreeSet::new()).leaves
             }
             Blob::Library | Blob::Transfers => {
                 let songs = self.songs_now(link, here);
@@ -1279,7 +1282,9 @@ impl DeviceSync {
         if any_on {
             self.channel(Blob::Settings).wanted = Some(Instant::now());
         }
-        for (blob, toggled) in [(Blob::Playlists, playlists), (Blob::Images, playlists), (Blob::Wishlist, wishes)] {
+        // (The pictures sync while the playlists or the songs do.)
+        let images = Some(self.syncing(Blob::Images)).filter(|&on| on != State::load(image_sync::NAME).is_some());
+        for (blob, toggled) in [(Blob::Playlists, playlists), (Blob::Images, images), (Blob::Wishlist, wishes)] {
             match toggled {
                 Some(true) => self.start_blob(link, here, blob),
                 Some(false) => self.stop_blob(blob),

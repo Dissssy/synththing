@@ -21,6 +21,7 @@ mod preferences;
 mod profiler;
 mod queue;
 use preferences::PrefTab;
+mod pictures;
 mod playlist_panel;
 mod identity;
 mod keyboard;
@@ -545,8 +546,8 @@ pub struct App {
     playlist_rename: Option<String>,
     /// "Find in here" on the open playlist's page.
     playlist_find: String,
-    /// The playlist (by ID) a picture's being picked for.
-    image_for: Option<String>,
+    /// What a picture's being picked for.
+    picture_for: Option<pictures::PictureFor>,
     /// Delete was clicked once; the next click confirms.
     confirm_delete_playlist: bool,
     /// The section layout. Moved out into a local while `DockArea` draws it
@@ -830,7 +831,7 @@ impl App {
             rng: Rng::from_time(),
             playlist_rename: None,
             playlist_find: String::new(),
-            image_for: None,
+            picture_for: None,
             confirm_delete_playlist: false,
             open_sections: Section::ALL.into_iter().filter(|&s| layout::is_open(&dock, s)).collect(),
             dock,
@@ -3017,9 +3018,8 @@ impl App {
                 }
                 crate::import::Kind::Soundfonts => self.add_soundfonts(imported.soundfonts),
                 crate::import::Kind::Image => {
-                    let id = self.image_for.take();
-                    if let Some(list) = id.and_then(|id| self.playlists.find(&id)) {
-                        self.set_playlist_image(list, imported.images.into_iter().next());
+                    if let Some(image) = imported.images.into_iter().next() {
+                        self.picture_picked(image);
                     }
                 }
             }
