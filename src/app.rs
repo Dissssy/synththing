@@ -1229,8 +1229,8 @@ impl App {
     /// Add one soundfont to the list: `Ok` with a note if it's added but
     /// can't be played by this build, or why it wasn't added. Only files
     /// that aren't SoundFont containers at all are refused: a valid one
-    /// this build of rustysynth can't render yet (a compressed SF3, say) is
-    /// still added, with a note.
+    /// this build of rustysynth can't render yet is still added, with a
+    /// note.
     fn try_add_soundfont(&mut self, path: &Path) -> Result<Option<String>, String> {
         let name = nice_name(path);
         let note = match loader::probe_soundfont(path) {
@@ -1283,10 +1283,10 @@ impl App {
     /// Android, import them: `import.rs`.)
     fn open_soundfont_browser(&mut self) {
         #[cfg(target_os = "android")]
-        crate::import::start(crate::import::Kind::Soundfonts, &["sf2"]);
+        crate::import::start(crate::import::Kind::Soundfonts, &["sf2", "sf3"]);
         #[cfg(not(target_os = "android"))]
         if let Some(paths) = rfd::FileDialog::new()
-            .add_filter("SoundFont", &["sf2"])
+            .add_filter("SoundFont", &["sf2", "sf3"])
             .pick_files()
         {
             self.add_soundfonts(paths);
@@ -1560,7 +1560,7 @@ impl App {
         let left = |ui: &mut egui::Ui| {
             if mobile {
                 if ui.button(format!("{}  Import soundfonts...", icon("plus"))).on_hover_text("Copy soundfonts into synththing").clicked() {
-                    crate::import::start(crate::import::Kind::Soundfonts, &["sf2"]);
+                    crate::import::start(crate::import::Kind::Soundfonts, &["sf2", "sf3"]);
                 }
             } else {
                 browse = ui.add(icon_button("plus")).on_hover_text("Add a soundfont...").clicked();

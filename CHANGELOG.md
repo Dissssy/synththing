@@ -22,6 +22,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - The Queue (once Up next) shows the song playing at the top, then what's queued, filled out (faded) with what the playlist, album or list playing goes on to, up to 5 songs (Preferences > Playback > Songs coming up). All of the queue shows, however long. Shuffled picks hold, so what it shows is what plays.
 - The Queue on phones: the menu has it, under Now playing.
 - Now playing on phones has a star button and a Song info button for the song playing, and an art button that shows the song's art instead of the visualizer: its own or its album's, else its artist's picture.
+- Compressed SF3 soundfonts (like GZDoom's or MuseScore's) work: add one like any `.sf2`, no converting first. Their samples are unpacked once as the soundfont loads.
 - Help > Support synththing opens Ko-fi, for anyone who wants to chip in. The website and docs link it too.
 
 ### Changed

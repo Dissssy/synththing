@@ -12,6 +12,7 @@ use crate::preset::Preset;
 use crate::preset_info::PresetInfo;
 use crate::read_counter::ReadCounter;
 use crate::sample_header::SampleHeader;
+use crate::soundfont_sampledata::SoundFontSampleData;
 use crate::zone::Zone;
 use crate::zone_info::ZoneInfo;
 
@@ -23,7 +24,12 @@ pub(crate) struct SoundFontParameters {
 }
 
 impl SoundFontParameters {
-    pub(crate) fn new<R: Read>(reader: &mut R) -> Result<Self, SoundFontError> {
+    /// LOCAL PATCH (synththing): takes the sample data too, to decompress an
+    /// SF3's samples before the instruments copy the sample headers.
+    pub(crate) fn new<R: Read>(
+        reader: &mut R,
+        sample_data: &mut SoundFontSampleData,
+    ) -> Result<Self, SoundFontError> {
         let chunk_id = BinaryReader::read_four_cc(reader)?;
         if chunk_id != b"LIST" {
             return Err(SoundFontError::ListChunkNotFound);
@@ -90,9 +96,13 @@ impl SoundFontParameters {
             SoundFontError::SubChunkNotFound(FourCC::from_bytes(*b"IGEN")),
         )?;
 
-        let sample_headers = sample_headers.ok_or(SoundFontError::SubChunkNotFound(
+        let mut sample_headers = sample_headers.ok_or(SoundFontError::SubChunkNotFound(
             FourCC::from_bytes(*b"SHDR"),
         ))?;
+
+        if let Some(smpl) = sample_data.compressed.take() {
+            sample_data.wave_data = crate::sf3::decompress(&smpl, &mut sample_headers)?;
+        }
 
         let instrument_zones = Zone::create(&instrument_bag, &instrument_generators)?;
         let instruments =
