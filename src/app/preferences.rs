@@ -9,6 +9,7 @@ use eframe::egui;
 use super::{categories_body, icon_button, row_icon_button, row_icon_button_room, nice_name, control_width, setting_label, setting_combo, setting_row, setting_slider, settings_group, toggle_chip, with_info, App};
 use crate::audio::{AudioCommand, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
+use crate::loudness;
 
 /// The sections of Preferences, in order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -226,6 +227,8 @@ impl App {
         let mut visualizer_scale = config::visualizer_scale_down(self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE));
         let mut channel_chips = self.config.channel_chips;
         let mut buffer_ms = self.buffer_ms;
+        let mut even_volume = self.config.even_volume.unwrap_or(true);
+        let mut volume_target = self.config.volume_target.unwrap_or(loudness::DEFAULT_TARGET);
         let mut remember = self.config.remember;
         let mut install_updates = self.config.android_install_updates;
         let mut over_cutout = self.config.fullscreen_over_cutout;
@@ -303,6 +306,30 @@ impl App {
                         |ui| {
                             let label = setting_label(ui, "Audio buffer");
                             label | setting_slider(ui, egui::Slider::new(&mut buffer_ms, MIN_BUFFER_MS..=MAX_BUFFER_MS).suffix(" ms"), 0.0)
+                        },
+                    );
+                    with_info(
+                        ui,
+                        "Plays every song about as loud as the next: each is turned up or down by how \
+                         loud it is, as its ReplayGain tags say, else as measured (once, in the background, \
+                         by your hub, or a computer without one; your other devices use that). A song's own volume \
+                         adjust (Song info) goes on top. Quiet songs are turned up only as far as they \
+                         go without clipping. MIDI files aren't evened out yet.",
+                        |ui| ui.checkbox(&mut even_volume, "Even out volume"),
+                    );
+                    with_info(
+                        ui,
+                        &format!(
+                            "How loud songs are brought to, in LUFS: higher is louder. {} LUFS (what most \
+                             streaming services use) unless changed.",
+                            loudness::DEFAULT_TARGET
+                        ),
+                        |ui| {
+                            ui.add_enabled_ui(even_volume, |ui| {
+                                let label = setting_label(ui, "Bring songs to");
+                                label | setting_slider(ui, egui::Slider::new(&mut volume_target, loudness::TARGET_RANGE).suffix(" LUFS").step_by(1.0), 0.0)
+                            })
+                            .inner
                         },
                     );
                 });
@@ -623,6 +650,8 @@ impl App {
             || visualizer_scale != self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE)
             || channel_chips != self.config.channel_chips
             || buffer_ms != self.buffer_ms
+            || even_volume != self.config.even_volume.unwrap_or(true)
+            || volume_target != self.config.volume_target.unwrap_or(loudness::DEFAULT_TARGET)
             || remember != self.config.remember
             || install_updates != self.config.android_install_updates
             || over_cutout != self.config.fullscreen_over_cutout
@@ -640,6 +669,9 @@ impl App {
                 self.send(AudioCommand::SetBufferMs(buffer_ms));
             }
             self.config.buffer_ms = (buffer_ms != DEFAULT_BUFFER_MS).then_some(buffer_ms);
+            self.config.even_volume = (!even_volume).then_some(false);
+            self.config.volume_target = Some(volume_target).filter(|&t| t != loudness::DEFAULT_TARGET);
+            self.send_volume();
             self.config.channel_chips = channel_chips;
             self.config.script_log_to_app = script_log;
             self.config.visualizer_scale = (visualizer_scale != config::DEFAULT_VISUALIZER_SCALE).then_some(visualizer_scale);

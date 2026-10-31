@@ -21,6 +21,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::loudness::Loudness;
 use crate::play_stats::Totals;
 use crate::song_info::{format_length, thousands, SongInfo};
 use crate::song_store::{self, Meta, Online, STARRED};
@@ -98,6 +99,8 @@ pub enum Field {
     Wished,
     /// The names of the wishes it fills.
     Wish,
+    /// How loud it is (LUFS: `Facts::loudness`).
+    Loudness,
     /// How often it's been played and skipped, and when last, on every
     /// device (`play_stats`).
     Plays,
@@ -207,6 +210,7 @@ pub const FIELDS: &[Def] = &[
     def(Field::ArtistMatched, "artist_matched", "Artist matched at MusicBrainz", Kind::Flag, true, 0.0, false, &[], false),
     def(Field::Wished, "wished", "On your wishlist", Kind::Flag, true, 0.0, false, &[], false),
     def(Field::Wish, "wish", "Wish", Kind::Text, true, 0.0, false, &[], false),
+    def(Field::Loudness, "loudness", "Loudness (LUFS)", Kind::Number, true, 72.0, false, &[], false),
     def(Field::Plays, "plays", "Plays", Kind::Number, true, 52.0, false, &[], false),
     def(Field::Skips, "skips", "Skips", Kind::Number, true, 52.0, false, &[], false),
     def(Field::LastPlayed, "last_played", "Last played", Kind::Date, true, 96.0, true, &[], false),
@@ -336,6 +340,8 @@ pub struct Facts<'a> {
     pub online: Option<&'a Online>,
     /// Its plays and skips, where they're known (`SongStore::totals`).
     pub stats: Option<Totals>,
+    /// How loud it measured, for a song its tags don't say.
+    pub loudness: Option<&'a Loudness>,
 }
 
 /// A song's edits (in the synced library, `song_store::Song::edits`): an
@@ -346,7 +352,7 @@ pub type Edits = BTreeMap<Field, String>;
 impl<'a> Facts<'a> {
     /// A song in the library, as every device knows it.
     pub fn of(song: &'a song_store::Song) -> Self {
-        Self { file_name: &song.name, meta: song.meta.as_ref(), info: None, imported: Some(song.imported), tags: &song.tags, edits: Some(&song.edits), added_by: song.added_by.as_deref(), online: song.online.as_ref(), stats: None }
+        Self { file_name: &song.name, meta: song.meta.as_ref(), info: None, imported: Some(song.imported), tags: &song.tags, edits: Some(&song.edits), added_by: song.added_by.as_deref(), online: song.online.as_ref(), stats: None, loudness: song.loudness.as_ref() }
     }
 
     /// What the song's edits say `field` is, if they do.
@@ -417,6 +423,7 @@ impl<'a> Facts<'a> {
             Field::BitRate if !self.is_midi() => meta.filter(|m| m.size > 0).and_then(|m| Some(m.size as f64 * 8.0 / m.length.filter(|&l| l > 0.0)? / 1000.0)),
             Field::SampleRate => meta?.sample_rate.map(f64::from),
             Field::Imported => self.imported.map(|secs| secs as f64),
+            Field::Loudness => self.loudness().map(|l| f64::from(l.lufs)),
             Field::Plays => self.stats.map(|s| f64::from(s.plays)),
             Field::Skips => self.stats.map(|s| f64::from(s.skips)),
             Field::LastPlayed => self.stats?.last_played.map(|secs| secs as f64),
@@ -440,6 +447,11 @@ impl<'a> Facts<'a> {
     /// its text.
     pub fn first(&self, field: Field) -> Option<Cow<'a, str>> {
         self.items(field).into_iter().next()
+    }
+
+    /// How loud it is: as its ReplayGain tags say, else as measured.
+    pub fn loudness(&self) -> Option<Loudness> {
+        self.meta.and_then(|m| m.replay_gain).or(self.loudness.copied())
     }
 
     /// Whether it's a MIDI file.
@@ -503,6 +515,7 @@ impl<'a> Facts<'a> {
                     Field::Size => format!("{n:.1}"),
                     Field::BitRate => format!("{n:.0}"),
                     Field::SampleRate => format!("{} kHz", n / 1000.0),
+                    Field::Loudness => format!("{n:.1}"),
                     Field::Imported | Field::LastPlayed | Field::LastSkipped => date(n as i64),
                     // (None yet shows as nothing, but sorts as none.)
                     Field::Plays | Field::Skips if n == 0.0 => String::new(),
@@ -642,7 +655,7 @@ mod tests {
     fn facts_give_each_field() {
         let meta = Meta { title: Some(" Song ".into()), artist: Some(String::new()), track: Some(3), length: Some(83.0), size: 4_200_000, ..Meta::default() };
         let tags = vec![STARRED.to_string()];
-        let facts = Facts { file_name: "03 Song.MP3", meta: Some(&meta), info: None, imported: Some(86_400), tags: &tags, edits: None, added_by: None, online: None, stats: None };
+        let facts = Facts { file_name: "03 Song.MP3", meta: Some(&meta), info: None, imported: Some(86_400), tags: &tags, edits: None, added_by: None, online: None, stats: None, loudness: None };
         assert_eq!(facts.text(Field::Title).as_deref(), Some("Song"));
         assert_eq!(facts.text(Field::Artist), None, "empty is none");
         assert_eq!(facts.text(Field::FileName).as_deref(), Some("03 Song"));

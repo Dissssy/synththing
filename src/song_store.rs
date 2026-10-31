@@ -53,6 +53,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::fields::{Edits, Field};
+use crate::loudness::Loudness;
 use crate::play_stats::{PlayStats, Totals};
 
 const INDEX: &str = "library.json";
@@ -96,6 +97,10 @@ pub struct Song {
     /// everywhere.
     #[serde(rename = "by", default, skip_serializing_if = "Option::is_none")]
     pub added_by: Option<String>,
+    /// How loud it is, as measured (`loudness`): for a song its tags
+    /// don't say (`Meta::replay_gain`).
+    #[serde(rename = "ld", default, skip_serializing_if = "Option::is_none")]
+    pub loudness: Option<Loudness>,
 }
 
 /// A song's match at MusicBrainz, or that its last one was wrong. Kept
@@ -214,6 +219,11 @@ pub struct Meta {
     pub musicbrainz_recording: Option<String>,
     #[serde(rename = "mbt", skip_serializing_if = "Option::is_none")]
     pub musicbrainz_track: Option<String>,
+    /// How loud its ReplayGain tags say it is, and its album.
+    #[serde(rename = "rg", skip_serializing_if = "Option::is_none")]
+    pub replay_gain: Option<Loudness>,
+    #[serde(rename = "rga", skip_serializing_if = "Option::is_none")]
+    pub album_replay_gain: Option<Loudness>,
     /// Which `META_VERSION` read it: one read by an older one is read
     /// again, for what it didn't read.
     #[serde(rename = "v", skip_serializing_if = "is_zero")]
@@ -223,8 +233,8 @@ pub struct Meta {
 /// The version of what's read of a song's file (`Meta::version`): 1 added
 /// its grouping, comment and sample rate; 2 trims the NULs some taggers
 /// leave at the end of a tag; 3 added its MusicBrainz IDs; 4 whether
-/// it's lossless, and its bits per sample.
-pub const META_VERSION: u32 = 4;
+/// it's lossless, and its bits per sample; 5 its ReplayGain.
+pub const META_VERSION: u32 = 5;
 
 fn is_zero(n: &u32) -> bool {
     *n == 0
@@ -381,7 +391,9 @@ impl SongStore {
                 (Some(synced), Some(here)) if here.version > synced.version => Some(here.clone()),
                 (synced, here) => synced.or_else(|| here.clone()),
             };
-            let mut learned = Song { meta, ..synced };
+            // (Nor is what's been measured here lost, before it's synced.)
+            let loudness = synced.loudness.or(song.loudness);
+            let mut learned = Song { meta, loudness, ..synced };
             // (One from before it was synced says 0.)
             if learned.imported == 0 || song.imported < learned.imported {
                 learned.imported = song.imported;
@@ -716,6 +728,16 @@ impl SongStore {
             }
         }
         if changed {
+            self.save();
+        }
+    }
+
+    /// Note how loud the song `key` measured; saved if it changed.
+    pub fn set_loudness(&mut self, key: &str, loudness: Loudness) {
+        if self.songs.get(key).is_some_and(|song| song.loudness != Some(loudness))
+            && let Some(song) = Arc::make_mut(&mut self.songs).get_mut(key)
+        {
+            song.loudness = Some(loudness);
             self.save();
         }
     }
