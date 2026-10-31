@@ -4,10 +4,19 @@
 //! happened, never to whom. Kept until an admin clears it
 //! (`synththing admin usage --clear`); `new` counts what came in since
 //! intake last took it.
+//!
+//! Intake (docs/feedback-intake.md) collects what's new as one flat list,
+//! a line's versions and platforms together (`GET /api/v1/intake/usage`),
+//! and says which issue each line it filed became
+//! (`POST /api/v1/intake/usage/taken`). The server remembers that, by the
+//! line's signature without its line number (`key`), so the same line is
+//! never filed twice, in a later run or a later version.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use tiny_http::Request;
 
 use super::moderation::limit;
@@ -42,6 +51,28 @@ INSERT INTO usage_rules (rule) VALUES ('error * keep'), ('warn * keep'), ('info 
 PRAGMA user_version = 21;
 COMMIT;
 ";
+
+/// What intake was last offered (`offered`, taken away from `new` once it
+/// says it's taken), and the issue each line became.
+pub(super) const SCHEMA_V22: &str = "
+BEGIN;
+ALTER TABLE usage ADD COLUMN offered INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE usage_sessions ADD COLUMN offered INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE usage_filed (
+    level TEXT NOT NULL,
+    target TEXT NOT NULL,
+    key TEXT NOT NULL,
+    issue INTEGER NOT NULL,
+    PRIMARY KEY (level, target, key)
+);
+PRAGMA user_version = 22;
+COMMIT;
+";
+
+/// The most lines one collection hands intake; the rest wait for the next.
+const DIGEST_LINES: usize = 100;
+/// Examples given of each, at most: signatures, versions, platforms.
+const DIGEST_EXAMPLES: usize = 5;
 
 /// Reports one address may send in a day: the daily one, and a few for
 /// panics, which go as soon as the app starts again.
@@ -198,6 +229,206 @@ pub(super) fn set_rules(db: &mut Connection, set: &[String]) -> Result<(), Strin
     run().map_err(|e| format!("database: {e}"))
 }
 
+/// A signature without its line number, so a line keeps its key from
+/// version to version: `synththing::sync:212 couldn't {}` is
+/// `synththing::sync couldn't {}`, `src/app.rs:12: oops` is
+/// `src/app.rs: oops`.
+pub(super) fn key(signature: &str) -> String {
+    let bytes = signature.as_bytes();
+    let mut i = 0;
+    while let Some(found) = signature[i..].find(':') {
+        let at = i + found;
+        let digits = bytes[at + 1..].iter().take_while(|b| b.is_ascii_digit()).count();
+        let after = bytes.get(at + 1 + digits);
+        if digits > 0 && matches!(after, None | Some(b' ' | b':')) {
+            return format!("{}{}", &signature[..at], &signature[at + 1 + digits..]);
+        }
+        i = at + 1;
+    }
+    signature.to_string()
+}
+
+/// One kind of line in intake's collection, across versions and platforms.
+#[derive(Debug, Serialize, PartialEq)]
+pub(super) struct DigestLine {
+    pub level: String,
+    pub target: String,
+    /// What `taken` names it by.
+    pub key: String,
+    /// Its signatures (with line numbers), a few.
+    pub signatures: Vec<String>,
+    pub versions: Vec<String>,
+    pub platforms: Vec<String>,
+    /// Since intake last took it, and ever.
+    pub new: u64,
+    pub total: u64,
+    pub first_seen: i64,
+    /// The issue it was filed as, if it was: comment there at most, never
+    /// file it again.
+    pub filed: Option<i64>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub(super) struct DigestSessions {
+    pub version: String,
+    pub platform: String,
+    pub new: u64,
+    pub total: u64,
+}
+
+#[derive(Deserialize)]
+struct Filed {
+    level: String,
+    target: String,
+    key: String,
+    issue: i64,
+}
+
+#[derive(Deserialize)]
+struct UsageTaken {
+    #[serde(default)]
+    filed: Vec<Filed>,
+}
+
+fn level_rank(level: &str) -> usize {
+    USAGE_LEVELS.iter().position(|l| *l == level).unwrap_or(USAGE_LEVELS.len())
+}
+
+/// What's new, as intake gets it: panics first, then errors, warnings and
+/// info, the most frequent first, at most `DIGEST_LINES`. The rows handed
+/// out are marked offered, for `take`.
+pub(super) fn digest(db: &mut Connection) -> rusqlite::Result<(Vec<DigestLine>, Vec<DigestSessions>)> {
+    let tx = db.transaction()?;
+    type Row = (String, String, String, String, String, u64, u64, i64);
+    let rows: Vec<Row> = tx
+        .prepare("SELECT version, platform, level, target, signature, total, new, first_seen FROM usage")?
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get::<_, i64>(5)? as u64, r.get::<_, i64>(6)? as u64, r.get(7)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut groups: BTreeMap<(String, String, String), (DigestLine, Vec<usize>)> = BTreeMap::new();
+    let mut sets: BTreeMap<(String, String, String), [BTreeSet<String>; 3]> = BTreeMap::new();
+    for (i, (version, platform, level, target, signature, total, new, first_seen)) in rows.iter().enumerate() {
+        let id = (level.clone(), target.clone(), key(signature));
+        let (line, members) = groups.entry(id.clone()).or_insert_with(|| {
+            (
+                DigestLine {
+                    level: level.clone(),
+                    target: target.clone(),
+                    key: id.2.clone(),
+                    signatures: Vec::new(),
+                    versions: Vec::new(),
+                    platforms: Vec::new(),
+                    new: 0,
+                    total: 0,
+                    first_seen: *first_seen,
+                    filed: None,
+                },
+                Vec::new(),
+            )
+        });
+        line.new += new;
+        line.total += total;
+        line.first_seen = line.first_seen.min(*first_seen);
+        members.push(i);
+        let [signatures, versions, platforms] = sets.entry(id).or_default();
+        signatures.insert(signature.clone());
+        versions.insert(version.clone());
+        platforms.insert(platform.clone());
+    }
+    let mut lines: Vec<(DigestLine, Vec<usize>)> = groups
+        .into_iter()
+        .filter(|(_, (line, _))| line.new > 0)
+        .map(|(id, (mut line, members))| {
+            let [signatures, versions, platforms] = sets.remove(&id).unwrap_or_default();
+            line.signatures = signatures.into_iter().take(DIGEST_EXAMPLES).collect();
+            line.versions = versions.into_iter().rev().take(DIGEST_EXAMPLES).collect();
+            line.platforms = platforms.into_iter().take(DIGEST_EXAMPLES).collect();
+            (line, members)
+        })
+        .collect();
+    lines.sort_by(|(a, _), (b, _)| level_rank(&a.level).cmp(&level_rank(&b.level)).then(b.new.cmp(&a.new)));
+    lines.truncate(DIGEST_LINES);
+
+    tx.execute("UPDATE usage SET offered = 0", [])?;
+    for (line, members) in &mut lines {
+        line.filed = tx
+            .query_row(
+                "SELECT issue FROM usage_filed WHERE level = ? AND target = ? AND key = ?",
+                params![line.level, line.target, line.key],
+                |r| r.get(0),
+            )
+            .optional()?;
+        for &i in members.iter() {
+            let (version, platform, level, target, signature, ..) = &rows[i];
+            tx.execute(
+                "UPDATE usage SET offered = new WHERE version = ? AND platform = ? AND level = ? AND target = ? AND signature = ?",
+                params![version, platform, level, target, signature],
+            )?;
+        }
+    }
+    tx.execute("UPDATE usage_sessions SET offered = new", [])?;
+    let sessions = tx
+        .prepare("SELECT version, platform, new, total FROM usage_sessions WHERE new > 0 ORDER BY version DESC, platform")?
+        .query_map([], |r| {
+            Ok(DigestSessions { version: r.get(0)?, platform: r.get(1)?, new: r.get::<_, i64>(2)? as u64, total: r.get::<_, i64>(3)? as u64 })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    tx.commit()?;
+    Ok((lines.into_iter().map(|(line, _)| line).collect(), sessions))
+}
+
+/// Intake took the last collection: what it was offered is no longer new,
+/// and the lines it filed remember their issues.
+fn take(db: &mut Connection, filed: &[Filed]) -> rusqlite::Result<()> {
+    let tx = db.transaction()?;
+    tx.execute("UPDATE usage SET new = new - offered, offered = 0", [])?;
+    tx.execute("UPDATE usage_sessions SET new = new - offered, offered = 0", [])?;
+    for f in filed {
+        tx.execute(
+            "INSERT INTO usage_filed (level, target, key, issue) VALUES (?, ?, ?, ?)
+             ON CONFLICT DO UPDATE SET issue = excluded.issue",
+            params![f.level, f.target, f.key, f.issue],
+        )?;
+    }
+    tx.commit()
+}
+
+/// `GET /api/v1/intake/usage`: what's new in the usage data.
+pub(super) fn intake(state: &State, request: &Request) -> Reply {
+    if let Err(reply) = super::intake::authorized(state, request) {
+        return reply;
+    }
+    match digest(&mut state.db()) {
+        Ok((lines, sessions)) => json(200, &serde_json::json!({ "lines": lines, "sessions": sessions })),
+        Err(e) => error(500, format!("database: {e}")),
+    }
+}
+
+/// `POST /api/v1/intake/usage/taken`: `{"filed": [{level, target, key,
+/// issue}]}`, the lines filed as (or added to) issues; the rest of what
+/// was collected is taken too.
+pub(super) fn intake_taken(state: &State, request: &mut Request) -> Reply {
+    if let Err(reply) = super::intake::authorized(state, request) {
+        return reply;
+    }
+    let body = match read_body(request, 256 * 1024) {
+        Ok(body) => body,
+        Err(reply) => return reply,
+    };
+    let taken: UsageTaken = match serde_json::from_slice(&body) {
+        Ok(taken) => taken,
+        Err(e) => return error(400, format!("not a list of filed lines: {e}")),
+    };
+    match take(&mut state.db(), &taken.filed) {
+        Ok(()) => {
+            println!("intake took the usage data ({} lines filed)", taken.filed.len());
+            json(200, &serde_json::json!({ "filed": taken.filed.len() }))
+        }
+        Err(e) => error(500, format!("database: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,7 +437,44 @@ mod tests {
     fn db() -> Connection {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch(SCHEMA_V21).unwrap();
+        db.execute_batch(SCHEMA_V22).unwrap();
         db
+    }
+
+    #[test]
+    fn keys_leave_out_the_line_number() {
+        assert_eq!(key("synththing::sync:212 couldn't send {name}: {e}"), "synththing::sync couldn't send {name}: {e}");
+        assert_eq!(key("synththing::sync:212"), "synththing::sync");
+        assert_eq!(key("src/app.rs:12: oops at 3:4"), "src/app.rs: oops at 3:4");
+        assert_eq!(key("no line here: at all"), "no line here: at all");
+    }
+
+    #[test]
+    fn intake_gets_whats_new_once_and_never_files_a_line_twice() {
+        let mut db = db();
+        let warn = |line: u32| ("warn", "synththing::sync", format!("synththing::sync:{line} couldn't send {{name}}"), 2);
+        let (a, b) = (warn(10), warn(14));
+        add(&mut db, &report("1.7.0", "linux x86_64", &[(a.0, a.1, &a.2, a.3), ("panic", "main", "src/app.rs:3: oops", 1)])).unwrap();
+        add(&mut db, &report("1.8.0", "windows x86_64", &[(b.0, b.1, &b.2, b.3)])).unwrap();
+
+        let (lines, sessions) = digest(&mut db).unwrap();
+        assert_eq!(lines.len(), 2, "the warning in both versions is one line");
+        assert_eq!((lines[0].level.as_str(), lines[0].new), ("panic", 1), "panics first");
+        let warning = &lines[1];
+        assert_eq!((warning.new, warning.versions.clone(), warning.filed), (4, vec!["1.8.0".to_string(), "1.7.0".to_string()], None));
+        assert_eq!(sessions.iter().map(|s| s.new).sum::<u64>(), 4);
+
+        // More comes in between collecting and taking: it stays new.
+        add(&mut db, &report("1.8.0", "windows x86_64", &[(b.0, b.1, &b.2, 1)])).unwrap();
+        let filed = Filed { level: "warn".into(), target: "synththing::sync".into(), key: warning.key.clone(), issue: 77 };
+        take(&mut db, &[filed]).unwrap();
+        let (lines, sessions) = digest(&mut db).unwrap();
+        assert_eq!(lines.len(), 1);
+        assert_eq!((lines[0].new, lines[0].total, lines[0].filed), (1, 5, Some(77)), "known as #77 from now on");
+        assert_eq!(sessions.iter().map(|s| s.new).sum::<u64>(), 2);
+
+        take(&mut db, &[]).unwrap();
+        assert!(digest(&mut db).unwrap().0.is_empty(), "nothing new: nothing to collect");
     }
 
     fn report(version: &str, platform: &str, lines: &[(&str, &str, &str, u64)]) -> UsageReport {

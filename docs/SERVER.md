@@ -202,6 +202,8 @@ POST /api/v1/feedback                     feedback for the admins (unsigned)
 GET  /api/v1/intake                       feedback waiting to be filed (the intake token)
 POST /api/v1/usage                        an anonymous usage report (docs/USAGE.md)
 GET  /api/v1/usage/rules                  which log lines usage reports should carry
+GET  /api/v1/intake/usage                 usage data new since intake last took it (the intake token)
+POST /api/v1/intake/usage/taken           intake took it, and which issues lines were filed as
 POST /api/v1/intake/taken                 mark it filed (the intake token)
 POST /api/v1/admin                        an admin action (signed by an admin)
 GET  /api/v1/users/{id}                   names, uploads, total encores

@@ -5,8 +5,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
-- Anonymous usage data, if you say yes (synththing asks once; Preferences > App > Usage data changes it): once a day, how often each kind of warning and error came up, and crashes as soon as synththing runs again. It says only where in the code something happened, never what it was about: no song names, files, account or anything that says who you are. See what's sent shows the next report. Branch builds never send it.
+- Anonymous usage data, if you say yes (synththing asks once; Preferences > App > Usage data changes it): once a day, how often each kind of warning and error came up, and crashes as soon as synththing runs again. It says only where in the code something happened and which message it was, never what the message was filled in with: no song names, files, account or anything that says who you are. See what's sent shows the next report. Branch builds never send it.
 - Servers: `synththing admin usage` shows the usage data as a tree (version, platform, level, target, signature) and clears parts of it, and `synththing admin usage-rules` sets which log lines are kept.
+- Servers: feedback intake collects the usage data too (`/api/v1/intake/usage`) and files crashes and frequent errors as issues, each line only once: the server remembers which issue it became.
 - Help > Support synththing opens Ko-fi, for anyone who wants to chip in. The website and docs link it too.
 
 ### Fixed
