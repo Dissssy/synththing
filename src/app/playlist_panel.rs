@@ -68,6 +68,7 @@ impl App {
             self.plan_listed();
         }
         self.song_options_tick(view);
+        self.plays_tick(view);
         if self.has_next() && !self.recording.holds_advance() {
             if !view.finished {
                 self.advance_armed = true;

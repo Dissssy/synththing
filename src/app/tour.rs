@@ -176,6 +176,11 @@ struct Baseline {
 }
 
 impl Tour {
+    /// Whether the tour is showing.
+    pub(super) fn running(&self) -> bool {
+        self.step.is_some()
+    }
+
     /// Start of a frame: forget last frame's marks.
     pub(super) fn begin_frame(&mut self) {
         self.marks.clear();
