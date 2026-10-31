@@ -91,3 +91,5 @@ winresource = "0.1"                                         # the icon, embedded
 tray-icon = { version = "0.24", default-features = false }  # the notification-area icon (tray.rs)
 raw-window-handle = "0.6"                                   # the window's HWND, which the media controls need (media_controls.rs)
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_SystemInformation"] }  # re-attach to the terminal for CLI use; local time for recording names
+windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Shell"] }  # the Start menu shortcut (install.rs)
+windows-registry = "0.6"                                    # the uninstall entry and starting with Windows (install.rs)

@@ -73,6 +73,13 @@ pub struct Config {
     /// or quits (`Some(false)`); `None` until the first close asks.
     #[serde(default)]
     pub close_to_tray: Option<bool>,
+    /// The offer to install synththing (Windows, `app/install.rs`) was
+    /// answered: it isn't made again (Preferences > App still installs).
+    #[serde(default)]
+    pub install_asked: bool,
+    /// How synththing opens when it starts with Windows.
+    #[serde(default)]
+    pub startup_opens: StartupOpens,
     /// Keys given to commands in place of their defaults, by command id
     /// (`commands::Keymap`), synced.
     #[serde(default)]
@@ -314,6 +321,30 @@ impl MiniPlayerShape {
             Self::Square => "Square",
             Self::Wide => "Wide (16:9)",
             Self::Tall => "Tall (9:16)",
+        }
+    }
+}
+
+/// How synththing opens when it starts with Windows (`cli::Cli::autostart`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StartupOpens {
+    /// Only the tray icon.
+    #[default]
+    Tray,
+    /// The mini player, by the tray icon.
+    MiniPlayer,
+    /// The window, as when started any other way.
+    Window,
+}
+
+impl StartupOpens {
+    pub const ALL: [Self; 3] = [Self::Tray, Self::MiniPlayer, Self::Window];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Tray => "In the tray",
+            Self::MiniPlayer => "As the mini player",
+            Self::Window => "As the window",
         }
     }
 }

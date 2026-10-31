@@ -176,6 +176,14 @@ SYNTHTHING_PUBLISH_KEY=<secret key, hex> synththing publish-bundled [--server UR
 
 Publishes every script bundled with this build (visualizers, games and examples; not the templates), or with `--dir` the ones in that folder (laid out like `assets/visualizers`), to a library server, `https://synththing.p51.nl` unless `--server` says otherwise, signed with the secret key in `SYNTHTHING_PUBLISH_KEY`. Each goes by its slug (its file name): a changed script becomes its next version, an unchanged one stays as it is. With `--dir`, a script using something this build doesn't know (a function newer than it) is skipped, since its minimum app version couldn't be worked out. Prints a line per script; exit code 1 if any failed. CI runs it (`.github/workflows/scripts.yml`, docs/RELEASING.md).
 
+## uninstall: uninstall the app (Windows)
+
+```
+synththing uninstall
+```
+
+What Settings > Apps runs to uninstall synththing, once it's installed (Preferences > App > Install): asks first, then removes the installed app, its Start menu entry and starting with Windows. Songs, settings and soundfonts stay in the config folder. Says to quit synththing first if it's running.
+
 ## Environment variables
 
 - `SYNTHTHING_OFFICIAL_URL`, `SYNTHTHING_OFFICIAL_KEY`: talk to another server instead of the official one (for trying things against a server of your own, e.g. `http://127.0.0.1:7381`), and its key (hex: `key` in its `/api/v1/info`). The app has the official server's key built in, so it never has to ask for it; with a server of your own, set both. They're the only way to change the server: the app has no setting for it.
