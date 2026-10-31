@@ -253,7 +253,7 @@ pub fn run() -> i32 {
             }
         }
         // (The hub does the library's background work, for every device.)
-        if background::runs_here(true, serving.is_some()) && jobs.tick(&mut songs) {
+        if background::runs_here(true, serving.is_some()) && jobs.tick(&mut songs, &config) {
             sync.songs_changed();
         }
         api.tick(&mut hub_api::Here { songs: &mut songs, playlists: &mut playlists, wishlist: &mut wishlist, sync: &mut sync, config: &config });

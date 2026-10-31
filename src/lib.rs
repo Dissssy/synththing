@@ -24,6 +24,7 @@ mod android_id;
 mod applog;
 mod audio;
 mod audio_stream;
+mod art_fill;
 mod background;
 mod build_info;
 mod changelog;

@@ -15,7 +15,7 @@ impl App {
         }
         let ctx = ctx.clone();
         let jobs = self.background.get_or_insert_with(|| Jobs::new(move || ctx.request_repaint()));
-        if jobs.tick(&mut self.songs) {
+        if jobs.tick(&mut self.songs, &self.config) {
             self.songs_changed();
             // (How loud the playing song is may be known now.)
             self.send_volume();

@@ -206,6 +206,15 @@ impl App {
                         }
                     });
                 }
+                changed |= ui
+                    .checkbox(&mut self.config.fill_art, "Fill in missing art")
+                    .on_hover_text(
+                        "Albums with no art in their files or at the Cover Art Archive get the iTunes Store's cover of the \
+                         album named just like them, and artists get their picture from Wikidata. Album and artist names \
+                         are sent to itunes.apple.com, musicbrainz.org and wikidata.org. A picture you choose always \
+                         comes first. Your hub does this, or this computer while you have none.",
+                    )
+                    .changed();
             });
         }
         if changed && let Err(e) = self.config.save() {

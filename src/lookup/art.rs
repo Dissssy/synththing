@@ -1,6 +1,6 @@
 //! Art an album could be shown with, from online (Choose art): a release's
 //! pictures at the Cover Art Archive, or the albums the iTunes Store has
-//! by a name.
+//! by a name; and an artist's picture, from Wikidata.
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -57,14 +57,30 @@ fn caa_choices(found: &Value) -> Vec<Choice> {
     choices.into_iter().map(|(_, c)| c).collect()
 }
 
-/// The albums the iTunes Store has by `term` (an album's name and artist),
-/// with their covers.
-pub fn itunes(term: &str) -> Result<Vec<Choice>> {
-    let found = get("https://itunes.apple.com/search", &[("term", term), ("entity", "album"), ("limit", "12")])?;
-    Ok(found.map(|f| itunes_choices(&f)).unwrap_or_default())
+/// An album the iTunes Store has.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listed {
+    pub name: String,
+    pub artist: String,
+    /// Its cover, at 600 pixels.
+    pub url: String,
 }
 
-fn itunes_choices(found: &Value) -> Vec<Choice> {
+impl Listed {
+    /// It as a picture an album could have, labeled with what it is.
+    pub fn choice(&self) -> Choice {
+        Choice { url: self.url.clone(), label: format!("{} - {}", self.name, self.artist) }
+    }
+}
+
+/// The albums the iTunes Store has by `term` (an album's name and artist),
+/// with their covers.
+pub fn itunes(term: &str) -> Result<Vec<Listed>> {
+    let found = get("https://itunes.apple.com/search", &[("term", term), ("entity", "album"), ("limit", "12")])?;
+    Ok(found.map(|f| itunes_albums(&f)).unwrap_or_default())
+}
+
+fn itunes_albums(found: &Value) -> Vec<Listed> {
     found["results"]
         .as_array()
         .into_iter()
@@ -72,10 +88,21 @@ fn itunes_choices(found: &Value) -> Vec<Choice> {
         .filter_map(|album| {
             // (Its 100-pixel cover's address names its size: any size can be asked for.)
             let url = album["artworkUrl100"].as_str()?.replace("100x100bb", "600x600bb");
-            let label = format!("{} - {}", album["collectionName"].as_str().unwrap_or("?"), album["artistName"].as_str().unwrap_or("?"));
-            Some(Choice { url, label })
+            let text = |name: &str| album[name].as_str().unwrap_or("?").to_string();
+            Some(Listed { name: text("collectionName"), artist: text("artistName"), url })
         })
         .collect()
+}
+
+/// Where the picture of the Wikidata item `id` (a Q-id) is, at 512
+/// pixels, at Wikimedia Commons: its image (P18), if it has one.
+pub fn wikidata_picture(id: &str) -> Result<Option<String>> {
+    let Some(found) = get(&format!("https://www.wikidata.org/wiki/Special:EntityData/{id}.json"), &[])? else { return Ok(None) };
+    Ok(wikidata_file(&found, id).map(|file| format!("https://commons.wikimedia.org/wiki/Special:FilePath/{}?width=512", file.replace(' ', "_"))))
+}
+
+fn wikidata_file<'v>(found: &'v Value, id: &str) -> Option<&'v str> {
+    found["entities"][id]["claims"]["P18"].as_array()?.iter().find_map(|claim| claim["mainsnak"]["datavalue"]["value"].as_str())
 }
 
 #[cfg(test)]
@@ -94,6 +121,10 @@ mod tests {
         let itunes = serde_json::json!({"results": [
             {"collectionName": "Moonmadness", "artistName": "Camel", "artworkUrl100": "https://is1/x/100x100bb.jpg"},
         ]});
-        assert_eq!(itunes_choices(&itunes), vec![Choice { url: "https://is1/x/600x600bb.jpg".into(), label: "Moonmadness - Camel".into() }]);
+        let listed = itunes_albums(&itunes);
+        assert_eq!(listed, vec![Listed { name: "Moonmadness".into(), artist: "Camel".into(), url: "https://is1/x/600x600bb.jpg".into() }]);
+        assert_eq!(listed[0].choice(), Choice { url: "https://is1/x/600x600bb.jpg".into(), label: "Moonmadness - Camel".into() });
+        let wikidata = serde_json::json!({"entities": {"Q1": {"claims": {"P18": [{"mainsnak": {"datavalue": {"value": "Camel band.jpg"}}}]}}}});
+        assert_eq!(wikidata_file(&wikidata, "Q1"), Some("Camel band.jpg"));
     }
 }
