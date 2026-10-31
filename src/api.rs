@@ -1752,7 +1752,7 @@ fn matching<'s>(store: &'s SongStore, wishes: &crate::wishlist::Wishes, query: &
     let rules = search.rules.matcher(store, wishes, crate::settings_sync::now());
     let mut found: Vec<(String, &Song)> = store
         .songs()
-        .filter(|(_, song)| rules(song))
+        .filter(|(path, song)| crate::song_store::key_in(store.dir(), path).is_some_and(|key| rules(key, song)))
         .filter(|(_, song)| {
             let facts = Facts::of(song);
             let hay: Vec<String> = [Field::Title, Field::Artist, Field::Album]

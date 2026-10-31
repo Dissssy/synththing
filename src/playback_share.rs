@@ -54,7 +54,8 @@ pub enum Control {
     Next,
     /// To this many seconds in.
     Seek { position: f64 },
-    /// Follow the device that sent this (Bring here).
+    /// Follow the device that sent this (Bring here, or it continues
+    /// here what this one played).
     FollowMe,
 }
 
@@ -70,6 +71,10 @@ pub struct State {
     /// The device it follows (by ID), if it does: it plays nothing then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub following: Option<String>,
+    /// The playlist (by its synced ID) the song plays from, if any: a
+    /// device continuing it carries on through the same playlist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playlist: Option<String>,
 }
 
 /// The song a device plays, as the others show it (they may not have it).
@@ -193,6 +198,15 @@ impl Players {
         }
     }
 
+    /// `id` asked this device to follow it, so it follows none itself
+    /// (whatever its last state said): it's a leader before its next
+    /// state is heard.
+    pub fn leads(&mut self, id: &str) {
+        if let Some(player) = self.players.iter_mut().find(|p| p.device.id == id) {
+            player.state.following = None;
+        }
+    }
+
     /// Forget devices gone silent.
     pub fn expire(&mut self, now: Instant) {
         self.players.retain(|p| now < p.heard + SILENCE);
@@ -245,12 +259,12 @@ mod tests {
         let start = Instant::now();
         let mut players = Players::default();
         let song = Song { key: None, title: "a".into(), artist: None, length: 100.0 };
-        players.hear(device("phone"), State { song: Some(song.clone()), paused: false, position: 10.0, speed: 2.0, following: None }, start);
+        players.hear(device("phone"), State { song: Some(song.clone()), paused: false, position: 10.0, speed: 2.0, ..State::default() }, start);
         let later = start + Duration::from_secs(5);
         assert_eq!(players.all()[0].position(later), 20.0);
         assert_eq!(players.all()[0].position(start + Duration::from_secs(60)), 100.0, "not past the end");
 
-        players.hear(device("phone"), State { song: Some(song), paused: true, position: 30.0, speed: 2.0, following: None }, later);
+        players.hear(device("phone"), State { song: Some(song), paused: true, position: 30.0, speed: 2.0, ..State::default() }, later);
         assert_eq!(players.all().len(), 1, "the same device, its state replaced");
         assert_eq!(players.all()[0].position(later + Duration::from_secs(5)), 30.0, "paused");
 
@@ -281,5 +295,10 @@ mod tests {
         assert_eq!(players.leader_of("phone", "me").as_deref(), Some("pc"));
         assert_eq!(players.leader_of("tv", "me"), None, "it's with this device already");
         assert_eq!(players.leader_of("gone", "me"), None);
+
+        // (The TV continues here what this device played, and asks it to
+        // follow: before its next state comes, it leads.)
+        players.leads("tv");
+        assert_eq!(players.leader_of("tv", "me").as_deref(), Some("tv"));
     }
 }

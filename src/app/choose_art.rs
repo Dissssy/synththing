@@ -109,7 +109,7 @@ impl App {
             .default_width(4.0 * (TILE + 12.0))
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().max_height(520.0).show(ui, |ui| {
-                    let automatic = Source { file: choose.file.clone(), release: choose.release.clone(), chosen: None };
+                    let automatic = Source { file: choose.file.clone(), release: choose.release.clone(), chosen: None, image: None };
                     let mut tiles: Vec<(Source, String, Option<Art>)> = vec![(automatic, "Automatic".into(), None)];
                     if choose.file.is_some() {
                         let files = Source { file: choose.file.clone(), chosen: Some(Art::Files), ..Source::default() };

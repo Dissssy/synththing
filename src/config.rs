@@ -161,6 +161,10 @@ pub struct Config {
     /// channel's name couldn't read the whole config (`read_json_or_set_aside`).
     #[serde(default)]
     pub canary_updates: Option<bool>,
+    /// Preference: send anonymous usage data (`usage`). `None`: not asked
+    /// yet, so it's off and the app asks.
+    #[serde(default)]
+    pub usage_data: Option<bool>,
     /// On Android: download and install updates in the app (it needs
     /// Install unknown apps allowed). Off, a new version is only announced.
     #[serde(default)]
@@ -207,6 +211,9 @@ pub struct Config {
     /// starred songs (one picked by hand still plays).
     #[serde(default)]
     pub only_starred: bool,
+    /// Preference: when a song counts as played or skipped (`play_stats`).
+    #[serde(default)]
+    pub play_counts: crate::play_stats::Cutoffs,
     /// Preference: where songs dropped on the window go, after the library.
     #[serde(default)]
     pub dropped_songs: DroppedSongs,

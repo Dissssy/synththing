@@ -1,7 +1,7 @@
 //! Syncing this device with the user's others (`settings_sync.rs`,
 //! `playlist_sync.rs`, `song_sync.rs`, `wishlist.rs`), with no window: each
 //! blob (the settings, the playlists, the song library and its transfers,
-//! the wishlist) syncs with
+//! the wishlist, the songs' play stats) syncs with
 //! the authority on a thread of its own: at launch, a moment after it
 //! changes here, and when the notification stream says another device
 //! wrote. Songs move through the relay on a thread of their own too, one
@@ -28,6 +28,7 @@ use crate::frame_timing;
 use crate::library::identity::{self, Identity};
 use crate::library::{self, client};
 use crate::playlist::Library;
+use crate::play_stats;
 use crate::playlist_sync;
 use crate::settings_sync::{self, Change, Fields, State, Winner};
 use crate::song_store::{SongStore, Stored};
@@ -56,10 +57,11 @@ enum Blob {
     Library,
     Transfers,
     Wishlist,
+    Stats,
 }
 
 impl Blob {
-    const ALL: [Blob; 5] = [Blob::Settings, Blob::Playlists, Blob::Library, Blob::Transfers, Blob::Wishlist];
+    const ALL: [Blob; 6] = [Blob::Settings, Blob::Playlists, Blob::Library, Blob::Transfers, Blob::Wishlist, Blob::Stats];
 
     fn name(self) -> &'static str {
         match self {
@@ -68,6 +70,7 @@ impl Blob {
             Blob::Library => song_sync::LIBRARY,
             Blob::Transfers => song_sync::TRANSFERS,
             Blob::Wishlist => wishlist::NAME,
+            Blob::Stats => play_stats::NAME,
         }
     }
 
@@ -83,6 +86,7 @@ impl Blob {
             Blob::Library => "library synced",
             Blob::Transfers => "transfers synced",
             Blob::Wishlist => "wishlist synced",
+            Blob::Stats => "play stats synced",
         }
     }
 }
@@ -168,7 +172,7 @@ pub struct DeviceSync {
     for_identity: Option<String>,
     /// The kinds of settings this device syncs (`State::choices`).
     choices: settings_sync::Choices,
-    channels: [Channel; 5],
+    channels: [Channel; 6],
     events: (Sender<Done>, Receiver<Done>),
     error: Option<String>,
     /// The songs here or the playlists changed: say so in the library, and
@@ -419,7 +423,7 @@ impl DeviceSync {
             && match blob {
                 Blob::Settings => true,
                 Blob::Playlists => settings_sync::syncs(&self.choices, &settings_sync::PLAYLISTS),
-                Blob::Library | Blob::Transfers => settings_sync::syncs(&self.choices, &settings_sync::SONGS),
+                Blob::Library | Blob::Transfers | Blob::Stats => settings_sync::syncs(&self.choices, &settings_sync::SONGS),
                 Blob::Wishlist => settings_sync::syncs(&self.choices, &settings_sync::WISHLIST),
             }
     }
@@ -499,6 +503,21 @@ impl DeviceSync {
         }
     }
 
+    /// The songs' play stats changed here: with them syncing, note what
+    /// changed, to send once it's settled.
+    pub fn stats_changed(&mut self, songs: &SongStore) {
+        if !self.syncing(Blob::Stats) {
+            return;
+        }
+        let Some(mut state) = State::load(play_stats::NAME) else { return };
+        if state.record_leaves(play_stats::leaves(songs.stats()), settings_sync::now()) {
+            if let Err(e) = state.save(play_stats::NAME) {
+                log::warn!("play stats sync: {e}");
+            }
+            self.channel(Blob::Stats).dirty_since = Some(Instant::now());
+        }
+    }
+
     /// Start a sync when one's due, and take one that's done: what it
     /// brought that's for whatever runs this to act on. While `held`, none
     /// starts; what was due waits until it's let go.
@@ -520,7 +539,7 @@ impl DeviceSync {
             let state = State::load(settings_sync::NAME);
             self.on = state.is_some() && link.identity.is_some();
             self.choices = state.map(|s| s.choices).unwrap_or_default();
-            for blob in [Blob::Settings, Blob::Playlists, Blob::Wishlist] {
+            for blob in [Blob::Settings, Blob::Playlists, Blob::Wishlist, Blob::Stats] {
                 let state = State::load(blob.name());
                 let wanted = self.syncing(blob).then(Instant::now);
                 *self.channel(blob) = Channel { revision: state.as_ref().map_or(0, |s| s.revision), wanted, ..Channel::default() };
@@ -566,6 +585,7 @@ impl DeviceSync {
                 Ok(outcome) => match blob {
                     Blob::Settings | Blob::Playlists => self.blob_synced(blob, outcome),
                     Blob::Wishlist => self.wishlist_synced(here.wishlist, outcome),
+                    Blob::Stats => self.stats_synced(here.songs, outcome),
                     Blob::Library | Blob::Transfers => {
                         self.error = None;
                         let songs = self.songs_now(link, here);
@@ -685,6 +705,17 @@ impl DeviceSync {
         self.blob_taken(Blob::Wishlist, Synced { outcome, state, result }, applied);
     }
 
+    /// A play stats sync is done: take the counts, with whatever was
+    /// counted here while it ran, and send those next.
+    fn stats_synced(&mut self, songs: &mut SongStore, outcome: Outcome) {
+        self.error = None;
+        let Some(state) = State::load(play_stats::NAME) else { return };
+        let result = settings_sync::merge_where(&outcome.local, &state.fields, &outcome.merged, |_| true).0;
+        songs.set_stats(play_stats::read(&result));
+        let applied = play_stats::leaves(songs.stats());
+        self.blob_taken(Blob::Stats, Synced { outcome, state, result }, applied);
+    }
+
     fn blob_taken(&mut self, blob: Blob, synced: Synced, applied: BTreeMap<String, Value>) {
         let Synced { outcome, mut state, result } = synced;
         state.applied = applied;
@@ -707,6 +738,7 @@ impl DeviceSync {
             Blob::Settings => return,
             Blob::Playlists => playlist_sync::leaves(here.playlists, here.songs),
             Blob::Wishlist => wishlist::leaves(here.wishlist),
+            Blob::Stats => play_stats::leaves(here.songs.stats()),
             Blob::Library | Blob::Transfers => {
                 let songs = self.songs_now(link, here);
                 return self.ask_worker(songs::Request::Start(blob, songs));
@@ -1096,7 +1128,7 @@ impl DeviceSync {
                 self.error = None;
                 *self.channel(Blob::Settings) = Channel::default();
                 self.start_sync(link, Blob::Settings, true);
-                for blob in [Blob::Playlists, Blob::Wishlist, Blob::Library, Blob::Transfers] {
+                for blob in [Blob::Playlists, Blob::Wishlist, Blob::Stats, Blob::Library, Blob::Transfers] {
                     if self.syncing(blob) {
                         self.start_blob(link, here, blob);
                     }
@@ -1151,7 +1183,7 @@ impl DeviceSync {
                 None => {}
             }
         }
-        for blob in [Blob::Library, Blob::Transfers] {
+        for blob in [Blob::Library, Blob::Transfers, Blob::Stats] {
             match songs {
                 Some(true) => self.start_blob(link, here, blob),
                 Some(false) => self.stop_blob(blob),

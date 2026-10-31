@@ -75,6 +75,7 @@ pub fn start() -> Result<(App, rodio::MixerDeviceSink)> {
     let mut config = Config::load_for_app()?;
     config.soundfonts.sort();
 
+    crate::usage::start(config.usage_data == Some(true));
     let mut app = App::new(command_tx, shared, config, tap, listeners, stream.mixer().clone(), sample_rate);
     app.autoload_soundfont();
     app.check_for_updates_on_launch();

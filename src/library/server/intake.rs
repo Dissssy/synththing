@@ -49,7 +49,7 @@ struct Taken {
 }
 
 /// The request carries the intake token (and intake is on).
-fn authorized(state: &State, request: &Request) -> Result<(), Reply> {
+pub(super) fn authorized(state: &State, request: &Request) -> Result<(), Reply> {
     let Some(token) = &state.intake_token else { return Err(error(404, "intake is off")) };
     let given = request
         .headers()

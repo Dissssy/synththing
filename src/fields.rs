@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::loudness::Loudness;
+use crate::play_stats::Totals;
 use crate::song_info::{format_length, thousands, SongInfo};
 use crate::song_store::{self, Meta, Online, STARRED};
 
@@ -100,6 +101,12 @@ pub enum Field {
     Wish,
     /// How loud it is (LUFS: `Facts::loudness`).
     Loudness,
+    /// How often it's been played and skipped, and when last, on every
+    /// device (`play_stats`).
+    Plays,
+    Skips,
+    LastPlayed,
+    LastSkipped,
 }
 
 /// Where Song info shows an editable field.
@@ -204,6 +211,10 @@ pub const FIELDS: &[Def] = &[
     def(Field::Wished, "wished", "On your wishlist", Kind::Flag, true, 0.0, false, &[], false),
     def(Field::Wish, "wish", "Wish", Kind::Text, true, 0.0, false, &[], false),
     def(Field::Loudness, "loudness", "Loudness (LUFS)", Kind::Number, true, 72.0, false, &[], false),
+    def(Field::Plays, "plays", "Plays", Kind::Number, true, 52.0, false, &[], false),
+    def(Field::Skips, "skips", "Skips", Kind::Number, true, 52.0, false, &[], false),
+    def(Field::LastPlayed, "last_played", "Last played", Kind::Date, true, 96.0, true, &[], false),
+    def(Field::LastSkipped, "last_skipped", "Last skipped", Kind::Date, true, 96.0, true, &[], false),
 ];
 
 impl Def {
@@ -271,10 +282,16 @@ impl Field {
         }
     }
 
+    /// Whether it's one of the play stats (`Facts::stats`).
+    pub fn is_play_stat(self) -> bool {
+        matches!(self, Field::Plays | Field::Skips | Field::LastPlayed | Field::LastSkipped)
+    }
+
     /// Whether a song name pattern can use it: it has a value to show.
     pub fn in_patterns(self) -> bool {
-        // (Not what it fills on the wishlist: that's not the song's.)
-        self != Field::Wish && matches!(self.kind(), Kind::Text | Kind::Number | Kind::Date)
+        // (Not what it fills on the wishlist, nor its plays: those aren't
+        // the song's own.)
+        self != Field::Wish && !self.is_play_stat() && matches!(self.kind(), Kind::Text | Kind::Number | Kind::Date)
     }
 }
 
@@ -320,7 +337,10 @@ pub struct Facts<'a> {
     /// The program that added it through the local API, if one did.
     pub added_by: Option<&'a str>,
     /// What it was matched to at MusicBrainz.
-    pub online: Option<&'a Online>,    /// How loud it measured, for a song its tags don't say.
+    pub online: Option<&'a Online>,
+    /// Its plays and skips, where they're known (`SongStore::totals`).
+    pub stats: Option<Totals>,
+    /// How loud it measured, for a song its tags don't say.
     pub loudness: Option<&'a Loudness>,
 }
 
@@ -332,7 +352,7 @@ pub type Edits = BTreeMap<Field, String>;
 impl<'a> Facts<'a> {
     /// A song in the library, as every device knows it.
     pub fn of(song: &'a song_store::Song) -> Self {
-        Self { file_name: &song.name, meta: song.meta.as_ref(), info: None, imported: Some(song.imported), tags: &song.tags, edits: Some(&song.edits), added_by: song.added_by.as_deref(), online: song.online.as_ref(), loudness: song.loudness.as_ref() }
+        Self { file_name: &song.name, meta: song.meta.as_ref(), info: None, imported: Some(song.imported), tags: &song.tags, edits: Some(&song.edits), added_by: song.added_by.as_deref(), online: song.online.as_ref(), stats: None, loudness: song.loudness.as_ref() }
     }
 
     /// What the song's edits say `field` is, if they do.
@@ -404,6 +424,10 @@ impl<'a> Facts<'a> {
             Field::SampleRate => meta?.sample_rate.map(f64::from),
             Field::Imported => self.imported.map(|secs| secs as f64),
             Field::Loudness => self.loudness().map(|l| f64::from(l.lufs)),
+            Field::Plays => self.stats.map(|s| f64::from(s.plays)),
+            Field::Skips => self.stats.map(|s| f64::from(s.skips)),
+            Field::LastPlayed => self.stats?.last_played.map(|secs| secs as f64),
+            Field::LastSkipped => self.stats?.last_skipped.map(|secs| secs as f64),
             _ => None,
         }
     }
@@ -492,7 +516,9 @@ impl<'a> Facts<'a> {
                     Field::BitRate => format!("{n:.0}"),
                     Field::SampleRate => format!("{} kHz", n / 1000.0),
                     Field::Loudness => format!("{n:.1}"),
-                    Field::Imported => date(n as i64),
+                    Field::Imported | Field::LastPlayed | Field::LastSkipped => date(n as i64),
+                    // (None yet shows as nothing, but sorts as none.)
+                    Field::Plays | Field::Skips if n == 0.0 => String::new(),
                     _ => format!("{n}"),
                 }
             }
@@ -629,7 +655,7 @@ mod tests {
     fn facts_give_each_field() {
         let meta = Meta { title: Some(" Song ".into()), artist: Some(String::new()), track: Some(3), length: Some(83.0), size: 4_200_000, ..Meta::default() };
         let tags = vec![STARRED.to_string()];
-        let facts = Facts { file_name: "03 Song.MP3", meta: Some(&meta), info: None, imported: Some(86_400), tags: &tags, edits: None, added_by: None, online: None, loudness: None };
+        let facts = Facts { file_name: "03 Song.MP3", meta: Some(&meta), info: None, imported: Some(86_400), tags: &tags, edits: None, added_by: None, online: None, stats: None, loudness: None };
         assert_eq!(facts.text(Field::Title).as_deref(), Some("Song"));
         assert_eq!(facts.text(Field::Artist), None, "empty is none");
         assert_eq!(facts.text(Field::FileName).as_deref(), Some("03 Song"));

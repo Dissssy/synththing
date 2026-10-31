@@ -4,7 +4,8 @@
 //! the rulesets along its top; on a phone each is a page of the menu. A
 //! group opens on a page of its own (a pushed page, on a phone): its art,
 //! title, play, shuffle, star them all, "find in" and its songs. A
-//! playlist opens as itself, to play and edit (`playlist_panel`).
+//! playlist opens as itself, to play and edit (`playlist_panel`), under
+//! the same header (`page_header`).
 //!
 //! A group's tile is its album's art when the ruleset splits by album and
 //! a song of it with a picture is here (`album_art`); else, and while the
@@ -228,6 +229,61 @@ fn art_play(ui: &egui::Ui, cover: egui::Rect, id: egui::Id, shown: bool) -> bool
     let at = rect.center() + egui::vec2(size * 0.04, 0.0);
     painter.text(at, egui::Align2::CENTER_CENTER, super::icon("play"), egui::FontId::proportional(size * 0.45), egui::Color32::WHITE);
     response.clicked()
+}
+
+/// How big a group's (or a playlist's) art is on its page.
+pub(super) fn page_art(phone: bool) -> f32 {
+    if phone { 112.0 } else { 160.0 }
+}
+
+/// How tall a page's header is, for art `size`.
+pub(super) fn page_header_height(size: f32) -> f32 {
+    size + 16.0
+}
+
+/// A button every page's header has.
+pub(super) enum PageButton {
+    Play,
+    Shuffle,
+    Queue,
+    Star,
+}
+
+/// A group's (or a playlist's) header in `rect`: its art, `size` points
+/// (`from`, else `name`'s initials; with the smart badge when `smart`),
+/// then beside it what `beside` draws: its title, lines and buttons.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn page_header(ui: &mut egui::Ui, rect: egui::Rect, size: f32, art: &mut AlbumArt, from: &AlbumArtSource, name: &str, smart: bool, beside: impl FnOnce(&mut egui::Ui)) {
+    let inner = rect.shrink(8.0);
+    let cover = egui::Rect::from_min_size(inner.min, egui::vec2(size, size));
+    art.tile(ui, cover, from, name);
+    if smart {
+        smart_badge(ui, cover);
+    }
+    let text = egui::Rect::from_min_max(egui::pos2(cover.right() + 12.0, inner.top()), inner.max);
+    // (A child of its own: the header's room is `rect`, already taken.)
+    beside(&mut ui.new_child(egui::UiBuilder::new().max_rect(text)));
+}
+
+/// Play, shuffle, queue them and star them all (unstar, when
+/// `all_starred`), in a page's header: the one clicked. All but the star
+/// are off while there's nothing to play (`any`).
+pub(super) fn page_buttons(ui: &mut egui::Ui, any: bool, all_starred: bool) -> Option<PageButton> {
+    let mut pressed = None;
+    if ui.add_enabled(any, icon_button("play")).on_hover_text("Play").clicked() {
+        pressed = Some(PageButton::Play);
+    }
+    if ui.add_enabled(any, icon_button("shuffle")).on_hover_text("Shuffle").clicked() {
+        pressed = Some(PageButton::Shuffle);
+    }
+    if ui.add_enabled(any, icon_button("list-plus")).on_hover_text("Add them to the queue").clicked() {
+        pressed = Some(PageButton::Queue);
+    }
+    let hover = if all_starred { "Unstar them all" } else { "Star them all" };
+    if ui.add(icon_button(select_list::STAR_ICON).selected(all_starred)).on_hover_text(hover).clicked() {
+        pressed = Some(PageButton::Star);
+    }
+    pressed
 }
 
 /// A smart playlist's mark on its tile at `rect`: its icon, in the
@@ -512,6 +568,7 @@ impl App {
     pub(super) fn open_playlist(&mut self, list: Option<usize>) {
         self.viewed_playlist = list;
         self.playlist_rename = None;
+        self.playlist_find.clear();
         self.confirm_delete_playlist = false;
         self.playlist_selection.clear();
     }
@@ -560,10 +617,14 @@ impl App {
         group.songs.iter().filter(|key| self.songs.has(key)).map(|key| self.songs.path(key)).collect()
     }
 
-    /// Where `group`'s art comes from, when the ruleset splits by album:
-    /// the first song of it here that isn't MIDI, and the first release
-    /// one of its songs is on.
-    fn art_from(&self, albums: bool, group: &Group) -> AlbumArtSource {
+    /// Where `group` of `id`'s art comes from: a playlist's picture, or
+    /// when the ruleset splits by album, the first song of it here that
+    /// isn't MIDI, and the first release one of its songs is on.
+    fn art_from(&self, id: &str, albums: bool, group: &Group) -> AlbumArtSource {
+        if id == PLAYLISTS {
+            let image = self.playlists.find(&group.key).and_then(|l| self.playlists.lists[l].playlist.image.as_deref());
+            return image.map(AlbumArtSource::image).unwrap_or_default();
+        }
         if !albums {
             return AlbumArtSource::default();
         }
@@ -578,7 +639,7 @@ impl App {
             .map(|(release, group)| (release.to_string(), group.map(str::to_string)))
             .next();
         let chosen = group.songs.iter().find_map(|key| self.songs.get_by_key(key)?.online.as_ref()?.art.clone());
-        AlbumArtSource { file, release, chosen }
+        AlbumArtSource { file, release, chosen, image: None }
     }
 
     /// Every group of `id` (each one `what`; `albums` have art), as tiles
@@ -708,7 +769,7 @@ impl App {
                 let group = &groups[i];
                 ui.add_space(6.0);
                 let (tile, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
-                let from = self.art_from(albums, group);
+                let from = self.art_from(id, albums, group);
                 tile_ui(ui, &mut self.groupings.art, tile, from, group);
                 if wished(group).is_none() && art_play(ui, tile, row.response.id.with("play"), touch || row.response.contains_pointer()) {
                     play = Some(i);
@@ -764,7 +825,7 @@ impl App {
                         let rect = egui::Rect::from_min_size(min, egui::vec2(tile, tile + 40.0));
                         let response = ui.interact(rect, ui.id().with(("group_tile", &group.key)), egui::Sense::click());
                         let cover = egui::Rect::from_min_size(rect.min, egui::vec2(tile, tile));
-                        let from = self.art_from(albums, group);
+                        let from = self.art_from(id, albums, group);
                         tile_ui(ui, &mut self.groupings.art, cover, from, group);
                         if response.contains_pointer() {
                             ui.painter().rect_stroke(cover, 4.0, ui.visuals().widgets.hovered.fg_stroke, egui::StrokeKind::Inside);
@@ -954,7 +1015,7 @@ impl App {
         let tracks = self.group_tracks(id, group);
         let phone = self.mobile();
         let albums = albums(ruleset);
-        let art_from = self.art_from(albums, group);
+        let art_from = self.art_from(id, albums, group);
         let current = self.current_song.clone();
         let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
         let mut wish = albums.then(|| super::wishlist::album_ask(&self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs)).flatten();
@@ -979,9 +1040,9 @@ impl App {
             Track(usize),
         }
         let row = row_height(ui);
-        let art = if phone { 112.0 } else { 160.0 };
+        let art = page_art(phone);
         let mut rows = vec![Row::Header];
-        let mut heights = vec![art + 16.0];
+        let mut heights = vec![page_header_height(art)];
         let words: Vec<String> = view.find.to_lowercase().split_whitespace().map(str::to_string).collect();
         let discs = albums && tracks.iter().any(|t| t.disc.unwrap_or(1) != tracks[0].disc.unwrap_or(1));
         // Spellings of an album are one section, under the best of them.
@@ -1028,59 +1089,47 @@ impl App {
         let mut act = None;
         let mut choose_art = false;
         virtual_rows(ui, ("group_page", id, &group.key), &heights, |ui, rect, i| match &rows[i] {
-            Row::Header => {
-                let inner = rect.shrink(8.0);
-                let cover = egui::Rect::from_min_size(inner.min, egui::vec2(art, art));
-                art_cache.tile(ui, cover, &art_from, &group.title);
-                let text = egui::Rect::from_min_max(egui::pos2(cover.right() + 12.0, inner.top()), inner.max);
-                ui.scope_builder(egui::UiBuilder::new().max_rect(text), |ui| {
-                    if !phone {
-                        ui.add(egui::Label::new(egui::RichText::new(&group.title).heading()).truncate());
-                    }
-                    if let Some(subtitle) = &group.subtitle {
-                        if links_to_artist && !group.artists.is_empty() {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                for (i, artist) in group.artists.iter().enumerate() {
-                                    if i > 0 {
-                                        ui.label(" & ");
-                                    }
-                                    if ui.link(artist).on_hover_text("Show the artist").clicked() {
-                                        act = Some(Act::Open(ARTISTS.into(), format!("{}\u{0}", fields::group_key(artist, &ignore))));
-                                    }
+            Row::Header => page_header(ui, rect, art, art_cache, &art_from, &group.title, false, |ui| {
+                if !phone {
+                    ui.add(egui::Label::new(egui::RichText::new(&group.title).heading()).truncate());
+                }
+                if let Some(subtitle) = &group.subtitle {
+                    if links_to_artist && !group.artists.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            for (i, artist) in group.artists.iter().enumerate() {
+                                if i > 0 {
+                                    ui.label(" & ");
                                 }
-                            });
-                        } else {
-                            ui.label(subtitle);
-                        }
+                                if ui.link(artist).on_hover_text("Show the artist").clicked() {
+                                    act = Some(Act::Open(ARTISTS.into(), format!("{}\u{0}", fields::group_key(artist, &ignore))));
+                                }
+                            }
+                        });
+                    } else {
+                        ui.label(subtitle);
                     }
-                    ui.weak(format!("{} \u{b7} {}", count(songs, "song"), format_length(length)));
-                    ui.horizontal(|ui| {
-                        if ui.add(icon_button("play")).on_hover_text("Play").clicked() {
-                            act = Some(Act::Play(playable.clone(), 0));
-                        }
-                        if ui.add(icon_button("shuffle")).on_hover_text("Shuffle").clicked() {
-                            act = Some(Act::Shuffle(playable.clone()));
-                        }
-                        if ui.add(icon_button("list-plus")).on_hover_text("Add them to the queue").clicked() {
-                            act = Some(Act::Queue(playable.clone(), false));
-                        }
-                        let hover = if all_starred { "Unstar them all" } else { "Star them all" };
-                        if ui.add(icon_button(select_list::STAR_ICON).selected(all_starred)).on_hover_text(hover).clicked() {
-                            act = Some(Act::Star(tracks.iter().map(|t| t.path.clone()).collect(), !all_starred));
-                        }
-                        if albums && ui.add(icon_button("image")).on_hover_text("Choose art").clicked() {
-                            choose_art = true;
-                        }
-                        if let Some(ask) = super::wishlist::album_wish_button(ui, wish.take()) {
-                            act = Some(Act::Wish(ask));
-                        }
-                        if let Some(wish) = super::wishlist::artist_wish_button(ui, more.take()) {
-                            act = Some(Act::WishArtist(wish));
-                        }
-                    });
+                }
+                ui.weak(format!("{} \u{b7} {}", count(songs, "song"), format_length(length)));
+                ui.horizontal(|ui| {
+                    match page_buttons(ui, !playable.is_empty(), all_starred) {
+                        Some(PageButton::Play) => act = Some(Act::Play(playable.clone(), 0)),
+                        Some(PageButton::Shuffle) => act = Some(Act::Shuffle(playable.clone())),
+                        Some(PageButton::Queue) => act = Some(Act::Queue(playable.clone(), false)),
+                        Some(PageButton::Star) => act = Some(Act::Star(tracks.iter().map(|t| t.path.clone()).collect(), !all_starred)),
+                        None => {}
+                    }
+                    if albums && ui.add(icon_button("image")).on_hover_text("Choose art").clicked() {
+                        choose_art = true;
+                    }
+                    if let Some(ask) = super::wishlist::album_wish_button(ui, wish.take()) {
+                        act = Some(Act::Wish(ask));
+                    }
+                    if let Some(wish) = super::wishlist::artist_wish_button(ui, more.take()) {
+                        act = Some(Act::WishArtist(wish));
+                    }
                 });
-            }
+            }),
             Row::Section(title) => {
                 let font = egui::TextStyle::Button.resolve(ui.style());
                 ui.painter().text(rect.left_bottom() + egui::vec2(4.0, -4.0), egui::Align2::LEFT_BOTTOM, title, font, ui.visuals().strong_text_color());
