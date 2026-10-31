@@ -209,27 +209,42 @@ impl AlbumArt {
     /// Draw the art of the album `name`, taken `from` a song of it and
     /// its release (neither: the album's all MIDI), filling `rect`.
     pub fn tile(&mut self, ui: &egui::Ui, rect: egui::Rect, from: &Source, name: &str) {
-        let radius = 4.0;
-        if !from.is_empty() {
-            let pixels = rect.width().max(rect.height()) * ui.ctx().pixels_per_point();
-            let size = SIZES.into_iter().find(|&s| s as f32 >= pixels).unwrap_or(SIZES[SIZES.len() - 1]);
-            let request = (from.clone(), size);
-            let frame = self.frame;
-            let kept = match self.kept.get_mut(&request) {
-                Some(kept) => kept,
-                None => {
-                    self.ask(ui.ctx(), request.clone());
-                    self.kept.entry(request).or_insert(Kept { slot: Slot::Loading, used: frame })
-                }
-            };
-            kept.used = frame;
-            if let Slot::Ready(texture) = &kept.slot {
-                let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-                egui::Image::new((texture.id(), rect.size())).uv(uv).corner_radius(radius).paint_at(ui, rect);
-                return;
-            }
+        let (radius, letters) = (4.0, self.letters);
+        match self.slot(ui.ctx(), rect, from) {
+            Some(Slot::Ready(texture)) => paint(ui, texture, rect, radius),
+            _ => generated_tile(ui.painter(), rect, name, radius, letters),
         }
-        generated_tile(ui.painter(), rect, name, radius, self.letters);
+    }
+
+    /// Draw the art `from` gives filling `rect`, if it gives any: whether
+    /// it does (or might: while it's being read, nothing's drawn).
+    pub fn picture(&mut self, ui: &egui::Ui, rect: egui::Rect, from: &Source) -> bool {
+        match self.slot(ui.ctx(), rect, from) {
+            Some(Slot::Ready(texture)) => {
+                paint(ui, texture, rect, 4.0);
+                true
+            }
+            Some(Slot::Loading) => true,
+            Some(Slot::Missing) | None => false,
+        }
+    }
+
+    /// Where the art `from` gives, at `rect`'s size, stands (asking for it
+    /// if it hasn't been yet); `None` if `from` gives nothing to look in.
+    fn slot(&mut self, ctx: &egui::Context, rect: egui::Rect, from: &Source) -> Option<&Slot> {
+        if from.is_empty() {
+            return None;
+        }
+        let pixels = rect.width().max(rect.height()) * ctx.pixels_per_point();
+        let size = SIZES.into_iter().find(|&s| s as f32 >= pixels).unwrap_or(SIZES[SIZES.len() - 1]);
+        let request = (from.clone(), size);
+        let frame = self.frame;
+        if !self.kept.contains_key(&request) {
+            self.ask(ctx, request.clone());
+        }
+        let kept = self.kept.entry(request).or_insert(Kept { slot: Slot::Loading, used: frame });
+        kept.used = frame;
+        Some(&kept.slot)
     }
 
     fn ask(&mut self, ctx: &egui::Context, request: Request) {
@@ -256,6 +271,12 @@ impl AlbumArt {
         }
         self.queue.ready.notify_one();
     }
+}
+
+/// Paint `texture` filling `rect`, its corners rounded by `radius`.
+fn paint(ui: &egui::Ui, texture: &egui::TextureHandle, rect: egui::Rect, radius: f32) {
+    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    egui::Image::new((texture.id(), rect.size())).uv(uv).corner_radius(radius).paint_at(ui, rect);
 }
 
 fn read_art_forever(queue: &Queue, send: &mpsc::Sender<(Request, Option<egui::ColorImage>)>, ctx: &egui::Context) {

@@ -580,7 +580,7 @@ impl App {
             RecordKind::Playlist => {
                 view.finished
                     && self.pending_play.is_none()
-                    && self.now_playing.as_ref().is_none_or(|np| np.upcoming.is_none())
+                    && self.now_playing.as_ref().is_none_or(|np| np.upcoming.is_empty())
             }
             RecordKind::Free => false,
         };
@@ -619,7 +619,7 @@ impl App {
         session.finished_at = None;
         let next = session.kind == RecordKind::Playlist
             && self.pending_play.is_none()
-            && self.now_playing.as_ref().is_some_and(|np| np.upcoming.is_some());
+            && self.now_playing.as_ref().is_some_and(|np| !np.upcoming.is_empty());
         if next {
             if let Some(recorder) = &mut self.recording.recorder {
                 recorder.set_paused(true);

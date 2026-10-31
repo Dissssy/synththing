@@ -82,7 +82,7 @@ impl App {
                         if let Some(np) = &mut self.now_playing {
                             np.entry = at;
                             np.history = vec![at];
-                            np.upcoming = None;
+                            np.upcoming.clear();
                         }
                     }
                     None => self.now_playing = None,

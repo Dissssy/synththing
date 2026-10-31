@@ -120,6 +120,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("songs_view", "Columns, sorting and grouping", &["songs_view"]),
             setting("preload", "Preload songs on hover", &["preload_on_hover"]),
             setting("autoplay_collapsed", "Autoplay skips closed groups", &["autoplay_skip_collapsed"]),
+            setting("coming_up", "Songs coming up in the queue", &["coming_up"]),
             setting("unload", "Unload preloaded files after", &["preload_expiry_secs"]),
             setting("rulesets", "Rulesets", &["rulesets", "hidden_rulesets"]),
             setting("group_ignore", "Characters ignored when grouping", &["group_ignore"]),

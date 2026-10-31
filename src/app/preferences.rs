@@ -210,6 +210,7 @@ impl App {
         let mut hover_preload = self.config.preload_on_hover;
         let mut skip_collapsed = self.config.autoplay_skip_collapsed;
         let mut only_starred = self.config.only_starred;
+        let mut coming_up = self.config.coming_up.unwrap_or(config::DEFAULT_COMING_UP);
         let mut play_counts = self.config.play_counts;
         let mut dropped_songs = self.config.dropped_songs;
         let mut tile_letters = self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS);
@@ -356,6 +357,15 @@ impl App {
                         "Autoplay (the button at the top of Songs) goes on to the next song in the list when \
                          one ends. On: it leaves out the songs in groups you've closed.",
                         |ui| ui.checkbox(&mut skip_collapsed, "Autoplay skips closed groups"),
+                    );
+                    with_info(
+                        ui,
+                        "How many songs the queue shows coming up: what's queued, filled out with what the \
+                         playlist, album or list playing goes on to. All of the queue shows, however long.",
+                        |ui| {
+                            let label = setting_label(ui, "Songs coming up");
+                            label | setting_slider(ui, egui::Slider::new(&mut coming_up, 0..=20), 0.0)
+                        },
                     );
                     with_info(
                         ui,
@@ -641,6 +651,7 @@ impl App {
             || hover_preload != self.config.preload_on_hover
             || skip_collapsed != self.config.autoplay_skip_collapsed
             || only_starred != self.config.only_starred
+            || coming_up != self.config.coming_up.unwrap_or(config::DEFAULT_COMING_UP)
             || play_counts != self.config.play_counts
             || dropped_songs != self.config.dropped_songs
             || tile_letters != self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS)
@@ -705,9 +716,12 @@ impl App {
             self.config.group_ignore = group_ignore;
             self.config.sort_with_articles = !past_articles;
             self.config.songs_view.unsearched = unsearched;
-            if self.config.only_starred != only_starred {
+            let coming_up = Some(coming_up).filter(|&n| n != config::DEFAULT_COMING_UP);
+            if self.config.only_starred != only_starred || self.config.coming_up != coming_up {
                 self.config.only_starred = only_starred;
+                self.config.coming_up = coming_up;
                 self.plan_upcoming();
+                self.plan_listed();
             }
             changed = true;
         }

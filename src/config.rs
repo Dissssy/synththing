@@ -182,6 +182,10 @@ pub struct Config {
     /// desktop (View > Mobile layout). Android always uses it.
     #[serde(default)]
     pub mobile_layout: bool,
+    /// The mobile layout's Now playing page shows the song's art instead
+    /// of the visualizer (this device only).
+    #[serde(default)]
+    pub now_playing_art: bool,
     /// Preference: the window has the system's frame (title bar and
     /// borders) rather than drawing its own (`app/title_bar.rs`).
     #[serde(default)]
@@ -220,6 +224,11 @@ pub struct Config {
     /// starred songs (one picked by hand still plays).
     #[serde(default)]
     pub only_starred: bool,
+    /// Preference: how many songs the queue shows coming up, what's
+    /// queued filled out with what plays after it (`None`:
+    /// `DEFAULT_COMING_UP`).
+    #[serde(default)]
+    pub coming_up: Option<usize>,
     /// Preference: when a song counts as played or skipped (`play_stats`).
     #[serde(default)]
     pub play_counts: crate::play_stats::Cutoffs,
@@ -383,6 +392,8 @@ impl Default for LibrarySettings {
 }
 
 pub const DEFAULT_PRELOAD_EXPIRY_SECS: u32 = 30;
+/// How many songs the queue shows coming up, unless set.
+pub const DEFAULT_COMING_UP: usize = 5;
 pub const PRELOAD_EXPIRY_RANGE: std::ops::RangeInclusive<u32> = 5..=300;
 
 impl Config {
