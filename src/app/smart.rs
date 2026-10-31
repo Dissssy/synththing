@@ -523,7 +523,7 @@ fn rule_ui(ui: &mut egui::Ui, rule: &mut Rule, tags: &BTreeMap<String, Tag>) {
     }
     let (hint, formats) = match (rule.field, rule.op) {
         (_, Op::InLast | Op::NotInLast) => ("30d", "How long ago: 12h, 30d, 2w, 6mo or 1y (a bare number is days)"),
-        (Field::Imported, _) => ("2026-10", "A year, month or day: 2026, 2026-10 or 2026-10-20"),
+        (Field::Imported | Field::LastPlayed | Field::LastSkipped, _) => ("2026-10", "A year, month or day: 2026, 2026-10 or 2026-10-20"),
         (Field::Length, _) => ("6:00", "6:00, 1:02:30, 6m, 90s or 1h2m (a bare number is minutes)"),
         (Field::Size, _) => ("MB", "MB, or with a unit: 800kb, 1.2gb"),
         _ => ("", ""),

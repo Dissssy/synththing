@@ -19,15 +19,17 @@ import android.media.session.PlaybackState;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.SystemClock;
+import android.util.Log;
 
 /**
  * Keeps music going with the app in the background (a foreground service,
- * which Android doesn't stop), with the media session that puts what's
- * playing in the notification, on the lock screen and on Bluetooth
- * devices, and takes their buttons. Playback itself is the Rust app's: this
- * shows what it says is playing (update) and hands it the buttons pressed
- * (Native.mediaCommand). It also pauses for calls and other apps' sound
- * (audio focus), and when headphones come out.
+ * which Android doesn't stop; it stays one, paused too, until the app's
+ * swiped away), with the media session that puts what's playing in the
+ * notification, on the lock screen and on Bluetooth devices, and takes
+ * their buttons. Playback itself is the Rust app's: this shows what it says
+ * is playing (update) and hands it the buttons pressed (Native.mediaCommand).
+ * It also pauses for calls and other apps' sound (audio focus), and when
+ * headphones come out.
  */
 public class PlaybackService extends Service {
     // Media commands, as src/android.rs numbers them.
@@ -67,7 +69,6 @@ public class PlaybackService extends Service {
     /** Paused for a moment (a notification sound, a short call): play again after. */
     private boolean resumeOnFocus;
     private boolean noisyRegistered;
-    private boolean foreground;
 
     /** From the app: what's playing now. Starts the service when something plays. */
     static void update(Context context, String title, String detail, boolean playing, long positionMs, long lengthMs, boolean hasNext) {
@@ -87,7 +88,15 @@ public class PlaybackService extends Service {
         if (service != null) {
             service.apply();
         } else if (playing) {
-            context.startForegroundService(new Intent(context, PlaybackService.class));
+            try {
+                context.startForegroundService(new Intent(context, PlaybackService.class));
+            } catch (IllegalStateException e) {
+                // Played from the background (the Local API, the hub) after
+                // the app was swiped away: Android won't start it from there
+                // (ForegroundServiceStartNotAllowedException), so no controls
+                // until the app's opened.
+                Log.w("synththing", "playback service not started", e);
+            }
         }
     }
 
@@ -142,7 +151,6 @@ public class PlaybackService extends Service {
         } else {
             startForeground(NOTIFICATION, notification(now));
         }
-        foreground = true;
         apply();
     }
 
@@ -207,25 +215,15 @@ public class PlaybackService extends Service {
                         now.positionMs, now.playing ? 1f : 0f, now.updatedAt)
                 .build());
 
-        Notification notification = notification(now);
+        // Stays in the foreground while paused too: once out of it, Android
+        // stops the service in the background, and won't let it start again
+        // from there (ForegroundServiceStartNotAllowedException), so the
+        // controls would be gone until the app's opened.
+        getSystemService(NotificationManager.class).notify(NOTIFICATION, notification(now));
         if (now.playing) {
-            if (Build.VERSION.SDK_INT >= 29) {
-                startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
-            } else {
-                startForeground(NOTIFICATION, notification);
-            }
-            foreground = true;
             takeFocus();
-        } else {
-            if (foreground) {
-                // Paused: the notification stays (to play again from), but can be swiped away.
-                stopForeground(STOP_FOREGROUND_DETACH);
-                foreground = false;
-            }
-            getSystemService(NotificationManager.class).notify(NOTIFICATION, notification);
-            if (!resumeOnFocus) {
-                releaseFocus();
-            }
+        } else if (!resumeOnFocus) {
+            releaseFocus();
         }
     }
 
@@ -235,7 +233,7 @@ public class PlaybackService extends Service {
                 .setContentTitle(now.title)
                 .setContentText(now.detail)
                 .setContentIntent(openApp())
-                .setOngoing(now.playing)
+                .setOngoing(true)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .addAction(action(android.R.drawable.ic_media_previous, "Previous", ACTION_PREVIOUS));
         if (now.playing) {

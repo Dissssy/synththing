@@ -4,11 +4,25 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Anonymous usage data, if you say yes (synththing asks once; Preferences > App > Usage data changes it): once a day, how often each kind of warning and error came up, and crashes as soon as synththing runs again. It says only where in the code something happened and which message it was, never what the message was filled in with: no song names, files, account or anything that says who you are. See what's sent shows the next report. Branch builds never send it.
+- Continue here, in the Devices popup and on the bar while following another device: plays that device's song on this one from where it is (through the same playlist, if you have it), and the other device follows this one.
+- Play counts: a song counts as played once you've heard half of it (or it reaches its end), and as skipped when you move on to another song between 2 and 20 seconds in. Songs has Plays, Skips, Last played and Last skipped columns, and Song info's Options tab shows a song's counts with a Reset button. With Songs from my other devices syncing, the counts add up across your devices, and Reset resets them on all of them.
+- Smart playlists and rulesets can go by plays, skips, and when a song was last played or skipped, and order or limit by most or least played and most or least recently played (a "Top 25 most played" playlist, say). Search takes plays:, skips:, played: and skipped: too (played:30d, plays:>10).
+- Preferences > Playback > Play counts sets when a song counts as played and the window for skips, each as a share of the song or seconds into it (the % / s button switches).
+- Play counts: a song counts as played once you've heard half of it (or it reaches its end), and as skipped when you move on to another song between 2 and 20 seconds in. Songs has Plays, Skips, Last played and Last skipped columns, and Song info's Options tab shows a song's counts with a Reset button. For now each device counts only its own.
+- Anonymous usage data, if you say yes (synththing asks once; Preferences > App > Usage data changes it): once a day, how often each kind of warning and error came up, and crashes as soon as synththing runs again. It says only where in the code something happened, never what it was about: no song names, files, account or anything that says who you are. See what's sent shows the next report. Branch builds never send it.
+- Servers: `synththing admin usage` shows the usage data as a tree (version, platform, level, target, signature) and clears parts of it, and `synththing admin usage-rules` sets which log lines are kept.
+- Servers: feedback intake collects the usage data too (`/api/v1/intake/usage`) and files crashes and frequent errors as issues, each line only once: the server remembers which issue it became.
+- Help > Support synththing opens Ko-fi, for anyone who wants to chip in. The website and docs link it too.
+
 ### Fixed
 - Playing music uses less power, so a phone playing in the background stays cooler: the audio thread now sleeps while nothing plays and wakes far less often while something does, and a MIDI song copies the whole synth half as often.
+- On Android, the media controls (notification and lock screen) no longer go away after playing in the background for a long while: the playback service stays running while paused too, so the paused notification can only go by swiping synththing away from recent apps.
 - Preferences fits on a phone's screen again: sliders, dropdowns and the (i) buttons no longer run off the right edge.
 
 ### Changed
+- While following another device, media keys, the phone's media buttons and the local API's seek drive that device's playing, as the transport does.
 - Check again under your hub, in the sync settings, also has the hub check its addresses from the internet again, instead of only after its next 6-hourly check.
 
 ## 1.8.3 (2026-10-28)

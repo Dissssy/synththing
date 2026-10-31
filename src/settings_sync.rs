@@ -34,8 +34,8 @@ pub const NAME: &str = "settings";
 
 /// The config's leaves that are this device's own, and every leaf under
 /// them: its folders, layouts and window, audio buffer, what it last
-/// played, its updates and how it looks on its screen (UI and visualizer
-/// pixel scale).
+/// played, its updates, whether it sends usage data and how it looks on
+/// its screen (UI and visualizer pixel scale).
 const LOCAL: &[&str] = &[
     "soundfonts",
     "record_dir",
@@ -51,6 +51,7 @@ const LOCAL: &[&str] = &[
     "repair_offered",
     "check_updates_on_launch",
     "canary_updates",
+    "usage_data",
     "android_install_updates",
     "mobile_layout",
     "fullscreen_over_cutout",
@@ -103,6 +104,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("remember", "What's remembered between launches", &["remember"]),
             setting("modes", "Loop, Shuffle and Autoplay", &["loop_mode", "shuffle", "autoplay"]),
             setting("only_starred", "Only play starred songs", &["only_starred"]),
+            setting("play_counts", "When songs count as played or skipped", &["play_counts"]),
             setting("dropped_songs", "Where dropped songs go", &["dropped_songs"]),
             setting("heavy_midi", "Warning before a very large MIDI file", &["warn_heavy_midi"]),
             setting("channel_chips", "Channel chips", &["channel_chips"]),
@@ -191,7 +193,8 @@ pub const WISHLIST: Setting = setting("wishlist", "Wishlist", &[]);
 
 /// Fetching songs from the other devices (`song_sync.rs`): those in
 /// playlists, with `STARRED_SONGS` the starred ones too, or with
-/// `EVERY_SONG`, every one in the library.
+/// `EVERY_SONG`, every one in the library. The library and its play
+/// stats (`play_stats.rs`) sync with it.
 pub const SONGS: Setting = setting("songs", "Songs from my other devices", &[]);
 pub const STARRED_SONGS: Setting =
     Setting { key: "starred_songs", name: "Starred songs, not only those in playlists", paths: &[], on: false };
