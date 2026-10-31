@@ -519,6 +519,14 @@ impl App {
     /// Tell the event streams and the media controls what changed.
     fn integration_changes(&mut self, view: &EngineView) {
         let streams = self.api.server.as_ref().is_some_and(api::Server::listened_to);
+        // (Taken every frame, so a stream opening later isn't told of old
+        // changes.)
+        let shared = crate::shared_data::changes();
+        if let Some(server) = self.api.server.as_ref().filter(|_| streams) {
+            for (key, value) in shared {
+                server.event("shared_changed", &serde_json::json!({ "key": key, "value": value }));
+            }
+        }
         #[cfg(not(target_os = "android"))]
         let media = self.api.media.is_some();
         #[cfg(target_os = "android")]

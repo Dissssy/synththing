@@ -62,8 +62,18 @@ const FRAME_WAIT: Duration = Duration::from_secs(3);
 /// How long a request waits for the app to answer.
 const APP_WAIT: Duration = Duration::from_secs(5);
 /// The events there are (`GET /v1/events?events=` picks among them).
-const EVENTS: [&str; 9] =
-    ["now_playing", "seeked", "library_changed", "playlists_changed", "queue_changed", "soundfonts_changed", "scripts_changed", "wishlist_changed", "panel"];
+const EVENTS: [&str; 10] = [
+    "now_playing",
+    "seeked",
+    "library_changed",
+    "playlists_changed",
+    "queue_changed",
+    "soundfonts_changed",
+    "scripts_changed",
+    "wishlist_changed",
+    "panel",
+    "shared_changed",
+];
 /// Songs in one page of a list, unless the request asks for fewer.
 const MOST_SONGS: usize = 500;
 /// The largest song a program can send (as the relay's limit).
@@ -1104,6 +1114,22 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             };
             answered(ask(shared, |reply| Call::Queue(QueueEdit::Add { song, playlist, next }, reply)))
         })),
+        (Method::Get, ["v1", "shared"]) => Some(needs(access.read, "read").unwrap_or_else(|| json(200, &crate::shared_data::all()))),
+        (Method::Get, ["v1", "shared", key]) => Some(needs(access.read, "read").unwrap_or_else(|| match crate::shared_data::get(&path_part(key)) {
+            Some(value) => json(200, &value),
+            None => error(404, "nothing's shared under that key"),
+        })),
+        (Method::Put, ["v1", "shared", key]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| share(shared, &mut request, &path_part(key)))),
+        (Method::Delete, ["v1", "shared", key]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| {
+            match crate::shared_data::set(&path_part(key), None) {
+                Ok(true) => {
+                    shared.waker.request_repaint();
+                    Response::from_data(Vec::new()).with_status_code(204)
+                }
+                Ok(false) => error(404, "nothing's shared under that key"),
+                Err(e) => error(400, e),
+            }
+        })),
         (Method::Delete, ["v1", "queue"]) => Some(needs(access.control, "control synththing").unwrap_or_else(|| {
             let edit = match query.get("at").map(|at| at.parse::<usize>()) {
                 None => QueueEdit::Clear,
@@ -1955,6 +1981,36 @@ fn panel_json(request: &mut Request) -> Result<serde_json::Value, Reply> {
     serde_json::from_slice(&body).map_err(|e| error(400, format!("not JSON: {e}")))
 }
 
+/// A part of the request's path, percent-decoded.
+fn path_part(part: &str) -> String {
+    percent_encoding::percent_decode_str(part).decode_utf8_lossy().into_owned()
+}
+
+/// `PUT /v1/shared/{key}`: shares the JSON sent as the body under `key`
+/// (`null` takes it out). 204.
+fn share(shared: &Shared, request: &mut Request, key: &str) -> Reply {
+    let mut body = Vec::new();
+    if request.as_reader().take(crate::shared_data::LARGEST as u64 + 1).read_to_end(&mut body).is_err() {
+        return error(400, "couldn't read the request");
+    }
+    if body.len() > crate::shared_data::LARGEST {
+        return error(413, format!("shared data holds at most {} KB", crate::shared_data::LARGEST >> 10));
+    }
+    let value: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(e) => return error(400, format!("not JSON: {e}")),
+    };
+    match crate::shared_data::set(key, Some(value)) {
+        Ok(changed) => {
+            if changed {
+                shared.waker.request_repaint();
+            }
+            Response::from_data(Vec::new()).with_status_code(204)
+        }
+        Err(e) => error(413, e),
+    }
+}
+
 /// `PUT /v1/panel`: the program's panel, as sent, in place of any it had.
 fn set_panel(shared: &Shared, request: &mut Request, access: &Access) -> Reply {
     let source = match panel_json(request) {
@@ -2568,6 +2624,29 @@ mod tests {
         server.event("now_playing", &NowPlaying::default());
         server.event("seeked", &serde_json::json!({ "position": 1.0 }));
         assert_eq!(stream.join().unwrap(), "event: seeked");
+    }
+
+    #[test]
+    fn shared_data_is_read_with_read_and_written_with_control() {
+        let (server, read_token, control_token) = server();
+        let addr = server.addr();
+        let put = |token: &str, body: &str| {
+            let request = agent().put(format!("http://{addr}/v1/shared/api%20test")).header("Authorization", format!("Bearer {token}"));
+            request.send(body).unwrap().status().as_u16()
+        };
+        assert_eq!(put(&read_token, "1"), 403);
+        assert_eq!(put(&control_token, "not json"), 400);
+        assert_eq!(put(&control_token, r#"{"score": 3}"#), 204);
+        assert_eq!(get(&server, "/v1/shared/api%20test", &control_token).0, 403);
+        assert_eq!(get(&server, "/v1/shared/api%20test", &read_token), (200, r#"{"score":3}"#.to_string()));
+        assert!(get(&server, "/v1/shared", &read_token).1.contains(r#""api test":{"score":3}"#));
+        let delete = || {
+            let request = agent().delete(format!("http://{addr}/v1/shared/api%20test")).header("Authorization", format!("Bearer {control_token}"));
+            request.call().unwrap().status().as_u16()
+        };
+        assert_eq!(delete(), 204);
+        assert_eq!(delete(), 404);
+        assert_eq!(get(&server, "/v1/shared/api%20test", &read_token).0, 404);
     }
 
     #[test]

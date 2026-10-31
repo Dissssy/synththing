@@ -15,7 +15,8 @@
 //! Another device made the hub after it, it stops serving and says so.
 //! As it starts and every 6 hours, it has the server check that its
 //! addresses work from the internet (`library::reach`), and logs what to
-//! fix if they don't (`hub check` does it now).
+//! fix if they don't (`hub check` does it now). While it's the hub, it
+//! does the library's background work (`background.rs`), for every device.
 
 use std::io::IsTerminal;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -34,7 +35,7 @@ use crate::playlist::Library;
 use crate::settings_sync;
 use crate::song_store::SongStore;
 use crate::wishlist::Wishlist;
-use crate::{applog, build_info, instance};
+use crate::{applog, background, build_info, instance};
 
 /// How often it looks at what's due (and how soon it notices a stop).
 const TICK: Duration = Duration::from_millis(250);
@@ -138,6 +139,8 @@ pub fn run() -> i32 {
     let mut error = None;
     let mut checked: Option<Instant> = None;
     let checks = mpsc::channel();
+    // (Ticked every `TICK`: nothing to wake.)
+    let mut jobs = background::Jobs::new(|| ());
     loop {
         if info_read.is_none_or(|t| t.elapsed() >= INFO_EVERY) {
             info_read = Some(Instant::now());
@@ -248,6 +251,10 @@ pub fn run() -> i32 {
                 Report::LibraryChanged | Report::ImageFetched => {}
                 Report::Status(text) | Report::Debug(text) => log::info!("{text}"),
             }
+        }
+        // (The hub does the library's background work, for every device.)
+        if background::runs_here(true, serving.is_some()) && jobs.tick(&mut songs) {
+            sync.songs_changed();
         }
         api.tick(&mut hub_api::Here { songs: &mut songs, playlists: &mut playlists, wishlist: &mut wishlist, sync: &mut sync, config: &config });
         api.panels_tick(&live);

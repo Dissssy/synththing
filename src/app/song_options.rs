@@ -1,6 +1,6 @@
 //! The playing song's playback options (Song info > Options,
 //! `fields::Section::Options`): where it starts and stops, its volume
-//! adjust, and where it was left, for a song that remembers that.
+//! adjust (over evening out its volume), and where it was left, for a song that remembers that.
 //! (Skipping when shuffling is the play order's: `song_list::Rules`,
 //! `pick_next`.)
 
@@ -8,6 +8,7 @@ use super::App;
 use crate::audio::AudioCommand;
 use crate::engine::EngineView;
 use crate::fields::{Facts, Field};
+use crate::loudness;
 
 /// A remembered position this close to either end is no position: the
 /// song starts from its start again.
@@ -18,11 +19,18 @@ impl App {
         self.current_song.as_deref().and_then(|p| self.songs.get(p)).map(Facts::of)
     }
 
-    /// Set the output volume: the slider's, and the playing song's adjust.
+    /// Set the output volume: the slider's, and the playing song's: its
+    /// adjust, over what evens out its volume (once it's known how loud
+    /// it is).
     pub(super) fn send_volume(&self) {
-        let adjust = self.playing_facts().and_then(|f| f.number(Field::VolumeAdjust)).unwrap_or(0.0);
+        let facts = self.playing_facts();
+        let adjust = facts.and_then(|f| f.number(Field::VolumeAdjust)).unwrap_or(0.0);
+        let evened = facts
+            .filter(|_| self.config.even_volume.unwrap_or(true))
+            .and_then(|f| f.loudness())
+            .map_or(1.0, |l| loudness::gain(l, self.config.volume_target.unwrap_or(loudness::DEFAULT_TARGET)));
         self.send(AudioCommand::SetVolume(self.volume));
-        self.send(AudioCommand::SetSongGain(1.0 + adjust as f32 / 100.0));
+        self.send(AudioCommand::SetSongGain((1.0 + adjust as f32 / 100.0) * evened));
     }
 
     /// The song just sent to play: from where it was left, else its start

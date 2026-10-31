@@ -44,6 +44,12 @@ impl App {
         self.sync.engine.songs_changed();
     }
 
+    /// Whether the user has a hub (which does the library's background
+    /// work: `crate::background`).
+    pub(super) fn has_hub(&self) -> bool {
+        self.sync.engine.hub().is_some()
+    }
+
     /// The authority and who's signed in, for syncing.
     pub(super) fn sync_link(&self) -> Link {
         let (server, server_key) = self.authority();

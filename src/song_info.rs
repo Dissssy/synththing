@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::midi_notes::NoteList;
+use crate::loudness::Loudness;
 use crate::song_store::Meta;
 
 /// A song's details as label/value pairs, empty when the file has nothing
@@ -501,7 +502,26 @@ fn read_audio_with_symphonia(path: &Path) -> Result<SongInfo, String> {
             details.push(("Bits per sample".into(), bits.to_string()));
         }
     }
+    meta.replay_gain = replay_gain(&details, "track");
+    meta.album_replay_gain = replay_gain(&details, "album");
     Ok(SongInfo { meta, details, notes: None, bpm: None })
+}
+
+/// The loudness the song's ReplayGain tags (its `which`: "track" or
+/// "album") say, by symphonia's names for them, ID3's ("TXXX:REPLAYGAIN_TRACK_GAIN")
+/// or ffmpeg's.
+fn replay_gain(details: &[(String, String)], which: &str) -> Option<Loudness> {
+    let find = |what: &str| {
+        let wanted = format!("replaygain{which}{what}");
+        details
+            .iter()
+            .find(|(key, _)| {
+                let key = key.strip_prefix("TXXX:").unwrap_or(key);
+                key.to_ascii_lowercase().replace([' ', '_'], "") == wanted
+            })
+            .map(|(_, value)| value.as_str())
+    };
+    Loudness::from_replay_gain(find("gain")?, find("peak"))
 }
 
 /// Whether symphonia's `codec` keeps audio without loss: linear PCM
@@ -608,6 +628,8 @@ fn parse_ffmpeg_info(log: &str) -> Option<SongInfo> {
         meta.bits = bits.parse().ok().filter(|_| meta.lossless);
         details.push(("Bits per sample".into(), bits.to_string()));
     }
+    meta.replay_gain = replay_gain(&details, "track");
+    meta.album_replay_gain = replay_gain(&details, "album");
     Some(SongInfo { meta, details, notes: None, bpm: None })
 }
 
@@ -698,6 +720,17 @@ mod tests {
         set_tag(&mut meta, "Artist", " A\0B\0\0 ");
         assert_eq!(meta.album.as_deref(), Some("KPM 155 Solo Instruments - Vol. 2"));
         assert_eq!(meta.artist.as_deref(), Some("A\0B"), "NULs between values stay, to split at");
+    }
+
+    #[test]
+    fn reads_replay_gain_by_any_name() {
+        let tags = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
+        let symphonia = tags(&[("Replay gain track gain", "-7.20 dB"), ("Replay gain track peak", "1.000000"), ("Replay gain album gain", "-8 dB")]);
+        assert_eq!(replay_gain(&symphonia, "track"), Some(Loudness { lufs: -10.8, peak: Some(1.0) }));
+        assert_eq!(replay_gain(&symphonia, "album"), Some(Loudness { lufs: -10.0, peak: None }));
+        let id3 = tags(&[("TXXX:REPLAYGAIN_TRACK_GAIN", "+1.5 dB")]);
+        assert_eq!(replay_gain(&id3, "track").map(|l| l.lufs), Some(-19.5));
+        assert_eq!(replay_gain(&tags(&[("Replaygain track peak", "0.5")]), "track"), None, "a peak alone says nothing");
     }
 
     #[test]
