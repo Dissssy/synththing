@@ -103,6 +103,11 @@ pub struct Config {
     /// `loudness::DEFAULT_TARGET`).
     #[serde(default)]
     pub volume_target: Option<f32>,
+    /// Preference: evening out volume, an album's songs share one gain
+    /// (its loudness, as a whole), so they keep the balance it was mixed
+    /// with.
+    #[serde(default)]
+    pub album_volume: bool,
     /// Preference: show the channel toggles as colored chips with each
     /// channel's instrument, instead of numbered checkboxes.
     #[serde(default)]

@@ -229,6 +229,7 @@ impl App {
         let mut buffer_ms = self.buffer_ms;
         let mut even_volume = self.config.even_volume.unwrap_or(true);
         let mut volume_target = self.config.volume_target.unwrap_or(loudness::DEFAULT_TARGET);
+        let mut album_volume = self.config.album_volume;
         let mut remember = self.config.remember;
         let mut install_updates = self.config.android_install_updates;
         let mut over_cutout = self.config.fullscreen_over_cutout;
@@ -331,6 +332,13 @@ impl App {
                             })
                             .inner
                         },
+                    );
+                    with_info(
+                        ui,
+                        "Turns each album up or down as a whole, by how loud all of it is, instead of song \
+                         by song: its quiet songs stay quieter than its loud ones, as it was mixed. Songs on \
+                         no album are evened out by themselves.",
+                        |ui| ui.add_enabled(even_volume, egui::Checkbox::new(&mut album_volume, "Keep albums' own balance")),
                     );
                 });
                 settings_group("What plays").icon("playlist").show(ui, |ui| {
@@ -652,6 +660,7 @@ impl App {
             || buffer_ms != self.buffer_ms
             || even_volume != self.config.even_volume.unwrap_or(true)
             || volume_target != self.config.volume_target.unwrap_or(loudness::DEFAULT_TARGET)
+            || album_volume != self.config.album_volume
             || remember != self.config.remember
             || install_updates != self.config.android_install_updates
             || over_cutout != self.config.fullscreen_over_cutout
@@ -671,6 +680,7 @@ impl App {
             self.config.buffer_ms = (buffer_ms != DEFAULT_BUFFER_MS).then_some(buffer_ms);
             self.config.even_volume = (!even_volume).then_some(false);
             self.config.volume_target = Some(volume_target).filter(|&t| t != loudness::DEFAULT_TARGET);
+            self.config.album_volume = album_volume;
             self.send_volume();
             self.config.channel_chips = channel_chips;
             self.config.script_log_to_app = script_log;
