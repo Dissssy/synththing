@@ -30,7 +30,12 @@ impl<'a> Naming<'a> {
     /// it) its own.
     pub fn song<'p>(&'p self, path: &'p Path, info: Option<&'p SongInfo>) -> Facts<'p> {
         match self.store.get(path) {
-            Some(song) => Facts { meta: song.meta.as_ref().or(info.map(|i| &i.meta)), info, ..Facts::of(song) },
+            Some(song) => Facts {
+                meta: song.meta.as_ref().or(info.map(|i| &i.meta)),
+                info,
+                stats: self.store.key(path).map(|key| self.store.totals(&key)),
+                ..Facts::of(song)
+            },
             None => Facts {
                 file_name: path.file_name().and_then(|n| n.to_str()).unwrap_or_default(),
                 meta: info.map(|i| &i.meta),
