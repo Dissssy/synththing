@@ -19,12 +19,14 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::fields::{self, Facts, Field, Kind};
 use crate::matching;
+use crate::play_stats::PlayStats;
 use crate::song_store::{Song, SongStore, Tag};
 use crate::wishlist::{Index, Wishes};
 
@@ -279,11 +281,29 @@ pub enum Order {
     Year,
     NewestAdded,
     OldestAdded,
+    /// By plays, every device's (`play_stats`).
+    MostPlayed,
+    LeastPlayed,
+    /// By when last played: never played last, and first.
+    RecentlyPlayed,
+    LeastRecentlyPlayed,
 }
 
 impl Order {
-    pub const ALL: [Self; 8] =
-        [Self::Random, Self::Title, Self::Artist, Self::Album, Self::Genre, Self::Year, Self::NewestAdded, Self::OldestAdded];
+    pub const ALL: [Self; 12] = [
+        Self::Random,
+        Self::Title,
+        Self::Artist,
+        Self::Album,
+        Self::Genre,
+        Self::Year,
+        Self::NewestAdded,
+        Self::OldestAdded,
+        Self::MostPlayed,
+        Self::LeastPlayed,
+        Self::RecentlyPlayed,
+        Self::LeastRecentlyPlayed,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -295,6 +315,10 @@ impl Order {
             Self::Year => "year",
             Self::NewestAdded => "most recently added",
             Self::OldestAdded => "least recently added",
+            Self::MostPlayed => "most played",
+            Self::LeastPlayed => "least played",
+            Self::RecentlyPlayed => "most recently played",
+            Self::LeastRecentlyPlayed => "least recently played",
         }
     }
 }
@@ -423,6 +447,8 @@ struct Test<'a> {
     /// For `Field::Wished` and `Field::Wish`: the wishes, to find those a
     /// song fills.
     wishes: Option<Index<'a>>,
+    /// For the play stats' fields: every song's.
+    stats: Option<Arc<PlayStats>>,
 }
 
 impl<'a> Test<'a> {
@@ -441,12 +467,14 @@ impl<'a> Test<'a> {
             periods: [period(&rule.value), period(&rule.to)],
             artists: (rule.field == Field::ArtistMatched).then(|| matched_artists(store)),
             wishes: matches!(rule.field, Field::Wished | Field::Wish).then(|| Index::new(wishes)),
+            stats: rule.field.is_play_stat().then(|| Arc::clone(store.stats())),
         }
     }
 
-    fn matches(&self, song: &Song) -> bool {
+    /// Whether song `key` (`song`) matches.
+    fn matches(&self, key: &str, song: &Song) -> bool {
         let Rule { field, op, value, .. } = self.rule;
-        let (whole, song) = (song, Facts::of(song));
+        let (whole, song) = (song, Facts { stats: self.stats.as_ref().map(|s| s.totals(key)), ..Facts::of(song) });
         match field.kind() {
             Kind::Text => {
                 // (Each of a list field's items: a song's genre "is" each
@@ -559,7 +587,7 @@ struct SortKey {
 
 /// What a song sorts by in `order`, names by what they sort as
 /// (`Facts::sort_text`, past a leading article unless `articles`).
-fn sort_key(order: Order, seed: u64, key: &str, song: &Song, articles: bool) -> SortKey {
+fn sort_key(order: Order, seed: u64, key: &str, song: &Song, stats: &PlayStats, articles: bool) -> SortKey {
     let facts = Facts::of(song);
     let lower = |field: Field| text(&facts, field).map(|t| t.to_lowercase()).unwrap_or_else(|| "\u{10ffff}".into());
     // (Spellings of one name together, as they're grouped.)
@@ -576,6 +604,16 @@ fn sort_key(order: Order, seed: u64, key: &str, song: &Song, articles: bool) -> 
         Order::Year => SortKey { text: [title, String::new(), String::new()], numbers: [facts.number(Field::Year).map_or(u64::MAX, |y| y as u64), 0, 0] },
         Order::NewestAdded => SortKey { numbers: [u64::MAX - song.imported.max(0) as u64, 0, 0], text: [title, String::new(), String::new()] },
         Order::OldestAdded => SortKey { numbers: [song.imported.max(0) as u64, 0, 0], text: [title, String::new(), String::new()] },
+        Order::MostPlayed => SortKey { numbers: [u64::MAX - u64::from(stats.totals(key).plays), 0, 0], text: [title, String::new(), String::new()] },
+        Order::LeastPlayed => SortKey { numbers: [u64::from(stats.totals(key).plays), 0, 0], text: [title, String::new(), String::new()] },
+        Order::RecentlyPlayed => {
+            let last = stats.totals(key).last_played.map_or(0, |t| t.max(0) as u64);
+            SortKey { numbers: [u64::MAX - last, 0, 0], text: [title, String::new(), String::new()] }
+        }
+        Order::LeastRecentlyPlayed => {
+            let last = stats.totals(key).last_played.map_or(0, |t| t.max(0) as u64);
+            SortKey { numbers: [last, 0, 0], text: [title, String::new(), String::new()] }
+        }
     }
 }
 
@@ -623,8 +661,8 @@ fn split_values<'a>(by: SplitBy, facts: &Facts<'a>, song: &'a Song, tags: &'a BT
 }
 
 /// `songs` (by key) in `order`, ties going by key.
-fn sorted<'a>(mut songs: Vec<(&'a str, &'a Song)>, order: Order, seed: u64, articles: bool) -> Vec<(&'a str, &'a Song)> {
-    let mut keyed: Vec<(SortKey, (&str, &Song))> = songs.drain(..).map(|(k, s)| (sort_key(order, seed, k, s, articles), (k, s))).collect();
+fn sorted<'a>(mut songs: Vec<(&'a str, &'a Song)>, order: Order, seed: u64, stats: &PlayStats, articles: bool) -> Vec<(&'a str, &'a Song)> {
+    let mut keyed: Vec<(SortKey, (&str, &Song))> = songs.drain(..).map(|(k, s)| (sort_key(order, seed, k, s, stats, articles), (k, s))).collect();
     keyed.sort_by(|(a, x), (b, y)| compare(order, a, b).then_with(|| x.0.cmp(y.0)));
     keyed.into_iter().map(|(_, song)| song).collect()
 }
@@ -633,25 +671,26 @@ impl Rules {
     /// Whether a song matches the rules (their values parsed once, here),
     /// `now` (Unix seconds) saying when "the last N days" are, `store`
     /// the library the songs are in.
-    pub fn matcher<'r>(&'r self, store: &SongStore, wishes: &'r Wishes, now: i64) -> impl Fn(&Song) -> bool + use<'r> {
+    /// The matcher takes a song's key and what's known of it.
+    pub fn matcher<'r>(&'r self, store: &SongStore, wishes: &'r Wishes, now: i64) -> impl Fn(&str, &Song) -> bool + use<'r> {
         let tests: Vec<Test> = self.rules.iter().map(|r| Test::new(r, store, wishes, now)).collect();
-        move |song| tests.is_empty() || if self.any { tests.iter().any(|t| t.matches(song)) } else { tests.iter().all(|t| t.matches(song)) }
+        move |key, song| tests.is_empty() || if self.any { tests.iter().any(|t| t.matches(key, song)) } else { tests.iter().all(|t| t.matches(key, song)) }
     }
 
     fn matching<'a>(&self, store: &SongStore, wishes: &Wishes, songs: impl Iterator<Item = (&'a str, &'a Song)>, now: i64) -> Vec<(&'a str, &'a Song)> {
         let matches = self.matcher(store, wishes, now);
-        songs.filter(|(_, song)| matches(song)).collect()
+        songs.filter(|(key, song)| matches(key, song)).collect()
     }
 
     /// `songs` cut to the limit (filling greedily in its order: a song
     /// that would go over is left out, one after it may still fit), in
     /// the playlist's order.
-    fn limited<'a>(&self, songs: Vec<(&'a str, &'a Song)>, articles: bool) -> Vec<(&'a str, &'a Song)> {
+    fn limited<'a>(&self, songs: Vec<(&'a str, &'a Song)>, stats: &PlayStats, articles: bool) -> Vec<(&'a str, &'a Song)> {
         let songs = match &self.limit {
             Some(limit) => {
                 let cap = limit.unit.scale(limit.amount);
                 let mut total = 0.0;
-                sorted(songs, limit.by, self.seed, articles)
+                sorted(songs, limit.by, self.seed, stats, articles)
                     .into_iter()
                     .filter(|(_, song)| {
                         let size = limit.unit.of(song);
@@ -665,7 +704,7 @@ impl Rules {
             }
             None => songs,
         };
-        sorted(songs, self.order, self.seed, articles)
+        sorted(songs, self.order, self.seed, stats, articles)
     }
 
     /// The songs (keys) of a smart playlist with this definition, from
@@ -674,7 +713,7 @@ impl Rules {
     /// past a leading article unless `articles`.
     pub fn songs(&self, store: &SongStore, wishes: &Wishes, now: i64, articles: bool) -> Vec<String> {
         let candidates = store.known().filter(|(key, _)| !store.is_blocked(key));
-        self.limited(self.matching(store, wishes, candidates, now), articles).into_iter().map(|(key, _)| key.to_string()).collect()
+        self.limited(self.matching(store, wishes, candidates, now), store.stats(), articles).into_iter().map(|(key, _)| key.to_string()).collect()
     }
 
     /// The playlists of a ruleset with this definition (none if it isn't
@@ -790,7 +829,7 @@ impl Rules {
                     sort,
                     subtitle,
                     artists,
-                    songs: self.limited(making.songs, articles).into_iter().map(|(key, _)| key.to_string()).collect(),
+                    songs: self.limited(making.songs, store.stats(), articles).into_iter().map(|(key, _)| key.to_string()).collect(),
                 }
             })
             .collect();
@@ -860,7 +899,7 @@ mod tests {
             let rules = Rules { rules: vec![Rule { field, op, value: String::new(), to: String::new() }], ..Rules::default() };
             let wishes = Wishes::new();
             let matches = rules.matcher(&store, &wishes, 0);
-            let mut names: Vec<String> = store.known().filter(|(_, s)| matches(s)).map(|(_, s)| s.name.clone()).collect();
+            let mut names: Vec<String> = store.known().filter(|(k, s)| matches(k, s)).map(|(_, s)| s.name.clone()).collect();
             names.sort();
             names
         };
@@ -882,7 +921,7 @@ mod tests {
         let wished = |field, op, value: &str| {
             let rules = Rules { rules: vec![Rule { field, op, value: value.into(), to: String::new() }], ..Rules::default() };
             let matches = rules.matcher(&store, &wishes, 0);
-            let mut names: Vec<String> = store.known().filter(|(_, s)| matches(s)).map(|(_, s)| s.name.clone()).collect();
+            let mut names: Vec<String> = store.known().filter(|(k, s)| matches(k, s)).map(|(_, s)| s.name.clone()).collect();
             names.sort();
             names
         };
@@ -941,6 +980,32 @@ mod tests {
         // unknown length does, 100 doesn't.
         let rules = Rules { limit: Some(Limit { amount: 9.0, unit: Unit::Minutes, by: Order::Album }), order: Order::Album, ..Rules::default() };
         assert_eq!(names(&lib, &rules.songs(&lib, &Wishes::new(), 0, false)), ["c.ogg", "b.ogg", "e.ogg"]);
+    }
+
+    #[test]
+    fn play_stats_rules_and_orders() {
+        let mut lib = library();
+        let key = |i: usize| format!("{:064x}.ogg", i);
+        let mut stats = PlayStats::default();
+        for (i, plays, at) in [(1, 3, 1000), (2, 1, 3000), (3, 5, 2000)] {
+            for _ in 0..plays {
+                stats.played(&key(i), "pc", at);
+            }
+        }
+        stats.skipped(&key(4), "phone", 500);
+        lib.set_stats(stats);
+        let wishes = Wishes::new();
+        let rule = |field, op, value: &str| Rules { rules: vec![Rule { field, op, value: value.into(), to: String::new() }], ..Rules::default() };
+        assert_eq!(names(&lib, &rule(Field::Plays, Op::AtLeast, "3").songs(&lib, &wishes, 0, false)), ["a.ogg", "c.ogg"]);
+        assert_eq!(names(&lib, &rule(Field::Plays, Op::Is, "0").songs(&lib, &wishes, 0, false)), ["d.ogg", "e.ogg"], "never played");
+        assert_eq!(names(&lib, &rule(Field::Skips, Op::AtLeast, "1").songs(&lib, &wishes, 0, false)), ["d.ogg"]);
+        // (Played in the 30 days before then: since 1500.)
+        let recent = rule(Field::LastPlayed, Op::InLast, "30d");
+        assert_eq!(names(&lib, &recent.songs(&lib, &wishes, 30 * 86_400 + 1500, false)), ["b.ogg", "c.ogg"]);
+        let top = |by| Rules { limit: Some(Limit { amount: 2.0, unit: Unit::Items, by }), order: by, ..Rules::default() };
+        assert_eq!(names(&lib, &top(Order::MostPlayed).songs(&lib, &wishes, 0, false)), ["c.ogg", "a.ogg"]);
+        assert_eq!(names(&lib, &top(Order::RecentlyPlayed).songs(&lib, &wishes, 0, false)), ["b.ogg", "c.ogg"]);
+        assert_eq!(names(&lib, &top(Order::LeastRecentlyPlayed).songs(&lib, &wishes, 0, false)), ["d.ogg", "e.ogg"], "never played first");
     }
 
     #[test]
