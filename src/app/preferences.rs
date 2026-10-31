@@ -209,6 +209,7 @@ impl App {
         let mut hover_preload = self.config.preload_on_hover;
         let mut skip_collapsed = self.config.autoplay_skip_collapsed;
         let mut only_starred = self.config.only_starred;
+        let mut play_counts = self.config.play_counts;
         let mut dropped_songs = self.config.dropped_songs;
         let mut tile_letters = self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS);
         let mut group_ignore = self.config.group_ignore.clone();
@@ -330,6 +331,12 @@ impl App {
                         ),
                         |ui| ui.checkbox(&mut warn_heavy, "Warn before playing a very large MIDI file"),
                     );
+                });
+                settings_group("Play counts").icon("chart-bar").show(ui, |ui| {
+                    let counts = &mut play_counts;
+                    cutoff_row(ui, "Played after", &mut counts.played, "How far into a song it counts as played (Plays, Last played). Reaching its end always does.");
+                    cutoff_row(ui, "Skipped from", &mut counts.skip_from, "Moving on to another song from this far in, before it counts as played, counts as skipping it.");
+                    cutoff_row(ui, "Skipped until", &mut counts.skip_until, "Moving on later than this isn't a skip: you listened to enough of it.");
                 });
                 settings_group("Start with what was set last time").icon("clock-counter-clockwise").show(ui, |ui| {
                     for (on, label, info) in [
@@ -598,6 +605,7 @@ impl App {
             || hover_preload != self.config.preload_on_hover
             || skip_collapsed != self.config.autoplay_skip_collapsed
             || only_starred != self.config.only_starred
+            || play_counts != self.config.play_counts
             || dropped_songs != self.config.dropped_songs
             || tile_letters != self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS)
             || group_ignore != self.config.group_ignore
@@ -623,6 +631,7 @@ impl App {
             self.config.mini_player = (!mini_player).then_some(false);
             self.config.mini_player_shape = mini_player_shape;
             self.config.remember = remember;
+            self.config.play_counts = play_counts;
             self.config.android_install_updates = install_updates;
             self.config.fullscreen_over_cutout = over_cutout;
             if buffer_ms != self.buffer_ms {
@@ -665,3 +674,32 @@ impl App {
         jump
     }
 }
+
+/// A point in a song (`play_stats::Cutoff`), as a slider with a button
+/// switching it between a share of the song and seconds into it.
+fn cutoff_row(ui: &mut egui::Ui, label: &str, cutoff: &mut crate::play_stats::Cutoff, info: &str) {
+    use crate::play_stats::Cutoff;
+    with_info(ui, info, |ui| {
+        let label = setting_label(ui, label);
+        let (switch, to) = match *cutoff {
+            Cutoff::Percent(p) => ("%", Cutoff::Seconds(p.min(MAX_CUTOFF_SECS))),
+            Cutoff::Seconds(s) => ("s", Cutoff::Percent(s.min(100.0))),
+        };
+        let button = ui.button(switch).on_hover_text(match to {
+            Cutoff::Seconds(_) => "A share of the song: click for seconds into it",
+            Cutoff::Percent(_) => "Seconds into the song: click for a share of it",
+        });
+        if button.clicked() {
+            *cutoff = to;
+        }
+        let beside = button.rect.width() + ui.spacing().item_spacing.x;
+        let slider = match cutoff {
+            Cutoff::Percent(p) => egui::Slider::new(p, 0.0..=100.0).suffix("%").fixed_decimals(0),
+            Cutoff::Seconds(s) => egui::Slider::new(s, 0.0..=MAX_CUTOFF_SECS).suffix(" s").fixed_decimals(0),
+        };
+        label | button | setting_slider(ui, slider, beside)
+    });
+}
+
+/// The most seconds a play count's cutoff can be.
+const MAX_CUTOFF_SECS: f64 = 300.0;

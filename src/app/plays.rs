@@ -11,7 +11,7 @@ use crate::play_stats::Heard;
 impl App {
     /// The song at `path` is starting: the one before was skipped, maybe.
     pub(super) fn listening_to(&mut self, path: &Path) {
-        let heard = self.listening.start(self.songs.key(path));
+        let heard = self.listening.start(self.songs.key(path), &self.config.play_counts);
         self.count(heard);
     }
 
@@ -21,7 +21,7 @@ impl App {
         if view.loads < self.song_loads {
             return;
         }
-        let heard = self.listening.at(view.position, view.length, view.finished);
+        let heard = self.listening.at(view.position, view.length, view.finished, &self.config.play_counts);
         self.count(heard);
     }
 

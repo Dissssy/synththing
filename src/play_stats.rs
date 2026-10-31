@@ -12,9 +12,9 @@
 //! Each device writes only its own counts, so no two write the same leaf
 //! but for a reset, where the latest wins.
 //!
-//! A play is getting past `PLAYED_AT` of the song (or to its end); a skip
-//! is leaving it for another between `SKIP_FROM` and `SKIP_UNTIL`
-//! seconds in, unplayed (`Listening`).
+//! A play is getting past a point in the song (or to its end); a skip is
+//! leaving it for another, unplayed, in a window near its start (`Listening`,
+//! by the user's `Cutoffs`: each a share of the song or seconds into it).
 
 use std::collections::BTreeMap;
 
@@ -28,11 +28,42 @@ pub const NAME: &str = "stats";
 /// A song's reset leaf, beside its devices' (`<key>/reset`).
 const RESET: &str = "reset";
 
-/// How far through a song it counts as played.
-pub const PLAYED_AT: f64 = 0.5;
-/// When leaving a song for another counts as skipping it (seconds in).
-pub const SKIP_FROM: f64 = 2.0;
-pub const SKIP_UNTIL: f64 = 20.0;
+/// A point in a song: a share of it, or seconds into it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Cutoff {
+    /// 0 to 100.
+    Percent(f64),
+    Seconds(f64),
+}
+
+impl Cutoff {
+    /// Seconds into a song `length` long (a share of one whose length
+    /// isn't known is never reached).
+    pub fn at(self, length: f64) -> f64 {
+        match self {
+            Cutoff::Percent(p) if length > 0.0 => length * p / 100.0,
+            Cutoff::Percent(_) => f64::INFINITY,
+            Cutoff::Seconds(s) => s,
+        }
+    }
+}
+
+/// When a song counts as played, and when leaving it counts as a skip
+/// (Preferences > Playback, `Config::play_counts`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Cutoffs {
+    pub played: Cutoff,
+    pub skip_from: Cutoff,
+    pub skip_until: Cutoff,
+}
+
+impl Default for Cutoffs {
+    fn default() -> Self {
+        Self { played: Cutoff::Percent(50.0), skip_from: Cutoff::Seconds(2.0), skip_until: Cutoff::Seconds(20.0) }
+    }
+}
 
 /// One device's count of one song, since `since`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,26 +201,28 @@ pub enum Heard {
 pub struct Listening {
     key: Option<String>,
     at: f64,
+    length: f64,
     played: bool,
 }
 
 impl Listening {
     /// Song `key` started (or a song not in the library: `None`): a skip
     /// of the one before, if it was left unplayed in the skip window.
-    pub fn start(&mut self, key: Option<String>) -> Option<Heard> {
+    pub fn start(&mut self, key: Option<String>, cutoffs: &Cutoffs) -> Option<Heard> {
         let left = std::mem::replace(self, Listening { key, ..Listening::default() });
-        let skipped = !left.played && (SKIP_FROM..SKIP_UNTIL).contains(&left.at);
+        let skipped = !left.played && (cutoffs.skip_from.at(left.length)..cutoffs.skip_until.at(left.length)).contains(&left.at);
         left.key.filter(|_| skipped).map(Heard::Skipped)
     }
 
     /// Where it is now (seconds in, of `length`; `finished` at its end): a
-    /// play, the moment it gets past `PLAYED_AT` or to its end. Going back
-    /// before that (looping, or seeking) lets it count again.
-    pub fn at(&mut self, position: f64, length: f64, finished: bool) -> Option<Heard> {
-        let past = finished || (length > 0.0 && position >= length * PLAYED_AT);
+    /// play, the moment it gets past `cutoffs.played` or to its end. Going
+    /// back before that (looping, or seeking) lets it count again.
+    pub fn at(&mut self, position: f64, length: f64, finished: bool, cutoffs: &Cutoffs) -> Option<Heard> {
+        let past = finished || position >= cutoffs.played.at(length);
         if !finished {
             self.at = position;
         }
+        self.length = length;
         let newly = past && !self.played;
         self.played = past;
         self.key.clone().filter(|_| newly).map(Heard::Played)
@@ -260,42 +293,55 @@ mod tests {
     #[test]
     fn a_play_is_past_halfway_once_each_time_through() {
         let mut listening = Listening::default();
-        assert_eq!(listening.start(Some("a".into())), None);
-        assert_eq!(listening.at(10.0, 100.0, false), None);
-        assert_eq!(listening.at(50.0, 100.0, false), Some(Heard::Played("a".into())));
-        assert_eq!(listening.at(60.0, 100.0, false), None);
-        assert_eq!(listening.at(100.0, 100.0, true), None, "already counted");
+        assert_eq!(listening.start(Some("a".into()), &Cutoffs::default()), None);
+        assert_eq!(listening.at(10.0, 100.0, false, &Cutoffs::default()), None);
+        assert_eq!(listening.at(50.0, 100.0, false, &Cutoffs::default()), Some(Heard::Played("a".into())));
+        assert_eq!(listening.at(60.0, 100.0, false, &Cutoffs::default()), None);
+        assert_eq!(listening.at(100.0, 100.0, true, &Cutoffs::default()), None, "already counted");
         // (Looped back to the start.)
-        assert_eq!(listening.at(1.0, 100.0, false), None);
-        assert_eq!(listening.at(70.0, 100.0, false), Some(Heard::Played("a".into())));
+        assert_eq!(listening.at(1.0, 100.0, false, &Cutoffs::default()), None);
+        assert_eq!(listening.at(70.0, 100.0, false, &Cutoffs::default()), Some(Heard::Played("a".into())));
     }
 
     #[test]
     fn reaching_the_end_counts_as_played() {
         let mut listening = Listening::default();
-        listening.start(Some("a".into()));
-        assert_eq!(listening.at(0.0, 0.0, true), Some(Heard::Played("a".into())), "a length it doesn't know");
+        listening.start(Some("a".into()), &Cutoffs::default());
+        assert_eq!(listening.at(0.0, 0.0, true, &Cutoffs::default()), Some(Heard::Played("a".into())), "a length it doesn't know");
     }
 
     #[test]
     fn leaving_early_but_not_at_once_is_a_skip() {
         let mut listening = Listening::default();
-        listening.start(Some("a".into()));
-        listening.at(1.0, 100.0, false);
-        assert_eq!(listening.start(Some("b".into())), None, "too soon");
-        listening.at(5.0, 100.0, false);
-        assert_eq!(listening.start(Some("c".into())), Some(Heard::Skipped("b".into())));
-        listening.at(25.0, 100.0, false);
-        assert_eq!(listening.start(None), None, "listened too long");
-        listening.at(5.0, 100.0, false);
-        assert_eq!(listening.start(Some("d".into())), None, "not a library song");
+        listening.start(Some("a".into()), &Cutoffs::default());
+        listening.at(1.0, 100.0, false, &Cutoffs::default());
+        assert_eq!(listening.start(Some("b".into()), &Cutoffs::default()), None, "too soon");
+        listening.at(5.0, 100.0, false, &Cutoffs::default());
+        assert_eq!(listening.start(Some("c".into()), &Cutoffs::default()), Some(Heard::Skipped("b".into())));
+        listening.at(25.0, 100.0, false, &Cutoffs::default());
+        assert_eq!(listening.start(None, &Cutoffs::default()), None, "listened too long");
+        listening.at(5.0, 100.0, false, &Cutoffs::default());
+        assert_eq!(listening.start(Some("d".into()), &Cutoffs::default()), None, "not a library song");
+    }
+
+    #[test]
+    fn cutoffs_in_either_unit() {
+        let cutoffs = Cutoffs { played: Cutoff::Seconds(30.0), skip_from: Cutoff::Percent(0.0), skip_until: Cutoff::Percent(10.0) };
+        let mut listening = Listening::default();
+        listening.start(Some("a".into()), &cutoffs);
+        assert_eq!(listening.at(29.0, 300.0, false, &cutoffs), None);
+        assert_eq!(listening.at(30.0, 300.0, false, &cutoffs), Some(Heard::Played("a".into())));
+        listening.start(Some("b".into()), &cutoffs);
+        listening.at(25.0, 300.0, false, &cutoffs);
+        assert_eq!(listening.start(Some("c".into()), &cutoffs), Some(Heard::Skipped("b".into())), "within 10% of 300 s");
+        assert_eq!(Cutoff::Percent(50.0).at(0.0), f64::INFINITY, "no length, no share of it");
     }
 
     #[test]
     fn a_short_song_played_through_is_not_a_skip() {
         let mut listening = Listening::default();
-        listening.start(Some("a".into()));
-        listening.at(5.0, 8.0, false);
-        assert_eq!(listening.start(Some("b".into())), None);
+        listening.start(Some("a".into()), &Cutoffs::default());
+        listening.at(5.0, 8.0, false, &Cutoffs::default());
+        assert_eq!(listening.start(Some("b".into()), &Cutoffs::default()), None);
     }
 }
