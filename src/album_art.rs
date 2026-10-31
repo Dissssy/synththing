@@ -38,11 +38,13 @@ pub struct Source {
     pub release: Option<(String, Option<String>)>,
     /// The art chosen for it, over all that (Choose art).
     pub chosen: Option<Art>,
+    /// A picture the user picked (`images.rs`), over everything.
+    pub image: Option<PathBuf>,
 }
 
 impl Source {
     fn is_empty(&self) -> bool {
-        self.file.is_none() && self.release.is_none() && self.chosen.is_none()
+        self.file.is_none() && self.release.is_none() && self.chosen.is_none() && self.image.is_none()
     }
 
     /// A song's art: its file (when it's here), then its release and the
@@ -53,7 +55,13 @@ impl Source {
             file,
             release: crate::lookup::release_of(song).map(|(release, group)| (release.to_string(), group.map(str::to_string))),
             chosen: song.online.as_ref().and_then(|o| o.art.clone()),
+            image: None,
         }
+    }
+
+    /// Only the picture the user picked, kept as `key` (`images.rs`).
+    pub fn image(key: &str) -> Self {
+        Self { image: crate::images::path(key).ok(), ..Self::default() }
     }
 
     /// Only the picture at `url` (Choose art's choices).
@@ -267,6 +275,9 @@ fn read_art_forever(queue: &Queue, send: &mpsc::Sender<(Request, Option<egui::Co
 /// The picture (a JPEG or PNG, as kept) `source` gives, if any: covers
 /// not kept yet are downloaded only if `online`.
 pub fn picture(source: &Source, online: bool) -> Option<Box<[u8]>> {
+    if let Some(image) = &source.image {
+        return std::fs::read(image).ok().map(Vec::into_boxed_slice);
+    }
     match &source.chosen {
         // (Asked for by the user: downloaded whatever `online` says, if
         // online lookups are on in this build.)

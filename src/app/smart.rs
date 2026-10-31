@@ -206,7 +206,7 @@ impl App {
         let name = name.trim().to_string();
         match editing {
             Editing::Playlist(id) => {
-                let playlist = Playlist { name, entries: Vec::new(), smart: Some(rules) };
+                let playlist = Playlist { name, smart: Some(rules), ..Playlist::default() };
                 let at = match id.and_then(|id| self.playlists.find(&id)) {
                     Some(at) => {
                         self.playlists.lists[at].playlist.name = playlist.name;

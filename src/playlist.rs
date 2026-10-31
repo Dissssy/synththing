@@ -47,6 +47,8 @@ pub struct Playlist {
     pub entries: Vec<PlaylistEntry>,
     /// A smart playlist's rules.
     pub smart: Option<crate::smart::Rules>,
+    /// The picture the user picked for it, by its key (`images.rs`).
+    pub image: Option<String>,
 }
 
 /// A playlist as saved: each song by its key in the library.
@@ -57,6 +59,8 @@ struct PlaylistFile {
     entries: Vec<EntryFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     smart: Option<crate::smart::Rules>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -113,7 +117,7 @@ impl Library {
                             .into_iter()
                             .map(|e| PlaylistEntry { soundfont: e.soundfont, ..PlaylistEntry::new(crate::song_store::path_of(&songs, &e.song)) })
                             .collect();
-                        lists.push(StoredPlaylist { id, playlist: Playlist { name: saved.name, entries, smart: saved.smart } });
+                        lists.push(StoredPlaylist { id, playlist: Playlist { name: saved.name, entries, smart: saved.smart, image: saved.image } });
                     }
                     Err(e) => errors.push(format!("{}: {e}", file.display())),
                 }
@@ -128,7 +132,7 @@ impl Library {
         let playlist = Playlist {
             name: name.to_string(),
             entries: songs.into_iter().map(PlaylistEntry::new).collect(),
-            smart: None,
+            ..Playlist::default()
         };
         self.put(&new_id(), playlist)
     }
@@ -177,7 +181,7 @@ impl Library {
                 .filter_map(|e| Some(EntryFile { song: crate::song_store::key_in(&self.songs, &e.path)?.to_string(), soundfont: e.soundfont.clone() }))
                 .collect(),
         };
-        let saved = PlaylistFile { name: stored.playlist.name.clone(), entries, smart: stored.playlist.smart.clone() };
+        let saved = PlaylistFile { name: stored.playlist.name.clone(), entries, smart: stored.playlist.smart.clone(), image: stored.playlist.image.clone() };
         let json = serde_json::to_string_pretty(&saved)?;
         fs::create_dir_all(&self.dir).with_context(|| format!("creating {}", self.dir.display()))?;
         let file = self.file(&stored.id);

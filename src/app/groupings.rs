@@ -617,10 +617,14 @@ impl App {
         group.songs.iter().filter(|key| self.songs.has(key)).map(|key| self.songs.path(key)).collect()
     }
 
-    /// Where `group`'s art comes from, when the ruleset splits by album:
-    /// the first song of it here that isn't MIDI, and the first release
-    /// one of its songs is on.
-    fn art_from(&self, albums: bool, group: &Group) -> AlbumArtSource {
+    /// Where `group` of `id`'s art comes from: a playlist's picture, or
+    /// when the ruleset splits by album, the first song of it here that
+    /// isn't MIDI, and the first release one of its songs is on.
+    fn art_from(&self, id: &str, albums: bool, group: &Group) -> AlbumArtSource {
+        if id == PLAYLISTS {
+            let image = self.playlists.find(&group.key).and_then(|l| self.playlists.lists[l].playlist.image.as_deref());
+            return image.map(AlbumArtSource::image).unwrap_or_default();
+        }
         if !albums {
             return AlbumArtSource::default();
         }
@@ -635,7 +639,7 @@ impl App {
             .map(|(release, group)| (release.to_string(), group.map(str::to_string)))
             .next();
         let chosen = group.songs.iter().find_map(|key| self.songs.get_by_key(key)?.online.as_ref()?.art.clone());
-        AlbumArtSource { file, release, chosen }
+        AlbumArtSource { file, release, chosen, image: None }
     }
 
     /// Every group of `id` (each one `what`; `albums` have art), as tiles
@@ -765,7 +769,7 @@ impl App {
                 let group = &groups[i];
                 ui.add_space(6.0);
                 let (tile, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
-                let from = self.art_from(albums, group);
+                let from = self.art_from(id, albums, group);
                 tile_ui(ui, &mut self.groupings.art, tile, from, group);
                 if wished(group).is_none() && art_play(ui, tile, row.response.id.with("play"), touch || row.response.contains_pointer()) {
                     play = Some(i);
@@ -821,7 +825,7 @@ impl App {
                         let rect = egui::Rect::from_min_size(min, egui::vec2(tile, tile + 40.0));
                         let response = ui.interact(rect, ui.id().with(("group_tile", &group.key)), egui::Sense::click());
                         let cover = egui::Rect::from_min_size(rect.min, egui::vec2(tile, tile));
-                        let from = self.art_from(albums, group);
+                        let from = self.art_from(id, albums, group);
                         tile_ui(ui, &mut self.groupings.art, cover, from, group);
                         if response.contains_pointer() {
                             ui.painter().rect_stroke(cover, 4.0, ui.visuals().widgets.hovered.fg_stroke, egui::StrokeKind::Inside);
@@ -1011,7 +1015,7 @@ impl App {
         let tracks = self.group_tracks(id, group);
         let phone = self.mobile();
         let albums = albums(ruleset);
-        let art_from = self.art_from(albums, group);
+        let art_from = self.art_from(id, albums, group);
         let current = self.current_song.clone();
         let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
         let mut wish = albums.then(|| super::wishlist::album_ask(&self.songs, &self.lookup.kept, &self.wishlist.list, online, &group.songs)).flatten();

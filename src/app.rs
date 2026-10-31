@@ -545,6 +545,8 @@ pub struct App {
     playlist_rename: Option<String>,
     /// "Find in here" on the open playlist's page.
     playlist_find: String,
+    /// The playlist (by ID) a picture's being picked for.
+    image_for: Option<String>,
     /// Delete was clicked once; the next click confirms.
     confirm_delete_playlist: bool,
     /// The section layout. Moved out into a local while `DockArea` draws it
@@ -828,6 +830,7 @@ impl App {
             rng: Rng::from_time(),
             playlist_rename: None,
             playlist_find: String::new(),
+            image_for: None,
             confirm_delete_playlist: false,
             open_sections: Section::ALL.into_iter().filter(|&s| layout::is_open(&dock, s)).collect(),
             dock,
@@ -2990,7 +2993,7 @@ impl App {
                 log::warn!("importing: {:?}", imported.failed);
                 notes.push(format!("{} couldn't be imported ({e}).", imported.failed.len()));
             }
-            let n = imported.songs.len() + imported.soundfonts.len();
+            let n = imported.songs.len() + imported.soundfonts.len() + imported.images.len();
             if n == 0 {
                 if !notes.is_empty() {
                     self.status = format!("Couldn't import: {}", notes.join(" "));
@@ -3013,6 +3016,12 @@ impl App {
                     self.after_import(ctx, done.then, paths, soundfonts);
                 }
                 crate::import::Kind::Soundfonts => self.add_soundfonts(imported.soundfonts),
+                crate::import::Kind::Image => {
+                    let id = self.image_for.take();
+                    if let Some(list) = id.and_then(|id| self.playlists.find(&id)) {
+                        self.set_playlist_image(list, imported.images.into_iter().next());
+                    }
+                }
             }
             if !notes.is_empty() {
                 self.status = format!("{} {}", self.status, notes.join(" "));

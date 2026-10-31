@@ -230,6 +230,20 @@ impl App {
         self.playlists_changed();
     }
 
+    /// Show playlist `list` with the picture kept as `image` (`None`: its
+    /// initials).
+    pub(super) fn set_playlist_image(&mut self, list: usize, image: Option<String>) {
+        self.playlists.lists[list].playlist.image = image;
+        self.save_playlist(list);
+    }
+
+    /// Ask for a picture for playlist `list` (it's shown with it once
+    /// picked: `poll_imports`).
+    fn pick_playlist_image(&mut self, list: usize) {
+        self.image_for = Some(self.playlists.lists[list].id.clone());
+        crate::import::start(crate::import::Kind::Image, &["jpg", "jpeg", "png"]);
+    }
+
     pub(super) fn create_playlist(&mut self, name: &str, songs: Vec<PathBuf>) {
         match self.playlists.create(name, songs) {
             Ok(idx) => {
@@ -597,6 +611,8 @@ impl App {
             Rules,
             Freeze,
             Rename,
+            PickImage,
+            Initials,
             #[cfg(not(target_os = "android"))]
             Export,
             Delete,
@@ -641,6 +657,7 @@ impl App {
         let left_at = left_at.map(|e| (e, entries[e].path.clone()));
         let left_at = left_at.map(|(e, path)| (e, self.song_title(&path)));
         let name = self.playlists.lists[list].playlist.name.clone();
+        let image = self.playlists.lists[list].playlist.image.clone();
         let rules = if super::smart::rules_editable(ui.ctx()) { ("sliders-horizontal", "Edit rules") } else { ("eye", "View rules") };
 
         let size = page_art(phone);
@@ -649,7 +666,8 @@ impl App {
         let confirm_delete = &mut self.confirm_delete_playlist;
         let mut renamed = None;
         let mut press = None;
-        page_header(ui, rect, size, &mut self.groupings.art, &AlbumArtSource::default(), &name, smart, |ui| {
+        let from = image.as_deref().map(AlbumArtSource::image).unwrap_or_default();
+        page_header(ui, rect, size, &mut self.groupings.art, &from, &name, smart, |ui| {
             if let Some(text) = rename {
                 ui.horizontal(|ui| {
                     let response = ui.add(egui::TextEdit::singleline(text).desired_width(160.0));
@@ -683,6 +701,22 @@ impl App {
                 }
                 if rename.is_none() && ui.add(super::icon_button("pencil-simple")).on_hover_text("Rename").clicked() {
                     press = Some(Press::Rename);
+                }
+                if image.is_none() {
+                    if ui.add(super::icon_button("image")).on_hover_text("Pick a picture for it").clicked() {
+                        press = Some(Press::PickImage);
+                    }
+                } else {
+                    egui::containers::menu::MenuButton::from_button(super::icon_button("image")).config(crate::menu::config(ui.ctx())).ui(ui, |ui| {
+                        if ui.button("Pick another picture...").clicked() {
+                            press = Some(Press::PickImage);
+                        }
+                        if ui.button("Show its initials").clicked() {
+                            press = Some(Press::Initials);
+                        }
+                    })
+                    .0
+                    .on_hover_text("Its picture");
                 }
                 #[cfg(not(target_os = "android"))]
                 if ui.add(super::icon_button("export")).on_hover_text("Export .m3u...: save as an .m3u8 playlist other players can open").clicked() {
@@ -724,6 +758,8 @@ impl App {
             Some(Press::Rules) => self.edit_playlist_rules(ui.ctx(), Some(list)),
             Some(Press::Freeze) => self.freeze_playlist(list),
             Some(Press::Rename) => self.playlist_rename = Some(name),
+            Some(Press::PickImage) => self.pick_playlist_image(list),
+            Some(Press::Initials) => self.set_playlist_image(list, None),
             #[cfg(not(target_os = "android"))]
             Some(Press::Export) => self.export_m3u(list),
             Some(Press::Delete) => self.delete_playlist(list),
