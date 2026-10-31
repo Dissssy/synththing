@@ -1,6 +1,7 @@
 //! The playing song's playback options (Song info > Options,
 //! `fields::Section::Options`): where it starts and stops, its volume
-//! adjust (over evening out its volume), and where it was left, for a song that remembers that.
+//! adjust (over evening out its volume, by the song's loudness or its
+//! album's), and where it was left, for a song that remembers that.
 //! (Skipping when shuffling is the play order's: `song_list::Rules`,
 //! `pick_next`.)
 
@@ -8,7 +9,8 @@ use super::App;
 use crate::audio::AudioCommand;
 use crate::engine::EngineView;
 use crate::fields::{Facts, Field};
-use crate::loudness;
+use crate::loudness::{self, Loudness};
+use crate::lookup;
 
 /// A remembered position this close to either end is no position: the
 /// song starts from its start again.
@@ -25,12 +27,30 @@ impl App {
     pub(super) fn send_volume(&self) {
         let facts = self.playing_facts();
         let adjust = facts.and_then(|f| f.number(Field::VolumeAdjust)).unwrap_or(0.0);
-        let evened = facts
+        let loudness = if self.config.album_volume { self.album_loudness() } else { facts.and_then(|f| f.loudness()) };
+        let evened = loudness
             .filter(|_| self.config.even_volume.unwrap_or(true))
-            .and_then(|f| f.loudness())
             .map_or(1.0, |l| loudness::gain(l, self.config.volume_target.unwrap_or(loudness::DEFAULT_TARGET)));
         self.send(AudioCommand::SetVolume(self.volume));
         self.send(AudioCommand::SetSongGain((1.0 + adjust as f32 / 100.0) * evened));
+    }
+
+    /// How loud the playing song's album is: as its ReplayGain tags say,
+    /// else from how loud its songs here are (those known), else (on no
+    /// album) the song itself.
+    fn album_loudness(&self) -> Option<Loudness> {
+        let path = self.current_song.as_deref()?;
+        let (key, song) = (self.songs.key(path)?, self.songs.get(path)?);
+        if let Some(tagged) = song.meta.as_ref().and_then(|m| m.album_replay_gain) {
+            return Some(tagged);
+        }
+        let ignore = &self.config.group_ignore;
+        let album = lookup::album_of(&key, song, ignore);
+        let songs = self.songs.known().filter(|(k, s)| lookup::album_of(k, s, ignore) == album).filter_map(|(_, s)| {
+            let facts = Facts::of(s);
+            Some((facts.loudness()?, facts.number(Field::Length).unwrap_or(0.0)))
+        });
+        loudness::album(songs).or_else(|| Facts::of(song).loudness())
     }
 
     /// The song just sent to play: from where it was left, else its start

@@ -59,6 +59,20 @@ impl Loudness {
     }
 }
 
+/// An album's loudness, from its songs' and how long each is (seconds):
+/// their loudness averaged as energy over the album's length, and the
+/// loudest peak of theirs (unknown if any's unknown). `None` for no songs.
+pub fn album(songs: impl IntoIterator<Item = (Loudness, f64)>) -> Option<Loudness> {
+    let (mut energy, mut length, mut peak) = (0.0f64, 0.0f64, Some(0.0f32));
+    for (loudness, seconds) in songs {
+        let seconds = if seconds > 0.0 { seconds } else { 1.0 };
+        energy += 10f64.powf(f64::from(loudness.lufs) / 10.0) * seconds;
+        length += seconds;
+        peak = peak.zip(loudness.peak).map(|(a, b)| a.max(b));
+    }
+    (length > 0.0).then(|| Loudness { lufs: (10.0 * (energy / length).log10()) as f32, peak })
+}
+
 /// The gain that brings a song this loud to `target` (LUFS): a boost
 /// only as far as its peak stays under full scale, and no more than
 /// `MAX_GAIN`.
@@ -300,6 +314,19 @@ mod tests {
         assert!((at(-20.0, Some(0.25)) - 1.995).abs() < 0.001, "6 dB up, with room to");
         assert!((at(-20.0, Some(0.8)) - 1.25).abs() < 0.001, "up only as far as its peak allows");
         assert_eq!(at(-40.0, None), MAX_GAIN, "never too far");
+    }
+
+    #[test]
+    fn an_album_is_as_loud_as_its_songs_together() {
+        let song = |lufs, peak| Loudness { lufs, peak: Some(peak) };
+        let same = album([(song(-10.0, 0.5), 100.0), (song(-10.0, 0.9), 300.0)]).unwrap();
+        assert!((same.lufs + 10.0).abs() < 1e-4);
+        assert_eq!(same.peak, Some(0.9), "its loudest peak");
+        // (Twice the energy for three quarters of it: about 2.4 dB louder.)
+        let mixed = album([(song(-13.0, 0.5), 100.0), (song(-10.0, 0.5), 300.0)]).unwrap();
+        assert!((mixed.lufs + 10.6).abs() < 0.1, "{mixed:?}");
+        assert_eq!(album([(Loudness { lufs: -10.0, peak: None }, 1.0)]).unwrap().peak, None);
+        assert_eq!(album([]), None);
     }
 
     #[test]
