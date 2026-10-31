@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Fixed
+- Adding a soundfont no longer freezes the window while it loads (several seconds for a big one). It joins the list straight away, and the status line says once it's ready to play, or if this build can't play it.
+
 ## 2.0.0 (2026-10-31)
 
 ### Added

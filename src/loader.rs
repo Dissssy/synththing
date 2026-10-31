@@ -191,17 +191,6 @@ impl AssetCache {
         self.entries.get(path).map(|e| &e.state)
     }
 
-    /// Put a file loaded some other way into the store (e.g. a soundfont
-    /// already parsed while validating it).
-    pub fn insert_ready(&mut self, path: &Path, asset: Asset, now: Instant) {
-        let kind = match asset {
-            Asset::Midi(_) => AssetKind::Midi,
-            Asset::Audio(_) => AssetKind::Audio,
-            Asset::SoundFont(_) => AssetKind::SoundFont,
-        };
-        self.entries.insert(path.to_path_buf(), Entry { kind, state: LoadState::Ready(asset), last_wanted: now });
-    }
-
     /// Collect finished loads. Returns whether anything finished (so the UI
     /// can react this frame). A result for a file that's since been evicted
     /// is dropped.
@@ -491,9 +480,25 @@ pub enum SoundFontProbe {
     NotSoundFont,
 }
 
+/// Whether `bytes` start like a SoundFont file (a RIFF/sfbk container).
+fn has_soundfont_header(bytes: &[u8]) -> bool {
+    bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"sfbk"
+}
+
+/// Whether the file at `path` is a SoundFont container, from its first 12
+/// bytes only: quick enough for the UI thread, unlike `probe_soundfont`.
+pub fn is_soundfont_file(path: &Path) -> Result<bool> {
+    use std::io::Read as _;
+    let mut header = Vec::with_capacity(12);
+    std::fs::File::open(path)?.take(12).read_to_end(&mut header)?;
+    Ok(has_soundfont_header(&header))
+}
+
+/// Read and fully parse a soundfont. Slow on a big one (seconds), so never
+/// on the UI thread.
 pub fn probe_soundfont(path: &Path) -> Result<SoundFontProbe> {
     let bytes = std::fs::read(path)?;
-    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"sfbk" {
+    if !has_soundfont_header(&bytes) {
         return Ok(SoundFontProbe::NotSoundFont);
     }
     match SoundFont::new(&mut bytes.as_slice()) {
