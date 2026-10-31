@@ -203,6 +203,9 @@ pub struct Config {
     /// starred songs (one picked by hand still plays).
     #[serde(default)]
     pub only_starred: bool,
+    /// Preference: when a song counts as played or skipped (`play_stats`).
+    #[serde(default)]
+    pub play_counts: crate::play_stats::Cutoffs,
     /// Preference: where songs dropped on the window go, after the library.
     #[serde(default)]
     pub dropped_songs: DroppedSongs,
