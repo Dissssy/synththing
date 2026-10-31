@@ -46,6 +46,7 @@ mod frame_timing;
 mod ffmpeg;
 mod gamepad;
 mod headless;
+mod image_sync;
 mod images;
 mod hub_api;
 mod hub;

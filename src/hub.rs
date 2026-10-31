@@ -248,7 +248,7 @@ pub fn run() -> i32 {
                     songs.add(stored);
                     sync.songs_changed();
                 }
-                Report::LibraryChanged => {}
+                Report::LibraryChanged | Report::ImageFetched => {}
                 Report::Status(text) | Report::Debug(text) => log::info!("{text}"),
             }
         }

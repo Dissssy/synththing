@@ -237,13 +237,6 @@ impl App {
         self.save_playlist(list);
     }
 
-    /// Ask for a picture for playlist `list` (it's shown with it once
-    /// picked: `poll_imports`).
-    fn pick_playlist_image(&mut self, list: usize) {
-        self.image_for = Some(self.playlists.lists[list].id.clone());
-        crate::import::start(crate::import::Kind::Image, &["jpg", "jpeg", "png"]);
-    }
-
     pub(super) fn create_playlist(&mut self, name: &str, songs: Vec<PathBuf>) {
         match self.playlists.create(name, songs) {
             Ok(idx) => {
@@ -758,7 +751,7 @@ impl App {
             Some(Press::Rules) => self.edit_playlist_rules(ui.ctx(), Some(list)),
             Some(Press::Freeze) => self.freeze_playlist(list),
             Some(Press::Rename) => self.playlist_rename = Some(name),
-            Some(Press::PickImage) => self.pick_playlist_image(list),
+            Some(Press::PickImage) => self.pick_picture(super::pictures::PictureFor::Playlist(self.playlists.lists[list].id.clone())),
             Some(Press::Initials) => self.set_playlist_image(list, None),
             #[cfg(not(target_os = "android"))]
             Some(Press::Export) => self.export_m3u(list),
