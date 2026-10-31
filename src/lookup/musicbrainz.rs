@@ -17,6 +17,7 @@ use musicbrainz_rs::entity::artist_credit::ArtistCredit;
 use musicbrainz_rs::entity::genre::Genre;
 use musicbrainz_rs::entity::recording::Recording;
 use musicbrainz_rs::entity::release::{Release as Entity, ReleaseStatus};
+use musicbrainz_rs::entity::relations::RelationContent;
 use musicbrainz_rs::entity::release_group::{ReleaseGroup, ReleaseGroupPrimaryType, ReleaseGroupSecondaryType};
 use musicbrainz_rs::entity::search::SearchResult;
 use musicbrainz_rs::entity::BrowseResult;
@@ -275,6 +276,29 @@ impl MusicBrainz {
         let entity = ArtistEntity::fetch().id(id).with_aliases().execute_with_client(&self.client).with_context(|| format!("fetching artist {id}"))?;
         self.cache.put("artist", id, &entity);
         Ok(artist(&entity))
+    }
+
+    /// The release `id`, as kept if it was, else asked for (and kept).
+    pub fn kept_or_fetched_release(&mut self, id: &str) -> Result<Release> {
+        Ok(converted(&self.release(id, false)?))
+    }
+
+    /// The Wikidata item (its Q-id) the artist `id` links to, if any:
+    /// kept, as their links rarely change.
+    pub fn wikidata(&mut self, id: &str) -> Result<Option<String>> {
+        let entity = match self.cache.get::<ArtistEntity>("artist-links", id) {
+            Some(entity) => entity,
+            None => {
+                self.wait_turn();
+                let entity = ArtistEntity::fetch().id(id).with_url_relations().execute_with_client(&self.client).with_context(|| format!("fetching artist {id}'s links"))?;
+                self.cache.put("artist-links", id, &entity);
+                entity
+            }
+        };
+        Ok(entity.relations.iter().flatten().find_map(|relation| match &relation.content {
+            RelationContent::Url(url) if relation.relation_type == "wikidata" => url.resource.rsplit('/').next().map(str::to_string),
+            _ => None,
+        }))
     }
 
     /// The release `id`, with its tracks and genres: kept, unless `fresh`.

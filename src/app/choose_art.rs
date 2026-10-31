@@ -12,7 +12,7 @@ use super::App;
 use crate::album_art::Source;
 use crate::build_info;
 use crate::lookup::art::{self, Choice};
-use crate::song_store::{Art, Online};
+use crate::song_store::Art;
 
 /// How big each choice is drawn.
 const TILE: f32 = 120.0;
@@ -65,18 +65,7 @@ impl App {
 
     /// Show the album with `art` (`None`: as it'd be by itself).
     pub(super) fn choose_art(&mut self, keys: &[String], art: Option<Art>) {
-        let at = crate::settings_sync::now();
-        let changes = keys
-            .iter()
-            .filter_map(|key| {
-                let mut online = self.songs.get_by_key(key)?.online.clone().unwrap_or(Online { at, ..Online::default() });
-                online.art = art.clone();
-                // (Nothing left to keep: no record at all.)
-                let empty = online.release.is_none() && online.rejected.is_empty() && !online.by_user && online.art.is_none();
-                Some((key.clone(), (!empty).then_some(online)))
-            })
-            .collect();
-        self.songs.set_online(changes);
+        self.songs.set_art(keys, art);
         self.songs_changed();
     }
 
@@ -163,7 +152,7 @@ impl App {
                 Some(artist) => format!("{} {artist}", crate::lookup::matching::search_name(&choose.title)),
                 None => crate::lookup::matching::search_name(&choose.title),
             };
-            choose.itunes = Some(Asked::start(move || art::itunes(&term)));
+            choose.itunes = Some(Asked::start(move || art::itunes(&term).map(|found| found.iter().map(art::Listed::choice).collect())));
         }
         if let Some(art) = pick {
             self.choose_art(&choose.keys, art);

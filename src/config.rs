@@ -134,6 +134,10 @@ pub struct Config {
     /// looked up once for every device.
     #[serde(default)]
     pub lookup_device: Option<String>,
+    /// Preference: fill in missing album art from the iTunes Store, and
+    /// artists' pictures from Wikidata (`art_fill`), with `online_lookup`.
+    #[serde(default)]
+    pub fill_art: bool,
     /// Preference: copy visualizer scripts' log() messages to the app's log.
     #[serde(default)]
     pub script_log_to_app: bool,

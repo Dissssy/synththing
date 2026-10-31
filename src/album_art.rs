@@ -300,7 +300,7 @@ pub fn picture(source: &Source, online: bool) -> Option<Box<[u8]>> {
 
 /// The picture in the file at `path`'s tags: its front cover, else the
 /// first one.
-fn embedded_picture(path: &Path) -> Option<Box<[u8]>> {
+pub(crate) fn embedded_picture(path: &Path) -> Option<Box<[u8]>> {
     use symphonia::core::formats::FormatOptions;
     use symphonia::core::io::MediaSourceStream;
     use symphonia::core::meta::{MetadataOptions, StandardVisualKey};
@@ -397,7 +397,7 @@ fn picture_at(url: &str) -> Option<Box<[u8]>> {
 }
 
 /// The image at `url` (`None`: there's none, a 404).
-fn download(url: &str) -> Result<Option<Vec<u8>>, ureq::Error> {
+pub(crate) fn download(url: &str) -> Result<Option<Vec<u8>>, ureq::Error> {
     let agent = format!("synththing/{} ( https://github.com/Dissssy/synththing )", crate::build_info::VERSION);
     match ureq::get(url).header("User-Agent", &agent).call() {
         Ok(mut response) => Ok(Some(response.body_mut().read_to_vec()?)),

@@ -7,6 +7,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### Added
 - Pick a picture for a playlist with the picture button on its page: it shows on its tile and its page instead of its initials. It goes along with the playlist to your other devices.
 - Pick a picture of your own for an album (Choose art > Pick a picture...) or an artist (the picture button on their page); it syncs too.
+- Fill in missing art (Preferences, under online lookups, off by default): albums with no art in their files or at the Cover Art Archive get the iTunes Store's cover of the album named just like them, and artists get their picture from Wikidata. Your hub does it in the background (or, without one, a computer), and the pictures sync to your other devices. A picture you choose always comes first.
 - Even out volume (Preferences > Playback, on by default): every song plays about as loud as the next, brought to -14 LUFS (or what you set). How loud a song is comes from its ReplayGain tags, else your hub (or, without one, a computer) measures it once in the background and your other devices use that. A song's Volume adjust goes on top. MIDI files aren't evened out yet.
 - A Loudness (LUFS) column in Songs, for smart playlists and sorting too.
 - Visualizer scripts and programs using the Local API can pass each other values: `shared_get`/`shared_set` in scripts, `/v1/shared` in the API, with a `shared_changed` event. It's in memory only and empties when you pick another visualizer or restart it.

@@ -746,6 +746,23 @@ impl SongStore {
         }
     }
 
+    /// Show the album of the songs `keys` with `art` (`None`: as it'd be
+    /// by itself); saved once.
+    pub fn set_art(&mut self, keys: &[String], art: Option<Art>) {
+        let at = crate::settings_sync::now();
+        let changes = keys
+            .iter()
+            .filter_map(|key| {
+                let mut online = self.songs.get(key)?.online.clone().unwrap_or(Online { at, ..Online::default() });
+                online.art = art.clone();
+                // (Nothing left to keep: no record at all.)
+                let empty = online.release.is_none() && online.rejected.is_empty() && !online.by_user && online.art.is_none();
+                Some((key.clone(), (!empty).then_some(online)))
+            })
+            .collect();
+        self.set_online(changes);
+    }
+
     /// Note how loud the song `key` measured; saved if it changed.
     pub fn set_loudness(&mut self, key: &str, loudness: Loudness) {
         if self.songs.get(key).is_some_and(|song| song.loudness != Some(loudness))
