@@ -31,10 +31,14 @@ impl AddingSoundfonts {
         &self.parsing
     }
 
-    /// Stop waiting on files that came off the list meanwhile.
+    /// Stop waiting on files that came off the list meanwhile. If that
+    /// leaves nothing parsing, the add is over: the removal says so instead.
     pub(super) fn forget_removed(&mut self, list: &[PathBuf]) {
         self.parsing.retain(|p| list.contains(p));
         self.added.retain(|p| list.contains(p));
+        if self.parsing.is_empty() {
+            *self = Self::default();
+        }
     }
 }
 
@@ -62,7 +66,8 @@ impl App {
         if any_added && let Err(e) = self.config.save() {
             self.adding_soundfonts.problems.push(format!("The soundfont list couldn't be saved: {e}"));
         }
-        self.poll_adding_soundfonts();
+        self.collect_parsed_soundfonts();
+        self.show_adding_soundfonts();
     }
 
     /// Put one soundfont on the list (not saved yet), or say why not. Only
@@ -81,13 +86,19 @@ impl App {
         Ok(())
     }
 
-    /// Every frame: note the parses that finished, and once none are left,
-    /// say how the whole add went.
+    /// Every frame: note the parses that finished, and update the status
+    /// line only when one did, so other messages aren't overwritten while a
+    /// parse runs.
     pub(super) fn poll_adding_soundfonts(&mut self) {
-        let adding = &mut self.adding_soundfonts;
-        if adding.added.is_empty() && adding.problems.is_empty() {
-            return;
+        if self.collect_parsed_soundfonts() {
+            self.show_adding_soundfonts();
         }
+    }
+
+    /// Note the parses that finished. Returns whether any did.
+    fn collect_parsed_soundfonts(&mut self) -> bool {
+        let adding = &mut self.adding_soundfonts;
+        let before = adding.parsing.len();
         let now = Instant::now();
         let mut still_parsing = Vec::new();
         for path in std::mem::take(&mut adding.parsing) {
@@ -105,6 +116,16 @@ impl App {
             }
         }
         adding.parsing = still_parsing;
+        adding.parsing.len() != before
+    }
+
+    /// Put how the add is going (or, once nothing is left parsing, how it
+    /// went) on the status line.
+    fn show_adding_soundfonts(&mut self) {
+        let adding = &mut self.adding_soundfonts;
+        if adding.added.is_empty() && adding.problems.is_empty() {
+            return;
+        }
         self.status = match adding.parsing.len() {
             0 => report(&std::mem::take(adding)),
             1 => format!("Checking soundfont {}...", nice_name(&adding.parsing[0])),
