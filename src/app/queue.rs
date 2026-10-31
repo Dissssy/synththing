@@ -1,4 +1,4 @@
-//! The play queue (Up next): songs to play after the one playing, before
+//! The play queue: songs to play after the one playing, before
 //! whatever it was playing from (a playlist, an album, or the Songs list
 //! with Autoplay) carries on. Play next puts songs at its front, Add to
 //! queue at its end; a playlist's or album's songs go in in its order, or
@@ -69,25 +69,71 @@ impl App {
         self.now_playing.as_ref().filter(|_| !self.playing_queued)
     }
 
-    /// The Up next tab: the queue's songs, shown as the Songs list shows
-    /// songs (its columns, without its search or sorting). A click plays
-    /// one now (taking it out); right-click to move songs to the top or
-    /// take them out, and Delete takes the selected ones out. Songs drag
-    /// in from Songs (or anywhere songs drag from), and rows drag to move.
+    /// How many songs to pick ahead in what's playing: as many as the queue
+    /// shows coming up, and at least the next (to preload it).
+    pub(super) fn planned_count(&self) -> usize {
+        self.config.coming_up.unwrap_or(crate::config::DEFAULT_COMING_UP).max(1)
+    }
+
+    /// The songs picked to play after the one playing, in what it's
+    /// playing from (the list with Autoplay, an album, or a playlist), after
+    /// the queue.
+    fn planned(&self) -> Vec<PathBuf> {
+        if let Some(playing) = &self.listed {
+            return playing.upcoming.iter().map(|(at, _)| at.path.clone()).collect();
+        }
+        let Some(np) = &self.now_playing else { return Vec::new() };
+        let entries = self.playlists.lists.get(np.list).map_or(&[][..], |l| &l.playlist.entries[..]);
+        np.upcoming.iter().filter_map(|&i| entries.get(i)).map(|e| e.path.clone()).collect()
+    }
+
+    /// The Queue tab: the song playing, marked as playing, over what's
+    /// coming up: the queue's songs, then (faded) what plays after them,
+    /// filling out the queue to the Songs coming up preference. They're
+    /// shown as the Songs list shows songs (its columns, without its search
+    /// or sorting). A click plays a queued song now (taking it out);
+    /// right-click to move queued songs to the top or take them out, and
+    /// Delete takes the selected ones out. Songs drag in from Songs (or
+    /// anywhere songs drag from), and queued rows drag to move.
     pub(super) fn queue_ui(&mut self, ui: &mut egui::Ui) {
-        let count = self.queue.len();
-        let text = match count {
-            1 => "1 song".to_string(),
-            n => format!("{n} songs"),
+        let queued = self.queue.len();
+        let planned = self.planned();
+        let after = self.config.coming_up.unwrap_or(crate::config::DEFAULT_COMING_UP).saturating_sub(queued).min(planned.len());
+        let text = match (queued, after) {
+            (1, 0) => "1 song".to_string(),
+            (n, 0) => format!("{n} songs"),
+            (n, m) => format!("{n} queued, {m} after"),
         };
         let mut clear = false;
-        select_list::toolbar(ui, |_| {}, text, |ui| {
-            clear = ui.add_enabled(count > 0, icon_button("trash")).on_hover_text("Clear the queue").clicked();
-        });
-        if clear {
-            self.queue.clear();
+        let mut view = self.config.songs_view.clone();
+        let keys = song_list::column_keys(&view);
+        let revision = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (&self.queue, &planned[..after], &self.current_song, self.songs_revision(), &keys).hash(&mut hasher);
+            hasher.finish()
+        };
+        if self.queue_rows.as_ref().is_none_or(|(seen, _)| *seen != revision) {
+            let naming = super::naming(&self.config, &self.songs);
+            let mut describe = |path: &PathBuf| (path.clone(), super::describe_song(&mut self.song_info, &naming, &self.songs, path, &keys));
+            let playing = self.current_song.as_ref().map(&mut describe);
+            let rows = self.queue.iter().chain(&planned[..after]).map(&mut describe).collect();
+            self.queue_rows = Some((revision, QueueRows { playing, rows }));
+            self.queue_selection.clear();
         }
-        if count == 0 {
+        let Some((_, shown)) = &self.queue_rows else { return };
+        let mut star = None;
+        if let Some(playing) = &shown.playing {
+            ui.label(egui::RichText::new("Now playing").weak());
+            if song_list::playing_ui(ui, "queue", playing, &view) {
+                star = Some((playing.0.clone(), !playing.1.plays.starred));
+            }
+            ui.add_space(ui.spacing().item_spacing.y);
+        }
+        select_list::toolbar(ui, |ui| { ui.label(egui::RichText::new("Up next").weak()); }, text, |ui| {
+            clear = ui.add_enabled(queued > 0, icon_button("trash")).on_hover_text("Clear the queue").clicked();
+        });
+        if shown.rows.is_empty() {
             let hint = if self.mobile() {
                 "Nothing queued.\nLong-press songs to play them next or add them to the queue."
             } else {
@@ -95,42 +141,37 @@ impl App {
             };
             super::placeholder(ui, hint);
         }
-        let mut view = self.config.songs_view.clone();
-        let keys = song_list::column_keys(&view);
-        let revision = {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            (&self.queue, self.songs_revision(), &keys).hash(&mut hasher);
-            hasher.finish()
-        };
-        if self.queue_rows.as_ref().is_none_or(|(seen, _)| *seen != revision) {
-            let naming = super::naming(&self.config, &self.songs);
-            let rows = self.queue.iter().map(|path| (path.clone(), super::describe_song(&mut self.song_info, &naming, &self.songs, path, &keys))).collect();
-            self.queue_rows = Some((revision, rows));
-            self.queue_selection.clear();
-        }
-        let Some((_, rows)) = &self.queue_rows else { return };
+        let rows = &shown.rows;
         let mut act = None;
         let cache = &mut self.song_info;
         let output = song_list::ordered_ui(
             ui,
             "queue",
             rows,
+            queued,
             &mut self.queue_selection,
             &mut view,
             &mut |ui, path| super::song_info_widgets(ui, cache, path, false),
-            &mut |ui, rows| {
-                if ui.button("Move to the top").clicked() {
-                    act = Some(Act::Top(rows.to_vec()));
-                }
-                if ui.button("Take out of the queue").clicked() {
-                    act = Some(Act::Out(rows.to_vec()));
+            &mut |ui, picked| {
+                let paths = || picked.iter().filter_map(|&i| rows.get(i).map(|(path, _)| path.clone())).collect();
+                if picked.iter().all(|&i| i < queued) {
+                    if ui.button("Move to the top").clicked() {
+                        act = Some(Act::Top(picked.to_vec()));
+                    }
+                    if ui.button("Take out of the queue").clicked() {
+                        act = Some(Act::Out(picked.to_vec()));
+                    }
+                } else if let Some(next) = menu(ui) {
+                    act = Some(Act::Queue(paths(), next));
                 }
                 if ui.button("Song info").clicked() {
-                    act = Some(Act::Info(rows.to_vec()));
+                    act = Some(Act::Info(paths()));
                 }
             },
         );
+        if clear {
+            self.queue.clear();
+        }
         if output.view_changed {
             self.config.songs_view = view;
             if let Err(e) = self.config.save() {
@@ -152,7 +193,7 @@ impl App {
             let mut old: Vec<Option<PathBuf>> = std::mem::take(&mut self.queue).into_iter().map(Some).collect();
             self.queue = order.iter().filter_map(|&i| old[i].take()).collect();
         }
-        if let Some((path, on)) = output.star {
+        if let Some((path, on)) = output.star.or(star) {
             self.tag_songs(super::tags::TagAction::Set(crate::song_store::STARRED.into(), on), &[path]);
         }
         match act {
@@ -166,18 +207,28 @@ impl App {
                 self.queue.splice(0..0, moved);
             }
             Some(Act::Out(rows)) => remove_rows(&mut self.queue, &rows),
-            Some(Act::Info(rows)) => self.details_for = Some(rows.iter().filter_map(|&i| self.queue.get(i).cloned()).collect()),
+            Some(Act::Queue(paths, next)) => self.queue_songs(ui.ctx(), paths, next),
+            Some(Act::Info(paths)) => self.details_for = Some(paths),
             Some(Act::Play(_)) | None => {}
         }
     }
 }
 
-/// What's asked of the Up next tab's rows (by their places in the queue).
+/// The Queue tab's rows as last described: the song playing, then the
+/// queue's and what plays after them.
+pub(super) struct QueueRows {
+    playing: Option<(PathBuf, song_list::Described)>,
+    rows: Vec<(PathBuf, song_list::Described)>,
+}
+
+/// What's asked of the Queue tab's rows (by their places in the queue).
 enum Act {
     Play(usize),
     Top(Vec<usize>),
     Out(Vec<usize>),
-    Info(Vec<usize>),
+    /// Songs coming up after the queue, put in it: next, or at its end.
+    Queue(Vec<PathBuf>, bool),
+    Info(Vec<PathBuf>),
 }
 
 /// Take the songs at `rows` out of `queue`.

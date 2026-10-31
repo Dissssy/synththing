@@ -19,7 +19,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Preferences > Playback > Play counts sets when a song counts as played and the window for skips, each as a share of the song or seconds into it (the % / s button switches).
 - Servers: `synththing admin usage` shows the usage data as a tree (version, platform, level, target, signature) and clears parts of it, `synththing admin usage-perf` shows the frame times, and `synththing admin usage-rules` sets which log lines are kept.
 - Servers: feedback intake collects the usage data too (`/api/v1/intake/usage`) and files crashes and frequent errors as issues, each line only once: the server remembers which issue it became.
-- Up next on phones: the menu has an Up next page, under Now playing, showing what's queued to play next. Tap a song to play it now, or long-press for moving it to the top or taking it out.
+- The Queue (once Up next) shows the song playing at the top, then what's queued, filled out (faded) with what the playlist, album or list playing goes on to, up to 5 songs (Preferences > Playback > Songs coming up). All of the queue shows, however long. Shuffled picks hold, so what it shows is what plays.
+- The Queue on phones: the menu has it, under Now playing.
+- Now playing on phones has a star button and a Song info button for the song playing, and an art button that shows the song's art instead of the visualizer: its own or its album's, else its artist's picture.
 - Help > Support synththing opens Ko-fi, for anyone who wants to chip in. The website and docs link it too.
 
 ### Changed

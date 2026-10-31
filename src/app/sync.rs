@@ -166,7 +166,7 @@ impl App {
                 let len = self.playlists.lists[np.list].playlist.entries.len();
                 (np.entry < len).then_some(())?;
                 np.history = vec![np.entry];
-                np.upcoming = None;
+                np.upcoming.clear();
             }
             Some(np)
         });

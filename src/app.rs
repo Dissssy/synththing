@@ -511,20 +511,20 @@ pub struct App {
     /// Set while autoplay goes down the Songs list (never with
     /// `now_playing`).
     listed: Option<song_list::Playing>,
-    /// The play queue (Up next, see `queue.rs`).
+    /// The play queue (see `queue.rs`).
     queue: Vec<PathBuf>,
     /// The song playing came from the queue: `now_playing` or `listed` is
     /// what it was queued after.
     playing_queued: bool,
-    /// The Up next tab's selected rows.
+    /// The Queue tab's selected rows.
     queue_selection: select_list::Selection,
     wishlist: wishlist::WishlistState,
     /// The Apps tab's panels (`panels.rs`).
     panels: panels::PanelsState,
     live: device_messages::LiveState,
     devices: devices::DevicesState,
-    /// The Up next tab's rows as last described, and what from (a hash).
-    queue_rows: Option<(u64, Vec<(PathBuf, song_list::Described)>)>,
+    /// The Queue tab's rows as last described, and what from (a hash).
+    queue_rows: Option<(u64, queue::QueueRows)>,
     /// Becomes true once the current playlist track is seen playing (not
     /// finished), so the "finished" that ends it advances exactly once, not
     /// again on a stale snapshot from before the next track loaded.
@@ -1573,7 +1573,7 @@ impl App {
 
         let active_sf = self.active_sf;
         let touch = select_list::touch(ui.ctx());
-        // The header, as Up next's (Name, then the size at the right).
+        // The header, as the Queue's (Name, then the size at the right).
         let size_width = if self.config.soundfonts.is_empty() {
             placeholder(ui, "No soundfonts yet.\nAdd one with + to play MIDI songs.");
             0.0

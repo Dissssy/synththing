@@ -83,15 +83,26 @@ pub struct Playing {
     /// The songs played through, when they aren't the list's.
     tracks: Option<Arc<[Queued]>>,
     pub history: Vec<PathBuf>,
-    /// With whether it starts a new pass (see [`SongList::next`]).
-    pub upcoming: Option<(Position, bool)>,
+    /// The songs picked to play next, in order, each with whether it
+    /// starts a new pass (see [`SongList::next`]).
+    pub upcoming: Vec<(Position, bool)>,
     /// The list's `generation` `upcoming` was picked from.
     pub planned: u64,
 }
 
 impl Playing {
     pub fn new(at: Position) -> Self {
-        Self { history: vec![at.path.clone()], at, tracks: None, upcoming: None, planned: 0 }
+        Self { history: vec![at.path.clone()], at, tracks: None, upcoming: Vec::new(), planned: 0 }
+    }
+
+    /// On to `at`, which starts a new pass (the history starts again) if
+    /// `new_pass`.
+    pub fn advance(&mut self, at: Position, new_pass: bool) {
+        if new_pass {
+            self.history.clear();
+        }
+        self.history.push(at.path.clone());
+        self.at = at;
     }
 
     /// Playing through `tracks` (each with how it plays) from the one at
@@ -508,26 +519,13 @@ pub struct DraggedRows {
     pub label: String,
 }
 
-/// `songs` (described by [`column_keys`]) in their own order, shown as the
-/// Songs list shows songs, with its columns but without its search,
-/// sorting or groups: the play queue. `menu` is a row's right-click menu,
-/// given the rows it's for. Rows drag to move them, and songs dragged in
-/// (from Songs) drop between them, or anywhere below them for the end.
-pub fn ordered_ui(
-    ui: &mut egui::Ui,
-    id_salt: &'static str,
-    songs: &[(PathBuf, Described)],
-    selection: &mut Selection,
-    view: &mut View,
-    marks: &mut dyn FnMut(&mut egui::Ui, &Path),
-    menu: &mut dyn FnMut(&mut egui::Ui, &[usize]),
-) -> OrderedOutput {
-    let touch = select_list::touch(ui.ctx());
-    let header_id = egui::Id::new(id_salt).with("header");
+/// The columns of `view` that fit in `ui` beside the names (just the
+/// first, on a touch screen), at their widths (set by the header `id`).
+fn shown_columns(ui: &egui::Ui, view: &View, header_id: egui::Id, touch: bool) -> Vec<(&'static Def, f32)> {
     let room = ui.available_width() - MIN_NAME_WIDTH;
     let mut used = 0.0;
     let columns = view.widths(ui.ctx(), header_id, view.columns.iter().filter_map(|k| column(k)).collect());
-    let shown: Vec<(&'static Def, f32)> = if touch {
+    if touch {
         columns.into_iter().take(1).collect()
     } else {
         columns
@@ -537,7 +535,47 @@ pub fn ordered_ui(
                 used <= room
             })
             .collect()
-    };
+    }
+}
+
+/// One song (described by [`column_keys`]) as a row of [`ordered_ui`]'s
+/// list `id_salt` would show it, marked as playing: the song playing, over
+/// the queue. Whether its star was clicked.
+pub fn playing_ui(ui: &mut egui::Ui, id_salt: &'static str, song: &(PathBuf, Described), view: &View) -> bool {
+    let touch = select_list::touch(ui.ctx());
+    let shown = shown_columns(ui, view, egui::Id::new(id_salt).with("header"), touch);
+    let mut star = false;
+    let height = select_list::row_height(ui);
+    ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
+        let songs = std::slice::from_ref(song);
+        select_list::show(ui, egui::Id::new(id_salt).with("playing"), songs, &mut Selection::default(), Some(0), |ui, row, (path, song)| {
+            star = song_row(ui, path, song, &Hits::default(), &shown, select_list::scrolls(row, true), touch, &mut |_, _| {});
+        });
+    });
+    star
+}
+
+/// `songs` (described by [`column_keys`]) in their own order, shown as the
+/// Songs list shows songs, with its columns but without its search,
+/// sorting or groups: the play queue, then what plays after it. The rows
+/// before `movable` drag to move them, and Delete takes them out; songs
+/// dragged in (from Songs) drop between them, or anywhere below them for
+/// after the last. The rest are only shown. `menu` is a row's right-click
+/// menu, given the rows it's for.
+#[allow(clippy::too_many_arguments)]
+pub fn ordered_ui(
+    ui: &mut egui::Ui,
+    id_salt: &'static str,
+    songs: &[(PathBuf, Described)],
+    movable: usize,
+    selection: &mut Selection,
+    view: &mut View,
+    marks: &mut dyn FnMut(&mut egui::Ui, &Path),
+    menu: &mut dyn FnMut(&mut egui::Ui, &[usize]),
+) -> OrderedOutput {
+    let touch = select_list::touch(ui.ctx());
+    let header_id = egui::Id::new(id_salt).with("header");
+    let shown = shown_columns(ui, view, header_id, touch);
     let mut view_changed = false;
     if !touch && !songs.is_empty() {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y), egui::Sense::hover());
@@ -552,8 +590,8 @@ pub fn ordered_ui(
     let ctx = ui.ctx().clone();
     let released = ui.input(|i| i.pointer.any_released());
     let output = select_list::show(ui, id_salt, songs, selection, None, |ui, row, (path, song)| {
-        if row.response.drag_started() {
-            let rows = row.rows();
+        if row.response.drag_started() && row.idx < movable {
+            let rows: Vec<usize> = row.rows().into_iter().filter(|&i| i < movable).collect();
             let label = match rows.len() {
                 1 => song.name.clone(),
                 n => format!("{} and {} more", song.name, n - 1),
@@ -561,7 +599,7 @@ pub fn ordered_ui(
             row.response.dnd_set_drag_payload(DraggedRows { list: id_salt, rows, label });
         }
         // Dropped onto this row: before it in its top half, else after it.
-        if row.response.contains_pointer() {
+        if row.response.contains_pointer() && row.idx < movable {
             let rect = row.response.rect;
             let above = ui.input(|i| i.pointer.hover_pos()).is_none_or(|p| p.y < rect.center().y);
             let at = if above { row.idx } else { row.idx + 1 };
@@ -583,6 +621,10 @@ pub fn ordered_ui(
             }
         }
         crate::menu::context(&row.response, |ui| menu(ui, &row.rows()));
+        // (What's only shown, faded, unless it's selected.)
+        if row.idx >= movable && ui.visuals().override_text_color.is_none() {
+            ui.visuals_mut().override_text_color = Some(ui.visuals().weak_text_color());
+        }
         if song_row(ui, path, song, &hits, &shown, select_list::scrolls(row, false), touch, marks) {
             star = Some((path.clone(), !song.plays.starred));
         }
@@ -590,17 +632,17 @@ pub fn ordered_ui(
     // Released anywhere else over the list: at the end.
     if released && insert.is_none() && moved.is_none() && ui.rect_contains_pointer(area) {
         if let Some(files) = egui::DragAndDrop::take_payload::<DraggedFiles>(&ctx) {
-            insert = Some((files.paths.clone(), songs.len()));
+            insert = Some((files.paths.clone(), movable));
         } else if let Some(dragged) = egui::DragAndDrop::payload::<DraggedRows>(&ctx)
             && dragged.list == id_salt
         {
             egui::DragAndDrop::clear_payload(&ctx);
-            moved = Some((dragged.rows.clone(), songs.len()));
+            moved = Some((dragged.rows.clone(), movable));
         }
     }
     OrderedOutput {
         play: output.activated,
-        delete: if output.delete { selection.rows().to_vec() } else { Vec::new() },
+        delete: if output.delete { selection.rows().iter().copied().filter(|&i| i < movable).collect() } else { Vec::new() },
         star,
         insert,
         moved,

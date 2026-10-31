@@ -359,11 +359,11 @@ impl App {
             return Some((path.clone(), self.soundfont_for(path, None)));
         }
         if let Some(playing) = &self.listed {
-            let (at, _) = playing.upcoming.as_ref()?;
+            let (at, _) = playing.upcoming.first()?;
             return Some((at.path.clone(), self.soundfont_for(&at.path, None)));
         }
         let np = self.now_playing.as_ref()?;
-        let entry = self.playlists.lists.get(np.list)?.playlist.entries.get(np.upcoming?)?;
+        let entry = self.playlists.lists.get(np.list)?.playlist.entries.get(*np.upcoming.first()?)?;
         if entry.missing {
             return None;
         }
