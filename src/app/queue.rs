@@ -88,7 +88,12 @@ impl App {
             self.queue.clear();
         }
         if count == 0 {
-            super::placeholder(ui, "Nothing queued.\nRight-click songs to play them next or add them to the queue, or drag them here.");
+            let hint = if self.mobile() {
+                "Nothing queued.\nLong-press songs to play them next or add them to the queue."
+            } else {
+                "Nothing queued.\nRight-click songs to play them next or add them to the queue, or drag them here."
+            };
+            super::placeholder(ui, hint);
         }
         let mut view = self.config.songs_view.clone();
         let keys = song_list::column_keys(&view);

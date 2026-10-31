@@ -34,6 +34,8 @@ const DESKTOP_SIZE: egui::Vec2 = egui::vec2(1100.0, 750.0);
 pub(super) enum Page {
     #[default]
     NowPlaying,
+    /// The play queue.
+    Queue,
     Songs,
     /// The playlists, or a ruleset's (`Groupings::show` says which); the
     /// menu has one for each.
@@ -54,8 +56,9 @@ pub(super) enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 7] = [
+    const ALL: [Page; 8] = [
         Self::NowPlaying,
+        Self::Queue,
         Self::Songs,
         Self::Soundfonts,
         Self::Wishlist,
@@ -67,6 +70,7 @@ impl Page {
     fn title(self) -> &'static str {
         match self {
             Self::NowPlaying => "Now playing",
+            Self::Queue => "Up next",
             Self::Songs => "Songs",
             Self::Grouping => "Groupings",
             Self::Soundfonts => "Soundfonts",
@@ -85,6 +89,7 @@ impl Page {
     fn icon(self) -> &'static str {
         match self {
             Self::NowPlaying => "monitor-play",
+            Self::Queue => "queue",
             Self::Songs => "music-notes",
             Self::Grouping => "squares-four",
             Self::Soundfonts => "piano-keys",
@@ -150,6 +155,7 @@ impl App {
     pub(super) fn mobile_list_section(&self) -> Option<crate::layout::Section> {
         use crate::layout::Section;
         match self.mobile_state.page {
+            Page::Queue => Some(Section::Queue),
             Page::Songs => Some(Section::Songs),
             Page::Grouping => Some(Section::Groupings),
             Page::Soundfonts => Some(Section::Soundfonts),
@@ -228,6 +234,7 @@ impl App {
             let _timing = frame_timing::scope(page.title());
             egui::CentralPanel::default().show(ui, |ui| match page {
                 Page::NowPlaying => {}
+                Page::Queue => self.queue_ui(ui),
                 Page::Songs => self.songs_ui(ui),
                 Page::Grouping => self.grouping_ui(ui),
                 Page::Soundfonts => self.soundfont_ui(ui),
