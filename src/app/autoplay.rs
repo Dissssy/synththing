@@ -78,14 +78,32 @@ impl App {
         self.save_playback_modes();
     }
 
-    /// Pick what plays after the song playing now (so it can be preloaded,
-    /// and a shuffle's pick holds), from the list as it is.
+    /// Pick what plays after the song playing now (so the first can be
+    /// preloaded, the queue can show them, and a shuffle's picks hold),
+    /// from the list as it is.
     pub(super) fn plan_listed(&mut self) {
+        if let Some(playing) = &mut self.listed {
+            playing.upcoming.clear();
+        }
+        self.extend_listed();
+    }
+
+    /// Pick songs after the ones already picked, up to `planned_count`.
+    fn extend_listed(&mut self) {
         let rules = self.listed_rules();
-        let random = self.rng.next();
         let generation = self.song_list.generation();
+        let count = self.planned_count();
         let Some(playing) = &self.listed else { return };
-        let upcoming = self.song_list.next(playing, rules, random);
+        let mut upcoming = playing.upcoming.clone();
+        let mut after = playing.clone();
+        for (at, new_pass) in &upcoming {
+            after.advance(at.clone(), *new_pass);
+        }
+        while upcoming.len() < count {
+            let Some((at, new_pass)) = self.song_list.next(&after, rules, self.rng.next()) else { break };
+            after.advance(at.clone(), new_pass);
+            upcoming.push((at, new_pass));
+        }
         if let Some(playing) = &mut self.listed {
             playing.upcoming = upcoming;
             playing.planned = generation;
@@ -99,18 +117,15 @@ impl App {
             self.plan_listed();
         }
         let Some(mut playing) = self.listed.clone() else { return };
-        let Some((at, new_pass)) = playing.upcoming.take() else {
+        if playing.upcoming.is_empty() {
             // Ran off the end: stay on the last song, finished.
             self.status = "End of the list.".to_string();
             return;
-        };
-        if new_pass {
-            playing.history.clear();
         }
-        playing.history.push(at.path.clone());
-        playing.at = at.clone();
+        let (at, new_pass) = playing.upcoming.remove(0);
+        playing.advance(at.clone(), new_pass);
         self.listed = Some(playing);
-        self.plan_listed();
+        self.extend_listed();
         self.request_play(&at.path, None, None, true);
     }
 
@@ -124,7 +139,7 @@ impl App {
             playing.history.push(at.path.clone());
         }
         playing.at = at.clone();
-        playing.upcoming = None;
+        playing.upcoming.clear();
         self.listed = Some(playing);
         self.plan_listed();
         self.request_play(&at.path, None, None, false);

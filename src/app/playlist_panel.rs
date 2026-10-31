@@ -120,7 +120,7 @@ impl App {
         }
         self.now_playing = Some(np.clone());
         self.listed = None;
-        self.plan_upcoming();
+        self.extend_upcoming();
         self.request_play(&entry.path, entry.soundfont.as_deref(), Some(np), skip_on_failure);
     }
 
@@ -135,17 +135,34 @@ impl App {
         playlist::next_entry(&playable, &members, np.entry, self.loop_mode, self.shuffle, &np.history, random)
     }
 
-    /// Decide now which entry follows the current one (randomly, if
-    /// shuffling), so it can be preloaded and Next/auto-advance go exactly
-    /// there. Re-decided whenever the playlist or loop/shuffle mode changes.
+    /// Decide now which entries follow the current one (randomly, if
+    /// shuffling), so the first can be preloaded, the queue can show them,
+    /// and Next/auto-advance go exactly there. Re-decided whenever the
+    /// playlist or loop/shuffle mode changes.
     pub(super) fn plan_upcoming(&mut self) {
-        let Some(np) = self.now_playing.clone() else {
+        if let Some(np) = &mut self.now_playing {
+            np.upcoming.clear();
+        }
+        self.extend_upcoming();
+    }
+
+    /// Pick entries after the ones already picked, up to `planned_count`.
+    fn extend_upcoming(&mut self) {
+        let Some(mut np) = self.now_playing.clone() else {
             return;
         };
-        let upcoming = self.pick_next(&np);
-        if let Some(np) = &mut self.now_playing {
-            np.upcoming = upcoming;
+        let len = self.playlists.lists.get(np.list).map_or(0, |l| l.playlist.entries.len());
+        let count = self.planned_count();
+        let mut after = np.clone();
+        for &entry in &np.upcoming {
+            after.advance(entry, len, self.shuffle);
         }
+        while np.upcoming.len() < count {
+            let Some(next) = self.pick_next(&after) else { break };
+            after.advance(next, len, self.shuffle);
+            np.upcoming.push(next);
+        }
+        self.now_playing = Some(np);
     }
 
     /// Advance to the next queued song, else the next playlist entry (the
@@ -163,9 +180,12 @@ impl App {
             return;
         };
         let len = self.playlists.lists.get(np.list).map_or(0, |l| l.playlist.entries.len());
-        let next = match np.upcoming.filter(|&u| u < len) {
-            Some(next) => Some(next),
-            None => self.pick_next(&np),
+        let next = match np.upcoming.first() {
+            Some(&next) if next < len => Some(np.upcoming.remove(0)),
+            _ => {
+                np.upcoming.clear();
+                self.pick_next(&np)
+            }
         };
         let Some(next) = next else {
             // Ran off the end: stay on the last track, finished, rather than
@@ -173,19 +193,7 @@ impl App {
             self.status = "End of playlist.".to_string();
             return;
         };
-        if self.shuffle {
-            if np.history.len() >= len {
-                // Every entry's had its turn: this pick starts a new pass.
-                np.history.clear();
-            }
-            np.history.push(next);
-        } else {
-            // History only matters for shuffle; don't let it grow forever
-            // on a looping playlist.
-            np.history = vec![next];
-        }
-        np.entry = next;
-        np.upcoming = None;
+        np.advance(next, len, self.shuffle);
         self.start_now_playing(np, true);
     }
 
@@ -214,7 +222,7 @@ impl App {
                     np.history = vec![prev];
                 }
                 np.entry = prev;
-                np.upcoming = None;
+                np.upcoming.clear();
                 self.start_now_playing(np, false);
             }
             _ => self.send(AudioCommand::Seek(0.0)),

@@ -256,6 +256,11 @@ pub fn show<T>(
     show_tall(ui, id_salt, items, selection, playing, 0.0, draw)
 }
 
+/// How tall [`show`]'s rows are in `ui`.
+pub fn row_height(ui: &egui::Ui) -> f32 {
+    if touch(ui.ctx()) { TOUCH_ROW_HEIGHT } else { ui.spacing().interact_size.y }
+}
+
 /// [`show`], with rows at least `height` tall (for a picture and two lines,
 /// say).
 pub fn show_tall<T>(
@@ -270,7 +275,7 @@ pub fn show_tall<T>(
     let id = egui::Id::new(id_salt);
     let mut output = ListOutput::default();
     let touch = touch(ui.ctx());
-    let row_height = height.max(if touch { TOUCH_ROW_HEIGHT } else { ui.spacing().interact_size.y });
+    let row_height = height.max(row_height(ui));
     let sense = if touch { egui::Sense::click() } else { egui::Sense::click_and_drag() };
     let modifiers = ui.input(|i| i.modifiers);
     let playing_color = crate::theme::playing_color(ui.ctx());

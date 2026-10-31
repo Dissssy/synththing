@@ -20,6 +20,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Anonymous usage data, if you say yes (synththing asks once; Preferences > App > Usage data changes it): once a day, how often each kind of warning and error came up, and crashes as soon as synththing runs again, plus how long frames took on what kind of hardware (graphics chip, cores, memory) and with which layout, visualizer pixel scale and window size, to tune the defaults by. It says only where in the code something happened and which message it was, never what the message was filled in with: no song names, files, account or anything that says who you are. See what's sent shows the next report. Branch builds never send it.
 - Servers: `synththing admin usage` shows the usage data as a tree (version, platform, level, target, signature) and clears parts of it, `synththing admin usage-perf` shows the frame times, and `synththing admin usage-rules` sets which log lines are kept.
 - Servers: feedback intake collects the usage data too (`/api/v1/intake/usage`) and files crashes and frequent errors as issues, each line only once: the server remembers which issue it became.
+- The Queue (once Up next) shows the song playing at the top, then what's queued, filled out (faded) with what the playlist, album or list playing goes on to, up to 5 songs (Preferences > Playback > Songs coming up). All of the queue shows, however long. Shuffled picks hold, so what it shows is what plays.
+- The Queue on phones: the menu has it, under Now playing.
+- Now playing on phones has a star button and a Song info button for the song playing, and an art button that shows the song's art instead of the visualizer: its own or its album's, else its artist's picture.
+- Compressed SF3 soundfonts (like GZDoom's or MuseScore's) work: add one like any `.sf2`, no converting first. Their samples are unpacked once as the soundfont loads.
 - Help > Support synththing opens Ko-fi, for anyone who wants to chip in. The website and docs link it too.
 
 ### Changed

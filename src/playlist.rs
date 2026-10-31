@@ -245,15 +245,31 @@ pub struct NowPlaying {
     pub list: usize,
     pub entry: usize,
     pub history: Vec<usize>,
-    /// The entry already picked to play next (decided as soon as this one
-    /// starts, even when shuffling, so it can be preloaded). `None` when
-    /// nothing follows, or not decided yet.
-    pub upcoming: Option<usize>,
+    /// The entries already picked to play next, in order (decided as soon
+    /// as this one starts, even when shuffling, so the first can be
+    /// preloaded and the queue can show what's coming). Empty when nothing
+    /// follows, or not decided yet.
+    pub upcoming: Vec<usize>,
 }
 
 impl NowPlaying {
     pub fn new(list: usize, entry: usize) -> Self {
-        Self { list, entry, history: vec![entry], upcoming: None }
+        Self { list, entry, history: vec![entry], upcoming: Vec::new() }
+    }
+
+    /// On to `next`, in a list of `len` entries: shuffle history keeps the
+    /// pass's entries (starting again once every one's had its turn), and
+    /// otherwise only the one playing, so a looping list's doesn't grow.
+    pub fn advance(&mut self, next: usize, len: usize, shuffle: bool) {
+        if shuffle {
+            if self.history.len() >= len {
+                self.history.clear();
+            }
+            self.history.push(next);
+        } else {
+            self.history = vec![next];
+        }
+        self.entry = next;
     }
 }
 

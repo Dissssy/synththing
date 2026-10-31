@@ -7,7 +7,7 @@
 //! to fit), and the transport. The chevron folds the controls away, giving
 //! the visualizer the whole screen, with a small handle left to bring them
 //! back (touches on the visualizer go to the script, so they can't be what
-//! brings them back). The menu at the top left opens the other pages, which
+//! brings them back). The visualizer can give way to the song's art. The menu at the top left opens the other pages, which
 //! are the desktop's tabs, and the windows the desktop's menus open.
 
 use std::time::{Duration, Instant};
@@ -34,6 +34,8 @@ const DESKTOP_SIZE: egui::Vec2 = egui::vec2(1100.0, 750.0);
 pub(super) enum Page {
     #[default]
     NowPlaying,
+    /// The play queue.
+    Queue,
     Songs,
     /// The playlists, or a ruleset's (`Groupings::show` says which); the
     /// menu has one for each.
@@ -54,8 +56,9 @@ pub(super) enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 7] = [
+    const ALL: [Page; 8] = [
         Self::NowPlaying,
+        Self::Queue,
         Self::Songs,
         Self::Soundfonts,
         Self::Wishlist,
@@ -67,6 +70,7 @@ impl Page {
     fn title(self) -> &'static str {
         match self {
             Self::NowPlaying => "Now playing",
+            Self::Queue => "Queue",
             Self::Songs => "Songs",
             Self::Grouping => "Groupings",
             Self::Soundfonts => "Soundfonts",
@@ -85,6 +89,7 @@ impl Page {
     fn icon(self) -> &'static str {
         match self {
             Self::NowPlaying => "monitor-play",
+            Self::Queue => "queue",
             Self::Songs => "music-notes",
             Self::Grouping => "squares-four",
             Self::Soundfonts => "piano-keys",
@@ -110,6 +115,8 @@ pub(super) struct Mobile {
     drawer_open: bool,
     /// The Now playing page's controls folded away.
     collapsed: bool,
+    /// The art shown instead of the visualizer (`now_playing_art_ui`).
+    art: crate::album_art::AlbumArt,
     /// What the media session was last told, and when.
     #[cfg(target_os = "android")]
     told: Option<(crate::android::Playback, std::time::Instant)>,
@@ -150,6 +157,7 @@ impl App {
     pub(super) fn mobile_list_section(&self) -> Option<crate::layout::Section> {
         use crate::layout::Section;
         match self.mobile_state.page {
+            Page::Queue => Some(Section::Queue),
             Page::Songs => Some(Section::Songs),
             Page::Grouping => Some(Section::Groupings),
             Page::Soundfonts => Some(Section::Soundfonts),
@@ -201,7 +209,11 @@ impl App {
         #[cfg(target_os = "android")]
         if crate::android::picture_in_picture() {
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-                self.show_visualizer(ui, &shared.notes, view, DisplayMode::Pip);
+                if self.config.now_playing_art {
+                    self.now_playing_art_ui(ui, 0.0);
+                } else {
+                    self.show_visualizer(ui, &shared.notes, view, DisplayMode::Pip);
+                }
             });
             return;
         }
@@ -215,6 +227,10 @@ impl App {
                     .show(ui, |ui| frame_timing::time("controls bar", || self.mobile_controls_ui(ui, view)));
             }
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                if self.config.now_playing_art {
+                    self.now_playing_art_ui(ui, 24.0);
+                    return;
+                }
                 self.script_error_ui(ui, false);
                 let mode = if fill_screen { DisplayMode::Dedicated } else { DisplayMode::Window };
                 self.show_visualizer(ui, &shared.notes, view, mode);
@@ -228,6 +244,7 @@ impl App {
             let _timing = frame_timing::scope(page.title());
             egui::CentralPanel::default().show(ui, |ui| match page {
                 Page::NowPlaying => {}
+                Page::Queue => self.queue_ui(ui),
                 Page::Songs => self.songs_ui(ui),
                 Page::Grouping => self.grouping_ui(ui),
                 Page::Soundfonts => self.soundfont_ui(ui),
@@ -470,6 +487,29 @@ impl App {
                 if ui.add(big_icon_button("caret-down", 32.0)).on_hover_text("Fold the controls away").clicked() {
                     self.mobile_state.collapsed = true;
                 }
+                let art = self.config.now_playing_art;
+                if ui.add(big_icon_button("image", 32.0).selected(art)).on_hover_text("Show the song's art instead of the visualizer").clicked() {
+                    self.config.now_playing_art = !art;
+                    if let Err(e) = self.config.save() {
+                        self.status = format!("Couldn't save preferences: {e}");
+                    }
+                    super::toast::show(ui.ctx(), if art { "Showing the visualizer" } else { "Showing the song's art" });
+                }
+                // The song's details and its star, for the song playing.
+                let Some(song) = self.current_song.clone() else { return };
+                if ui.add(big_icon_button("info", 32.0)).on_hover_text("Song info").clicked() {
+                    self.details_for = Some(vec![song.clone()]);
+                }
+                let starred = self.songs.is_starred(&song);
+                let mut glyph = egui::RichText::new(icon(crate::select_list::STAR_ICON)).size(16.0);
+                if starred {
+                    glyph = glyph.family(egui::FontFamily::Name(super::fonts::PHOSPHOR_FILL.into())).color(crate::theme::star_color(ui.ctx()));
+                }
+                let star = egui::Button::new(glyph.atom_grow(true)).min_size(egui::Vec2::splat(32.0));
+                if ui.add(star).on_hover_text(if starred { "Starred: tap to unstar" } else { "Star this song" }).clicked() {
+                    let tag = super::tags::TagAction::Set(crate::song_store::STARRED.into(), !starred);
+                    self.tag_songs(tag, &[song]);
+                }
             });
         });
 
@@ -535,12 +575,40 @@ impl App {
             .map(|p| lua_visualizer::display_name(p))
             .unwrap_or_else(|| "(none)".to_string());
         ui.vertical_centered(|ui| {
-            if ui.button(format!("{}  {script}", icon("waveform"))).on_hover_text("Pick a visualizer").clicked() {
+            let label = format!("{}  {script}", icon("waveform"));
+            if ui.add_enabled(!self.config.now_playing_art, egui::Button::new(label)).on_hover_text("Pick a visualizer").clicked() {
                 self.mobile_state.page = Page::Scripts;
             }
             self.devices_button_ui(ui, view);
         });
         ui.add_space(6.0);
+    }
+
+    /// The song playing's art in place of the visualizer, as big as fits
+    /// inside `margin`: its own (its file's, else its album's), else its
+    /// artist's picture, else a tile in its album's (or its name's) color.
+    fn now_playing_art_ui(&mut self, ui: &mut egui::Ui, margin: f32) {
+        let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
+        let title = self.current_title();
+        let art = &mut self.mobile_state.art;
+        art.frame(ui.ctx(), online);
+        let rect = ui.max_rect().shrink(margin);
+        let square = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(rect.width().min(rect.height()).max(0.0)));
+        let Some(path) = self.current_song.clone() else { return };
+        let song = self.songs.get(&path);
+        if art.picture(ui, square, &crate::album_art::Source::of_song(Some(path.clone()), song)) {
+            return;
+        }
+        let facts = song.map(crate::fields::Facts::of);
+        let text = |field| facts.as_ref().and_then(|f| f.text(field)).map(|t| t.into_owned());
+        let artist = text(crate::fields::Field::Artist).and_then(|a| a.split(';').next().map(|a| crate::fields::group_key(a.trim(), &self.config.group_ignore)));
+        if let Some(key) = artist.and_then(|a| self.songs.artist_images().get(&a))
+            && art.picture(ui, square, &crate::album_art::Source::image(key))
+        {
+            return;
+        }
+        let name = text(crate::fields::Field::Album).or(title).unwrap_or_default();
+        art.tile(ui, square, &crate::album_art::Source::default(), &name);
     }
 
     /// On the other pages: what's playing, with play/pause; tapping the

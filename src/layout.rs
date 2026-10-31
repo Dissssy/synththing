@@ -19,7 +19,7 @@ pub enum Section {
     /// Artist...).
     Groupings,
     Soundfonts,
-    /// The play queue (Up next).
+    /// The play queue.
     Queue,
     /// Music wished for (`wishlist.rs`).
     Wishlist,
@@ -59,7 +59,7 @@ impl Section {
             Self::Songs => "Songs",
             Self::Groupings => "Groupings",
             Self::Soundfonts => "Soundfonts",
-            Self::Queue => "Up next",
+            Self::Queue => "Queue",
             Self::Wishlist => "Wishlist",
             Self::Apps => "Apps",
             Self::Visualizer => "Visualizer",

@@ -173,7 +173,7 @@ impl Command {
                 Section::Songs => "Go to Songs",
                 Section::Groupings => "Go to Groupings",
                 Section::Soundfonts => "Go to Soundfonts",
-                Section::Queue => "Go to Up next",
+                Section::Queue => "Go to Queue",
                 Section::Wishlist => "Go to Wishlist",
                 Section::Apps => "Go to Apps",
                 Section::Visualizer => "Go to Visualizer",
