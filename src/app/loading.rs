@@ -40,7 +40,16 @@ pub(super) struct PendingPlay {
     skip_on_failure: bool,
     /// From the play queue: failing to load moves on.
     queued: bool,
+    /// When it was asked for, and whether it was loaded already then (for
+    /// the log: how long starting it took).
+    asked: Instant,
+    preloaded: bool,
 }
+
+/// How many of the songs coming up are kept loaded ahead, so Next (or
+/// skipping on quickly) starts them at once. Few: a decoded song takes
+/// about 20 MB a minute.
+const PRELOAD_AHEAD: usize = 2;
 
 fn song_kind(path: &Path) -> AssetKind {
     if is_midi_path(path) { AssetKind::Midi } else { AssetKind::Audio }
@@ -71,18 +80,20 @@ impl App {
         skip_on_failure: bool,
     ) {
         let soundfont = self.soundfont_for(path, soundfont_override);
-        self.request(PendingPlay { path: path.to_path_buf(), soundfont, entry, skip_on_failure, queued: false });
+        self.request(path, soundfont, entry, skip_on_failure, false);
     }
 
     /// Play `path` from the play queue (see `queue.rs`): as `request_play`,
     /// but what it was queued after stays, to carry on after the queue.
     pub(super) fn request_queued(&mut self, path: &Path) {
         let soundfont = self.soundfont_for(path, None);
-        self.request(PendingPlay { path: path.to_path_buf(), soundfont, entry: None, skip_on_failure: true, queued: true });
+        self.request(path, soundfont, None, true, true);
     }
 
-    fn request(&mut self, pending: PendingPlay) {
+    fn request(&mut self, path: &Path, soundfont: Option<PathBuf>, entry: Option<NowPlaying>, skip_on_failure: bool, queued: bool) {
         let now = Instant::now();
+        let preloaded = matches!(self.assets.get(path), Some(LoadState::Ready(_)));
+        let pending = PendingPlay { path: path.to_path_buf(), soundfont, entry, skip_on_failure, queued, asked: now, preloaded };
         self.assets.request(&pending.path, song_kind(&pending.path), Priority::Now, now);
         if let Some(sf) = &pending.soundfont
             && self.loaded_sf.as_ref() != Some(sf)
@@ -169,6 +180,7 @@ impl App {
         };
         let path = pending.path.clone();
         let queued = pending.queued;
+        let (asked, preloaded) = (pending.asked, pending.preloaded);
         let song = match self.assets.get(&path).cloned() {
             None => {
                 self.assets.request(&path, song_kind(&path), Priority::Now, Instant::now());
@@ -219,6 +231,8 @@ impl App {
 
         self.pending_play = None;
         let name = self.song_title(&path);
+        let how = if preloaded { "preloaded" } else { "loaded on request" };
+        log::info!("starting {name} {} ms after it was asked for ({how})", asked.elapsed().as_millis());
         // A running script can ask for songs to wait for it (its own start
         // button): `script_options({ start_paused = true })`. So does a
         // recording the script prepares each song for.
@@ -333,7 +347,7 @@ impl App {
         if let Some(sf) = self.selected_soundfont() {
             self.assets.request(&sf, AssetKind::SoundFont, Priority::Background, now);
         }
-        if let Some((song, sf)) = self.upcoming_song() {
+        for (song, sf) in self.upcoming_songs() {
             self.assets.request(&song, song_kind(&song), Priority::Background, now);
             if let Some(sf) = sf {
                 self.assets.request(&sf, AssetKind::SoundFont, Priority::Background, now);
@@ -348,26 +362,25 @@ impl App {
         }
     }
 
-    /// The playlist track (or the song autoplay picked) that'll play after
-    /// this one, with its soundfont, if there is one worth preloading.
-    /// Looping one track has no next.
-    fn upcoming_song(&self) -> Option<(PathBuf, Option<PathBuf>)> {
+    /// The songs that'll play next (the queue's, then the playlist's or
+    /// what autoplay picked), with their soundfonts: the first
+    /// `PRELOAD_AHEAD` worth preloading. Looping one track has none.
+    fn upcoming_songs(&self) -> Vec<(PathBuf, Option<PathBuf>)> {
         if self.loop_mode == LoopMode::One {
-            return None;
+            return Vec::new();
         }
-        if let Some(path) = self.queue.first() {
-            return Some((path.clone(), self.soundfont_for(path, None)));
-        }
+        let mut songs: Vec<(PathBuf, Option<PathBuf>)> =
+            self.queue.iter().take(PRELOAD_AHEAD).map(|path| (path.clone(), self.soundfont_for(path, None))).collect();
+        let room = PRELOAD_AHEAD - songs.len();
         if let Some(playing) = &self.listed {
-            let (at, _) = playing.upcoming.first()?;
-            return Some((at.path.clone(), self.soundfont_for(&at.path, None)));
+            songs.extend(playing.upcoming.iter().take(room).map(|(at, _)| (at.path.clone(), self.soundfont_for(&at.path, None))));
+        } else if let Some(np) = &self.now_playing
+            && let Some(list) = self.playlists.lists.get(np.list)
+        {
+            let entries = np.upcoming.iter().take(room).filter_map(|&i| list.playlist.entries.get(i)).filter(|e| !e.missing);
+            songs.extend(entries.map(|e| (e.path.clone(), self.soundfont_for(&e.path, e.soundfont.as_deref()))));
         }
-        let np = self.now_playing.as_ref()?;
-        let entry = self.playlists.lists.get(np.list)?.playlist.entries.get(*np.upcoming.first()?)?;
-        if entry.missing {
-            return None;
-        }
-        Some((entry.path.clone(), self.soundfont_for(&entry.path, entry.soundfont.as_deref())))
+        songs
     }
 
     /// Experimental: once the pointer has rested on a song (in Songs or a
