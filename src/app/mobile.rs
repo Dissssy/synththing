@@ -807,6 +807,17 @@ impl App {
             self.open_pairing_link(link);
         }
         for command in android::take_media_commands() {
+            // (While following, they drive the leader's playing.)
+            let forwarded = match command {
+                MediaCommand::Play => self.command_to_leader(crate::commands::Command::Play),
+                MediaCommand::Pause => self.command_to_leader(crate::commands::Command::Pause),
+                MediaCommand::Next => self.command_to_leader(crate::commands::Command::NextTrack),
+                MediaCommand::Previous => self.command_to_leader(crate::commands::Command::PreviousTrack),
+                MediaCommand::Seek(_) => false,
+            };
+            if forwarded {
+                continue;
+            }
             match command {
                 MediaCommand::Play if view.paused => self.send(AudioCommand::TogglePause),
                 MediaCommand::Pause if !view.paused => self.send(AudioCommand::TogglePause),
@@ -814,7 +825,7 @@ impl App {
                 MediaCommand::Next if self.has_next() => self.next_track(),
                 MediaCommand::Next => {}
                 MediaCommand::Previous => self.previous_track(view.position),
-                MediaCommand::Seek(to) => self.send(AudioCommand::Seek(to)),
+                MediaCommand::Seek(to) => self.seek(to, false),
             }
         }
 

@@ -252,6 +252,7 @@ impl App {
         let group = self.listed.as_ref().filter(|p| p.at.path == path).and_then(|p| p.at.group.clone());
         self.song_list.set_active(Some((path.clone(), group)));
         self.remember_position();
+        self.listening_to(&path);
         self.song_loads = loads;
         self.current_song = Some(path);
         self.playing_queued = queued;

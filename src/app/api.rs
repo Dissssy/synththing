@@ -437,6 +437,7 @@ impl App {
     fn api_set(&mut self, set: api::Set, view: &EngineView) -> Result<(), (u16, String)> {
         use crate::audio::AudioCommand;
         match set {
+            api::Set::Position(to) if self.following() => self.seek(to, false),
             api::Set::Position(_) if self.current_song.is_none() => return Err((409, "nothing's playing".into())),
             api::Set::Position(to) => self.send(AudioCommand::Seek(if view.length > 0.0 { to.min(view.length) } else { to })),
             api::Set::Volume(to) => {
@@ -471,7 +472,6 @@ impl App {
     /// them carried out.
     #[cfg(not(target_os = "android"))]
     fn media_tick(&mut self, ctx: &egui::Context, view: &EngineView) {
-        use crate::audio::AudioCommand;
         use crate::media_controls::{Control, MediaControls};
         if !self.config.api.media_controls() {
             self.api.media = None;
@@ -499,7 +499,7 @@ impl App {
                 Control::Previous => Command::PreviousTrack,
                 Control::Quit => Command::Quit,
                 Control::Seek { seconds, relative } => {
-                    self.send(if relative { AudioCommand::SeekRelative(seconds) } else { AudioCommand::Seek(seconds) });
+                    self.seek(seconds, relative);
                     continue;
                 }
                 Control::Volume(volume) => {
@@ -653,7 +653,7 @@ impl App {
         }
     }
 
-    fn api_playlist(&self) -> Option<PlaylistRef> {
+    pub(super) fn api_playlist(&self) -> Option<PlaylistRef> {
         let np = self.playing_entry()?;
         let list = self.playlists.lists.get(np.list)?;
         Some(PlaylistRef { id: list.id.clone(), name: list.playlist.name.clone() })

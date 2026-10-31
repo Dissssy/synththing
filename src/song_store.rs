@@ -28,6 +28,9 @@
 //! by key, that shuffling treats as one and plays in order. A song is in
 //! at most one.
 //!
+//! Each song's plays and skips are counted (`stats.json`,
+//! `play_stats.rs`), every device's apart.
+//!
 //! A song removed here is blocked (`blocked.json`): this device doesn't
 //! fetch it from the others again (`song_sync.rs`), until it's unblocked
 //! or imported again.
@@ -50,12 +53,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::fields::{Edits, Field};
+use crate::play_stats::{PlayStats, Totals};
 
 const INDEX: &str = "library.json";
 const BLOCKED: &str = "blocked.json";
 const TAGS: &str = "tags.json";
 const TOGETHER: &str = "together.json";
 const REMOVED: &str = "removed.json";
+const STATS: &str = "stats.json";
 
 /// The built-in tag starred songs have: hidden from the tag editor and
 /// the chips, it syncs like any other.
@@ -264,6 +269,8 @@ pub struct SongStore {
     tags: BTreeMap<String, Tag>,
     /// The songs that play together, by the set's ID: their keys, in order.
     together: BTreeMap<String, Vec<String>>,
+    /// (Shared like `songs`.)
+    stats: Arc<PlayStats>,
     /// Counts the changes made (`revision`).
     revision: u64,
 }
@@ -301,7 +308,11 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{REMOVED}: {e}")).ok())
             .unwrap_or_default();
-        let mut store = Self { dir, songs: Arc::new(songs), present, blocked, removed, tags, together, revision: 0 };
+        let stats = std::fs::read_to_string(dir.join(STATS))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{STATS}: {e}")).ok())
+            .unwrap_or_default();
+        let mut store = Self { dir, songs: Arc::new(songs), present, blocked, removed, tags, together, stats: Arc::new(stats), revision: 0 };
         // (A file that couldn't be deleted when it was removed everywhere,
         // or found again: it goes now.)
         let leftover: Vec<String> = store.removed.keys().filter(|key| store.songs.contains_key(*key)).cloned().collect();
@@ -512,6 +523,10 @@ impl SongStore {
             self.save_blocked();
         }
         self.leave_together(&[key.to_string()]);
+        if self.stats.counts.contains_key(key) || self.stats.resets.contains_key(key) {
+            Arc::make_mut(&mut self.stats).forget(key);
+            self.save_stats();
+        }
     }
 
     /// Delete the song `key`'s file, damaged, without blocking it: this
@@ -716,6 +731,53 @@ impl SongStore {
         }
     }
 
+    /// Song `key`'s plays and skips, every device's.
+    pub fn totals(&self, key: &str) -> Totals {
+        self.stats.totals(key)
+    }
+
+    /// Every song's plays and skips, every device's.
+    pub fn stats(&self) -> &Arc<PlayStats> {
+        &self.stats
+    }
+
+    /// Take the synced stats: whether they changed.
+    pub fn set_stats(&mut self, stats: PlayStats) -> bool {
+        if *self.stats == stats {
+            return false;
+        }
+        self.stats = Arc::new(stats);
+        self.save_stats();
+        true
+    }
+
+    /// Device `device` played song `key`.
+    pub fn played(&mut self, key: &str, device: &str) {
+        Arc::make_mut(&mut self.stats).played(key, device, crate::settings_sync::now());
+        self.save_stats();
+    }
+
+    /// Device `device` skipped song `key`.
+    pub fn skipped(&mut self, key: &str, device: &str) {
+        Arc::make_mut(&mut self.stats).skipped(key, device, crate::settings_sync::now());
+        self.save_stats();
+    }
+
+    /// Start counting the songs `keys` again: whether any had counts.
+    pub fn reset_stats(&mut self, keys: &[String]) -> bool {
+        let now = crate::settings_sync::now();
+        let mut any = false;
+        for key in keys {
+            if self.stats.totals(key) != Totals::default() {
+                any |= Arc::make_mut(&mut self.stats).reset(key, now);
+            }
+        }
+        if any {
+            self.save_stats();
+        }
+        any
+    }
+
     /// A number that changes whenever anything in the store does, so
     /// what's made from it (the Songs list) knows to be made again.
     pub fn revision(&self) -> u64 {
@@ -776,6 +838,12 @@ impl SongStore {
         self.revision += 1;
         let together = self.together.clone();
         write_later(self.dir.join(TOGETHER), move || serde_json::to_string_pretty(&together));
+    }
+
+    fn save_stats(&mut self) {
+        self.revision += 1;
+        let stats = Arc::clone(&self.stats);
+        write_later(self.dir.join(STATS), move || serde_json::to_string(&*stats));
     }
 
     fn save_removed(&mut self) {

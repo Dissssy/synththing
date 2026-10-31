@@ -46,6 +46,7 @@ mod choose_art;
 mod cleanup;
 mod song_meta;
 mod song_options;
+mod plays;
 mod song_names;
 mod storage;
 mod sprite_editor;
@@ -55,6 +56,7 @@ mod title_bar;
 mod toast;
 mod tray_panel;
 mod tour;
+mod usage;
 mod welcome;
 mod which_key;
 mod wishlist;
@@ -166,7 +168,7 @@ impl song_list::Source for Listed<'_> {
             let matches = search.rules.matcher(self.store, self.wishes, crate::settings_sync::now());
             self.store
                 .songs()
-                .filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song))
+                .filter(|(path, song)| song_store::has_extension(path, self.extensions) && song_store::key_in(self.store.dir(), path).is_some_and(|key| matches(key, song)))
                 .map(|(path, _)| path)
                 .filter(|p| self.only.is_none_or(|only| song_store::key_in(self.store.dir(), p).is_some_and(|k| only.contains(k))))
                 .collect()
@@ -177,7 +179,7 @@ impl song_list::Source for Listed<'_> {
     fn values(&mut self, field: crate::fields::Field, query: &str) -> Vec<String> {
         let rules = crate::search::parse(query, self.store.tags()).rules;
         let matches = rules.matcher(self.store, self.wishes, crate::settings_sync::now());
-        let songs = self.store.songs().filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song)).map(|(_, song)| song);
+        let songs = self.store.songs().filter(|(path, song)| song_store::has_extension(path, self.extensions) && song_store::key_in(self.store.dir(), path).is_some_and(|key| matches(key, song))).map(|(_, song)| song);
         if field == crate::fields::Field::Wish {
             // (Those the songs kept fill.)
             let index = crate::wishlist::Index::new(self.wishes);
@@ -529,6 +531,9 @@ pub struct App {
     /// Where the current song is, and its length, while it plays: where
     /// it was left, for a song that remembers that (`song_options.rs`).
     playing_at: Option<(f64, f64)>,
+    /// The current song as it's listened to, for its plays and skips
+    /// (`plays.rs`).
+    listening: crate::play_stats::Listening,
     /// The engine's generation (`EngineView::generation`) the current song
     /// last got to its stop time in, so it's acted on once.
     stopped_in: Option<u64>,
@@ -538,6 +543,10 @@ pub struct App {
     rng: Rng,
     /// Text being typed into the playlist rename box, while renaming.
     playlist_rename: Option<String>,
+    /// "Find in here" on the open playlist's page.
+    playlist_find: String,
+    /// The playlist (by ID) a picture's being picked for.
+    image_for: Option<String>,
     /// Delete was clicked once; the next click confirms.
     confirm_delete_playlist: bool,
     /// The section layout. Moved out into a local while `DockArea` draws it
@@ -815,10 +824,13 @@ impl App {
             advance_armed: false,
             song_loads: 0,
             playing_at: None,
+            listening: Default::default(),
             stopped_in: None,
             seek_on_load: None,
             rng: Rng::from_time(),
             playlist_rename: None,
+            playlist_find: String::new(),
+            image_for: None,
             confirm_delete_playlist: false,
             open_sections: Section::ALL.into_iter().filter(|&s| layout::is_open(&dock, s)).collect(),
             dock,
@@ -2410,6 +2422,7 @@ impl App {
             || self.credits_open
             || self.changelog.is_some()
             || self.welcome.open
+            || self.asking_usage()
             || self.song_details.is_some()
             || self.cleanup.is_some()
             || self.palette.is_some()
@@ -2982,7 +2995,7 @@ impl App {
                 log::warn!("importing: {:?}", imported.failed);
                 notes.push(format!("{} couldn't be imported ({e}).", imported.failed.len()));
             }
-            let n = imported.songs.len() + imported.soundfonts.len();
+            let n = imported.songs.len() + imported.soundfonts.len() + imported.images.len();
             if n == 0 {
                 if !notes.is_empty() {
                     self.status = format!("Couldn't import: {}", notes.join(" "));
@@ -3005,6 +3018,12 @@ impl App {
                     self.after_import(ctx, done.then, paths, soundfonts);
                 }
                 crate::import::Kind::Soundfonts => self.add_soundfonts(imported.soundfonts),
+                crate::import::Kind::Image => {
+                    let id = self.image_for.take();
+                    if let Some(list) = id.and_then(|id| self.playlists.find(&id)) {
+                        self.set_playlist_image(list, imported.images.into_iter().next());
+                    }
+                }
             }
             if !notes.is_empty() {
                 self.status = format!("{} {}", self.status, notes.join(" "));
@@ -4033,6 +4052,7 @@ impl eframe::App for App {
             self.rename_ui(&ctx);
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
+            self.usage_prompt_ui(&ctx);
             self.cleanup_ui(&ctx);
             self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);
@@ -4062,6 +4082,7 @@ impl eframe::App for App {
             self.changelog_ui(&ctx);
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
+            self.usage_prompt_ui(&ctx);
             self.cleanup_ui(&ctx);
             self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);
