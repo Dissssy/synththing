@@ -5,6 +5,7 @@
 
 use crate::cli::{AdminArgs, AdminCommand};
 use crate::library::identity::Identity;
+use crate::library::usage::UsageNode;
 use crate::library::{
     ago, client, key_id, lines_text, report_reason_title, AdminAction, AdminScriptInfo, Ban, Feedback, Report,
 };
@@ -106,6 +107,27 @@ pub fn run(args: &AdminArgs) -> Result<(), String> {
         }
         AdminCommand::FeedbackDone { feedback, note } => {
             done(send(AdminAction::FeedbackDone { feedback: *feedback, note: note.clone() })?)
+        }
+        AdminCommand::Usage { path, clear: true } => {
+            let reply = send(AdminAction::UsageClear { path: path.clone() })?;
+            println!("deleted {} rows", reply["done"].as_u64().unwrap_or(0));
+        }
+        AdminCommand::Usage { path, clear: false } => {
+            let nodes: Vec<UsageNode> = client::admin(&base, &key, &server, &AdminAction::Usage { path: path.clone() })?;
+            if nodes.is_empty() {
+                println!("nothing here");
+            }
+            for node in nodes {
+                let sessions = node.sessions.map(|n| format!(", {n} app starts")).unwrap_or_default();
+                println!("{:>8} ({} new{sessions})  {}", node.total, node.new, node.name);
+            }
+        }
+        AdminCommand::UsageRules { set } => {
+            let set = (!set.is_empty()).then(|| set.iter().filter(|rule| !rule.trim().is_empty()).cloned().collect());
+            let rules: Vec<String> = client::admin(&base, &key, &server, &AdminAction::UsageRules { set })?;
+            for rule in rules {
+                println!("{rule}");
+            }
         }
         AdminCommand::Update { check } => {
             let version: crate::library::ServerVersion = client::admin(&base, &key, &server, &AdminAction::UpdateCheck)?;

@@ -103,6 +103,7 @@ mod together;
 mod tray;
 mod typing;
 mod updater;
+mod usage;
 mod visualizer;
 mod visualizer_stream;
 mod watch;

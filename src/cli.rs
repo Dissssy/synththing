@@ -261,6 +261,24 @@ pub enum AdminCommand {
         #[arg(long, default_value = "")]
         note: String,
     },
+    /// Anonymous usage data, as a tree: versions, then (under a version)
+    /// platforms, levels, targets and signatures, each with its total, the
+    /// count new since intake last took it, and app starts.
+    Usage {
+        /// Where in the tree: e.g. `1.7.0 "windows x86_64" warn`.
+        path: Vec<String>,
+        /// Delete everything under the path (all of it, with none).
+        #[arg(long)]
+        clear: bool,
+    },
+    /// The rules for which log lines the server keeps: `<level> <target>
+    /// keep|drop`, the first match deciding (panics are always kept).
+    UsageRules {
+        /// Replace the rules with these, in order (e.g. --set "warn * keep"
+        /// --set "info * drop"). `--set ""` alone goes back to the defaults.
+        #[arg(long)]
+        set: Vec<String>,
+    },
     /// Update the server to the newest release (under systemd, through
     /// the update service; under Docker it says to pull the image).
     Update {
