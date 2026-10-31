@@ -174,8 +174,7 @@ impl Meter {
 
 /// Measuring the songs here, one at a time, each its tags don't say it
 /// for and no device has measured yet, into the song store (and so
-/// synced). The app measures without a hub; with one, the hub does
-/// (it has every song, and it's always on).
+/// synced): a background job (`background.rs`).
 pub struct Measuring {
     done: Arc<dyn Fn() + Send + Sync>,
     measurer: Option<Measurer>,

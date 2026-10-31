@@ -45,7 +45,7 @@ impl App {
     }
 
     /// Whether the user has a hub (which does the library's background
-    /// work: measuring songs).
+    /// work: `crate::background`).
     pub(super) fn has_hub(&self) -> bool {
         self.sync.engine.hub().is_some()
     }
