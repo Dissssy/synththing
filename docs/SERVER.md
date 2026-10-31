@@ -121,11 +121,12 @@ Rendered by the server on each upload and each new version, through a queue (one
 - Read it in Moderation's Feedback tab or with `synththing admin feedback`, and mark it done (with a note, like the issue it became) with `synththing admin feedback-done <number>`.
 - **Intake** (`server/intake.rs`, `"intake": true` in `server.json`, docs/DEPLOY.md): an hourly Claude run collects the feedback waiting (`GET /api/v1/intake`, up to 20, oldest first: each note, its build, its performance stats and the last 8 KB of its log, not the address), files it as GitHub issues (docs/feedback-intake.md), and marks it taken (`POST /api/v1/intake/taken`). Both need the intake token (`intake.token` in the data folder, made on first run). Until a note is taken, the next run gets it again; one run takes a whole batch, so notes about the same thing are filed together.
 - Kept until it's done, then 90 days; addresses 30 days, as for reports. A branch build's feedback is deleted once that branch's test build is gone from GitHub's releases (`branch-cleanup.yml` removes it when the branch is deleted), checked daily; if GitHub can't be reached, nothing is deleted.
+- **Usage data** (`server/usage.rs`, docs/USAGE.md): anonymous counts of log lines and panics from apps that opted in, added up by version, platform, level, target and signature, kept until an admin clears them. The server's rules say which lines it keeps.
 
 ## Moderation
 
 - **Admins** are keys listed by the server (added with `synththing admin add-admin <id>`), and the server's own key.
-- One endpoint, `POST /api/v1/admin`, signed by an admin, takes an action (`AdminAction`): reports, a script's extra metadata (uploader key and addresses, versions, its reports) and source (hidden or not), hide, unhide, delete, ban (a key or an address, for a while or for good, optionally hiding everything the key uploaded), unban, bans, add-admin, remove-admin, admins, resolve, feedback, feedback-done.
+- One endpoint, `POST /api/v1/admin`, signed by an admin, takes an action (`AdminAction`): reports, a script's extra metadata (uploader key and addresses, versions, its reports) and source (hidden or not), hide, unhide, delete, ban (a key or an address, for a while or for good, optionally hiding everything the key uploaded), unban, bans, add-admin, remove-admin, admins, resolve, feedback, feedback-done, usage, usage-clear, usage-rules.
 - **`synththing admin <command>`** on the server sends those, signed with the server's own key from its data folder, to the running server at its configured address: it works from SSH, under systemd, and in Docker (`docker exec <container> synththing admin ...`), and `update` asks it to update itself (Hosting, below).
 - **Moderation** in the app's Library tab, for admin keys: reports with the lines they point at highlighted in the code and the sprites drawn, and the actions above, signed with the admin's key.
 - **Web admin panel**: parked. Moderation in the app does the job and stays in step with it; if the app ever builds for the web (egui runs in a browser, see TODO), that's the web version.
@@ -199,6 +200,8 @@ POST /api/v1/scripts/{id}/encore          (and DELETE to take it back)
 POST /api/v1/scripts/{id}/report
 POST /api/v1/feedback                     feedback for the admins (unsigned)
 GET  /api/v1/intake                       feedback waiting to be filed (the intake token)
+POST /api/v1/usage                        an anonymous usage report (docs/USAGE.md)
+GET  /api/v1/usage/rules                  which log lines usage reports should carry
 POST /api/v1/intake/taken                 mark it filed (the intake token)
 POST /api/v1/admin                        an admin action (signed by an admin)
 GET  /api/v1/users/{id}                   names, uploads, total encores

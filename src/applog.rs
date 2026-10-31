@@ -62,6 +62,10 @@ impl Log for Logger {
         if !self.enabled(record.metadata()) {
             return;
         }
+        // (A panic is counted by the hook, from what it knows of it.)
+        if record.target() != "synththing::panic" {
+            crate::usage::count(record);
+        }
         self.push(record.level(), record.target(), record.args().to_string());
     }
 
@@ -125,6 +129,7 @@ pub fn init(echo: bool) {
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
         let backtrace = std::backtrace::Backtrace::force_capture();
+        crate::usage::panicked(info);
         log::error!(target: "synththing::panic", "thread '{thread}' panicked: {info}\n{backtrace}");
         log::logger().flush();
         default_hook(info);
