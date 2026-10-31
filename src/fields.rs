@@ -207,10 +207,10 @@ pub const FIELDS: &[Def] = &[
     def(Field::ArtistMatched, "artist_matched", "Artist matched at MusicBrainz", Kind::Flag, true, 0.0, false, &[], false),
     def(Field::Wished, "wished", "On your wishlist", Kind::Flag, true, 0.0, false, &[], false),
     def(Field::Wish, "wish", "Wish", Kind::Text, true, 0.0, false, &[], false),
-    def(Field::Plays, "plays", "Plays", Kind::Number, false, 52.0, false, &[], false),
-    def(Field::Skips, "skips", "Skips", Kind::Number, false, 52.0, false, &[], false),
-    def(Field::LastPlayed, "last_played", "Last played", Kind::Date, false, 96.0, true, &[], false),
-    def(Field::LastSkipped, "last_skipped", "Last skipped", Kind::Date, false, 96.0, true, &[], false),
+    def(Field::Plays, "plays", "Plays", Kind::Number, true, 52.0, false, &[], false),
+    def(Field::Skips, "skips", "Skips", Kind::Number, true, 52.0, false, &[], false),
+    def(Field::LastPlayed, "last_played", "Last played", Kind::Date, true, 96.0, true, &[], false),
+    def(Field::LastSkipped, "last_skipped", "Last skipped", Kind::Date, true, 96.0, true, &[], false),
 ];
 
 impl Def {
@@ -278,11 +278,16 @@ impl Field {
         }
     }
 
+    /// Whether it's one of the play stats (`Facts::stats`).
+    pub fn is_play_stat(self) -> bool {
+        matches!(self, Field::Plays | Field::Skips | Field::LastPlayed | Field::LastSkipped)
+    }
+
     /// Whether a song name pattern can use it: it has a value to show.
     pub fn in_patterns(self) -> bool {
         // (Not what it fills on the wishlist, nor its plays: those aren't
         // the song's own.)
-        !matches!(self, Field::Wish | Field::Plays | Field::Skips | Field::LastPlayed | Field::LastSkipped) && matches!(self.kind(), Kind::Text | Kind::Number | Kind::Date)
+        self != Field::Wish && !self.is_play_stat() && matches!(self.kind(), Kind::Text | Kind::Number | Kind::Date)
     }
 }
 

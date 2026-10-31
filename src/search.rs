@@ -24,9 +24,9 @@ pub const HELP: &str = "Search for words (fuzzy), \"a phrase\" (past case and pu
     type:mid  (also filetype:, ext:)\n\
     title: artist: album: albumartist: composer: genre: file:\n\
     \u{2003}artist:bonno or artist:'daft pk' (fuzzy), artist:\"daft punk\" (the whole name), artist:^\"Daft Punk\" (exactly)\n\
-    year: track: disc: length: size:  (5, >5, <5, >=5, <=5, 1..9, 5.., ..9)\n\
+    year: track: disc: length: size: plays: skips:  (5, >5, <5, >=5, <=5, 1..9, 5.., ..9)\n\
     \u{2003}length:>6m or >6:00 (a bare number is minutes), size:>1.2gb (bare: MB), year:90s\n\
-    added:30d (12h, 2w, 6mo, 1y), added:2026-10 (that month), added:>=2026-01-01\n\
+    added:30d (12h, 2w, 6mo, 1y), added:2026-10 (that month), added:>=2026-01-01; played: and skipped: (when last) the same\n\
     tag:name  is:starred  has:album  (has: any text or number key)\n\
     is:wished  (songs filling a wish on your wishlist)  wish:\"Album name\"  (those filling that one)\n\
     matched:song  matched:album  matched:artist  (at MusicBrainz; -matched:album for what isn't)\n\
@@ -49,6 +49,10 @@ pub const KEYS: &[(&str, Field)] = &[
     ("length", Field::Length),
     ("size", Field::Size),
     ("added", Field::Imported),
+    ("plays", Field::Plays),
+    ("skips", Field::Skips),
+    ("played", Field::LastPlayed),
+    ("skipped", Field::LastSkipped),
     ("tag", Field::Tag),
     ("addedby", Field::AddedBy),
     ("wish", Field::Wish),
@@ -225,7 +229,7 @@ fn filter(term: &str, tags: &BTreeMap<String, Tag>) -> Result<Rule, Option<Strin
                 Kind::Number => number(field, not, value).ok_or_else(|| {
                     Some(if not { format!("{key}: can only leave out one value, like -{key}:5") } else { format!("{key}: takes {}", number_help(field)) })
                 }),
-                Kind::Date => date(not, value).ok_or_else(|| Some("added: takes 30d, 2w, 6mo, 1y, 2026, 2026-10, 2026-10-20, >2026-10, <=2026...".to_string())),
+                Kind::Date => date(field, not, value).ok_or_else(|| Some(format!("{key}: takes 30d, 2w, 6mo, 1y, 2026, 2026-10, 2026-10-20, >2026-10, <=2026..."))),
                 Kind::Tag => match tags.iter().find(|(_, t)| t.name.eq_ignore_ascii_case(value)) {
                     Some((id, _)) => rule(field, if not { Op::HasNot } else { Op::Has }, id),
                     None => bad(&format!("There's no tag named {value}")),
@@ -343,12 +347,12 @@ fn number(field: Field, not: bool, value: &str) -> Option<Rule> {
     }
 }
 
-/// A date filter: how long ago (`30d`, `12h`, `2w`, `6mo`, `1y`: added
-/// since; excluded, not), a year, month or day (`2026`, `2026-10`,
-/// `2026-10-20`: added in it), or a `comparison` with one (`>2026-10` is
+/// A date `field`'s filter: how long ago (`30d`, `12h`, `2w`, `6mo`,
+/// `1y`: since; excluded, not), a year, month or day (`2026`, `2026-10`,
+/// `2026-10-20`: in it), or a `comparison` with one (`>2026-10` is
 /// after October, `>=2026-10` from its start).
-fn date(not: bool, value: &str) -> Option<Rule> {
-    let rule = |op, value: &str, to: &str| Some(Rule { field: Field::Imported, op, value: value.to_string(), to: to.to_string() });
+fn date(field: Field, not: bool, value: &str) -> Option<Rule> {
+    let rule = |op, value: &str, to: &str| Some(Rule { field, op, value: value.to_string(), to: to.to_string() });
     let period = |v: &str| smart::parse_period(v).is_some();
     match comparison(value) {
         (None, v, _) if period(v) => rule(if not { Op::NotOn } else { Op::On }, v, ""),
@@ -418,6 +422,7 @@ mod tests {
         assert_eq!(rules("length:>3:30"), [rule(Field::Length, Op::Greater, "3:30", "")]);
         assert_eq!(rules("-track:1"), [rule(Field::Track, Op::IsNot, "1", "")]);
         assert_eq!(rules("added:30d"), [rule(Field::Imported, Op::InLast, "30d", "")]);
+        assert_eq!(rules("played:30d"), [rule(Field::LastPlayed, Op::InLast, "30d", "")]);
         assert_eq!(rules("-added:2w"), [rule(Field::Imported, Op::NotInLast, "2w", "")]);
         assert_eq!(rules("added:2026-10"), [rule(Field::Imported, Op::On, "2026-10", "")]);
         assert_eq!(rules("added:>=2026"), [rule(Field::Imported, Op::AtLeast, "2026", "")]);

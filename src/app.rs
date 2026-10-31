@@ -168,7 +168,7 @@ impl song_list::Source for Listed<'_> {
             let matches = search.rules.matcher(self.store, self.wishes, crate::settings_sync::now());
             self.store
                 .songs()
-                .filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song))
+                .filter(|(path, song)| song_store::has_extension(path, self.extensions) && song_store::key_in(self.store.dir(), path).is_some_and(|key| matches(key, song)))
                 .map(|(path, _)| path)
                 .filter(|p| self.only.is_none_or(|only| song_store::key_in(self.store.dir(), p).is_some_and(|k| only.contains(k))))
                 .collect()
@@ -179,7 +179,7 @@ impl song_list::Source for Listed<'_> {
     fn values(&mut self, field: crate::fields::Field, query: &str) -> Vec<String> {
         let rules = crate::search::parse(query, self.store.tags()).rules;
         let matches = rules.matcher(self.store, self.wishes, crate::settings_sync::now());
-        let songs = self.store.songs().filter(|(path, song)| song_store::has_extension(path, self.extensions) && matches(song)).map(|(_, song)| song);
+        let songs = self.store.songs().filter(|(path, song)| song_store::has_extension(path, self.extensions) && song_store::key_in(self.store.dir(), path).is_some_and(|key| matches(key, song))).map(|(_, song)| song);
         if field == crate::fields::Field::Wish {
             // (Those the songs kept fill.)
             let index = crate::wishlist::Index::new(self.wishes);
