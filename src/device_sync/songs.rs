@@ -184,7 +184,7 @@ impl Worker {
         match blob {
             Blob::Library => self.library.as_mut(),
             Blob::Transfers => self.transfers.as_mut(),
-            Blob::Settings | Blob::Playlists | Blob::Wishlist => None,
+            Blob::Settings | Blob::Playlists | Blob::Wishlist | Blob::Stats => None,
         }
     }
 
