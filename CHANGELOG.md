@@ -17,6 +17,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Help > Support synththing opens Ko-fi, for anyone who wants to chip in. The website and docs link it too.
 
 ### Fixed
+- On Android, the media controls (notification and lock screen) no longer go away after playing in the background for a long while: the playback service stays running while paused too, so the paused notification can only go by swiping synththing away from recent apps.
 - Preferences fits on a phone's screen again: sliders, dropdowns and the (i) buttons no longer run off the right edge.
 
 ### Changed
