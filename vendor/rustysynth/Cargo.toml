@@ -39,3 +39,10 @@ name = "rustysynth"
 path = "src/lib.rs"
 
 [dependencies]
+
+# LOCAL PATCH (synththing): decodes SF3's compressed samples (src/sf3.rs); the
+# same symphonia copy synththing and rodio use.
+[dependencies.symphonia]
+version = "0.5.5"
+default-features = false
+features = ["ogg", "vorbis", "flac"]

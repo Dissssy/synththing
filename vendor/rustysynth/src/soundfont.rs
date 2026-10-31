@@ -49,8 +49,8 @@ impl SoundFont {
         }
 
         let info = SoundFontInfo::new(reader)?;
-        let sample_data = SoundFontSampleData::new(reader)?;
-        let parameters = SoundFontParameters::new(reader)?;
+        let mut sample_data = SoundFontSampleData::new(reader)?;
+        let parameters = SoundFontParameters::new(reader, &mut sample_data)?;
 
         let mut sound_font = Self {
             info,
@@ -172,16 +172,6 @@ mod tests {
             .parent()
             .unwrap()
             .join("samples")
-    }
-
-    #[test]
-    fn test_load_reject_sf3() {
-        let path = samples_dir_path().join("dummy.sf3");
-        let mut file = File::open(&path).unwrap();
-        assert!(matches!(
-            SoundFont::new(&mut file),
-            Err(SoundFontError::UnsupportedSampleFormat)
-        ));
     }
 
     // smpl sub-chunk exists, but is zero-length.
