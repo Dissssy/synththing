@@ -120,6 +120,12 @@ impl BinaryReader {
         reader.read_exact(&mut data)
     }
 
+    pub(crate) fn read_bytes<R: Read>(reader: &mut R, size: usize) -> Result<Vec<u8>, io::Error> {
+        let mut bytes = vec![0; size];
+        reader.read_exact(&mut bytes)?;
+        Ok(bytes)
+    }
+
     pub(crate) fn read_wave_data<R: Read>(
         reader: &mut R,
         size: usize,

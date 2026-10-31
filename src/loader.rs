@@ -497,32 +497,9 @@ pub fn probe_soundfont(path: &Path) -> Result<SoundFontProbe> {
         return Ok(SoundFontProbe::NotSoundFont);
     }
     match SoundFont::new(&mut bytes.as_slice()) {
-        // An SF3 parses, but its samples are compressed, and would play as
-        // loud noise: refuse it like one that doesn't parse.
-        Ok(soundfont) if soundfont.get_info().get_version().get_major() >= 3 => {
-            Ok(SoundFontProbe::Unplayable(describe_soundfont_error("version 3", &bytes)))
-        }
         Ok(soundfont) => Ok(SoundFontProbe::Playable(Arc::new(soundfont))),
-        Err(err) => Ok(SoundFontProbe::Unplayable(describe_soundfont_error(&err.to_string(), &bytes))),
+        Err(err) => Ok(SoundFontProbe::Unplayable(format!("rustysynth rejected it ({err})."))),
     }
-}
-
-/// Turn a rustysynth parse failure into something actionable. The common case
-/// for "valid" soundfonts that fail here is a compressed SF3 (Ogg/FLAC sample
-/// data), which rustysynth does not support; FluidSynth does, which is why it
-/// plays elsewhere.
-fn describe_soundfont_error(base: &str, bytes: &[u8]) -> String {
-    if contains_bytes(bytes, b"OggS") || contains_bytes(bytes, b"fLaC") {
-        "it's a compressed SF3 soundfont. rustysynth only plays uncompressed SF2, \
-         convert it with Polyphone (File > Save as... > .sf2) and add that file."
-            .to_string()
-    } else {
-        format!("rustysynth rejected it ({base}).")
-    }
-}
-
-fn contains_bytes(haystack: &[u8], needle: &[u8; 4]) -> bool {
-    haystack.windows(needle.len()).any(|w| w == needle)
 }
 
 #[cfg(test)]
