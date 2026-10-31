@@ -63,10 +63,12 @@ puffin_egui = { git = "https://github.com/EmbarkStudios/puffin", rev = "c81e9bb5
 musicbrainz_rs = { version = "0.14", default-features = false, features = ["sync", "rustls"] }
 strsim = "0.11"
 fs4 = "1.1"                                               # free space on the hub's disk (hub_server.rs)
+ebur128 = "0.1.11"                                        # songs' loudness, to even out their volume (loudness.rs)
 
 # The GUI framework (re-exports egui): on the desktop with its defaults, on
 # Android with the native-activity backend and what that allows (not
 # accesskit, which needs the game-activity one).
+percent-encoding = "2"
 [target.'cfg(not(target_os = "android"))'.dependencies]
 eframe = "0.36.1"
 rfd = "0.15"                                              # native file and folder dialogs

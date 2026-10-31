@@ -184,7 +184,7 @@ impl Worker {
         match blob {
             Blob::Library => self.library.as_mut(),
             Blob::Transfers => self.transfers.as_mut(),
-            Blob::Settings | Blob::Playlists | Blob::Wishlist | Blob::Stats => None,
+            Blob::Settings | Blob::Playlists | Blob::Wishlist | Blob::Stats | Blob::Images => None,
         }
     }
 
@@ -245,7 +245,7 @@ impl Worker {
         let hub_plan = hub.as_ref().map(|hub| HubPlan { device: hub.device.clone(), direct: songs.hub_direct, only: songs.hub_only });
         let pulls = hub_plan.as_ref().is_some_and(|hub| hub.direct && hub.device != songs.device);
         let hub_only = hub_plan.as_ref().is_some_and(|hub| hub.only && hub.device != songs.device);
-        let mut plan = song_sync::plan(&applied, &songs.device, &songs.store, &songs.wanted, &songs.busy, &songs.given, hub_plan.as_ref());
+        let mut plan = song_sync::plan(&applied, &songs.device, |k| songs.store.has(k), &songs.wanted, &songs.busy, &songs.given, hub_plan.as_ref());
         song_sync::note_device(&mut plan.leaves, &songs.device, &songs.device_name, pulls, hub_only, now);
         song_sync::note_have(&mut plan.leaves, &songs.device, &songs.store);
         if let Some((leaf, take_over)) = &songs.hub

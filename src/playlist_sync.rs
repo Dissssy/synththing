@@ -8,6 +8,8 @@
 //! A smart playlist goes as its rules, no songs: each device works them
 //! out from its own library.
 //!
+//! A playlist's picture goes by its key (`images.rs`).
+//!
 //! Each song goes by its key in the song library, with its name, so a
 //! device that doesn't have it yet knows what it is (`SongStore::know`),
 //! and shows it as unavailable until it's there.
@@ -32,6 +34,8 @@ struct SyncedPlaylist {
     songs: Vec<SyncedSong>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     smart: Option<crate::smart::Rules>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -55,7 +59,7 @@ pub fn leaves(library: &Library, store: &SongStore) -> BTreeMap<String, Value> {
                     Some(SyncedSong { key, name })
                 })
                 .collect();
-            let synced = SyncedPlaylist { name: stored.playlist.name.clone(), songs, smart: stored.playlist.smart.clone() };
+            let synced = SyncedPlaylist { name: stored.playlist.name.clone(), songs, smart: stored.playlist.smart.clone(), image: stored.playlist.image.clone() };
             (stored.id.clone(), serde_json::to_value(synced).unwrap_or_default())
         })
         .collect()
@@ -70,6 +74,7 @@ pub fn apply(library: &mut Library, store: &mut SongStore, fields: &Fields) -> R
     for (id, field) in fields {
         let Ok(mut synced) = serde_json::from_value::<SyncedPlaylist>(field.value.clone()) else { continue };
         synced.songs.retain(|s| song_store::is_key(&s.key));
+        synced.image = synced.image.filter(|k| song_store::is_key(k));
         if !playlist::is_id(id) || current.get(id) == serde_json::to_value(&synced).ok().as_ref() {
             continue;
         }
@@ -89,7 +94,7 @@ pub fn apply(library: &mut Library, store: &mut SongStore, fields: &Fields) -> R
             }
             entries.push(entry);
         }
-        library.put(id, Playlist { name: synced.name, entries, smart: synced.smart }).map_err(|e| format!("{e:#}"))?;
+        library.put(id, Playlist { name: synced.name, entries, smart: synced.smart, image: synced.image }).map_err(|e| format!("{e:#}"))?;
         touched.push(id.clone());
     }
     for id in current.keys().filter(|id| !fields.contains_key(*id)) {

@@ -273,6 +273,7 @@ pub fn imported(kind: i32, copied: Vec<PathBuf>, skipped: Vec<String>, error: Op
         (Some(error), _) => Err(error),
         (None, Kind::Songs) => Ok(import::Imported { skipped, ..import::songs_copied(copied) }),
         (None, Kind::Soundfonts) => Ok(import::Imported { soundfonts: copied, skipped, ..Default::default() }),
+        (None, Kind::Image) => Ok(import::Imported { skipped, ..import::images_in(copied, true) }),
     };
     import::finish(import::Finished { kind, then: import::Then::Keep, result });
 }

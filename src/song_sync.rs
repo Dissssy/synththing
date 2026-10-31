@@ -6,7 +6,8 @@
 //!   (`song_store::Song`: songs are only ever added: a song removed on one
 //!   device stays in the others'), the tags themselves (`tag/<id>`), and
 //!   the songs that play together (`group/<id>`: their keys, in order),
-//!   and the songs removed from every device (`removed/<key>`: gone from
+//!   the pictures picked for artists (`artist/<name>`: its key), and
+//!   the songs removed from every device (`removed/<key>`: gone from
 //!   the library, until a device imports one again).
 //!   Each device knows them all (`SongStore::learn`), and forgets the
 //!   removed ones (`SongStore::set_removed`) and those gone from it (no
@@ -56,6 +57,7 @@ pub const TRANSFERS: &str = "transfers";
 
 const TAG: &str = "tag/";
 const GROUP: &str = "group/";
+const ARTIST: &str = "artist/";
 const REMOVED: &str = "removed/";
 const HAVE: &str = "have/";
 /// How much of each key a device's list of the songs it has keeps: enough
@@ -70,7 +72,7 @@ const HAVE_PREFIX: usize = 12;
 pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
     let mut leaves: BTreeMap<String, Value> = applied
         .iter()
-        .filter(|(k, _)| !k.starts_with(TAG) && !k.starts_with(GROUP) && !k.starts_with(REMOVED) && !store.is_removed(k))
+        .filter(|(k, _)| !k.starts_with(TAG) && !k.starts_with(GROUP) && !k.starts_with(ARTIST) && !k.starts_with(REMOVED) && !store.is_removed(k))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     for (key, song) in store.known() {
@@ -83,6 +85,9 @@ pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> B
     }
     for (id, keys) in store.together() {
         leaves.insert(format!("{GROUP}{id}"), serde_json::to_value(keys).unwrap_or_default());
+    }
+    for (name, image) in store.artist_images() {
+        leaves.insert(format!("{ARTIST}{name}"), Value::String(image.clone()));
     }
     for (key, removed) in store.removed() {
         leaves.insert(format!("{REMOVED}{key}"), serde_json::to_value(removed).unwrap_or_default());
@@ -97,6 +102,7 @@ pub struct SyncedLibrary {
     removed: BTreeMap<String, Removed>,
     tags: BTreeMap<String, Tag>,
     together: BTreeMap<String, Vec<String>>,
+    artist_images: BTreeMap<String, String>,
     songs: Vec<(String, Song)>,
 }
 
@@ -122,6 +128,10 @@ pub fn read_library(fields: &Fields) -> SyncedLibrary {
             if let Ok(keys) = serde_json::from_value(value()) {
                 library.together.insert(id.to_string(), keys);
             }
+        } else if let Some(name) = key.strip_prefix(ARTIST) {
+            if let Some(image) = field.value.as_str().filter(|k| song_store::is_key(k)) {
+                library.artist_images.insert(name.to_string(), image.to_string());
+            }
         } else if let Ok(song) = serde_json::from_value(value()) {
             library.songs.push((key.clone(), song));
         }
@@ -134,7 +144,7 @@ pub fn read_library(fields: &Fields) -> SyncedLibrary {
 /// that play together (those gone from it deleted here), and the songs
 /// removed from every device. Whether any song was removed or forgotten.
 pub fn apply_library(store: &mut SongStore, library: SyncedLibrary) -> bool {
-    let SyncedLibrary { removed, tags, together, songs } = library;
+    let SyncedLibrary { removed, tags, together, artist_images, songs } = library;
     let mut forgot = store.set_removed(removed);
     let listed: BTreeSet<String> = songs.iter().map(|(key, _)| key.clone()).collect();
     for (id, tag) in &tags {
@@ -142,6 +152,13 @@ pub fn apply_library(store: &mut SongStore, library: SyncedLibrary) -> bool {
     }
     for (id, keys) in &together {
         store.set_together(id, keys.clone());
+    }
+    let gone: Vec<String> = store.artist_images().keys().filter(|name| !artist_images.contains_key(*name)).cloned().collect();
+    for name in gone {
+        store.set_artist_image(&name, None);
+    }
+    for (name, image) in artist_images {
+        store.set_artist_image(&name, Some(image));
     }
     store.learn(songs);
     let gone: Vec<String> = store.known().map(|(key, _)| key).filter(|key| !listed.contains(*key)).map(str::to_string).collect();
@@ -268,14 +285,14 @@ fn ready(key: &str) -> String {
     format!("ready/{key}")
 }
 
-/// What `device`, wanting `wanted`, does about the transfers synced so far
-/// (`applied`), leaving alone the songs `busy` already being moved, and
+/// What `device`, wanting `wanted` and having the files `here` says,
+/// does about the transfers synced so far (`applied`), leaving alone the songs `busy` already being moved, and
 /// the wants it already streamed a song for (`given`, as their paths: the
 /// device it went to says it has it next), with the `hub` if there is one.
 pub fn plan(
     applied: &BTreeMap<String, Value>,
     device: &str,
-    store: &SongStore,
+    here: impl Fn(&str) -> bool,
     wanted: &BTreeSet<String>,
     busy: &BTreeSet<String>,
     given: &BTreeSet<String>,
@@ -327,7 +344,7 @@ pub fn plan(
             }
         } else if who.contains(device) && pulls && hub_has(key) {
             tasks.push(Task::Pull(key.to_string()));
-        } else if store.has(key) {
+        } else if here(key) {
             // (A device taking songs from the hub takes this one there.)
             let pulled = |w: &str| devices.get(w).is_some_and(|leaf| leaf.pulls) && hub_has(key);
             let allowed = |w: &str| if only || only_hub(w) { hub_device == Some(device) || hub_device == Some(w) } else { true };
@@ -744,6 +761,8 @@ mod tests {
         desktop.set_song_tags(&song.key, vec!["t1".into()]);
         let elsewhere = format!("{}.mid", "b".repeat(64));
         desktop.set_together("g1", vec![song.key.clone(), elsewhere.clone()]);
+        let picture = format!("{}.jpg", "c".repeat(64));
+        desktop.set_artist_image("aloboi", Some(picture.clone()));
         let library = library_leaves(&desktop, &BTreeMap::new());
         assert_eq!(library[&song.key]["name"], "Song.mid");
         desktop.note_meta([(song.key.clone(), song_store::Meta { title: Some("Song".into()), track: Some(3), size: 4, ..Default::default() })]);
@@ -753,6 +772,7 @@ mod tests {
         apply_library(&mut phone, read_library(&fields));
         assert_eq!(phone.tags()["t1"].name, "Chill");
         assert_eq!(phone.together()["g1"], [song.key.clone(), elsewhere], "play together");
+        assert_eq!(phone.artist_images()["aloboi"], picture, "an artist's picture");
         let known = phone.known().find(|(k, _)| *k == song.key).unwrap().1.clone();
         assert_eq!(known.tags, ["t1"]);
         assert_eq!(known.meta.unwrap().title.as_deref(), Some("Song"), "known without the file");
@@ -771,23 +791,23 @@ mod tests {
         assert_eq!(wants, BTreeSet::from([song.key.clone()]));
 
         let none = BTreeSet::new();
-        let asked = plan(&BTreeMap::new(), "phone", &phone, &wants, &none, &none, None);
+        let asked = plan(&BTreeMap::new(), "phone", |k| phone.has(k), &wants, &none, &none, None);
         assert!(asked.tasks.is_empty(), "no one has it to send yet");
         // The desktop sends it, and marks it ready.
-        let sending = plan(&asked.leaves, "desktop", &desktop, &none, &none, &none, None);
+        let sending = plan(&asked.leaves, "desktop", |k| desktop.has(k), &none, &none, &none, None);
         assert_eq!(sending.tasks, [Task::Send { key: song.key.clone(), to: vec!["phone".into()] }]);
-        assert!(plan(&asked.leaves, "desktop", &desktop, &none, &BTreeSet::from([song.key.clone()]), &none, None).tasks.is_empty(), "busy");
+        assert!(plan(&asked.leaves, "desktop", |k| desktop.has(k), &none, &BTreeSet::from([song.key.clone()]), &none, None).tasks.is_empty(), "busy");
         let given = BTreeSet::from([want("phone", &song.key)]);
-        assert!(plan(&asked.leaves, "desktop", &desktop, &none, &none, &given, None).tasks.is_empty(), "streamed to it already");
+        assert!(plan(&asked.leaves, "desktop", |k| desktop.has(k), &none, &none, &given, None).tasks.is_empty(), "streamed to it already");
         let sent = after(sending.leaves, &Moved::Sent(song.key.clone()));
         // The phone fetches it; once it has it, it stops wanting it, and
         // deletes it from the relay, as no one wants it now.
-        assert_eq!(plan(&sent, "phone", &phone, &wants, &none, &none, None).tasks, [Task::Fetch(song.key.clone())]);
+        assert_eq!(plan(&sent, "phone", |k| phone.has(k), &wants, &none, &none, None).tasks, [Task::Fetch(song.key.clone())]);
         let mut incoming = song_store::Incoming::new(&song.key, &phone_dir).unwrap();
         std::io::Write::write_all(&mut incoming, b"song").unwrap();
         incoming.finish().unwrap();
         phone.add(song_store::Stored { key: song.key.clone(), name: "Song.mid".into() });
-        let fetched = plan(&sent, "phone", &phone, &wanted(&phone, &playlists, every), &none, &none, None);
+        let fetched = plan(&sent, "phone", |k| phone.has(k), &wanted(&phone, &playlists, every), &none, &none, None);
         assert_eq!(fetched.tasks, [Task::Delete(song.key.clone())]);
         assert!(fetched.leaves.is_empty());
 
@@ -1077,23 +1097,23 @@ mod tests {
 
         // The hub lacks both: the desktop sends them, the one only it has
         // first, and the rare one to the phone too, the hub not having it.
-        let tasks = plan(&leaves, "desktop", &desktop, &none, &none, &none, Some(&hub_plan(true))).tasks;
+        let tasks = plan(&leaves, "desktop", |k| desktop.has(k), &none, &none, &none, Some(&hub_plan(true))).tasks;
         assert_eq!(tasks, [Task::Send { key: rare.key.clone(), to: vec!["hub".into(), "phone".into()] }, Task::Send { key: common.key.clone(), to: vec!["hub".into()] }]);
-        assert!(plan(&leaves, "laptop", &laptop, &none, &none, &none, Some(&hub_plan(true))).tasks.is_empty(), "the laptop has nothing it wants");
+        assert!(plan(&leaves, "laptop", |k| laptop.has(k), &none, &none, &none, Some(&hub_plan(true))).tasks.is_empty(), "the laptop has nothing it wants");
 
         // Once the hub has them, the phone takes the rare one from it, and
         // no one sends it there.
         leaves.retain(|path, _| !path.starts_with("want/hub/"));
         leaves.insert(format!("{HAVE}hub"), have(&[&common.key, &rare.key]));
         let wants = BTreeSet::from([rare.key.clone()]);
-        assert!(plan(&leaves, "desktop", &desktop, &none, &none, &none, Some(&hub_plan(true))).tasks.is_empty());
-        assert!(plan(&leaves, "hub", &desktop, &none, &none, &none, Some(&hub_plan(true))).tasks.is_empty(), "the hub doesn't send it either");
-        assert_eq!(plan(&leaves, "phone", &phone, &wants, &none, &none, Some(&hub_plan(true))).tasks, [Task::Pull(rare.key.clone())]);
+        assert!(plan(&leaves, "desktop", |k| desktop.has(k), &none, &none, &none, Some(&hub_plan(true))).tasks.is_empty());
+        assert!(plan(&leaves, "hub", |k| desktop.has(k), &none, &none, &none, Some(&hub_plan(true))).tasks.is_empty(), "the hub doesn't send it either");
+        assert_eq!(plan(&leaves, "phone", |k| phone.has(k), &wants, &none, &none, Some(&hub_plan(true))).tasks, [Task::Pull(rare.key.clone())]);
         // A phone that doesn't reach the hub gets it sent, from either.
-        assert!(plan(&leaves, "phone", &phone, &wants, &none, &none, Some(&hub_plan(false))).tasks.is_empty());
+        assert!(plan(&leaves, "phone", |k| phone.has(k), &wants, &none, &none, Some(&hub_plan(false))).tasks.is_empty());
         leaves.insert("device/phone".into(), device(false));
         let to_phone = [Task::Send { key: rare.key.clone(), to: vec!["phone".into()] }];
-        assert_eq!(plan(&leaves, "desktop", &desktop, &none, &none, &none, Some(&hub_plan(true))).tasks, to_phone);
+        assert_eq!(plan(&leaves, "desktop", |k| desktop.has(k), &none, &none, &none, Some(&hub_plan(true))).tasks, to_phone);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1117,14 +1137,14 @@ mod tests {
             ("device/phone".into(), serde_json::to_value(DeviceLeaf { name: "Phone".into(), seen: 1, pulls: false, hub_only: true }).unwrap()),
         ]);
         let hub_plan = |only: bool| HubPlan { device: "hub".into(), direct: false, only };
-        let sends = |device: &str, store: &SongStore, only: bool| plan(&leaves, device, store, &none, &none, &none, Some(&hub_plan(only))).tasks;
+        let sends = |device: &str, store: &SongStore, only: bool| plan(&leaves, device, |k| store.has(k), &none, &none, &none, Some(&hub_plan(only))).tasks;
         let to = |key: &str, to: &[&str]| vec![Task::Send { key: key.to_string(), to: to.iter().map(|d| d.to_string()).collect() }];
         assert_eq!(sends("desktop", &desktop, false), to(&ours.key, &["hub"]), "not to the phone");
         assert_eq!(sends("phone", &phone, true), to(&theirs.key, &["hub"]), "nor from it but to the hub");
         hub.add(song_store::write_in(b"desktop's", "Desk.mid", hub.dir()).unwrap());
         assert_eq!(sends("hub", &hub, false), to(&ours.key, &["phone"]), "the hub sends it on");
         // With no hub, it trades as any device does.
-        assert_eq!(plan(&leaves, "desktop", &desktop, &none, &none, &none, None).tasks, to(&ours.key, &["hub", "phone"]));
+        assert_eq!(plan(&leaves, "desktop", |k| desktop.has(k), &none, &none, &none, None).tasks, to(&ours.key, &["hub", "phone"]));
         let _ = std::fs::remove_dir_all(&root);
     }
 

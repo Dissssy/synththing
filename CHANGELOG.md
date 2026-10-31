@@ -6,6 +6,18 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Added
 - Anonymous usage data, if you say yes (synththing asks once; Preferences > App > Usage data changes it): once a day, how often each kind of warning and error came up, and crashes as soon as synththing runs again, plus how long frames took on what kind of hardware (graphics chip, cores, memory) and with which layout, visualizer pixel scale and window size, to tune the defaults by. It says only where in the code something happened and which message it was, never what the message was filled in with: no song names, files, account or anything that says who you are. See what's sent shows the next report. Branch builds never send it.
+- Pick a picture for a playlist with the picture button on its page: it shows on its tile and its page instead of its initials. It goes along with the playlist to your other devices.
+- Pick a picture of your own for an album (Choose art > Pick a picture...) or an artist (the picture button on their page); it syncs too.
+- Even out volume (Preferences > Playback, on by default): every song plays about as loud as the next, brought to -14 LUFS (or what you set). How loud a song is comes from its ReplayGain tags, else your hub (or, without one, a computer) measures it once in the background and your other devices use that. A song's Volume adjust goes on top. MIDI files aren't evened out yet.
+- A Loudness (LUFS) column in Songs, for smart playlists and sorting too.
+- Visualizer scripts and programs using the Local API can pass each other values: `shared_get`/`shared_set` in scripts, `/v1/shared` in the API, with a `shared_changed` event. It's in memory only and empties when you pick another visualizer or restart it.
+- Pick a picture for a playlist with the picture button on its page: it shows on its tile and its page instead of its initials.
+
+### Changed
+- A playlist's page looks like an album's: its tile, name, count and length at the top, with Shuffle and Star them all next to Play, and a find-in-here box that narrows its songs.
+
+### Added
+- Anonymous usage data, if you say yes (synththing asks once; Preferences > App > Usage data changes it): once a day, how often each kind of warning and error came up, and crashes as soon as synththing runs again. It says only where in the code something happened and which message it was, never what the message was filled in with: no song names, files, account or anything that says who you are. See what's sent shows the next report. Branch builds never send it.
 - Continue here, in the Devices popup and on the bar while following another device: plays that device's song on this one from where it is (through the same playlist, if you have it), and the other device follows this one.
 - Play counts: a song counts as played once you've heard half of it (or it reaches its end), and as skipped when you move on to another song between 2 and 20 seconds in. Songs has Plays, Skips, Last played and Last skipped columns, and Song info's Options tab shows a song's counts with a Reset button. With Songs from my other devices syncing, the counts add up across your devices, and Reset resets them on all of them.
 - Smart playlists and rulesets can go by plays, skips, and when a song was last played or skipped, and order or limit by most or least played and most or least recently played (a "Top 25 most played" playlist, say). Search takes plays:, skips:, played: and skipped: too (played:30d, plays:>10).
@@ -16,6 +28,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Help > Support synththing opens Ko-fi, for anyone who wants to chip in. The website and docs link it too.
 
 ### Fixed
+- Playing music uses less power, so a phone playing in the background stays cooler: the audio thread now sleeps while nothing plays and wakes far less often while something does, and a MIDI song copies the whole synth half as often.
+- On Android, the media controls (notification and lock screen) no longer go away after playing in the background for a long while: the playback service stays running while paused too, so the paused notification can only go by swiping synththing away from recent apps.
 - Preferences fits on a phone's screen again: sliders, dropdowns and the (i) buttons no longer run off the right edge.
 
 ### Changed

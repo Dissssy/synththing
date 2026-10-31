@@ -95,6 +95,14 @@ pub struct Config {
     /// milliseconds (`None`: `audio::DEFAULT_BUFFER_MS`).
     #[serde(default)]
     pub buffer_ms: Option<u32>,
+    /// Preference: even out songs' volume, bringing each to
+    /// `volume_target` by how loud it is (`loudness.rs`) (`None`: yes).
+    #[serde(default)]
+    pub even_volume: Option<bool>,
+    /// Preference: the loudness songs are brought to, in LUFS (`None`:
+    /// `loudness::DEFAULT_TARGET`).
+    #[serde(default)]
+    pub volume_target: Option<f32>,
     /// Preference: show the channel toggles as colored chips with each
     /// channel's instrument, instead of numbered checkboxes.
     #[serde(default)]

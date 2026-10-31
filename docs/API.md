@@ -76,6 +76,10 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `POST /v1/wishlist` | edit library | Wishes for what the body says (a wish as JSON, below): 201 with the wish if it's new, 200 if it was wished for already |
 | `DELETE /v1/wishlist/{id}` | edit library | Takes the wish off the wishlist (an artist's albums with them): 204, or 404 |
 | `POST /v1/wishlist/{id}/note?text=` | edit library | Writes the wish's note (none: no note): 204, or 404 |
+| `GET /v1/shared` | read | Everything shared with the visualizer script (below), as one JSON object |
+| `GET /v1/shared/{key}` | read | The value shared under `key`, or 404 |
+| `PUT /v1/shared/{key}` | control | Shares the JSON sent as the body under `key` with the visualizer script (`null` takes it out): 204, or 413 past the limits (below) |
+| `DELETE /v1/shared/{key}` | control | Takes it out: 204, or 404 |
 | `GET /v1/musicbrainz/search?q=&kind=` | read | `{"artists", "albums", "songs"}`: what MusicBrainz finds (only `artist`s, `album`s or `song`s with `kind`), each as the wish for it, to send to `POST /v1/wishlist`. 409 if online lookups are off, 502 if MusicBrainz can't be reached |
 | `GET /v1/musicbrainz/artists/{id}/albums` | read | An artist's albums at MusicBrainz (by the artist's MusicBrainz ID, as an artist's wish has it), each as the wish for it: add `"under"` (the artist's wish's ID) to wish for it as one of theirs |
 | `GET /v1/musicbrainz/releases/{id}` | read | `{"id", "group", "title", "artist", "date", "tracks": [{"disc", "position", "title", "length", "recording"}]}`: a release's track list (by its MusicBrainz ID, as an album wish's `release`), so a program can see which songs of a wished album aren't here or `skipped` yet. Kept for months, so mostly instant |
@@ -164,9 +168,16 @@ Every song a program adds that wasn't in your library yet is marked with that pr
 - `soundfonts_changed`: a soundfont was added, removed or put in use: `{}`. Ask `/v1/soundfonts` again.
 - `scripts_changed`: a script was added, removed or put in use: `{}`. Ask `/v1/scripts` again.
 - `wishlist_changed`: a wish was made, taken off or changed (here or by sync), or more of one is here: `{}`. Ask `/v1/wishlist` again.
+- `shared_changed`: a value shared with the visualizer script changed: `{"key": "score", "value": 3}`, with `"value": null` when it was taken out.
 - `panel`: the user did something in your panel (below). Only your own streams get your panel's events.
 
 Add `?events=now_playing,seeked` (any of them, by name) for only those. A comment line (`: keep-alive`) comes every 25 seconds when nothing else does (every 2 seconds while you have a panel).
+
+## Talking to visualizer scripts
+
+`/v1/shared` is a small key-value store the visualizer script reads and writes too (`shared_get` and `shared_set`, docs/scripting-reference.md), for passing data both ways without files: send a game's score or a chat message for the script to draw, or pick up what the script worked out. Values are any JSON. Keys are up to 128 bytes (percent-encode them in the path), and it holds about 1 MB in all.
+
+It's in memory only and belongs to the script running: it's emptied when another script is picked, when the script restarts and when synththing closes (each key taken out comes as a `shared_changed` with `null`, so send yours again then). Every program with a token shares the same one.
 
 ## Panels
 
@@ -226,7 +237,7 @@ In OBS, add a **Media Source**, untick Local File and give it `http://127.0.0.1:
 
 ## Listening
 
-`/v1/audio/stream` sends what synththing plays, as it plays it: 16-bit stereo at 44.1 kHz, as a WAV that doesn't end (about 1.4 Mbit/s, fine on this computer or the local network). It's the sound before the volume slider, so turning synththing down or muting it doesn't change what listeners hear; a song's own Volume adjust does count. While nothing plays it sends silence. Up to 8 can listen at once (503 after that).
+`/v1/audio/stream` sends what synththing plays, as it plays it: 16-bit stereo at 44.1 kHz, as a WAV that doesn't end (about 1.4 Mbit/s, fine on this computer or the local network). It's the sound before the volume slider, so turning synththing down or muting it doesn't change what listeners hear; a song's own Volume adjust, and evening out its volume (Preferences > Playback), do count. While nothing plays it sends silence. Up to 8 can listen at once (503 after that).
 
 Players buffer it, so it comes a second or two late: VLC, ffmpeg or OBS's **Media Source** (untick Local File, give it `http://127.0.0.1:7340/v1/audio/stream?token=st_...`) play it as it is. For less delay, use the pages: `/v1/audio?token=st_...` plays it about 0.15 seconds behind, and `/v1/visualizer?...&audio=1` shows the visualizer and plays the sound with it, so one **Browser Source** gives OBS both (tick its **Control audio via OBS** to mix it like any other source). A browser only plays sound after a click, so the page shows a **Click to listen** button until then; OBS doesn't need one. Another device on the network can open the same pages with Preferences > Integrations letting the local network in.
 

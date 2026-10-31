@@ -34,6 +34,9 @@ pub const SAMPLE_RATE: u32 = 44_100;
 const CONSUMER_CHUNK_FRAMES: usize = 1024;
 /// How many stereo frames the render thread synthesizes per block.
 const RENDER_BLOCK_FRAMES: usize = 512;
+/// The most a song's gain goes: twice its volume (its volume adjust) over
+/// the most evening out boosts it.
+pub const MAX_SONG_GAIN: f32 = 2.0 * crate::loudness::MAX_GAIN;
 /// Allowed range for the user's buffer slider, in milliseconds.
 pub const MIN_BUFFER_MS: u32 = 40;
 pub const MAX_BUFFER_MS: u32 = 500;
@@ -42,6 +45,16 @@ pub const DEFAULT_BUFFER_MS: u32 = 150;
 /// note is heard soon after the script plays it.
 const LIVE_BLOCK_FRAMES: usize = 128;
 const LIVE_BUFFER_MS: u32 = 25;
+/// How often the render thread looks at the live synth's cushion while it
+/// plays: often, the cushion being small.
+const LIVE_WAKE: Duration = Duration::from_millis(4);
+/// How often playback is published (`AudioEngine::publish`) while it moves.
+const PUBLISH_EVERY: Duration = Duration::from_millis(16);
+/// How far apart, in frames, the engine snapshots `rerender` goes back to
+/// are taken (about 23 ms): each copies the whole synth, so not every
+/// block, but often enough that what `rerender` renders again before the
+/// first new sample (heard as silence meanwhile) stays short.
+const SNAPSHOT_EVERY_FRAMES: u64 = 1024;
 
 /// GUI -> render thread. Everything the GUI used to call on `Engine` directly.
 pub enum AudioCommand {
@@ -61,9 +74,9 @@ pub enum AudioCommand {
     /// The volume slider, 0.0..=1.0: applied as the audio goes out, so
     /// neither the visualizer nor the API's listeners hear it.
     SetVolume(f32),
-    /// The playing song's volume adjust, as a gain (0.0..=2.0): applied as
-    /// the song renders, so the API's listeners hear it, the visualizer
-    /// doesn't.
+    /// The playing song's gain: its volume adjust, and what evens out its
+    /// volume (0.0..=`MAX_SONG_GAIN`). Applied as the song renders, so the
+    /// API's listeners hear it, the visualizer doesn't.
     SetSongGain(f32),
     /// Target cushion in milliseconds.
     SetBufferMs(u32),
@@ -294,7 +307,7 @@ pub struct AudioEngine {
     shared: Arc<Mutex<PlaybackShared>>,
     sample_rate: u32,
     volume: Volume,
-    /// The playing song's volume adjust.
+    /// The playing song's gain (`AudioCommand::SetSongGain`).
     song_gain: f32,
     buffer_ms: u32,
     block: Vec<f32>,
@@ -351,7 +364,11 @@ impl AudioEngine {
 
     pub fn run(mut self) {
         loop {
-            match self.commands.recv_timeout(Duration::from_millis(4)) {
+            let received = match self.wait() {
+                Some(wait) => self.commands.recv_timeout(wait),
+                None => self.commands.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            };
+            match received {
                 Ok(command) => self.apply(command),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break, // GUI gone
@@ -365,10 +382,29 @@ impl AudioEngine {
             self.fill_ring();
             self.fill_live_ring();
 
-            if self.last_publish.elapsed() >= Duration::from_millis(16) {
+            // (Before waiting for the next command, playback as it's left.)
+            if self.wait().is_none() || self.last_publish.elapsed() >= PUBLISH_EVERY {
                 self.publish();
                 self.last_publish = Instant::now();
             }
+        }
+    }
+
+    /// How long to wait for a command before looking at the rings again:
+    /// briefly while the live synth plays, about a publish's time while the
+    /// song does (or what was rendered is still being heard), and, with
+    /// nothing going on, until the next command. Paused or stopped, the
+    /// thread sleeps, rather than waking hundreds of times a second for
+    /// nothing (on a phone, that's battery and heat).
+    fn wait(&self) -> Option<Duration> {
+        if self.engine.live_busy() {
+            Some(LIVE_WAKE)
+        } else if self.should_render || self.history.len() > 1 {
+            // (A fraction of the cushion, so a small one still gets topped
+            // up in time.)
+            Some(PUBLISH_EVERY.min(Duration::from_millis(u64::from(self.buffer_ms / 4))))
+        } else {
+            None
         }
     }
 
@@ -408,7 +444,7 @@ impl AudioEngine {
             AudioCommand::SoloChannel(channel) => self.rerender(|engine| engine.solo_channel(channel)),
             AudioCommand::SetLoopEnabled(enabled) => self.engine.set_loop_enabled(enabled),
             AudioCommand::SetVolume(volume) => self.volume.set(volume.clamp(0.0, 1.0)),
-            AudioCommand::SetSongGain(gain) => self.song_gain = gain.clamp(0.0, 2.0),
+            AudioCommand::SetSongGain(gain) => self.song_gain = gain.clamp(0.0, MAX_SONG_GAIN),
             AudioCommand::SetBufferMs(ms) => {
                 self.buffer_ms = ms.clamp(MIN_BUFFER_MS, MAX_BUFFER_MS);
             }
@@ -467,10 +503,11 @@ impl AudioEngine {
     }
 
     /// Render the next block: keep a snapshot of the engine from before it
-    /// (for `rerender`), then queue it for the speakers and the visualizer,
+    /// every so often (for `rerender`), then queue it for the speakers and the visualizer,
     /// all but its first `skip` frames (already heard: see `rerender`).
     fn render_block(&mut self, skip: usize) {
-        if let Some(snapshot) = self.engine.snapshot() {
+        let due = self.snapshots.back().is_none_or(|(at, _)| self.rendered - at >= SNAPSHOT_EVERY_FRAMES);
+        if due && let Some(snapshot) = self.engine.snapshot() {
             self.snapshots.push_back((self.rendered, snapshot));
             self.prune_snapshots();
         }

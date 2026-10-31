@@ -108,6 +108,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("dropped_songs", "Where dropped songs go", &["dropped_songs"]),
             setting("heavy_midi", "Warning before a very large MIDI file", &["warn_heavy_midi"]),
             setting("channel_chips", "Channel chips", &["channel_chips"]),
+            setting("even_volume", "Even out volume", &["even_volume", "volume_target"]),
             Setting { key: "volume", name: "Last volume (taken at the next launch)", paths: &["session/volume"], on: false },
             Setting { key: "speed", name: "Last speed (taken at the next launch)", paths: &["session/speed"], on: false },
         ],

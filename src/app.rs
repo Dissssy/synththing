@@ -21,6 +21,7 @@ mod preferences;
 mod profiler;
 mod queue;
 use preferences::PrefTab;
+mod pictures;
 mod playlist_panel;
 mod identity;
 mod keyboard;
@@ -36,6 +37,7 @@ mod palette;
 mod previews;
 mod library;
 mod lookup;
+mod background;
 mod groupings;
 mod recording;
 mod repair;
@@ -468,6 +470,8 @@ pub struct App {
     /// Signing in another device, or this one with a link.
     pairing: pairing::PairingState,
     lookup: lookup::LookupState,
+    /// The library's background work, once it's started here.
+    background: Option<crate::background::Jobs>,
     choose_art: Option<choose_art::ChooseArt>,
     /// Settings sync between the identity's devices.
     sync: sync::SyncState,
@@ -543,6 +547,10 @@ pub struct App {
     rng: Rng,
     /// Text being typed into the playlist rename box, while renaming.
     playlist_rename: Option<String>,
+    /// "Find in here" on the open playlist's page.
+    playlist_find: String,
+    /// What a picture's being picked for.
+    picture_for: Option<pictures::PictureFor>,
     /// Delete was clicked once; the next click confirms.
     confirm_delete_playlist: bool,
     /// The section layout. Moved out into a local while `DockArea` draws it
@@ -792,6 +800,7 @@ impl App {
             identity: Default::default(),
             pairing: Default::default(),
             lookup: Default::default(),
+            background: None,
             choose_art: None,
             sync: Default::default(),
             notifications: Default::default(),
@@ -825,6 +834,8 @@ impl App {
             seek_on_load: None,
             rng: Rng::from_time(),
             playlist_rename: None,
+            playlist_find: String::new(),
+            picture_for: None,
             confirm_delete_playlist: false,
             open_sections: Section::ALL.into_iter().filter(|&s| layout::is_open(&dock, s)).collect(),
             dock,
@@ -1294,6 +1305,8 @@ impl App {
                 self.completion.request(source.clone());
                 self.editor_hover_info = None;
                 self.script.load(Some(path.clone()), source);
+                // (What was shared was for the script before.)
+                crate::shared_data::clear();
                 self.active_script = Some(idx);
                 self.editor_opened(&path);
             }
@@ -2987,7 +3000,7 @@ impl App {
                 log::warn!("importing: {:?}", imported.failed);
                 notes.push(format!("{} couldn't be imported ({e}).", imported.failed.len()));
             }
-            let n = imported.songs.len() + imported.soundfonts.len();
+            let n = imported.songs.len() + imported.soundfonts.len() + imported.images.len();
             if n == 0 {
                 if !notes.is_empty() {
                     self.status = format!("Couldn't import: {}", notes.join(" "));
@@ -3010,6 +3023,11 @@ impl App {
                     self.after_import(ctx, done.then, paths, soundfonts);
                 }
                 crate::import::Kind::Soundfonts => self.add_soundfonts(imported.soundfonts),
+                crate::import::Kind::Image => {
+                    if let Some(image) = imported.images.into_iter().next() {
+                        self.picture_picked(image);
+                    }
+                }
             }
             if !notes.is_empty() {
                 self.status = format!("{} {}", self.status, notes.join(" "));
@@ -3454,6 +3472,7 @@ impl App {
     /// Restart button).
     fn restart_script(&mut self) {
         let name = self.script.path().map(nice_name).unwrap_or_else(|| "script".to_string());
+        crate::shared_data::clear();
         self.status = if self.script.restart() {
             format!("Restarted {name}.")
         } else {
@@ -3929,6 +3948,7 @@ impl App {
         let held = self.update_offered();
         frame_timing::time("poll_sync", || self.poll_sync(held));
         frame_timing::time("lookup_tick", || self.lookup_tick(ctx, held));
+        frame_timing::time("background_tick", || self.background_tick(ctx));
         frame_timing::time("api_tick", || self.api_tick(ctx, &view));
         // (Minimized, eframe still draws the window, but only 10 times a
         // second.)

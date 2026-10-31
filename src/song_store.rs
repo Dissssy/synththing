@@ -24,6 +24,9 @@
 //! and size), read on the device that has it (`App::note_song_meta`) and
 //! synced, so every device can list and sort the songs it doesn't have.
 //!
+//! An artist can have a picture the user picked (`artists.json`): its
+//! key (`images.rs`), by the artist's name as `fields::group_key` makes it.
+//!
 //! Songs can play together (`together.json`): an ordered set of them,
 //! by key, that shuffling treats as one and plays in order. A song is in
 //! at most one.
@@ -53,12 +56,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::fields::{Edits, Field};
+use crate::loudness::Loudness;
 use crate::play_stats::{PlayStats, Totals};
 
 const INDEX: &str = "library.json";
 const BLOCKED: &str = "blocked.json";
 const TAGS: &str = "tags.json";
 const TOGETHER: &str = "together.json";
+const ARTISTS: &str = "artists.json";
 const REMOVED: &str = "removed.json";
 const STATS: &str = "stats.json";
 
@@ -96,6 +101,10 @@ pub struct Song {
     /// everywhere.
     #[serde(rename = "by", default, skip_serializing_if = "Option::is_none")]
     pub added_by: Option<String>,
+    /// How loud it is, as measured (`loudness`): for a song its tags
+    /// don't say (`Meta::replay_gain`).
+    #[serde(rename = "ld", default, skip_serializing_if = "Option::is_none")]
+    pub loudness: Option<Loudness>,
 }
 
 /// A song's match at MusicBrainz, or that its last one was wrong. Kept
@@ -139,6 +148,9 @@ pub enum Art {
     /// The picture at this address.
     #[serde(rename = "u")]
     Url(String),
+    /// A picture the user picked, kept as this key (`images.rs`).
+    #[serde(rename = "i")]
+    Image(String),
 }
 
 impl Song {
@@ -214,6 +226,11 @@ pub struct Meta {
     pub musicbrainz_recording: Option<String>,
     #[serde(rename = "mbt", skip_serializing_if = "Option::is_none")]
     pub musicbrainz_track: Option<String>,
+    /// How loud its ReplayGain tags say it is, and its album.
+    #[serde(rename = "rg", skip_serializing_if = "Option::is_none")]
+    pub replay_gain: Option<Loudness>,
+    #[serde(rename = "rga", skip_serializing_if = "Option::is_none")]
+    pub album_replay_gain: Option<Loudness>,
     /// Which `META_VERSION` read it: one read by an older one is read
     /// again, for what it didn't read.
     #[serde(rename = "v", skip_serializing_if = "is_zero")]
@@ -223,8 +240,8 @@ pub struct Meta {
 /// The version of what's read of a song's file (`Meta::version`): 1 added
 /// its grouping, comment and sample rate; 2 trims the NULs some taggers
 /// leave at the end of a tag; 3 added its MusicBrainz IDs; 4 whether
-/// it's lossless, and its bits per sample.
-pub const META_VERSION: u32 = 4;
+/// it's lossless, and its bits per sample; 5 its ReplayGain.
+pub const META_VERSION: u32 = 5;
 
 fn is_zero(n: &u32) -> bool {
     *n == 0
@@ -269,6 +286,9 @@ pub struct SongStore {
     tags: BTreeMap<String, Tag>,
     /// The songs that play together, by the set's ID: their keys, in order.
     together: BTreeMap<String, Vec<String>>,
+    /// The pictures picked for artists: their keys, by the artists' names
+    /// (`fields::group_key`).
+    artist_images: BTreeMap<String, String>,
     /// (Shared like `songs`.)
     stats: Arc<PlayStats>,
     /// Counts the changes made (`revision`).
@@ -304,6 +324,10 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{TOGETHER}: {e}")).ok())
             .unwrap_or_default();
+        let artist_images = std::fs::read_to_string(dir.join(ARTISTS))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{ARTISTS}: {e}")).ok())
+            .unwrap_or_default();
         let removed: BTreeMap<String, Removed> = std::fs::read_to_string(dir.join(REMOVED))
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{REMOVED}: {e}")).ok())
@@ -312,7 +336,7 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{STATS}: {e}")).ok())
             .unwrap_or_default();
-        let mut store = Self { dir, songs: Arc::new(songs), present, blocked, removed, tags, together, stats: Arc::new(stats), revision: 0 };
+        let mut store = Self { dir, songs: Arc::new(songs), present, blocked, removed, tags, together, stats: Arc::new(stats), artist_images, revision: 0 };
         // (A file that couldn't be deleted when it was removed everywhere,
         // or found again: it goes now.)
         let leftover: Vec<String> = store.removed.keys().filter(|key| store.songs.contains_key(*key)).cloned().collect();
@@ -381,7 +405,9 @@ impl SongStore {
                 (Some(synced), Some(here)) if here.version > synced.version => Some(here.clone()),
                 (synced, here) => synced.or_else(|| here.clone()),
             };
-            let mut learned = Song { meta, ..synced };
+            // (Nor is what's been measured here lost, before it's synced.)
+            let loudness = synced.loudness.or(song.loudness);
+            let mut learned = Song { meta, loudness, ..synced };
             // (One from before it was synced says 0.)
             if learned.imported == 0 || song.imported < learned.imported {
                 learned.imported = song.imported;
@@ -720,6 +746,16 @@ impl SongStore {
         }
     }
 
+    /// Note how loud the song `key` measured; saved if it changed.
+    pub fn set_loudness(&mut self, key: &str, loudness: Loudness) {
+        if self.songs.get(key).is_some_and(|song| song.loudness != Some(loudness))
+            && let Some(song) = Arc::make_mut(&mut self.songs).get_mut(key)
+        {
+            song.loudness = Some(loudness);
+            self.save();
+        }
+    }
+
     /// Note where the song at `key` was left (`None`: from its start);
     /// saved if it changed.
     pub fn set_position(&mut self, key: &str, position: Option<f64>) {
@@ -832,6 +868,26 @@ impl SongStore {
         self.revision += 1;
         let tags = self.tags.clone();
         write_later(self.dir.join(TAGS), move || serde_json::to_string_pretty(&tags));
+    }
+
+    /// The pictures picked for artists: their keys, by the artists' names
+    /// (`fields::group_key`).
+    pub fn artist_images(&self) -> &BTreeMap<String, String> {
+        &self.artist_images
+    }
+
+    /// Show the artist `name` (a `fields::group_key`) with the picture kept
+    /// as `image` (`None`: its initials).
+    pub fn set_artist_image(&mut self, name: &str, image: Option<String>) {
+        let changed = match image {
+            Some(image) => self.artist_images.insert(name.to_string(), image.clone()).as_ref() != Some(&image),
+            None => self.artist_images.remove(name).is_some(),
+        };
+        if changed {
+            self.revision += 1;
+            let images = self.artist_images.clone();
+            write_later(self.dir.join(ARTISTS), move || serde_json::to_string_pretty(&images));
+        }
     }
 
     fn save_together(&mut self) {

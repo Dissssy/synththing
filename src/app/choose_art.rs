@@ -1,7 +1,7 @@
 //! Choose art: picking what an album's shown with (`song_store::Art`,
 //! synced with its songs): what its files have, a picture of its release
-//! at the Cover Art Archive, or one of the iTunes Store's covers, asked
-//! for on demand.
+//! at the Cover Art Archive, one of the iTunes Store's covers, asked
+//! for on demand, or a picture of one's own (`pictures.rs`).
 
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -64,7 +64,7 @@ impl App {
     }
 
     /// Show the album with `art` (`None`: as it'd be by itself).
-    fn choose_art(&mut self, keys: &[String], art: Option<Art>) {
+    pub(super) fn choose_art(&mut self, keys: &[String], art: Option<Art>) {
         let at = crate::settings_sync::now();
         let changes = keys
             .iter()
@@ -99,6 +99,7 @@ impl App {
         let mut open = true;
         let mut search_itunes = false;
         let mut turn_on = false;
+        let mut pick_own = false;
         let art = &mut self.groupings.art;
         egui::Window::new(format!("Art for {}", choose.title))
             .id(egui::Id::new("choose_art"))
@@ -109,14 +110,18 @@ impl App {
             .default_width(4.0 * (TILE + 12.0))
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().max_height(520.0).show(ui, |ui| {
-                    let automatic = Source { file: choose.file.clone(), release: choose.release.clone(), chosen: None };
+                    let automatic = Source { file: choose.file.clone(), release: choose.release.clone(), chosen: None, image: None };
                     let mut tiles: Vec<(Source, String, Option<Art>)> = vec![(automatic, "Automatic".into(), None)];
                     if choose.file.is_some() {
                         let files = Source { file: choose.file.clone(), chosen: Some(Art::Files), ..Source::default() };
                         tiles.push((files, "From its files".into(), Some(Art::Files)));
                     }
+                    if let Some(Art::Image(key)) = &chosen {
+                        tiles.push((Source { chosen: chosen.clone(), ..Source::default() }, "Your picture".into(), Some(Art::Image(key.clone()))));
+                    }
                     ui.weak("Automatic: its files' art, else its release's front cover once it's matched at MusicBrainz.");
                     choices_ui(ui, art, &tiles, &chosen, &mut pick, &choose.title);
+                    pick_own = ui.button("Pick a picture...").on_hover_text("Show it with a picture of your own").clicked();
 
                     if !online {
                         ui.separator();
@@ -149,6 +154,9 @@ impl App {
             });
         if turn_on {
             self.set_online(build_info::Online::Lookup, true);
+        }
+        if pick_own {
+            self.pick_picture(super::pictures::PictureFor::Album(choose.keys.clone()));
         }
         if search_itunes {
             let term = match &choose.artist {
