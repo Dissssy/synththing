@@ -41,6 +41,11 @@ pub struct Cli {
     #[arg(long, value_enum, value_delimiter = ',', value_name = "KINDS")]
     pub online: Vec<crate::build_info::Online>,
 
+    /// Started with Windows (Preferences > App): opens the way
+    /// Preferences says, into the tray, the mini player or the window.
+    #[arg(long, hide = true)]
+    pub autostart: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -131,6 +136,11 @@ pub enum Command {
         #[arg(long, value_name = "DIR")]
         dir: Option<PathBuf>,
     },
+
+    /// Uninstall synththing (what Settings > Apps runs), asking first.
+    /// Songs, settings and soundfonts are kept.
+    #[cfg(windows)]
+    Uninstall,
 }
 
 #[derive(Args, Debug)]

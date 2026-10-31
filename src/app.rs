@@ -24,6 +24,8 @@ use preferences::PrefTab;
 mod pictures;
 mod playlist_panel;
 mod identity;
+#[cfg(windows)]
+mod install;
 mod keyboard;
 mod pairing;
 mod sync;
@@ -485,6 +487,12 @@ pub struct App {
     changelog: Option<Option<changelog::Version>>,
     /// The welcome window and the starter pack download.
     welcome: welcome::Welcome,
+    /// Installing synththing: the offer, and Preferences > App's group.
+    #[cfg(windows)]
+    install: install::Install,
+    /// Started with Windows to open as the mini player: it opens on the
+    /// first frame (`handle_tray`).
+    open_mini_at_start: bool,
     /// The category showing in Preferences.
     preferences_tab: PrefTab,
     /// The Themes window, and your themes.
@@ -701,6 +709,8 @@ impl App {
             Some(e) => format!("Couldn't read a playlist ({e})"),
             None => "Click a song to play it, a soundfont to load it.".to_string(),
         };
+        #[cfg(windows)]
+        let install = install::Install::new(&config);
 
         let mut app = Self {
             commands,
@@ -807,6 +817,9 @@ impl App {
             copyright: Default::default(),
             changelog: None,
             welcome: welcome::Welcome::default(),
+            #[cfg(windows)]
+            install,
+            open_mini_at_start: false,
             preferences_tab: PrefTab::default(),
             themes: themes::ThemesState::default(),
             tour: tour::Tour::default(),
@@ -3190,6 +3203,23 @@ impl App {
         self.api.window = window;
     }
 
+    /// Started with Windows (`--autostart`): open as Preferences says, the
+    /// window hidden in the tray, or as the mini player. (Without a tray,
+    /// as the window.)
+    pub fn started_with_windows(&mut self, ctx: &egui::Context) {
+        if self.tray.is_none() {
+            return;
+        }
+        match self.config.startup_opens {
+            config::StartupOpens::Window => {}
+            config::StartupOpens::Tray => self.hide_window(ctx),
+            config::StartupOpens::MiniPlayer => {
+                self.hide_window(ctx);
+                self.open_mini_at_start = true;
+            }
+        }
+    }
+
     /// Watch `flag`, raised when synththing is launched again here.
     pub fn listen_for_second_launch(&mut self, flag: Arc<std::sync::atomic::AtomicBool>) {
         self.second_launch = Some(flag);
@@ -3198,6 +3228,20 @@ impl App {
     /// Clicks on the tray icon since last frame, and what was clicked in
     /// the tray panel.
     fn handle_tray(&mut self, ctx: &egui::Context, view: &EngineView) {
+        if self.tray.is_none() {
+            return;
+        }
+        if std::mem::take(&mut self.open_mini_at_start) {
+            let native = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
+            match self.tray.as_ref().and_then(crate::tray::Tray::corner) {
+                Some(corner) => {
+                    let snapshot = self.tray_snapshot(view);
+                    self.tray_panel.update(ctx, snapshot);
+                    self.tray_panel.toggle_mini(ctx, corner, native * ctx.zoom_factor());
+                }
+                None => self.show_window(ctx),
+            }
+        }
         let Some(tray) = &self.tray else { return };
         for click in tray.clicks() {
             let native = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
@@ -4097,6 +4141,11 @@ impl eframe::App for App {
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
             self.usage_prompt_ui(&ctx);
+            #[cfg(windows)]
+            {
+                self.install_offer_ui(&ctx);
+                self.uninstall_ui(&ctx);
+            }
             self.cleanup_ui(&ctx);
             self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);

@@ -148,6 +148,10 @@ pub fn main() -> Result<()> {
             None => std::process::exit(hub::run()),
         }
     }
+    #[cfg(windows)]
+    if let Some(Command::Uninstall) = &cli.command {
+        std::process::exit(crate::install::uninstall_command());
+    }
     if let Some(Command::Serve(args)) = &cli.command {
         let data = args.data.clone().unwrap_or_else(library::server::default_data_dir);
         if let Err(e) = library::server::run(&data, args.bind.clone()) {
@@ -190,6 +194,9 @@ pub fn main() -> Result<()> {
         None => {}
     }
 
+    #[cfg(windows)]
+    crate::install::refresh();
+
     let (mut app, stream) = startup::start()?;
     if cli.visualizer {
         app.set_visualizer_open(true);
@@ -229,6 +236,9 @@ pub fn main() -> Result<()> {
             }
             app::fonts::install(&cc.egui_ctx);
             app.attach_tray(&cc.egui_ctx);
+            if cli.autostart {
+                app.started_with_windows(&cc.egui_ctx);
+            }
             app.attach_window(hwnd(cc));
             if let Some(guard) = &instance {
                 app.listen_for_second_launch(guard.listen(&cc.egui_ctx));

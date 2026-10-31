@@ -82,6 +82,17 @@ pub fn claim() -> Result<Claim> {
     }
 }
 
+/// Start `exe` to take over from this app, with the same arguments: it
+/// waits for this one to close (`RELAUNCH_VAR`), which the caller then does.
+pub fn hand_over_to(exe: &std::path::Path) -> Result<()> {
+    std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .env(RELAUNCH_VAR, "1")
+        .spawn()
+        .with_context(|| format!("starting {}", exe.display()))?;
+    Ok(())
+}
+
 impl Guard {
     /// Watch for a second launch, in the background: the flag is raised
     /// and the app woken (it may be hidden, with nothing else happening)
