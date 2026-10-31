@@ -543,6 +543,8 @@ pub struct App {
     rng: Rng,
     /// Text being typed into the playlist rename box, while renaming.
     playlist_rename: Option<String>,
+    /// "Find in here" on the open playlist's page.
+    playlist_find: String,
     /// Delete was clicked once; the next click confirms.
     confirm_delete_playlist: bool,
     /// The section layout. Moved out into a local while `DockArea` draws it
@@ -825,6 +827,7 @@ impl App {
             seek_on_load: None,
             rng: Rng::from_time(),
             playlist_rename: None,
+            playlist_find: String::new(),
             confirm_delete_playlist: false,
             open_sections: Section::ALL.into_iter().filter(|&s| layout::is_open(&dock, s)).collect(),
             dock,

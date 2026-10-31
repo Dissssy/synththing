@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- A playlist's page looks like an album's: its tile, name, count and length at the top, with Shuffle and Star them all next to Play, and a find-in-here box that narrows its songs.
+
 ### Added
 - Anonymous usage data, if you say yes (synththing asks once; Preferences > App > Usage data changes it): once a day, how often each kind of warning and error came up, and crashes as soon as synththing runs again. It says only where in the code something happened and which message it was, never what the message was filled in with: no song names, files, account or anything that says who you are. See what's sent shows the next report. Branch builds never send it.
 - Continue here, in the Devices popup and on the bar while following another device: plays that device's song on this one from where it is (through the same playlist, if you have it), and the other device follows this one.
