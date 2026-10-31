@@ -318,6 +318,7 @@ pub(super) fn admin(state: &State, request: &mut Request) -> Reply {
                     | AdminAction::Notices { .. }
                     | AdminAction::Feedback { .. }
                     | AdminAction::Usage { .. }
+                    | AdminAction::UsagePerf { .. }
                     | AdminAction::UsageRules { set: None }
             ) {
                 println!("admin {who}: {}", serde_json::to_string(&action).unwrap_or_default());
@@ -484,6 +485,9 @@ fn act(state: &State, action: &AdminAction) -> Acted {
         AdminAction::FeedbackDone { feedback, note } => changed(super::feedback::done(&db, *feedback, note).map_err(db_error)?, "done"),
         AdminAction::Usage { path } => value(serde_json::to_value(super::usage::tree(&db, path).map_err(|e| (500, e))?)),
         AdminAction::UsageClear { path } => Ok(serde_json::json!({ "done": super::usage::clear(&db, path).map_err(|e| (500, e))? })),
+        AdminAction::UsagePerf { version } => {
+            value(serde_json::to_value(super::usage::perf(&db, version.as_deref()).map_err(db_error)?))
+        }
         AdminAction::UsageRules { set } => {
             if let Some(set) = set {
                 super::usage::set_rules(&mut db, set).map_err(|e| (400, e))?;

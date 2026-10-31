@@ -1357,6 +1357,7 @@ mod tests {
 
         let line = |level: &str, target: &str| UsageLine { level: level.into(), target: target.into(), signature: format!("{target}:1"), count: 2 };
         let report = UsageReport {
+            perf: Vec::new(),
             version: "1.7.0".into(),
             platform: "linux x86_64".into(),
             sessions: 3,

@@ -156,6 +156,7 @@ Moderates a running library server from the machine it runs on: each command goe
 | `feedback [--all]` | Feedback not dealt with yet, newest first (all of it with `--all`), with the build each came from and any log sent along. |
 | `feedback-done FEEDBACK [--note TEXT]` | Mark feedback dealt with. |
 | `usage [PATH...] [--clear]` | Anonymous usage data as a tree, one level at a time (docs/USAGE.md); `--clear` deletes what's under the path. |
+| `usage-perf [VERSION]` | Frame times from usage data, per hardware and settings, with the slowest sections. |
 | `usage-rules [--set RULE...]` | Which log lines the server keeps; `--set` replaces the rules. |
 | `update [--check]` | Says which version's running and which is the newest release, and (without `--check`) updates to it: run by hand, the server updates itself and restarts; under systemd it asks the update service (`synththing-update.path`, docs/DEPLOY.md); under Docker it says to pull the new image. |
 

@@ -5,7 +5,7 @@
 
 use crate::cli::{AdminArgs, AdminCommand};
 use crate::library::identity::Identity;
-use crate::library::usage::UsageNode;
+use crate::library::usage::{PerfRow, UsageNode, FRAME_BUCKETS_US};
 use crate::library::{
     ago, client, key_id, lines_text, report_reason_title, AdminAction, AdminScriptInfo, Ban, Feedback, Report,
 };
@@ -122,6 +122,15 @@ pub fn run(args: &AdminArgs) -> Result<(), String> {
                 println!("{:>8} ({} new{sessions})  {}", node.total, node.new, node.name);
             }
         }
+        AdminCommand::UsagePerf { version } => {
+            let rows: Vec<PerfRow> = client::admin(&base, &key, &server, &AdminAction::UsagePerf { version: version.clone() })?;
+            if rows.is_empty() {
+                println!("no frame times");
+            }
+            for row in &rows {
+                print_perf(row);
+            }
+        }
         AdminCommand::UsageRules { set } => {
             let set = (!set.is_empty()).then(|| set.iter().filter(|rule| !rule.trim().is_empty()).cloned().collect());
             let rules: Vec<String> = client::admin(&base, &key, &server, &AdminAction::UsageRules { set })?;
@@ -186,6 +195,29 @@ fn print_report(report: &Report) {
     }
     if !marks.is_empty() {
         println!("    points at {}", marks.join("; "));
+    }
+}
+
+/// One group of frame times: what it ran on, with what, how the frames
+/// spread over the buckets, and the sections that took longest.
+fn print_perf(row: &PerfRow) {
+    let (h, s, g) = (&row.group.hardware, &row.group.settings, &row.group);
+    let ram = h.ram_gb.map(|gb| format!(", {gb} GB")).unwrap_or_default();
+    let layout = if s.mobile_layout { "mobile layout" } else { "desktop layout" };
+    println!("{} {}  {} ({}), {} cores{ram}", row.version, row.platform, h.gpu, h.backend, h.cores);
+    println!("    {layout}, visualizer {}x, window {:.2} MP", s.visualizer_scale, s.window_kpx as f64 / 1000.0);
+    let frames: u64 = g.frames.iter().sum();
+    let ends: Vec<String> = FRAME_BUCKETS_US.iter().map(|us| format!("<{:.1} ms", *us as f64 / 1000.0)).chain(["slower".to_string()]).collect();
+    let spread: Vec<String> = g
+        .frames
+        .iter()
+        .zip(&ends)
+        .map(|(n, end)| format!("{end} {:.0}%", *n as f64 * 100.0 / frames.max(1) as f64))
+        .collect();
+    println!("    {frames} frames: {}", spread.join(", "));
+    for section in g.sections.iter().take(5) {
+        let average = section.total_us as f64 / section.frames.max(1) as f64 / 1000.0;
+        println!("    {:>7.2} ms avg, worst {:>7.1} ms  {}", average, section.worst_us as f64 / 1000.0, section.name);
     }
 }
 
