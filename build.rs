@@ -15,6 +15,11 @@
 //! Windows exe, `$OUT_DIR/icon_256.rgba` for the window (`desktop.rs`) and
 //! `$OUT_DIR/icon_32.rgba` for the tray (`tray.rs`).
 //!
+//! And `$OUT_DIR/log_lines.rs`: `LOG_LINES`, every `log::error!`,
+//! `log::warn!` and `log::info!` in `src/` as (module, line, format
+//! string), sorted, so usage data (`src/usage.rs`) can send a line's
+//! template without what it was filled in with (`generate_log_lines`).
+//!
 //! And stamps the build (`src/build_info.rs`): `SYNTHTHING_VERSION`,
 //! `SYNTHTHING_CHANNEL` and `SYNTHTHING_COMMIT`, from what CI sets for a
 //! canary or branch build (`stamp_build` below), and `SYNTHTHING_ACCENT`,
@@ -71,6 +76,7 @@ fn main() {
         .unwrap_or_else(|e| panic!("writing {}: {e}", out_path.display()));
 
     generate_reference(&manifest_dir, &out_dir);
+    generate_log_lines(&manifest_dir, &out_dir);
     let channel = stamp_build();
     let accent = accent(&channel);
     println!("cargo:rustc-env=SYNTHTHING_ACCENT={accent}");
@@ -433,4 +439,114 @@ fn parse_reference(text: &str) -> Result<Vec<(String, Vec<Block>)>, String> {
         return Err("no `## ` sections".to_string());
     }
     Ok(sections)
+}
+
+/// `LOG_LINES` (see the top): each log call's module, the line it starts
+/// on (what `log::Record::line` says) and its format string, as written.
+/// The module is the file's (`src/library/sync.rs` is
+/// `synththing::library::sync`); calls in inline modules (`mod tests`) get
+/// their file's, so they're never looked up, which is fine.
+fn generate_log_lines(manifest_dir: &str, out_dir: &str) {
+    println!("cargo:rerun-if-changed=src");
+    let src = Path::new(manifest_dir).join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    let mut lines: Vec<(String, usize, String)> = Vec::new();
+    for file in files {
+        let relative = file.strip_prefix(&src).unwrap().with_extension("");
+        let mut parts: Vec<String> = relative.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        if matches!(parts.last().map(String::as_str), Some("mod" | "lib" | "main")) {
+            parts.pop();
+        }
+        let module = std::iter::once("synththing".to_string()).chain(parts).collect::<Vec<_>>().join("::");
+        let text = fs::read_to_string(&file).unwrap_or_else(|e| panic!("reading {}: {e}", file.display()));
+        for (start, call) in log_calls(&text) {
+            let line = text[..start].matches('\n').count() + 1;
+            if let Some(format) = format_string(&text[call..]) {
+                lines.push((module.clone(), line, format));
+            }
+        }
+    }
+    lines.sort();
+    lines.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    let mut generated = String::from("pub static LOG_LINES: &[(&str, u32, &str)] = &[\n");
+    for (module, line, format) in lines {
+        let _ = writeln!(generated, "    ({module:?}, {line}, {format:?}),");
+    }
+    generated.push_str("];\n");
+    fs::write(Path::new(out_dir).join("log_lines.rs"), generated).expect("writing log_lines.rs");
+}
+
+fn rust_files(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
+    for entry in fs::read_dir(dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display())).flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            rust_files(&path, files);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            files.push(path);
+        }
+    }
+}
+
+/// Where each `log::error!(` / `warn!(` / `info!(` starts, and where its
+/// arguments do.
+fn log_calls(text: &str) -> Vec<(usize, usize)> {
+    let mut calls = Vec::new();
+    for macro_name in ["log::error!(", "log::warn!(", "log::info!("] {
+        let mut from = 0;
+        while let Some(found) = text[from..].find(macro_name) {
+            let start = from + found;
+            calls.push((start, start + macro_name.len()));
+            from = start + macro_name.len();
+        }
+    }
+    calls
+}
+
+/// The first string literal in a call's arguments, after a `target: ...,`
+/// if there is one, as it's written (escapes and all, `\` line
+/// continuations joined up).
+fn format_string(args: &str) -> Option<String> {
+    let mut rest = args.trim_start();
+    if let Some(after) = rest.strip_prefix("target:") {
+        // (The target is a literal or a constant: up to the first comma
+        // outside a string.)
+        let mut in_string = false;
+        let mut escaped = false;
+        let comma = after.char_indices().find(|&(_, c)| {
+            if in_string {
+                match (escaped, c) {
+                    (true, _) => escaped = false,
+                    (false, '\\') => escaped = true,
+                    (false, '"') => in_string = false,
+                    _ => {}
+                }
+                false
+            } else {
+                in_string = c == '"';
+                c == ','
+            }
+        })?;
+        rest = after[comma.0 + 1..].trim_start();
+    }
+    let body = rest.strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                '\n' => {
+                    // A continuation: the next line's indent goes too.
+                    let rest = chars.as_str().trim_start();
+                    chars = rest.chars();
+                }
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                other => out.push(other),
+            },
+            c => out.push(c),
+        }
+    }
+    None
 }

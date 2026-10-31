@@ -93,7 +93,7 @@ impl App {
         }
 
         let info = example_info();
-        let example = Facts { file_name: "harbour_lights.mid", meta: Some(&info.meta), info: Some(&info), imported: Some(1_760_000_000), tags: &[], edits: None, added_by: None, online: None };
+        let example = Facts { file_name: "harbour_lights.mid", meta: Some(&info.meta), info: Some(&info), imported: Some(1_760_000_000), tags: &[], edits: None, added_by: None, online: None, stats: None };
         let named = patterns.iter().find_map(|p| render(p, &example)).unwrap_or_else(|| "harbour_lights".to_string());
         let songs = self.preview_songs(ui);
         let naming = super::naming(&self.config, &self.songs);

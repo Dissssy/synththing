@@ -62,6 +62,11 @@ impl App {
         self.sync.engine.playlists_changed(&self.songs, &self.playlists);
     }
 
+    /// The songs' play stats changed here.
+    pub(super) fn stats_changed(&mut self) {
+        self.sync.engine.stats_changed(&self.songs);
+    }
+
     /// The wishlist changed here.
     pub(super) fn wishlist_changed(&mut self) {
         self.sync.engine.wishlist_changed(&self.wishlist.list);
