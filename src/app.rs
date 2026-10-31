@@ -1300,6 +1300,8 @@ impl App {
                 self.completion.request(source.clone());
                 self.editor_hover_info = None;
                 self.script.load(Some(path.clone()), source);
+                // (What was shared was for the script before.)
+                crate::shared_data::clear();
                 self.active_script = Some(idx);
                 self.editor_opened(&path);
             }
@@ -3466,6 +3468,7 @@ impl App {
     /// Restart button).
     fn restart_script(&mut self) {
         let name = self.script.path().map(nice_name).unwrap_or_else(|| "script".to_string());
+        crate::shared_data::clear();
         self.status = if self.script.restart() {
             format!("Restarted {name}.")
         } else {

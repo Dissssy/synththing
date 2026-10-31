@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Visualizer scripts and programs using the Local API can pass each other values: `shared_get`/`shared_set` in scripts, `/v1/shared` in the API, with a `shared_changed` event. It's in memory only and empties when you pick another visualizer or restart it.
 - Pick a picture for a playlist with the picture button on its page: it shows on its tile and its page instead of its initials.
 
 ### Changed
