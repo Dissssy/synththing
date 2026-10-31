@@ -55,6 +55,7 @@ mod title_bar;
 mod toast;
 mod tray_panel;
 mod tour;
+mod usage;
 mod welcome;
 mod which_key;
 mod wishlist;
@@ -2408,6 +2409,7 @@ impl App {
             || self.credits_open
             || self.changelog.is_some()
             || self.welcome.open
+            || self.asking_usage()
             || self.song_details.is_some()
             || self.cleanup.is_some()
             || self.palette.is_some()
@@ -4030,6 +4032,7 @@ impl eframe::App for App {
             self.rename_ui(&ctx);
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
+            self.usage_prompt_ui(&ctx);
             self.cleanup_ui(&ctx);
             self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);
@@ -4059,6 +4062,7 @@ impl eframe::App for App {
             self.changelog_ui(&ctx);
             self.set_aside_ui(&ctx);
             self.welcome_ui(&ctx);
+            self.usage_prompt_ui(&ctx);
             self.cleanup_ui(&ctx);
             self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);

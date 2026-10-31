@@ -14,6 +14,7 @@ pub mod pairing;
 pub mod reach;
 pub mod server;
 pub mod sync;
+pub mod usage;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -713,6 +714,15 @@ pub enum AdminAction {
     Feedback { all: bool },
     /// Mark feedback dealt with.
     FeedbackDone { feedback: i64, note: String },
+    /// Anonymous usage data (`usage::UsageNode`s): the level of the tree
+    /// under `path` (version, platform, level, target, signature).
+    Usage { path: Vec<String> },
+    /// Delete everything under `path` (all of it with an empty path):
+    /// `{"done": n}`.
+    UsageClear { path: Vec<String> },
+    /// The rules for which log lines are kept, replaced with `set` if
+    /// given: `[rule]`.
+    UsageRules { set: Option<Vec<String>> },
 }
 
 /// A copyright notice, as a rights holder (or someone acting for one)
