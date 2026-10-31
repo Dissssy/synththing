@@ -26,3 +26,4 @@
 - [Design language](design/design-language.md)
 - [Feedback intake](feedback-intake.md)
 - [Fixes for feedback](feedback-fixes.md)
+- [Usage data](USAGE.md)

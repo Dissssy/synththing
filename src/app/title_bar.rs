@@ -19,6 +19,9 @@ const HOP: f32 = 0.35;
 /// How wide the empty middle that moves the window is at least.
 const GRIP: f32 = 48.0;
 
+/// Where Help > Support synththing goes (also linked from the website and docs).
+const DONATE_URL: &str = "https://ko-fi.com/p51_dissy";
+
 /// The bar's buttons, in their order from the left.
 #[derive(Clone, Copy, PartialEq)]
 enum Item {
@@ -241,6 +244,10 @@ impl App {
     }
 
     fn help_menu_ui(&mut self, ui: &mut egui::Ui) {
+        if ui.button(format!("{}  Support synththing", icon("heart"))).on_hover_text("Chip in on Ko-fi. synththing stays free either way").clicked() {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(DONATE_URL));
+        }
+        ui.separator();
         if ui.button("Welcome...").on_hover_text("The welcome window, and the starter pack").clicked() {
             self.open_welcome();
         }
