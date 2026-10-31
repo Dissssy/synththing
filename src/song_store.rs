@@ -736,6 +736,21 @@ impl SongStore {
         self.stats.totals(key)
     }
 
+    /// Every song's plays and skips, every device's.
+    pub fn stats(&self) -> &PlayStats {
+        &self.stats
+    }
+
+    /// Take the synced stats: whether they changed.
+    pub fn set_stats(&mut self, stats: PlayStats) -> bool {
+        if *self.stats == stats {
+            return false;
+        }
+        self.stats = Arc::new(stats);
+        self.save_stats();
+        true
+    }
+
     /// Device `device` played song `key`.
     pub fn played(&mut self, key: &str, device: &str) {
         Arc::make_mut(&mut self.stats).played(key, device, crate::settings_sync::now());

@@ -323,8 +323,9 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let reset = ui
                     .add_enabled(plays + skips > 0, egui::Button::new("Reset"))
-                    .on_hover_text("Count plays and skips from nothing again");
+                    .on_hover_text("Count plays and skips from nothing again, on every device");
                 if reset.clicked() && self.songs.reset_stats(&details.keys) {
+                    self.stats_changed();
                     self.status = "Play counts reset.".to_string();
                 }
             });

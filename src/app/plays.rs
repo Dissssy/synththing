@@ -1,5 +1,6 @@
 //! Counting the songs' plays and skips as they're listened to
-//! (`play_stats.rs`): each counted on this device, in the library.
+//! (`play_stats.rs`): each counted on this device, in the library, and
+//! synced.
 
 use std::path::Path;
 
@@ -31,5 +32,6 @@ impl App {
             Heard::Played(key) => self.songs.played(&key, &device),
             Heard::Skipped(key) => self.songs.skipped(&key, &device),
         }
+        self.stats_changed();
     }
 }

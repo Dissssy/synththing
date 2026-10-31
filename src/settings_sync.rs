@@ -192,7 +192,8 @@ pub const WISHLIST: Setting = setting("wishlist", "Wishlist", &[]);
 
 /// Fetching songs from the other devices (`song_sync.rs`): those in
 /// playlists, with `STARRED_SONGS` the starred ones too, or with
-/// `EVERY_SONG`, every one in the library.
+/// `EVERY_SONG`, every one in the library. The library and its play
+/// stats (`play_stats.rs`) sync with it.
 pub const SONGS: Setting = setting("songs", "Songs from my other devices", &[]);
 pub const STARRED_SONGS: Setting =
     Setting { key: "starred_songs", name: "Starred songs, not only those in playlists", paths: &[], on: false };
