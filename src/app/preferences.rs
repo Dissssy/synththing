@@ -586,6 +586,7 @@ impl App {
                         );
                     }
                 });
+                self.usage_preferences_ui(ui);
                 // (The desktop has these in Help.)
                 if self.mobile() {
                     settings_group("Getting started").icon("rocket-launch").show(ui, |ui| {

@@ -317,6 +317,8 @@ pub(super) fn admin(state: &State, request: &mut Request) -> Reply {
                     | AdminAction::UpdateCheck
                     | AdminAction::Notices { .. }
                     | AdminAction::Feedback { .. }
+                    | AdminAction::Usage { .. }
+                    | AdminAction::UsageRules { set: None }
             ) {
                 println!("admin {who}: {}", serde_json::to_string(&action).unwrap_or_default());
             }
@@ -334,7 +336,7 @@ fn db_error(e: rusqlite::Error) -> (u16, String) {
 
 fn act(state: &State, action: &AdminAction) -> Acted {
     let value = |v: serde_json::Result<serde_json::Value>| v.map_err(|e| (500, e.to_string()));
-    let db = state.db();
+    let mut db = state.db();
     match action {
         AdminAction::Whoami => Ok(serde_json::json!({ "admin": true })),
         AdminAction::Reports { all } => value(serde_json::to_value(reports(&db, None, *all).map_err(db_error)?)),
@@ -480,6 +482,14 @@ fn act(state: &State, action: &AdminAction) -> Acted {
         }
         AdminAction::Feedback { all } => value(serde_json::to_value(super::feedback::list(&db, *all).map_err(db_error)?)),
         AdminAction::FeedbackDone { feedback, note } => changed(super::feedback::done(&db, *feedback, note).map_err(db_error)?, "done"),
+        AdminAction::Usage { path } => value(serde_json::to_value(super::usage::tree(&db, path).map_err(|e| (500, e))?)),
+        AdminAction::UsageClear { path } => Ok(serde_json::json!({ "done": super::usage::clear(&db, path).map_err(|e| (500, e))? })),
+        AdminAction::UsageRules { set } => {
+            if let Some(set) = set {
+                super::usage::set_rules(&mut db, set).map_err(|e| (400, e))?;
+            }
+            Ok(serde_json::json!(super::usage::rules(&db).map_err(db_error)?))
+        }
         AdminAction::UpdateCheck => {
             drop(db);
             value(serde_json::to_value(super::update::check()))
