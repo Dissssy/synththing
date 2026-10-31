@@ -6,6 +6,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Added
 - Play counts: a song counts as played once you've heard half of it (or it reaches its end), and as skipped when you move on to another song between 2 and 20 seconds in. Songs has Plays, Skips, Last played and Last skipped columns, and Song info's Options tab shows a song's counts with a Reset button. For now each device counts only its own.
+- Anonymous usage data, if you say yes (synththing asks once; Preferences > App > Usage data changes it): once a day, how often each kind of warning and error came up, and crashes as soon as synththing runs again. It says only where in the code something happened, never what it was about: no song names, files, account or anything that says who you are. See what's sent shows the next report. Branch builds never send it.
+- Servers: `synththing admin usage` shows the usage data as a tree (version, platform, level, target, signature) and clears parts of it, and `synththing admin usage-rules` sets which log lines are kept.
+- Help > Support synththing opens Ko-fi, for anyone who wants to chip in. The website and docs link it too.
 
 ### Fixed
 - Preferences fits on a phone's screen again: sliders, dropdowns and the (i) buttons no longer run off the right edge.
