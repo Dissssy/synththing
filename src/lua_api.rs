@@ -268,8 +268,8 @@ pub const ITEMS: &[Item] = &[
     // Saved data and assets
     f("store_get", SAVED, "0.1.4", &[p("key", "string")], &[p("value", "any")], "the script's saved data, nil if none"),
     f("store_set", SAVED, "0.1.4", &[p("key", "string"), d("value", "any", "nil deletes")], &[], "save script data across restarts"),
-    f("shared_get", SHARED, "next", &[p("key", "string")], &[p("value", "any")], "a value shared with Local API programs, nil if none"),
-    f("shared_set", SHARED, "next", &[p("key", "string"), d("value", "any", "nil deletes")], &[], "share a value with Local API programs, until the app closes"),
+    f("shared_get", SHARED, "2.0.0", &[p("key", "string")], &[p("value", "any")], "a value shared with Local API programs, nil if none"),
+    f("shared_set", SHARED, "2.0.0", &[p("key", "string"), d("value", "any", "nil deletes")], &[], "share a value with Local API programs, until the app closes"),
     f("read_asset", ASSETS, "1.6.0", &[d("name", "string", "a plain file name")], &[p("contents", "string|nil")], "a file's bytes from the script's <name>.lua.assets folder"),
     f("list_assets", ASSETS, "1.6.0", &[], &[p("names", "string[]")], "the files in the script's assets folder, sorted"),
     // What the script defines

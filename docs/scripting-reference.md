@@ -1023,8 +1023,8 @@ if score > best then store_set("best", score) end
 
 <!-- api: shared_get shared_set -->
 ```lua
-shared_get(key) -> value   -- a value shared with Local API programs, nil if none (since next)
-shared_set(key, value)     -- share a value with Local API programs, until the app closes (since next)
+shared_get(key) -> value   -- a value shared with Local API programs, nil if none (since 2.0.0)
+shared_set(key, value)     -- share a value with Local API programs, until the app closes (since 2.0.0)
                            -- value: nil deletes
 ```
 <!-- /api -->
