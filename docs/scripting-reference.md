@@ -1019,6 +1019,26 @@ local best = store_get("best") or 0
 if score > best then store_set("best", score) end
 ```
 
+## Shared data
+
+<!-- api: shared_get shared_set -->
+```lua
+shared_get(key) -> value   -- a value shared with Local API programs, nil if none (since next)
+shared_set(key, value)     -- share a value with Local API programs, until the app closes (since next)
+                           -- value: nil deletes
+```
+<!-- /api -->
+
+The link between scripts and Local API programs (docs/API.md): values both can read and write, for passing data without files. A program puts a game's score or a chat message in, the script draws it; the script puts what it worked out in, the program picks it up. Values are as `store_set`'s, and setting what a key already holds changes nothing. Keys are up to 128 bytes, and it holds about 1 MB in all: `shared_set` fails past that.
+
+It's kept in memory only and belongs to the script running: it's emptied when another script is picked, when the script restarts (F5) and when synththing closes, but not when an edit reloads it. For a script's own data that lasts, use `store_set`. Programs see a change as a `shared_changed` event; a script just reads the key when it wants it.
+
+```lua
+local message = shared_get("chat.last") or ""
+text(message, 8, 8)
+shared_set("visualizer.peak", peak_left())
+```
+
 ## Assets
 
 <!-- api: read_asset list_assets -->

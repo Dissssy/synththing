@@ -68,6 +68,7 @@ ebur128 = "0.1.11"                                        # songs' loudness, to 
 # The GUI framework (re-exports egui): on the desktop with its defaults, on
 # Android with the native-activity backend and what that allows (not
 # accesskit, which needs the game-activity one).
+percent-encoding = "2"
 [target.'cfg(not(target_os = "android"))'.dependencies]
 eframe = "0.36.1"
 rfd = "0.15"                                              # native file and folder dialogs
