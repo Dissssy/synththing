@@ -709,6 +709,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 21 {
         db.execute_batch(usage::SCHEMA_V21)?;
     }
+    if version < 22 {
+        db.execute_batch(usage::SCHEMA_V22)?;
+    }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
 }
@@ -900,6 +903,8 @@ fn handle(state: &Arc<State>, mut request: Request) {
             let ip = client_ip(state, &request);
             usage::report(state, &mut request, &ip)
         }
+        (Method::Get, ["api", "v1", "intake", "usage"]) => usage::intake(state, &request),
+        (Method::Post, ["api", "v1", "intake", "usage", "taken"]) => usage::intake_taken(state, &mut request),
         (Method::Get, ["api", "v1", "intake"]) => intake::waiting(state, &request),
         (Method::Post, ["api", "v1", "intake", "taken"]) => intake::taken(state, &mut request),
         (Method::Post, ["api", "v1", "admin"]) => moderation::admin(state, &mut request),
