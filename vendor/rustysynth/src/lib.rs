@@ -15,6 +15,7 @@ mod preset;
 mod preset_info;
 mod preset_region;
 mod sample_header;
+mod sf3;
 mod soundfont;
 mod soundfont_info;
 mod soundfont_math;
