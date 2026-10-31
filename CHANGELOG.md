@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Continue here, in the Devices popup and on the bar while following another device: plays that device's song on this one from where it is (through the same playlist, if you have it), and the other device follows this one.
 - Play counts: a song counts as played once you've heard half of it (or it reaches its end), and as skipped when you move on to another song between 2 and 20 seconds in. Songs has Plays, Skips, Last played and Last skipped columns, and Song info's Options tab shows a song's counts with a Reset button. With Songs from my other devices syncing, the counts add up across your devices, and Reset resets them on all of them.
 - Smart playlists and rulesets can go by plays, skips, and when a song was last played or skipped, and order or limit by most or least played and most or least recently played (a "Top 25 most played" playlist, say). Search takes plays:, skips:, played: and skipped: too (played:30d, plays:>10).
 - Preferences > Playback > Play counts sets when a song counts as played and the window for skips, each as a share of the song or seconds into it (the % / s button switches).
@@ -17,6 +18,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Preferences fits on a phone's screen again: sliders, dropdowns and the (i) buttons no longer run off the right edge.
 
 ### Changed
+- While following another device, media keys, the phone's media buttons and the local API's seek drive that device's playing, as the transport does.
 - Check again under your hub, in the sync settings, also has the hub check its addresses from the internet again, instead of only after its next 6-hourly check.
 
 ## 1.8.3 (2026-10-28)

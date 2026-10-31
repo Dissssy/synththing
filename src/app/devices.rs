@@ -2,8 +2,10 @@
 //! one's told to them as it changes, and theirs shown under the Devices
 //! button by the transport, each with its own controls. This device can
 //! follow another (Join, or the other's Bring here): it pauses, and its
-//! transport and hotkeys drive the leader's until it leaves, plays a song
-//! of its own, or the leader goes quiet.
+//! transport, hotkeys and media keys drive the leader's until it leaves,
+//! plays a song of its own, or the leader goes quiet. Continue here plays
+//! another device's song on this one, from where it is, and has that one
+//! follow this.
 
 use std::time::{Duration, Instant};
 
@@ -59,6 +61,7 @@ enum Act {
     Join,
     Bring,
     Leave,
+    Continue,
 }
 
 impl App {
@@ -134,7 +137,10 @@ impl App {
             Control::Previous => Command::PreviousTrack,
             Control::Next => Command::NextTrack,
             Control::Seek { position } => return self.send(AudioCommand::Seek(position)),
-            Control::FollowMe => return self.follow(from, view.loads),
+            Control::FollowMe => {
+                self.devices.players.leads(from);
+                return self.follow(from, view.loads);
+            }
         };
         if self.command_available(command) {
             self.run_command(ctx, command, view);
@@ -145,9 +151,7 @@ impl App {
     /// whether it was.
     pub(super) fn command_to_leader(&mut self, command: Command) -> bool {
         let Some(leader) = self.devices.following.as_ref().and_then(|f| self.devices.players.get(&f.leader)) else { return false };
-        let position = leader.position(Instant::now());
-        let length = leader.state.song.as_ref().map_or(0.0, |s| s.length);
-        let seek = |by: f64| Control::Seek { position: (position + by).clamp(0.0, length) };
+        let seek = |by: f64| leader_seek(leader, by, true);
         let control = match command {
             Command::TogglePause if leader.state.paused => Control::Play,
             Command::TogglePause => Control::Pause,
@@ -167,6 +171,46 @@ impl App {
         true
     }
 
+    /// Seek to `seconds` in (or by them, `relative`): the leader's song
+    /// while following, else this device's.
+    pub(super) fn seek(&mut self, seconds: f64, relative: bool) {
+        let leader = self.devices.following.as_ref().and_then(|f| self.devices.players.get(&f.leader));
+        match leader {
+            Some(leader) => {
+                let (to, control) = (leader.device.id.clone(), leader_seek(leader, seconds, relative));
+                self.send_playback(Some(to), &Message::Control(control));
+            }
+            None if relative => self.send(AudioCommand::SeekRelative(seconds)),
+            None => self.send(AudioCommand::Seek(seconds)),
+        }
+    }
+
+    /// Play here what `id` plays, from where it is (through the same
+    /// playlist, if it's here), and have it follow this device.
+    fn continue_here(&mut self, id: &str, view: &EngineView) {
+        let Some(player) = self.devices.players.get(id) else { return };
+        let Some(key) = player.state.song.as_ref().and_then(|s| s.key.clone()).filter(|key| self.songs.has(key)) else { return };
+        let position = player.position(Instant::now());
+        let dir = self.songs.dir();
+        let entry = player.state.playlist.as_deref().and_then(|playlist| {
+            let list = self.playlists.lists.iter().position(|l| l.id == playlist)?;
+            let entry = self.playlists.lists[list].playlist.entries.iter().position(|e| crate::song_store::key_in(dir, &e.path) == Some(key.as_str()))?;
+            Some((list, entry))
+        });
+        self.devices.following = None;
+        let path = self.songs.path(&key);
+        self.seek_on_load = Some((path.clone(), position));
+        match entry {
+            Some((list, entry)) => self.play_entry(list, entry),
+            None => self.play_path(path),
+        }
+        // (Told first that this device follows none, so the other doesn't
+        // take it for a circle.)
+        let state = self.playback_state(view);
+        self.send_playback(None, &Message::State(state));
+        self.send_playback(Some(id.to_string()), &Message::Control(Control::FollowMe));
+    }
+
     /// Whether this device follows another.
     pub(super) fn following(&self) -> bool {
         self.devices.following.is_some()
@@ -182,7 +226,8 @@ impl App {
             artist: self.playing_facts().and_then(|f| f.text(Field::Artist)).map(|t| t.into_owned()),
             length: view.length,
         });
-        State { song, paused: view.paused, position: view.position, speed: view.speed, following }
+        let playlist = self.api_playlist().map(|p| p.id).filter(|_| following.is_none());
+        State { song, paused: view.paused, position: view.position, speed: view.speed, following, playlist }
     }
 
     /// Send to one device (by ID) or every one.
@@ -212,12 +257,13 @@ impl App {
     }
 
     /// Carry out what was asked of `id` in the popup or the following bar.
-    fn act(&mut self, id: String, act: Act, loads: u64) {
+    fn act(&mut self, id: String, act: Act, view: &EngineView) {
         match act {
             Act::Control(control) => self.send_playback(Some(id), &Message::Control(control)),
-            Act::Join => self.follow(&id, loads),
+            Act::Join => self.follow(&id, view.loads),
             Act::Bring => self.send_playback(Some(id), &Message::Control(Control::FollowMe)),
             Act::Leave => self.devices.following = None,
+            Act::Continue => self.continue_here(&id, view),
         }
     }
 
@@ -226,6 +272,7 @@ impl App {
     pub(super) fn following_bar_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let following = self.devices.following.as_ref().map(|f| f.leader.as_str());
         let Some(leader) = following.and_then(|id| self.devices.players.get(id)).cloned() else { return };
+        let here = self.can_continue(&leader);
         let mut act = None;
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -234,6 +281,9 @@ impl App {
             ui.strong(&leader.device.name);
             if ui.button("Leave").on_hover_text("Stop following it: this device's own transport comes back").clicked() {
                 act = Some(Act::Leave);
+            }
+            if continue_button(ui, &leader, here, false) {
+                act = Some(Act::Continue);
             }
             self.devices_button_ui(ui, view);
         });
@@ -245,7 +295,7 @@ impl App {
             ui.ctx().request_repaint_after(RUN_ON);
         }
         if let Some(act) = act {
-            self.act(leader.device.id, act, view.loads);
+            self.act(leader.device.id, act, view);
         }
     }
 
@@ -253,6 +303,8 @@ impl App {
     /// plays, with its controls, Join and Bring here, in a popup.
     pub(super) fn devices_button_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let me = self.this_device().id;
+        // (Which devices' songs this one has, to continue here.)
+        let here: Vec<bool> = self.devices.players.all().iter().map(|p| self.can_continue(p)).collect();
         let DevicesState { players, seeking, following, .. } = &mut self.devices;
         let following = following.as_ref().map(|f| f.leader.as_str());
         let all = players.all();
@@ -273,7 +325,7 @@ impl App {
                 if i > 0 {
                     ui.separator();
                 }
-                if let Some(act) = player_ui(ui, player, players, &me, following, seeking, now) {
+                if let Some(act) = player_ui(ui, player, players, &me, following, here[i], seeking, now) {
                     asked = Some((player.device.id.clone(), act));
                 }
             }
@@ -282,20 +334,49 @@ impl App {
             }
         });
         if let Some((id, act)) = asked {
-            self.act(id, act, view.loads);
+            self.act(id, act, view);
         }
     }
+
+    /// Whether `player`'s song is in this device's library, to continue
+    /// here.
+    fn can_continue(&self, player: &Player) -> bool {
+        player.state.song.as_ref().and_then(|s| s.key.as_deref()).is_some_and(|key| self.songs.has(key))
+    }
+}
+
+/// Where a seek on the leader's song lands: `seconds` in, or on from where
+/// it is (`relative`), within the song.
+fn leader_seek(leader: &Player, seconds: f64, relative: bool) -> Control {
+    let length = leader.state.song.as_ref().map_or(0.0, |s| s.length);
+    let at = if relative { leader.position(Instant::now()) + seconds } else { seconds };
+    Control::Seek { position: at.clamp(0.0, length) }
+}
+
+/// Continue here, for a device playing a song: greyed out when this device
+/// doesn't have the song. Whether it was clicked.
+fn continue_button(ui: &mut egui::Ui, player: &Player, here: bool, small: bool) -> bool {
+    if player.state.song.is_none() {
+        return false;
+    }
+    let button = if small { egui::Button::new("Continue here").small() } else { egui::Button::new("Continue here") };
+    ui.add_enabled(here, button)
+        .on_hover_text("Play it on this device from where it is; that one follows this")
+        .on_disabled_hover_text("This device doesn't have that song yet")
+        .clicked()
 }
 
 /// One device in the popup: its name, its song with its controls (or whom
 /// it's with), and Join, Bring here or Leave. What's asked of it, if
 /// anything.
+#[allow(clippy::too_many_arguments)]
 fn player_ui(
     ui: &mut egui::Ui,
     player: &Player,
     players: &Players,
     me: &str,
     following: Option<&str>,
+    here: bool,
     seeking: &mut Option<Seek>,
     now: Instant,
 ) -> Option<Act> {
@@ -325,6 +406,9 @@ fn player_ui(
                 }
                 if ui.small_button("Join").on_hover_text("Follow it: this device pauses, and its transport drives that one's playing").clicked() {
                     asked = Some(Act::Join);
+                }
+                if state.following.is_none() && continue_button(ui, player, here, true) {
+                    asked = Some(Act::Continue);
                 }
             }
         });
