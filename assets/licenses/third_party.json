@@ -5662,6 +5662,17 @@
     {
       "authors": [],
       "license": "MIT OR Apache-2.0",
+      "name": "windows-registry",
+      "repository": "https://github.com/microsoft/windows-rs",
+      "texts": [
+        306,
+        307
+      ],
+      "version": "0.6.1"
+    },
+    {
+      "authors": [],
+      "license": "MIT OR Apache-2.0",
       "name": "windows-result",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [

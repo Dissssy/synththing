@@ -53,6 +53,8 @@ mod hub_api;
 mod hub;
 mod hub_server;
 mod import;
+#[cfg(windows)]
+mod install;
 mod instance;
 mod layout;
 mod library;

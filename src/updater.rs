@@ -445,13 +445,7 @@ pub fn install_now(release: &Release) -> Result<()> {
 /// Start the (now updated) exe again with the same arguments. The caller
 /// then closes this instance.
 pub fn relaunch() -> Result<()> {
-    let exe = std::env::current_exe()?;
-    // (It waits for this one to close: `instance.rs`.)
-    std::process::Command::new(exe)
-        .args(std::env::args_os().skip(1))
-        .env(crate::instance::RELAUNCH_VAR, "1")
-        .spawn()?;
-    Ok(())
+    crate::instance::hand_over_to(&std::env::current_exe()?)
 }
 
 #[cfg(test)]
