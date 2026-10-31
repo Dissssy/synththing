@@ -261,7 +261,8 @@ pub(super) fn page_header(ui: &mut egui::Ui, rect: egui::Rect, size: f32, art: &
         smart_badge(ui, cover);
     }
     let text = egui::Rect::from_min_max(egui::pos2(cover.right() + 12.0, inner.top()), inner.max);
-    ui.scope_builder(egui::UiBuilder::new().max_rect(text), beside);
+    // (A child of its own: the header's room is `rect`, already taken.)
+    beside(&mut ui.new_child(egui::UiBuilder::new().max_rect(text)));
 }
 
 /// Play, shuffle, queue them and star them all (unstar, when
