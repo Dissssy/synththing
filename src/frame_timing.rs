@@ -289,6 +289,7 @@ pub fn report(cpu_usage: Option<f32>) {
         }
         let now = Instant::now();
         f.record(now, total, &frame.sections);
+        crate::usage::frame(total, &frame.sections);
 
         if total < FRAME_BUDGET && !slow_section {
             return;

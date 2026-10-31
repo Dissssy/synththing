@@ -17,15 +17,18 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use log::Record;
 use serde::{Deserialize, Serialize};
 
 use crate::build_info::{self, Channel};
-use crate::library::usage::{kept, parse_rules, UsageLine, UsageReport, MAX_USAGE_LINES, MAX_USAGE_TEXT};
+use crate::library::usage::{
+    frame_bucket, kept, parse_rules, Hardware, PerfGroup, PerfSettings, SectionStat, UsageLine, UsageReport, FRAME_BUCKETS_US,
+    MAX_PERF_GROUPS, MAX_PERF_SECTIONS, MAX_USAGE_LINES, MAX_USAGE_TEXT,
+};
 use crate::library::{client, official_url};
 
 /// A report goes once this long after the last one.
@@ -38,6 +41,12 @@ const MESSAGE_CHARS: usize = 200;
 static ON: AtomicBool = AtomicBool::new(false);
 /// The counts, once loaded.
 static COUNTS: Mutex<Option<Counts>> = Mutex::new(None);
+/// What the app runs on, once the window's graphics have started.
+static HARDWARE: OnceLock<Hardware> = OnceLock::new();
+/// The settings frames are counted under (`set_view`).
+static MOBILE_LAYOUT: AtomicBool = AtomicBool::new(false);
+static VISUALIZER_SCALE: AtomicU32 = AtomicU32::new(1);
+static WINDOW_KPX: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 struct Counts {
@@ -47,6 +56,8 @@ struct Counts {
     /// A panic is waiting to be sent: send without waiting for the day.
     panicked: bool,
     lines: Vec<UsageLine>,
+    #[serde(default)]
+    perf: Vec<PerfGroup>,
 }
 
 impl Counts {
@@ -69,6 +80,22 @@ impl Counts {
             }
         }
         self.lines.retain(|l| l.count > 0);
+        for group in &sent.perf {
+            let Some(mine) = self.perf.iter_mut().find(|g| g.hardware == group.hardware && g.settings == group.settings) else { continue };
+            for (count, sent) in mine.frames.iter_mut().zip(&group.frames) {
+                *count = count.saturating_sub(*sent);
+            }
+            for section in &group.sections {
+                if let Some(s) = mine.sections.iter_mut().find(|s| s.name == section.name) {
+                    s.total_us = s.total_us.saturating_sub(section.total_us);
+                    s.frames = s.frames.saturating_sub(section.frames);
+                    // (The worst went with the report; the next starts over.)
+                    s.worst_us = 0;
+                }
+            }
+            mine.sections.retain(|s| s.frames > 0);
+        }
+        self.perf.retain(|g| g.frames.iter().any(|&n| n > 0));
         self.panicked = false;
         self.since = now();
     }
@@ -183,6 +210,80 @@ pub fn panicked(info: &std::panic::PanicHookInfo) {
     save(counts);
 }
 
+/// What the app runs on: the graphics adapter (from the window, once it's
+/// up), the CPU's cores and the memory. Frames are only counted once it's
+/// known.
+pub fn set_hardware(gpu: &str, backend: &str) {
+    let cores = std::thread::available_parallelism().map_or(0, |n| n.get() as u32);
+    let _ = HARDWARE.set(Hardware { gpu: clip(gpu, 100), backend: clip(backend, 40), cores, ram_gb: ram_gb() });
+}
+
+pub fn hardware_known() -> bool {
+    HARDWARE.get().is_some()
+}
+
+/// Total memory, rounded to a power of two GB (so 5.6 GB of a 6 GB phone
+/// is 4, 7.6 GB of an 8 GB one is 8), where the system says.
+fn ram_gb() -> Option<u32> {
+    // (Linux and Android say in /proc/meminfo; elsewhere it's left out.)
+    let meminfo = fs::read_to_string("/proc/meminfo").ok()?;
+    let kb: f64 = meminfo.lines().find_map(|l| l.strip_prefix("MemTotal:"))?.trim().trim_end_matches("kB").trim().parse().ok()?;
+    let gb = kb / (1024.0 * 1024.0);
+    Some(2f64.powf(gb.max(0.5).log2().round()) as u32)
+}
+
+/// The settings this frame is drawn with: the layout, the visualizer's
+/// pixel scale and the window's size in physical pixels.
+pub fn set_view(mobile_layout: bool, visualizer_scale: u32, window_pixels: f32) {
+    MOBILE_LAYOUT.store(mobile_layout, Ordering::Relaxed);
+    VISUALIZER_SCALE.store(visualizer_scale, Ordering::Relaxed);
+    WINDOW_KPX.store(((window_pixels / 250_000.0).round() as u32) * 250, Ordering::Relaxed);
+}
+
+/// Count a frame: how long it took, and its sections (`frame_timing`).
+pub fn frame(total: Duration, sections: &[(&'static str, Duration)]) {
+    if !ON.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some(hardware) = HARDWARE.get() else { return };
+    let settings = PerfSettings {
+        mobile_layout: MOBILE_LAYOUT.load(Ordering::Relaxed),
+        visualizer_scale: VISUALIZER_SCALE.load(Ordering::Relaxed),
+        window_kpx: WINDOW_KPX.load(Ordering::Relaxed),
+    };
+    let mut counts = lock();
+    let counts = loaded(&mut counts);
+    let group = match counts.perf.iter().position(|g| &g.hardware == hardware && g.settings == settings) {
+        Some(i) => &mut counts.perf[i],
+        None if counts.perf.len() < MAX_PERF_GROUPS => {
+            counts.perf.push(PerfGroup {
+                hardware: hardware.clone(),
+                settings,
+                frames: vec![0; FRAME_BUCKETS_US.len() + 1],
+                sections: Vec::new(),
+            });
+            counts.perf.last_mut().unwrap()
+        }
+        None => return,
+    };
+    group.frames[frame_bucket(total.as_micros() as u64)] += 1;
+    for &(name, time) in sections {
+        let us = time.as_micros() as u64;
+        let full = group.sections.len() >= MAX_PERF_SECTIONS;
+        match group.sections.iter_mut().find(|s| s.name == name) {
+            Some(section) => {
+                section.total_us += us;
+                section.frames += 1;
+                section.worst_us = section.worst_us.max(us);
+            }
+            None if !full => {
+                group.sections.push(SectionStat { name: name.to_string(), total_us: us, frames: 1, worst_us: us })
+            }
+            None => {}
+        }
+    }
+}
+
 // `LOG_LINES`: every log call in `src/`, as (module, line, format string),
 // sorted (build.rs).
 include!(concat!(env!("OUT_DIR"), "/log_lines.rs"));
@@ -275,6 +376,7 @@ fn report(counts: &Counts, rules: Option<&[crate::library::usage::UsageRule]>) -
         platform: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
         sessions: counts.sessions,
         lines: counts.lines.iter().filter(|line| rules.is_none_or(|rules| kept(rules, line))).cloned().collect(),
+        perf: counts.perf.clone(),
     }
 }
 
@@ -362,6 +464,22 @@ mod tests {
             "wgpu-core-0.19.0/src/device/mod.rs"
         );
         assert_eq!(short_path("C:\\Users\\x\\.cargo\\git\\checkouts\\egui\\crates\\egui\\src\\ui.rs"), "egui/src/ui.rs");
+    }
+
+    #[test]
+    fn a_sent_reports_frames_are_taken_away() {
+        let group = |frames: Vec<u64>, total_us| PerfGroup {
+            frames,
+            sections: vec![SectionStat { name: "dock".into(), total_us, frames: 2, worst_us: 9_000 }],
+            ..Default::default()
+        };
+        let sent = Counts { perf: vec![group(vec![1, 1, 0, 0, 0, 0], 12_000)], ..Default::default() };
+        let mut counts = Counts { perf: vec![group(vec![1, 3, 0, 0, 0, 0], 12_500)], ..Default::default() };
+        counts.subtract(&sent);
+        assert_eq!(counts.perf[0].frames, vec![0, 2, 0, 0, 0, 0]);
+        assert!(counts.perf[0].sections.is_empty(), "the section had no frames left");
+        counts.subtract(&Counts { perf: vec![group(vec![0, 2, 0, 0, 0, 0], 0)], ..Default::default() });
+        assert!(counts.perf.is_empty());
     }
 
     #[test]

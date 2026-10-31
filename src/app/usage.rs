@@ -8,8 +8,9 @@ use super::{settings_group, with_info, App};
 
 /// What's sent, in a sentence or two, for the question and Preferences.
 const WHAT: &str = "Once a day: how often each kind of warning and error came up, which version and system it \
-                    was, and crashes, as soon as synththing runs again. Only where in the code something happened, \
-                    never what it was about: no song names, files, account or anything that says who you are.";
+                    was, how long frames took on what kind of graphics chip and with which display settings, and \
+                    crashes, as soon as synththing runs again. Only where in the code something happened, never \
+                    what it was about: no song names, files, account or anything that says who you are.";
 
 impl App {
     /// Whether the question is up: not asked yet, and nothing else first

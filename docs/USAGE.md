@@ -14,6 +14,8 @@ A report (`library::usage::UsageReport`) holds:
 
 A log line's signature is where it was logged, module and line, and the format string it was written with: `synththing::library::sync:212 couldn't send {name}: {e}`. build.rs makes a map of every log call in `src/` (`LOG_LINES`), built into the app, so each build carries its own and line numbers always match. What a message was filled in with (song names, paths, error details) never leaves the device. Another crate's line (wgpu, egui) has only its module and line, and its text when that's fixed. A panic's signature is its source file and line, from the crate's folder on, and its message with numbers turned into `#`, quoted text into `"…"`, and anything with a slash into `<path>`.
 
+A report also says how long frames took, for picking defaults that suit the hardware (like the visualizer's pixel scale on phones). Frames are counted per hardware class and settings: the graphics adapter's name and API (from wgpu), the CPU's cores, the memory rounded to a power of two GB (where the system says: Linux and Android), the layout, the visualizer's pixel scale and the window's size in quarter megapixels. For each, the frames in each time bucket (under 8, 16.7, 33, 50 and 100 ms, and slower) and each section's time (`frame_timing`'s, like `dock` or `visualizer`): total, frames and worst.
+
 Nothing in a report says which device or person sent it: no key, no install ID. Preferences > App > Usage data > See what's sent shows the next report so far.
 
 ## Rules
@@ -31,6 +33,8 @@ The app fetches the rules (`GET /api/v1/usage/rules`) before each report and sen
 ## On the server
 
 `server/usage.rs` adds each report into one row per version, platform, level, target and signature, with its total, the count that's `new` since intake last took it, and when it was first and last seen; app starts are counted per version and platform. No address is stored with any of it (reports are limited to 6 a day per address, counted in memory).
+
+Frame times are kept per version, platform, hardware and settings, apart from the tree; `synththing admin usage-perf [version]` shows them, the most frames first: the share of frames in each bucket and the five slowest sections. Clearing a version or platform in the tree clears its frame times too. Intake doesn't read them.
 
 `synththing admin usage [path...]` shows the tree one level at a time, biggest first: versions, then under a version its platforms, then levels, targets and signatures, e.g. `synththing admin usage 1.8.3 "windows x86_64" warn`. Versions and platforms show their app starts, so counts can be read as rates. Nothing is deleted until `synththing admin usage [path...] --clear` deletes that part of the tree (all of it without a path).
 

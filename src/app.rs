@@ -3984,6 +3984,15 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut Frame) {
         frame_timing::report(frame.info().cpu_usage);
         let ctx = ui.ctx().clone();
+        if !crate::usage::hardware_known()
+            && let Some(render) = frame.wgpu_render_state()
+        {
+            let info = render.adapter.get_info();
+            crate::usage::set_hardware(&info.name, &format!("{:?}", info.backend));
+        }
+        let window = ctx.input(|i| i.viewport().inner_rect).map_or(0.0, |r| r.area() * ctx.pixels_per_point().powi(2));
+        let scale = config::visualizer_scale_down(self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE));
+        crate::usage::set_view(self.mobile(), scale, window);
         frame_timing::time("sync_theme", || self.sync_theme(&ctx));
         if self.hidden {
             // Hidden in the tray, this still runs while a tray window (a

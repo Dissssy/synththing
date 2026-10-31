@@ -271,6 +271,13 @@ pub enum AdminCommand {
         #[arg(long)]
         clear: bool,
     },
+    /// Frame times from usage data, by hardware and settings, the most
+    /// frames first: the share of frames in each time bucket and the
+    /// slowest sections.
+    UsagePerf {
+        /// Only this version's (as the tree shows it: `1.9.0`, `1.9.0 nightly`).
+        version: Option<String>,
+    },
     /// The rules for which log lines the server keeps: `<level> <target>
     /// keep|drop`, the first match deciding (panics are always kept).
     UsageRules {

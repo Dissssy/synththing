@@ -723,6 +723,9 @@ pub enum AdminAction {
     /// The rules for which log lines are kept, replaced with `set` if
     /// given: `[rule]`.
     UsageRules { set: Option<Vec<String>> },
+    /// Frame times (`usage::PerfRow`s), the most frames first: all of
+    /// them, or one version's.
+    UsagePerf { version: Option<String> },
 }
 
 /// A copyright notice, as a rights holder (or someone acting for one)

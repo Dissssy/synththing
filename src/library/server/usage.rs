@@ -22,6 +22,7 @@ use tiny_http::Request;
 use super::moderation::limit;
 use super::{error, json, now, read_body, Reply, State};
 use crate::library::usage::{
+    PerfGroup, PerfRow, SectionStat, FRAME_BUCKETS_US, MAX_PERF_GROUPS, MAX_PERF_SECTIONS,
     kept, parse_rules, UsageNode, UsageReport, UsageRule, DEFAULT_USAGE_RULES, MAX_USAGE_LINES, MAX_USAGE_TEXT, USAGE_LEVELS,
 };
 
@@ -66,6 +67,34 @@ CREATE TABLE usage_filed (
     PRIMARY KEY (level, target, key)
 );
 PRAGMA user_version = 22;
+COMMIT;
+";
+
+/// Frame times (docs/USAGE.md): per version, platform, hardware and
+/// settings (each kept as its JSON), frames per bucket, and the sections'
+/// time.
+pub(super) const SCHEMA_V23: &str = "
+BEGIN;
+CREATE TABLE usage_perf (
+    version TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    hardware TEXT NOT NULL,
+    settings TEXT NOT NULL,
+    frames TEXT NOT NULL,
+    PRIMARY KEY (version, platform, hardware, settings)
+);
+CREATE TABLE usage_perf_sections (
+    version TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    hardware TEXT NOT NULL,
+    settings TEXT NOT NULL,
+    name TEXT NOT NULL,
+    total_us INTEGER NOT NULL,
+    frames INTEGER NOT NULL,
+    worst_us INTEGER NOT NULL,
+    PRIMARY KEY (version, platform, hardware, settings, name)
+);
+PRAGMA user_version = 23;
 COMMIT;
 ";
 
@@ -134,7 +163,102 @@ fn check(report: &UsageReport) -> Result<(), String> {
             return Err("a line's target and signature are needed, and short".into());
         }
     }
+    if report.perf.len() > MAX_PERF_GROUPS {
+        return Err(format!("a report has up to {MAX_PERF_GROUPS} groups of frames"));
+    }
+    for group in &report.perf {
+        if group.frames.len() != FRAME_BUCKETS_US.len() + 1 || group.sections.len() > MAX_PERF_SECTIONS {
+            return Err("a group of frames has a count per bucket and a few sections".into());
+        }
+        let hardware = &group.hardware;
+        if hardware.gpu.len() > MAX_USAGE_TEXT || hardware.backend.len() > MAX_USAGE_TEXT {
+            return Err("the hardware's names are short".into());
+        }
+        if group.sections.iter().any(|s| !short(&s.name)) {
+            return Err("a section's name is needed, and short".into());
+        }
+    }
     Ok(())
+}
+
+/// Add a report's frame times to the counts.
+fn add_perf(tx: &rusqlite::Transaction, report: &UsageReport) -> rusqlite::Result<()> {
+    for group in &report.perf {
+        let hardware = serde_json::to_string(&group.hardware).unwrap_or_default();
+        let settings = serde_json::to_string(&group.settings).unwrap_or_default();
+        let key = params![report.version, report.platform, hardware, settings];
+        let stored: Option<String> = tx
+            .query_row(
+                "SELECT frames FROM usage_perf WHERE version = ? AND platform = ? AND hardware = ? AND settings = ?",
+                key,
+                |r| r.get(0),
+            )
+            .optional()?;
+        let mut frames: Vec<u64> = stored.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        frames.resize(FRAME_BUCKETS_US.len() + 1, 0);
+        for (count, new) in frames.iter_mut().zip(&group.frames) {
+            *count += new;
+        }
+        tx.execute(
+            "INSERT INTO usage_perf (version, platform, hardware, settings, frames) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT DO UPDATE SET frames = ?5",
+            params![report.version, report.platform, hardware, settings, serde_json::to_string(&frames).unwrap_or_default()],
+        )?;
+        for section in &group.sections {
+            tx.execute(
+                "INSERT INTO usage_perf_sections (version, platform, hardware, settings, name, total_us, frames, worst_us)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT DO UPDATE SET total_us = total_us + ?6, frames = frames + ?7, worst_us = MAX(worst_us, ?8)",
+                params![
+                    report.version,
+                    report.platform,
+                    hardware,
+                    settings,
+                    section.name,
+                    section.total_us as i64,
+                    section.frames as i64,
+                    section.worst_us as i64
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Frame times, the most frames first: all of them, or one version's.
+pub(super) fn perf(db: &Connection, version: Option<&str>) -> rusqlite::Result<Vec<PerfRow>> {
+    let mut rows: Vec<(PerfRow, String, String)> = db
+        .prepare("SELECT version, platform, hardware, settings, frames FROM usage_perf WHERE ?1 IS NULL OR version = ?1")?
+        .query_map([version], |r| {
+            let (hardware, settings, frames): (String, String, String) = (r.get(2)?, r.get(3)?, r.get(4)?);
+            let group = PerfGroup {
+                hardware: serde_json::from_str(&hardware).unwrap_or_default(),
+                settings: serde_json::from_str(&settings).unwrap_or_default(),
+                frames: serde_json::from_str(&frames).unwrap_or_default(),
+                sections: Vec::new(),
+            };
+            Ok((PerfRow { version: r.get(0)?, platform: r.get(1)?, group }, hardware, settings))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut sections = db.prepare(
+        "SELECT name, total_us, frames, worst_us FROM usage_perf_sections
+         WHERE version = ? AND platform = ? AND hardware = ? AND settings = ? ORDER BY total_us DESC",
+    )?;
+    for (row, hardware, settings) in &mut rows {
+        row.group.sections = sections
+            .query_map(params![row.version, row.platform, &*hardware, &*settings], |r| {
+                Ok(SectionStat {
+                    name: r.get(0)?,
+                    total_us: r.get::<_, i64>(1)? as u64,
+                    frames: r.get::<_, i64>(2)? as u64,
+                    worst_us: r.get::<_, i64>(3)? as u64,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+    }
+    let mut rows: Vec<PerfRow> = rows.into_iter().map(|(row, ..)| row).collect();
+    rows.sort_by_key(|row| std::cmp::Reverse(row.group.frames.iter().sum::<u64>()));
+    Ok(rows)
 }
 
 /// Add a report's sessions and the lines the rules keep (the app should
@@ -160,6 +284,7 @@ fn add(db: &mut Connection, report: &UsageReport) -> rusqlite::Result<usize> {
         )?;
         kept_lines += 1;
     }
+    add_perf(&tx, report)?;
     tx.commit()?;
     Ok(kept_lines)
 }
@@ -210,6 +335,11 @@ pub(super) fn clear(db: &Connection, path: &[String]) -> Result<usize, String> {
         deleted += db
             .execute(&format!("DELETE FROM usage_sessions WHERE {clause}"), rusqlite::params_from_iter(&values))
             .map_err(|e| format!("database: {e}"))?;
+        for table in ["usage_perf", "usage_perf_sections"] {
+            deleted += db
+                .execute(&format!("DELETE FROM {table} WHERE {clause}"), rusqlite::params_from_iter(&values))
+                .map_err(|e| format!("database: {e}"))?;
+        }
     }
     Ok(deleted)
 }
@@ -438,7 +568,40 @@ mod tests {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch(SCHEMA_V21).unwrap();
         db.execute_batch(SCHEMA_V22).unwrap();
+        db.execute_batch(SCHEMA_V23).unwrap();
         db
+    }
+
+    #[test]
+    fn frame_times_add_up_per_hardware_and_settings() {
+        use crate::library::usage::{Hardware, PerfSettings};
+        let mut db = db();
+        let phone = Hardware { gpu: "Adreno 640".into(), backend: "Vulkan".into(), cores: 8, ram_gb: Some(8) };
+        let group = |scale, frames: Vec<u64>, worst_us| PerfGroup {
+            hardware: phone.clone(),
+            settings: PerfSettings { mobile_layout: true, visualizer_scale: scale, window_kpx: 2500 },
+            frames,
+            sections: vec![SectionStat { name: "visualizer".into(), total_us: 9_000, frames: 1, worst_us }],
+        };
+        let mut sent = report("1.9.0", "android aarch64", &[]);
+        sent.perf = vec![group(4, vec![1, 0, 0, 0, 0, 0], 9_000), group(1, vec![0, 0, 1, 0, 0, 0], 9_000)];
+        assert!(check(&sent).is_ok());
+        add(&mut db, &sent).unwrap();
+        sent.perf = vec![group(4, vec![2, 1, 0, 0, 0, 0], 12_000)];
+        add(&mut db, &sent).unwrap();
+
+        let rows = perf(&db, Some("1.9.0")).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!((rows[0].group.settings.visualizer_scale, rows[0].group.frames.clone()), (4, vec![3, 1, 0, 0, 0, 0]));
+        assert_eq!(rows[0].group.sections, vec![SectionStat { name: "visualizer".into(), total_us: 18_000, frames: 2, worst_us: 12_000 }]);
+        assert_eq!(rows[0].group.hardware, phone);
+        assert!(perf(&db, Some("1.8.0")).unwrap().is_empty());
+
+        clear(&db, &["1.9.0".into()]).unwrap();
+        assert!(perf(&db, None).unwrap().is_empty());
+
+        sent.perf[0].frames.pop();
+        assert!(check(&sent).is_err(), "a count per bucket");
     }
 
     #[test]
@@ -479,6 +642,7 @@ mod tests {
 
     fn report(version: &str, platform: &str, lines: &[(&str, &str, &str, u64)]) -> UsageReport {
         UsageReport {
+            perf: Vec::new(),
             version: version.into(),
             platform: platform.into(),
             sessions: 2,

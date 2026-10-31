@@ -25,6 +25,74 @@ pub struct UsageReport {
     /// Times the app was started.
     pub sessions: u64,
     pub lines: Vec<UsageLine>,
+    /// How long frames took, per kind of hardware and the settings that
+    /// cost the most.
+    #[serde(default)]
+    pub perf: Vec<PerfGroup>,
+}
+
+/// Frame-time buckets' upper ends, in microseconds: under 8 ms, 16.7 ms
+/// (60 fps), 33 ms, 50 ms, 100 ms, and slower.
+pub const FRAME_BUCKETS_US: [u64; 5] = [8_000, 16_667, 33_333, 50_000, 100_000];
+/// Groups (hardware and settings) one report may carry, and sections per
+/// group.
+pub const MAX_PERF_GROUPS: usize = 20;
+pub const MAX_PERF_SECTIONS: usize = 64;
+
+/// What the app runs on, coarsely: enough to pick defaults by, not enough
+/// to tell one device from another.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Hardware {
+    /// The graphics adapter's name and API (`Adreno (TM) 640`, `Vulkan`).
+    pub gpu: String,
+    pub backend: String,
+    pub cores: u32,
+    /// Memory, in whole GB rounded to a power of two, where it's known.
+    pub ram_gb: Option<u32>,
+}
+
+/// The settings frames cost depends on most.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PerfSettings {
+    pub mobile_layout: bool,
+    pub visualizer_scale: u32,
+    /// The window's size, in physical pixels, rounded to quarter
+    /// megapixels (thousands of pixels: 250, 500, ...).
+    pub window_kpx: u32,
+}
+
+/// Frames counted with one hardware and settings.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct PerfGroup {
+    pub hardware: Hardware,
+    pub settings: PerfSettings,
+    /// Frames per bucket of `FRAME_BUCKETS_US`, and one more for slower.
+    pub frames: Vec<u64>,
+    pub sections: Vec<SectionStat>,
+}
+
+/// One part of the frame (`frame_timing`'s sections): its time over the
+/// frames it ran in, and its worst.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct SectionStat {
+    pub name: String,
+    pub total_us: u64,
+    pub frames: u64,
+    pub worst_us: u64,
+}
+
+/// The bucket a frame of `us` microseconds goes in.
+pub fn frame_bucket(us: u64) -> usize {
+    FRAME_BUCKETS_US.iter().position(|&end| us < end).unwrap_or(FRAME_BUCKETS_US.len())
+}
+
+/// Frame times as the admin sees them (`AdminAction::UsagePerf`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PerfRow {
+    pub version: String,
+    pub platform: String,
+    #[serde(flatten)]
+    pub group: PerfGroup,
 }
 
 /// A kind of log line and how many times it came up.
