@@ -49,7 +49,6 @@ pub(super) enum Page {
     /// From the menu's lower part, not its pages.
     Preferences,
     Updates,
-    /// What's new since `Mobile::changelog_since`, or all of it.
     Changelog,
     Log,
     Credits,
@@ -135,9 +134,6 @@ pub(super) struct Mobile {
     pref_section: Option<PrefTab>,
     /// Editing themes, a level under Preferences > Appearance.
     editing_themes: bool,
-    /// The version the Changelog page shows what's new since (after an
-    /// update), else all of it.
-    changelog_since: Option<crate::changelog::Version>,
     /// When back was pressed with nothing left to go back from: a second
     /// press while its toast shows leaves (`mobile_back`).
     back_to_leave: Option<Instant>,
@@ -262,9 +258,10 @@ impl App {
                     });
                 }
                 Page::Changelog => {
-                    if super::changelog_body_ui(ui, self.mobile_state.changelog_since, true) {
-                        self.mobile_state.changelog_since = None;
-                    }
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 8.0;
+                        super::changelog_body_ui(ui, None);
+                    });
                 }
                 Page::Log => {
                     self.log_body_ui(ui, true);
@@ -277,17 +274,11 @@ impl App {
         }
     }
 
-    /// What opens a window on the desktop (the launch update check, What's
-    /// new after an update, the status bar's link to the log) opens its
-    /// page here instead.
+    /// What opens a window on the desktop (the status bar's link to the
+    /// log, the credits) opens its page here instead.
     pub(super) fn open_mobile_pages(&mut self, ctx: &egui::Context) {
         let state = &mut self.mobile_state;
-        let page = if std::mem::take(&mut self.updates_open) {
-            Page::Updates
-        } else if let Some(since) = self.changelog.take() {
-            state.changelog_since = since;
-            Page::Changelog
-        } else if std::mem::take(&mut self.log_open) {
+        let page = if std::mem::take(&mut self.log_open) {
             Page::Log
         } else if std::mem::take(&mut self.credits_open) {
             Page::Credits
@@ -353,9 +344,6 @@ impl App {
                     Page::Grouping => {
                         let title = grouping.as_ref().map_or(Page::Grouping.title(), |(t, _)| t.as_str());
                         ui.add(egui::Label::new(egui::RichText::new(title).heading()).truncate());
-                    }
-                    Page::Changelog if self.mobile_state.changelog_since.is_some() => {
-                        ui.heading("What's new");
                     }
                     page => {
                         ui.heading(page.title());
@@ -791,7 +779,6 @@ impl App {
             close = true;
         }
         if item(ui, Page::Changelog) {
-            self.mobile_state.changelog_since = None;
             self.mobile_state.page = Page::Changelog;
             close = true;
         }

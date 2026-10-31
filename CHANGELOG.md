@@ -8,6 +8,11 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Install synththing on Windows: run from a download, it offers once to move itself to its own folder (`%LOCALAPPDATA%\Programs\synththing`), adding itself to the Start menu and to Settings > Apps to uninstall it from. It updates itself there as before. Preferences > App > Install does it any time.
 - Start with Windows (Preferences > App > Install, once installed), opening in the tray, as the mini player or as the window.
 
+### Changed
+- What synththing has to say or ask at launch (the welcome, usage data, what's new, an update, installing, settings that couldn't be read) is one page in place of the panels, styled like Preferences, instead of popups one after another: a step per page, Back and Next, and the answers taken at Done. The rest of the app waits until it's done. Help's Welcome, Check for updates and Changelog open there too.
+- The changelog reads like Preferences: a section per version, its Added, Changed and Fixed as dividers, and What's new marks where the version you had starts, with the older ones folded away.
+- View and Layout in the title bar are disabled while Preferences is open, since it takes the panels' room.
+
 ## 2.0.0 (2026-10-31)
 
 ### Added

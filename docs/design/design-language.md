@@ -76,6 +76,13 @@ built entirely from these pieces.
   rows by kind.
 - Title bar buttons all use `title_bar::bar_button`. Menus with options use
   `menu::config` (Shift+click keeps them open).
+- What has to be gone through before the rest of the app (the launch's
+  welcome, questions and notices; Help's Welcome, Updates and Changelog)
+  is the flow (`flow.rs`), not popups: a page in place of the panels,
+  built like Preferences (pills down the side, sections), a step per page
+  with Back and Next, answers applied at Done. The rest of the app is
+  disabled until it's done. New ones are a `flow::Step`.
+- Popups are only for small confirmations.
 - Something that can't be undone (removing a program, deleting) asks first
   in a small dialog: the question as its heading, one line on what happens,
   the destructive button in the error color, then Cancel. Esc closes only
