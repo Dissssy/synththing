@@ -47,7 +47,8 @@ jobs:
           retention-days: 1
 
   # The three builds side by side, each into an artifact; publish puts
-  # them in the release together.
+  # them in the release together. No tests here: CI (ci.yml) tests the
+  # release commit when it's pushed to master.
   windows:
     needs: check
     runs-on: windows-latest
@@ -62,9 +63,6 @@ jobs:
         with:
           shared-key: windows-release
           save-if: false
-
-      - name: Test
-        run: cargo test --lib
 
       - name: Build
         run: cargo build --release
@@ -98,9 +96,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev libwayland-dev
-
-      - name: Test
-        run: cargo test --lib
 
       - name: Build
         run: cargo build --release
