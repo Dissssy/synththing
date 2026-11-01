@@ -48,9 +48,12 @@ runs:
       with:
         shared-key: android
 
-    - uses: taiki-e/install-action@v2
-      with:
-        tool: cargo-ndk
+    # Built here, not downloaded: cargo-ndk's own Linux binaries need a
+    # newer glibc than the self-hosted runner's Ubuntu 22.04. Reinstalled
+    # only when the one there (a volume on our runner) doesn't run.
+    - name: cargo-ndk
+      shell: bash
+      run: cargo ndk --version > /dev/null 2>&1 || cargo install --locked --force cargo-ndk
 
     - uses: actions/setup-java@v5
       with:
