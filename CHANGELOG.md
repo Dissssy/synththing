@@ -6,6 +6,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Fixed
 - Playing a smart playlist, a change to the song playing that makes it stop matching (liking it in an "unrated" playlist, say) no longer ends the playlist: the song plays out and leaves the playlist after, and what was planned to play next stays as it was. Any change to the library also keeps a shuffle's order now, only leaving out songs that stopped matching.
+- Android: tapping a text field sometimes only selected it, and a second tap was needed for the keyboard to come up. The keyboard now comes up on the first tap.
 
 ## 2.1.1 (2026-11-01)
 
