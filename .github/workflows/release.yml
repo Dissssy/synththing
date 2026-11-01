@@ -51,7 +51,7 @@ jobs:
   # release commit when it's pushed to master.
   windows:
     needs: check
-    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
+    runs-on: ${{ vars.RUNNER && format('{0}-windows', vars.RUNNER) || 'ubuntu-latest' }}  # see ci.yml
     steps:
       - uses: actions/checkout@v5
 
@@ -89,12 +89,16 @@ jobs:
           path: synththing.exe
           retention-days: 1
 
+      # Last, so this build's output is kept unless the folder is too big.
+      - if: always()
+        uses: ./.github/actions/trim-target
+
   # On Ubuntu 22.04 (the runner's image, deploy/ci-runner.compose.yml), so
   # the binary runs on more distributions (it needs a glibc at least as new
   # as the one it's built against).
   linux:
     needs: check
-    runs-on: ${{ vars.RUNNER || 'ubuntu-22.04' }}  # see ci.yml
+    runs-on: ${{ vars.RUNNER && format('{0}-linux', vars.RUNNER) || 'ubuntu-22.04' }}  # see ci.yml
     steps:
       - uses: actions/checkout@v5
 
@@ -126,11 +130,15 @@ jobs:
           path: synththing
           retention-days: 1
 
+      # Last, so this build's output is kept unless the folder is too big.
+      - if: always()
+        uses: ./.github/actions/trim-target
+
   # The Android app (docs/ANDROID.md). Only with the release key (the
   # ANDROID_* secrets): without it, this builds but adds nothing.
   android:
     needs: check
-    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNNER && format('{0}-android', vars.RUNNER) || 'ubuntu-latest' }}  # see ci.yml
     outputs:
       signed: ${{ steps.apk.outputs.signed }}
     steps:
@@ -150,6 +158,10 @@ jobs:
           name: android
           path: synththing-android-arm64.apk
           retention-days: 1
+
+      # Last, so this build's output is kept unless the folder is too big.
+      - if: always()
+        uses: ./.github/actions/trim-target
 
   # The release, with every build at once, once the desktop builds have
   # passed. The Android app is still experimental, so it failing (or being
