@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Fixed
+- Assorted backend and CI issues
+
 ## 2.2.0 (2026-11-01)
 
 ### Added
