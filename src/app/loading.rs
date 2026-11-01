@@ -147,6 +147,7 @@ impl App {
     pub(super) fn poll_loads(&mut self) {
         self.assets.poll();
         self.poll_pending_soundfont();
+        self.poll_adding_soundfonts();
         self.poll_pending_play();
     }
 
@@ -337,6 +338,7 @@ impl App {
         }
         needed.extend(self.current_song.clone());
         needed.extend(self.loaded_sf.clone());
+        needed.extend(self.adding_soundfonts.parsing().iter().cloned());
         for path in &needed {
             self.assets.touch(path, now);
         }
@@ -357,7 +359,11 @@ impl App {
 
         self.assets.evict(now, self.config.preload_expiry());
 
-        if self.assets.any_loading() || self.pending_play.is_some() || self.pending_soundfont.is_some() {
+        if self.assets.any_loading()
+            || self.pending_play.is_some()
+            || self.pending_soundfont.is_some()
+            || !self.adding_soundfonts.parsing().is_empty()
+        {
             ctx.request_repaint_after(LOADING_REPAINT);
         }
     }

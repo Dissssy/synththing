@@ -7,6 +7,7 @@
 //! around, split, float them out into windows. Closing a tab only hides that
 //! section; the View menu brings it back (see `layout.rs` for where).
 
+mod adding_soundfonts;
 mod api;
 mod autoplay;
 mod branding;
@@ -88,7 +89,7 @@ use crate::song_list::{self, Autoplay, DraggedFiles, SongList};
 use crate::song_store::{self, SongStore, Stored};
 use crate::select_list::{self, Selection};
 use crate::layout::{self, Section};
-use crate::loader::{self, Asset, AssetCache, SoundFontProbe};
+use crate::loader::AssetCache;
 use crate::lua_completion::CompletionWorker;
 use crate::lua_docs;
 use crate::lua_visualizer::{
@@ -358,6 +359,8 @@ pub struct App {
     /// one too; `None`: just a swap for the playing song (its playlist
     /// override changed).
     pending_soundfont: Option<(Option<usize>, PathBuf)>,
+    /// Soundfonts just added, still being parsed in the background.
+    adding_soundfonts: adding_soundfonts::AddingSoundfonts,
     /// The song the engine has (or last had) loaded.
     current_song: Option<PathBuf>,
     /// Playlist tracks skipped in a row for failing to load, so a playlist
@@ -753,6 +756,7 @@ impl App {
             assets: AssetCache::new(),
             pending_play: None,
             pending_soundfont: None,
+            adding_soundfonts: Default::default(),
             current_song: None,
             skips_in_a_row: 0,
             hovered_playlist_entry: None,
@@ -1136,79 +1140,6 @@ impl App {
         self.request_play(&path, None, None, false);
     }
 
-    fn add_soundfont(&mut self, path: PathBuf) {
-        let name = nice_name(&path);
-        self.status = match self.try_add_soundfont(&path) {
-            Ok(Some(note)) => format!("Added '{name}', but {note}"),
-            Ok(None) => format!("Added soundfont: {name}"),
-            Err(problem) => problem,
-        };
-    }
-
-    /// Add `paths` to the soundfont list, saying how it went in one line.
-    fn add_soundfonts(&mut self, paths: Vec<PathBuf>) {
-        if let [path] = paths.as_slice() {
-            self.add_soundfont(path.clone());
-            return;
-        }
-        let mut added = 0;
-        let mut problems = Vec::new();
-        for path in &paths {
-            match self.try_add_soundfont(path) {
-                Ok(note) => {
-                    added += 1;
-                    if let Some(note) = note {
-                        problems.push(format!("'{}' was added, but {note}", nice_name(path)));
-                    }
-                }
-                Err(problem) => problems.push(problem),
-            }
-        }
-        for problem in &problems {
-            log::info!("adding soundfonts: {problem}");
-        }
-        let plural = |n: usize| if n == 1 { "" } else { "s" };
-        self.status = match problems.as_slice() {
-            [] => format!("Added {added} soundfont{}.", plural(added)),
-            [one] => format!("Added {added} soundfont{}. {one}", plural(added)),
-            more => format!(
-                "Added {added} soundfont{}; {} had problems (Help > Log has them all). {}",
-                plural(added),
-                more.len(),
-                more[0]
-            ),
-        };
-    }
-
-    /// Add one soundfont to the list: `Ok` with a note if it's added but
-    /// can't be played by this build, or why it wasn't added. Only files
-    /// that aren't SoundFont containers at all are refused: a valid one
-    /// this build of rustysynth can't render yet is still added, with a
-    /// note.
-    fn try_add_soundfont(&mut self, path: &Path) -> Result<Option<String>, String> {
-        let name = nice_name(path);
-        let note = match loader::probe_soundfont(path) {
-            Ok(SoundFontProbe::Playable(soundfont)) => {
-                // Already parsed it, so keep it rather than parse it again
-                // when it's picked.
-                self.assets.insert_ready(path, Asset::SoundFont(soundfont), std::time::Instant::now());
-                None
-            }
-            Ok(SoundFontProbe::Unplayable(reason)) => Some(reason),
-            Ok(SoundFontProbe::NotSoundFont) => {
-                return Err(format!("'{name}' is not a SoundFont file (no RIFF/sfbk header)."));
-            }
-            Err(e) => return Err(format!("Failed to read '{name}': {e}")),
-        };
-        if !self.config.add_soundfont(path) {
-            return Err(format!("'{name}' is already in the list."));
-        }
-        if let Err(e) = self.config.save() {
-            return Ok(Some(format!("the list couldn't be saved: {e}")));
-        }
-        Ok(note)
-    }
-
     /// Take the soundfonts at `indices` off the list.
     fn remove_soundfonts(&mut self, indices: &[usize]) {
         let mut indices: Vec<usize> = indices.iter().copied().filter(|&i| i < self.config.soundfonts.len()).collect();
@@ -1222,6 +1153,7 @@ impl App {
         }
         self.soundfont_selection.clear();
         self.pending_soundfont = None;
+        self.adding_soundfonts.forget_removed(&self.config.soundfonts);
         let removed = match names.as_slice() {
             [] => return,
             [name] => format!("soundfont: {name}"),

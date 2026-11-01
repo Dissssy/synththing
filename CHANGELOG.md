@@ -17,6 +17,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### Fixed
 - A big song library stopped syncing: past about 1 MB of song info (a few thousand songs), a device couldn't send the library any more, so songs it added (a hub's downloads, say) never showed up on your other devices. The library is now split over as many pieces on the server as it needs, more as it grows, and a change sends only the pieces it's in. Every device needs this version for its library to sync again.
 - Two devices could keep sending the library back and forth, each putting back a song's import date the other replaced.
+- Adding a soundfont no longer freezes the window while it loads (several seconds for a big one). It joins the list straight away, and the status line says once it's ready to play, or if this build can't play it.
 
 ## 2.0.0 (2026-10-31)
 
