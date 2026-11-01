@@ -1,13 +1,13 @@
 //! Song tags (`song_store::Tag`): the Tags submenu of a song's right-click
-//! menu, and the Tags modal, where they're made, renamed, colored and
-//! deleted. They sync with the library (`song_sync.rs`).
+//! menu, and the Tags modal, where they're made, renamed, colored, given
+//! icons and deleted. They sync with the library (`song_sync.rs`).
 
 use std::path::PathBuf;
 
 use eframe::egui;
 
 use super::{fit_width, icon, App};
-use crate::song_store::{SongStore, Tag};
+use crate::song_store::{SongStore, Tag, TagShow, TAG_ICONS};
 
 /// The colors new tags take, in turn.
 const PALETTE: [[u8; 3]; 8] = [
@@ -20,6 +20,47 @@ const PALETTE: [[u8; 3]; 8] = [
     [0x8a, 0x5c, 0xd6],
     [0xc9, 0x5c, 0xa8],
 ];
+
+/// A tag as the app shows it (`Tag::show`): its name, its icon, or both,
+/// in its color.
+pub(super) fn tag_text(tag: &Tag) -> egui::RichText {
+    let glyph = icon(tag.icon_or_default());
+    let text = match tag.show {
+        TagShow::Name => tag.name.clone(),
+        TagShow::Icon => glyph.to_string(),
+        TagShow::Both => format!("{glyph}  {}", tag.name),
+    };
+    egui::RichText::new(text).color(egui::Color32::from_rgb(tag.color[0], tag.color[1], tag.color[2]))
+}
+
+/// The button that picks `tag`'s icon (from `TAG_ICONS`) and how it's
+/// shown, in a popup under it.
+fn icon_picker(ui: &mut egui::Ui, tag: &mut Tag) {
+    let size = ui.spacing().interact_size.y;
+    let glyph = egui::RichText::new(icon(tag.icon_or_default())).size(size - 6.0);
+    let glyph = if tag.icon.is_some() { glyph } else { glyph.weak() };
+    let button = ui.add(egui::Button::new(glyph).min_size(egui::vec2(size, size))).on_hover_text("Its icon, and whether the app shows it");
+    egui::Popup::from_toggle_button_response(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_max_width(6.0 * (size + 10.0));
+        ui.label("Icon (Android's media controls show only this)");
+        ui.horizontal_wrapped(|ui| {
+            for name in TAG_ICONS {
+                let selected = tag.icon.as_deref() == Some(name);
+                let pick = egui::Button::new(egui::RichText::new(icon(name)).size(size - 4.0)).selected(selected).min_size(egui::vec2(size + 4.0, size + 4.0));
+                if ui.add(pick).on_hover_text(name.replace('-', " ")).clicked() {
+                    tag.icon = (!selected).then(|| name.to_string());
+                }
+            }
+        });
+        ui.separator();
+        ui.label("Show in the app");
+        ui.horizontal(|ui| {
+            for show in TagShow::ALL {
+                ui.selectable_value(&mut tag.show, show, show.title());
+            }
+        });
+    });
+}
 
 /// What the Tags submenu asked for.
 pub(super) enum TagAction {
@@ -41,8 +82,8 @@ pub(super) fn tags_menu(ui: &mut egui::Ui, store: &SongStore, paths: &[PathBuf])
         for (id, tag) in tags {
             let with = paths.iter().filter(|p| store.get(p).is_some_and(|s| s.tags.contains(id))).count();
             let mut on = with == paths.len();
-            let text = egui::RichText::new(&tag.name).color(egui::Color32::from_rgb(tag.color[0], tag.color[1], tag.color[2]));
-            if ui.add(egui::Checkbox::new(&mut on, text).indeterminate(with > 0 && with < paths.len())).clicked() {
+            let checkbox = ui.add(egui::Checkbox::new(&mut on, tag_text(tag)).indeterminate(with > 0 && with < paths.len()));
+            if checkbox.on_hover_text(&tag.name).clicked() {
                 action = Some(TagAction::Set(id.clone(), on));
             }
         }
@@ -96,7 +137,7 @@ impl App {
             .min_by_key(|color| tags.values().filter(|t| t.color == **color).count())
             .copied()
             .unwrap_or(PALETTE[0]);
-        self.songs.set_tag(&id, Tag { name, color });
+        self.songs.set_tag(&id, Tag { name, color, icon: None, show: TagShow::Name });
         self.songs_changed();
         self.tags_open = true;
         self.tag_to_name = Some(id.clone());
@@ -116,7 +157,7 @@ impl App {
         let response = egui::Modal::new(egui::Id::new("tags")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 360.0));
             ui.heading("Tags");
-            ui.weak("Your own labels for songs: right-click songs to tag them. With sync on, they're the same on all your devices.");
+            ui.weak("Your own labels for songs: right-click songs to tag them, or use Song info's Tags. Each can have an icon, which its button in Android's media controls shows. With sync on, they're the same on all your devices.");
             ui.add_space(6.0);
             let mut tags: Vec<(String, Tag)> = self.songs.tags().iter().map(|(id, tag)| (id.clone(), tag.clone())).collect();
             tags.sort_by_key(|(_, tag)| tag.name.to_lowercase());
@@ -128,6 +169,7 @@ impl App {
                     ui.horizontal(|ui| {
                         let before = tag.clone();
                         ui.color_edit_button_srgb(&mut tag.color);
+                        icon_picker(ui, &mut tag);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button(icon("trash")).on_hover_text("Delete it (from every song)").clicked() {
                                 delete = Some(id.clone());

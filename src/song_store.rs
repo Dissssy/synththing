@@ -261,7 +261,73 @@ pub struct Tag {
     pub name: String,
     /// sRGB.
     pub color: [u8; 3],
+    /// Its icon, one of `TAG_ICONS` by its Phosphor name: what its button
+    /// in Android's media controls shows (which can't show a name), and
+    /// in the app as `show` says.
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub show: TagShow,
 }
+
+impl Tag {
+    /// Its icon, or the plain tag's if it hasn't one.
+    pub fn icon_or_default(&self) -> &str {
+        self.icon.as_deref().unwrap_or(TAG_ICONS[0])
+    }
+}
+
+/// How the app shows a tag: its name, its icon, or both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TagShow {
+    #[default]
+    Name,
+    Icon,
+    Both,
+}
+
+impl TagShow {
+    pub const ALL: [Self; 3] = [Self::Name, Self::Icon, Self::Both];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Name => "Name",
+            Self::Icon => "Icon",
+            Self::Both => "Icon and name",
+        }
+    }
+}
+
+/// The icons a tag can have, by their Phosphor names (`app::icon`). Each
+/// has an outlined and a filled look (on Android: the `ic_<name>` and
+/// `ic_<name>_on` drawables, drawn from the same font), so a button shows
+/// whether the song has the tag.
+pub const TAG_ICONS: [&str; 24] = [
+    "tag",
+    "star",
+    "heart",
+    "thumbs-up",
+    "thumbs-down",
+    "trash",
+    "x-circle",
+    "check-circle",
+    "prohibit",
+    "flag",
+    "bookmark-simple",
+    "archive",
+    "fire",
+    "sparkle",
+    "lightning",
+    "moon",
+    "sun",
+    "music-note",
+    "headphones",
+    "microphone",
+    "smiley",
+    "smiley-sad",
+    "coffee",
+    "barbell",
+];
 
 /// A file now in the store, to [`SongStore::add`].
 #[derive(Clone, Debug, PartialEq)]
@@ -1513,8 +1579,8 @@ mod tests {
         let stored = write_in(b"tagged", "Tagged.mid", &dir).unwrap();
         store.add(stored.clone());
         let path = path_of(&dir, &stored.key);
-        store.set_tag("b", Tag { name: "Chill".into(), color: [1, 2, 3] });
-        store.set_tag("a", Tag { name: "party".into(), color: [4, 5, 6] });
+        store.set_tag("b", Tag { name: "Chill".into(), color: [1, 2, 3], icon: None, show: TagShow::Name });
+        store.set_tag("a", Tag { name: "party".into(), color: [4, 5, 6], icon: None, show: TagShow::Name });
         store.set_song_tags(&stored.key, vec!["a".into(), "b".into(), "a".into(), "gone".into()]);
         let names = |store: &SongStore| store.tags_of(&path).iter().map(|(_, t)| t.name.clone()).collect::<Vec<_>>();
         assert_eq!(names(&store), ["Chill", "party"], "by name, without case; an unknown ID left out");

@@ -4,6 +4,12 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Android: the notification, the lock screen and the mini player can have more buttons beside play/pause: previous, next, the song's star, and buttons for your own tags that give the song playing the tag or take it off. They help sort songs out as they play, for example with a "Don't keep" tag. Arrange them in Preferences > Playback > Media controls, most wanted first, as many as you like. Lines show how many fit in the notification and in this phone's mini player.
+- Tags can have icons (a tag's button in the media controls shows its icon), and each tag can show its icon, its name, or both in the app. Set them in Edit tags.
+- Song info has a Tags page that stars or tags the songs straight away. On a phone, Song info is a page of its own, laid out like Preferences: a list of its pages (Details, Sorting, Options, Tags, File), each opening in its place.
+- Android: the notification and the lock screen show the song's art, or its album's tile when it has none.
+
 ## 2.1.1 (2026-11-01)
 
 ### Fixed

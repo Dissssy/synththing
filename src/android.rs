@@ -287,6 +287,30 @@ pub struct Playback {
     pub position_ms: i64,
     pub length_ms: i64,
     pub has_next: bool,
+    /// The buttons beside play/pause, in order (`config::MediaButtons`).
+    pub buttons: Vec<Button>,
+}
+
+/// One of the media controls' buttons beside play/pause.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Button {
+    Previous,
+    Next,
+    Toggle(Toggle),
+}
+
+/// A button in the media controls for the song playing: a tag (the star
+/// too) to give it or take off it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Toggle {
+    pub tag: String,
+    /// What it's called (for accessibility; Android shows only the icon).
+    pub label: String,
+    /// Its icon, by its Phosphor name (one of `song_store::TAG_ICONS`, or
+    /// the star's): the Java side's `ic_<name>` drawable, `_on` while `on`.
+    pub icon: String,
+    /// Whether the song has the tag.
+    pub on: bool,
 }
 
 /// Tell the Java side what's playing (it starts or stops the playback
@@ -295,10 +319,25 @@ pub fn set_playback(playback: &Playback) {
     call("updating the media session", |env, activity| {
         let title = env.new_string(&playback.title)?;
         let detail = env.new_string(&playback.detail)?;
+        // (Five strings a button: "previous", "next" or "tag", then a
+        // toggle's tag, label, icon, and "1" if on.)
+        let buttons = env.new_object_array(5 * playback.buttons.len() as i32, "java/lang/String", JObject::null())?;
+        for (i, button) in playback.buttons.iter().enumerate() {
+            let texts = match button {
+                Button::Previous => ["previous", "", "", "", ""],
+                Button::Next => ["next", "", "", "", ""],
+                Button::Toggle(t) => ["tag", t.tag.as_str(), t.label.as_str(), t.icon.as_str(), if t.on { "1" } else { "0" }],
+            };
+            for (j, text) in texts.into_iter().enumerate() {
+                let text = env.new_string(text)?;
+                env.set_object_array_element(&buttons, (5 * i + j) as i32, &text)?;
+                env.delete_local_ref(text)?;
+            }
+        }
         env.call_method(
             activity,
             "setPlayback",
-            "(Ljava/lang/String;Ljava/lang/String;ZJJZ)V",
+            "(Ljava/lang/String;Ljava/lang/String;ZJJZ[Ljava/lang/String;)V",
             &[
                 JValue::Object(&title),
                 JValue::Object(&detail),
@@ -306,8 +345,32 @@ pub fn set_playback(playback: &Playback) {
                 JValue::Long(playback.position_ms),
                 JValue::Long(playback.length_ms),
                 JValue::Bool(playback.has_next.into()),
+                JValue::Object(&buttons),
             ],
         )?;
+        Ok(())
+    });
+}
+
+/// The song playing's art, for the notification and the lock screen.
+pub enum Art {
+    /// A picture: a JPEG or PNG file's bytes.
+    Picture(Box<[u8]>),
+    /// None of its own: the app's tile (`album_art::tile_look`), its
+    /// color (`0xFFRRGGBB`) and initials, drawn as `album_art`'s tiles
+    /// are.
+    Tile { color: u32, initials: String },
+}
+
+/// Tell the Java side the song playing's art.
+pub fn set_art(art: &Art) {
+    call("setting the notification's art", |env, activity| {
+        let (picture, color, initials) = match art {
+            Art::Picture(bytes) => (env.byte_array_from_slice(bytes)?, 0, ""),
+            Art::Tile { color, initials } => (env.byte_array_from_slice(&[])?, *color as i32, initials.as_str()),
+        };
+        let initials = env.new_string(initials)?;
+        env.call_method(activity, "setArt", "([BILjava/lang/String;)V", &[JValue::Object(&picture), JValue::Int(color), JValue::Object(&initials)])?;
         Ok(())
     });
 }
@@ -329,13 +392,16 @@ pub fn set_sync_progress(done: usize, total: usize) {
 
 /// A button pressed outside the app: in the notification, on the lock
 /// screen, on headphones or in picture-in-picture.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum MediaCommand {
     Play,
     Pause,
     Next,
     Previous,
     Seek(f64),
+    /// One of the `Toggle`s: give the song playing the tag (`true`) or
+    /// take it off.
+    SetTag(String, bool),
 }
 
 static MEDIA_COMMANDS: Mutex<Vec<MediaCommand>> = Mutex::new(Vec::new());
@@ -351,6 +417,11 @@ pub fn media_command(command: i32, position_ms: i64) {
         _ => return,
     };
     MEDIA_COMMANDS.lock().unwrap().push(command);
+}
+
+/// From Java: a `Toggle` was tapped, to set its tag to `on`.
+pub fn set_tag(tag: String, on: bool) {
+    MEDIA_COMMANDS.lock().unwrap().push(MediaCommand::SetTag(tag, on));
 }
 
 /// The media buttons pressed since the last call.
@@ -449,6 +520,16 @@ pub fn set_picture_in_picture_allowed(allowed: bool, shape: crate::config::MiniP
         )?;
         Ok(())
     });
+}
+
+/// How many buttons the mini player (picture-in-picture) has room for
+/// beside play/pause, as the phone says (asked once).
+pub fn picture_in_picture_room() -> usize {
+    static ROOM: OnceLock<usize> = OnceLock::new();
+    *ROOM.get_or_init(|| {
+        call("asking picture-in-picture's room", |env, activity| env.call_method(activity, "getMaxNumPictureInPictureActions", "()I", &[])?.i())
+            .map_or(2, |max| (max.max(1) - 1) as usize)
+    })
 }
 
 /// Whether this app may install APKs (Settings > Apps > Special app access

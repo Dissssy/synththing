@@ -106,6 +106,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("remember", "What's remembered between launches", &["remember"]),
             setting("modes", "Loop, Shuffle and Autoplay", &["loop_mode", "shuffle", "autoplay"]),
             setting("only_starred", "Only play starred songs", &["only_starred"]),
+            setting("media_buttons", "Like and tag buttons in the media controls", &["media_buttons"]),
             setting("play_counts", "When songs count as played or skipped", &["play_counts"]),
             setting("dropped_songs", "Where dropped songs go", &["dropped_songs"]),
             setting("heavy_midi", "Warning before a very large MIDI file", &["warn_heavy_midi"]),

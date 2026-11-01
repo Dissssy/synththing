@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Phosphor's tag (fill; MIT), for the media controls (made by a script from the egui-phosphor font). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="1024"
+    android:viewportHeight="1024">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M973 544 576 147Q567 138 555.5 133.0Q544 128 531 128Q531 128 531.0 128.0Q531 128 531 128H160Q147 128 137.5 137.5Q128 147 128 160V531Q128 531 128.0 531.0Q128 531 128 531Q128 544 133.0 555.5Q138 567 147 576L544 973Q553 982 564.5 987.0Q576 992 589 992Q603 992 614.5 987.0Q626 982 635 973L973 635Q982 626 987.0 614.5Q992 603 992 589Q992 576 987.0 564.5Q982 553 973 544ZM336 384Q316 384 302.0 370.0Q288 356 288 336Q288 316 302.0 302.0Q316 288 336 288Q356 288 370.0 302.0Q384 316 384 336Q384 356 370.0 370.0Q356 384 336 384Z" />
+</vector>

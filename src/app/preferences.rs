@@ -98,6 +98,21 @@ pub(super) enum PrefJump {
     Themes,
 }
 
+/// A line across a list with `text` on it, in weak small text: where
+/// what's above it ends (Media controls' room).
+fn cutoff_line(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal(|ui| {
+        let stroke = egui::Stroke::new(1.0, ui.visuals().weak_text_color());
+        let galley = ui.painter().layout_no_wrap(text.to_string(), egui::TextStyle::Small.resolve(ui.style()), ui.visuals().weak_text_color());
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), galley.size().y + 4.0), egui::Sense::hover());
+        let y = rect.center().y;
+        let text_left = rect.left() + 12.0;
+        ui.painter().line_segment([egui::pos2(rect.left(), y), egui::pos2(text_left - 4.0, y)], stroke);
+        ui.painter().line_segment([egui::pos2(text_left + galley.size().x + 4.0, y), egui::pos2(rect.right(), y)], stroke);
+        ui.painter().galley(egui::pos2(text_left, y - galley.size().y / 2.0), galley, ui.visuals().weak_text_color());
+    });
+}
+
 impl App {
     /// The desktop's Preferences, as a page in the panels' place: the title
     /// bar and the bottom bar stay, and playback goes on.
@@ -150,6 +165,95 @@ impl App {
             self.keymap_capture = None;
             self.api_preferences_closed();
         }
+    }
+
+    /// Playback > Media controls (Android): the buttons beside
+    /// play/pause, in order, each moved up or down or taken out, and more
+    /// added.
+    fn media_buttons_ui(&self, ui: &mut egui::Ui, buttons: &mut config::MediaButtons) {
+        use config::MediaButton;
+        let tags = self.songs.tags();
+        // Its icon and name (`None`: a tag since deleted).
+        let describe = |button: &MediaButton| -> Option<egui::RichText> {
+            Some(match button {
+                MediaButton::Previous => egui::RichText::new(format!("{}  Previous", super::icon("skip-back"))),
+                MediaButton::Next => egui::RichText::new(format!("{}  Next", super::icon("skip-forward"))),
+                MediaButton::Star => egui::RichText::new(format!("{}  Star", super::icon(crate::select_list::STAR_ICON))),
+                MediaButton::Tag(id) => {
+                    let tag = tags.get(id)?;
+                    let text = format!("{}  {}", super::icon(tag.icon_or_default()), tag.name);
+                    egui::RichText::new(text).color(egui::Color32::from_rgb(tag.color[0], tag.color[1], tag.color[2]))
+                }
+            })
+        };
+        buttons.0.retain(|b| describe(b).is_some());
+        let info = "The buttons beside play/pause in the notification, on the lock screen and in the mini player, \
+                    most wanted first: each place shows as many as it has room for, as the lines say. Star and tag \
+                    buttons give the song playing its star or the tag, or take it off: to sort songs out as they \
+                    play (a \"Don't keep\" tag, say). They show only the tag's icon, set in Song info's Tags. \
+                    Previous and next always sit either side of play/pause.";
+        // Where each place's room runs out: the lines drawn there.
+        #[cfg(target_os = "android")]
+        let mini_player = crate::android::picture_in_picture_room();
+        #[cfg(not(target_os = "android"))]
+        let mini_player = 2;
+        let cutoff = |i: usize| -> Option<String> {
+            let places: Vec<&str> =
+                [(config::NOTIFICATION_BUTTONS, "notification"), (mini_player, "mini player")].into_iter().filter(|(room, _)| *room == i).map(|(_, p)| p).collect();
+            (!places.is_empty()).then(|| format!("The {} shows the ones above", places.join(" and the ")))
+        };
+        settings_group("Media controls").icon("bell-simple").hint("Buttons beside play/pause, most wanted first").show(ui, |ui| {
+            let last = buttons.0.len().saturating_sub(1);
+            let mut moved = None;
+            let mut remove = None;
+            for (i, button) in buttons.0.iter().enumerate() {
+                let Some(text) = describe(button) else { continue };
+                if let Some(line) = cutoff(i) {
+                    cutoff_line(ui, &line);
+                }
+                setting_row(ui, |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(row_icon_button(ui, "x")).on_hover_text("Take it out").clicked() {
+                            remove = Some(i);
+                        }
+                        if ui.add_enabled(i < last, row_icon_button(ui, "arrow-down")).on_hover_text("Lower").clicked() {
+                            moved = Some(i + 1);
+                        }
+                        if ui.add_enabled(i > 0, row_icon_button(ui, "arrow-up")).on_hover_text("Higher").clicked() {
+                            moved = Some(i);
+                        }
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(egui::Label::new(text).truncate()));
+                    });
+                });
+            }
+            if let Some(i) = moved {
+                buttons.0.swap(i - 1, i);
+            }
+            if let Some(i) = remove {
+                buttons.0.remove(i);
+            }
+            let mut sorted: Vec<(&String, &crate::song_store::Tag)> = tags.iter().collect();
+            sorted.sort_by_key(|(_, tag)| tag.name.to_lowercase());
+            let unused: Vec<MediaButton> = [MediaButton::Previous, MediaButton::Next, MediaButton::Star]
+                .into_iter()
+                .chain(sorted.into_iter().map(|(id, _)| MediaButton::Tag(id.clone())))
+                .filter(|b| !buttons.0.contains(b))
+                .collect();
+            with_info(ui, info, |ui| {
+                ui.add_enabled_ui(!unused.is_empty(), |ui| {
+                    setting_combo(ui, "media_button_add", 0.0).selected_text("Add a button...").show_ui(ui, |ui| {
+                        for button in unused {
+                            if let Some(text) = describe(&button)
+                                && ui.selectable_label(false, text).clicked()
+                            {
+                                buttons.0.push(button);
+                            }
+                        }
+                    });
+                })
+                .response
+            });
+        });
     }
 
     /// Playback > Loaded right now: each file in memory, with what it takes
@@ -236,6 +340,7 @@ impl App {
         let mut over_cutout = self.config.fullscreen_over_cutout;
         let mut mini_player = self.config.mini_player.unwrap_or(true);
         let mut mini_player_shape = self.config.mini_player_shape;
+        let mut media_buttons = self.config.media_buttons.clone();
         let mut jump = None;
         match tab {
             PrefTab::Appearance => {
@@ -421,6 +526,7 @@ impl App {
                             });
                         });
                     });
+                    self.media_buttons_ui(ui, &mut media_buttons);
                 }
                 settings_group("Loading").icon("hourglass").show(ui, |ui| {
                     // (No pointer to rest on a touch screen.)
@@ -679,7 +785,9 @@ impl App {
             || over_cutout != self.config.fullscreen_over_cutout
             || mini_player != self.config.mini_player.unwrap_or(true)
             || mini_player_shape != self.config.mini_player_shape
+            || media_buttons != self.config.media_buttons
         {
+            self.config.media_buttons = media_buttons;
             self.config.mini_player = (!mini_player).then_some(false);
             self.config.mini_player_shape = mini_player_shape;
             self.config.remember = remember;

@@ -443,6 +443,22 @@ fn color_of(name: &str) -> egui::Color32 {
     egui::ecolor::Hsva::new(hue, 0.45, 0.55, 1.0).into()
 }
 
+/// What `generated_tile` draws for the album `name`, for a tile drawn
+/// elsewhere (Android's notification): its color, as `0xFFRRGGBB`, and up
+/// to `letters` of its initials (two over two, with a line break, as four
+/// are drawn).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn tile_look(name: &str, letters: u8) -> (u32, String) {
+    let [r, g, b, _] = color_of(name).to_array();
+    let letters = letters.clamp(1, 4);
+    let mut initials = initials(name, letters as usize);
+    if letters == 4 && initials.chars().count() > 2 {
+        let split = initials.char_indices().nth(2).map_or(initials.len(), |(i, _)| i);
+        initials.insert(split, '\n');
+    }
+    (0xFF00_0000 | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b), initials)
+}
+
 /// Up to `n` letters for an album: its first words' first letters.
 fn initials(name: &str, n: usize) -> String {
     name.split_whitespace().filter_map(|w| w.chars().find(|c| c.is_alphanumeric())).take(n).flat_map(char::to_uppercase).collect()
@@ -502,6 +518,13 @@ mod tests {
         assert_eq!(initials("Tribute To Nujabes", 4), "TTN", "as many as there are words");
         assert_eq!(initials("\"NuJams\"", 2), "N");
         assert_eq!(initials("", 1), "");
+    }
+
+    #[test]
+    fn four_letters_are_two_over_two() {
+        assert_eq!(tile_look("Tribute To Nujabes Vol", 4).1, "TT\nNV");
+        assert_eq!(tile_look("Tribute To Nujabes", 3).1, "TTN");
+        assert_eq!(tile_look("Modal Soul", 2).0, 0xFF00_0000 | u32::from_be_bytes([0, color_of("Modal Soul").r(), color_of("Modal Soul").g(), color_of("Modal Soul").b()]));
     }
 
     #[test]

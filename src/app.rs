@@ -3963,6 +3963,8 @@ impl eframe::App for App {
             // (The whole screen: the flow comes first.)
             if self.flow.open() {
                 self.flow_ui(ui);
+            } else if self.song_details_open() {
+                self.mobile_song_details_ui(ui);
             } else {
                 frame_timing::time("mobile", || self.mobile_ui(ui, &shared));
             }
@@ -3970,7 +3972,6 @@ impl eframe::App for App {
             self.rename_ui(&ctx);
             self.cleanup_ui(&ctx);
             self.choose_art_ui(&ctx);
-            self.song_details_ui(&ctx);
             self.history_ui(&ctx);
             self.status_toast_ui(&ctx);
         } else {
