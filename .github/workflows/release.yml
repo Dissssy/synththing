@@ -51,7 +51,7 @@ jobs:
   # release commit when it's pushed to master.
   windows:
     needs: check
-    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
+    runs-on: ${{ vars.RUNNER && format('{0}-windows', vars.RUNNER) || 'ubuntu-latest' }}  # see ci.yml
     steps:
       - uses: actions/checkout@v5
 
@@ -94,7 +94,7 @@ jobs:
   # as the one it's built against).
   linux:
     needs: check
-    runs-on: ${{ vars.RUNNER || 'ubuntu-22.04' }}  # see ci.yml
+    runs-on: ${{ vars.RUNNER && format('{0}-linux', vars.RUNNER) || 'ubuntu-22.04' }}  # see ci.yml
     steps:
       - uses: actions/checkout@v5
 
@@ -130,7 +130,7 @@ jobs:
   # ANDROID_* secrets): without it, this builds but adds nothing.
   android:
     needs: check
-    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNNER && format('{0}-android', vars.RUNNER) || 'ubuntu-latest' }}  # see ci.yml
     outputs:
       signed: ${{ steps.apk.outputs.signed }}
     steps:

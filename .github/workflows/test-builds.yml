@@ -72,7 +72,7 @@ jobs:
   # Cross-compiled, as releases are (release.yml).
   windows:
     needs: stamp
-    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
+    runs-on: ${{ vars.RUNNER && format('{0}-windows', vars.RUNNER) || 'ubuntu-latest' }}  # see ci.yml
     env:
       SYNTHTHING_CHANNEL: ${{ needs.stamp.outputs.channel }}
       SYNTHTHING_BUILD_NUMBER: ${{ needs.stamp.outputs.number }}
@@ -115,7 +115,7 @@ jobs:
   # On Ubuntu 22.04, as releases are (glibc, see release.yml).
   linux:
     needs: stamp
-    runs-on: ${{ vars.RUNNER || 'ubuntu-22.04' }}  # see ci.yml
+    runs-on: ${{ vars.RUNNER && format('{0}-linux', vars.RUNNER) || 'ubuntu-22.04' }}  # see ci.yml
     env:
       SYNTHTHING_CHANNEL: ${{ needs.stamp.outputs.channel }}
       SYNTHTHING_BUILD_NUMBER: ${{ needs.stamp.outputs.number }}
@@ -155,7 +155,7 @@ jobs:
   # installs over the last.
   android:
     needs: stamp
-    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNNER && format('{0}-android', vars.RUNNER) || 'ubuntu-latest' }}  # see ci.yml
     outputs:
       signed: ${{ steps.apk.outputs.signed }}
     env:
