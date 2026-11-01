@@ -13,6 +13,7 @@ mod branding;
 mod close;
 mod editor;
 mod feedback;
+mod flow;
 pub mod fonts;
 pub use editor::ApplyMode;
 mod loading;
@@ -384,7 +385,6 @@ pub struct App {
     /// Whether the cursor is currently confined to the window for a script.
     cursor_confined: bool,
     updater: Updater,
-    updates_open: bool,
     /// Branch builds: GitHub's list, and installing one (in the Updates
     /// window).
     branches: crate::channels::Branches,
@@ -481,10 +481,10 @@ pub struct App {
     notifications: notifications::NotificationsState,
     /// A copyright notice on one of the user's uploads, open.
     copyright: copyright::CopyrightState,
-    /// The changelog window: `Some(since)` lists only the versions newer
-    /// than that (What's new, after an update), `None` all of them
-    /// (Help > Changelog...).
-    changelog: Option<Option<changelog::Version>>,
+    /// What to go through before the rest of the app (`flow.rs`).
+    flow: flow::Flow,
+    /// The flow's Usage data checkbox (`usage.rs`), until it's done.
+    send_usage_data: bool,
     /// The welcome window and the starter pack download.
     welcome: welcome::Welcome,
     /// Installing synththing: the offer, and Preferences > App's group.
@@ -710,7 +710,7 @@ impl App {
             None => "Click a song to play it, a soundfont to load it.".to_string(),
         };
         #[cfg(windows)]
-        let install = install::Install::new(&config);
+        let offer_install = install::Install::offer(&config);
 
         let mut app = Self {
             commands,
@@ -765,7 +765,6 @@ impl App {
             minimized: false,
             cursor_confined: false,
             updater: Updater::new(),
-            updates_open: false,
             branches: crate::channels::Branches::default(),
             confirm_recopy: false,
             updates_message: None,
@@ -815,10 +814,11 @@ impl App {
             sync: Default::default(),
             notifications: Default::default(),
             copyright: Default::default(),
-            changelog: None,
+            flow: flow::Flow::default(),
+            send_usage_data: false,
             welcome: welcome::Welcome::default(),
             #[cfg(windows)]
-            install,
+            install: install::Install::new(),
             open_mini_at_start: false,
             preferences_tab: PrefTab::default(),
             themes: themes::ThemesState::default(),
@@ -890,6 +890,10 @@ impl App {
             last_recording: None,
             mobile_state: mobile::Mobile::default(),
         };
+        #[cfg(windows)]
+        if offer_install {
+            app.flow.add(flow::Step::Install);
+        }
         if let Some(path) = app.script.path().map(Path::to_path_buf) {
             app.editor_opened(&path);
         }
@@ -933,7 +937,7 @@ impl App {
             && last < current
             && changelog::newer_than(last).next().is_some()
         {
-            self.changelog = Some(Some(last));
+            self.flow.add(flow::Step::Changelog(Some(last)));
         }
         let version = changelog::format_version(current);
         if self.config.last_version.as_deref() != Some(version.as_str()) {
@@ -941,69 +945,6 @@ impl App {
             if let Err(e) = self.config.save() {
                 log::warn!("couldn't save the config: {e:#}");
             }
-        }
-    }
-
-    /// Settings files that couldn't be read and were set aside (at launch,
-    /// or later for ones read later): what happened, and where the old file
-    /// is.
-    fn set_aside_ui(&mut self, ctx: &egui::Context) {
-        self.set_aside.extend(crate::config::set_aside_notices());
-        if self.set_aside.is_empty() {
-            return;
-        }
-        let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("set_aside")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 480.0));
-            ui.heading("Some settings couldn't be read");
-            ui.add_space(4.0);
-            for (note, kept) in &self.set_aside {
-                ui.label(note);
-                if ui.small_button("Show it").on_hover_text(kept.display().to_string()).clicked() {
-                    open_in_file_manager(kept);
-                }
-                ui.add_space(4.0);
-            }
-            ui.weak("Nothing was deleted: the build that saved it can still read the kept copy.");
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if ui.button("OK").clicked() {
-                    close = true;
-                }
-            });
-        });
-        if close || response.should_close() {
-            self.set_aside.clear();
-        }
-    }
-
-    /// What's new (since a version), or the whole changelog, as a modal
-    /// (the mobile layout shows it as a page instead).
-    fn changelog_ui(&mut self, ctx: &egui::Context) {
-        let Some(since) = self.changelog else { return };
-        if self.mobile() {
-            return;
-        }
-        let mut close = false;
-        let mut show_all = false;
-        let response = egui::Modal::new(egui::Id::new("changelog")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 560.0));
-            ui.heading(if since.is_some() { "What's new" } else { "Changelog" });
-            show_all = changelog_body_ui(ui, since, false);
-            ui.add_space(6.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if ui.button("Close").clicked() {
-                    close = true;
-                }
-                if since.is_some() && ui.button("Full changelog").clicked() {
-                    show_all = true;
-                }
-            });
-        });
-        if show_all {
-            self.changelog = Some(None);
-        } else if close || response.should_close() {
-            self.changelog = None;
         }
     }
 
@@ -1743,10 +1684,9 @@ impl App {
         close
     }
 
-    /// The Updates window: what the update check found, release notes, and
-    /// installing. Opened from Help, or by the startup check when it finds
-    /// a release that isn't skipped.
-    fn updates_ui(&mut self, ctx: &egui::Context) {
+    /// The startup update check: what it found goes in the flow, if it's
+    /// new (not a skipped version), or the branch build is gone.
+    fn poll_launch_update_check(&mut self, ctx: &egui::Context) {
         let state = self.updater.state();
         if self.launch_update_check {
             match &state {
@@ -1754,11 +1694,13 @@ impl App {
                 UpdateState::Available(release) => {
                     self.launch_update_check = false;
                     let skipped = self.config.skipped_update.as_deref() == Some(release.version.to_string().as_str());
-                    self.updates_open |= !skipped;
+                    if !skipped {
+                        self.flow.add(flow::Step::Update);
+                    }
                 }
                 UpdateState::Gone => {
                     self.launch_update_check = false;
-                    self.updates_open = true;
+                    self.flow.add(flow::Step::Update);
                 }
                 _ => self.launch_update_check = false,
             }
@@ -1766,31 +1708,16 @@ impl App {
         if matches!(state, UpdateState::Checking | UpdateState::Downloading { .. }) || self.branches.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
-        if !self.updates_open || self.mobile() {
-            return;
-        }
-        let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("updates")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 440.0));
-            ui.heading("Updates");
-            ui.add_space(4.0);
-            close = self.updates_body_ui(ui, false);
-        });
-        if close || response.should_close() {
-            self.updates_open = false;
-            self.updates_message = None;
-        }
     }
 
-    /// An update is offered (the Updates window or page is open with one
-    /// available) or downloading: sync and the online lookup wait, so the
+    /// An update is offered (the flow's Updates step, or the phone's
+    /// Updates page, with one available) or downloading: sync and the online lookup wait, so the
     /// download has the connection. Closing it, or installing it (the app
     /// restarts without it open), lets them go on.
     pub(super) fn update_offered(&self) -> bool {
         match self.updater.state() {
             UpdateState::Downloading { .. } => true,
-            UpdateState::Available(_) if self.mobile() => self.on_updates_page(),
-            UpdateState::Available(_) => self.updates_open,
+            UpdateState::Available(_) => self.flow.has(flow::Step::Update) || (self.mobile() && self.on_updates_page()),
             _ => false,
         }
     }
@@ -2435,12 +2362,9 @@ impl App {
     fn any_modal_open(&self) -> bool {
         self.keymap_capture.is_some()
             || self.log_open
-            || self.updates_open
+            || self.flow.open()
             || self.rename.is_some()
             || self.credits_open
-            || self.changelog.is_some()
-            || self.welcome.open
-            || self.asking_usage()
             || self.song_details.is_some()
             || self.cleanup.is_some()
             || self.palette.is_some()
@@ -2460,7 +2384,6 @@ impl App {
             || self.heavy_prompt.is_some()
             || self.sprite.new_sprite.is_some()
             || self.close_prompt.is_some()
-            || !self.set_aside.is_empty()
     }
 
     /// Pick up scripts added, removed or changed on disk.
@@ -4100,17 +4023,19 @@ impl eframe::App for App {
         self.hovered_playlist_entry = None;
         self.tour.begin_frame();
 
+        self.poll_launch_update_check(&ctx);
+        self.collect_flow_steps();
         if self.dedicated.is_some() {
             frame_timing::time("dedicated", || self.dedicated_ui(ui, &shared));
         } else if self.mobile() {
-            frame_timing::time("mobile", || self.mobile_ui(ui, &shared));
-            // (Only for the launch check: the windows are pages here.)
-            self.updates_ui(&ctx);
+            // (The whole screen: the flow comes first.)
+            if self.flow.open() {
+                self.flow_ui(ui);
+            } else {
+                frame_timing::time("mobile", || self.mobile_ui(ui, &shared));
+            }
             self.open_mobile_pages(&ctx);
             self.rename_ui(&ctx);
-            self.set_aside_ui(&ctx);
-            self.welcome_ui(&ctx);
-            self.usage_prompt_ui(&ctx);
             self.cleanup_ui(&ctx);
             self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);
@@ -4121,31 +4046,27 @@ impl eframe::App for App {
                 .show_separator_line(false)
                 .exact_size(title_bar::HEIGHT)
                 .show(ui, |ui| frame_timing::time("top bar", || self.title_bar_ui(ui)));
+            // (Disabled while the flow's up: it's gone through first.)
+            let flow_open = self.flow.open();
             egui::Panel::bottom("controls_panel").show_separator_line(false).show(ui, |ui| {
                 let _timing = frame_timing::scope("controls bar");
-                self.controls_bar_ui(ui, view);
+                ui.add_enabled_ui(!flow_open, |ui| self.controls_bar_ui(ui, view));
                 self.tour.mark(tour::Target::Controls, ui.min_rect());
             });
-            if self.preferences_open {
+            if flow_open {
+                self.flow_ui(ui);
+            } else if self.preferences_open {
                 self.preferences_ui(ui);
             } else {
                 frame_timing::time("dock", || self.dock_ui(ui, &shared));
             }
             frame_timing::time("autosave_layout", || self.autosave_layout(&ctx));
             let windows = frame_timing::scope("windows");
-            self.updates_ui(&ctx);
             self.log_ui(&ctx);
             self.rename_ui(&ctx);
             self.credits_ui(&ctx);
-            self.changelog_ui(&ctx);
-            self.set_aside_ui(&ctx);
-            self.welcome_ui(&ctx);
-            self.usage_prompt_ui(&ctx);
             #[cfg(windows)]
-            {
-                self.install_offer_ui(&ctx);
-                self.uninstall_ui(&ctx);
-            }
+            self.uninstall_ui(&ctx);
             self.cleanup_ui(&ctx);
             self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);
@@ -4562,12 +4483,6 @@ fn setting_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
         ui.add(egui::Label::new(text).truncate())
     })
     .inner
-}
-
-/// A heading over a group of settings, with a little room above it.
-fn setting_section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(6.0);
-    ui.label(egui::RichText::new(title).strong().size(15.0));
 }
 
 /// A small circled "i": `info` on hover, and in the mobile layout's toast
@@ -5130,51 +5045,71 @@ fn is_midi_path(path: &Path) -> bool {
         .is_some_and(|ext| MIDI_EXTENSIONS.iter().any(|m| ext.eq_ignore_ascii_case(m)))
 }
 
-/// The changelog's text: what's new since a version, or all of it. On a
-/// page it fills what's left, with "Full changelog" above it rather than
-/// beside a Close button; whether that was tapped.
-fn changelog_body_ui(ui: &mut egui::Ui, since: Option<changelog::Version>, page: bool) -> bool {
-    let mut show_all = false;
-    if let Some(since) = since {
-        ui.weak(format!(
-            "synththing v{}, since v{} (the version you had)",
-            crate::build_info::VERSION,
-            changelog::format_version(since)
-        ));
-        if page && ui.button("Full changelog").clicked() {
-            show_all = true;
+/// The changelog in the settings look: a section per version, newest
+/// first, its groups (Added, Changed, Fixed) as dividers and a row per
+/// line. With `since` (What's new after an update), the versions after it
+/// are open and a marker shows where the version you had starts; the rest
+/// fold away. Without, only the newest is open.
+fn changelog_body_ui(ui: &mut egui::Ui, since: Option<changelog::Version>) {
+    let current = changelog::current_version();
+    let mut marked = false;
+    for (i, release) in changelog::releases().iter().enumerate() {
+        // (Unreleased changes aren't in this build unless it's newer.)
+        let new = match (since, release.version) {
+            (Some(since), Some(v)) => v > since && current.is_none_or(|c| v <= c),
+            (Some(_), None) => false,
+            (None, _) => i == 0,
+        };
+        if let (Some(since), Some(v)) = (since, release.version)
+            && v <= since
+            && !marked
+        {
+            marked = true;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(icon("map-pin")).color(ui.visuals().selection.stroke.color));
+                ui.label(
+                    egui::RichText::new(format!("You had v{} before this update", changelog::format_version(since)))
+                        .color(ui.visuals().selection.stroke.color),
+                );
+            });
         }
-    }
-    ui.add_space(6.0);
-    let releases: Vec<&changelog::Release> = match since {
-        Some(since) => changelog::newer_than(since).collect(),
-        None => changelog::releases().iter().collect(),
-    };
-    egui::ScrollArea::vertical()
-        .id_salt("changelog_scroll")
-        .max_height(if page { f32::INFINITY } else { 440.0 })
-        .auto_shrink([!page, !page])
-        .show(ui, |ui| {
-            for release in releases {
-                ui.label(egui::RichText::new(&release.heading).heading().size(17.0));
-                for block in &release.blocks {
-                    match block {
-                        changelog::Block::Heading(text) => {
-                            ui.add_space(2.0);
+        let (title, date) = match release.version {
+            Some(v) => {
+                let date = release.heading.split_once('(').map(|(_, d)| d.trim_end_matches(')').trim().to_string());
+                (format!("v{}", changelog::format_version(v)), date)
+            }
+            None => (release.heading.clone(), Some("Not in a release yet".to_string())),
+        };
+        let mut group = settings_group(&title).icon("tag");
+        if let Some(date) = &date {
+            group = group.hint(date);
+        }
+        if !new {
+            group = group.closable(&release.heading);
+        }
+        group.show(ui, |ui| {
+            for block in &release.blocks {
+                match block {
+                    changelog::Block::Heading(text) => {
+                        setting_row(ui, |ui| {
+                            let kind = match text.as_str() {
+                                "Added" | "New" => "plus-circle",
+                                "Changed" => "arrows-clockwise",
+                                "Fixed" => "wrench",
+                                "Removed" => "minus-circle",
+                                _ => "dot-outline",
+                            };
+                            ui.label(egui::RichText::new(icon(kind)).color(ui.visuals().weak_text_color()));
                             ui.strong(text);
-                        }
-                        changelog::Block::Bullet(text) => {
-                            ui.label(inline_code_job(ui, "- ", text));
-                        }
-                        changelog::Block::Paragraph(text) => {
-                            ui.label(inline_code_job(ui, "", text));
-                        }
+                        });
+                    }
+                    changelog::Block::Bullet(text) | changelog::Block::Paragraph(text) => {
+                        setting_row(ui, |ui| ui.label(inline_code_job(ui, "", text)));
                     }
                 }
-                ui.add_space(10.0);
             }
         });
-    show_all
+    }
 }
 
 /// Where the log file is.

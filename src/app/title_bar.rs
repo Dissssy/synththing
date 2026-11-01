@@ -119,14 +119,16 @@ impl App {
                     window_buttons_ui(ui);
                 }
                 let items: Vec<Item> = Item::ALL.into_iter().filter(|&item| item != Item::Notifications || self.notifications_shown()).collect();
-                match Fit::of(ui, &items, ui.available_width() - GRIP) {
+                // (Disabled while the flow's up; the window's buttons and
+                // dragging still work.)
+                ui.add_enabled_ui(!self.flow.open(), |ui| match Fit::of(ui, &items, ui.available_width() - GRIP) {
                     Fit::Menu => self.bar_menu_ui(ui, &items),
                     fit => {
                         for &item in items.iter().rev() {
                             self.bar_item_ui(ui, item, fit);
                         }
                     }
-                }
+                });
                 // (What's left between the wordmark and the buttons.)
                 let rest = ui.available_rect_before_wrap();
                 let grip = ui.interact(rest, ui.id().with("title_drag"), egui::Sense::click_and_drag());
@@ -148,13 +150,15 @@ impl App {
             Fit::Labels => bar_button(format!("{}  {}", icon(item.icon()), item.label())),
             _ => bar_icon(item.icon()),
         };
-        let menu = |button| egui::containers::menu::MenuButton::from_button(button).config(crate::menu::config(ui.ctx()));
+        let ctx = ui.ctx().clone();
+        let menu = |button| egui::containers::menu::MenuButton::from_button(button).config(crate::menu::config(&ctx));
         match item {
+            // (Not while Preferences has the panels' room.)
             Item::View => {
-                menu(button).ui(ui, |ui| self.view_menu_ui(ui));
+                ui.add_enabled_ui(!self.preferences_open, |ui| menu(button).ui(ui, |ui| self.view_menu_ui(ui)));
             }
             Item::Layout => {
-                menu(button).ui(ui, |ui| self.layout_menu_ui(ui));
+                ui.add_enabled_ui(!self.preferences_open, |ui| menu(button).ui(ui, |ui| self.layout_menu_ui(ui)));
             }
             Item::Help => {
                 menu(button).ui(ui, |ui| self.help_menu_ui(ui));
@@ -181,10 +185,10 @@ impl App {
                 let text = format!("{}  {}", icon(item.icon()), item.label());
                 match item {
                     Item::View => {
-                        ui.menu_button(text, |ui| self.view_menu_ui(ui));
+                        ui.add_enabled_ui(!self.preferences_open, |ui| ui.menu_button(text, |ui| self.view_menu_ui(ui)));
                     }
                     Item::Layout => {
-                        ui.menu_button(text, |ui| self.layout_menu_ui(ui));
+                        ui.add_enabled_ui(!self.preferences_open, |ui| ui.menu_button(text, |ui| self.layout_menu_ui(ui)));
                     }
                     Item::Help => {
                         ui.menu_button(text, |ui| self.help_menu_ui(ui));
@@ -256,11 +260,11 @@ impl App {
         }
         if ui.button("Check for updates...").clicked() {
             self.launch_update_check = false;
-            self.updates_open = true;
+            self.flow.show(super::flow::Step::Update);
             self.updater.check(self.update_track());
         }
         if ui.button("Changelog...").clicked() {
-            self.changelog = Some(None);
+            self.flow.show(super::flow::Step::Changelog(None));
         }
         if ui.button("Log...").clicked() {
             self.log_open = true;
