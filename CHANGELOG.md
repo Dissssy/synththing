@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 2.1.1 (2026-11-01)
+
 ### Fixed
 - Your devices (or a hub on its own) kept sending the song library back and forth every few seconds: numbers like a song's loudness came back from the server a hair different from how they were sent, which every device took for a change. They now read back exactly; it stops once every device, hub included, runs this version.
 
