@@ -4,7 +4,19 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Install synththing on Windows: run from a download, it offers once to move itself to its own folder (`%LOCALAPPDATA%\Programs\synththing`), adding itself to the Start menu and to Settings > Apps to uninstall it from. It updates itself there as before. Preferences > App > Install does it any time.
+- Start with Windows (Preferences > App > Install, once installed), opening in the tray, as the mini player or as the window.
+
+### Changed
+- What synththing has to say or ask at launch (the welcome, usage data, what's new, an update, installing, settings that couldn't be read) is one page in place of the panels, styled like Preferences, instead of popups one after another: a step per page, Back and Next, and the answers taken at Done. The rest of the app waits until it's done. Help's Welcome, Check for updates and Changelog open there too.
+- The changelog reads like Preferences: a section per version, its Added, Changed and Fixed as dividers, and What's new marks where the version you had starts, with the older ones folded away.
+- View and Layout in the title bar are disabled while Preferences is open, since it takes the panels' room.
+- The Wishlist's MusicBrainz search finds what has every word you typed first (in its name or its artist's), instead of anything with any one of them: "Jane! the long faces" finds the song. Quote words to find them together ("the long faces"), and put `artist:` before a word or a quoted name to look for it only in the artist's name. A dropdown searches only artists, albums or songs, and the Advanced button sends MusicBrainz's own search syntax as you type it.
+
 ### Fixed
+- A big song library stopped syncing: past about 1 MB of song info (a few thousand songs), a device couldn't send the library any more, so songs it added (a hub's downloads, say) never showed up on your other devices. The library is now split over as many pieces on the server as it needs, more as it grows, and a change sends only the pieces it's in. Every device needs this version for its library to sync again.
+- Two devices could keep sending the library back and forth, each putting back a song's import date the other replaced.
 - Adding a soundfont no longer freezes the window while it loads (several seconds for a big one). It joins the list straight away, and the status line says once it's ready to play, or if this build can't play it.
 
 ## 2.0.0 (2026-10-31)

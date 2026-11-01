@@ -6,7 +6,16 @@ use rusqlite::{params, OptionalExtension};
 use tiny_http::Request;
 
 use super::{error, json, notifications, now, read_body_or, signer, Reply, State};
-use crate::library::sync::{valid_name, Blob, Changed, ChangedEvent, LiveEvent, Write, Written, MAX_BLOBS, MAX_DATA, MAX_LIVE};
+use crate::library::sync::{valid_name, Blob, Changed, ChangedEvent, LiveEvent, Write, Written, MAX_BLOBS, MAX_DATA, MAX_LIVE, MAX_TOTAL};
+
+/// The song library before it was split over shards (`library-0`, ...),
+/// which nothing reads any more.
+pub(super) const SCHEMA_V24: &str = "
+BEGIN;
+DELETE FROM sync WHERE name = 'library';
+PRAGMA user_version = 24;
+COMMIT;
+";
 
 pub(super) const SCHEMA_V16: &str = "
 BEGIN;
@@ -77,18 +86,23 @@ pub(super) fn write(state: &State, request: &mut Request, name: &str) -> Reply {
         return error(400, "the synced data is empty or too big");
     }
     let db = state.db();
-    let written = (|| -> rusqlite::Result<Option<Written>> {
+    let written = (|| -> rusqlite::Result<Result<Written, String>> {
         let tx = db.unchecked_transaction()?;
         let current: Option<i64> =
             tx.query_row("SELECT revision FROM sync WHERE key = ? AND name = ?", params![key, name], |r| r.get(0)).optional()?;
         if current.unwrap_or(0) != write.base {
-            return Ok(Some(Written { stored: false, revision: current.unwrap_or(0) }));
+            return Ok(Ok(Written { stored: false, revision: current.unwrap_or(0) }));
         }
-        if current.is_none() {
-            let blobs: i64 = tx.query_row("SELECT COUNT(*) FROM sync WHERE key = ?", [&key], |r| r.get(0))?;
-            if blobs >= MAX_BLOBS as i64 {
-                return Ok(None);
-            }
+        let (blobs, others): (i64, i64) = tx.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(LENGTH(data)), 0) FROM sync WHERE key = ? AND name != ?",
+            params![key, name],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if current.is_none() && blobs >= MAX_BLOBS as i64 {
+            return Ok(Err(format!("there's a limit of {MAX_BLOBS} kinds of synced data")));
+        }
+        if others as usize + write.data.len() > MAX_TOTAL {
+            return Ok(Err(format!("there's a limit of {} MB of synced data in all", MAX_TOTAL / (1024 * 1024))));
         }
         let revision = write.base + 1;
         tx.execute(
@@ -96,18 +110,18 @@ pub(super) fn write(state: &State, request: &mut Request, name: &str) -> Reply {
             params![key, name, revision, write.data, now()],
         )?;
         tx.commit()?;
-        Ok(Some(Written { stored: true, revision }))
+        Ok(Ok(Written { stored: true, revision }))
     })();
     drop(db);
     match written {
-        Ok(Some(written)) => {
+        Ok(Ok(written)) => {
             if written.stored {
                 let event = ChangedEvent { sync: Changed { name: name.to_string(), revision: written.revision } };
                 notifications::push(state, &key, &serde_json::to_string(&event).unwrap_or_default());
             }
             json(200, &written)
         }
-        Ok(None) => error(400, format!("there's a limit of {MAX_BLOBS} kinds of synced data")),
+        Ok(Err(limit)) => error(400, limit),
         Err(e) => error(500, format!("database: {e}")),
     }
 }

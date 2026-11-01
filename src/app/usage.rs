@@ -1,10 +1,10 @@
-//! Asking about anonymous usage data (`crate::usage`), once, on the first
-//! launch that has it; and its switch in Preferences > App, with what the
+//! Asking about anonymous usage data (`crate::usage`), once, as a step of
+//! the flow (`flow.rs`) on the first launch that has it; and its switch in Preferences > App, with what the
 //! next report holds so far.
 
 use eframe::egui;
 
-use super::{settings_group, with_info, App};
+use super::{setting_row, settings_group, with_info, App};
 
 /// What's sent, in a sentence or two, for the question and Preferences.
 const WHAT: &str = "Once a day: how often each kind of warning and error came up, which version and system it \
@@ -13,41 +13,20 @@ const WHAT: &str = "Once a day: how often each kind of warning and error came up
                     what it was about: no song names, files, account or anything that says who you are.";
 
 impl App {
-    /// Whether the question is up: not asked yet, and nothing else first
-    /// (the welcome window, the tour).
-    pub(super) fn asking_usage(&self) -> bool {
-        self.config.usage_data.is_none() && crate::usage::available() && !self.welcome.open && !self.tour.running()
+    /// The flow's Usage data page: the answer's taken when it's done.
+    pub(super) fn usage_step_ui(&mut self, ui: &mut egui::Ui) {
+        settings_group("Usage data")
+            .icon("chart-bar")
+            .hint("You can change this any time in Preferences > App.")
+            .show(ui, |ui| {
+                setting_row(ui, |ui| ui.label(format!("synththing can send anonymous usage data to its developers. {WHAT}")));
+                setting_row(ui, |ui| ui.checkbox(&mut self.send_usage_data, "Send anonymous usage data"));
+            });
     }
 
-    pub(super) fn usage_prompt_ui(&mut self, ctx: &egui::Context) {
-        if !self.asking_usage() {
-            return;
-        }
-        let mut answer = None;
-        let response = egui::Modal::new(egui::Id::new("usage_prompt")).show(ctx, |ui| {
-            ui.set_width(super::fit_width(ui, 470.0));
-            ui.heading("Help find problems?");
-            ui.add_space(4.0);
-            ui.label(format!("synththing can send anonymous usage data to its developers. {WHAT}"));
-            ui.add_space(4.0);
-            ui.weak("You can change this any time in Preferences > App.");
-            ui.add_space(8.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if ui.button("Send usage data").clicked() {
-                    answer = Some(true);
-                }
-                if ui.button("Don't send").clicked() {
-                    answer = Some(false);
-                }
-            });
-        });
-        // (Closing it is a no: it isn't asked again.)
-        if answer.is_none() && response.should_close() {
-            answer = Some(false);
-        }
-        if let Some(on) = answer {
-            self.set_usage_data(on);
-        }
+    /// Done: the answer (unticked is a no; it isn't asked again).
+    pub(super) fn usage_done(&mut self) {
+        self.set_usage_data(self.send_usage_data);
     }
 
     fn set_usage_data(&mut self, on: bool) {

@@ -25,8 +25,13 @@ use serde::{Deserialize, Serialize};
 
 /// The most a sealed blob can be (base64).
 pub const MAX_DATA: usize = 1024 * 1024;
+/// The most one identity's blobs can be in all (sealed, base64).
+pub const MAX_TOTAL: usize = 64 * 1024 * 1024;
 /// The most blobs one identity can have.
-pub const MAX_BLOBS: usize = 16;
+pub const MAX_BLOBS: usize = 256;
+/// The most shards a blob split over several (the song library) is split
+/// over: half the blobs, leaving the rest for the others.
+pub const MAX_SHARDS: usize = MAX_BLOBS / 2;
 
 /// Whether `name` is a blob's name: 1 to 32 of `a-z`, `0-9`, `-` and `_`.
 pub fn valid_name(name: &str) -> bool {

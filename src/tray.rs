@@ -28,7 +28,7 @@ mod imp {
 
     pub struct Tray {
         /// Kept alive: dropping it takes the icon away.
-        _icon: TrayIcon,
+        icon: TrayIcon,
         clicks: Receiver<TrayClick>,
     }
 
@@ -60,12 +60,19 @@ mod imp {
                 .build()
                 .map_err(|e| log::warn!("no tray icon: {e}"))
                 .ok()?;
-            Some(Self { _icon: icon, clicks })
+            Some(Self { icon, clicks })
         }
 
         /// The clicks since the last call, oldest first.
         pub fn clicks(&self) -> Vec<TrayClick> {
             self.clicks.try_iter().collect()
+        }
+
+        /// The icon's top-right corner (physical screen pixels), for the
+        /// mini player to open by when nothing was clicked.
+        pub fn corner(&self) -> Option<[f32; 2]> {
+            let rect = self.icon.rect()?;
+            Some([(rect.position.x + f64::from(rect.size.width)) as f32, rect.position.y as f32])
         }
     }
 }
@@ -84,6 +91,10 @@ mod imp {
 
         pub fn clicks(&self) -> Vec<TrayClick> {
             Vec::new()
+        }
+
+        pub fn corner(&self) -> Option<[f32; 2]> {
+            None
         }
     }
 }

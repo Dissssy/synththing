@@ -53,6 +53,8 @@ const LOCAL: &[&str] = &[
     "canary_updates",
     "usage_data",
     "android_install_updates",
+    "install_asked",
+    "startup_opens",
     "mobile_layout",
     "fullscreen_over_cutout",
     "ui_scale",

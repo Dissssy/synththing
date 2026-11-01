@@ -80,10 +80,10 @@ pub(super) enum Reply {
     Unheld(Vec<String>),
     /// The blob's sync didn't start: it has no state (turned off meanwhile).
     Skipped(Blob),
-    /// A sync was taken in: the server's revision now, and for the library,
-    /// its leaves to apply to the songs, read (only when they say more than
-    /// the songs here already do).
-    Taken { blob: Blob, revision: i64, library: Option<SyncedLibrary> },
+    /// A sync was taken in: the server's revision of each shard now, and
+    /// for the library, its leaves to apply to the songs, read (only when
+    /// they say more than the songs here already do).
+    Taken { blob: Blob, revisions: Vec<i64>, library: Option<SyncedLibrary> },
     Error(String),
 }
 
@@ -285,13 +285,13 @@ impl Worker {
         // new from the other devices, there's nothing to apply.)
         let library = (blob == Blob::Library && applied != state.applied).then(|| song_sync::read_library(&result));
         state.applied = applied;
-        state.revision = outcome.revision;
+        state.revision = outcome.revision();
         state.base = outcome.merged;
         state.fields = result;
         self.save(blob);
         if changed {
             self.reply(Reply::Changed(blob));
         }
-        self.reply(Reply::Taken { blob, revision: outcome.revision, library });
+        self.reply(Reply::Taken { blob, revisions: outcome.revisions, library });
     }
 }

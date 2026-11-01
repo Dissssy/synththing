@@ -1,5 +1,5 @@
-//! The welcome window: shown the first time synththing runs (and from
-//! Help > Welcome...), offering the starter pack (`starter.rs`): songs
+//! The welcome, a step of the flow (`flow.rs`): shown the first time
+//! synththing runs (and from Help > Welcome...), offering the starter pack (`starter.rs`): songs
 //! written to a folder the Songs tab then opens in, and soundfonts
 //! downloaded in the background and added to the list as they arrive.
 
@@ -8,14 +8,16 @@ use std::time::Duration;
 
 use eframe::egui;
 
-use super::App;
+use super::flow::Step;
+use super::{App, setting_row, settings_group, with_info};
 use crate::starter;
 
 #[derive(Default)]
 pub(super) struct Welcome {
-    pub open: bool,
     /// The "Add the starter pack" checkbox.
     pub get_pack: bool,
+    /// The "Take the tour" checkbox: it starts once the flow's done.
+    tour: bool,
     pub downloader: starter::Downloader,
     /// How many of the downloaded soundfonts are in the list already.
     registered: usize,
@@ -33,80 +35,68 @@ fn megabytes(bytes: u64) -> String {
 }
 
 impl App {
-    /// Show the welcome window, with the starter pack ticked unless it's
-    /// all there already.
+    /// Show the welcome (a step of the flow), with the starter pack ticked
+    /// unless it's all there already.
     pub fn open_welcome(&mut self) {
         let have_all = starter::soundfonts_dir().is_ok_and(|dir| {
             starter::SOUNDFONTS.iter().all(|sf| self.config.soundfonts.iter().any(|p| same_file(p, &dir.join(sf.file))))
         });
         self.welcome.get_pack = !have_all;
-        self.welcome.open = true;
+        self.welcome.tour = false;
+        self.flow.show(Step::Welcome);
     }
 
-    pub(super) fn welcome_ui(&mut self, ctx: &egui::Context) {
-        if !self.welcome.open {
-            return;
-        }
+    /// The flow's Welcome page.
+    pub(super) fn welcome_step_ui(&mut self, ui: &mut egui::Ui) {
         let state = self.welcome.downloader.state();
-        let mut start = false;
-        let mut tour = false;
-        // The tour shows the desktop layout's panels: none of them are in
-        // the mobile one.
-        let mobile = self.mobile();
-        let response = egui::Modal::new(egui::Id::new("welcome")).show(ctx, |ui| {
-            ui.set_width(super::fit_width(ui, 470.0));
-            ui.heading("Welcome to synththing");
-            ui.add_space(4.0);
-            ui.label(
-                "Play MIDI files and audio, watch them through visualizers, and play along with the games. \
-                 Everything is a tab you can drag around; the View menu brings back any you close.",
+        ui.add(egui::Label::new(
+            "Play MIDI files and audio, watch them through visualizers, and play along with the games. \
+             Everything is a tab you can drag around; the View menu brings back any you close.",
+        ).wrap());
+        settings_group("Starter pack").icon("package").show(ui, |ui| {
+            with_info(
+                ui,
+                "Two soundfonts, the instruments MIDI files are played with: GeneralUser GS (full and detailed) \
+                 and TimGM6mb (small and light), downloaded in the background. And four songs to try, each \
+                 instrument on its own channel, in the Songs tab.",
+                |ui| {
+                    ui.add_enabled(
+                        !state.running,
+                        egui::Checkbox::new(
+                            &mut self.welcome.get_pack,
+                            format!("Add the starter pack ({} download)", megabytes(starter::download_size())),
+                        ),
+                    )
+                },
             );
-            ui.add_space(10.0);
-            ui.add_enabled_ui(!state.running, |ui| {
-                ui.checkbox(
-                    &mut self.welcome.get_pack,
-                    format!("Add the starter pack ({} download)", megabytes(starter::download_size())),
-                );
-            });
-            ui.indent("starter_details", |ui| {
-                ui.weak(
-                    "Two soundfonts, the instruments MIDI files are played with: GeneralUser GS (full and \
-                     detailed) and TimGM6mb (small and light). They download in the background.",
-                );
-                ui.weak("Four songs to try, each instrument on its own channel, in the Songs tab.");
-            });
             if state.running {
-                ui.add_space(4.0);
-                let fraction = state.done as f32 / starter::download_size().max(1) as f32;
-                ui.add(egui::ProgressBar::new(fraction).show_percentage().text("Downloading soundfonts"));
+                setting_row(ui, |ui| {
+                    let fraction = state.done as f32 / starter::download_size().max(1) as f32;
+                    ui.add(egui::ProgressBar::new(fraction).show_percentage().text("Downloading soundfonts"));
+                });
             }
             if let Some(error) = &state.error {
-                ui.colored_label(egui::Color32::from_rgb(220, 90, 90), format!("The last download failed: {error}"));
+                setting_row(ui, |ui| ui.colored_label(ui.visuals().error_fg_color, format!("The last download failed: {error}")));
             }
-            ui.add_space(8.0);
-            if !mobile {
-                ui.label("New here? The tour shows you around: playing songs, soundfonts, visualizers, playlists.");
-                ui.add_space(8.0);
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if !mobile {
-                    tour = ui.button("Take the tour").clicked();
-                }
-                let label = if self.welcome.get_pack && !state.running { "Just get started" } else { "Close" };
-                start = ui.button(label).clicked();
-            });
         });
-        if start || tour {
-            if self.welcome.get_pack && !state.running {
-                self.install_starter();
-            }
-            self.welcome.open = false;
-            if tour {
-                self.start_tour();
-            }
-        } else if response.should_close() {
-            self.welcome.open = false;
+        // The tour shows the desktop layout's panels: none of them are in
+        // the mobile one.
+        if !self.mobile() {
+            settings_group("Tour").icon("signpost").show(ui, |ui| {
+                with_info(ui, "A walk through the app, one thing at a time: playing songs, soundfonts, visualizers, playlists. Help > Tour takes it again.", |ui| {
+                    ui.checkbox(&mut self.welcome.tour, "Show me around once I'm done")
+                });
+            });
         }
+    }
+
+    /// Done: get the starter pack if it was ticked; whether to take the
+    /// tour.
+    pub(super) fn welcome_done(&mut self) -> bool {
+        if self.welcome.get_pack && !self.welcome.downloader.state().running {
+            self.install_starter();
+        }
+        std::mem::take(&mut self.welcome.tour) && !self.mobile()
     }
 
     /// Put the songs in the library, and start fetching the soundfonts.
