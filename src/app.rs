@@ -293,6 +293,9 @@ pub struct App {
     /// The library's revision the smart playlists were last worked out
     /// for (`smart::refresh_smart`).
     smart_seen: Option<u64>,
+    /// The song kept on a smart playlist (by ID) while it plays there,
+    /// though it no longer matches the rules (`smart::refresh_smart`).
+    smart_held: Option<(String, PathBuf)>,
     /// The rules being edited (or looked at), if any.
     rules_editor: Option<smart::RulesEditor>,
     /// The rulesets' playlists, as Preferences last showed them.
@@ -725,6 +728,7 @@ impl App {
             groupings: groupings::Groupings::default(),
             meta_seen: None,
             smart_seen: None,
+            smart_held: None,
             rules_editor: None,
             ruleset_groups: Default::default(),
             missing_info: None,

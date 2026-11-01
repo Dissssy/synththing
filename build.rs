@@ -258,9 +258,9 @@ fn generate_icon(manifest_dir: &str, out_dir: &str, accent: &str) {
     let ico_path = Path::new(out_dir).join("synththing.ico");
     fs::write(&ico_path, &ico).unwrap_or_else(|e| panic!("writing {}: {e}", ico_path.display()));
 
-    // Into the exe, for Explorer and the taskbar. Without Windows' resource
-    // compiler (no Windows SDK) the build still works, with a plain icon.
-    #[cfg(windows)]
+    // Into the exe, for Explorer and the taskbar: with rc.exe on Windows,
+    // llvm-rc when cross-compiling (CI). Without either the build still
+    // works, with a plain icon.
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut resource = winresource::WindowsResource::new();
         resource.set_icon(ico_path.to_str().expect("OUT_DIR is valid UTF-8"));

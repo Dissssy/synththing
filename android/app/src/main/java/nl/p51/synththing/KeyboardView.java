@@ -8,6 +8,7 @@ import android.text.InputType;
 import android.text.Selection;
 import android.text.SpannableStringBuilder;
 import android.view.View;
+import android.view.WindowInsets;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -32,6 +33,12 @@ final class KeyboardView extends View {
     private final SpannableStringBuilder text = new SpannableStringBuilder();
     private boolean editing;
     private boolean password;
+    /** The keyboard has the field: it made a connection since the last
+     * restart, so a request to show can't land before the field does. */
+    private boolean connected;
+    /** Rust asked to show the keyboard before the keyboard had the field:
+     * it shows once the connection is made. */
+    private boolean showPending;
     /** The number of what Rust last said the field holds. */
     private int revision;
 
@@ -62,6 +69,7 @@ final class KeyboardView extends View {
             text.replace(0, text.length(), value);
             Selection.setSelection(text, selectionStart, selectionEnd);
             remember();
+            connected = false;
             keyboard.restartInput(this);
         } else {
             BaseInputConnection.removeComposingSpans(text);
@@ -71,22 +79,49 @@ final class KeyboardView extends View {
         }
     }
 
-    /** From Rust: show the keyboard (a field's being edited). */
+    /**
+     * From Rust: show the keyboard (a field's being edited). Android drops
+     * a request to show for a view the keyboard isn't connected to yet,
+     * which is what a field's first tap is (the view only now gains focus,
+     * or was just restarted with the new field): so until the connection
+     * is made, the request waits for it ({@link #onCreateInputConnection}).
+     */
     void show() {
+        if (connected) {
+            post(this::showNow);
+        } else {
+            showPending = true;
+        }
         if (!hasFocus()) {
             requestFocus();
         }
-        // Once focused, which the keyboard needs to come up for this view.
-        post(() -> keyboard.showSoftInput(this, 0));
+    }
+
+    private void showNow() {
+        if (!editing || !hasFocus()) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            // (Android's own way: it waits for the keyboard to be ready.)
+            getWindowInsetsController().show(WindowInsets.Type.ime());
+        } else {
+            keyboard.showSoftInput(this, 0);
+        }
     }
 
     /** From Rust: no field's being edited. */
     void hide() {
         editing = false;
+        showPending = false;
+        connected = false;
         text.clearSpans();
         text.clear();
         remember();
-        keyboard.hideSoftInputFromWindow(getWindowToken(), 0);
+        if (Build.VERSION.SDK_INT >= 30) {
+            getWindowInsetsController().hide(WindowInsets.Type.ime());
+        } else {
+            keyboard.hideSoftInputFromWindow(getWindowToken(), 0);
+        }
         keyboard.restartInput(this);
     }
 
@@ -111,6 +146,12 @@ final class KeyboardView extends View {
         info.initialSelEnd = Selection.getSelectionEnd(text);
         if (Build.VERSION.SDK_INT >= 30) {
             info.setInitialSurroundingText(text);
+        }
+        connected = true;
+        if (showPending) {
+            showPending = false;
+            // Once the keyboard has the connection.
+            post(this::showNow);
         }
         return new Connection();
     }
