@@ -10,7 +10,7 @@ use std::sync::Arc;
 use eframe::egui;
 
 use super::{fit_width, App};
-use crate::playlist::{Playlist, PlaylistEntry};
+use crate::playlist::{self, Playlist, PlaylistEntry};
 use crate::select_list;
 use crate::settings_sync;
 use crate::fields::{self, Field, Kind};
@@ -53,47 +53,70 @@ pub(super) struct RulesEditor {
 
 impl App {
     /// Work each smart playlist's songs out again if the library changed
-    /// (or `force`d: a playlist's rules did), keeping the one playing on
-    /// the song it's at (or letting go of the playlist, if that song's no
-    /// longer on it).
+    /// (or `force`d: a playlist's rules did). The one playing keeps its
+    /// place and what's planned next, and its song stays on it while it
+    /// plays even if it no longer matches (see `playlist::carry_over`).
     pub(super) fn refresh_smart(&mut self, force: bool) {
         let revision = self.groups_revision();
         if !force && self.smart_seen == Some(revision) {
             return;
         }
         self.smart_seen = Some(revision);
-        let now = settings_sync::now();
         let mut replanned = false;
-        for (i, stored) in self.playlists.lists.iter_mut().enumerate() {
-            let Some(rules) = &stored.playlist.smart else { continue };
-            let entries: Vec<PlaylistEntry> = rules
-                .songs(&self.songs, &self.wishlist.list.wishes, now, self.config.sort_with_articles)
-                .into_iter()
-                .map(|key| PlaylistEntry { path: self.songs.path(&key), soundfont: None, missing: !self.songs.has(&key) })
-                .collect();
-            let old = &stored.playlist.entries;
-            if old.len() == entries.len() && old.iter().zip(&entries).all(|(a, b)| a.path == b.path && a.missing == b.missing) {
-                continue;
-            }
-            if self.now_playing.as_ref().is_some_and(|np| np.list == i) {
-                let playing = self.now_playing.as_ref().and_then(|np| old.get(np.entry)).map(|e| e.path.clone());
-                match playing.and_then(|path| entries.iter().position(|e| e.path == path)) {
-                    Some(at) => {
-                        if let Some(np) = &mut self.now_playing {
-                            np.entry = at;
-                            np.history = vec![at];
-                            np.upcoming.clear();
-                        }
-                    }
-                    None => self.now_playing = None,
-                }
-                replanned = true;
-            }
-            stored.playlist.entries = entries;
+        for i in 0..self.playlists.lists.len() {
+            replanned |= self.refresh_smart_list(i);
         }
         if replanned {
-            self.plan_upcoming();
+            self.extend_upcoming();
         }
+    }
+
+    /// Each frame: once the song kept on a smart playlist past its rules
+    /// (see `refresh_smart`) isn't playing there any more, it goes.
+    pub(super) fn smart_held_tick(&mut self) {
+        let Some(held) = &self.smart_held else { return };
+        let playing = self.now_playing.as_ref().and_then(|np| {
+            let stored = self.playlists.lists.get(np.list)?;
+            Some((&stored.id, &stored.playlist.entries.get(np.entry)?.path))
+        });
+        if playing == Some((&held.0, &held.1)) {
+            return;
+        }
+        let list = self.playlists.find(&held.0);
+        self.smart_held = None;
+        if let Some(list) = list
+            && self.refresh_smart_list(list)
+        {
+            self.extend_upcoming();
+        }
+    }
+
+    /// Work smart playlist `list`'s songs out again; whether the one
+    /// playing changed (so what comes next wants filling in again).
+    fn refresh_smart_list(&mut self, list: usize) -> bool {
+        let now = settings_sync::now();
+        let Some(stored) = self.playlists.lists.get_mut(list) else { return false };
+        let Some(rules) = &stored.playlist.smart else { return false };
+        let mut entries: Vec<PlaylistEntry> = rules
+            .songs(&self.songs, &self.wishlist.list.wishes, now, self.config.sort_with_articles)
+            .into_iter()
+            .map(|key| PlaylistEntry { path: self.songs.path(&key), soundfont: None, missing: !self.songs.has(&key) })
+            .collect();
+        let playing = self.now_playing.as_mut().filter(|np| np.list == list);
+        if let Some(np) = playing {
+            let kept;
+            (entries, kept) = playlist::carry_over(np, &stored.playlist.entries, entries);
+            self.smart_held.take_if(|(id, _)| *id == stored.id);
+            if kept {
+                self.smart_held = Some((stored.id.clone(), entries[np.entry].path.clone()));
+            }
+        }
+        let old = &stored.playlist.entries;
+        if old.len() == entries.len() && old.iter().zip(&entries).all(|(a, b)| a.path == b.path && a.missing == b.missing) {
+            return false;
+        }
+        stored.playlist.entries = entries;
+        self.now_playing.as_ref().is_some_and(|np| np.list == list)
     }
 
     /// Open the rules of playlist `list`, or of a new smart playlist.
