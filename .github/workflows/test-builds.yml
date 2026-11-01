@@ -81,7 +81,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # Its own cache, shared with releases: by job name alone it would share
+      # CI's `windows` job's, which holds only debug builds.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-release
 
       - name: Test
         run: cargo test --lib

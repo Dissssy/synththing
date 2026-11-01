@@ -56,7 +56,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # Test builds' cache (they fill it from master). Never saved here:
+      # a tag's cache is only readable by that same tag.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-release
+          save-if: false
 
       - name: Test
         run: cargo test --lib
@@ -87,6 +92,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: linux-release
+          save-if: false
 
       - name: System libraries
         run: |
