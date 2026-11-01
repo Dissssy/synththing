@@ -10,7 +10,9 @@
 # Wiping one is always safe, it just refills on the next run.
 services:
   github-runner:
-    image: myoung34/github-runner:ubuntu-noble
+    # Ubuntu 22.04: Linux release builds need a glibc at least as new as
+    # the one they're built against, so an older one runs on more systems.
+    image: myoung34/github-runner:ubuntu-jammy
     restart: always
     environment:
       RUNNER_SCOPE: repo
@@ -37,6 +39,8 @@ services:
       - gradle:/root/.gradle
       # JDKs from setup-java
       - toolcache:/opt/hostedtoolcache
+      # the MSVC CRT and Windows SDK cargo-xwin downloads for Windows builds
+      - xwin:/root/.cache/cargo-xwin
 
 volumes:
   rustup:
@@ -45,3 +49,4 @@ volumes:
   android-sdk:
   gradle:
   toolcache:
+  xwin:

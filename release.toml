@@ -11,9 +11,13 @@ allow-branch = ["master"]
 tag-name = "v{{version}}"
 pre-release-commit-message = "Release {{version}}"
 # Before the release commit, with the new version and changelog in place:
-# the changelog tests the release workflow runs, so a release whose
-# Unreleased section was empty stops here instead of failing in CI.
-pre-release-hook = ["cargo", "test", "--lib", "changelog::"]
+# a release whose Unreleased section was empty stops here instead of
+# failing release.yml's check. A plain awk, as that check is, so cutting a
+# release builds nothing (CI tests the changelog's format on every push).
+pre-release-hook = ["sh", "-c", '''
+awk -v v="$NEW_VERSION" '/^## / { on = ($2 == v); next } on && NF { found = 1 } END { exit !found }' CHANGELOG.md \
+  || { echo "CHANGELOG.md has nothing under $NEW_VERSION" >&2; exit 1; }
+''']
 tag-message = "Release {{version}}"
 # CHANGELOG.md: the Unreleased section becomes the new version's, with a
 # fresh Unreleased heading above it for what comes next.
