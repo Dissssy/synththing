@@ -946,11 +946,12 @@ impl App {
     /// it (`now_playing_art_ui`): its own, else its artist's picture, else
     /// its album's tile. Read on a thread of its own (a file's picture, a
     /// download); a song started meanwhile wins.
-    fn send_media_art(&self) {
+    fn send_media_art(&mut self) {
         use std::sync::atomic::{AtomicU64, Ordering};
         static LATEST: AtomicU64 = AtomicU64::new(0);
 
         let Some(path) = self.current_song.clone() else { return };
+        let title = self.current_title();
         let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
         let song = self.songs.get(&path);
         let facts = song.map(crate::fields::Facts::of);
@@ -959,7 +960,7 @@ impl App {
             .and_then(|a| a.split(';').next().map(|a| crate::fields::group_key(a.trim(), &self.config.group_ignore)))
             .and_then(|a| self.songs.artist_images().get(&a).cloned());
         let sources = [Some(crate::album_art::Source::of_song(Some(path.clone()), song)), artist.map(|key| crate::album_art::Source::image(&key))];
-        let name = text(crate::fields::Field::Album).or_else(|| self.current_title()).unwrap_or_default();
+        let name = text(crate::fields::Field::Album).or(title).unwrap_or_default();
         let letters = self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS);
         let mine = LATEST.fetch_add(1, Ordering::Relaxed) + 1;
         let read = move || {
