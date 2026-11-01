@@ -408,10 +408,12 @@ impl SongStore {
             // (Nor is what's been measured here lost, before it's synced.)
             let loudness = synced.loudness.or(song.loudness);
             let mut learned = Song { meta, loudness, ..synced };
-            // (One from before it was synced says 0.)
-            if learned.imported == 0 || song.imported < learned.imported {
-                learned.imported = song.imported;
-            }
+            // (The first import any device knows of: one from before it was
+            // noted says 0, which isn't one.)
+            learned.imported = match (learned.imported, song.imported) {
+                (0, here) | (here, 0) => here,
+                (synced, here) => synced.min(here),
+            };
             if *song != learned {
                 *song = learned;
                 changed = true;
@@ -1536,6 +1538,26 @@ mod tests {
         let synced = Song { meta: Some(old), ..store.get_by_key(&stored.key).unwrap().clone() };
         store.learn([(stored.key.clone(), synced)]);
         assert_eq!(store.get_by_key(&stored.key).unwrap().meta, Some(new), "kept over an older version's, synced");
+    }
+
+    #[test]
+    fn the_first_import_is_learned() {
+        let dir = temp_dir("imported");
+        let mut store = SongStore::open(dir.clone());
+        let stored = write_in(b"old", "Old.mp3", &dir).unwrap();
+        store.add(stored.clone());
+        let unknown = Song { imported: 0, ..store.get_by_key(&stored.key).unwrap().clone() };
+        store.learn([(stored.key.clone(), unknown.clone())]);
+        let here = store.get_by_key(&stored.key).unwrap().imported;
+        assert_ne!(here, 0, "a synced 0 doesn't say when");
+        // (A song noted before imports were: 0 here.)
+        Arc::make_mut(&mut store.songs).get_mut(&stored.key).unwrap().imported = 0;
+        store.learn([(stored.key.clone(), Song { imported: 1000, ..unknown.clone() })]);
+        assert_eq!(store.get_by_key(&stored.key).unwrap().imported, 1000, "taken over the 0 here");
+        store.learn([(stored.key.clone(), Song { imported: 2000, ..unknown.clone() })]);
+        assert_eq!(store.get_by_key(&stored.key).unwrap().imported, 1000, "the earlier kept");
+        store.learn([(stored.key.clone(), Song { imported: 500, ..unknown })]);
+        assert_eq!(store.get_by_key(&stored.key).unwrap().imported, 500);
     }
 
     #[test]
