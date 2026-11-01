@@ -67,6 +67,7 @@ impl App {
             // The list changed: what comes next may have too.
             self.plan_listed();
         }
+        self.smart_held_tick();
         self.song_options_tick(view);
         self.plays_tick(view);
         if self.has_next() && !self.recording.holds_advance() {
@@ -147,7 +148,7 @@ impl App {
     }
 
     /// Pick entries after the ones already picked, up to `planned_count`.
-    fn extend_upcoming(&mut self) {
+    pub(super) fn extend_upcoming(&mut self) {
         let Some(mut np) = self.now_playing.clone() else {
             return;
         };

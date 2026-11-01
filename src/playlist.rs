@@ -411,6 +411,34 @@ pub fn from_m3u(text: &str, base: &Path) -> Vec<PlaylistEntry> {
     entries
 }
 
+/// Replace a playlist's entries (as working a smart playlist out again
+/// does) without losing the place in it: the song playing stays on the list
+/// (put back, before the next old entry still there, if it no longer
+/// belongs), and the history and the songs planned next follow their songs
+/// to where they are now, leaving out those gone. Returns the entries to
+/// use, and whether the playing song had to be put back.
+pub fn carry_over(np: &mut NowPlaying, old: &[PlaylistEntry], mut new: Vec<PlaylistEntry>) -> (Vec<PlaylistEntry>, bool) {
+    let Some(playing) = old.get(np.entry) else {
+        np.history.clear();
+        np.upcoming.clear();
+        return (new, false);
+    };
+    let kept = !new.iter().any(|e| e.path == playing.path);
+    if kept {
+        let at = old[np.entry + 1..]
+            .iter()
+            .find_map(|after| new.iter().position(|e| e.path == after.path))
+            .unwrap_or(new.len());
+        new.insert(at, playing.clone());
+    }
+    let places: std::collections::HashMap<&Path, usize> = new.iter().enumerate().map(|(i, e)| (e.path.as_path(), i)).collect();
+    let place = |i: &usize| old.get(*i).and_then(|e| places.get(e.path.as_path()).copied());
+    np.entry = places[playing.path.as_path()];
+    np.history = np.history.iter().filter_map(place).collect();
+    np.upcoming = np.upcoming.iter().filter_map(place).collect();
+    (new, kept)
+}
+
 /// Where an index ends up after removing entry `removed`; `None` if it was
 /// the removed one.
 pub fn index_after_remove(idx: usize, removed: usize) -> Option<usize> {
@@ -447,6 +475,43 @@ impl Rng {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entries(names: &[&str]) -> Vec<PlaylistEntry> {
+        names.iter().map(|n| PlaylistEntry::new(PathBuf::from(n))).collect()
+    }
+
+    fn names(entries: &[PlaylistEntry]) -> Vec<&str> {
+        entries.iter().map(|e| e.path.to_str().unwrap()).collect()
+    }
+
+    #[test]
+    fn carry_over_keeps_the_place_and_whats_planned() {
+        let old = entries(&["a", "b", "c", "d", "e"]);
+        // Playing c, shuffled: a and c played, e then b planned.
+        let mut np = NowPlaying { list: 0, entry: 2, history: vec![0, 2], upcoming: vec![4, 1] };
+        let (new, kept) = carry_over(&mut np, &old, entries(&["e", "a", "b", "c", "d"]));
+        assert!(!kept);
+        assert_eq!(names(&new), ["e", "a", "b", "c", "d"]);
+        assert_eq!((np.entry, &np.history[..], &np.upcoming[..]), (3, &[1, 3][..], &[0, 2][..]));
+    }
+
+    #[test]
+    fn carry_over_keeps_the_song_playing_though_it_left() {
+        let old = entries(&["a", "b", "c", "d", "e"]);
+        // Playing c (which stops matching), with d gone too.
+        let mut np = NowPlaying { list: 0, entry: 2, history: vec![0, 2], upcoming: vec![3, 4, 1] };
+        let (new, kept) = carry_over(&mut np, &old, entries(&["a", "b", "e"]));
+        assert!(kept);
+        assert_eq!(names(&new), ["a", "b", "c", "e"], "back before the next one still there");
+        assert_eq!((np.entry, &np.history[..], &np.upcoming[..]), (2, &[0, 2][..], &[3, 1][..]));
+        // Once something else plays, working it out again lets c go.
+        np.entry = 3;
+        np.upcoming = vec![1];
+        let (new, kept) = carry_over(&mut np, &new, entries(&["a", "b", "e"]));
+        assert!(!kept);
+        assert_eq!(names(&new), ["a", "b", "e"]);
+        assert_eq!((np.entry, &np.history[..], &np.upcoming[..]), (2, &[0][..], &[1][..]));
+    }
 
     #[test]
     fn sequential_next_stops_or_wraps() {
