@@ -467,7 +467,10 @@ fn sync_split(job: Job) -> SyncResult {
     let count_name = job.blob.count_name();
     'again: for _ in 0..5 {
         let (count_revision, plain) = client::sync_get(&job.server, &job.server_key, &job.identity, &job.sync_key, &count_name)?;
-        let count = plain.and_then(|p| serde_json::from_slice::<ShardCount>(&p).ok()).map_or(1, |c| c.shards.max(1).next_power_of_two());
+        let count = match plain {
+            Some(plain) => serde_json::from_slice::<ShardCount>(&plain).map_err(|e| format!("{name} sync: its shard count doesn't read: {e}"))?.shards.max(1).next_power_of_two(),
+            None => 1,
+        };
         // (Each read at once: one round trip, however many there are.)
         let read: Vec<Result<(i64, Option<Fields>), String>> = std::thread::scope(|scope| {
             let reads: Vec<_> = (0..count)
@@ -482,6 +485,11 @@ fn sync_split(job: Job) -> SyncResult {
             reads.into_iter().map(|read| read.join().unwrap_or_else(|_| Err("a shard's read failed".into()))).collect()
         });
         let (mut revisions, mut on_server): (Vec<i64>, Vec<Option<Fields>>) = read.into_iter().collect::<Result<Vec<_>, _>>()?.into_iter().unzip();
+        // (Split meanwhile: the count's written before any leaf moves, so
+        // these shards may be missing what moved. Read them again.)
+        if client::sync_get(&job.server, &job.server_key, &job.identity, &job.sync_key, &count_name)?.0 != count_revision {
+            continue 'again;
+        }
         let mut server: Option<Fields> = None;
         for (shard, fields) in on_server.iter().enumerate() {
             let Some(fields) = fields else { continue };
