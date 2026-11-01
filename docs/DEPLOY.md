@@ -95,7 +95,7 @@ The official server's sign-in links (`/pair#...`) open in the Android app once A
 
 ## Sync
 
-Signed-in apps keep their settings, playlists and songs the same across devices through their authority (docs/SERVER.md, Sync). On the authority, add `"sync": true` to `server.json` and restart. Everything is encrypted on the devices, so the server can't read it: at most 16 blobs of 1 MB per identity for settings and playlists, and songs either streamed straight between two open devices (kept nowhere) or left in `relay/` for up to 7 days, up to `relay_song_mb` each (250) and `relay_mb_per_identity` in all (2048). Behind nginx, the relay needs the `/api/v1/relay/` block below (no body size limit, no buffering, long timeouts); Caddy needs nothing extra.
+Signed-in apps keep their settings, playlists and songs the same across devices through their authority (docs/SERVER.md, Sync). On the authority, add `"sync": true` to `server.json` and restart. Everything is encrypted on the devices, so the server can't read it: at most 64 MB per identity (blobs of up to 1 MB each) for settings, playlists and the song library, and songs either streamed straight between two open devices (kept nowhere) or left in `relay/` for up to 7 days, up to `relay_song_mb` each (250) and `relay_mb_per_identity` in all (2048). Behind nginx, the relay needs the `/api/v1/relay/` block below (no body size limit, no buffering, long timeouts); Caddy needs nothing extra.
 
 ## Feedback intake
 
