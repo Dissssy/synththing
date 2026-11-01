@@ -4,7 +4,12 @@
 //! and every detail read from its file. With several songs it's a bulk
 //! editor: a field they differ in shows "Mixed", and only the fields
 //! touched are written. The last save can be undone from the Songs
-//! toolbar, all of its songs at once.
+//! toolbar, all of its songs at once. Its Tags page gives the songs tags
+//! (their star too) at once, as their menu's Tags does.
+//!
+//! On the desktop it's a dialog with a tab for each page; in the mobile
+//! layout, a page of its own (as Preferences is): a list of its pages,
+//! each opening in its place.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -22,7 +27,44 @@ enum Tab {
     Sorting,
     /// How it plays.
     Options,
+    /// The star, and the user's tags.
+    Tags,
     File,
+}
+
+impl Tab {
+    const ALL: [Tab; 5] = [Tab::Details, Tab::Sorting, Tab::Options, Tab::Tags, Tab::File];
+
+    fn title(self) -> &'static str {
+        match self {
+            Tab::Details => "Details",
+            Tab::Sorting => "Sorting",
+            Tab::Options => "Options",
+            Tab::Tags => "Tags",
+            Tab::File => "File",
+        }
+    }
+
+    /// Its icon and what's on it, for the mobile layout's list.
+    fn icon(self) -> &'static str {
+        match self {
+            Tab::Details => "text-aa",
+            Tab::Sorting => "sort-ascending",
+            Tab::Options => "sliders-horizontal",
+            Tab::Tags => "tag",
+            Tab::File => "file",
+        }
+    }
+
+    fn summary(self) -> &'static str {
+        match self {
+            Tab::Details => "Title, artist, album and the rest",
+            Tab::Sorting => "What the names sort as",
+            Tab::Options => "Start, stop, volume, plays",
+            Tab::Tags => "Star it, tag it",
+            Tab::File => "Everything the file says",
+        }
+    }
 }
 
 /// What's to be done to a field on saving.
@@ -39,6 +81,8 @@ pub(super) struct SongDetails {
     /// The library's songs among them, by key: only they can be edited.
     keys: Vec<String>,
     tab: Tab,
+    /// In the mobile layout: `tab` is open (else the list of them).
+    tab_open: bool,
     /// Each editable field's text as shown, and whether the songs differ
     /// in it.
     texts: BTreeMap<Field, (String, bool)>,
@@ -61,73 +105,45 @@ impl App {
             })
             .collect();
         let tab = if keys.is_empty() { Tab::File } else { Tab::Details };
-        self.song_details = Some(SongDetails { paths, keys, tab, texts, changes: BTreeMap::new() });
+        self.song_details = Some(SongDetails { paths, keys, tab, tab_open: false, texts, changes: BTreeMap::new() });
     }
 
-    /// The details modal, while it's open.
-    pub(super) fn song_details_ui(&mut self, ctx: &egui::Context) {
+    /// Whether Song info is open (opening it first if it was asked for):
+    /// the mobile layout shows it in place of its pages.
+    pub(super) fn song_details_open(&mut self) -> bool {
         if let Some(paths) = self.details_for.take() {
             self.open_details(paths);
+        }
+        self.song_details.is_some()
+    }
+
+    /// The details dialog, while it's open (on the desktop).
+    pub(super) fn song_details_ui(&mut self, ctx: &egui::Context) {
+        if !self.song_details_open() {
+            return;
         }
         let Some(mut details) = self.song_details.take() else { return };
         let mut close = false;
         let mut save = false;
         let mut preview = None;
-        let one = details.paths.len() == 1;
         let response = egui::Modal::new(egui::Id::new("song_details")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 480.0));
-            if one {
-                ui.heading(self.song_title(&details.paths[0]));
-                // (A library song by the file it came from; one played
-                // from elsewhere by where it is.)
-                match self.songs.get(&details.paths[0]) {
-                    Some(song) => ui.weak(&song.name),
-                    None => ui.weak(details.paths[0].display().to_string()),
-                };
-            } else {
-                ui.heading(format!("{} songs", details.paths.len()));
-            }
+            self.details_heading_ui(ui, &details);
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                for (tab, label) in [(Tab::Details, "Details"), (Tab::Sorting, "Sorting"), (Tab::Options, "Options")] {
-                    ui.add_enabled_ui(!details.keys.is_empty(), |ui| ui.selectable_value(&mut details.tab, tab, label))
+                for tab in Tab::ALL {
+                    if !available(&details, tab) {
+                        continue;
+                    }
+                    ui.add_enabled_ui(editable(&details, tab), |ui| ui.selectable_value(&mut details.tab, tab, tab.title()))
                         .inner
                         .on_disabled_hover_text("Only songs in your library can be edited");
                 }
-                if one {
-                    ui.selectable_value(&mut details.tab, Tab::File, "File");
-                }
             });
             ui.separator();
-            match details.tab {
-                Tab::Details => self.details_tab_ui(ui, &mut details, Section::Details),
-                Tab::Sorting => {
-                    ui.weak("What each name sorts as, if not itself: \"Beatles\" for \"The Beatles\". Empty sorts it as it is (past a leading The, A or An, as Preferences > Browsing says).");
-                    self.details_tab_ui(ui, &mut details, Section::Sorting);
-                }
-                Tab::Options => {
-                    ui.weak("How it plays: times as 1:23, the volume from -100 to 100%. Remember position starts it again where you left it.");
-                    preview = self.options_range_ui(ui, &mut details);
-                    self.details_tab_ui(ui, &mut details, Section::Options);
-                    ui.separator();
-                    self.together_ui(ui, &details);
-                    ui.separator();
-                    self.plays_ui(ui, &details);
-                }
-                Tab::File => {
-                    self.file_tab_ui(ui, &details.paths[0]);
-                    self.online_match_ui(ui, &details.paths[0]);
-                }
-            }
+            preview = self.details_page_ui(ui, &mut details);
             ui.add_space(8.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if details.changes.is_empty() {
-                    close |= ui.button("Close").clicked();
-                } else {
-                    save |= ui.button("Save").clicked();
-                    close |= ui.button("Cancel").clicked();
-                }
-            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| (save, close) = save_buttons_ui(ui, &details));
         });
         if let Some(at) = preview {
             self.preview_at(&details.paths[0], at);
@@ -136,6 +152,129 @@ impl App {
             self.save_details(&details);
         } else if !(close || response.should_close()) {
             self.song_details = Some(details);
+        }
+    }
+
+    /// Song info as the mobile layout's page, filling `ui`: the songs'
+    /// names over a list of its pages (as Preferences lists its sections),
+    /// each opening in its place, with back to the list; Save or Close at
+    /// the bottom. Back from the list closes it, as Cancel does.
+    pub(super) fn mobile_song_details_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(mut details) = self.song_details.take() else { return };
+        let mut close = false;
+        let mut save = false;
+        let mut preview = None;
+        // Back (Android's, or Escape), unless a dialog over it (Tags)
+        // takes it.
+        let back = ui.ctx().input(|i| i.key_pressed(egui::Key::Escape))
+            && ui.ctx().memory(|m| m.top_modal_layer().is_none())
+            && !egui::Popup::is_any_open(ui.ctx());
+        egui::Panel::top("song_details_top").show(ui, |ui| {
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 36.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                if ui.add(super::mobile::big_icon_button("arrow-left", 36.0)).on_hover_text("Back").clicked() || back {
+                    if details.tab_open {
+                        details.tab_open = false;
+                    } else {
+                        close = true;
+                    }
+                }
+                ui.heading(if details.tab_open { details.tab.title() } else { "Song info" });
+            });
+        });
+        egui::Panel::bottom("song_details_buttons").show(ui, |ui| {
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                let (s, c) = save_buttons_ui(ui, &details);
+                save |= s;
+                close |= c;
+            });
+            ui.add_space(4.0);
+        });
+        egui::CentralPanel::default().show(ui, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 8.0;
+                if details.tab_open {
+                    preview = self.details_page_ui(ui, &mut details);
+                    return;
+                }
+                self.details_heading_ui(ui, &details);
+                ui.add_space(4.0);
+                for tab in Tab::ALL {
+                    if !available(&details, tab) {
+                        continue;
+                    }
+                    let row = ui.add_enabled_ui(editable(&details, tab), |ui| super::mobile::section_row(ui, tab.icon(), tab.title(), tab.summary()));
+                    if row.inner.clicked() {
+                        details.tab = tab;
+                        details.tab_open = true;
+                    }
+                }
+                if details.keys.is_empty() {
+                    ui.weak("Only songs in your library can be edited.");
+                }
+            });
+        });
+        if let Some(at) = preview {
+            self.preview_at(&details.paths[0], at);
+        }
+        if save {
+            self.save_details(&details);
+        } else if !close {
+            self.song_details = Some(details);
+        }
+    }
+
+    /// The songs' title, and the file a song came from.
+    fn details_heading_ui(&mut self, ui: &mut egui::Ui, details: &SongDetails) {
+        if let [path] = details.paths.as_slice() {
+            ui.heading(self.song_title(path));
+            // (A library song by the file it came from; one played
+            // from elsewhere by where it is.)
+            match self.songs.get(path) {
+                Some(song) => ui.weak(&song.name),
+                None => ui.weak(path.display().to_string()),
+            };
+        } else {
+            ui.heading(format!("{} songs", details.paths.len()));
+        }
+    }
+
+    /// The page open (`details.tab`): what to play from, when Options'
+    /// buttons are clicked.
+    fn details_page_ui(&mut self, ui: &mut egui::Ui, details: &mut SongDetails) -> Option<f64> {
+        let mut preview = None;
+        match details.tab {
+            Tab::Details => self.details_tab_ui(ui, details, Section::Details),
+            Tab::Sorting => {
+                ui.weak("What each name sorts as, if not itself: \"Beatles\" for \"The Beatles\". Empty sorts it as it is (past a leading The, A or An, as Preferences > Browsing says).");
+                self.details_tab_ui(ui, details, Section::Sorting);
+            }
+            Tab::Options => {
+                ui.weak("How it plays: times as 1:23, the volume from -100 to 100%. Remember position starts it again where you left it.");
+                preview = self.options_range_ui(ui, details);
+                self.details_tab_ui(ui, details, Section::Options);
+                ui.separator();
+                self.together_ui(ui, details);
+                ui.separator();
+                self.plays_ui(ui, details);
+            }
+            Tab::Tags => self.tags_tab_ui(ui, details),
+            Tab::File => {
+                self.file_tab_ui(ui, &details.paths[0]);
+                self.online_match_ui(ui, &details.paths[0]);
+            }
+        }
+        preview
+    }
+
+    /// The Tags page: the songs' star and tags, switched at once rather
+    /// than on saving (`tags::tag_checklist`). Editing the tags leaves
+    /// Song info, so not with changes unsaved.
+    fn tags_tab_ui(&mut self, ui: &mut egui::Ui, details: &SongDetails) {
+        let paths: Vec<PathBuf> = details.keys.iter().map(|k| self.songs.path(k)).collect();
+        let editing = if details.changes.is_empty() { Ok(()) } else { Err("Save or cancel your changes first") };
+        if let Some(action) = super::tags::tag_checklist(ui, &self.songs, &paths, editing) {
+            self.tag_songs(action, &paths);
         }
     }
 
@@ -410,6 +549,29 @@ impl App {
         self.songs_changed();
         self.send_volume();
         self.status = "Undid the last edit.".to_string();
+    }
+}
+
+/// Whether Song info has the page `tab` for these songs: File only for
+/// one song.
+fn available(details: &SongDetails, tab: Tab) -> bool {
+    tab != Tab::File || details.paths.len() == 1
+}
+
+/// Whether the page `tab` can be opened: only File for songs not in the
+/// library.
+fn editable(details: &SongDetails, tab: Tab) -> bool {
+    tab == Tab::File || !details.keys.is_empty()
+}
+
+/// Save and Cancel while something's changed, else Close, right to left:
+/// whether each was clicked.
+fn save_buttons_ui(ui: &mut egui::Ui, details: &SongDetails) -> (bool, bool) {
+    if details.changes.is_empty() {
+        (false, ui.button("Close").clicked())
+    } else {
+        let save = ui.button("Save").clicked();
+        (save, ui.button("Cancel").clicked())
     }
 }
 

@@ -757,7 +757,7 @@ mod tests {
         let mut phone = SongStore::open(phone_dir.clone());
 
         // The library goes around: the phone knows the song, and wants it.
-        desktop.set_tag("t1", Tag { name: "Chill".into(), color: [1, 2, 3] });
+        desktop.set_tag("t1", Tag { name: "Chill".into(), color: [1, 2, 3], icon: Some("fire".into()), show: crate::song_store::TagShow::Both });
         desktop.set_song_tags(&song.key, vec!["t1".into()]);
         let elsewhere = format!("{}.mid", "b".repeat(64));
         desktop.set_together("g1", vec![song.key.clone(), elsewhere.clone()]);
@@ -771,6 +771,7 @@ mod tests {
         let fields = library.iter().map(|(k, v)| (k.clone(), crate::settings_sync::Field { value: v.clone(), changed: 1 })).collect();
         apply_library(&mut phone, read_library(&fields));
         assert_eq!(phone.tags()["t1"].name, "Chill");
+        assert_eq!((phone.tags()["t1"].icon.as_deref(), phone.tags()["t1"].show), (Some("fire"), crate::song_store::TagShow::Both), "its icon too");
         assert_eq!(phone.together()["g1"], [song.key.clone(), elsewhere], "play together");
         assert_eq!(phone.artist_images()["aloboi"], picture, "an artist's picture");
         let known = phone.known().find(|(k, _)| *k == song.key).unwrap().1.clone();

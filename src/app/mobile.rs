@@ -122,6 +122,9 @@ pub(super) struct Mobile {
     /// The songs moving between devices the sync service was last told of.
     #[cfg(target_os = "android")]
     sync_told: Option<(usize, usize)>,
+    /// The song the media session was last given the art of.
+    #[cfg(target_os = "android")]
+    art_for: Option<std::path::PathBuf>,
     /// What picture-in-picture was last set to: whether leaving goes into
     /// it, and its shape.
     #[cfg(target_os = "android")]
@@ -395,6 +398,13 @@ impl App {
         }
     }
 
+    /// Go to the Preferences page, at `section`.
+    pub(super) fn open_mobile_preferences(&mut self, section: PrefTab) {
+        self.show_mobile_page(Page::Preferences);
+        self.mobile_state.pref_section = Some(section);
+        self.mobile_state.editing_themes = false;
+    }
+
     /// Preferences > Appearance > Edit themes...: a level under it.
     pub(super) fn open_mobile_themes(&mut self) {
         self.mobile_state.editing_themes = true;
@@ -415,7 +425,7 @@ impl App {
             }
             None => {
                 for section in PrefTab::available() {
-                    if section_row(ui, section).clicked() {
+                    if section_row(ui, section.icon(), section.title(), section.summary()).clicked() {
                         self.mobile_state.pref_section = Some(section);
                         self.mobile_state.editing_themes = false;
                     }
@@ -487,6 +497,9 @@ impl App {
                 let Some(song) = self.current_song.clone() else { return };
                 if ui.add(big_icon_button("info", 32.0)).on_hover_text("Song info").clicked() {
                     self.details_for = Some(vec![song.clone()]);
+                }
+                if self.songs.get(&song).is_some() && ui.add(big_icon_button("tag", 32.0)).on_hover_text("Tag this song").clicked() {
+                    self.tags_for = Some(vec![song.clone()]);
                 }
                 let starred = self.songs.is_starred(&song);
                 let mut glyph = egui::RichText::new(icon(crate::select_list::STAR_ICON)).size(16.0);
@@ -862,13 +875,20 @@ impl App {
             self.open_pairing_link(link);
         }
         for command in android::take_media_commands() {
+            // (Tags are the library's: set here, whoever's playing.)
+            if let MediaCommand::SetTag(tag, on) = command {
+                if let Some(song) = self.current_song.clone() {
+                    self.tag_songs(super::tags::TagAction::Set(tag, on), &[song]);
+                }
+                continue;
+            }
             // (While following, they drive the leader's playing.)
             let forwarded = match command {
                 MediaCommand::Play => self.command_to_leader(crate::commands::Command::Play),
                 MediaCommand::Pause => self.command_to_leader(crate::commands::Command::Pause),
                 MediaCommand::Next => self.command_to_leader(crate::commands::Command::NextTrack),
                 MediaCommand::Previous => self.command_to_leader(crate::commands::Command::PreviousTrack),
-                MediaCommand::Seek(_) => false,
+                MediaCommand::Seek(_) | MediaCommand::SetTag(..) => false,
             };
             if forwarded {
                 continue;
@@ -881,6 +901,7 @@ impl App {
                 MediaCommand::Next => {}
                 MediaCommand::Previous => self.previous_track(view.position),
                 MediaCommand::Seek(to) => self.seek(to, false),
+                MediaCommand::SetTag(..) => {}
             }
         }
 
@@ -897,6 +918,7 @@ impl App {
             position_ms: (view.position * 1000.0) as i64,
             length_ms: (view.length * 1000.0) as i64,
             has_next: self.has_next(),
+            buttons: self.media_buttons(),
         };
         // The session moves the position along by itself while playing:
         // only a change, or a jump (a seek), is worth telling it.
@@ -918,12 +940,80 @@ impl App {
             android::set_playback(&playback);
             self.mobile_state.told = Some((playback, std::time::Instant::now()));
         }
+        if self.mobile_state.art_for != self.current_song {
+            self.mobile_state.art_for = self.current_song.clone();
+            self.send_media_art();
+        }
         let moving = self.songs_moving();
         if moving != self.mobile_state.sync_told {
             let (done, total) = moving.unwrap_or_default();
             android::set_sync_progress(done, total);
             self.mobile_state.sync_told = moving;
         }
+    }
+
+    /// Give the media session the song playing's art, as Now playing shows
+    /// it (`now_playing_art_ui`): its own, else its artist's picture, else
+    /// its album's tile. Read on a thread of its own (a file's picture, a
+    /// download); a song started meanwhile wins.
+    fn send_media_art(&mut self) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static LATEST: AtomicU64 = AtomicU64::new(0);
+
+        let Some(path) = self.current_song.clone() else { return };
+        let title = self.current_title();
+        let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
+        let song = self.songs.get(&path);
+        let facts = song.map(crate::fields::Facts::of);
+        let text = |field| facts.as_ref().and_then(|f| f.text(field)).map(|t| t.into_owned());
+        let artist = text(crate::fields::Field::Artist)
+            .and_then(|a| a.split(';').next().map(|a| crate::fields::group_key(a.trim(), &self.config.group_ignore)))
+            .and_then(|a| self.songs.artist_images().get(&a).cloned());
+        let sources = [Some(crate::album_art::Source::of_song(Some(path.clone()), song)), artist.map(|key| crate::album_art::Source::image(&key))];
+        let name = text(crate::fields::Field::Album).or(title).unwrap_or_default();
+        let letters = self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS);
+        let mine = LATEST.fetch_add(1, Ordering::Relaxed) + 1;
+        let read = move || {
+            let art = match sources.iter().flatten().find_map(|source| crate::album_art::picture(source, online)) {
+                Some(bytes) => crate::android::Art::Picture(bytes),
+                None => {
+                    let (color, initials) = crate::album_art::tile_look(&name, letters);
+                    crate::android::Art::Tile { color, initials }
+                }
+            };
+            if LATEST.load(Ordering::Relaxed) == mine {
+                crate::android::set_art(&art);
+            }
+        };
+        if let Err(e) = std::thread::Builder::new().name("notification art".into()).spawn(read) {
+            log::warn!("couldn't read the notification's art: {e}");
+        }
+    }
+
+    /// The media controls' buttons for the song playing
+    /// (`config::MediaButtons`): no star or tags for a song not in the
+    /// library, which can't be tagged, nor a tag since deleted.
+    fn media_buttons(&self) -> Vec<crate::android::Button> {
+        use crate::android::{Button, Toggle};
+        use crate::config::MediaButton;
+        use crate::song_store::STARRED;
+
+        let song = self.current_song.as_deref().and_then(|p| self.songs.get(p));
+        let has = |tag: &str| song.is_some_and(|s| s.tags.iter().any(|t| t == tag));
+        let toggle = |tag: &str, label: &str, icon: &str| {
+            song.map(|_| Button::Toggle(Toggle { tag: tag.into(), label: label.into(), icon: icon.into(), on: has(tag) }))
+        };
+        self.config
+            .media_buttons
+            .0
+            .iter()
+            .filter_map(|button| match button {
+                MediaButton::Previous => Some(Button::Previous),
+                MediaButton::Next => Some(Button::Next),
+                MediaButton::Star => toggle(STARRED, "Star", crate::select_list::STAR_ICON),
+                MediaButton::Tag(id) => self.songs.tags().get(id).and_then(|tag| toggle(id, &tag.name, tag.icon_or_default())),
+            })
+            .collect()
     }
 }
 
@@ -933,9 +1023,9 @@ fn drawer_item(ui: &egui::Ui, selected: bool, glyph: &str, text: &str) -> egui::
     egui::Button::selectable(selected, format!("{}   {text}", icon(glyph))).min_size(egui::vec2(ui.available_width(), 0.0))
 }
 
-/// A Preferences section in the list: its icon, title and what's in it,
-/// the width of `ui`.
-fn section_row(ui: &mut egui::Ui, section: PrefTab) -> egui::Response {
+/// A section in a list of them (Preferences', Song info's): its icon,
+/// title and what's in it, the width of `ui`, opening it when tapped.
+pub(super) fn section_row(ui: &mut egui::Ui, glyph: &str, title: &str, summary: &str) -> egui::Response {
     let height = 60.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
     let visuals = ui.style().interact(&response);
@@ -948,10 +1038,10 @@ fn section_row(ui: &mut egui::Ui, section: PrefTab) -> egui::Response {
     let body = egui::TextStyle::Body.resolve(ui.style());
     let small = egui::TextStyle::Small.resolve(ui.style());
     let icon_font = egui::FontId::proportional(22.0);
-    painter.text(egui::pos2(rect.left() + 22.0, rect.center().y), egui::Align2::CENTER_CENTER, icon(section.icon()), icon_font.clone(), text);
+    painter.text(egui::pos2(rect.left() + 22.0, rect.center().y), egui::Align2::CENTER_CENTER, icon(glyph), icon_font.clone(), text);
     let left = rect.left() + 48.0;
-    painter.text(egui::pos2(left, rect.center().y - 2.0), egui::Align2::LEFT_BOTTOM, section.title(), body, text);
-    painter.text(egui::pos2(left, rect.center().y + 2.0), egui::Align2::LEFT_TOP, section.summary(), small, weak);
+    painter.text(egui::pos2(left, rect.center().y - 2.0), egui::Align2::LEFT_BOTTOM, title, body, text);
+    painter.text(egui::pos2(left, rect.center().y + 2.0), egui::Align2::LEFT_TOP, summary, small, weak);
     painter.text(
         egui::pos2(rect.right() - 16.0, rect.center().y),
         egui::Align2::CENTER_CENTER,
@@ -962,7 +1052,7 @@ fn section_row(ui: &mut egui::Ui, section: PrefTab) -> egui::Response {
     response
 }
 
-fn big_icon_button(name: &str, size: f32) -> egui::Button<'static> {
+pub(super) fn big_icon_button(name: &str, size: f32) -> egui::Button<'static> {
     // (Growing, the icon is centered in the button.)
     egui::Button::new(egui::RichText::new(icon(name)).size(size * 0.5).atom_grow(true)).min_size(egui::Vec2::splat(size))
 }

@@ -15,7 +15,6 @@ import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.graphics.Insets;
-import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -345,14 +344,19 @@ public class MainActivity extends NativeActivity {
 
     // ---- Playback ----
 
-    /** From Rust: what's playing, for the playback service. */
-    public void setPlayback(String title, String detail, boolean playing, long positionMs, long lengthMs, boolean hasNext) {
-        PlaybackService.update(this, title, detail, playing, positionMs, lengthMs, hasNext);
-        // (Its play/pause button follows.)
+    /** From Rust: what's playing, and the buttons beside play/pause, for the playback service. */
+    public void setPlayback(String title, String detail, boolean playing, long positionMs, long lengthMs, boolean hasNext, String[] buttons) {
+        PlaybackService.update(this, title, detail, playing, positionMs, lengthMs, hasNext, buttons);
+        // (Its buttons follow.)
         runOnUiThread(this::updatePictureInPicture);
     }
 
-    public void setSyncProgress(int done, int total) {
+    /** From Rust: the song playing's art, or its tile (PlaybackService.setArt). */
+    public void setArt(byte[] picture, int color, String initials) {
+        PlaybackService.setArt(picture, color, initials);
+    }
+
+        public void setSyncProgress(int done, int total) {
         SyncService.update(this, done, total);
     }
 
@@ -386,22 +390,20 @@ public class MainActivity extends NativeActivity {
         return builder.build();
     }
 
+    /**
+     * The floating window's buttons: play/pause, and the first of the
+     * buttons beside it that Android has room for, laid out as the
+     * notification's are.
+     */
     private List<RemoteAction> pictureInPictureActions() {
+        int room = Math.max(getMaxNumPictureInPictureActions(), 1) - 1;
+        boolean playing = PlaybackService.isPlaying();
         List<RemoteAction> actions = new ArrayList<>();
-        actions.add(action(android.R.drawable.ic_media_previous, "Previous", PlaybackService.ACTION_PREVIOUS));
-        if (PlaybackService.isPlaying()) {
-            actions.add(action(android.R.drawable.ic_media_pause, "Pause", PlaybackService.ACTION_PAUSE));
-        } else {
-            actions.add(action(android.R.drawable.ic_media_play, "Play", PlaybackService.ACTION_PLAY));
+        for (PlaybackService.Button button : PlaybackService.Button.layout(PlaybackService.buttons(), room)) {
+            String title = PlaybackService.title(button, playing);
+            actions.add(new RemoteAction(PlaybackService.icon(this, button, playing), title, title, PlaybackService.pending(this, button, playing)));
         }
-        actions.add(action(android.R.drawable.ic_media_next, "Next", PlaybackService.ACTION_NEXT));
         return actions;
-    }
-
-    private RemoteAction action(int icon, String title, String serviceAction) {
-        Intent intent = new Intent(this, PlaybackService.class).setAction(serviceAction);
-        PendingIntent pending = PendingIntent.getService(this, serviceAction.hashCode(), intent, PendingIntent.FLAG_IMMUTABLE);
-        return new RemoteAction(Icon.createWithResource(this, icon), title, title, pending);
     }
 
     @Override

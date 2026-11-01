@@ -208,6 +208,10 @@ pub struct Config {
     /// That window's shape.
     #[serde(default)]
     pub mini_player_shape: MiniPlayerShape,
+    /// On Android: the buttons the notification and the mini player show
+    /// beside play, pause and skip, for the song playing.
+    #[serde(default)]
+    pub media_buttons: MediaButtons,
     /// A release version the user chose to skip: the startup check doesn't
     /// bring it up again (a manual check still shows it).
     #[serde(default)]
@@ -323,6 +327,37 @@ impl MiniPlayerShape {
             Self::Tall => "Tall (9:16)",
         }
     }
+}
+
+/// The buttons Android's media controls (the notification, the lock
+/// screen, the mini player) show beside play/pause, by priority: previous,
+/// next, the song's star and tags of the user's choosing (each toggled
+/// with a tap, showing only its icon). As many as the user likes; each
+/// place shows the first ones it has room for.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MediaButtons(pub Vec<MediaButton>);
+
+impl Default for MediaButtons {
+    fn default() -> Self {
+        Self(vec![MediaButton::Previous, MediaButton::Next, MediaButton::Star])
+    }
+}
+
+/// How many `MediaButtons` the notification has room for: five slots,
+/// play/pause's one of them. (The mini player's room is the phone's:
+/// `android::picture_in_picture_room`.)
+pub const NOTIFICATION_BUTTONS: usize = 4;
+
+/// One of `MediaButtons`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MediaButton {
+    Previous,
+    Next,
+    /// The song's star (`song_store::STARRED`).
+    Star,
+    /// A tag, by its ID (`song_store::Tag`).
+    Tag(String),
 }
 
 /// How synththing opens when it starts with Windows (`cli::Cli::autostart`).

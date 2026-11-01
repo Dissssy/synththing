@@ -374,7 +374,7 @@ mod tests {
     use super::*;
 
     fn tags() -> BTreeMap<String, Tag> {
-        BTreeMap::from([("t1".to_string(), Tag { name: "Chill".into(), color: [0; 3] })])
+        BTreeMap::from([("t1".to_string(), Tag { name: "Chill".into(), color: [0; 3], icon: None, show: Default::default() })])
     }
 
     fn rule(field: Field, op: Op, value: &str, to: &str) -> Rule {

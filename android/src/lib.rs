@@ -63,6 +63,20 @@ pub extern "system" fn Java_nl_p51_synththing_Native_mediaCommand<'local>(
     synththing::android::media_command(command, position_ms);
 }
 
+/// `Native.setTag(String tag, boolean on)`: a tag's button in the media
+/// controls.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_nl_p51_synththing_Native_setTag<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    tag: JString<'local>,
+    on: jboolean,
+) {
+    if let Ok(tag) = env.get_string(&tag) {
+        synththing::android::set_tag(tag.into(), on != 0);
+    }
+}
+
 /// `Native.insets(int left, int top, int right, int bottom)`: what the
 /// system bars, a notch and the keyboard cover, in pixels.
 #[unsafe(no_mangle)]

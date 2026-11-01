@@ -143,7 +143,7 @@ fn describe_song(cache: &mut SongInfoCache, naming: &Naming, store: &SongStore, 
     let info = cache.get(path);
     let song = naming.song(path, info.as_deref());
     let values = keys.iter().map(|&key| Field::by_key(key).and_then(|field| song.value(field))).collect();
-    let tags = store.tags_of(path).into_iter().map(|(_, tag)| (tag.name.clone(), tag.color)).collect();
+    let tags = store.tags_of(path).into_iter().map(|(_, tag)| (tags::tag_label(tag), tag.color)).collect();
     song_list::Described { name: naming.name(path, info.as_deref()), file_name: song.file_name.to_string(), values, tags, plays: plays(store, path) }
 }
 
@@ -430,9 +430,9 @@ pub struct App {
     last_edit: Option<Vec<(String, Field, Option<String>)>>,
     /// The Clean up window, while it's open (`cleanup.rs`).
     cleanup: Option<cleanup::CleanUp>,
-    /// The Tags modal is open.
-    tags_open: bool,
-    /// The tag just made, to name in the Tags modal.
+    /// The quick Tags dialog's songs, while it's open (`tags.rs`).
+    tags_for: Option<Vec<PathBuf>>,
+    /// The tag just made, to name in Preferences > Library > Tags.
     tag_to_name: Option<String>,
     /// Selected rows of the playlist on screen.
     playlist_selection: Selection,
@@ -793,7 +793,7 @@ impl App {
             song_details: None,
             last_edit: None,
             cleanup: None,
-            tags_open: false,
+            tags_for: None,
             tag_to_name: None,
             playlist_selection: Selection::default(),
             binding_capture: None,
@@ -2304,7 +2304,7 @@ impl App {
             || self.song_details.is_some()
             || self.cleanup.is_some()
             || self.palette.is_some()
-            || self.tags_open
+            || self.tags_for.is_some()
             || self.recording.prompt_open
             || self.recording.window.is_some()
             || self.script_window.is_some()
@@ -3967,6 +3967,8 @@ impl eframe::App for App {
             // (The whole screen: the flow comes first.)
             if self.flow.open() {
                 self.flow_ui(ui);
+            } else if self.song_details_open() {
+                self.mobile_song_details_ui(ui);
             } else {
                 frame_timing::time("mobile", || self.mobile_ui(ui, &shared));
             }
@@ -3974,7 +3976,6 @@ impl eframe::App for App {
             self.rename_ui(&ctx);
             self.cleanup_ui(&ctx);
             self.choose_art_ui(&ctx);
-            self.song_details_ui(&ctx);
             self.history_ui(&ctx);
             self.status_toast_ui(&ctx);
         } else {

@@ -13,6 +13,9 @@ final class Native {
     /** A media button: one of PlaybackService's COMMAND_*s. */
     static native void mediaCommand(int command, long positionMs);
 
+    /** A toggle in the media controls: give the song playing {@code tag} ({@code on}), or take it off. */
+    static native void setTag(String tag, boolean on);
+
     /** What the system bars, a notch and the keyboard cover of the window, in pixels. */
     static native void insets(int left, int top, int right, int bottom);
 
