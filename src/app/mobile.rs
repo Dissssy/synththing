@@ -398,6 +398,13 @@ impl App {
         }
     }
 
+    /// Go to the Preferences page, at `section`.
+    pub(super) fn open_mobile_preferences(&mut self, section: PrefTab) {
+        self.show_mobile_page(Page::Preferences);
+        self.mobile_state.pref_section = Some(section);
+        self.mobile_state.editing_themes = false;
+    }
+
     /// Preferences > Appearance > Edit themes...: a level under it.
     pub(super) fn open_mobile_themes(&mut self) {
         self.mobile_state.editing_themes = true;
@@ -490,6 +497,9 @@ impl App {
                 let Some(song) = self.current_song.clone() else { return };
                 if ui.add(big_icon_button("info", 32.0)).on_hover_text("Song info").clicked() {
                     self.details_for = Some(vec![song.clone()]);
+                }
+                if self.songs.get(&song).is_some() && ui.add(big_icon_button("tag", 32.0)).on_hover_text("Tag this song").clicked() {
+                    self.tags_for = Some(vec![song.clone()]);
                 }
                 let starred = self.songs.is_starred(&song);
                 let mut glyph = egui::RichText::new(icon(crate::select_list::STAR_ICON)).size(16.0);

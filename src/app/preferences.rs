@@ -80,7 +80,7 @@ impl PrefTab {
             Self::Appearance => "Theme, UI scale, the seek bar",
             Self::Playback => "Sound, what plays, what's kept from last time, loading",
             Self::Browsing => "Song names, sorting and grouping, search",
-            Self::Library => "Adding songs, album art and details, rulesets, storage",
+            Self::Library => "Adding songs, album art and details, tags, rulesets, storage",
             Self::Visualizer => "Pixel scale, channel toggles, scripts, recording",
             Self::Account => "Identity, your devices, sync, the Online Library",
             Self::Keyboard => "Keyboard shortcuts",
@@ -155,6 +155,16 @@ impl App {
         }
         if let Some(jump) = jump {
             self.preference_jump(jump);
+        }
+    }
+
+    /// Open Preferences at `tab` (on a phone, its page at that section).
+    pub(super) fn open_preferences(&mut self, tab: PrefTab) {
+        if self.mobile() {
+            self.open_mobile_preferences(tab);
+        } else {
+            self.preferences_tab = tab;
+            self.preferences_open = true;
         }
     }
 
@@ -638,6 +648,7 @@ impl App {
                 settings_group("Album art and details").icon("vinyl-record").show(ui, |ui| {
                     self.lookup_preferences_ui(ui);
                 });
+                self.tags_preferences_ui(ui);
                 self.rulesets_ui(ui);
                 self.storage_ui(ui);
             }

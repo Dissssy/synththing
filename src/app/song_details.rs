@@ -267,47 +267,13 @@ impl App {
         preview
     }
 
-    /// The Tags page: the star and each tag, a switch for each (half on
-    /// when only some of the songs have it), set at once rather than on
-    /// saving; then New tag and Edit tags.
+    /// The Tags page: the songs' star and tags, switched at once rather
+    /// than on saving (`tags::tag_checklist`). Editing the tags leaves
+    /// Song info, so not with changes unsaved.
     fn tags_tab_ui(&mut self, ui: &mut egui::Ui, details: &SongDetails) {
-        use crate::song_store::STARRED;
-        let has = |id: &str| details.keys.iter().filter(|k| self.songs.get_by_key(k).is_some_and(|s| s.tags.iter().any(|t| t == id))).count();
-        let star = egui::RichText::new(format!("{}  Starred", super::icon(crate::select_list::STAR_ICON)));
-        let mut tags: Vec<(String, String, egui::RichText)> =
-            self.songs.tags().iter().map(|(id, tag)| (id.clone(), tag.name.clone(), super::tags::tag_text(tag))).collect();
-        tags.sort_by_key(|(_, name, _)| name.to_lowercase());
-        tags.insert(0, (STARRED.to_string(), "Starred".to_string(), star));
-        let mut action = None;
-        super::settings_group("Tags")
-            .icon("tag")
-            .hint("Changed straight away. Preferences > Playback puts a tag's button in the notification.")
-            .show(ui, |ui| {
-                for (id, name, text) in &tags {
-                    let with = has(id);
-                    let mut on = with == details.keys.len();
-                    super::setting_row(ui, |ui| {
-                        let indeterminate = with > 0 && with < details.keys.len();
-                        let checkbox = ui.add(egui::Checkbox::new(&mut on, text.clone()).indeterminate(indeterminate));
-                        if checkbox.on_hover_text(name).clicked() {
-                            action = Some(super::tags::TagAction::Set(id.clone(), on));
-                        }
-                    });
-                }
-                if tags.len() == 1 {
-                    super::setting_row(ui, |ui| ui.weak("No tags of your own yet."));
-                }
-            });
-        ui.horizontal(|ui| {
-            if ui.button("New tag").clicked() {
-                action = Some(super::tags::TagAction::New);
-            }
-            if ui.button("Edit tags...").clicked() {
-                action = Some(super::tags::TagAction::Edit);
-            }
-        });
-        if let Some(action) = action {
-            let paths: Vec<PathBuf> = details.keys.iter().map(|k| self.songs.path(k)).collect();
+        let paths: Vec<PathBuf> = details.keys.iter().map(|k| self.songs.path(k)).collect();
+        let editing = if details.changes.is_empty() { Ok(()) } else { Err("Save or cancel your changes first") };
+        if let Some(action) = super::tags::tag_checklist(ui, &self.songs, &paths, editing) {
             self.tag_songs(action, &paths);
         }
     }
