@@ -276,6 +276,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn numbers_read_back_as_written() {
+        // (Synced leaves are compared after a trip through the server: a
+        // number read back a bit off is a change every device sends again.)
+        let mut x: u32 = 0x9e37_79b9;
+        for _ in 0..10_000 {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            let value = serde_json::json!({ "i": -(x as f32 / u32::MAX as f32) * 30.0, "l": x as f64 / 7.0 });
+            let back: serde_json::Value = serde_json::from_slice(&unpack(&pack(&serde_json::to_vec(&value).unwrap())).unwrap()).unwrap();
+            assert_eq!(back, value);
+        }
+    }
+
+    #[test]
     fn names() {
         assert!(valid_name("settings"));
         assert!(valid_name("play_lists-2"));

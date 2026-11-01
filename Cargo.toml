@@ -20,7 +20,7 @@ rodio = { version = "0.22.2", features = ["playback"] } # Safe cross-platform au
 anyhow = "1.0.104"
 directories = "6.0.0"                                   # cross-platform config dir
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }  # float_roundtrip: synced numbers read back exactly as written
 rustfft = "6.4.1"
 mlua = { version = "0.12.1", features = ["lua54", "vendored"] }
 egui_dock = { version = "0.21.1", features = ["serde"] }      # dockable, rearrangeable tab layout
