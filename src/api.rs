@@ -37,7 +37,7 @@ use crate::audio::SAMPLE_RATE;
 use crate::audio_stream::Listeners;
 use crate::visualizer_stream::Format;
 use crate::lookup::matching::Release;
-use crate::lookup::musicbrainz::MusicBrainz;
+use crate::lookup::musicbrainz::{MusicBrainz, Query};
 use crate::staged::Staged;
 use crate::wishlist::{Kind, Wish};
 
@@ -1306,7 +1306,10 @@ fn handle(shared: &Arc<Shared>, mut request: Request) {
             match (q, query.get("kind").map(String::as_str)) {
                 (None, _) => error(400, "say what to search for: ?q="),
                 (_, Some(kind)) if !["artist", "album", "song"].contains(&kind) => error(400, "?kind= is artist, album or song"),
-                (Some(q), kind) => online(shared).unwrap_or_else(|| musicbrainz_search(&q, kind)),
+                (Some(q), kind) => {
+                    let q = if query.get("advanced").is_some_and(|a| a == "true") { Query::Advanced(q) } else { Query::Words(q) };
+                    online(shared).unwrap_or_else(|| musicbrainz_search(&q, kind))
+                }
             }
         })),
         (Method::Get, ["v1", "musicbrainz", "artists", id, "albums"]) => Some(needs(access.read, "read").unwrap_or_else(|| {
@@ -1547,7 +1550,7 @@ fn online(shared: &Shared) -> Option<Reply> {
 
 /// `GET /v1/musicbrainz/search?q=&kind=`: the artists, albums and songs
 /// (or only those of `kind`) MusicBrainz finds, each as the wish for it.
-fn musicbrainz_search(q: &str, kind: Option<&str>) -> Reply {
+fn musicbrainz_search(q: &Query, kind: Option<&str>) -> Reply {
     let mut musicbrainz = MusicBrainz::new();
     let found = (|| {
         let mut found = serde_json::Map::new();

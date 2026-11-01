@@ -18,7 +18,7 @@ use crate::album_art::{AlbumArt, Source};
 use crate::build_info::{self, Online};
 use crate::lookup::Kept;
 use crate::lookup::matching::{ArtistAlbum, Release};
-use crate::lookup::musicbrainz::MusicBrainz;
+use crate::lookup::musicbrainz::{MusicBrainz, Query};
 use crate::search_box::{self, SearchBox};
 use crate::select_list::{self, Selection};
 use crate::wishlist_search::Filter;
@@ -68,6 +68,10 @@ enum Search {
 pub(super) struct WishlistState {
     pub list: Wishlist,
     query: String,
+    /// What's searched for (none: everything).
+    search_kind: Option<Kind>,
+    /// Whether the query is in MusicBrainz's own syntax.
+    advanced: bool,
     search: Option<Search>,
     /// A wish by name being written: its title and artist.
     by_name: Option<(String, String)>,
@@ -110,6 +114,8 @@ impl Default for WishlistState {
         Self {
             list: Wishlist::load(),
             query: String::new(),
+            search_kind: None,
+            advanced: false,
             search: None,
             by_name: None,
             note: None,
@@ -355,19 +361,22 @@ impl App {
     }
 
     fn start_wishlist_search(&mut self, ctx: &egui::Context) {
-        let words = self.wishlist.query.trim().to_string();
-        if words.is_empty() {
+        let text = self.wishlist.query.trim().to_string();
+        if text.is_empty() {
             return;
         }
+        let query = if self.wishlist.advanced { Query::Advanced(text) } else { Query::Words(text) };
+        let kind = self.wishlist.search_kind;
+        let wanted = move |k| kind.is_none_or(|kind| kind == k);
         let (send, receive) = mpsc::channel();
         let ctx = ctx.clone();
         let started = std::thread::Builder::new().name("wishlist search".into()).spawn(move || {
             let mut musicbrainz = MusicBrainz::new();
             let found = (|| {
                 Ok::<_, anyhow::Error>(Found {
-                    artists: musicbrainz.find_artists(&words)?,
-                    albums: musicbrainz.find_albums(&words)?,
-                    songs: musicbrainz.find_songs(&words)?,
+                    artists: if wanted(Kind::Artist) { musicbrainz.find_artists(&query)? } else { Vec::new() },
+                    albums: if wanted(Kind::Album) { musicbrainz.find_albums(&query)? } else { Vec::new() },
+                    songs: if wanted(Kind::Song) { musicbrainz.find_songs(&query)? } else { Vec::new() },
                 })
             })()
             .map_err(|e| format!("{e:#}"));
@@ -432,9 +441,31 @@ impl App {
         }
         let mut search = false;
         ui.horizontal(|ui| {
+            let kinds = [(None, "All"), (Some(Kind::Artist), "Artists"), (Some(Kind::Album), "Albums"), (Some(Kind::Song), "Songs")];
+            let kind = &mut self.wishlist.search_kind;
+            let shown = kinds.iter().find(|(k, _)| k == kind).map_or("All", |(_, name)| name);
+            egui::ComboBox::from_id_salt("wishlist_search_kind").selected_text(shown).width(70.0).show_ui(ui, |ui| {
+                for (k, name) in kinds {
+                    ui.selectable_value(kind, k, name);
+                }
+            });
+            let advanced = ui
+                .add(super::row_icon_button(ui, "code").selected(self.wishlist.advanced))
+                .on_hover_text("Advanced: MusicBrainz's own search syntax, such as recording:\"Jane!\" AND artist:\"The Long Faces\" (musicbrainz.org/doc/Indexed_Search_Syntax)");
+            if advanced.clicked() {
+                self.wishlist.advanced = !self.wishlist.advanced;
+                toast::show(ui.ctx(), if self.wishlist.advanced { "Advanced search: MusicBrainz's own syntax" } else { "Plain search" });
+            }
             let room = (ui.available_width() - 120.0).max(80.0);
-            let edit = egui::TextEdit::singleline(&mut self.wishlist.query).hint_text("Search MusicBrainz for artists, albums and songs").desired_width(room);
-            let response = ui.add_enabled(online, edit);
+            let hint = if self.wishlist.advanced {
+                "MusicBrainz query, such as recording:\"Jane!\" AND artist:\"The Long Faces\""
+            } else {
+                "Search MusicBrainz: \"exact phrase\", artist:\"name\""
+            };
+            let edit = egui::TextEdit::singleline(&mut self.wishlist.query).hint_text(hint).desired_width(room);
+            let response = ui.add_enabled(online, edit).on_hover_text(
+                "Every word must be in the name or the artist's. Quote words to find them together, and put artist: before a word or a quoted name to look for it only in the artist's name.",
+            );
             search = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let waiting = matches!(self.wishlist.search, Some(Search::Waiting(_)));
             search |= ui.add_enabled(online && !waiting, egui::Button::new("Search")).clicked();

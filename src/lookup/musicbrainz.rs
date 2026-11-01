@@ -179,35 +179,31 @@ impl MusicBrainz {
         }
     }
 
-    /// Albums named like `words` or by an artist named like them, for the
+    /// Albums named like `query` or by an artist named like it, for the
     /// wishlist: one wish for each album (release group), from its first
     /// official release found (else its first).
-    pub fn find_albums(&mut self, words: &str) -> Result<Vec<Wish>> {
-        let words = lucene_words(words);
-        if words.is_empty() {
+    pub fn find_albums(&mut self, query: &Query) -> Result<Vec<Wish>> {
+        let Some(query) = query.lucene(&["release"], &["artist"]) else {
             return Ok(Vec::new());
-        }
-        let hits = self.search(format!("release:({words}) OR artist:({words})"), false)?;
+        };
+        let hits = self.search(query, false)?;
         Ok(album_wishes(&hits))
     }
 
-    /// Songs named like `words` or by an artist named like them, for the
+    /// Songs named like `query` or by an artist named like it, for the
     /// wishlist.
-    pub fn find_songs(&mut self, words: &str) -> Result<Vec<Wish>> {
-        let words = lucene_words(words);
-        if words.is_empty() {
+    pub fn find_songs(&mut self, query: &Query) -> Result<Vec<Wish>> {
+        let Some(query) = query.lucene(&["recording"], &["artist"]) else {
             return Ok(Vec::new());
-        }
-        Ok(self.search_recordings(format!("recording:({words}) OR artist:({words})"), false)?.iter().map(song_wish).collect())
+        };
+        Ok(self.search_recordings(query, false)?.iter().map(song_wish).collect())
     }
 
-    /// Artists named like `words`, for the wishlist: a wish to watch each.
-    pub fn find_artists(&mut self, words: &str) -> Result<Vec<Wish>> {
-        let words = lucene_words(words);
-        if words.is_empty() {
+    /// Artists named like `query`, for the wishlist: a wish to watch each.
+    pub fn find_artists(&mut self, query: &Query) -> Result<Vec<Wish>> {
+        let Some(query) = query.lucene(&["artist", "alias"], &[]) else {
             return Ok(Vec::new());
-        }
-        let query = format!("artist:({words}) OR alias:({words})");
+        };
         let name = crate::library::hex(&sha2::Sha256::digest(query.as_bytes())[..16]);
         let hits = match self.cache.get::<Vec<ArtistEntity>>("artist-search", &name) {
             Some(hits) => hits,
@@ -362,21 +358,107 @@ impl MusicBrainz {
     }
 }
 
-/// `text`'s words, each escaped for Lucene (its operators taken as
-/// words).
-fn lucene_words(text: &str) -> String {
-    let words: Vec<String> = text
-        .split_whitespace()
-        .filter(|w| !matches!(*w, "AND" | "OR" | "NOT"))
-        .map(|w| w.chars().fold(String::new(), |mut out, c| {
-            if "+-&|!(){}[]^\"~*?:\\/".contains(c) {
-                out.push('\\');
+/// A wishlist search's text.
+#[derive(Clone, Debug)]
+pub enum Query {
+    /// Words and "quoted phrases", and `artist:` marking those only of the
+    /// artist's name.
+    Words(String),
+    /// MusicBrainz's own search syntax, sent as it is.
+    Advanced(String),
+}
+
+impl Query {
+    /// The Lucene query for it (none: nothing to search for), with
+    /// `Asked::query`'s fields.
+    fn lucene(&self, names: &[&str], artists: &[&str]) -> Option<String> {
+        match self {
+            Query::Words(text) => Some(Asked::parse(text)).filter(|a| !a.is_empty()).map(|a| a.query(names, artists)),
+            Query::Advanced(text) => Some(text.trim().to_string()).filter(|t| !t.is_empty()),
+        }
+    }
+}
+
+/// What a wishlist search asks for: words and "quoted phrases", each in a
+/// name or its artist's, and those marked `artist:` only in the artist's.
+#[derive(Debug, Default, PartialEq)]
+struct Asked {
+    /// Each a Lucene term: an escaped word or a quoted phrase.
+    anywhere: Vec<String>,
+    by: Vec<String>,
+    /// Whether any is a phrase or marked `artist:`: asked precisely.
+    precise: bool,
+}
+
+impl Asked {
+    fn parse(text: &str) -> Self {
+        let mut asked = Asked::default();
+        let mut rest = text.trim_start();
+        while !rest.is_empty() {
+            let by = rest.get(..7).is_some_and(|key| key.eq_ignore_ascii_case("artist:"));
+            if by {
+                rest = &rest[7..];
             }
-            out.push(c);
-            out
-        }))
-        .collect();
-    words.join(" ")
+            let (term, phrase) = match rest.strip_prefix('"') {
+                Some(after) => {
+                    let end = after.find('"').unwrap_or(after.len());
+                    rest = after.get(end + 1..).unwrap_or("");
+                    (after[..end].trim(), true)
+                }
+                None => {
+                    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+                    let word = &rest[..end];
+                    rest = &rest[end..];
+                    (word, false)
+                }
+            };
+            rest = rest.trim_start();
+            let term = if phrase { (!term.is_empty()).then(|| quoted(term)) } else { lucene_word(term) };
+            if let Some(term) = term {
+                asked.precise |= phrase || by;
+                if by { &mut asked.by } else { &mut asked.anywhere }.push(term);
+            }
+        }
+        asked
+    }
+
+    fn is_empty(&self) -> bool {
+        self.anywhere.is_empty() && self.by.is_empty()
+    }
+
+    /// The Lucene query for it, where `names` are the fields of what's
+    /// searched for and `artists` those of its artist (none: `artist:`
+    /// terms are looked for in `names`). Every term must be in one of
+    /// them; asked loosely, hits with only some of the words come after.
+    fn query(&self, names: &[&str], artists: &[&str]) -> String {
+        let artists = if artists.is_empty() { names } else { artists };
+        let all: Vec<&str> = names.iter().chain(artists).copied().collect();
+        let any_of = |fields: &[&str], term: &str| fields.iter().map(|f| format!("{f}:{term}")).collect::<Vec<_>>().join(" OR ");
+        let every: Vec<String> =
+            self.anywhere.iter().map(|t| format!("({})", any_of(&all, t))).chain(self.by.iter().map(|t| format!("({})", any_of(artists, t)))).collect();
+        let every = every.join(" AND ");
+        if self.precise {
+            return every;
+        }
+        let words = self.anywhere.join(" ");
+        let some = all.iter().map(|f| format!("{f}:({words})")).collect::<Vec<_>>().join(" OR ");
+        format!("({every})^4 OR {some}")
+    }
+}
+
+/// `word` escaped for Lucene (an operator taken as a word), if anything's
+/// left of it.
+fn lucene_word(word: &str) -> Option<String> {
+    if word.is_empty() || matches!(word, "AND" | "OR" | "NOT") {
+        return None;
+    }
+    Some(word.chars().fold(String::new(), |mut out, c| {
+        if "+-&|!(){}[]^\"~*?:\\/".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+        out
+    }))
 }
 
 /// A date's year ("2005" of "2005-11-11").
@@ -660,7 +742,29 @@ mod tests {
 
     #[test]
     fn search_words_are_escaped() {
-        assert_eq!(lucene_words("AC/DC  back: in OR black"), r"AC\/DC back\: in black");
+        let asked = Asked::parse("AC/DC  back: in OR black");
+        assert_eq!(asked.anywhere, [r"AC\/DC", r"back\:", "in", "black"]);
+        assert!(!asked.precise);
+    }
+
+    #[test]
+    fn loose_searches_rank_hits_with_every_word_first() {
+        assert_eq!(
+            Asked::parse("Jane! long faces").query(&["recording"], &["artist"]),
+            r"((recording:Jane\! OR artist:Jane\!) AND (recording:long OR artist:long) AND (recording:faces OR artist:faces))^4 OR recording:(Jane\! long faces) OR artist:(Jane\! long faces)"
+        );
+    }
+
+    #[test]
+    fn phrases_and_artists_are_asked_precisely() {
+        let asked = Asked::parse(r#"jane! ARTIST:"the long faces" "big  sky" artist:solo"#);
+        assert_eq!(asked.anywhere, [r"jane\!", r#""big  sky""#]);
+        assert_eq!(asked.by, [r#""the long faces""#, "solo"]);
+        assert_eq!(asked.query(&["release"], &["artist"]).matches(" AND ").count(), 3);
+        assert!(asked.query(&["release"], &["artist"]).ends_with("(artist:solo)"));
+        assert_eq!(Asked::parse(r#"x "unclosed"#).anywhere, ["x", r#""unclosed""#]);
+        assert_eq!(Asked::parse("artist:Tool").query(&["artist", "alias"], &[]), "(artist:Tool OR alias:Tool)");
+        assert!(Asked::parse(r#" "" artist: OR "#).is_empty());
     }
 
     #[test]
