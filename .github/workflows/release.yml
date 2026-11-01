@@ -35,7 +35,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           awk -v v="$version" '/^## / { on = ($2 == v); next } on' CHANGELOG.md > notes.md
-          if [ ! -s notes.md ]; then
+          if ! grep -q '[^[:space:]]' notes.md; then
             echo "::error::CHANGELOG.md has no section for $version"
             exit 1
           fi
