@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Fixed
+- Android: tapping a text field sometimes only selected it, and a second tap was needed for the keyboard to come up. The keyboard now comes up on the first tap.
+
 ## 2.1.1 (2026-11-01)
 
 ### Fixed
