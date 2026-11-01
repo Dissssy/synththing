@@ -1022,8 +1022,10 @@ mod tests {
         let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
         let base = format!("http://{}", running.addr);
         let key = info(&base).unwrap().key;
+        // Generous: a debug build renders the preview, on a CI runner that
+        // may be building other platforms at the same time.
         let wait_for = |id: &str, version: u32| {
-            for _ in 0..600 {
+            for _ in 0..2400 {
                 let details = details(&base, id).unwrap();
                 let v = details.versions.iter().find(|v| v.version == version).unwrap();
                 if v.preview != crate::library::Preview::Pending {
