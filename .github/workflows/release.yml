@@ -206,6 +206,9 @@ jobs:
   # the official server's stack runs at synththing.p51.nl (docs/DEPLOY.md).
   website:
     needs: publish
+    # Publish runs even when Android fails, and without this its own
+    # dependents would still be skipped for that failure.
+    if: always() && needs.publish.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -253,6 +256,9 @@ jobs:
   # build: TODO.)
   docker:
     needs: publish
+    # Publish runs even when Android fails, and without this its own
+    # dependents would still be skipped for that failure.
+    if: always() && needs.publish.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -300,6 +306,9 @@ jobs:
   # SYNTHTHING_PUBLISH_KEY secret, this does nothing.
   scripts:
     needs: publish
+    # Publish runs even when Android fails, and without this its own
+    # dependents would still be skipped for that failure.
+    if: always() && needs.publish.result == 'success'
     runs-on: ubuntu-22.04
     env:
       SYNTHTHING_PUBLISH_KEY: ${{ secrets.SYNTHTHING_PUBLISH_KEY }}
