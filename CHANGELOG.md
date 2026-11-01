@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 2.1.0 (2026-11-01)
+
 ### Added
 - Install synththing on Windows: run from a download, it offers once to move itself to its own folder (`%LOCALAPPDATA%\Programs\synththing`), adding itself to the Start menu and to Settings > Apps to uninstall it from. It updates itself there as before. Preferences > App > Install does it any time.
 - Start with Windows (Preferences > App > Install, once installed), opening in the tray, as the mini player or as the window.
