@@ -16,7 +16,40 @@ permissions:
   contents: write
 
 jobs:
+  # Before anything is built: the tag is Cargo.toml's version and
+  # CHANGELOG.md has a section for it (the release's notes).
+  check:
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Tag matches Cargo.toml version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME doesn't match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - name: Notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '/^## / { on = ($2 == v); next } on' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: notes
+          path: notes.md
+          retention-days: 1
+
+  # The three builds side by side, each into an artifact; publish puts
+  # them in the release together.
   windows:
+    needs: check
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -25,43 +58,22 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Tag matches Cargo.toml version
-        shell: bash
-        run: |
-          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "synththing") | .version')
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag $GITHUB_REF_NAME doesn't match Cargo.toml version $version"
-            exit 1
-          fi
-
       - name: Test
         run: cargo test --lib
 
       - name: Build
         run: cargo build --release
 
-      - name: Publish release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          cp target/release/synththing.exe synththing-windows-x86_64.exe
-          # The notes are this version's section of CHANGELOG.md.
-          version="${GITHUB_REF_NAME#v}"
-          awk -v v="$version" '/^## / { on = ($2 == v); next } on' CHANGELOG.md > notes.md
-          if [ ! -s notes.md ]; then
-            echo "::error::CHANGELOG.md has no section for $version"
-            exit 1
-          fi
-          gh release create "$GITHUB_REF_NAME" synththing-windows-x86_64.exe \
-            --title "synththing $GITHUB_REF_NAME" \
-            --notes-file notes.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: target/release/synththing.exe
+          retention-days: 1
 
-  # Built once the Windows job has published the release, and added to it.
   # On an older Ubuntu, so the binary runs on more distributions (it needs
   # a glibc at least as new as the one it's built against).
   linux:
-    needs: windows
+    needs: check
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -87,20 +99,19 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: Add to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          cp target/release/synththing synththing-linux-x86_64
-          chmod +x synththing-linux-x86_64
-          gh release upload "$GITHUB_REF_NAME" synththing-linux-x86_64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux
+          path: target/release/synththing
+          retention-days: 1
 
-  # The Android app (docs/ANDROID.md), added to the release once the
-  # Windows job has published it. Only with the release key (the ANDROID_*
-  # secrets): without it, this builds but adds nothing.
+  # The Android app (docs/ANDROID.md). Only with the release key (the
+  # ANDROID_* secrets): without it, this builds but adds nothing.
   android:
-    needs: windows
+    needs: check
     runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
+    outputs:
+      signed: ${{ steps.apk.outputs.signed }}
     steps:
       - uses: actions/checkout@v5
 
@@ -112,18 +123,68 @@ jobs:
           key-alias: ${{ secrets.ANDROID_KEY_ALIAS }}
           key-password: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
-      - name: Add to the release
-        if: steps.apk.outputs.signed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" synththing-android-arm64.apk
+      - if: steps.apk.outputs.signed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: android
+          path: synththing-android-arm64.apk
+          retention-days: 1
+
+  # The release, with every build at once, once the desktop builds have
+  # passed. The Android app is still experimental, so it failing (or being
+  # skipped) doesn't hold the release back; the release then has no APK.
+  publish:
+    needs: [windows, linux, android]
+    if: always() && needs.windows.result == 'success' && needs.linux.result == 'success'
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ANDROID: ${{ needs.android.result == 'success' && needs.android.outputs.signed == 'true' }}
+    steps:
+      # By name, each into its own folder (by name, the files go straight
+      # in it).
+      - uses: actions/download-artifact@v8
+        with:
+          name: notes
+          path: notes
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows
+          path: windows
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux
+          path: linux
+
+      - if: env.ANDROID == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: android
+          path: android-apk
+
+      - name: Publish release
+        run: |
+          mv windows/synththing.exe synththing-windows-x86_64.exe
+          mv linux/synththing synththing-linux-x86_64
+          chmod +x synththing-linux-x86_64
+          files=(synththing-windows-x86_64.exe synththing-linux-x86_64)
+          if [ "$ANDROID" = true ]; then
+            mv android-apk/synththing-android-arm64.apk .
+            files+=(synththing-android-arm64.apk)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "synththing $GITHUB_REF_NAME" \
+            --notes-file notes/notes.md
 
   # The website (deploy/website.Dockerfile): the front page and the docs
   # rendered by mdBook (book.toml), pushed to
   # ghcr.io/<owner>/synththing-website as :<version> and :latest, which
   # the official server's stack runs at synththing.p51.nl (docs/DEPLOY.md).
   website:
-    needs: windows
+    needs: publish
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -165,12 +226,12 @@ jobs:
             org.opencontainers.image.description=synththing website and docs
 
   # The container image for servers and hubs (docs/DEPLOY.md, docs/HUB.md):
-  # the Linux build just added, in deploy/release.Dockerfile's runtime,
+  # the release's Linux build, in deploy/release.Dockerfile's runtime,
   # pushed to ghcr.io/<owner>/synththing as :<version> and :latest. (It's
   # the whole app, desktop libraries and all, until there's a server-only
   # build: TODO.)
   docker:
-    needs: linux
+    needs: publish
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -178,11 +239,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Fetch the Linux build
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux
+          path: linux
+
+      - name: The Linux build
         run: |
-          gh release download "$GITHUB_REF_NAME" --pattern synththing-linux-x86_64 --dir deploy
+          mv linux/synththing deploy/synththing-linux-x86_64
           chmod +x deploy/synththing-linux-x86_64
 
       - name: Image name
@@ -208,22 +272,27 @@ jobs:
             org.opencontainers.image.description=synththing server and hub
 
   # The bundled scripts, published to the official script library with the
-  # Linux build just made (it knows every function they use, so their
+  # release's Linux build (it knows every function they use, so their
   # minimum app versions come out right). The server works those out too,
   # with its own binary, so this waits until it's running this release
   # (Watchtower pulls the new image within the hour). Without the
   # SYNTHTHING_PUBLISH_KEY secret, this does nothing.
   scripts:
-    needs: linux
+    needs: publish
     runs-on: ubuntu-22.04
     env:
       SYNTHTHING_PUBLISH_KEY: ${{ secrets.SYNTHTHING_PUBLISH_KEY }}
-      GH_TOKEN: ${{ github.token }}
     steps:
+      - if: env.SYNTHTHING_PUBLISH_KEY != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: linux
+          path: linux
+
       - name: Publish
         run: |
           if [ -z "$SYNTHTHING_PUBLISH_KEY" ]; then echo "No SYNTHTHING_PUBLISH_KEY secret: nothing to do."; exit 0; fi
-          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern synththing-linux-x86_64
+          mv linux/synththing synththing-linux-x86_64
           chmod +x synththing-linux-x86_64
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libgtk-3-0 libasound2 libudev1 libxkbcommon0
