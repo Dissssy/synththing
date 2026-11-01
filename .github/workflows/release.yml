@@ -51,45 +51,63 @@ jobs:
   # release commit when it's pushed to master.
   windows:
     needs: check
-    runs-on: windows-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
     steps:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
 
-      # Test builds' cache (they fill it from master). Never saved here:
-      # a tag's cache is only readable by that same tag.
+      # On GitHub's runners only: ours keeps its builds on volumes.
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
         with:
           shared-key: windows-release
+          # A tag's cache is only readable by that same tag.
           save-if: false
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-xwin
+
+      # clang-cl, lld-link and llvm-rc, which cargo-xwin and winresource
+      # (the icon, build.rs) cross-compile with.
+      - name: LLVM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld llvm
+
       - name: Build
-        run: cargo build --release
+        run: |
+          cargo xwin build --release --target x86_64-pc-windows-msvc
+          cp "${CARGO_TARGET_DIR:-target}/x86_64-pc-windows-msvc/release/synththing.exe" .
 
       - uses: actions/upload-artifact@v7
         with:
           name: windows
-          path: target/release/synththing.exe
+          path: synththing.exe
           retention-days: 1
 
-  # On an older Ubuntu, so the binary runs on more distributions (it needs
-  # a glibc at least as new as the one it's built against).
+  # On Ubuntu 22.04 (the runner's image, deploy/ci-runner.compose.yml), so
+  # the binary runs on more distributions (it needs a glibc at least as new
+  # as the one it's built against).
   linux:
     needs: check
-    runs-on: ubuntu-22.04
+    runs-on: ${{ vars.RUNNER || 'ubuntu-22.04' }}  # see ci.yml
     steps:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Its own cache: by job name alone (the default) it would share CI's
-      # `linux` job's, which holds only debug builds from a newer Ubuntu,
-      # so every release build here started from scratch. Release and test
-      # builds share it: the same build, on the same Ubuntu.
+      # On GitHub's runners only: ours keeps its builds on volumes. Its own
+      # cache: by job name alone (the default) it would share CI's `linux`
+      # job's, which holds only debug builds from a newer Ubuntu.
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
         with:
           shared-key: linux-release
+          # A tag's cache is only readable by that same tag.
           save-if: false
 
       - name: System libraries
@@ -98,12 +116,14 @@ jobs:
           sudo apt-get install -y libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev libwayland-dev
 
       - name: Build
-        run: cargo build --release
+        run: |
+          cargo build --release
+          cp "${CARGO_TARGET_DIR:-target}/release/synththing" .
 
       - uses: actions/upload-artifact@v7
         with:
           name: linux
-          path: target/release/synththing
+          path: synththing
           retention-days: 1
 
   # The Android app (docs/ANDROID.md). Only with the release key (the
