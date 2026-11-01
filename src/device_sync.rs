@@ -50,11 +50,10 @@ const GIVEN_FOR: Duration = Duration::from_secs(5 * 60);
 /// How often a device that hasn't reached the hub directly tries again
 /// (or one that has checks it still does).
 const HUB_CHECK: Duration = Duration::from_secs(10 * 60);
-/// How many blobs the song library is split over on the server: each is
-/// sealed and sent on its own, so together they hold this many times the
-/// most one blob can (`library::sync::MAX_DATA`), and a change sends only
-/// the blobs it's in.
-const LIBRARY_SHARDS: usize = 8;
+/// How full a shard of a split blob may get (sealed) before the device
+/// writing it splits every shard in two: below the most one blob can be
+/// (`library::sync::MAX_DATA`), with room for what's added meanwhile.
+const SPLIT_AT: usize = library::sync::MAX_DATA * 3 / 4;
 
 /// What's synced, each its own blob on the server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,21 +86,31 @@ impl Blob {
         self as usize
     }
 
-    /// How many blobs on the server it's split over (`shard_of`).
-    fn shards(self) -> usize {
-        match self {
-            Blob::Library => LIBRARY_SHARDS,
-            _ => 1,
-        }
+    /// Whether it's split over shards on the server, as many as it takes
+    /// (`sync_split`): one that grows with the library, past what one blob
+    /// can hold.
+    fn split(self) -> bool {
+        self == Blob::Library
     }
 
     /// The name on the server of its shard `shard`: `library-3`, say, or
     /// just its name if it isn't split.
     fn server_name(self, shard: usize) -> String {
-        match self.shards() {
-            1 => self.name().to_string(),
-            _ => format!("{}-{shard}", self.name()),
+        if self.split() { format!("{}-{shard}", self.name()) } else { self.name().to_string() }
+    }
+
+    /// The name on the server of a split one's shard count:
+    /// `library-shards`.
+    fn count_name(self) -> String {
+        format!("{}-shards", self.name())
+    }
+
+    /// Which of its shards the blob named `name` on the server is.
+    fn shard_named(self, name: &str) -> Option<usize> {
+        if !self.split() {
+            return (name == self.name()).then_some(0);
         }
+        name.strip_prefix(self.name())?.strip_prefix('-')?.parse().ok()
     }
 
     /// Its section in the slow-frame log, taking in a sync.
@@ -118,8 +127,9 @@ impl Blob {
     }
 }
 
-/// The shard (of `shards`) the leaf at `path` is kept in: by its hash, so
-/// every device puts it in the same one, and they fill evenly.
+/// The shard (of `shards`, a power of two) the leaf at `path` is kept in:
+/// by its hash, so every device puts it in the same one, they fill evenly,
+/// and doubling the count splits each shard `i` into `i` and `i + shards`.
 fn shard_of(path: &str, shards: usize) -> usize {
     use sha2::Digest;
     let hash = sha2::Sha256::digest(path.as_bytes());
@@ -150,7 +160,7 @@ impl Channel {
     /// A blob's channel, as of `revision` (a saved state's): known as its
     /// shard's revision unless it's split (then they're synced afresh).
     fn at(blob: Blob, revision: i64) -> Self {
-        let revisions = if blob.shards() == 1 { vec![revision] } else { Vec::new() };
+        let revisions = if blob.split() { Vec::new() } else { vec![revision] };
         Channel { revisions, ..Channel::default() }
     }
 }
@@ -387,60 +397,139 @@ impl Outcome {
     }
 }
 
-/// Merge with the server's leaves and write the result, shard by shard
-/// (each with its own revision), until each write isn't beaten by another
-/// device's.
+/// Merge with the server's leaves and write the result, until a write
+/// isn't beaten by another device's.
 fn sync(job: Job) -> SyncResult {
-    let shards = job.blob.shards();
-    let part = |fields: &Fields, shard: usize| -> Fields {
-        fields.iter().filter(|(path, _)| shards == 1 || shard_of(path, shards) == shard).map(|(p, f)| (p.clone(), f.clone())).collect()
-    };
-    let mut outcome = Outcome { revisions: Vec::new(), merged: Fields::new(), local: Fields::new(), changes: Vec::new() };
-    for shard in 0..shards {
-        let (revision, merged, changes) = sync_shard(&job, &job.blob.server_name(shard), &part(&job.base, shard), &part(&job.local, shard))?;
-        outcome.revisions.push(revision);
-        outcome.merged.extend(merged);
-        outcome.changes.extend(changes);
+    if job.blob.split() {
+        return sync_split(job);
     }
-    outcome.changes.sort_by(|a, b| a.path.cmp(&b.path));
-    outcome.local = job.local;
-    Ok(outcome)
-}
-
-/// Sync one shard, the blob `name` on the server, from this device's
-/// `base` and `local` leaves in it: the server's revision, the leaves and
-/// what changed here.
-fn sync_shard(job: &Job, name: &str, base: &Fields, local: &Fields) -> Result<(i64, Fields, Vec<Change>), String> {
+    let name = job.blob.name();
     for _ in 0..5 {
         let (revision, plain) = client::sync_get(&job.server, &job.server_key, &job.identity, &job.sync_key, name)?;
         let server: Option<Fields> = plain.and_then(|p| serde_json::from_slice(&p).ok());
-        let (merged, changes) = match &server {
-            Some(server) if job.adopt => {
-                let mut merged = server.clone();
-                for (path, field) in local {
-                    merged.entry(path.clone()).or_insert_with(|| field.clone());
-                }
-                let changes = merged
-                    .iter()
-                    .filter(|(path, field)| local.get(*path).map(|f| &f.value) != Some(&field.value))
-                    .filter(|(path, _)| job.syncs(path))
-                    .map(|(path, _)| Change { path: path.clone(), conflict: None })
-                    .collect();
-                (merged, changes)
-            }
-            Some(server) => settings_sync::merge_where(base, local, server, |path| job.syncs(path)),
-            None => (local.clone(), Vec::new()),
-        };
+        let (merged, changes) = merge(&job, server.as_ref());
         if server.as_ref() == Some(&merged) {
-            return Ok((revision, merged, changes));
+            return Ok(Outcome { revisions: vec![revision], merged, local: job.local, changes });
         }
-        let plain = serde_json::to_vec(&merged).map_err(|e| e.to_string())?;
-        let written = client::sync_write(&job.server, &job.server_key, &job.identity, &job.sync_key, name, revision, &plain)?;
+        let written = client::sync_write(&job.server, &job.server_key, &job.identity, name, revision, &seal(&job, &merged)?)?;
         if written.stored {
-            return Ok((written.revision, merged, changes));
+            return Ok(Outcome { revisions: vec![written.revision], merged, local: job.local, changes });
         }
     }
-    Err(format!("other devices kept changing the {}: trying again in a minute", job.blob.name()))
+    Err(format!("other devices kept changing the {name}: trying again in a minute"))
+}
+
+/// This device's leaves merged with the server's (`None`: it has none yet,
+/// so they go up as they are), and what that changed here.
+fn merge(job: &Job, server: Option<&Fields>) -> (Fields, Vec<Change>) {
+    match server {
+        Some(server) if job.adopt => {
+            let mut merged = server.clone();
+            for (path, field) in &job.local {
+                merged.entry(path.clone()).or_insert_with(|| field.clone());
+            }
+            let changes = merged
+                .iter()
+                .filter(|(path, field)| job.local.get(*path).map(|f| &f.value) != Some(&field.value))
+                .filter(|(path, _)| job.syncs(path))
+                .map(|(path, _)| Change { path: path.clone(), conflict: None })
+                .collect();
+            (merged, changes)
+        }
+        Some(server) => settings_sync::merge_where(&job.base, &job.local, server, |path| job.syncs(path)),
+        None => (job.local.clone(), Vec::new()),
+    }
+}
+
+/// Leaves, deflated and sealed for the server.
+fn seal(job: &Job, fields: &Fields) -> Result<String, String> {
+    let plain = serde_json::to_vec(fields).map_err(|e| e.to_string())?;
+    library::sync::seal(&job.sync_key, &library::sync::pack(&plain))
+}
+
+/// A split blob's shard count, as the server keeps it (`count_name`).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ShardCount {
+    shards: usize,
+}
+
+/// Sync a blob split over shards: its shard count (one until it's
+/// needed more), every shard read and merged as one, and the shards that
+/// changed written back, last first. When one would be too full
+/// (`SPLIT_AT`), the count doubles first, and leaves move to their new
+/// shards: written to those (higher) before they're taken out of the old
+/// ones, so a write that fails between leaves them in both, not neither.
+/// A leaf found in a shard it doesn't belong in (left there that way, or by
+/// a device that hadn't seen the count change) is taken only if the shard
+/// it belongs in lacks it, and then moved.
+fn sync_split(job: Job) -> SyncResult {
+    let name = job.blob.name();
+    let count_name = job.blob.count_name();
+    'again: for _ in 0..5 {
+        let (count_revision, plain) = client::sync_get(&job.server, &job.server_key, &job.identity, &job.sync_key, &count_name)?;
+        let count = plain.and_then(|p| serde_json::from_slice::<ShardCount>(&p).ok()).map_or(1, |c| c.shards.max(1).next_power_of_two());
+        // (Each read at once: one round trip, however many there are.)
+        let read: Vec<Result<(i64, Option<Fields>), String>> = std::thread::scope(|scope| {
+            let reads: Vec<_> = (0..count)
+                .map(|shard| {
+                    let job = &job;
+                    scope.spawn(move || {
+                        let (revision, plain) = client::sync_get(&job.server, &job.server_key, &job.identity, &job.sync_key, &job.blob.server_name(shard))?;
+                        Ok((revision, plain.and_then(|p| serde_json::from_slice(&p).ok())))
+                    })
+                })
+                .collect();
+            reads.into_iter().map(|read| read.join().unwrap_or_else(|_| Err("a shard's read failed".into()))).collect()
+        });
+        let (mut revisions, mut on_server): (Vec<i64>, Vec<Option<Fields>>) = read.into_iter().collect::<Result<Vec<_>, _>>()?.into_iter().unzip();
+        let mut server: Option<Fields> = None;
+        for (shard, fields) in on_server.iter().enumerate() {
+            let Some(fields) = fields else { continue };
+            let server = server.get_or_insert_with(Fields::new);
+            for (path, field) in fields {
+                if shard_of(path, count) == shard {
+                    server.insert(path.clone(), field.clone());
+                } else {
+                    server.entry(path.clone()).or_insert_with(|| field.clone());
+                }
+            }
+        }
+        let (merged, changes) = merge(&job, server.as_ref());
+        let mut shards = count;
+        let parts = loop {
+            let mut parts = vec![Fields::new(); shards];
+            for (path, field) in &merged {
+                parts[shard_of(path, shards)].insert(path.clone(), field.clone());
+            }
+            let sealed: Vec<String> = parts.iter().map(|part| seal(&job, part)).collect::<Result<_, _>>()?;
+            if sealed.iter().all(|data| data.len() <= SPLIT_AT) || shards >= library::sync::MAX_SHARDS {
+                break parts.into_iter().zip(sealed).collect::<Vec<_>>();
+            }
+            shards *= 2;
+        };
+        if shards != count {
+            log::info!("{name} sync: splitting it over {shards} shards (from {count})");
+            let plain = serde_json::to_vec(&ShardCount { shards }).map_err(|e| e.to_string())?;
+            let data = library::sync::seal(&job.sync_key, &library::sync::pack(&plain))?;
+            if !client::sync_write(&job.server, &job.server_key, &job.identity, &count_name, count_revision, &data)?.stored {
+                continue 'again;
+            }
+            revisions.resize(shards, 0);
+            on_server.resize(shards, None);
+        }
+        for (shard, (part, data)) in parts.iter().enumerate().rev() {
+            if on_server[shard].as_ref() == Some(part) || (on_server[shard].is_none() && part.is_empty()) {
+                continue;
+            }
+            let written = client::sync_write(&job.server, &job.server_key, &job.identity, &job.blob.server_name(shard), revisions[shard], data)?;
+            if !written.stored {
+                continue 'again;
+            }
+            revisions[shard] = written.revision;
+        }
+        return Ok(Outcome { revisions, merged, local: job.local, changes });
+    }
+    Err(format!("other devices kept changing the {name}: trying again in a minute"))
 }
 
 /// The debug toast's text: what changed, each named by `title`.
@@ -547,7 +636,7 @@ impl DeviceSync {
         }
         for blob in Blob::ALL {
             let shard = match &changed {
-                Some(changed) => match (0..blob.shards()).find(|&shard| changed.name == blob.server_name(shard)) {
+                Some(changed) => match blob.shard_named(&changed.name) {
                     Some(shard) if changed.revision > self.channels[blob.index()].revisions.get(shard).copied().unwrap_or(0) => Some(shard),
                     _ => continue,
                 },
@@ -1521,7 +1610,9 @@ mod tests {
         assert!(whole.len() > library::sync::MAX_DATA, "too big for one blob");
         let library_job = |state: &State, adopt| Job { blob: Blob::Library, ..job(&base, &key, &me, state, adopt) };
         let up = sync(library_job(&hub, true)).unwrap();
-        assert_eq!(up.revisions, vec![1; LIBRARY_SHARDS], "each shard written once");
+        let shards = up.revisions.len();
+        assert!(shards > 1 && shards.is_power_of_two(), "split as it needed: {shards}");
+        assert_eq!(up.revisions, vec![1; shards], "each shard written once");
         let mut hub = after(hub, &up);
 
         // The desktop takes them all, and adds one: only its shard is written.
@@ -1534,14 +1625,29 @@ mod tests {
         leaves.insert(new.clone(), json!({ "name": "New" }));
         desktop.record_leaves(leaves, settings_sync::now());
         let added = sync(library_job(&desktop, false)).unwrap();
-        let shard = shard_of(&new, LIBRARY_SHARDS);
+        let shard = shard_of(&new, shards);
         assert!(added.revisions.iter().enumerate().all(|(i, &r)| r == if i == shard { 2 } else { 1 }), "{:?}", added.revisions);
+        let desktop = after(desktop, &added);
 
         // The hub hears of it.
         let heard = sync(library_job(&hub, false)).unwrap();
         assert_eq!(heard.changes.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(), [new.as_str()]);
         hub = after(hub, &heard);
         assert_eq!(hub.fields.len(), songs.len() + 1);
+
+        // The library grows past what those shards hold: they split again,
+        // and the other device finds every song where it now is.
+        let more: BTreeMap<String, Value> = (12_000..30_000)
+            .map(|i| (format!("{}.flac", hash(format!("song {i}"))), json!({ "name": format!("Song {i}"), "mbc": hash(format!("recording {i}")) })))
+            .collect();
+        let mut leaves = hub.applied.clone();
+        leaves.extend(more.clone());
+        hub.record_leaves(leaves, settings_sync::now());
+        let grown = sync(library_job(&hub, false)).unwrap();
+        assert!(grown.revisions.len() > shards, "split again: {}", grown.revisions.len());
+        let caught_up = sync(library_job(&desktop, false)).unwrap();
+        assert_eq!(caught_up.merged.len(), songs.len() + more.len() + 1);
+        assert_eq!(caught_up.changes.len(), more.len(), "only the new songs are new to it");
         running.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }

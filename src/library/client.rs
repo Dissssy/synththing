@@ -373,24 +373,16 @@ pub fn sync_get(
     Ok((blob.revision, plain))
 }
 
-/// Write synced data `name`, sealed with the sync key, made from revision
-/// `revision` (0 if this device has never had it): whether it was stored
-/// (it isn't if the server has a newer one, to merge with and write
-/// again), and the server's revision now.
-pub fn sync_write(
-    base: &str,
-    server_key: &str,
-    identity: &Identity,
-    sync_key: &[u8; 32],
-    name: &str,
-    revision: i64,
-    plain: &[u8],
-) -> Result<super::sync::Written, String> {
-    let data = super::sync::seal(sync_key, &super::sync::pack(plain))?;
+/// Write synced data `name`, already sealed with the sync key
+/// (`sync::seal`), made from revision `revision` (0 if this device has
+/// never had it): whether it was stored (it isn't if the server has a
+/// newer one, to merge with and write again), and the server's revision
+/// now.
+pub fn sync_write(base: &str, server_key: &str, identity: &Identity, name: &str, revision: i64, data: &str) -> Result<super::sync::Written, String> {
     if data.len() > super::sync::MAX_DATA {
         return Err(format!("{name} is too big to sync ({} KB sealed; the most is {} KB)", data.len() / 1024, super::sync::MAX_DATA / 1024));
     }
-    let write = super::sync::Write { base: revision, data };
+    let write = super::sync::Write { base: revision, data: data.to_string() };
     let body = serde_json::to_value(&write).map_err(|e| e.to_string())?;
     signed_post(base, server_key, identity, &format!("/api/v1/sync/{name}"), &body)
 }
@@ -1507,8 +1499,9 @@ mod tests {
         }
         std::thread::sleep(Duration::from_millis(300));
 
+        let sealed = |plain: &[u8]| crate::library::sync::seal(&sync_key, &crate::library::sync::pack(plain)).unwrap();
         assert_eq!(sync_get(&base, &key, &alice, &sync_key, "settings").unwrap(), (0, None));
-        let first = sync_write(&base, &key, &alice, &sync_key, "settings", 0, b"one").unwrap();
+        let first = sync_write(&base, &key, &alice, "settings", 0, &sealed(b"one")).unwrap();
         assert_eq!((first.stored, first.revision), (true, 1));
         let changed = crate::library::sync::Changed { name: "settings".into(), revision: 1 };
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), StreamEvent::Sync(changed));
@@ -1517,16 +1510,16 @@ mod tests {
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), StreamEvent::Live("sealed".into()));
         assert_eq!(live_send(&base, &key, &Identity::generate().unwrap(), "x".into()).unwrap(), 0, "only to hers");
         // Made from an older revision: refused, with the server's.
-        let stale = sync_write(&base, &key, &alice, &sync_key, "settings", 0, b"stale").unwrap();
+        let stale = sync_write(&base, &key, &alice, "settings", 0, &sealed(b"stale")).unwrap();
         assert_eq!((stale.stored, stale.revision), (false, 1));
-        assert!(sync_write(&base, &key, &alice, &sync_key, "settings", 1, b"two").unwrap().stored);
+        assert!(sync_write(&base, &key, &alice, "settings", 1, &sealed(b"two")).unwrap().stored);
         assert_eq!(sync_get(&base, &key, &alice, &sync_key, "settings").unwrap(), (2, Some(b"two".to_vec())));
         assert_eq!(sync_get(&base, &key, &alice, &[6; 32], "settings").unwrap(), (2, None), "another sync key's");
         assert!(sync_get(&base, &key, &Identity::generate().unwrap(), &sync_key, "settings").unwrap().1.is_none(), "only hers");
-        assert!(sync_write(&base, &key, &alice, &sync_key, "../x", 0, b"x").is_err());
+        assert!(sync_write(&base, &key, &alice, "../x", 0, &sealed(b"x")).is_err());
         let mut noise = vec![0; crate::library::sync::MAX_DATA];
         getrandom::fill(&mut noise).unwrap();
-        assert!(sync_write(&base, &key, &alice, &sync_key, "settings", 2, &noise).unwrap_err().contains("too big"), "known before sending");
+        assert!(sync_write(&base, &key, &alice, "settings", 2, &sealed(&noise)).unwrap_err().contains("too big"), "known before sending");
 
         // A new key: the synced data comes along.
         let alice2 = Identity::generate().unwrap();
