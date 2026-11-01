@@ -63,6 +63,10 @@ jobs:
       - name: Test
         run: cargo test --lib
 
+      # Last, so this build's output is kept unless the folder is too big.
+      - if: always()
+        uses: ./.github/actions/trim-target
+
   # The docs website (book.toml) builds: every page in docs/SUMMARY.md is
   # there.
   docs:
@@ -92,3 +96,7 @@ jobs:
           name: android
           path: synththing-android-arm64.apk
           retention-days: 7
+
+      # Last, so this build's output is kept unless the folder is too big.
+      - if: always()
+        uses: ./.github/actions/trim-target

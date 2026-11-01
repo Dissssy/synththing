@@ -1,0 +1,23 @@
+# On the self-hosted runners (deploy/ci-runner.compose.yml), which keep
+# CARGO_TARGET_DIR between runs: cargo never removes old builds there
+# (every toolchain update and dependency bump leaves the last ones behind),
+# so once the folder passes the limit it's emptied and the next build
+# starts from scratch. The limit is the runner's TRIM_TARGET_GB (30 GB
+# without it). Nothing on GitHub's runners, whose folders go away.
+name: Trim builds
+description: Empty the kept build folder once it's too big
+
+runs:
+  using: composite
+  steps:
+    - if: runner.environment == 'self-hosted'
+      shell: bash
+      run: |
+        LIMIT="${TRIM_TARGET_GB:-30}"
+        dir="${CARGO_TARGET_DIR:-target}"
+        size=$(du -s --block-size=1G "$dir" 2> /dev/null | cut -f1)
+        echo "$dir: ${size:-0} GB (limit $LIMIT GB)"
+        if [ "${size:-0}" -gt "$LIMIT" ]; then
+          echo "Emptying it."
+          find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        fi

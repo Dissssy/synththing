@@ -112,6 +112,10 @@ jobs:
           path: synththing.exe
           retention-days: 1
 
+      # Last, so this build's output is kept unless the folder is too big.
+      - if: always()
+        uses: ./.github/actions/trim-target
+
   # On Ubuntu 22.04, as releases are (glibc, see release.yml).
   linux:
     needs: stamp
@@ -149,6 +153,10 @@ jobs:
           path: synththing
           retention-days: 1
 
+      # Last, so this build's output is kept unless the folder is too big.
+      - if: always()
+        uses: ./.github/actions/trim-target
+
   # The Android app (docs/ANDROID.md). A branch's is an app of its own
   # (src/android_id.rs), installed beside the usual one from its Updates >
   # Branch builds. Published only with the release key, so each build
@@ -180,6 +188,10 @@ jobs:
           name: android
           path: synththing-android-arm64.apk
           retention-days: 1
+
+      # Last, so this build's output is kept unless the folder is too big.
+      - if: always()
+        uses: ./.github/actions/trim-target
 
   # The builds into the release at once, once they've passed: a release
   # never has one platform's build newer than another's. The Android app is

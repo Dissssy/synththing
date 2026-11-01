@@ -5,12 +5,18 @@
 # Administration: Read and write, which lets each container register
 # itself on every start. Set RUNNER to synththing-runner.
 #
+# Also set in the stack's environment variables: RUNNER_ROOT, the host
+# folder everything below is kept in (a disk with room: builds reach tens
+# of GB), and optionally TRIM_TARGET_GB, the size past which a runner's
+# build folder is emptied after a job (.github/actions/trim-target, 30 by
+# default).
+#
 # A runner takes one job at a time, so there's one per platform: builds of
 # different platforms run side by side, two of the same one queue. Each has
 # the shared label (for small jobs, any runner) and its platform's
 # (synththing-runner-linux and so on, for builds).
 #
-# Every volume caches downloads or builds between runs, so the runners skip
+# Every folder caches downloads or builds between runs, so the runners skip
 # the GitHub cache (rust-cache, setup-gradle's cache) GitHub's runners use.
 # Wiping one is always safe, it just refills on the next run. Each runner
 # has its own build folder and toolchains (rustup has no locking, so two
@@ -30,6 +36,7 @@ x-env: &env
   # Builds go here instead of the checkout's target/ (which checkout
   # wipes), so each build only redoes what changed.
   CARGO_TARGET_DIR: /root/target
+  TRIM_TARGET_GB: ${TRIM_TARGET_GB:-30}
 
 services:
   runner-linux:
@@ -39,10 +46,10 @@ services:
       RUNNER_NAME: ethan-docker-synththing-linux
       LABELS: synththing-runner,synththing-runner-linux
     volumes:
-      - rustup-linux:/root/.rustup
+      - ${RUNNER_ROOT}/rustup-linux:/root/.rustup
       # cargo's registry, git checkouts and installed tools
-      - cargo:/root/.cargo
-      - target-linux:/root/target
+      - ${RUNNER_ROOT}/cargo:/root/.cargo
+      - ${RUNNER_ROOT}/target-linux:/root/target
 
   runner-windows:
     <<: *runner
@@ -51,11 +58,11 @@ services:
       RUNNER_NAME: ethan-docker-synththing-windows
       LABELS: synththing-runner,synththing-runner-windows
     volumes:
-      - rustup-windows:/root/.rustup
-      - cargo:/root/.cargo
-      - target-windows:/root/target
+      - ${RUNNER_ROOT}/rustup-windows:/root/.rustup
+      - ${RUNNER_ROOT}/cargo:/root/.cargo
+      - ${RUNNER_ROOT}/target-windows:/root/target
       # the MSVC CRT and Windows SDK cargo-xwin downloads
-      - xwin:/root/.cache/cargo-xwin
+      - ${RUNNER_ROOT}/xwin:/root/.cache/cargo-xwin
 
   runner-android:
     <<: *runner
@@ -66,25 +73,13 @@ services:
       # Where android-actions/setup-android installs the SDK and NDK.
       ANDROID_HOME: /root/android-sdk
     volumes:
-      - rustup-android:/root/.rustup
-      - cargo:/root/.cargo
-      - target-android:/root/target
+      - ${RUNNER_ROOT}/rustup-android:/root/.rustup
+      - ${RUNNER_ROOT}/cargo:/root/.cargo
+      - ${RUNNER_ROOT}/target-android:/root/target
       # the Android SDK, NDK and licences
-      - android-sdk:/root/android-sdk
+      - ${RUNNER_ROOT}/android-sdk:/root/android-sdk
       # Gradle's dependencies, the Android Gradle plugin and Gradle itself
-      - gradle:/root/.gradle
+      - ${RUNNER_ROOT}/gradle:/root/.gradle
       # JDKs from setup-java
-      - toolcache:/opt/hostedtoolcache
+      - ${RUNNER_ROOT}/toolcache:/opt/hostedtoolcache
 
-volumes:
-  rustup-linux:
-  rustup-windows:
-  rustup-android:
-  cargo:
-  target-linux:
-  target-windows:
-  target-android:
-  xwin:
-  android-sdk:
-  gradle:
-  toolcache:

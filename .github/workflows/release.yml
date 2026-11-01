@@ -89,6 +89,10 @@ jobs:
           path: synththing.exe
           retention-days: 1
 
+      # Last, so this build's output is kept unless the folder is too big.
+      - if: always()
+        uses: ./.github/actions/trim-target
+
   # On Ubuntu 22.04 (the runner's image, deploy/ci-runner.compose.yml), so
   # the binary runs on more distributions (it needs a glibc at least as new
   # as the one it's built against).
@@ -126,6 +130,10 @@ jobs:
           path: synththing
           retention-days: 1
 
+      # Last, so this build's output is kept unless the folder is too big.
+      - if: always()
+        uses: ./.github/actions/trim-target
+
   # The Android app (docs/ANDROID.md). Only with the release key (the
   # ANDROID_* secrets): without it, this builds but adds nothing.
   android:
@@ -150,6 +158,10 @@ jobs:
           name: android
           path: synththing-android-arm64.apk
           retention-days: 1
+
+      # Last, so this build's output is kept unless the folder is too big.
+      - if: always()
+        uses: ./.github/actions/trim-target
 
   # The release, with every build at once, once the desktop builds have
   # passed. The Android app is still experimental, so it failing (or being
