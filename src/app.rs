@@ -1496,17 +1496,32 @@ impl App {
     }
 
     /// Volume as a button, when the bar has no room for its slider: it
-    /// opens the slider in a popup.
+    /// opens the slider upright above it, its value on top.
     fn volume_button_ui(&mut self, ui: &mut egui::Ui) {
         let button = ui.add(icon_button(speaker_icon(self.volume))).on_hover_text(format!("Volume: {:.0}%", self.volume * 100.0));
-        bar_popup(&button, |ui| self.volume_ui(ui));
+        bar_popup(&button, |ui| {
+            ui.weak(format!("{:.0}%", self.volume * 100.0));
+            if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).vertical().show_value(false)).changed() {
+                self.send_volume();
+            }
+        });
     }
 
     /// Speed as a button, when the bar has no room for its slider: it
-    /// opens the slider in a popup.
+    /// opens the slider upright above it, its value on top and a button
+    /// back to 1x under it.
     fn speed_button_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let button = ui.add(icon_button("gauge").selected(view.speed != 1.0)).on_hover_text(format!("Speed: {:.2}x", view.speed));
-        bar_popup(&button, |ui| self.speed_ui(ui, view));
+        bar_popup(&button, |ui| {
+            ui.weak(format!("{:.2}x", view.speed));
+            let mut speed = view.speed;
+            if ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).vertical().show_value(false)).changed() {
+                self.send(AudioCommand::SetSpeed(speed));
+            }
+            if ui.add_enabled(view.speed != 1.0, egui::Button::new("1x")).on_hover_text("Back to normal speed").clicked() {
+                self.send(AudioCommand::SetSpeed(1.0));
+            }
+        });
     }
 
     /// Speed: its value, a slider and its icon, which puts it back to 1x
@@ -4823,6 +4838,8 @@ const TRANSPORT_WIDTH: f32 = 5.0 * ICON_BUTTON_WIDTH + PLAY_WIDTH + 5.0 * 8.0;
 /// How wide volume and speed's sliders get in the controls bar.
 const MIN_SLIDER: f32 = 60.0;
 const MAX_SLIDER: f32 = 160.0;
+/// How tall a slider is in a controls bar popup (`bar_popup`).
+const POPUP_SLIDER: f32 = 120.0;
 const VOLUME_TEXT_WIDTH: f32 = 36.0;
 const SPEED_TEXT_WIDTH: f32 = 40.0;
 const SPEAKER_WIDTH: f32 = 20.0;
@@ -4867,13 +4884,19 @@ fn shape_width(shape: Shape, slider: f32, gap: f32) -> f32 {
     }
 }
 
-/// A popup under a controls bar button holding one of its sliders, laid
-/// out as in the bar (right to left).
+/// A popup right above a controls bar button (as a dropdown, but up),
+/// holding one of its sliders upright, `POPUP_SLIDER` tall, down its
+/// middle.
 fn bar_popup(button: &egui::Response, add: impl FnOnce(&mut egui::Ui)) {
-    egui::Popup::from_toggle_button_response(button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        ui.spacing_mut().slider_width = MAX_SLIDER;
-        ui.allocate_ui_with_layout(egui::vec2(0.0, TRANSPORT_HEIGHT), egui::Layout::right_to_left(egui::Align::Center), add);
-    });
+    egui::Popup::from_toggle_button_response(button)
+        .align(egui::RectAlign::TOP)
+        .align_alternatives(&[])
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .width(button.rect.width())
+        .show(|ui| {
+            ui.spacing_mut().slider_width = POPUP_SLIDER;
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), add);
+        });
 }
 
 /// The speaker icon for `volume`.
