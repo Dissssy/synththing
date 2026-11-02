@@ -9,6 +9,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - The controls bar's devices button stays in its place, greyed out, while no other device is online, instead of disappearing.
 
 ### Added
+- Show in folder (desktop): opens your file manager with the file selected, from a song's right-click menu and its Song info > File page, a soundfont's right-click menu, and the running visualizer script's buttons in the script picker. Songs show as synththing's own copy in its library folder.
 - The Publish dialog shows the script's preview, as the Online Library will show it.
 - View in Library (after publishing, and in a notification) shows just that script's details in a dialog, leaving your layout as it is. Going to a panel your locked layout hasn't got shows it in the same dialog.
 - A preview the server is making shows dimmed with a spinner in the Library, and the new one appears as soon as it's done.

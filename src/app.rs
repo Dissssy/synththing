@@ -14,6 +14,8 @@ mod branding;
 mod close;
 mod editor;
 mod feedback;
+#[cfg(not(target_os = "android"))]
+mod file_manager;
 mod flow;
 pub mod fonts;
 pub use editor::ApplyMode;
@@ -1730,6 +1732,8 @@ impl App {
                 if ui.button(format!("Remove from the list{count}")).clicked() {
                     remove = Some(rows);
                 }
+                #[cfg(not(target_os = "android"))]
+                file_manager::show_in_folder_button(ui, path);
             });
             let active = Some(row.idx) == active_sf;
             let text = egui::RichText::new(nice_name(path));
@@ -2874,6 +2878,10 @@ impl App {
             {
                 save_copy = Some(path.clone());
             }
+            #[cfg(not(target_os = "android"))]
+            if let [path] = paths {
+                file_manager::show_in_folder_button(ui, path);
+            }
             if ui.button("Song info").clicked() {
                 info_for = Some(paths.to_vec());
             }
@@ -3727,6 +3735,7 @@ impl App {
             {
                 self.restart_script();
             }
+            #[cfg(not(target_os = "android"))]
             if self.script.options().assets
                 && let Some(path) = self.active_script.and_then(|i| self.available_scripts.get(i))
             {
@@ -3736,7 +3745,7 @@ impl App {
                     .on_hover_text(format!("Open the script's assets folder ({}), for the files it reads", folder.display()))
                     .clicked()
                 {
-                    open_folder(&folder);
+                    file_manager::open_folder(&folder);
                 }
             }
             if visualizer {
@@ -3800,6 +3809,8 @@ impl App {
             let name = lua_visualizer::display_name(path);
             self.rename = Some(RenameScript { path: path.to_path_buf(), name, error: None, focused_once: false, waiting: None });
         }
+        #[cfg(not(target_os = "android"))]
+        file_manager::show_in_folder_button(ui, path);
         self.script_share_button(ui);
     }
 
@@ -5201,35 +5212,6 @@ pub(super) fn chip(ui: &mut egui::Ui, text: &str, color: egui::Color32) -> egui:
     response
 }
 
-/// Open the folder `dir` in the system file manager, making it first.
-fn open_folder(dir: &Path) {
-    let _ = std::fs::create_dir_all(dir);
-    let opener = if cfg!(windows) {
-        "explorer"
-    } else if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    if let Err(e) = std::process::Command::new(opener).arg(dir).spawn() {
-        log::warn!("couldn't open the file manager: {e}");
-    }
-}
-
-/// Show `path` in the system file manager (selected, on Windows).
-fn open_in_file_manager(path: &Path) {
-    let result = if cfg!(windows) {
-        std::process::Command::new("explorer").arg("/select,").arg(path).spawn()
-    } else {
-        let dir = path.parent().unwrap_or(path);
-        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-        std::process::Command::new(opener).arg(dir).spawn()
-    };
-    if let Err(e) = result {
-        log::warn!("couldn't open the file manager: {e}");
-    }
-}
-
 /// While something is being dragged, a small label following the pointer
 /// saying what, egui's drag-and-drop carries a payload but draws nothing
 /// for it on its own.
@@ -5412,7 +5394,7 @@ fn log_actions_ui(ui: &mut egui::Ui, shown: &[&applog::Entry]) {
         if let Some(path) = applog::file_path()
             && ui.button("Open log folder").clicked()
         {
-            open_in_file_manager(&path);
+            file_manager::show_in_folder(&path);
         }
         #[cfg(target_os = "android")]
         if let Some(path) = applog::file_path()

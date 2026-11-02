@@ -483,6 +483,8 @@ impl App {
 
     /// Every detail read from the file at `path`.
     fn file_tab_ui(&mut self, ui: &mut egui::Ui, path: &std::path::Path) {
+        #[cfg(not(target_os = "android"))]
+        super::file_manager::show_in_folder_button(ui, path);
         match self.song_info.get(path) {
             None => {
                 ui.horizontal(|ui| {
