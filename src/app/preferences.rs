@@ -6,7 +6,7 @@
 
 use eframe::egui;
 
-use super::reorder::{reorder_list, ListEntry};
+use super::reorder::{reorder_list, trash_ui, ListEntry};
 use super::{categories_body, icon_button, row_icon_button, row_icon_button_room, nice_name, control_width, setting_label, setting_combo, setting_row, setting_slider, settings_group, toggle_chip, with_info, App};
 use crate::audio::{AudioCommand, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
@@ -169,7 +169,7 @@ impl App {
     }
 
     /// Playback > Media controls (Android): the buttons beside
-    /// play/pause, in order, each moved up or down or taken out, and more
+    /// play/pause, in order, each dragged to its place or onto the heading's trash, and more
     /// added.
     fn media_buttons_ui(&self, ui: &mut egui::Ui, buttons: &mut config::MediaButtons) {
         use config::MediaButton;
@@ -199,8 +199,18 @@ impl App {
                 [(config::NOTIFICATION_BUTTONS, "notification"), (mini_player, "mini player")].into_iter().filter(|(room, _)| *room == i).map(|(_, p)| p).collect();
             (!places.is_empty()).then(|| format!("The {} shows the ones above", places.join(" and the "))).into_iter().collect()
         };
-        settings_group("Media controls").icon("bell-simple").hint("Buttons beside play/pause, most wanted first").show(ui, |ui| {
-            reorder_list(ui, "media_buttons", &mut buttons.0, |i, button| ListEntry { lines: cutoff(i), row: describe(button) });
+        let len = buttons.0.len();
+        let mut trash = |ui: &mut egui::Ui| trash_ui(ui, "media_buttons", len);
+        settings_group("Media controls").icon("bell-simple").hint("Buttons beside play/pause, most wanted first").buttons(&mut trash).show(ui, |ui| {
+            let entry = |i: usize, _: &MediaButton| ListEntry { lines: cutoff(i), row: true };
+            let row = |ui: &mut egui::Ui, button: &MediaButton| {
+                if let Some(text) = describe(button) {
+                    ui.add(egui::Label::new(text).selectable(false).truncate());
+                }
+            };
+            if let Some(i) = reorder_list(ui, "media_buttons", &mut buttons.0, entry, row) {
+                buttons.0.remove(i);
+            }
             let mut sorted: Vec<(&String, &crate::song_store::Tag)> = tags.iter().collect();
             sorted.sort_by_key(|(_, tag)| tag.name.to_lowercase());
             let unused: Vec<MediaButton> = [MediaButton::Previous, MediaButton::Next, MediaButton::Star]
@@ -227,7 +237,7 @@ impl App {
 
     /// Appearance > Controls bar: the bar's line of buttons and sliders as
     /// a list, its left, middle and right sections under their lines, each
-    /// moved up or down (past a line into the next section) or taken out;
+    /// dragged to its place (past a line into the next section) or onto the heading's trash;
     /// the heading's + adds more at the left's end, and ↺ puts back the
     /// usual ones.
     fn controls_bar_list_ui(&self, ui: &mut egui::Ui, bar: &mut config::ControlsBar) {
@@ -263,7 +273,12 @@ impl App {
                 BarItem::Right => lines.push("Right".to_string()),
                 _ => {}
             }
-            ListEntry { lines, row: describe(item) }
+            ListEntry { lines, row: !matches!(item, BarItem::Middle | BarItem::Right) }
+        };
+        let row = |ui: &mut egui::Ui, item: &BarItem| {
+            if let Some(text) = describe(item) {
+                ui.add(egui::Label::new(text).selectable(false).truncate());
+            }
         };
         let mut sorted: Vec<(&String, &crate::song_store::Tag)> = tags.iter().collect();
         sorted.sort_by_key(|(_, tag)| tag.name.to_lowercase());
@@ -280,6 +295,7 @@ impl App {
         let mut added = None;
         let mut reset = false;
         let usual = *bar == config::ControlsBar::default();
+        let len = bar.0.len();
         let mut buttons = |ui: &mut egui::Ui| {
             super::info_icon(ui, info);
             if ui.add_enabled(!usual, row_icon_button(ui, "arrow-counter-clockwise")).on_hover_text("Back to the usual buttons").clicked() {
@@ -295,9 +311,12 @@ impl App {
                     }
                 }
             });
+            trash_ui(ui, "controls_bar", len);
         };
         settings_group("Controls bar").icon("faders-horizontal").hint("Left to right, the middle kept centred").buttons(&mut buttons).show(ui, |ui| {
-            reorder_list(ui, "controls_bar", &mut bar.0, entry);
+            if let Some(i) = reorder_list(ui, "controls_bar", &mut bar.0, entry, row) {
+                bar.0.remove(i);
+            }
         });
         if let Some(item) = added {
             let at = bar.0.iter().position(|i| *i == BarItem::Middle).unwrap_or(0);
