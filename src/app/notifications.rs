@@ -487,8 +487,7 @@ impl App {
         });
         if let Some(script) = show {
             self.notifications.detail = None;
-            self.set_open(crate::layout::Section::Library, true);
-            self.library_open_script(script);
+            self.show_library_script(script);
         } else if moderate {
             self.notifications.detail = None;
             self.open_moderation();

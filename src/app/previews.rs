@@ -164,8 +164,21 @@ pub struct LocalPreviews {
     pub drawn_at: u64,
 }
 
+/// The cache's folder, named for how previews are made: when that
+/// changes (previews got fresh, without the script's saved data), a new
+/// name drops every preview made the old way, and the old folder goes.
+const CACHE: &str = "previews-2";
+const OLD_CACHES: [&str; 1] = ["previews"];
+
 pub fn cache_dir() -> Option<PathBuf> {
-    crate::config::config_dir().ok().map(|d| d.join("library").join("previews"))
+    static FORGOT: std::sync::Once = std::sync::Once::new();
+    let library = crate::config::config_dir().ok()?.join("library");
+    FORGOT.call_once(|| {
+        for old in OLD_CACHES {
+            let _ = std::fs::remove_dir_all(library.join(old));
+        }
+    });
+    Some(library.join(CACHE))
 }
 
 fn cached(dir: &Path, sha256: &str, sheet: bool) -> PathBuf {
@@ -530,18 +543,15 @@ impl super::App {
         picked
     }
 
-    /// The sidebar for one script, but for its description, which it
-    /// returns (to go under anything added to the card): None if the
-    /// script couldn't be read.
-    fn script_card_ui(&self, ui: &mut egui::Ui, script: &Path) -> Option<String> {
+    /// `script`'s preview, `width` wide: made here as the server makes it
+    /// (or the server's, on Android), else where it's got to.
+    pub(super) fn script_preview_ui(&self, ui: &mut egui::Ui, script: &Path, width: f32) {
         let source = self.preview_source();
         let mut previews = self.script_previews.borrow_mut();
-        let Some(card) = previews.card(script) else {
-            ui.weak("Couldn't read it.");
-            return None;
+        let Some(sha256) = previews.card(script).map(|c| c.sha256.clone()) else {
+            placeholder_ui(ui, width, "Couldn't read it.", false);
+            return;
         };
-        let (sha256, description, installed) = (card.sha256.clone(), card.description.clone(), card.installed.clone());
-        let width = ui.available_width();
         match previews.preview(ui.ctx(), script, &sha256, source) {
             Shown::Ready(image) => {
                 image.ui(ui, width);
@@ -550,7 +560,20 @@ impl super::App {
             Shown::Making => placeholder_ui(ui, width, "Making its preview...", true),
             Shown::Missing(why) => placeholder_ui(ui, width, &why, false),
         }
+    }
+
+    /// The sidebar for one script, but for its description, which it
+    /// returns (to go under anything added to the card): None if the
+    /// script couldn't be read.
+    fn script_card_ui(&self, ui: &mut egui::Ui, script: &Path) -> Option<String> {
+        let mut previews = self.script_previews.borrow_mut();
+        let Some(card) = previews.card(script) else {
+            ui.weak("Couldn't read it.");
+            return None;
+        };
+        let (description, installed) = (card.description.clone(), card.installed.clone());
         drop(previews);
+        self.script_preview_ui(ui, script, ui.available_width());
 
         ui.add_space(4.0);
         ui.strong(lua_visualizer::display_name(script));

@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
+use super::panel_modal::{PanelChange, PanelView};
 use super::previews::{self, PreviewImage};
 use super::{info_icon, with_info, App};
 use crate::build_info::Online;
@@ -960,6 +961,32 @@ impl App {
                 details.show(&mut columns[1], |ui| self.library_details_ui(ui, &mut act));
             });
         }
+        self.library_act(act);
+    }
+
+    /// One script's details on their own, in the panel dialog
+    /// (`panel_modal.rs`): what's done there may ask it to show something
+    /// else (an author's uploads: the whole Library) or to close.
+    pub(super) fn library_script_ui(&mut self, ui: &mut egui::Ui) -> Option<PanelChange> {
+        if !crate::build_info::online(Online::Scripts) {
+            self.online_ui(ui, Online::Scripts);
+            return None;
+        }
+        let mut act = LibraryActions::default();
+        self.library_details_ui(ui, &mut act);
+        let change = if act.show_author.is_some() {
+            Some(PanelChange::Show(PanelView::Section(crate::layout::Section::Library)))
+        } else if act.use_script.is_some() {
+            Some(PanelChange::Close)
+        } else {
+            None
+        };
+        self.library_act(act);
+        change
+    }
+
+    /// Carry out what was clicked in the Library's list or details.
+    fn library_act(&mut self, act: LibraryActions) {
         let LibraryActions { pick, open, install, update, use_script, show_author, delete, encore, report } = act;
 
         if let Some(id) = pick {
@@ -1036,7 +1063,7 @@ impl App {
             && let Some(idx) = self.available_scripts.iter().position(|p| *p == path)
         {
             self.load_script(idx);
-            self.set_open(crate::layout::Section::Visualizer, true);
+            self.reveal_section(crate::layout::Section::Visualizer);
         }
     }
 
@@ -1105,7 +1132,11 @@ impl App {
             ui.weak("Pick a script to see more.");
             return;
         };
-        let Some(s) = self.library.results.iter().find(|f| f.id == id).cloned() else {
+        // (One opened from elsewhere may not be among the results, or
+        // dropped from them by a search since: its details have it.)
+        let found = self.library.results.iter().find(|f| f.id == id).cloned();
+        let Some(s) = found.or_else(|| self.library.details.as_ref().filter(|d| d.summary.id == id).map(|d| d.summary.clone())) else {
+            previews::placeholder_ui(ui, ui.available_width().min(480.0), "Loading...", true);
             return;
         };
         let s = &s;
@@ -1635,14 +1666,13 @@ impl App {
                     if ui.button("Close").clicked() {
                         close = true;
                     }
-                    if ui.button("Open in Library").clicked() {
+                    if ui.button("View in Library").clicked() {
                         show = true;
                     }
                 });
             });
             if show {
-                self.set_open(crate::layout::Section::Library, true);
-                self.library_open_script(id);
+                self.show_library_script(id);
             } else if !(close || response.should_close()) {
                 self.library.publish = Some(draft);
             }
@@ -1656,6 +1686,11 @@ impl App {
                 (None, None) => "Publish a script",
             });
             ui.weak(draft.script.display().to_string());
+            // What the server will make of it: previews are made the same
+            // way everywhere, so this is how the Library will show it.
+            ui.add_space(4.0);
+            self.script_preview_ui(ui, &draft.script, ui.available_width().min(360.0));
+            ui.weak("Its preview, as the Online Library will show it.");
             if let Some((original, by)) = &draft.remix {
                 let credit = format!("A remix of \"{}\" by {by}: it links back to it, crediting it.", original.name);
                 with_info(
