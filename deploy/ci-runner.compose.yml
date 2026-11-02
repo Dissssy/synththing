@@ -14,7 +14,10 @@
 # A runner takes one job at a time, so there's one per platform: builds of
 # different platforms run side by side, two of the same one queue. Each has
 # the shared label (for small jobs, any runner) and its platform's
-# (synththing-runner-linux and so on, for builds).
+# (synththing-runner-linux and so on, for builds). The release runner has
+# only its own label (synththing-runner-release): it's kept free for Cut
+# release (.github/workflows/cut-release.yml), which waits there for CI's
+# builds, so it can't sit on a platform runner one of them needs.
 #
 # Every folder caches downloads or builds between runs, so the runners skip
 # the GitHub cache (rust-cache, setup-gradle's cache) GitHub's runners use.
@@ -82,3 +85,14 @@ services:
       # JDKs from setup-java
       - ${RUNNER_ROOT}/toolcache:/opt/hostedtoolcache
 
+
+  # Builds nothing: cargo release bumps, commits, tags and pushes.
+  runner-release:
+    <<: *runner
+    environment:
+      <<: *env
+      RUNNER_NAME: ethan-docker-synththing-release
+      LABELS: synththing-runner-release
+    volumes:
+      - ${RUNNER_ROOT}/rustup-release:/root/.rustup
+      - ${RUNNER_ROOT}/cargo:/root/.cargo

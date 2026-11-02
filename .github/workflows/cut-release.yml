@@ -36,7 +36,9 @@ jobs:
   release:
     # release.toml only allows master; this says so before anything runs.
     if: github.ref == 'refs/heads/master'
-    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
+    # Its own runner (deploy/ci-runner.compose.yml): waiting on a shared
+    # one could hold the very runner the CI build it waits for needs.
+    runs-on: ${{ vars.RUNNER && format('{0}-release', vars.RUNNER) || 'ubuntu-latest' }}
     steps:
       # Only a commit CI passed is released. Master's test builds are
       # cancelled first, except on a dry run (the release commit makes its own nightly), then
