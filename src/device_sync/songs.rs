@@ -4,8 +4,9 @@
 //! longer than a frame once there are thousands. `DeviceSync` sends what
 //! changed and takes back what it has to act on (`DeviceSync::poll`).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
@@ -18,8 +19,11 @@ use crate::song_sync::{self, HubLeaf, HubPlan, Moved, SyncedDevice, SyncedLibrar
 /// The songs as the device has them, for the worker to go by.
 pub(super) struct Songs {
     pub store: SongStore,
-    /// The songs this device wants (`song_sync::wanted`).
-    pub wanted: BTreeSet<String>,
+    /// The songs in the playlists, and which others this device takes:
+    /// the worker works out the songs it wants from them
+    /// (`song_sync::wanted`), off the UI thread.
+    pub listed: Vec<String>,
+    pub wants: song_sync::Wants,
     /// This device's ID and name (`Device`).
     pub device: String,
     pub device_name: String,
@@ -88,13 +92,15 @@ pub(super) enum Reply {
 }
 
 /// Starts the worker: syncs it starts report to `events`.
-pub(super) fn spawn(events: Sender<Done>) -> (Sender<Request>, Receiver<Reply>) {
+/// It keeps `wanted_ids`, the songs this device wants by their relay IDs,
+/// for the song inbox.
+pub(super) fn spawn(events: Sender<Done>, wanted_ids: Arc<Mutex<HashMap<String, String>>>) -> (Sender<Request>, Receiver<Reply>) {
     let (requests, inbox) = mpsc::channel();
     let (replies, outbox) = mpsc::channel();
     std::thread::Builder::new()
         .name("song sync".into())
         .spawn(move || {
-            let mut worker = Worker { library: None, transfers: None, events, replies };
+            let mut worker = Worker { library: None, transfers: None, wanted: BTreeSet::new(), wanted_ids, events, replies };
             for request in inbox {
                 worker.handle(request);
             }
@@ -106,14 +112,22 @@ pub(super) fn spawn(events: Sender<Done>) -> (Sender<Request>, Receiver<Reply>) 
 struct Worker {
     library: Option<State>,
     transfers: Option<State>,
+    /// The songs this device wants, as of the last songs sent.
+    wanted: BTreeSet<String>,
+    wanted_ids: Arc<Mutex<HashMap<String, String>>>,
     events: Sender<Done>,
     replies: Sender<Reply>,
 }
 
 impl Worker {
     fn handle(&mut self, request: Request) {
+        if let Request::Start(_, songs) | Request::Songs(songs) | Request::Synced(_, _, songs) = &request {
+            self.note_wanted(songs);
+        }
         match request {
             Request::Reload => {
+                // (Another sync key hashes the wanted songs to other IDs.)
+                self.wanted.clear();
                 self.library = State::load(song_sync::LIBRARY);
                 self.transfers = State::load(song_sync::TRANSFERS);
                 let revision = |state: &Option<State>| state.as_ref().map(|s| s.revision);
@@ -173,6 +187,19 @@ impl Worker {
                     .ok();
             }
             Request::Synced(blob, outcome, songs) => self.synced(blob, outcome, &songs),
+        }
+    }
+
+    /// Work out the songs this device wants, and their relay IDs if they
+    /// changed (hashing each one, which took tens of milliseconds a frame
+    /// on a phone when it ran on the UI thread).
+    fn note_wanted(&mut self, songs: &Songs) {
+        let wanted = song_sync::wanted(&songs.store, &songs.listed, songs.wants);
+        if wanted != self.wanted {
+            if let Some(sync_key) = identity::sync_key() {
+                *self.wanted_ids.lock().unwrap_or_else(|p| p.into_inner()) = song_sync::wanted_ids(&sync_key, &wanted);
+            }
+            self.wanted = wanted;
         }
     }
 
@@ -246,7 +273,7 @@ impl Worker {
         let hub_plan = hub.as_ref().map(|hub| HubPlan { device: hub.device.clone(), direct: songs.hub_direct, only: songs.hub_only });
         let pulls = hub_plan.as_ref().is_some_and(|hub| hub.direct && hub.device != songs.device);
         let hub_only = hub_plan.as_ref().is_some_and(|hub| hub.only && hub.device != songs.device);
-        let mut plan = song_sync::plan(&applied, &songs.device, |k| songs.store.has(k), &songs.wanted, &songs.busy, &songs.given, hub_plan.as_ref());
+        let mut plan = song_sync::plan(&applied, &songs.device, |k| songs.store.has(k), &self.wanted, &songs.busy, &songs.given, hub_plan.as_ref());
         song_sync::note_device(&mut plan.leaves, &songs.device, &songs.device_name, pulls, hub_only, now);
         song_sync::note_have(&mut plan.leaves, &songs.device, &songs.store);
         if let Some((leaf, take_over)) = &songs.hub

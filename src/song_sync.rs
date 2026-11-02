@@ -191,14 +191,19 @@ pub struct Wants {
     pub every: bool,
 }
 
+/// The songs (by key) in the playlists, for `wanted`.
+pub fn listed(store: &SongStore, playlists: &Library) -> Vec<String> {
+    let entries = playlists.lists.iter().flat_map(|stored| &stored.playlist.entries);
+    entries.filter_map(|e| song_store::key_in(store.dir(), &e.path)).map(str::to_string).collect()
+}
+
 /// The songs this device wants: those it lacks and hasn't blocked (nor
 /// were removed from every device), in a
-/// playlist, starred, or anywhere in the library, as `wants` says.
-pub fn wanted(store: &SongStore, playlists: &Library, wants: Wants) -> BTreeSet<String> {
+/// playlist (`listed`), starred, or anywhere in the library, as `wants` says.
+pub fn wanted(store: &SongStore, listed: &[String], wants: Wants) -> BTreeSet<String> {
     let lacks = |key: &str| song_store::is_key(key) && !store.has(key) && !store.is_blocked(key) && !store.is_removed(key);
     let known = store.known().filter(|(_, song)| wants.every || (wants.starred && song.tags.iter().any(|t| t == song_store::STARRED)));
-    let listed = playlists.lists.iter().flat_map(|stored| &stored.playlist.entries).filter_map(|e| song_store::key_in(store.dir(), &e.path));
-    known.map(|(key, _)| key).chain(listed).filter(|key| lacks(key)).map(str::to_string).collect()
+    known.map(|(key, _)| key).chain(listed.iter().map(String::as_str)).filter(|key| lacks(key)).map(str::to_string).collect()
 }
 
 /// What to do about the transfers.
@@ -793,13 +798,13 @@ mod tests {
         let (playlists, _) = Library::load(root.join("playlists"), phone_dir.clone());
         let (only_listed, starred, every) =
             (Wants { starred: false, every: false }, Wants { starred: true, every: false }, Wants { starred: false, every: true });
-        assert!(wanted(&phone, &playlists, only_listed).is_empty(), "in no playlist");
-        assert!(wanted(&phone, &playlists, starred).is_empty(), "not starred");
+        assert!(wanted(&phone, &listed(&phone, &playlists), only_listed).is_empty(), "in no playlist");
+        assert!(wanted(&phone, &listed(&phone, &playlists), starred).is_empty(), "not starred");
         let mut starred_phone = phone.clone();
         starred_phone.set_song_tags(&song.key, vec!["t1".into(), song_store::STARRED.into()]);
-        assert_eq!(wanted(&starred_phone, &playlists, starred), BTreeSet::from([song.key.clone()]));
+        assert_eq!(wanted(&starred_phone, &listed(&starred_phone, &playlists), starred), BTreeSet::from([song.key.clone()]));
         assert!(starred_phone.tags_of(&song_store::path_of(&phone_dir, &song.key)).iter().all(|(id, _)| *id != song_store::STARRED), "never a chip");
-        let wants = wanted(&phone, &playlists, every);
+        let wants = wanted(&phone, &listed(&phone, &playlists), every);
         assert_eq!(wants, BTreeSet::from([song.key.clone()]));
 
         let none = BTreeSet::new();
@@ -819,7 +824,7 @@ mod tests {
         std::io::Write::write_all(&mut incoming, b"song").unwrap();
         incoming.finish().unwrap();
         phone.add(song_store::Stored { key: song.key.clone(), name: "Song.mid".into() });
-        let fetched = plan(&sent, "phone", |k| phone.has(k), &wanted(&phone, &playlists, every), &none, &none, None);
+        let fetched = plan(&sent, "phone", |k| phone.has(k), &wanted(&phone, &listed(&phone, &playlists), every), &none, &none, None);
         assert_eq!(fetched.tasks, [Task::Delete(song.key.clone())]);
         assert!(fetched.leaves.is_empty());
 
@@ -830,7 +835,7 @@ mod tests {
         assert_eq!(std::fs::read_dir(root.join("elsewhere")).unwrap().count(), 0, "nothing left behind");
         // Removed here: not wanted again.
         phone.remove(&song_store::path_of(&phone_dir, &song.key)).unwrap();
-        assert!(wanted(&phone, &playlists, every).is_empty());
+        assert!(wanted(&phone, &listed(&phone, &playlists), every).is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -861,7 +866,7 @@ mod tests {
         assert_eq!(library_leaves(&phone, &removed), removed, "nothing new to say");
         let (playlists, _) = Library::load(root.join("playlists"), phone_dir.clone());
         phone.know(&song.key, "Song.mid");
-        assert!(wanted(&phone, &playlists, Wants { starred: false, every: true }).is_empty());
+        assert!(wanted(&phone, &listed(&phone, &playlists), Wants { starred: false, every: true }).is_empty());
         assert!(!apply_library(&mut phone, read_library(&fields(&removed))), "already gone");
         // A song only removed here can be removed everywhere later.
         let other = song_store::write_in(b"other", "Other.mid", &phone_dir).unwrap();
@@ -877,7 +882,7 @@ mod tests {
         assert!(back.contains_key(&song.key) && !back.contains_key(&format!("removed/{}", song.key)));
         apply_library(&mut desktop, read_library(&fields(&back)));
         assert!(!desktop.is_removed(&song.key));
-        assert_eq!(wanted(&desktop, &playlists, Wants { starred: false, every: true }), BTreeSet::from([song.key.clone()]));
+        assert_eq!(wanted(&desktop, &listed(&desktop, &playlists), Wants { starred: false, every: true }), BTreeSet::from([song.key.clone()]));
         let _ = std::fs::remove_dir_all(&root);
     }
 

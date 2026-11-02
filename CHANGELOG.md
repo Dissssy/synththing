@@ -10,6 +10,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Fixed
 - Help > Credits & licenses no longer slows every frame while it's open: only the libraries in sight are drawn, instead of all of them (8 to 11 ms a frame on a phone).
+- Song sync no longer stalls the app for tens of milliseconds at a time while songs come in (most of all right after starting): working out which songs this device still wants now happens in the background.
 - Groupings: the songs on an album's, artist's or other group's page are spaced like every other list again, instead of cramped with striped rows taller than the rest and the playing song's outline touching its neighbours.
 - The log (and usage data) no longer warns "UI stuck" or "stalled frame" while the window is in the background, minimized or hidden: with nothing on screen, no frames are drawn, which isn't a hang. A hang in the app's own code is still caught there.
 
