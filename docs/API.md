@@ -245,6 +245,8 @@ Players buffer it, so it comes a second or two late: VLC, ffmpeg or OBS's **Medi
 
 Separately from the API, synththing shows what's playing in the system's media controls (on by default, Preferences > Integrations): MPRIS on Linux, the media overlay and media keys on Windows, Now Playing on macOS. Anything that already understands those (desktop widgets, KDE Connect, Home Assistant's MPRIS integrations) can see and control it without a token. Play, pause, next, previous, seek and volume work from there.
 
+It can also show what you're listening to on Discord (off by default, Preferences > Integrations > Discord), through the Discord app running on the same computer: the song, its artist, a progress bar and its album cover once it's matched online, or the synththing logo otherwise. Nothing shows while paused.
+
 ## Trying it
 
 ```sh

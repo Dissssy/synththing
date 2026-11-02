@@ -8,6 +8,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Anonymous usage data now says where a problem came up, without saying anything about you: for slow frames, which part of the app took the time; for "UI stuck" and stalled frames, which part it was in and whether the window was in the background, minimized or hidden; for things that don't fit a phone's screen, which page and what kind of thing. Only fixed names from synththing's own code are sent this way, never song names, files or anything you typed. The server counts usage lines per set of these values (it updates its database on start).
 
 ### Added
+- Discord (desktop): show what you're listening to on Discord, with the song, its artist, a progress bar and its album cover once it's matched online. Off until you turn it on in Preferences > Integrations > Discord; it needs the Discord app running on the same computer, and shows nothing while paused or while following another device.
 - Linux: synththing offers once to add itself to your applications menu and app search, with its icon, starting it from where the file is. Preferences > App > Applications menu adds it later (or again after moving the file), or removes it.
 
 ## 2.4.1 (2026-11-02)

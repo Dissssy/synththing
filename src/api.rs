@@ -92,11 +92,17 @@ pub struct Settings {
     /// Show synththing in the system's media controls
     /// (`media_controls.rs`): `None` means yes.
     pub media_controls: Option<bool>,
+    /// Show what's playing on Discord (`discord.rs`).
+    pub discord: bool,
 }
 
 impl Settings {
     pub fn media_controls(&self) -> bool {
         self.media_controls.unwrap_or(true) && !cfg!(target_os = "android")
+    }
+
+    pub fn discord(&self) -> bool {
+        self.discord && !cfg!(target_os = "android")
     }
 
     pub fn port(&self) -> u16 {
