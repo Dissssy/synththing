@@ -102,7 +102,6 @@ struct Window {
     /// Reports showing what they point at.
     shown: HashSet<i64>,
     sources: HashMap<(String, u32), Result<String, String>>,
-    confirm_delete: Option<String>,
     ban: BanForm,
     new_admin: String,
     message: Option<String>,
@@ -284,7 +283,6 @@ impl App {
             feedback_note: String::new(),
             shown: HashSet::new(),
             sources: HashMap::new(),
-            confirm_delete: None,
             ban: BanForm::default(),
             new_admin: String::new(),
             message: None,
@@ -784,22 +782,18 @@ impl App {
                             }
                             actions.push(("Hidden.".into(), list));
                         }
-                        let confirming = window.confirm_delete.as_deref() == Some(script.as_str());
-                        if ui
-                            .button(if confirming { "Click again to delete" } else { "Delete" })
-                            .on_hover_text("Delete it for good, every version (the report stays)")
-                            .clicked()
-                        {
-                            if confirming {
-                                window.confirm_delete = None;
-                                let mut list = vec![AdminAction::Delete { script: script.clone() }];
-                                if report.resolved.is_none() {
-                                    list.push(resolve("deleted"));
-                                }
-                                actions.push(("Deleted.".into(), list));
-                            } else {
-                                window.confirm_delete = Some(script.clone());
+                        if super::confirm_button(
+                            ui,
+                            ("script", &script),
+                            egui::Button::new("Delete"),
+                            "Delete it for good, every version (the report stays)",
+                            "Really delete?",
+                        ) {
+                            let mut list = vec![AdminAction::Delete { script: script.clone() }];
+                            if report.resolved.is_none() {
+                                list.push(resolve("deleted"));
                             }
+                            actions.push(("Deleted.".into(), list));
                         }
                         if ui.button("Ban its author...").clicked() {
                             *ban_author = Some(script.clone());

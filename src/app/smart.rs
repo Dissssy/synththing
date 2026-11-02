@@ -375,7 +375,7 @@ impl App {
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if !builtin && ui.add(super::row_icon_button(ui, "trash")).on_hover_text("Delete").clicked() {
+                        if !builtin && super::confirm_button(ui, ("ruleset", &id), super::row_icon_button(ui, "trash"), "Delete", "Really delete?") {
                             delete = Some(id.clone());
                         }
                         let (name, hover) = if builtin || !editable { ("list-magnifying-glass", "View rules") } else { ("pencil-simple", "Edit rules") };
