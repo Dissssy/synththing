@@ -1917,6 +1917,9 @@ pub struct LuaVisualizer {
     compiles: u64,
     /// The "copy script logs to the app log" preference.
     app_log: Rc<Cell<bool>>,
+    /// Whether the script reads its saved data (store, settings, controls)
+    /// from beside its file; off for previews (`ignore_saved_data`).
+    saved_data: bool,
 }
 
 impl LuaVisualizer {
@@ -1948,6 +1951,7 @@ impl LuaVisualizer {
             watchdog_limit: WATCHDOG_LIMIT,
             compiles: 0,
             app_log: Rc::default(),
+            saved_data: true,
         };
         visualizer.set_source(source);
         visualizer
@@ -1960,6 +1964,19 @@ impl LuaVisualizer {
         visualizer.watchdog_limit = limit;
         visualizer.set_source(source);
         visualizer
+    }
+
+    /// Run the script as if nothing was ever saved for it: its store,
+    /// settings and controls start empty and are never written (previews,
+    /// which look the same on every device). Before `set_source`.
+    pub fn ignore_saved_data(&mut self) {
+        self.saved_data = false;
+    }
+
+    /// Where the script's saved data is read from and written to: beside
+    /// its file, unless it ignores it.
+    fn saved_path(&self) -> Option<&Path> {
+        self.path.as_deref().filter(|_| self.saved_data)
     }
 
     /// Copy the script's `log()` messages to the app's log (the
@@ -2119,7 +2136,7 @@ impl LuaVisualizer {
     pub fn set_setting(&mut self, key: &str, value: SettingValue) {
         let Some(compiled) = &self.compiled else { return };
         compiled.settings.borrow_mut().set(key, value);
-        if let Some(path) = &self.path {
+        if let Some(path) = self.saved_path() {
             save_sidecar(path, &compiled.settings.borrow());
         }
     }
@@ -2171,7 +2188,7 @@ impl LuaVisualizer {
     /// previously running keeps running.
     pub fn set_source(&mut self, new_source: String) {
         self.source = new_source;
-        let pending_settings = load_pending_settings(self.path.as_deref());
+        let pending_settings = load_pending_settings(self.saved_path());
         match compile(
             &self.source,
             self.sample_rate,
@@ -2185,6 +2202,7 @@ impl LuaVisualizer {
             &self.live,
             &self.features,
             self.path.as_deref(),
+            self.saved_path(),
             pending_settings,
             &self.stop,
             self.watchdog_limit,
@@ -2237,7 +2255,7 @@ impl LuaVisualizer {
         let Some(source) = self.compiled.as_ref().map(|c| c.source.clone()) else {
             return false;
         };
-        let pending_settings = load_pending_settings(self.path.as_deref());
+        let pending_settings = load_pending_settings(self.saved_path());
         match compile(
             &source,
             self.sample_rate,
@@ -2251,6 +2269,7 @@ impl LuaVisualizer {
             &self.live,
             &self.features,
             self.path.as_deref(),
+            self.saved_path(),
             pending_settings,
             &self.stop,
             self.watchdog_limit,
@@ -2417,6 +2436,7 @@ fn compile(
     live: &Rc<RefCell<LiveQueue>>,
     features: &Rc<RefCell<AudioFeatures>>,
     script_path: Option<&Path>,
+    saved_path: Option<&Path>,
     pending_settings: HashMap<String, serde_json::Value>,
     stop: &Arc<AtomicBool>,
     watchdog_limit: Duration,
@@ -2486,7 +2506,7 @@ fn compile(
     )
     .map_err(|e| e.to_string())?;
     let cursor = Rc::new(RefCell::new(CursorRequest::default()));
-    let controls = Rc::new(RefCell::new(Controls::load(script_path)));
+    let controls = Rc::new(RefCell::new(Controls::load(saved_path)));
     let typing: Rc<RefCell<TypingSpan>> = Rc::default();
     register_input(&lua, input, &cursor, &controls, &typing).map_err(|e| e.to_string())?;
     let canvas = Canvas::default();
@@ -2519,7 +2539,7 @@ fn compile(
             .map_err(|e| e.to_string())?;
     }
     let playback_requests: Rc<RefCell<Vec<PlaybackRequest>>> = Rc::default();
-    let store = Rc::new(RefCell::new(ScriptStore::load(script_path)));
+    let store = Rc::new(RefCell::new(ScriptStore::load(saved_path)));
     let sprites: Rc<RefCell<Vec<Sprite>>> = Rc::default();
     register_sprites(&lua, &sprites, &commands).map_err(|e| e.to_string())?;
     register_album_art(&lua, &sprites, song).map_err(|e| e.to_string())?;

@@ -473,7 +473,7 @@ fn watch_server(link: &Link, identity: &Identity) -> Receiver<Heard> {
                 let streamed = client::notification_stream(&server, &key, &identity, |event| match event {
                     client::StreamEvent::Sync(changed) => tx.send(Heard::Sync(Some(changed))).is_ok(),
                     client::StreamEvent::Live(sealed) => tx.send(Heard::Live(sealed)).is_ok(),
-                    client::StreamEvent::Notification(_) | client::StreamEvent::Opened => true,
+                    client::StreamEvent::Notification(_) | client::StreamEvent::Preview(_) | client::StreamEvent::Opened => true,
                 });
                 if let Err(e) = streamed
                     && started.elapsed() < client::STREAM_FOR

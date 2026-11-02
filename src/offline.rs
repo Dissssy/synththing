@@ -54,9 +54,25 @@ pub struct Stage {
 }
 
 impl Stage {
-    pub fn new(source: String, script: Option<PathBuf>, width: usize, height: usize, fps: f64) -> Self {
-        let mut visualizer = LuaVisualizer::new(source, script, SAMPLE_RATE);
+    /// The script starts already in `take` (if it's a recording), so its
+    /// top level sees `recording()` too; with `saved_data` off, it runs as
+    /// if nothing was ever saved for it (`ignore_saved_data`).
+    pub fn new(
+        source: String,
+        script: Option<PathBuf>,
+        width: usize,
+        height: usize,
+        fps: f64,
+        take: Option<RecordingTake>,
+        saved_data: bool,
+    ) -> Self {
+        let mut visualizer = LuaVisualizer::new(String::new(), script, SAMPLE_RATE);
         visualizer.set_fixed_timestep(Some(1.0 / fps));
+        visualizer.set_recording(take.is_some_and(|t| t.phase == RecordPhase::Recording), take);
+        if !saved_data {
+            visualizer.ignore_saved_data();
+        }
+        visualizer.set_source(source);
         let samples_per_frame = (f64::from(SAMPLE_RATE) / fps).round().max(1.0) as usize;
         Self {
             engine: Engine::new(SAMPLE_RATE),
@@ -288,8 +304,10 @@ fn render(job: RenderJob, ffmpeg: &Path, status: &Mutex<RenderStatus>, stop: &At
         std::fs::read_to_string(&job.script).map_err(|e| format!("couldn't read {}: {e}", job.script.display()))?;
     let format = job.format;
     let fps = f64::from(format.fps);
-    let mut stage = Stage::new(source, Some(job.script.clone()), format.width, format.height, fps);
-    // It reads its saved data, but a render never writes it.
+    // A recording from its first line; it reads its saved data, but a
+    // render never writes it.
+    let starting = RecordingTake { phase: RecordPhase::Preparing, kind: job.kind, auto: job.auto };
+    let mut stage = Stage::new(source, Some(job.script.clone()), format.width, format.height, fps, Some(starting), true);
     stage.visualizer.detach_store();
     if let Some(error) = stage.visualizer.error() {
         return Err(format!("the script has an error: {error}"));
@@ -413,6 +431,28 @@ fn preview(pixels: &[u32], width: usize, height: usize) -> (usize, usize, Arc<Ve
 mod tests {
     use super::*;
     use crate::recorder::Quality;
+
+    /// A stage that's a recording is one from the script's first line, and
+    /// one ignoring saved data reads nothing saved beside the script.
+    #[test]
+    fn recording_and_saved_data_from_the_top_level() {
+        let dir = std::env::temp_dir().join(format!("synththing-stage-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("top.lua");
+        std::fs::write(dir.join("top.lua.store.json"), r#"{"panel":false}"#).unwrap();
+        let source = "log(tostring(recording() ~= nil) .. ' ' .. tostring(store_get('panel')))
+            function render() end";
+        let last = |stage: &Stage| stage.visualizer.log_entries().last().map(|e| e.message.clone()).unwrap_or_default();
+        let take = RecordingTake { phase: RecordPhase::Preparing, kind: RecordKind::Song, auto: false };
+        let preview = Stage::new(source.into(), Some(script.clone()), 8, 8, 30.0, Some(take), false);
+        assert_eq!(preview.visualizer.error(), None);
+        assert_eq!(last(&preview), "true nil");
+        let render = Stage::new(source.into(), Some(script.clone()), 8, 8, 30.0, Some(take), true);
+        assert_eq!(last(&render), "true false");
+        let plain = Stage::new(source.into(), Some(script), 8, 8, 30.0, None, true);
+        assert_eq!(last(&plain), "false false");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A whole song rendered in the background, by a script that takes
     /// part (it prepares for a few frames first, then ends the take itself

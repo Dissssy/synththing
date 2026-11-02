@@ -31,6 +31,8 @@ enum Event {
     Opened,
     /// A live message, sealed.
     Live(String),
+    /// A script's preview being made on the server, or done.
+    Preview(library::PreviewEvent),
 }
 
 pub struct NotificationsState {
@@ -246,6 +248,7 @@ impl App {
                 }
                 Event::Synced(changed) => self.sync_server_seen(Some(changed)),
                 Event::Opened => self.live_opened(),
+                Event::Preview(preview) => self.library_preview_event(preview),
                 // (Those come from the hub while it's listened to.)
                 Event::Live(sealed) => {
                     if !self.live_from_hub() {
@@ -487,8 +490,7 @@ impl App {
         });
         if let Some(script) = show {
             self.notifications.detail = None;
-            self.set_open(crate::layout::Section::Library, true);
-            self.library_open_script(script);
+            self.show_library_script(script);
         } else if moderate {
             self.notifications.detail = None;
             self.open_moderation();
@@ -529,6 +531,7 @@ fn listen(server: &str, key: &str, identity: &Identity, stop: &AtomicBool, tx: &
                 client::StreamEvent::Sync(changed) => Event::Synced(changed),
                 client::StreamEvent::Opened => Event::Opened,
                 client::StreamEvent::Live(sealed) => Event::Live(sealed),
+                client::StreamEvent::Preview(preview) => Event::Preview(preview),
             });
             ctx.request_repaint();
             true

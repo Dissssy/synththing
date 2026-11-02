@@ -168,8 +168,11 @@ pub fn check(script: &Path, soundfont: &Path, work: &Path) -> Result<(), String>
 /// The preview's frames, written into `out`; or, without one, the check.
 fn render_songs(source: String, script: &Path, soundfont: &Path, out: Option<&Path>, songs: &Path) -> Result<Made, String> {
     let check = out.is_none();
-    let mut stage = Stage::new(source, Some(script.to_path_buf()), WIDTH, HEIGHT, RUN_FPS);
-    stage.visualizer.detach_store();
+    // A recording from its first line (so a script hiding its controls
+    // for one does it at its top level too), with nothing saved for it:
+    // the same preview on every device, the server's included.
+    let starting = RecordingTake { phase: RecordPhase::Preparing, kind: RecordKind::Song, auto: false };
+    let mut stage = Stage::new(source, Some(script.to_path_buf()), WIDTH, HEIGHT, RUN_FPS, Some(starting), false);
     if let Some(error) = stage.visualizer.error() {
         return Err(format!("{SCRIPT_ERROR}{error}"));
     }

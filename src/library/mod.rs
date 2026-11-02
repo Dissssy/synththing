@@ -423,6 +423,34 @@ pub struct VersionInfo {
     /// Its preview, as far as the server's got with it.
     #[serde(default)]
     pub preview: Preview,
+    /// The server is making its preview right now (a first one, or one
+    /// made again over the one it has).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rendering: bool,
+    /// Which making of its preview the server has (0 for none): asked for
+    /// with it (`?rev=`), so a preview made again isn't one cached before.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub preview_rev: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// What the notification stream says about a preview, to everyone
+/// listening: the server started making it, or it's done (`rendering`
+/// false: the script's details say what came of it).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewEvent {
+    pub script: String,
+    pub version: u32,
+    pub rendering: bool,
+}
+
+/// `PreviewEvent` as it's sent: `{"preview": {...}}`.
+#[derive(Serialize, Deserialize)]
+pub struct PreviewEventMessage {
+    pub preview: PreviewEvent,
 }
 
 /// A version's preview (`preview.rs`): made by the server after each
@@ -673,6 +701,10 @@ pub enum AdminAction {
     Unhide { script: String },
     /// Every version, for good (its reports stay).
     Delete { script: String },
+    /// Make the newest version's preview again, of one script or (without
+    /// one) of every script shown: `{"queued": n}`. Made one at a time,
+    /// as uploads' are; the old one stays until the new one's made.
+    Rerender { script: Option<String> },
     /// A key (hex, or an ID the server's seen) or an address, for `hours`
     /// (for good without), optionally hiding everything the key uploaded,
     /// and with `ban_addresses`, the addresses the key was seen on in the

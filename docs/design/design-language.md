@@ -83,6 +83,11 @@ built entirely from these pieces.
   with Back and Next, answers applied at Done. The rest of the app is
   disabled until it's done. New ones are a `flow::Step`.
 - Popups are only for small confirmations.
+- Showing something that lives in a panel without changing the layout
+  (View in Library, or going to a panel a locked layout hasn't got) uses
+  the panel dialog (`panel_modal.rs`): the panel's title, its contents (the
+  whole panel, or one thing in it, like a script's details) at a fixed size,
+  and Close. Never open or move a tab for it.
 - Something that can't be undone (removing a program, deleting) asks first
   in a small dialog: the question as its heading, one line on what happens,
   the destructive button in the error color, then Cancel. Esc closes only

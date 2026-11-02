@@ -68,6 +68,7 @@ mod welcome;
 mod which_key;
 mod wishlist;
 mod panels;
+mod panel_modal;
 mod device_messages;
 mod devices;
 
@@ -468,6 +469,8 @@ pub struct App {
     /// The script picker's previews (behind a RefCell: the picker's list is
     /// drawn from `&self`).
     script_previews: std::cell::RefCell<previews::LocalPreviews>,
+    /// A panel's contents shown in a dialog over the layout.
+    panel_modal: Option<panel_modal::PanelView>,
     /// Reports, and the Moderation window.
     moderation: moderation::ModerationState,
     feedback: feedback::FeedbackState,
@@ -817,6 +820,7 @@ impl App {
             state_request: Default::default(),
             library: library::LibraryState::new(),
             script_previews: Default::default(),
+            panel_modal: None,
             moderation: Default::default(),
             feedback: Default::default(),
             storage: Default::default(),
@@ -1031,8 +1035,13 @@ impl App {
     }
 
     /// Open `section` if it's closed, and make it the shown tab of its
-    /// group.
+    /// group; in a locked layout that hasn't got it, show it in the panel
+    /// dialog instead (`panel_modal.rs`), leaving the layout as it is.
     fn reveal_section(&mut self, section: Section) {
+        if !self.mobile() && self.layout_locked() && !self.is_open(section) {
+            self.open_panel_modal(panel_modal::PanelView::Section(section));
+            return;
+        }
         if self.dock_in_use {
             self.pending_layout.push((section, true));
             self.pending_focus = Some(section);
@@ -4259,6 +4268,7 @@ impl eframe::App for App {
         self.sync_toast_ui(&ctx);
         toast::ui(&ctx);
         self.notification_ui(&ctx);
+        self.panel_modal_ui(&ctx, &shared);
         self.copyright_ui(&ctx);
         self.moderation_ui(&ctx);
         self.feedback_ui(&ctx);
@@ -4351,23 +4361,7 @@ impl TabViewer for SectionTabs<'_> {
         } else if self.joined.contains(tab) {
             square_corner(ui, self.top);
         }
-        match tab {
-            Section::Songs => app.songs_ui(ui),
-            Section::Groupings => app.groupings_ui(ui),
-            Section::Soundfonts => app.soundfont_ui(ui),
-            Section::Queue => app.queue_ui(ui),
-            Section::Wishlist => app.wishlist_ui(ui),
-            Section::Apps => app.apps_ui(ui),
-            Section::Visualizer => {
-                app.visualizer_preview_ui(ui, self.shared.notes.clone(), self.shared.view.clone());
-            }
-            Section::Editor => app.editor_section_ui(ui),
-            // (Dropped from layouts as they load.)
-            Section::Removed => {}
-            Section::Reference => app.docs_ui(ui),
-            Section::Sprites => app.sprite_editor_ui(ui),
-            Section::Library => app.library_ui(ui),
-        }
+        app.section_ui(ui, *tab, self.shared);
     }
 
     /// Sections are shown and hidden from View (and the transport's
@@ -4380,6 +4374,31 @@ impl TabViewer for SectionTabs<'_> {
     /// outer scroll area from the dock would just fight it.
     fn scroll_bars(&self, _tab: &Section) -> [bool; 2] {
         [false, false]
+    }
+}
+
+impl App {
+    /// A section's contents, filling `ui`: in its tab, or in the panel
+    /// dialog (`panel_modal.rs`).
+    fn section_ui(&mut self, ui: &mut egui::Ui, section: Section, shared: &PlaybackShared) {
+        let app = self;
+        match section {
+            Section::Songs => app.songs_ui(ui),
+            Section::Groupings => app.groupings_ui(ui),
+            Section::Soundfonts => app.soundfont_ui(ui),
+            Section::Queue => app.queue_ui(ui),
+            Section::Wishlist => app.wishlist_ui(ui),
+            Section::Apps => app.apps_ui(ui),
+            Section::Visualizer => {
+                app.visualizer_preview_ui(ui, shared.notes.clone(), shared.view.clone());
+            }
+            Section::Editor => app.editor_section_ui(ui),
+            // (Dropped from layouts as they load.)
+            Section::Removed => {}
+            Section::Reference => app.docs_ui(ui),
+            Section::Sprites => app.sprite_editor_ui(ui),
+            Section::Library => app.library_ui(ui),
+        }
     }
 }
 
