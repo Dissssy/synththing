@@ -4597,8 +4597,13 @@ impl<'a> SettingsGroup<'a> {
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     // (The caret and buttons go in first, at the right end,
-                    // so the title and hint wrap in the room left of them.)
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // so the title and hint wrap in the room left of them.
+                    // A row's height to start with, as `horizontal` does:
+                    // `with_layout` would take all the height left, and with
+                    // no caret or buttons to size the row the title centres
+                    // in it.)
+                    let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+                    ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if toggle.is_some() {
                             ui.label(icon(if open { "caret-up" } else { "caret-down" }));
                         }
@@ -5460,6 +5465,33 @@ mod tests {
         }
         assert_eq!(open, 5, "open, and still open");
         assert!(!unseen, "seen");
+    }
+
+    /// A group's heading is as tall as its title and hint, with or without
+    /// buttons at its end, even when it's the first thing in a tall window.
+    #[test]
+    fn group_heading_fits_its_title() {
+        let ctx = egui::Context::default();
+        for with_buttons in [false, true] {
+            let header = std::cell::Cell::new(0.0);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 2000.0))),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let top = ui.cursor().min.y;
+                let mut buttons = |ui: &mut egui::Ui| {
+                    let _ = ui.button("New");
+                };
+                let mut group = settings_group("v1.0.0").icon("tag").hint("2026-11-02");
+                if with_buttons {
+                    group = group.buttons(&mut buttons);
+                }
+                group.show(ui, |ui| header.set(ui.min_rect().min.y - top));
+            });
+            output.textures_delta.clear(); // (no renderer here to hand them to)
+            assert!(header.get() < 80.0, "buttons {with_buttons}: heading {} tall", header.get());
+        }
     }
 
     /// Slow songs blue, fast ones pink, blended between; out of range,
