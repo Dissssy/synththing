@@ -94,10 +94,17 @@ pub(super) enum TagAction {
     Edit,
 }
 
-/// The Tags submenu for the songs at `paths`: their tags to switch
-/// (`tag_checklist`, without the star), then New tag and Edit tags.
+/// Star (Unstar, when every one is starred) for the songs at `paths`,
+/// then the Tags submenu: their tags to switch (`tag_checklist`, without
+/// the star), then New tag and Edit tags.
 pub(super) fn tags_menu(ui: &mut egui::Ui, store: &SongStore, paths: &[PathBuf]) -> Option<TagAction> {
     let mut action = None;
+    let starred = paths.iter().all(|p| store.is_starred(p));
+    let count = if paths.len() > 1 { format!(" ({})", paths.len()) } else { String::new() };
+    let label = format!("{} {}{count}", icon(store.star().icon_name()), if starred { "Unstar" } else { "Star" });
+    if ui.button(label).clicked() {
+        action = Some(TagAction::Set(STARRED.into(), !starred));
+    }
     ui.menu_button("Tags", |ui| {
         action = tag_checks(ui, store, paths, false, |ui, text, on, mixed| ui.add(egui::Checkbox::new(on, text).indeterminate(mixed)));
         if !store.tags().is_empty() {

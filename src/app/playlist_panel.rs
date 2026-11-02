@@ -602,8 +602,8 @@ impl App {
 
     /// Back and "find in here", then the playlist's header as a group's:
     /// its tile, name (a text box in its place while renaming; a phone's
-    /// top bar has it otherwise), count and length, play, shuffle, queue
-    /// and star them all, then continue, its rules, rename, export and
+    /// top bar has it otherwise), count and length, play, shuffle and
+    /// queue them, then continue, its rules, rename, export and
     /// delete.
     fn playlist_header_ui(&mut self, ui: &mut egui::Ui, list: usize) {
         use super::groupings::{page_art, page_buttons, page_header, page_header_height, PageButton};
@@ -636,7 +636,6 @@ impl App {
         let smart = stored.playlist.smart.is_some();
         let entries = &stored.playlist.entries;
         let here: Vec<PathBuf> = entries.iter().filter(|e| !e.missing).map(|e| e.path.clone()).collect();
-        let all_starred = here.iter().all(|p| self.songs.is_starred(p));
         // Total time from what's been read so far.
         let (mut total, mut unknown) = (0.0, 0usize);
         for entry in entries {
@@ -685,7 +684,7 @@ impl App {
             }
             ui.weak(summary);
             ui.horizontal_wrapped(|ui| {
-                if let Some(button) = page_buttons(ui, !here.is_empty(), all_starred) {
+                if let Some(button) = page_buttons(ui, !here.is_empty()) {
                     press = Some(Press::Page(button));
                 }
                 if let Some((entry, title)) = &left_at
@@ -755,7 +754,6 @@ impl App {
                 self.play_playlist(list);
             }
             Some(Press::Page(PageButton::Queue)) => self.queue_songs(ui.ctx(), here, false),
-            Some(Press::Page(PageButton::Star)) => self.tag_songs(super::tags::TagAction::Set(crate::song_store::STARRED.into(), !all_starred), &here),
             Some(Press::Continue(entry)) => self.play_entry(list, entry),
             Some(Press::Rules) => self.edit_playlist_rules(ui.ctx(), Some(list)),
             Some(Press::Freeze) => self.freeze_playlist(list),

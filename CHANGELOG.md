@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- The star button in album, artist and playlist headers is gone: one click starred or unstarred every song on the page with no way back. To star several songs, select them (Ctrl+A for all) and right-click > Star, which says Unstar when every selected song is already starred.
+
 ## 2.5.0 (2026-11-02)
 
 ### Changed
