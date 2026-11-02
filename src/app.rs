@@ -4237,8 +4237,9 @@ impl eframe::App for App {
             self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);
             self.history_ui(&ctx);
-            self.layout_new_ui(&ctx);
+            // (New layout after Edit layouts: Edit's + opens it over it.)
             self.layout_edit_ui(&ctx);
+            self.layout_new_ui(&ctx);
             self.new_sprite_ui(&ctx);
             drop(windows);
         }

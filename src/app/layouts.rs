@@ -85,7 +85,7 @@ impl App {
     }
 
     /// Edit layouts: a section of the layouts, one per row, the showing one
-    /// marked; a pencil by its name renames it in place, the trash at the
+    /// marked, with New layout and Close in its header; a pencil by its name renames it in place, the trash at the
     /// row's end deletes it (asking first, in a dialog of its own).
     pub(super) fn layout_edit_ui(&mut self, ctx: &egui::Context) {
         let Some(editing) = &mut self.layout_edit else { return };
@@ -93,12 +93,16 @@ impl App {
         let presets = &self.config.layout_presets;
         let mut ask = None;
         let mut close = false;
+        let mut add = false;
         let mut stop_renaming = false;
         let response = egui::Modal::new(egui::Id::new("edit_layouts")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 400.0));
-            ui.heading("Layouts");
-            ui.add_space(8.0);
-            settings_group("Your layouts").icon("layout").hint("Rename or delete them. Switch between them from the Layout menu.").show(ui, |ui| {
+            let mut buttons = |ui: &mut egui::Ui| {
+                close = ui.add(row_icon_button(ui, "x")).on_hover_text("Close").clicked();
+                add = ui.add(row_icon_button(ui, "plus")).on_hover_text("New layout: from this arrangement, or from a template").clicked();
+            };
+            let group = settings_group("Layouts").icon("layout").hint("Add, rename or delete them. Switch between them from the Layout menu.");
+            group.buttons(&mut buttons).show(ui, |ui| {
                 for (n, saved) in presets.iter().enumerate() {
                     setting_row(ui, |ui| match &mut editing.renaming {
                         Some((at, name)) if *at == n => {
@@ -148,13 +152,12 @@ impl App {
                     });
                 }
             });
-            ui.add_space(8.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if ui.button("Close").clicked() {
-                    close = true;
-                }
-            });
         });
+        // (A new layout's dialog shows over this one, which lists it once
+        // it's made.)
+        if add {
+            self.layout_new = Some(NewLayout::default());
+        }
         // (Esc while renaming stops the renaming, not the window.)
         if stop_renaming || (response.should_close() && editing.renaming.is_some() && editing.deleting.is_none()) {
             editing.renaming = None;
