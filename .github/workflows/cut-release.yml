@@ -61,7 +61,12 @@ jobs:
             const dryRun = ${{ inputs.dry_run }};
             for (const run of testBuilds.filter(r => !dryRun && isTestBuild(r) && unfinished(r))) {
               core.info(`cancelling test build ${run.html_url}`);
-              await github.rest.actions.cancelWorkflowRun({ ...context.repo, run_id: run.id });
+              try {
+                await github.rest.actions.cancelWorkflowRun({ ...context.repo, run_id: run.id });
+              } catch (e) {
+                // It finished between listing and cancelling: nothing to cancel.
+                if (e.status !== 409) throw e;
+              }
             }
 
             const deadline = Date.now() + 90 * 60 * 1000;
