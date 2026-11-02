@@ -26,7 +26,7 @@ struct Dragged {
 /// An ordered list as settings rows: a grip at each row's left to drag it
 /// to its place, and Take it out at its right. While a
 /// row is dragged it follows the pointer, and the others make room for it
-/// where it would land (with an empty row), showing just their names.
+/// where it would land (with an empty row), Take it out greyed out.
 /// Lines (`ListEntry::lines`) take a row each, striped in turn as the rows
 /// are, and belong to the place in the list, not to an entry: dropping a
 /// row past one moves it into the section beyond. `id_salt` tells it from
@@ -59,11 +59,15 @@ pub(super) fn reorder_list<T>(ui: &mut egui::Ui, id_salt: &str, items: &mut Vec<
             setting_row(ui, |ui| {
                 // (The dragged row's grip stays, so the drag carries on.)
                 grip(ui, list, slot.unwrap_or(from), slot.is_some());
-                if slot.is_some() {
-                    ui.add(egui::Label::new(text.clone()).selectable(false).truncate());
-                } else {
-                    ui.allocate_space(egui::vec2(ui.available_width(), ui.spacing().interact_size.y));
-                }
+                // (Take it out stays, greyed out, and in the empty row
+                // unseen: rows keep their height while dragging.)
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let x = row_icon_button(ui, "x");
+                    ui.add_enabled_ui(false, |ui| ui.add_visible(slot.is_some(), x));
+                    if slot.is_some() {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(egui::Label::new(text.clone()).selectable(false).truncate()));
+                    }
+                });
             });
         }
         let rect = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().top());
