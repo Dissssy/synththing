@@ -4715,6 +4715,24 @@ fn setting_combo(ui: &egui::Ui, id_salt: &str, beside: f32) -> egui::ComboBox {
     egui::ComboBox::from_id_salt(id_salt).width(control_width(ui, beside)).truncate()
 }
 
+/// A dropdown showing `selected`, for a wrapping row (`horizontal_wrapped`).
+/// egui lays a ComboBox out in a frame of its own before it knows how wide
+/// it is, so a wrapping row can't move one to the next line: it runs past
+/// the edge (and widens the page under it). This starts the next line first
+/// when it wouldn't fit on this one.
+pub(super) fn wrapping_combo(ui: &mut egui::Ui, id_salt: &str, selected: &str) -> egui::ComboBox {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let text = ui.painter().layout_no_wrap(selected.to_string(), font, egui::Color32::PLACEHOLDER).size().x;
+    let spacing = ui.spacing();
+    let width = (text + spacing.icon_spacing + spacing.icon_width + 2.0 * spacing.button_padding.x).max(spacing.combo_width);
+    // (A wrapping row's `available_width` is the whole row's: what's left
+    // on this line is from the cursor.)
+    if ui.max_rect().right() - ui.cursor().min.x < width {
+        ui.end_row();
+    }
+    egui::ComboBox::from_id_salt(id_salt).selected_text(selected)
+}
+
 /// A setting's slider, as wide as `control_width` makes it with its value
 /// box after it (and `beside` points more).
 fn setting_slider(ui: &mut egui::Ui, slider: egui::Slider, beside: f32) -> egui::Response {
@@ -5486,6 +5504,29 @@ fn log_actions_ui(ui: &mut egui::Ui, shown: &[&applog::Entry]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A dropdown that doesn't fit on a wrapping row's line goes on the
+    /// next one, instead of past the edge.
+    #[test]
+    fn wrapping_combo_wraps() {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 400.0))),
+            ..Default::default()
+        };
+        let mut combo = egui::Rect::NOTHING;
+        let mut right = 0.0;
+        let mut output = ctx.run_ui(input, |ui| {
+            right = ui.max_rect().right();
+            ui.horizontal_wrapped(|ui| {
+                ui.add_sized([150.0, 20.0], egui::Label::new("wide"));
+                combo = wrapping_combo(ui, "test_combo", "Newest").show_ui(ui, |_| {}).response.rect;
+            });
+        });
+        output.textures_delta.clear();
+        assert!(combo.right() <= right, "{combo:?} runs past {right}");
+        assert!(combo.left() < 50.0, "on a line of its own");
+    }
 
     /// The status history opens from its button, clears the red dot, and
     /// stays open on the frames after (the dot going away mustn't lose it).

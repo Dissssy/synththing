@@ -903,7 +903,7 @@ impl App {
                 }
                 let all = "All kinds";
                 let category = self.library.category.map(library::category_title).unwrap_or(all);
-                egui::ComboBox::from_id_salt("library_category").selected_text(category).show_ui(ui, |ui| {
+                super::wrapping_combo(ui, "library_category", category).show_ui(ui, |ui| {
                     search |= ui.selectable_value(&mut self.library.category, None, all).clicked();
                     for c in library::CATEGORIES {
                         let option = kind_option(ui, c, library::category_title(c));
@@ -911,7 +911,7 @@ impl App {
                     }
                 });
                 let sort = SORTS.iter().find(|(s, _)| *s == self.library.sort).map(|(_, t)| *t).unwrap_or("Newest");
-                egui::ComboBox::from_id_salt("library_sort").selected_text(sort).show_ui(ui, |ui| {
+                super::wrapping_combo(ui, "library_sort", sort).show_ui(ui, |ui| {
                     for (s, title) in SORTS {
                         search |= ui.selectable_value(&mut self.library.sort, s, title).clicked();
                     }
