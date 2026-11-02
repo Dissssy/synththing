@@ -644,7 +644,8 @@ impl App {
             rows.iter().filter_map(|&i| if let Some(Row::Wish(id, _)) = all.get(i) { Some(id.clone()) } else { None }).collect()
         };
         let mut menu_act = None;
-        let output = select_list::show(ui, "wishlist", &rows, &mut self.wishlist.selection, None, |ui, row, item| {
+        let is_header = |row: &Row| matches!(row, Row::Heading(..));
+        let output = select_list::show_grouped(ui, "wishlist", &rows, &mut self.wishlist.selection, None, is_header, |ui, row, item| {
             let id = match item {
                 Row::Heading(state, count) => {
                     let caret = icon(if folded.contains(state) { "caret-right" } else { "caret-down" });

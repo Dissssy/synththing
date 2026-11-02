@@ -18,6 +18,10 @@
 //! A list can have columns: rows lay their cells out with [`cell`], and
 //! [`header`] titles them over the rows, its titles clickable and the
 //! lines between them dragged to resize them ([`column_width`]).
+//!
+//! A list can be in groups ([`show_grouped`]): the header of the group at
+//! the top stays pinned there as its rows scroll by, until the next
+//! header pushes it out.
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
@@ -253,7 +257,7 @@ pub fn show<T>(
     playing: Option<usize>,
     draw: impl FnMut(&mut egui::Ui, &Row, &T),
 ) -> ListOutput {
-    show_tall(ui, id_salt, items, selection, playing, 0.0, draw)
+    show_list(ui, id_salt, items, selection, playing, 0.0, None, draw)
 }
 
 /// How tall [`show`]'s rows are in `ui`.
@@ -270,6 +274,36 @@ pub fn show_tall<T>(
     selection: &mut Selection,
     playing: Option<usize>,
     height: f32,
+    draw: impl FnMut(&mut egui::Ui, &Row, &T),
+) -> ListOutput {
+    show_list(ui, id_salt, items, selection, playing, height, None, draw)
+}
+
+/// [`show`], for a list in groups: the rows `is_header` picks head the
+/// rows after them, drawn on a header's background. The header of the
+/// group at the top of the view stays pinned there while its rows scroll
+/// under it, until the next header comes up and pushes it out.
+pub fn show_grouped<T>(
+    ui: &mut egui::Ui,
+    id_salt: impl egui::AsId,
+    items: &[T],
+    selection: &mut Selection,
+    playing: Option<usize>,
+    is_header: impl Fn(&T) -> bool,
+    draw: impl FnMut(&mut egui::Ui, &Row, &T),
+) -> ListOutput {
+    show_list(ui, id_salt, items, selection, playing, 0.0, Some(&is_header), draw)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn show_list<T>(
+    ui: &mut egui::Ui,
+    id_salt: impl egui::AsId,
+    items: &[T],
+    selection: &mut Selection,
+    playing: Option<usize>,
+    height: f32,
+    is_header: Option<&dyn Fn(&T) -> bool>,
     mut draw: impl FnMut(&mut egui::Ui, &Row, &T),
 ) -> ListOutput {
     let id = egui::Id::new(id_salt);
@@ -310,51 +344,73 @@ pub fn show_tall<T>(
         };
         area = area.vertical_scroll_offset(shown);
     }
-    let scroll = area.show_rows(ui, row_height, items.len(), |ui, range| {
-            for idx in range {
-                let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), row_height));
-                // Not focusable: a focused row would count as typing and turn the keys off.
-                let response = ui.interact(rect, id.with(idx), sense - egui::Sense::FOCUSABLE);
-                // Playing and selecting are apart: a plain click plays and
-                // leaves the selection be. (A double-click's second click
-                // doesn't play, or load, it again.)
-                if response.clicked() {
-                    if touch || !(modifiers.command || modifiers.shift) {
-                        if !response.double_clicked() {
-                            output.activated = Some(idx);
-                        }
-                    } else {
-                        selection.click(idx, modifiers);
-                    }
+    // One row, in `rect`, interacting as `row_id`; a header's background
+    // reaches `under` further down.
+    let mut one_row = |ui: &mut egui::Ui, idx: usize, rect: egui::Rect, under: f32, row_id: egui::Id, output: &mut ListOutput| {
+        // Not focusable: a focused row would count as typing and turn the keys off.
+        let response = ui.interact(rect, row_id, sense - egui::Sense::FOCUSABLE);
+        // Playing and selecting are apart: a plain click plays and
+        // leaves the selection be. (A double-click's second click
+        // doesn't play, or load, it again.)
+        if response.clicked() {
+            if touch || !(modifiers.command || modifiers.shift) {
+                if !response.double_clicked() {
+                    output.activated = Some(idx);
                 }
-                if response.contains_pointer() {
-                    output.hovered = Some(idx);
-                }
-
-                let selected = selection.contains(idx);
-                let is_playing = playing == Some(idx);
-                let marked = paint_row(ui, rect, &response, idx, selected, is_playing, true);
-                let visuals = ui.style().interact_selectable(&response, selected);
-
-                let row = Row { idx, response, selection };
-                let builder = egui::UiBuilder::new()
-                    .id_salt(idx)
-                    .max_rect(rect.with_max_x(rect.max.x - EDGE))
-                    .layout(egui::Layout::left_to_right(egui::Align::Center));
-                ui.scope_builder(builder, |ui| {
-                    // Selectable text would take the row's clicks and drags.
-                    ui.style_mut().interaction.selectable_labels = false;
-                    if selected {
-                        ui.visuals_mut().override_text_color = Some(visuals.text_color());
-                    } else if marked {
-                        ui.visuals_mut().override_text_color = Some(playing_color);
-                    }
-                    // (In from the left as from the right.)
-                    ui.add_space(EDGE);
-                    draw(ui, &row, &items[idx]);
-                });
+            } else {
+                selection.click(idx, modifiers);
             }
+        }
+        if response.contains_pointer() {
+            output.hovered = Some(idx);
+        }
+
+        let selected = selection.contains(idx);
+        let header = is_header.is_some_and(|is_header| is_header(&items[idx]));
+        let marked = if header {
+            paint_header(ui, rect.with_max_y(rect.bottom() + under));
+            false
+        } else {
+            paint_row(ui, rect, &response, idx, selected, playing == Some(idx), true)
+        };
+        let visuals = ui.style().interact_selectable(&response, selected);
+
+        let row = Row { idx, response, selection };
+        let builder = egui::UiBuilder::new()
+            .id_salt(row_id)
+            .max_rect(rect.with_max_x(rect.max.x - EDGE))
+            .layout(egui::Layout::left_to_right(egui::Align::Center));
+        ui.scope_builder(builder, |ui| {
+            // Selectable text would take the row's clicks and drags.
+            ui.style_mut().interaction.selectable_labels = false;
+            if selected && !header {
+                ui.visuals_mut().override_text_color = Some(visuals.text_color());
+            } else if marked {
+                ui.visuals_mut().override_text_color = Some(playing_color);
+            }
+            // (In from the left as from the right.)
+            ui.add_space(EDGE);
+            draw(ui, &row, &items[idx]);
         });
+    };
+    let scroll = area.show_rows(ui, row_height, items.len(), |ui, range| {
+        // Where row 0 would be, scrolled as the list is.
+        let origin = ui.max_rect().top() - range.start as f32 * pitch;
+        let x_range = ui.max_rect().x_range();
+        for idx in range {
+            let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), row_height));
+            one_row(ui, idx, rect, 0.0, id.with(idx), &mut output);
+        }
+        // Drawn last, so it's over the rows and takes the pointer from them.
+        if let Some(is_header) = is_header {
+            let view_top = ui.clip_rect().top();
+            if let Some((idx, top)) = sticky(view_top - origin, pitch, items.len(), |i| is_header(&items[i])) {
+                let rect = egui::Rect::from_x_y_ranges(x_range, origin + top..=origin + top + row_height);
+                // (Its background over the gap under it too, so rows don't show through.)
+                one_row(ui, idx, rect, ui.spacing().item_spacing.y, id.with("sticky"), &mut output);
+            }
+        }
+    });
 
     ui.ctx().data_mut(|d| d.insert_temp(view_id, (scroll.state.offset.y, scroll.inner_rect.height())));
 
@@ -384,6 +440,28 @@ pub fn show_tall<T>(
         output.delete = delete && !selection.is_empty();
     }
     output
+}
+
+/// Paint a group header's background in `rect`: set off from the rows,
+/// with a line under it.
+fn paint_header(ui: &egui::Ui, rect: egui::Rect) {
+    ui.painter().rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
+    ui.painter().hline(rect.x_range(), rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
+}
+
+/// The header to pin to the top of a grouped list scrolled down by
+/// `offset`, rows `pitch` apart: the header of the group at the top, and
+/// how far down the rows it goes, pushed up by the next header right under
+/// it. None while that header is where it'd be anyway.
+fn sticky(offset: f32, pitch: f32, len: usize, is_header: impl Fn(usize) -> bool) -> Option<(usize, f32)> {
+    let last = len.checked_sub(1)?;
+    let first = ((offset.max(0.0) / pitch) as usize).min(last);
+    let at = (0..=first).rev().find(|&i| is_header(i))?;
+    let mut top = offset;
+    if first < last && is_header(first + 1) {
+        top = top.min(first as f32 * pitch);
+    }
+    (top > at as f32 * pitch).then_some((at, top))
 }
 
 /// Paint row `idx`'s background in `rect` as a list's rows are: striped,
@@ -705,6 +783,21 @@ mod tests {
             selection.click(idx, modifiers);
         }
         selection.rows().to_vec()
+    }
+
+    #[test]
+    fn sticky_header_pins_then_gets_pushed() {
+        // Headers at rows 0 and 4, rows 10 apart.
+        let header = |i: usize| i == 0 || i == 4;
+        assert_eq!(sticky(0.0, 10.0, 8, header), None, "in place at the top");
+        assert_eq!(sticky(15.0, 10.0, 8, header), Some((0, 15.0)), "pinned to the view's top");
+        assert_eq!(sticky(25.0, 10.0, 8, header), Some((0, 25.0)), "the next header isn't right under it yet");
+        assert_eq!(sticky(34.0, 10.0, 8, header), Some((0, 30.0)), "pushed up by the next header");
+        assert_eq!(sticky(40.0, 10.0, 8, header), None, "the next header is in place");
+        assert_eq!(sticky(41.0, 10.0, 8, header), Some((4, 41.0)), "and pinned once it's past");
+        assert_eq!(sticky(25.0, 10.0, 8, |_| false), None, "no groups");
+        assert_eq!(sticky(5.0, 10.0, 2, |_| true), None, "a folded group's header is pushed by the next");
+        assert_eq!(sticky(5.0, 10.0, 0, header), None, "no rows");
     }
 
     const PLAIN: egui::Modifiers = egui::Modifiers::NONE;
