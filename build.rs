@@ -12,8 +12,9 @@
 //! `docs/scripting-reference.md`, the in-app Scripting Reference (see
 //! `lua_docs.rs` and `parse_reference` below), and the app icon from
 //! `assets/synththing-icon.svg`: `$OUT_DIR/synththing.ico`, embedded in the
-//! Windows exe, `$OUT_DIR/icon_256.rgba` for the window (`desktop.rs`) and
-//! `$OUT_DIR/icon_32.rgba` for the tray (`tray.rs`).
+//! Windows exe, `$OUT_DIR/icon_256.rgba` for the window (`desktop.rs`),
+//! `$OUT_DIR/icon_32.rgba` for the tray (`tray.rs`) and `$OUT_DIR/icon_256.png`
+//! for the Linux applications menu (`desktop_entry.rs`).
 //!
 //! And `$OUT_DIR/log_lines.rs`: `LOG_LINES`, every `log::error!`,
 //! `log::warn!` and `log::info!` in `src/` as (module, line, format
@@ -233,6 +234,10 @@ fn generate_icon(manifest_dir: &str, out_dir: &str, accent: &str) {
             encoder.set_depth(png::BitDepth::Eight);
             let mut writer = encoder.write_header().expect("PNG header");
             writer.write_image_data(&rgba).expect("PNG data");
+        }
+        if size == 256 {
+            let png_path = Path::new(out_dir).join("icon_256.png");
+            fs::write(&png_path, &png_bytes).unwrap_or_else(|e| panic!("writing {}: {e}", png_path.display()));
         }
         images.push((size, png_bytes));
     }
