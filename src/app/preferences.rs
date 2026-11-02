@@ -6,6 +6,7 @@
 
 use eframe::egui;
 
+use super::reorder::{reorder_list, ListEntry};
 use super::{categories_body, icon_button, row_icon_button, row_icon_button_room, nice_name, control_width, setting_label, setting_combo, setting_row, setting_slider, settings_group, toggle_chip, with_info, App};
 use crate::audio::{AudioCommand, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
@@ -96,66 +97,6 @@ impl PrefTab {
 pub(super) enum PrefJump {
     Welcome,
     Themes,
-}
-
-/// A line across a list with `text` on it, in weak small text: where
-/// what's above it ends (Media controls' room).
-fn cutoff_line(ui: &mut egui::Ui, text: &str) {
-    ui.horizontal(|ui| {
-        let stroke = egui::Stroke::new(1.0, ui.visuals().weak_text_color());
-        let galley = ui.painter().layout_no_wrap(text.to_string(), egui::TextStyle::Small.resolve(ui.style()), ui.visuals().weak_text_color());
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), galley.size().y + 4.0), egui::Sense::hover());
-        let y = rect.center().y;
-        let text_left = rect.left() + 12.0;
-        ui.painter().line_segment([egui::pos2(rect.left(), y), egui::pos2(text_left - 4.0, y)], stroke);
-        ui.painter().line_segment([egui::pos2(text_left + galley.size().x + 4.0, y), egui::pos2(rect.right(), y)], stroke);
-        ui.painter().galley(egui::pos2(text_left, y - galley.size().y / 2.0), galley, ui.visuals().weak_text_color());
-    });
-}
-
-/// One entry of a `reorder_list`: the lines over it (section names,
-/// where a place's room runs out), and its row, if it has one (an entry
-/// without is only its lines, a section's start: moved past, never moved).
-struct ListEntry {
-    lines: Vec<String>,
-    row: Option<egui::RichText>,
-}
-
-/// An ordered list as settings rows, each with Higher, Lower and Take it
-/// out at its right; moving past a line moves the entry into the section
-/// under (or over) it. Lines take a row each.
-fn reorder_list<T>(ui: &mut egui::Ui, items: &mut Vec<T>, entry: impl Fn(usize, &T) -> ListEntry) {
-    let last = items.len().saturating_sub(1);
-    let mut moved = None;
-    let mut remove = None;
-    for (i, item) in items.iter().enumerate() {
-        let ListEntry { lines, row } = entry(i, item);
-        // (A line is a row of its own, striped in turn as the rows are.)
-        for line in lines {
-            setting_row(ui, |ui| cutoff_line(ui, &line));
-        }
-        let Some(text) = row else { continue };
-        setting_row(ui, |ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(row_icon_button(ui, "x")).on_hover_text("Take it out").clicked() {
-                    remove = Some(i);
-                }
-                if ui.add_enabled(i < last, row_icon_button(ui, "arrow-down")).on_hover_text("Lower").clicked() {
-                    moved = Some(i + 1);
-                }
-                if ui.add_enabled(i > 0, row_icon_button(ui, "arrow-up")).on_hover_text("Higher").clicked() {
-                    moved = Some(i);
-                }
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(egui::Label::new(text).truncate()));
-            });
-        });
-    }
-    if let Some(i) = moved {
-        items.swap(i - 1, i);
-    }
-    if let Some(i) = remove {
-        items.remove(i);
-    }
 }
 
 /// A tag's icon and name in its color, as lists of buttons show it.
@@ -259,7 +200,7 @@ impl App {
             (!places.is_empty()).then(|| format!("The {} shows the ones above", places.join(" and the "))).into_iter().collect()
         };
         settings_group("Media controls").icon("bell-simple").hint("Buttons beside play/pause, most wanted first").show(ui, |ui| {
-            reorder_list(ui, &mut buttons.0, |i, button| ListEntry { lines: cutoff(i), row: describe(button) });
+            reorder_list(ui, "media_buttons", &mut buttons.0, |i, button| ListEntry { lines: cutoff(i), row: describe(button) });
             let mut sorted: Vec<(&String, &crate::song_store::Tag)> = tags.iter().collect();
             sorted.sort_by_key(|(_, tag)| tag.name.to_lowercase());
             let unused: Vec<MediaButton> = [MediaButton::Previous, MediaButton::Next, MediaButton::Star]
@@ -356,7 +297,7 @@ impl App {
             });
         };
         settings_group("Controls bar").icon("faders-horizontal").hint("Left to right, the middle kept centred").buttons(&mut buttons).show(ui, |ui| {
-            reorder_list(ui, &mut bar.0, entry);
+            reorder_list(ui, "controls_bar", &mut bar.0, entry);
         });
         if let Some(item) = added {
             let at = bar.0.iter().position(|i| *i == BarItem::Middle).unwrap_or(0);

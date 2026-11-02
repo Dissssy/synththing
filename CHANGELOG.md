@@ -4,6 +4,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- Lists you put in order (Preferences > Appearance > Controls bar, and the phone's Media controls) have a grip on each row: drag a row to its place, or drop it past a section line to move it into that section. The arrows still work too.
+- The controls bar's devices button stays in its place, greyed out, while no other device is online, instead of disappearing.
+
 ## 2.3.0 (2026-11-02)
 
 ### Added

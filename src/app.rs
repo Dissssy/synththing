@@ -44,6 +44,7 @@ mod lookup;
 mod background;
 mod groupings;
 mod recording;
+mod reorder;
 mod repair;
 mod script_windows;
 mod smart;
@@ -1373,11 +1374,9 @@ impl App {
     /// them.
     fn controls_line_ui(&mut self, ui: &mut egui::Ui, view: &EngineView, width: f32) {
         let gap = ui.spacing().item_spacing.x;
-        let devices = self.has_other_devices();
         let mut sections = self.config.controls_bar.sections().map(|items| {
             items
                 .into_iter()
-                .filter(|item| **item != BarItem::Devices || devices)
                 .filter(|item| self.bar_item_shown(item))
                 .map(|item| Slot::Item(item.clone()))
                 .collect::<Vec<_>>()
