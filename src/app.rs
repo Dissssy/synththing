@@ -28,6 +28,8 @@ use preferences::PrefTab;
 mod pictures;
 mod playlist_panel;
 mod identity;
+#[cfg(target_os = "linux")]
+mod desktop_entry;
 #[cfg(windows)]
 mod install;
 mod keyboard;
@@ -502,6 +504,10 @@ pub struct App {
     /// Installing synththing: the offer, and Preferences > App's group.
     #[cfg(windows)]
     install: install::Install,
+    /// Adding synththing to the applications menu (Linux): the offer, and
+    /// Preferences > App's group.
+    #[cfg(target_os = "linux")]
+    desktop_entry: desktop_entry::DesktopEntry,
     /// Started with Windows to open as the mini player: it opens on the
     /// first frame (`handle_tray`).
     open_mini_at_start: bool,
@@ -729,6 +735,8 @@ impl App {
         };
         #[cfg(windows)]
         let offer_install = install::Install::offer(&config);
+        #[cfg(target_os = "linux")]
+        let offer_desktop_entry = desktop_entry::DesktopEntry::offer(&config);
 
         let mut app = Self {
             commands,
@@ -840,6 +848,8 @@ impl App {
             welcome: welcome::Welcome::default(),
             #[cfg(windows)]
             install: install::Install::new(),
+            #[cfg(target_os = "linux")]
+            desktop_entry: desktop_entry::DesktopEntry::new(),
             open_mini_at_start: false,
             preferences_tab: PrefTab::default(),
             themes: themes::ThemesState::default(),
@@ -916,6 +926,10 @@ impl App {
         #[cfg(windows)]
         if offer_install {
             app.flow.add(flow::Step::Install);
+        }
+        #[cfg(target_os = "linux")]
+        if offer_desktop_entry {
+            app.flow.add(flow::Step::DesktopEntry);
         }
         if let Some(path) = app.script.path().map(Path::to_path_buf) {
             app.editor_opened(&path);

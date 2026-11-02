@@ -40,6 +40,8 @@ mod device_messages;
 mod duplicates;
 mod credits;
 mod decoded_audio;
+#[cfg(target_os = "linux")]
+mod desktop_entry;
 mod engine;
 mod fields;
 mod file_tags;

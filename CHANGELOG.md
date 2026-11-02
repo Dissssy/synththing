@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Linux: synththing offers once to add itself to your applications menu and app search, with its icon, starting it from where the file is. Preferences > App > Applications menu adds it later (or again after moving the file), or removes it.
+
 ## 2.4.1 (2026-11-02)
 
 ### Fixed
