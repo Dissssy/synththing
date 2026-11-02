@@ -136,6 +136,9 @@ const DIGEST_DETAILS: usize = 10;
 /// panics, which go as soon as the app starts again.
 const REPORTS_PER_DAY: usize = 6;
 
+/// A line, across versions: its level, target and key.
+type Id = (String, String, String);
+
 /// The tree's levels, in order: the `usage` columns.
 const LEVELS: [&str; 6] = ["version", "platform", "level", "target", "signature", "details"];
 
@@ -443,6 +446,36 @@ pub(super) struct DigestDetails {
     pub total: u64,
 }
 
+/// A line filed as an issue, and where it's been seen, so intake can tell
+/// a fixed line (a release out a while, used, without it) from one that's
+/// gone quiet.
+#[derive(Debug, Serialize, PartialEq)]
+pub(super) struct DigestFiled {
+    pub level: String,
+    pub target: String,
+    pub key: String,
+    pub issue: i64,
+    /// Every version and platform it came up on, with its total there.
+    pub seen: Vec<DigestSeen>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub(super) struct DigestSeen {
+    pub version: String,
+    pub platform: String,
+    pub total: u64,
+}
+
+/// What intake collects (`GET /api/v1/intake/usage`).
+#[derive(Debug, Serialize, PartialEq)]
+pub(super) struct Digest {
+    /// What's new.
+    pub lines: Vec<DigestLine>,
+    /// App starts per version and platform, all of them.
+    pub sessions: Vec<DigestSessions>,
+    pub filed: Vec<DigestFiled>,
+}
+
 #[derive(Debug, Serialize, PartialEq)]
 pub(super) struct DigestSessions {
     pub version: String,
@@ -471,8 +504,9 @@ fn level_rank(level: &str) -> usize {
 
 /// What's new, as intake gets it: panics first, then errors, warnings and
 /// info, the most frequent first, at most `DIGEST_LINES`. The rows handed
-/// out are marked offered, for `take`.
-pub(super) fn digest(db: &mut Connection) -> rusqlite::Result<(Vec<DigestLine>, Vec<DigestSessions>)> {
+/// out are marked offered, for `take`. With it, app starts and where each
+/// filed line has been seen.
+pub(super) fn digest(db: &mut Connection) -> rusqlite::Result<Digest> {
     let tx = db.transaction()?;
     type Row = (String, String, String, String, String, String, u64, u64, i64);
     let rows: Vec<Row> = tx
@@ -491,8 +525,6 @@ pub(super) fn digest(db: &mut Connection) -> rusqlite::Result<(Vec<DigestLine>, 
             ))
         })?
         .collect::<rusqlite::Result<_>>()?;
-    // (A line is its level, target and key.)
-    type Id = (String, String, String);
     let mut groups: BTreeMap<Id, (DigestLine, Vec<usize>)> = BTreeMap::new();
     let mut sets: BTreeMap<Id, [BTreeSet<String>; 3]> = BTreeMap::new();
     // (Each line's new and total counts per set of marked values.)
@@ -573,13 +605,39 @@ pub(super) fn digest(db: &mut Connection) -> rusqlite::Result<(Vec<DigestLine>, 
     }
     tx.execute("UPDATE usage_sessions SET offered = new", [])?;
     let sessions = tx
-        .prepare("SELECT version, platform, new, total FROM usage_sessions WHERE new > 0 ORDER BY version DESC, platform")?
+        .prepare("SELECT version, platform, new, total FROM usage_sessions ORDER BY version DESC, platform")?
         .query_map([], |r| {
             Ok(DigestSessions { version: r.get(0)?, platform: r.get(1)?, new: r.get::<_, i64>(2)? as u64, total: r.get::<_, i64>(3)? as u64 })
         })?
         .collect::<rusqlite::Result<_>>()?;
+    let mut seen: BTreeMap<Id, BTreeMap<(String, String), u64>> = BTreeMap::new();
+    for (version, platform, level, target, signature, _, total, ..) in &rows {
+        *seen
+            .entry((level.clone(), target.clone(), key(signature)))
+            .or_default()
+            .entry((version.clone(), platform.clone()))
+            .or_default() += total;
+    }
+    let filed = tx
+        .prepare("SELECT level, target, key, issue FROM usage_filed ORDER BY issue")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<rusqlite::Result<Vec<(String, String, String, i64)>>>()?
+        .into_iter()
+        .map(|(level, target, key, issue)| {
+            let id = (level, target, key);
+            let at = seen.remove(&id).unwrap_or_default();
+            let (level, target, key) = id;
+            DigestFiled {
+                level,
+                target,
+                key,
+                issue,
+                seen: at.into_iter().map(|((version, platform), total)| DigestSeen { version, platform, total }).collect(),
+            }
+        })
+        .collect();
     tx.commit()?;
-    Ok((lines.into_iter().map(|(line, _)| line).collect(), sessions))
+    Ok(Digest { lines: lines.into_iter().map(|(line, _)| line).collect(), sessions, filed })
 }
 
 /// Intake took the last collection: what it was offered is no longer new,
@@ -604,7 +662,7 @@ pub(super) fn intake(state: &State, request: &Request) -> Reply {
         return reply;
     }
     match digest(&mut state.db()) {
-        Ok((lines, sessions)) => json(200, &serde_json::json!({ "lines": lines, "sessions": sessions })),
+        Ok(digest) => json(200, &digest),
         Err(e) => error(500, format!("database: {e}")),
     }
 }
@@ -695,7 +753,8 @@ mod tests {
         add(&mut db, &report("1.7.0", "linux x86_64", &[(a.0, a.1, &a.2, a.3), ("panic", "main", "src/app.rs:3: oops", 1)])).unwrap();
         add(&mut db, &report("1.8.0", "windows x86_64", &[(b.0, b.1, &b.2, b.3)])).unwrap();
 
-        let (lines, sessions) = digest(&mut db).unwrap();
+        let Digest { lines, sessions, filed } = digest(&mut db).unwrap();
+        assert!(filed.is_empty());
         assert_eq!(lines.len(), 2, "the warning in both versions is one line");
         assert_eq!((lines[0].level.as_str(), lines[0].new), ("panic", 1), "panics first");
         let warning = &lines[1];
@@ -706,13 +765,15 @@ mod tests {
         add(&mut db, &report("1.8.0", "windows x86_64", &[(b.0, b.1, &b.2, 1)])).unwrap();
         let filed = Filed { level: "warn".into(), target: "synththing::sync".into(), key: warning.key.clone(), issue: 77 };
         take(&mut db, &[filed]).unwrap();
-        let (lines, sessions) = digest(&mut db).unwrap();
+        let Digest { lines, sessions, filed } = digest(&mut db).unwrap();
         assert_eq!(lines.len(), 1);
         assert_eq!((lines[0].new, lines[0].total, lines[0].filed), (1, 5, Some(77)), "known as #77 from now on");
+        let seen: Vec<(&str, u64)> = filed[0].seen.iter().map(|s| (s.version.as_str(), s.total)).collect();
+        assert_eq!((filed[0].issue, seen), (77, vec![("1.7.0", 2), ("1.8.0", 3)]), "where #77's line has been seen, new or not");
         assert_eq!(sessions.iter().map(|s| s.new).sum::<u64>(), 2);
 
         take(&mut db, &[]).unwrap();
-        assert!(digest(&mut db).unwrap().0.is_empty(), "nothing new: nothing to collect");
+        assert!(digest(&mut db).unwrap().lines.is_empty(), "nothing new: nothing to collect");
     }
 
     fn report(version: &str, platform: &str, lines: &[(&str, &str, &str, u64)]) -> UsageReport {
@@ -772,13 +833,13 @@ mod tests {
         let names: Vec<String> = tree(&db, &path).unwrap().into_iter().map(|n| n.name).collect();
         assert_eq!(names, vec!["page=Queue side=right", "page=Songs side=right", ""]);
 
-        let (lines, _) = digest(&mut db).unwrap();
+        let lines = digest(&mut db).unwrap().lines;
         assert_eq!(lines.len(), 1, "one line, whatever its values");
         assert_eq!(lines[0].new, 8);
         let details: Vec<(&str, u64)> = lines[0].details.iter().map(|d| (d.details.as_str(), d.new)).collect();
         assert_eq!(details, vec![("page=Queue side=right", 5), ("page=Songs side=right", 2)]);
         take(&mut db, &[]).unwrap();
-        assert!(digest(&mut db).unwrap().0.is_empty());
+        assert!(digest(&mut db).unwrap().lines.is_empty());
     }
 
     #[test]
