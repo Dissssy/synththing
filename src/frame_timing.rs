@@ -42,8 +42,8 @@ const STATS_BUCKET: Duration = Duration::from_secs(1);
 const STALL: Duration = Duration::from_secs(1);
 
 /// What the window was last doing (`set_window`), for the stalled-frame
-/// and UI-stuck lines: a frame long in coming while the app was in the
-/// background isn't a hang.
+/// and UI-stuck lines: a frame long in coming while the window isn't on
+/// screen isn't a hang, just the system not asking for one.
 static WINDOW: Mutex<Window> = Mutex::new(Window::Focused);
 
 /// What the window's doing.
@@ -70,6 +70,11 @@ impl Window {
             Window::Background => "background",
         }
     }
+
+    /// On screen, so the system draws the frames the app asks for.
+    fn shown(self) -> bool {
+        matches!(self, Window::Focused | Window::Unfocused)
+    }
 }
 
 /// Say what the window's doing now (each frame's logic, and Android's
@@ -78,8 +83,8 @@ pub fn set_window(window: Window) {
     *WINDOW.lock().unwrap() = window;
 }
 
-fn window() -> &'static str {
-    WINDOW.lock().unwrap().name()
+fn window() -> Window {
+    *WINDOW.lock().unwrap()
 }
 
 /// How often the watchdog looks at the UI thread.
@@ -201,11 +206,13 @@ pub fn begin(size: Option<egui::Vec2>) {
         let now = Instant::now();
         if let (Some(end), Some(due)) = (f.last_end.take(), f.due.take()) {
             let gap = now - end;
-            if gap > due + STALL {
+            // (What the window was doing in the gap: the frame's logic
+            // hasn't said what it's doing now yet. Off screen, the gap is
+            // the system not drawing, not a stall.)
+            let window = window();
+            if gap > due + STALL && window.shown() {
                 let size = size.map_or("unknown".to_string(), |w| format!("{:.0}x{:.0} pt", w.x, w.y));
-                // (What the window was doing in the gap: the frame's logic
-                // hasn't said what it's doing now yet.)
-                let window = window();
+                let window = window.name();
                 log::warn!(
                     window;
                     "stalled frame: {} ms after the last one, due within {} ms; window {size}, {window}",
@@ -434,10 +441,11 @@ pub fn summary() -> Option<String> {
 fn watchdog() {
     loop {
         std::thread::sleep(WATCH_EVERY);
-        let Some(Stuck { stuck, due, stage, section }) = WATCH.lock().unwrap().as_mut().and_then(|w| w.stuck(Instant::now())) else {
+        let window = window();
+        let Some(Stuck { stuck, due, stage, section }) = WATCH.lock().unwrap().as_mut().and_then(|w| w.stuck(window, Instant::now())) else {
             continue;
         };
-        let (stuck, due, window) = (ms(stuck), ms(due), window());
+        let (stuck, due, window) = (ms(stuck), ms(due), window.name());
         let section = section.unwrap_or("none");
         match stage {
             Stage::App => log::warn!(
@@ -464,9 +472,13 @@ struct Stuck {
 
 impl Watch {
     /// The UI thread stuck, well past when its next frame was due: again
-    /// each time the stuck time doubles.
-    fn stuck(&mut self, now: Instant) -> Option<Stuck> {
+    /// each time the stuck time doubles. Outside the app's code with the
+    /// window off screen, it's only waiting for the system to draw again.
+    fn stuck(&mut self, window: Window, now: Instant) -> Option<Stuck> {
         let due = self.due?;
+        if self.stage == Stage::Outside && !window.shown() {
+            return None;
+        }
         let stuck = now - self.since;
         if stuck < due + STALL || stuck < self.logged * 2 {
             return None;
@@ -509,15 +521,28 @@ mod tests {
         let start = Instant::now();
         let at = |ms| start + Duration::from_millis(ms);
         let mut watch = Watch { since: start, stage: Stage::Outside, section: None, due: None, logged: Duration::ZERO };
-        assert_eq!(watch.stuck(at(10_000)), None, "nothing due: idle");
+        assert_eq!(watch.stuck(Window::Focused, at(10_000)), None, "nothing due: idle");
         watch.due = Some(Duration::from_millis(200));
-        assert_eq!(watch.stuck(at(1_000)), None, "not late enough yet");
+        assert_eq!(watch.stuck(Window::Focused, at(1_000)), None, "not late enough yet");
         let stuck = Stuck { stuck: Duration::from_millis(1_500), due: Duration::from_millis(200), stage: Stage::Outside, section: None };
-        assert_eq!(watch.stuck(at(1_500)), Some(stuck));
-        assert_eq!(watch.stuck(at(2_500)), None, "said once till it doubles");
-        assert!(watch.stuck(at(3_000)).is_some(), "and again once it has");
+        assert_eq!(watch.stuck(Window::Focused, at(1_500)), Some(stuck));
+        assert_eq!(watch.stuck(Window::Focused, at(2_500)), None, "said once till it doubles");
+        assert!(watch.stuck(Window::Focused, at(3_000)).is_some(), "and again once it has");
         (watch.stage, watch.section, watch.logged) = (Stage::App, Some("Songs"), Duration::ZERO);
-        let stuck = watch.stuck(at(3_000)).unwrap();
+        let stuck = watch.stuck(Window::Focused, at(3_000)).unwrap();
         assert_eq!((stuck.stage, stuck.section), (Stage::App, Some("Songs")));
+    }
+
+    #[test]
+    fn the_watchdog_lets_an_off_screen_window_wait() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let due = Some(Duration::from_millis(200));
+        let mut watch = Watch { since: start, stage: Stage::Outside, section: None, due, logged: Duration::ZERO };
+        for window in [Window::Background, Window::Minimized, Window::Hidden] {
+            assert_eq!(watch.stuck(window, at(200_000)), None, "{window:?}: no frames drawn, no hang");
+        }
+        watch.stage = Stage::App;
+        assert!(watch.stuck(Window::Background, at(200_000)).is_some(), "stuck in the app's code is a hang anywhere");
     }
 }
