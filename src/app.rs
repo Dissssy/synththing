@@ -83,7 +83,7 @@ use crate::commands::{self, Command, Keymap};
 use crate::frame_timing;
 use crate::credits::{self, Contributors, ContributorsState};
 use crate::audio::{AudioCommand, PlaybackShared, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
-use crate::config::{self, nice_name, Config};
+use crate::config::{self, nice_name, BarItem, Config};
 use crate::engine::{EngineView, MAX_SPEED, MIN_SPEED};
 use crate::song_list::{self, Autoplay, DraggedFiles, SongList};
 use crate::song_store::{self, SongStore, Stored};
@@ -608,6 +608,12 @@ pub struct App {
     song_notes: Option<Arc<crate::midi_notes::NoteList>>,
     /// The transport's accent as last drawn (it eases toward the tempo's).
     accent: Option<[f32; 3]>,
+    /// The points per pixel the window's minimum size (`MIN_WINDOW`) was
+    /// last set for: set again when the UI scale changes.
+    min_window_scale: f32,
+    /// Whether the window's size is still to be checked against its new
+    /// minimum (`keep_min_window`).
+    min_window_check: bool,
     /// The reference spot to show (section, block), when it was asked for,
     /// and whether it still needs scrolling to.
     docs_target: Option<((usize, usize), Instant, bool)>,
@@ -877,6 +883,8 @@ impl App {
             script_art: mpsc::channel(),
             song_notes: None,
             accent: None,
+            min_window_scale: 0.0,
+            min_window_check: false,
             docs_target: None,
             pending_focus: None,
             sprite: sprite_editor::SpriteEditorState::default(),
@@ -1259,37 +1267,63 @@ impl App {
         Some(egui::Color32::from_rgb(r, g, b))
     }
 
+    /// The window's minimum size, `MIN_WINDOW` points at the UI scale
+    /// it's at (set again when that changes), so the controls bar and the
+    /// title bar always fit. A window smaller than that after the scale
+    /// changes (zoomed in with Ctrl+) grows to it, on the next frame, once
+    /// the window's size is measured at the new scale.
+    fn keep_min_window(&mut self, ctx: &egui::Context) {
+        let scale = ctx.pixels_per_point();
+        if scale != self.min_window_scale {
+            self.min_window_scale = scale;
+            self.min_window_check = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(MIN_WINDOW));
+            ctx.request_repaint();
+        } else if std::mem::take(&mut self.min_window_check) {
+            let size = ctx.content_rect().size();
+            if size.x < MIN_WINDOW.x - 1.0 || size.y < MIN_WINDOW.y - 1.0 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size.max(MIN_WINDOW)));
+            }
+        }
+    }
+
     /// The bottom transport bar, across the window's width: the song (title
     /// over a weak detail line) with the status line at the right, the seek
-    /// bar between the times, then the view toggles, the transport in the
-    /// middle, and speed and volume. Shown identically whether fullscreen or
-    /// not, so it's the one thing that's always reachable.
+    /// bar between the times, then the devices button and quick actions,
+    /// the transport in the middle, and speed and volume. When the sides
+    /// don't fit beside the transport, it goes on a line of its own over
+    /// them. Shown identically whether fullscreen or not, so it's the one
+    /// thing that's always reachable.
     fn controls_bar_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         if self.following() {
             return self.following_bar_ui(ui, view);
         }
         ui.add_space(6.0);
 
-        let line = egui::vec2(ui.available_width(), 34.0);
-        ui.allocate_ui_with_layout(line, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.scope(|ui| {
-                    ui.set_max_width(ui.available_width() * 0.45);
-                    if status_line_ui(ui, &self.status, &mut self.unseen_failure, applog::elapsed, applog::entries) {
-                        self.log_search = STATUS_TARGET.to_string();
-                        self.log_open = true;
-                    }
-                });
-                ui.add_space(12.0);
-                let title = match self.current_song.clone() {
-                    Some(path) => self.song_title(&path),
-                    None => view.track_name.clone().unwrap_or_else(|| "Nothing playing".to_string()),
-                };
-                let detail = self.song_detail(view);
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    select_list::two_lines(ui, std::iter::empty(), egui::RichText::new(title).strong(), Some(detail), true);
-                });
-            });
+        // The song at the left, the status line at the right taking at
+        // most `STATUS_SHARE` of the line (cut short past that).
+        let width = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 34.0), egui::Sense::hover());
+        let right = egui::Layout::right_to_left(egui::Align::Center);
+        let status = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(rect).layout(right), |ui| {
+                ui.set_max_width(width * STATUS_SHARE);
+                if status_line_ui(ui, &self.status, &mut self.unseen_failure, applog::elapsed, applog::entries) {
+                    self.log_search = STATUS_TARGET.to_string();
+                    self.log_open = true;
+                }
+            })
+            .response
+            .rect;
+        let title = match self.current_song.clone() {
+            Some(path) => self.song_title(&path),
+            None => view.track_name.clone().unwrap_or_else(|| "Nothing playing".to_string()),
+        };
+        let detail = Some(self.song_detail(view)).filter(|d| !d.is_empty());
+        let song = rect.with_max_x(status.left() - 12.0);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(song).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+            ui.set_clip_rect(song.intersect(ui.clip_rect()));
+            select_list::two_lines(ui, std::iter::empty(), egui::RichText::new(title).strong(), detail, true);
         });
 
         let accent = self.transport_accent(ui.ctx(), view);
@@ -1306,39 +1340,7 @@ impl App {
         });
         ui.add_space(2.0);
 
-        // The devices button at the left, the transport centred, speed and
-        // volume at the right; when they don't fit, the transport centred
-        // over the rest.
-        let width = ui.available_width();
-        let center = TRANSPORT_WIDTH;
-        let side = (width - center) / 2.0;
-        let line = |ui: &mut egui::Ui| ui.allocate_exact_size(egui::vec2(width, TRANSPORT_HEIGHT), egui::Sense::hover()).0;
-        let zone = |rect: egui::Rect, x: f32, width: f32, layout: egui::Layout| {
-            egui::UiBuilder::new()
-                .max_rect(egui::Rect::from_min_size(egui::pos2(rect.left() + x, rect.top()), egui::vec2(width, rect.height())))
-                .layout(layout)
-        };
-        let (left, right) = (egui::Layout::left_to_right(egui::Align::Center), egui::Layout::right_to_left(egui::Align::Center));
-        if side >= SIDE_WIDTH {
-            let rect = line(ui);
-            ui.scope_builder(zone(rect, 0.0, side, left), |ui| self.devices_button_ui(ui, view));
-            ui.scope_builder(zone(rect, side, center, left), |ui| self.transport_ui(ui, view));
-            ui.scope_builder(zone(rect, side + center, side, right), |ui| self.speed_volume_ui(ui, view));
-        } else {
-            let rect = line(ui);
-            ui.scope_builder(zone(rect, side.max(0.0), center, left), |ui| self.transport_ui(ui, view));
-            ui.add_space(4.0);
-            if width >= DEVICES_WIDTH + SIDE_WIDTH {
-                let rect = line(ui);
-                ui.scope_builder(zone(rect, 0.0, DEVICES_WIDTH, left), |ui| self.devices_button_ui(ui, view));
-                ui.scope_builder(zone(rect, DEVICES_WIDTH, width - DEVICES_WIDTH, right), |ui| self.speed_volume_ui(ui, view));
-            } else {
-                ui.horizontal_wrapped(|ui| {
-                    self.devices_button_ui(ui, view);
-                    self.speed_volume_ui(ui, view);
-                });
-            }
-        }
+        self.controls_line_ui(ui, view, width);
         ui.add_space(6.0);
     }
 
@@ -1362,81 +1364,291 @@ impl App {
         parts.join("  ·  ")
     }
 
-    /// Shuffle, stop, previous, play/pause, next and loop.
-    fn transport_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
-        let hover = shuffle_text(self.shuffle);
-        if ui.add(icon_button("shuffle").selected(self.shuffle)).on_hover_text(hover).clicked() {
-            self.set_shuffle(!self.shuffle);
-            toast::show(ui.ctx(), shuffle_text(self.shuffle));
-        }
-        if ui.add(icon_button("stop")).on_hover_text("Stop").clicked() {
-            self.send(AudioCommand::Seek(0.0));
-            if !view.paused {
-                self.send(AudioCommand::TogglePause);
+    /// The controls bar's line of buttons and sliders (`config::ControlsBar`):
+    /// its left section at the left end, the middle centred (moving over
+    /// for the sides when they don't fit beside it), the right at the right
+    /// end. The sliders share the room that's left. With too little, speed
+    /// and then volume become buttons that open theirs (`Shape`), and then
+    /// the star and tag buttons fold, last first, into a ⋯ button listing
+    /// them.
+    fn controls_line_ui(&mut self, ui: &mut egui::Ui, view: &EngineView, width: f32) {
+        let gap = ui.spacing().item_spacing.x;
+        let devices = self.has_other_devices();
+        let mut sections = self.config.controls_bar.sections().map(|items| {
+            items
+                .into_iter()
+                .filter(|item| **item != BarItem::Devices || devices)
+                .filter(|item| self.bar_item_shown(item))
+                .map(|item| Slot::Item(item.clone()))
+                .collect::<Vec<_>>()
+        });
+        let count = |sections: &[Vec<Slot>; 3], item: BarItem| sections.iter().flatten().filter(|s| **s == Slot::Item(item.clone())).count() as f32;
+        let (volumes, speeds) = (count(&sections, BarItem::Volume), count(&sections, BarItem::Speed));
+        let fixed = |sections: &[Vec<Slot>; 3]| -> f32 {
+            sections.iter().flatten().filter(|s| !matches!(s, Slot::Item(BarItem::Volume | BarItem::Speed))).map(|s| s.width() + gap).sum::<f32>() + 2.0 * gap
+        };
+        let need = |fixed: f32, volume: Shape, speed: Shape| {
+            fixed + volumes * (shape_width(volume, volume_width(gap, MIN_SLIDER)) + gap) + speeds * (shape_width(speed, speed_width(gap, MIN_SLIDER)) + gap)
+        };
+        // Speed's sliders give way first, then volume's.
+        let all_fixed = fixed(&sections);
+        let (volume, speed) = [(Shape::Slider, Shape::Slider), (Shape::Slider, Shape::Button), (Shape::Button, Shape::Button)]
+            .into_iter()
+            .find(|&(v, s)| need(all_fixed, v, s) <= width)
+            .unwrap_or((Shape::Button, Shape::Button));
+        // Then the star and tag buttons fold, last first, the ⋯ button
+        // taking the first folded one's place.
+        let over = need(all_fixed, volume, speed) - width;
+        if over > 0.0 {
+            let toggles: Vec<(usize, usize)> = (0..3)
+                .flat_map(|s| (0..sections[s].len()).map(move |i| (s, i)))
+                .filter(|&(s, i)| matches!(sections[s][i], Slot::Item(BarItem::Star | BarItem::Tag(_))))
+                .collect();
+            let fold = (((over / (ICON_BUTTON_WIDTH + gap)).ceil() as usize) + 1).min(toggles.len());
+            if fold > 1 {
+                let folded = &toggles[toggles.len() - fold..];
+                let items: Vec<BarItem> = folded.iter().filter_map(|&(s, i)| if let Slot::Item(item) = &sections[s][i] { Some(item.clone()) } else { None }).collect();
+                let (first_s, first_i) = folded[0];
+                for &(s, i) in folded.iter().rev() {
+                    sections[s].remove(i);
+                }
+                sections[first_s].insert(first_i, Slot::More(items));
             }
         }
-        if ui
-            .add(icon_button("skip-back"))
-            .on_hover_text(format!(
-                "Previous: the previous playlist track, or this one from the start if it's been playing a few seconds{}",
-                commands::hint(ui.ctx(), Command::PreviousTrack)
-            ))
-            .clicked()
-        {
-            self.previous_track(view.position);
-        }
-        let hover = if view.paused { "Play" } else { "Pause" };
-        let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::TogglePause));
-        let play = play_button(ui.ctx(), view.paused, 18.0, egui::vec2(PLAY_WIDTH, TRANSPORT_HEIGHT));
-        if ui.add(play).on_hover_text(hover).clicked() {
-            self.send(AudioCommand::TogglePause);
-        }
-        if ui
-            .add_enabled(self.has_next(), icon_button("skip-forward"))
-            .on_hover_text(format!(
-                "Next: the next queued song, else the next playlist track, or the next song autoplay plays{}",
-                commands::hint(ui.ctx(), Command::NextTrack)
-            ))
-            .on_disabled_hover_text("Queue songs (right-click them), or play something from a playlist or from Songs with Autoplay on, to have a next track")
-            .clicked()
-        {
-            self.next_track();
-        }
-        let (glyph, hover) = match self.loop_mode {
-            LoopMode::Off => ("repeat", "Loop: off (click: loop the playlist, or what autoplay plays)"),
-            LoopMode::All => ("repeat", "Loop: the playlist, or what autoplay plays (click: this track)"),
-            LoopMode::One => ("repeat-once", "Loop: this track (click: off)"),
+        let (volume, speed) = {
+            let fixed = fixed(&sections);
+            [(Shape::Slider, Shape::Slider), (Shape::Slider, Shape::Button), (Shape::Button, Shape::Button)]
+                .into_iter()
+                .find(|&(v, s)| need(fixed, v, s) <= width)
+                .unwrap_or((volume, speed))
         };
-        if ui.add(icon_button(glyph).selected(self.loop_mode != LoopMode::Off)).on_hover_text(hover).clicked() {
-            self.set_loop_mode(self.loop_mode.cycle());
-            toast::show(ui.ctx(), loop_text(self.loop_mode));
+        let sliders = volumes * f32::from(u8::from(volume == Shape::Slider)) + speeds * f32::from(u8::from(speed == Shape::Slider));
+        let spare = width - need(fixed(&sections), volume, speed);
+        let slider = if sliders > 0.0 { (MIN_SLIDER + spare / sliders).clamp(MIN_SLIDER, MAX_SLIDER) } else { MIN_SLIDER };
+        let shapes = Shapes { volume, speed };
+        let slot_width = |slot: &Slot| match slot {
+            Slot::Item(BarItem::Volume) if volume == Shape::Slider => volume_width(gap, slider),
+            Slot::Item(BarItem::Speed) if speed == Shape::Slider => speed_width(gap, slider),
+            Slot::Item(BarItem::Volume | BarItem::Speed) => ICON_BUTTON_WIDTH,
+            slot => slot.width(),
+        };
+        let section_width = |slots: &[Slot]| (slots.iter().map(|s| slot_width(s) + gap).sum::<f32>() - gap).max(0.0);
+        let [left_w, middle_w, right_w] = [&sections[0], &sections[1], &sections[2]].map(|s| section_width(s));
+        let centred = (width - middle_w) / 2.0;
+        let x = if centred >= left_w.max(right_w) + SIDE_GAP {
+            centred
+        } else {
+            centred.min(width - right_w - gap - middle_w).max(left_w + gap).min(width - middle_w).max(0.0)
+        };
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, TRANSPORT_HEIGHT), egui::Sense::hover());
+        let zone = |from: f32, to: f32| {
+            egui::UiBuilder::new()
+                .max_rect(egui::Rect::from_x_y_ranges(rect.left() + from..=rect.left() + to.max(from), rect.y_range()))
+                .layout(egui::Layout::left_to_right(egui::Align::Center))
+        };
+        let [left, middle, right] = sections;
+        ui.spacing_mut().slider_width = slider;
+        ui.scope_builder(zone(0.0, x - gap), |ui| self.controls_slots_ui(ui, view, &left, shapes));
+        ui.scope_builder(zone(x, x + middle_w), |ui| self.controls_slots_ui(ui, view, &middle, shapes));
+        let right_x = (width - right_w).max(x + middle_w + gap);
+        ui.scope_builder(zone(right_x, width), |ui| self.controls_slots_ui(ui, view, &right, shapes));
+    }
+
+    /// Whether a controls bar item has something to show (a tag still
+    /// there).
+    fn bar_item_shown(&self, item: &BarItem) -> bool {
+        match item {
+            BarItem::Tag(id) => self.songs.tags().contains_key(id),
+            _ => true,
         }
     }
 
-    /// Speed and volume, each an icon, a slider and its value (in a
-    /// right-to-left layout). The speed's icon puts it back to 1x.
-    fn speed_volume_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
-        ui.add_sized([36.0, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.0}%", self.volume * 100.0)).weak()));
-        ui.spacing_mut().slider_width = 96.0;
+    /// Some of the controls bar's slots, left to right, as many as fit.
+    fn controls_slots_ui(&mut self, ui: &mut egui::Ui, view: &EngineView, slots: &[Slot], shapes: Shapes) {
+        for slot in slots {
+            if ui.available_width() < ICON_BUTTON_WIDTH {
+                break;
+            }
+            match slot {
+                Slot::Item(item) => self.controls_item_ui(ui, view, item, shapes),
+                Slot::More(items) => self.controls_more_ui(ui, items),
+            }
+        }
+    }
+
+    /// The ⋯ button the star and tag buttons fold into when the bar's too
+    /// narrow: a list of them above it, each toggling its tag on the song
+    /// playing.
+    fn controls_more_ui(&mut self, ui: &mut egui::Ui, items: &[BarItem]) {
+        let song = self.current_song.clone().filter(|p| self.songs.get(p).is_some());
+        let button = ui.add(icon_button("dots-three")).on_hover_text("More buttons");
+        let mut clicked = None;
+        bar_popup(&button, |ui| {
+            ui.set_min_width(160.0);
+            ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                for item in items {
+                    let id = match item {
+                        BarItem::Star => song_store::STARRED,
+                        BarItem::Tag(id) => id.as_str(),
+                        _ => continue,
+                    };
+                    let Some(toggle) = self.tag_toggle(id) else { continue };
+                    let name = if id == song_store::STARRED { "Starred".to_string() } else { toggle.label.clone() };
+                    let text = format!("{}  {name}", icon(&toggle.icon));
+                    if ui.add_enabled(song.is_some(), egui::Button::selectable(toggle.on, text)).on_disabled_hover_text("Play a song from your library to star or tag it").clicked() {
+                        clicked = Some(toggle);
+                    }
+                }
+            });
+        });
+        if let Some(toggle) = clicked
+            && let Some(song) = song
+        {
+            self.tag_songs(tags::TagAction::Set(toggle.tag, !toggle.on), &[song]);
+        }
+    }
+
+    /// One of the controls bar's items.
+    fn controls_item_ui(&mut self, ui: &mut egui::Ui, view: &EngineView, item: &BarItem, shapes: Shapes) {
+        match item {
+            BarItem::Middle | BarItem::Right => {}
+            BarItem::Devices => self.devices_button_ui(ui, view),
+            BarItem::Shuffle => {
+                let hover = shuffle_text(self.shuffle);
+                if ui.add(icon_button("shuffle").selected(self.shuffle)).on_hover_text(hover).clicked() {
+                    self.set_shuffle(!self.shuffle);
+                    toast::show(ui.ctx(), shuffle_text(self.shuffle));
+                }
+            }
+            BarItem::Stop => {
+                if ui.add(icon_button("stop")).on_hover_text("Stop").clicked() {
+                    self.send(AudioCommand::Seek(0.0));
+                    if !view.paused {
+                        self.send(AudioCommand::TogglePause);
+                    }
+                }
+            }
+            BarItem::Previous => {
+                if ui
+                    .add(icon_button("skip-back"))
+                    .on_hover_text(format!(
+                        "Previous: the previous playlist track, or this one from the start if it's been playing a few seconds{}",
+                        commands::hint(ui.ctx(), Command::PreviousTrack)
+                    ))
+                    .clicked()
+                {
+                    self.previous_track(view.position);
+                }
+            }
+            BarItem::PlayPause => {
+                let hover = if view.paused { "Play" } else { "Pause" };
+                let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::TogglePause));
+                let play = play_button(ui.ctx(), view.paused, 18.0, egui::vec2(PLAY_WIDTH, TRANSPORT_HEIGHT));
+                if ui.add(play).on_hover_text(hover).clicked() {
+                    self.send(AudioCommand::TogglePause);
+                }
+            }
+            BarItem::Next => {
+                if ui
+                    .add_enabled(self.has_next(), icon_button("skip-forward"))
+                    .on_hover_text(format!(
+                        "Next: the next queued song, else the next playlist track, or the next song autoplay plays{}",
+                        commands::hint(ui.ctx(), Command::NextTrack)
+                    ))
+                    .on_disabled_hover_text("Queue songs (right-click them), or play something from a playlist or from Songs with Autoplay on, to have a next track")
+                    .clicked()
+                {
+                    self.next_track();
+                }
+            }
+            BarItem::Loop => {
+                let (glyph, hover) = match self.loop_mode {
+                    LoopMode::Off => ("repeat", "Loop: off (click: loop the playlist, or what autoplay plays)"),
+                    LoopMode::All => ("repeat", "Loop: the playlist, or what autoplay plays (click: this track)"),
+                    LoopMode::One => ("repeat-once", "Loop: this track (click: off)"),
+                };
+                if ui.add(icon_button(glyph).selected(self.loop_mode != LoopMode::Off)).on_hover_text(hover).clicked() {
+                    self.set_loop_mode(self.loop_mode.cycle());
+                    toast::show(ui.ctx(), loop_text(self.loop_mode));
+                }
+            }
+            BarItem::Volume => match shapes.volume {
+                Shape::Button => self.volume_button_ui(ui),
+                Shape::Slider => self.volume_ui(ui),
+            },
+            BarItem::Speed => match shapes.speed {
+                Shape::Button => self.speed_button_ui(ui, view),
+                Shape::Slider => self.speed_ui(ui, view),
+            },
+            BarItem::Star => self.bar_toggle_ui(ui, song_store::STARRED),
+            BarItem::Tag(id) => self.bar_toggle_ui(ui, id),
+        }
+    }
+
+    /// A star or tag button on the controls bar: it toggles the tag `id`
+    /// on the song playing; greyed out while no song from the library is.
+    fn bar_toggle_ui(&mut self, ui: &mut egui::Ui, id: &str) {
+        let Some(toggle) = self.tag_toggle(id) else { return };
+        let song = self.current_song.clone().filter(|p| self.songs.get(p).is_some());
+        let size = egui::vec2(ICON_BUTTON_WIDTH, TRANSPORT_HEIGHT);
+        let clicked = ui
+            .add_enabled_ui(song.is_some(), |ui| tags::quick_toggle_button(ui, &self.songs, &toggle, 16.0, size))
+            .inner
+            .on_disabled_hover_text("Play a song from your library to star or tag it")
+            .clicked();
+        if clicked && let Some(song) = song {
+            self.tag_songs(tags::TagAction::Set(toggle.tag, !toggle.on), &[song]);
+        }
+    }
+
+    /// Volume: an icon, a slider (`slider_width` wide) and its value.
+    fn volume_ui(&mut self, ui: &mut egui::Ui) {
+        ui.add_sized([SPEAKER_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(icon(speaker_icon(self.volume))).size(16.0))).on_hover_text("Volume");
         if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false)).changed() {
             self.send_volume();
         }
-        let speaker = match self.volume {
-            v if v <= 0.0 => "speaker-x",
-            v if v < 0.5 => "speaker-low",
-            _ => "speaker-high",
-        };
-        ui.label(egui::RichText::new(icon(speaker)).size(16.0)).on_hover_text("Volume");
+        ui.add_sized([VOLUME_TEXT_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.0}%", self.volume * 100.0)).weak()));
+    }
 
-        ui.add_space(12.0);
-        ui.add_sized([40.0, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.2}x", view.speed)).weak()));
+    /// Volume as a button, when the bar has no room for its slider: it
+    /// opens the slider upright above it, its value on top.
+    fn volume_button_ui(&mut self, ui: &mut egui::Ui) {
+        let button = ui.add(icon_button(speaker_icon(self.volume))).on_hover_text(format!("Volume: {:.0}%", self.volume * 100.0));
+        bar_popup(&button, |ui| {
+            ui.weak(format!("{:.0}%", self.volume * 100.0));
+            if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).vertical().show_value(false)).changed() {
+                self.send_volume();
+            }
+        });
+    }
+
+    /// Speed as a button, when the bar has no room for its slider: it
+    /// opens the slider upright above it, its value on top and a button
+    /// back to 1x under it.
+    fn speed_button_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        let button = ui.add(icon_button("gauge").selected(view.speed != 1.0)).on_hover_text(format!("Speed: {:.2}x", view.speed));
+        bar_popup(&button, |ui| {
+            ui.weak(format!("{:.2}x", view.speed));
+            let mut speed = view.speed;
+            if ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).vertical().show_value(false)).changed() {
+                self.send(AudioCommand::SetSpeed(speed));
+            }
+            if ui.add_enabled(view.speed != 1.0, egui::Button::new("1x")).on_hover_text("Back to normal speed").clicked() {
+                self.send(AudioCommand::SetSpeed(1.0));
+            }
+        });
+    }
+
+    /// Speed: its icon, which puts it back to 1x, a slider and its value.
+    fn speed_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        if ui.add(icon_button("gauge").selected(view.speed != 1.0)).on_hover_text("Speed (click: back to 1x)").clicked() {
+            self.send(AudioCommand::SetSpeed(1.0));
+        }
         let mut speed = view.speed;
         if ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).show_value(false)).changed() {
             self.send(AudioCommand::SetSpeed(speed));
         }
-        if ui.add(icon_button("gauge").selected(view.speed != 1.0)).on_hover_text("Speed (click: back to 1x)").clicked() {
-            self.send(AudioCommand::SetSpeed(1.0));
-        }
+        ui.add_sized([SPEED_TEXT_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.2}x", view.speed)).weak()));
     }
 
     fn soundfont_ui(&mut self, ui: &mut egui::Ui) {
@@ -3979,6 +4191,7 @@ impl eframe::App for App {
             self.history_ui(&ctx);
             self.status_toast_ui(&ctx);
         } else {
+            self.keep_min_window(&ctx);
             egui::Panel::top("top_bar")
                 .show_separator_line(false)
                 .exact_size(title_bar::HEIGHT)
@@ -4293,7 +4506,6 @@ const GROUP_ROW_MARGIN: i8 = 3;
 /// A box of settings under a heading, drawn as a list is: outlined, the
 /// heading (an icon, the title, a line of hint under it) on the header's
 /// color, the rows (`setting_row`) striped. Built up, then drawn by `show`.
-#[derive(Clone, Copy)]
 struct SettingsGroup<'a> {
     title: &'a str,
     icon: Option<&'a str>,
@@ -4301,10 +4513,13 @@ struct SettingsGroup<'a> {
     /// Opens and closes by its heading (closed at first), kept by this
     /// whatever the title says.
     closable: Option<&'a str>,
+    /// Draws the heading's buttons at its right end (in a right-to-left
+    /// layout): what acts on the whole group, as adding to its list.
+    buttons: Option<&'a mut dyn FnMut(&mut egui::Ui)>,
 }
 
 fn settings_group(title: &str) -> SettingsGroup<'_> {
-    SettingsGroup { title, icon: None, hint: None, closable: None }
+    SettingsGroup { title, icon: None, hint: None, closable: None, buttons: None }
 }
 
 impl<'a> SettingsGroup<'a> {
@@ -4320,8 +4535,12 @@ impl<'a> SettingsGroup<'a> {
         Self { closable: Some(id_salt), ..self }
     }
 
+    fn buttons(self, buttons: &'a mut dyn FnMut(&mut egui::Ui)) -> Self {
+        Self { buttons: Some(buttons), ..self }
+    }
+
     /// Draw it, `add` drawing its contents (unless it's closed: `None`).
-    fn show<R>(self, ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    fn show<R>(mut self, ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
         let id = egui::Id::new(SETTINGS_GROUP);
         let visuals = ui.visuals().clone();
         let radius = 6u8;
@@ -4348,9 +4567,14 @@ impl<'a> SettingsGroup<'a> {
                                 ui.add(egui::Label::new(egui::RichText::new(hint).weak()).wrap());
                             }
                         });
-                        if toggle.is_some() {
+                        if toggle.is_some() || self.buttons.is_some() {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(icon(if open { "caret-up" } else { "caret-down" }));
+                                if toggle.is_some() {
+                                    ui.label(icon(if open { "caret-up" } else { "caret-down" }));
+                                }
+                                if let Some(buttons) = self.buttons.as_mut() {
+                                    buttons(ui);
+                                }
                             });
                         }
                     });
@@ -4657,10 +4881,11 @@ fn status_line_ui(
     if shown {
         *unseen_failure = false;
     }
-    match status_color(ui.visuals(), status) {
-        Some(color) => ui.colored_label(color, status),
-        None => ui.weak(status),
+    let text = match status_color(ui.visuals(), status) {
+        Some(color) => egui::RichText::new(status).color(color),
+        None => egui::RichText::new(status).weak(),
     };
+    ui.add(egui::Label::new(text).truncate());
     open_log
 }
 
@@ -4715,7 +4940,7 @@ pub(super) fn palette_color(index: u8) -> egui::Color32 {
 /// A toolbar button: just its icon (Phosphor), a little larger than text.
 /// Give it a hover text saying what it does.
 pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(icon(name)).size(16.0)).min_size(egui::vec2(28.0, 24.0))
+    egui::Button::new(egui::RichText::new(icon(name)).size(16.0)).min_size(egui::vec2(ICON_BUTTON_WIDTH, 24.0))
 }
 
 /// An icon button as tall as the other controls in a row of settings (or
@@ -4732,13 +4957,104 @@ pub(crate) fn row_icon_button_room(ui: &egui::Ui) -> f32 {
     ui.spacing().interact_size.y + 6.0 + ui.spacing().item_spacing.x
 }
 
-/// How wide the transport (`App::transport_ui`) is: five icon buttons and
-/// play, with the gaps between.
-const TRANSPORT_WIDTH: f32 = 5.0 * 28.0 + PLAY_WIDTH + 5.0 * 8.0;
-/// How wide each side of it has to be for the bar to fit on one line.
-const SIDE_WIDTH: f32 = 380.0;
-/// How wide the devices button (`App::devices_button_ui`) is.
-const DEVICES_WIDTH: f32 = 28.0;
+/// How wide volume and speed's sliders get in the controls bar.
+const MIN_SLIDER: f32 = 60.0;
+const MAX_SLIDER: f32 = 160.0;
+/// How tall a slider is in a controls bar popup (`bar_popup`).
+const POPUP_SLIDER: f32 = 120.0;
+const VOLUME_TEXT_WIDTH: f32 = 36.0;
+const SPEED_TEXT_WIDTH: f32 = 40.0;
+const SPEAKER_WIDTH: f32 = 20.0;
+/// The least room between the transport and the bar's sides.
+const SIDE_GAP: f32 = 24.0;
+/// How much of the bar's first line the status line may take.
+const STATUS_SHARE: f32 = 0.4;
+/// The window's smallest size, in points: room for the title bar, and the
+/// controls bar's usual buttons with volume as a button.
+const MIN_WINDOW: egui::Vec2 = egui::vec2(400.0, 420.0);
+
+/// How the controls bar shows volume or speed, by the room it has.
+#[derive(Clone, Copy, PartialEq)]
+enum Shape {
+    /// Its slider, with its value and icon.
+    Slider,
+    /// A button opening the slider in a popup.
+    Button,
+}
+
+/// How wide a `Shape`'s slider form is `slider`; its button form an
+/// icon button.
+fn shape_width(shape: Shape, slider: f32) -> f32 {
+    match shape {
+        Shape::Slider => slider,
+        Shape::Button => ICON_BUTTON_WIDTH,
+    }
+}
+
+/// A place on the controls bar's line: one of its items, or the ⋯
+/// button the star and tag buttons fold into (`App::controls_more_ui`).
+#[derive(Clone, PartialEq)]
+enum Slot {
+    Item(BarItem),
+    More(Vec<BarItem>),
+}
+
+impl Slot {
+    /// How wide it is, as a button (sliders aside).
+    fn width(&self) -> f32 {
+        match self {
+            Slot::Item(BarItem::Middle | BarItem::Right) => 0.0,
+            Slot::Item(BarItem::PlayPause) => PLAY_WIDTH,
+            _ => ICON_BUTTON_WIDTH,
+        }
+    }
+}
+
+/// How the controls bar shows volume and speed this frame.
+#[derive(Clone, Copy)]
+struct Shapes {
+    volume: Shape,
+    speed: Shape,
+}
+
+
+/// A popup right above a controls bar button (as a dropdown, but up),
+/// holding one of its sliders upright, `POPUP_SLIDER` tall, down its
+/// middle.
+fn bar_popup(button: &egui::Response, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Popup::from_toggle_button_response(button)
+        .align(egui::RectAlign::TOP)
+        .align_alternatives(&[])
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .width(button.rect.width())
+        .show(|ui| {
+            ui.spacing_mut().slider_width = POPUP_SLIDER;
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), add);
+        });
+}
+
+/// The speaker icon for `volume`.
+fn speaker_icon(volume: f32) -> &'static str {
+    match volume {
+        v if v <= 0.0 => "speaker-x",
+        v if v < 0.5 => "speaker-low",
+        _ => "speaker-high",
+    }
+}
+
+/// How wide volume is (`App::volume_ui`) with a `slider` wide slider,
+/// `gap` between each of its widgets.
+fn volume_width(gap: f32, slider: f32) -> f32 {
+    VOLUME_TEXT_WIDTH + slider + SPEAKER_WIDTH + 2.0 * gap
+}
+
+/// How wide speed is (`App::speed_ui`), as `volume_width`.
+fn speed_width(gap: f32, slider: f32) -> f32 {
+    SPEED_TEXT_WIDTH + slider + ICON_BUTTON_WIDTH + 2.0 * gap
+}
+
+/// How wide an `icon_button` is.
+const ICON_BUTTON_WIDTH: f32 = 28.0;
 const PLAY_WIDTH: f32 = 44.0;
 /// The Soundfonts list's Size column's own width.
 const SOUNDFONT_SIZE_WIDTH: f32 = 72.0;

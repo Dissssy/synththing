@@ -6,11 +6,12 @@
 
 use std::path::PathBuf;
 
-use eframe::egui;
+use eframe::egui::{self, AtomExt as _};
 
 use super::preferences::PrefTab;
 use super::{fit_width, icon, setting_row, settings_group, App};
-use crate::song_store::{SongStore, Tag, TagShow, TAG_ICONS};
+use crate::config::QuickToggle;
+use crate::song_store::{SongStore, Tag, TagShow, STARRED, TAG_ICONS};
 
 /// The colors new tags take, in turn.
 const PALETTE: [[u8; 3]; 8] = [
@@ -147,7 +148,50 @@ pub(super) fn tag_checklist(ui: &mut egui::Ui, store: &SongStore, paths: &[PathB
     action
 }
 
+/// A star or tag toggle (`App::tag_toggle`) as an icon button:
+/// filled in the tag's color (the star's for the star) while the song has
+/// it, outlined otherwise. With its hover text; a click means toggle it.
+pub(super) fn quick_toggle_button(ui: &mut egui::Ui, store: &SongStore, toggle: &QuickToggle, glyph: f32, size: egui::Vec2) -> egui::Response {
+    let star = toggle.tag == STARRED;
+    let mut text = egui::RichText::new(icon(&toggle.icon)).size(glyph);
+    if toggle.on {
+        let color = match store.tags().get(&toggle.tag) {
+            Some(tag) if !star => egui::Color32::from_rgb(tag.color[0], tag.color[1], tag.color[2]),
+            _ => crate::theme::star_color(ui.ctx()),
+        };
+        text = text.family(egui::FontFamily::Name(super::fonts::PHOSPHOR_FILL.into())).color(color);
+    }
+    let hover = match (star, toggle.on) {
+        (true, true) => "Starred (click: unstar)".to_string(),
+        (true, false) => "Star this song".to_string(),
+        (false, true) => format!("Tagged {} (click: untag)", toggle.label),
+        (false, false) => format!("Tag it {}", toggle.label),
+    };
+    ui.add(egui::Button::new(text.atom_grow(true)).min_size(size)).on_hover_text(hover)
+}
+
 impl App {
+    /// The song playing's toggle for the tag `id` (`STARRED`: its star):
+    /// None with no song in the library playing, or for a deleted tag.
+    pub(super) fn quick_toggle(&self, id: &str) -> Option<QuickToggle> {
+        self.current_song.as_deref().and_then(|p| self.songs.get(p))?;
+        self.tag_toggle(id)
+    }
+
+    /// The toggle for the tag `id` (`STARRED`: the star), on when the song
+    /// playing has it (off with none playing): None for a deleted tag.
+    pub(super) fn tag_toggle(&self, id: &str) -> Option<QuickToggle> {
+        let (label, glyph) = if id == STARRED {
+            ("Star".to_string(), crate::select_list::STAR_ICON)
+        } else {
+            let tag = self.songs.tags().get(id)?;
+            (tag.name.clone(), tag.icon_or_default())
+        };
+        let song = self.current_song.as_deref().and_then(|p| self.songs.get(p));
+        let on = song.is_some_and(|s| s.tags.iter().any(|t| t == id));
+        Some(QuickToggle { tag: id.into(), label, icon: glyph.into(), on })
+    }
+
     /// Do what a Tags list asked for, on the songs at `paths`.
     pub(super) fn tag_songs(&mut self, action: TagAction, paths: &[PathBuf]) {
         let (id, on) = match action {

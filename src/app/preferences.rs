@@ -113,6 +113,56 @@ fn cutoff_line(ui: &mut egui::Ui, text: &str) {
     });
 }
 
+/// One entry of a `reorder_list`: the lines over it (section names,
+/// where a place's room runs out), and its row, if it has one (an entry
+/// without is only its lines, a section's start: moved past, never moved).
+struct ListEntry {
+    lines: Vec<String>,
+    row: Option<egui::RichText>,
+}
+
+/// An ordered list as settings rows, each with Higher, Lower and Take it
+/// out at its right; moving past a line moves the entry into the section
+/// under (or over) it. Lines take a row each.
+fn reorder_list<T>(ui: &mut egui::Ui, items: &mut Vec<T>, entry: impl Fn(usize, &T) -> ListEntry) {
+    let last = items.len().saturating_sub(1);
+    let mut moved = None;
+    let mut remove = None;
+    for (i, item) in items.iter().enumerate() {
+        let ListEntry { lines, row } = entry(i, item);
+        // (A line is a row of its own, striped in turn as the rows are.)
+        for line in lines {
+            setting_row(ui, |ui| cutoff_line(ui, &line));
+        }
+        let Some(text) = row else { continue };
+        setting_row(ui, |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(row_icon_button(ui, "x")).on_hover_text("Take it out").clicked() {
+                    remove = Some(i);
+                }
+                if ui.add_enabled(i < last, row_icon_button(ui, "arrow-down")).on_hover_text("Lower").clicked() {
+                    moved = Some(i + 1);
+                }
+                if ui.add_enabled(i > 0, row_icon_button(ui, "arrow-up")).on_hover_text("Higher").clicked() {
+                    moved = Some(i);
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(egui::Label::new(text).truncate()));
+            });
+        });
+    }
+    if let Some(i) = moved {
+        items.swap(i - 1, i);
+    }
+    if let Some(i) = remove {
+        items.remove(i);
+    }
+}
+
+/// A tag's icon and name in its color, as lists of buttons show it.
+fn tag_entry_text(tag: &crate::song_store::Tag) -> egui::RichText {
+    egui::RichText::new(format!("{}  {}", super::icon(tag.icon_or_default()), tag.name)).color(egui::Color32::from_rgb(tag.color[0], tag.color[1], tag.color[2]))
+}
+
 impl App {
     /// The desktop's Preferences, as a page in the panels' place: the title
     /// bar and the bottom bar stay, and playback goes on.
@@ -189,11 +239,7 @@ impl App {
                 MediaButton::Previous => egui::RichText::new(format!("{}  Previous", super::icon("skip-back"))),
                 MediaButton::Next => egui::RichText::new(format!("{}  Next", super::icon("skip-forward"))),
                 MediaButton::Star => egui::RichText::new(format!("{}  Star", super::icon(crate::select_list::STAR_ICON))),
-                MediaButton::Tag(id) => {
-                    let tag = tags.get(id)?;
-                    let text = format!("{}  {}", super::icon(tag.icon_or_default()), tag.name);
-                    egui::RichText::new(text).color(egui::Color32::from_rgb(tag.color[0], tag.color[1], tag.color[2]))
-                }
+                MediaButton::Tag(id) => tag_entry_text(tags.get(id)?),
             })
         };
         buttons.0.retain(|b| describe(b).is_some());
@@ -207,41 +253,13 @@ impl App {
         let mini_player = crate::android::picture_in_picture_room();
         #[cfg(not(target_os = "android"))]
         let mini_player = 2;
-        let cutoff = |i: usize| -> Option<String> {
+        let cutoff = |i: usize| -> Vec<String> {
             let places: Vec<&str> =
                 [(config::NOTIFICATION_BUTTONS, "notification"), (mini_player, "mini player")].into_iter().filter(|(room, _)| *room == i).map(|(_, p)| p).collect();
-            (!places.is_empty()).then(|| format!("The {} shows the ones above", places.join(" and the ")))
+            (!places.is_empty()).then(|| format!("The {} shows the ones above", places.join(" and the "))).into_iter().collect()
         };
         settings_group("Media controls").icon("bell-simple").hint("Buttons beside play/pause, most wanted first").show(ui, |ui| {
-            let last = buttons.0.len().saturating_sub(1);
-            let mut moved = None;
-            let mut remove = None;
-            for (i, button) in buttons.0.iter().enumerate() {
-                let Some(text) = describe(button) else { continue };
-                if let Some(line) = cutoff(i) {
-                    cutoff_line(ui, &line);
-                }
-                setting_row(ui, |ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(row_icon_button(ui, "x")).on_hover_text("Take it out").clicked() {
-                            remove = Some(i);
-                        }
-                        if ui.add_enabled(i < last, row_icon_button(ui, "arrow-down")).on_hover_text("Lower").clicked() {
-                            moved = Some(i + 1);
-                        }
-                        if ui.add_enabled(i > 0, row_icon_button(ui, "arrow-up")).on_hover_text("Higher").clicked() {
-                            moved = Some(i);
-                        }
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(egui::Label::new(text).truncate()));
-                    });
-                });
-            }
-            if let Some(i) = moved {
-                buttons.0.swap(i - 1, i);
-            }
-            if let Some(i) = remove {
-                buttons.0.remove(i);
-            }
+            reorder_list(ui, &mut buttons.0, |i, button| ListEntry { lines: cutoff(i), row: describe(button) });
             let mut sorted: Vec<(&String, &crate::song_store::Tag)> = tags.iter().collect();
             sorted.sort_by_key(|(_, tag)| tag.name.to_lowercase());
             let unused: Vec<MediaButton> = [MediaButton::Previous, MediaButton::Next, MediaButton::Star]
@@ -264,6 +282,89 @@ impl App {
                 .response
             });
         });
+    }
+
+    /// Appearance > Controls bar: the bar's line of buttons and sliders as
+    /// a list, its left, middle and right sections under their lines, each
+    /// moved up or down (past a line into the next section) or taken out;
+    /// the heading's + adds more at the left's end, and ↺ puts back the
+    /// usual ones.
+    fn controls_bar_list_ui(&self, ui: &mut egui::Ui, bar: &mut config::ControlsBar) {
+        use config::BarItem;
+        let tags = self.songs.tags();
+        // Its icon and name (`None`: a section's start, or a tag since
+        // deleted).
+        let describe = |item: &BarItem| -> Option<egui::RichText> {
+            let (glyph, name) = match item {
+                BarItem::Middle | BarItem::Right => return None,
+                BarItem::Tag(id) => return tags.get(id).map(tag_entry_text),
+                BarItem::Devices => ("devices", "Devices"),
+                BarItem::Shuffle => ("shuffle", "Shuffle"),
+                BarItem::Stop => ("stop", "Stop"),
+                BarItem::Previous => ("skip-back", "Previous"),
+                BarItem::PlayPause => ("play", "Play/pause"),
+                BarItem::Next => ("skip-forward", "Next"),
+                BarItem::Loop => ("repeat", "Loop"),
+                BarItem::Volume => ("speaker-high", "Volume"),
+                BarItem::Speed => ("gauge", "Speed"),
+                BarItem::Star => (crate::select_list::STAR_ICON, "Star"),
+            };
+            Some(egui::RichText::new(format!("{}  {name}", super::icon(glyph))))
+        };
+        bar.0.retain(|item| matches!(item, BarItem::Middle | BarItem::Right) || describe(item).is_some());
+        let entry = |i: usize, item: &BarItem| {
+            let mut lines = Vec::new();
+            if i == 0 {
+                lines.push("Left".to_string());
+            }
+            match item {
+                BarItem::Middle => lines.push("Middle (kept centred)".to_string()),
+                BarItem::Right => lines.push("Right".to_string()),
+                _ => {}
+            }
+            ListEntry { lines, row: describe(item) }
+        };
+        let mut sorted: Vec<(&String, &crate::song_store::Tag)> = tags.iter().collect();
+        sorted.sort_by_key(|(_, tag)| tag.name.to_lowercase());
+        let unused: Vec<BarItem> = BarItem::SINGLE
+            .into_iter()
+            .chain(sorted.into_iter().map(|(id, _)| BarItem::Tag(id.clone())))
+            .filter(|item| !bar.0.contains(item))
+            .collect();
+        let info = "The buttons and sliders under the seek bar, left to right. Moving one past a line moves it into \
+                    that section: the middle stays centred, the left and right hug their ends. Star and tag buttons \
+                    give the song playing its star or the tag, or take it off. When the window gets narrow, speed \
+                    and then volume become buttons that open their slider, and then star and tag buttons fold into \
+                    a list.";
+        let mut added = None;
+        let mut reset = false;
+        let usual = *bar == config::ControlsBar::default();
+        let mut buttons = |ui: &mut egui::Ui| {
+            super::info_icon(ui, info);
+            if ui.add_enabled(!usual, row_icon_button(ui, "arrow-counter-clockwise")).on_hover_text("Back to the usual buttons").clicked() {
+                reset = true;
+            }
+            let add = ui.add_enabled(!unused.is_empty(), row_icon_button(ui, "plus")).on_hover_text("Add a button");
+            egui::Popup::menu(&add).show(|ui| {
+                for item in &unused {
+                    if let Some(text) = describe(item)
+                        && ui.button(text).clicked()
+                    {
+                        added = Some(item.clone());
+                    }
+                }
+            });
+        };
+        settings_group("Controls bar").icon("faders-horizontal").hint("Left to right, the middle kept centred").buttons(&mut buttons).show(ui, |ui| {
+            reorder_list(ui, &mut bar.0, entry);
+        });
+        if let Some(item) = added {
+            let at = bar.0.iter().position(|i| *i == BarItem::Middle).unwrap_or(0);
+            bar.0.insert(at, item);
+        }
+        if reset {
+            *bar = config::ControlsBar::default();
+        }
     }
 
     /// Playback > Loaded right now: each file in memory, with what it takes
@@ -341,6 +442,7 @@ impl App {
         let mut script_log = self.config.script_log_to_app;
         let mut visualizer_scale = config::visualizer_scale_down(self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE));
         let mut channel_chips = self.config.channel_chips;
+        let mut controls_bar = self.config.controls_bar.clone();
         let mut buffer_ms = self.buffer_ms;
         let mut even_volume = self.config.even_volume.unwrap_or(true);
         let mut volume_target = self.config.volume_target.unwrap_or(loudness::DEFAULT_TARGET);
@@ -375,6 +477,9 @@ impl App {
                     }
                     self.ui_scale_ui(ui);
                 });
+                if !self.mobile() {
+                    self.controls_bar_list_ui(ui, &mut controls_bar);
+                }
                 settings_group("Seek bar").icon("sliders-horizontal").show(ui, |ui| {
                     with_info(
                         ui,
@@ -787,6 +892,7 @@ impl App {
             || script_log != self.config.script_log_to_app
             || visualizer_scale != self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE)
             || channel_chips != self.config.channel_chips
+            || controls_bar != self.config.controls_bar
             || buffer_ms != self.buffer_ms
             || even_volume != self.config.even_volume.unwrap_or(true)
             || volume_target != self.config.volume_target.unwrap_or(loudness::DEFAULT_TARGET)
@@ -815,6 +921,7 @@ impl App {
             self.config.album_volume = album_volume;
             self.send_volume();
             self.config.channel_chips = channel_chips;
+            self.config.controls_bar = controls_bar;
             self.config.script_log_to_app = script_log;
             self.config.visualizer_scale = (visualizer_scale != config::DEFAULT_VISUALIZER_SCALE).then_some(visualizer_scale);
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);

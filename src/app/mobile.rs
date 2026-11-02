@@ -501,15 +501,10 @@ impl App {
                 if self.songs.get(&song).is_some() && ui.add(big_icon_button("tag", 32.0)).on_hover_text("Tag this song").clicked() {
                     self.tags_for = Some(vec![song.clone()]);
                 }
-                let starred = self.songs.is_starred(&song);
-                let mut glyph = egui::RichText::new(icon(crate::select_list::STAR_ICON)).size(16.0);
-                if starred {
-                    glyph = glyph.family(egui::FontFamily::Name(super::fonts::PHOSPHOR_FILL.into())).color(crate::theme::star_color(ui.ctx()));
-                }
-                let star = egui::Button::new(glyph.atom_grow(true)).min_size(egui::Vec2::splat(32.0));
-                if ui.add(star).on_hover_text(if starred { "Starred: tap to unstar" } else { "Star this song" }).clicked() {
-                    let tag = super::tags::TagAction::Set(crate::song_store::STARRED.into(), !starred);
-                    self.tag_songs(tag, &[song]);
+                if let Some(toggle) = self.quick_toggle(crate::song_store::STARRED)
+                    && super::tags::quick_toggle_button(ui, &self.songs, &toggle, 16.0, egui::Vec2::splat(32.0)).clicked()
+                {
+                    self.tag_songs(super::tags::TagAction::Set(toggle.tag, !toggle.on), &[song]);
                 }
             });
         });
@@ -994,15 +989,8 @@ impl App {
     /// (`config::MediaButtons`): no star or tags for a song not in the
     /// library, which can't be tagged, nor a tag since deleted.
     fn media_buttons(&self) -> Vec<crate::android::Button> {
-        use crate::android::{Button, Toggle};
+        use crate::android::Button;
         use crate::config::MediaButton;
-        use crate::song_store::STARRED;
-
-        let song = self.current_song.as_deref().and_then(|p| self.songs.get(p));
-        let has = |tag: &str| song.is_some_and(|s| s.tags.iter().any(|t| t == tag));
-        let toggle = |tag: &str, label: &str, icon: &str| {
-            song.map(|_| Button::Toggle(Toggle { tag: tag.into(), label: label.into(), icon: icon.into(), on: has(tag) }))
-        };
         self.config
             .media_buttons
             .0
@@ -1010,8 +998,8 @@ impl App {
             .filter_map(|button| match button {
                 MediaButton::Previous => Some(Button::Previous),
                 MediaButton::Next => Some(Button::Next),
-                MediaButton::Star => toggle(STARRED, "Star", crate::select_list::STAR_ICON),
-                MediaButton::Tag(id) => self.songs.tags().get(id).and_then(|tag| toggle(id, &tag.name, tag.icon_or_default())),
+                MediaButton::Star => self.quick_toggle(crate::song_store::STARRED).map(Button::Toggle),
+                MediaButton::Tag(id) => self.quick_toggle(id.as_str()).map(Button::Toggle),
             })
             .collect()
     }

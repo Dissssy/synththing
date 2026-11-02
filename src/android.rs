@@ -28,6 +28,7 @@ use jni::objects::{GlobalRef, JObject, JObjectArray, JString, JThrowable, JValue
 use jni::{JNIEnv, JavaVM};
 
 use crate::app::App;
+use crate::config::QuickToggle;
 use crate::import::{self, Kind};
 
 mod keyboard;
@@ -291,26 +292,13 @@ pub struct Playback {
     pub buttons: Vec<Button>,
 }
 
-/// One of the media controls' buttons beside play/pause.
+/// One of the media controls' buttons beside play/pause
+/// (`config::MediaButtons`, resolved by `App::media_buttons`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Button {
     Previous,
     Next,
-    Toggle(Toggle),
-}
-
-/// A button in the media controls for the song playing: a tag (the star
-/// too) to give it or take off it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Toggle {
-    pub tag: String,
-    /// What it's called (for accessibility; Android shows only the icon).
-    pub label: String,
-    /// Its icon, by its Phosphor name (one of `song_store::TAG_ICONS`, or
-    /// the star's): the Java side's `ic_<name>` drawable, `_on` while `on`.
-    pub icon: String,
-    /// Whether the song has the tag.
-    pub on: bool,
+    Toggle(QuickToggle),
 }
 
 /// Tell the Java side what's playing (it starts or stops the playback
@@ -399,7 +387,7 @@ pub enum MediaCommand {
     Next,
     Previous,
     Seek(f64),
-    /// One of the `Toggle`s: give the song playing the tag (`true`) or
+    /// One of the `QuickToggle`s: give the song playing the tag (`true`) or
     /// take it off.
     SetTag(String, bool),
 }
@@ -419,7 +407,7 @@ pub fn media_command(command: i32, position_ms: i64) {
     MEDIA_COMMANDS.lock().unwrap().push(command);
 }
 
-/// From Java: a `Toggle` was tapped, to set its tag to `on`.
+/// From Java: a `QuickToggle` was tapped, to set its tag to `on`.
 pub fn set_tag(tag: String, on: bool) {
     MEDIA_COMMANDS.lock().unwrap().push(MediaCommand::SetTag(tag, on));
 }

@@ -119,6 +119,9 @@ pub struct Config {
     /// channel's instrument, instead of numbered checkboxes.
     #[serde(default)]
     pub channel_chips: bool,
+    /// The controls bar's buttons and sliders, left to right.
+    #[serde(default)]
+    pub controls_bar: ControlsBar,
     /// The Songs list's columns, sorting and grouping.
     #[serde(default)]
     pub songs_view: crate::song_list::View,
@@ -358,6 +361,81 @@ pub enum MediaButton {
     Star,
     /// A tag, by its ID (`song_store::Tag`).
     Tag(String),
+}
+
+/// A star or tag button for the song playing (the phone's media
+/// controls, the controls bar): a tag (the star too) to give it or take
+/// off it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuickToggle {
+    pub tag: String,
+    /// What it's called (for accessibility; Android shows only the icon).
+    pub label: String,
+    /// Its icon, by its Phosphor name (one of `song_store::TAG_ICONS`, or
+    /// the star's): the Java side's `ic_<name>` drawable, `_on` while `on`.
+    pub icon: String,
+    /// Whether the song has the tag.
+    pub on: bool,
+}
+
+/// The controls bar's line of buttons and sliders (under the seek bar),
+/// left to right, in three sections: the left end, the middle (kept
+/// centred) and the right end, each starting at its marker. Set in
+/// Preferences > Appearance > Controls bar.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ControlsBar(pub Vec<BarItem>);
+
+impl Default for ControlsBar {
+    fn default() -> Self {
+        use BarItem::*;
+        Self(vec![Devices, Middle, Shuffle, Stop, Previous, PlayPause, Next, Loop, Right, Volume])
+    }
+}
+
+impl ControlsBar {
+    /// The left, middle and right sections' items.
+    pub fn sections(&self) -> [Vec<&BarItem>; 3] {
+        let mut sections = [Vec::new(), Vec::new(), Vec::new()];
+        let mut at = 0;
+        for item in &self.0 {
+            match item {
+                BarItem::Middle => at = 1,
+                BarItem::Right => at = 2,
+                item => sections[at].push(item),
+            }
+        }
+        sections
+    }
+}
+
+/// One of `ControlsBar`'s items.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BarItem {
+    /// Where the middle section starts (not drawn).
+    Middle,
+    /// Where the right section starts (not drawn).
+    Right,
+    /// What the other devices play (only while one's online).
+    Devices,
+    Shuffle,
+    Stop,
+    Previous,
+    PlayPause,
+    Next,
+    Loop,
+    Volume,
+    Speed,
+    /// The song playing's star (`song_store::STARRED`).
+    Star,
+    /// A tag for the song playing, by its ID (`song_store::Tag`).
+    Tag(String),
+}
+
+impl BarItem {
+    /// The items there's one of, as the Add list offers them.
+    pub const SINGLE: [Self; 10] =
+        [Self::Devices, Self::Shuffle, Self::Stop, Self::Previous, Self::PlayPause, Self::Next, Self::Loop, Self::Volume, Self::Speed, Self::Star];
 }
 
 /// How synththing opens when it starts with Windows (`cli::Cli::autostart`).
