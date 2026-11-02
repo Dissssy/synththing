@@ -27,6 +27,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Check again under your hub, in the sync settings, also has the hub check its addresses from the internet again, instead of only after its next 6-hourly check.
 
 ### Fixed
+- Songs in a format synththing can't read no longer put an error in the log each time their info or art is read.
 - Playing music uses less power, so a phone playing in the background stays cooler: the audio thread now sleeps while nothing plays and wakes far less often while something does, and a MIDI song copies the whole synth half as often.
 - On Android, the media controls (notification and lock screen) no longer go away after playing in the background for a long while: the playback service stays running while paused too, so the paused notification can only go by swiping synththing away from recent apps.
 - Preferences fits on a phone's screen again: sliders, dropdowns and the (i) buttons no longer run off the right edge.
