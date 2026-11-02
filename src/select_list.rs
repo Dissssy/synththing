@@ -339,8 +339,9 @@ fn show_list<T>(
         };
         area = area.vertical_scroll_offset(shown);
     }
-    // One row, in `rect`, interacting as `row_id`.
-    let mut one_row = |ui: &mut egui::Ui, idx: usize, rect: egui::Rect, row_id: egui::Id, output: &mut ListOutput| {
+    // One row, in `rect`, interacting as `row_id`; a header's background
+    // reaches `under` further down.
+    let mut one_row = |ui: &mut egui::Ui, idx: usize, rect: egui::Rect, under: f32, row_id: egui::Id, output: &mut ListOutput| {
         // Not focusable: a focused row would count as typing and turn the keys off.
         let response = ui.interact(rect, row_id, sense - egui::Sense::FOCUSABLE);
         // Playing and selecting are apart: a plain click plays and
@@ -362,7 +363,7 @@ fn show_list<T>(
         let selected = selection.contains(idx);
         let header = is_header.is_some_and(|is_header| is_header(&items[idx]));
         let marked = if header {
-            paint_header(ui, rect);
+            paint_header(ui, rect.with_max_y(rect.bottom() + under));
             false
         } else {
             paint_row(ui, rect, &response, idx, selected, playing == Some(idx), true)
@@ -393,16 +394,15 @@ fn show_list<T>(
         let x_range = ui.max_rect().x_range();
         for idx in range {
             let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), row_height));
-            one_row(ui, idx, rect, id.with(idx), &mut output);
+            one_row(ui, idx, rect, 0.0, id.with(idx), &mut output);
         }
         // Drawn last, so it's over the rows and takes the pointer from them.
         if let Some(is_header) = is_header {
             let view_top = ui.clip_rect().top();
             if let Some((idx, top)) = sticky(view_top - origin, pitch, items.len(), |i| is_header(&items[i])) {
                 let rect = egui::Rect::from_x_y_ranges(x_range, origin + top..=origin + top + row_height);
-                // (Over the gap under it too, so rows don't show through.)
-                paint_header(ui, rect.with_max_y(rect.bottom() + ui.spacing().item_spacing.y));
-                one_row(ui, idx, rect, id.with("sticky"), &mut output);
+                // (Its background over the gap under it too, so rows don't show through.)
+                one_row(ui, idx, rect, ui.spacing().item_spacing.y, id.with("sticky"), &mut output);
             }
         }
     });
