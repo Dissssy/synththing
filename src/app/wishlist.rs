@@ -588,16 +588,17 @@ impl App {
         let filter = &self.wishlist.filter.as_ref().expect("parsed").1;
         let now = crate::settings_sync::now();
         let kept: HashSet<&String> = wishes.iter().filter(|(id, wish)| filter.keeps(wish, state_of(id), now)).map(|(id, _)| id).collect();
+        if wishes.is_empty() {
+            // (On its own, not in the row below, so it wraps on a phone.)
+            ui.weak("Nothing wished for yet. Search MusicBrainz above, or add something by name with +.");
+            return self.wishlist_act(ui.ctx(), act);
+        }
         ui.horizontal(|ui| {
             ui.weak(match (wishes.len(), kept.len()) {
-                (0, _) => "Nothing wished for yet. Search MusicBrainz above, or add something by name with +.".to_string(),
                 (all, kept) if kept < all => format!("{kept} of {all}"),
                 (1, _) => "1 wish".to_string(),
                 (n, _) => format!("{n} wishes"),
             });
-            if wishes.is_empty() {
-                return;
-            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // let clear = ui.add_enabled(got > 0, egui::Button::new(format!("Clear got it ({got})")));
                 // if clear.on_hover_text("Take the wishes that came true off the wishlist").clicked() {
@@ -610,9 +611,6 @@ impl App {
                 self.wishlist.filter_box.ui(ui, &FILTER, &filter.problems, None, &mut complete);
             });
         });
-        if wishes.is_empty() {
-            return self.wishlist_act(ui.ctx(), act);
-        }
 
         // (An artist's albums go under them, not in a part of their own.)
         let on_top = |wish: &Wish| wish.under.as_ref().is_none_or(|artist| !wishes.contains_key(artist));

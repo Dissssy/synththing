@@ -6,6 +6,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Fixed
 - Groupings: the songs on an album's, artist's or other group's page are spaced like every other list again, instead of cramped with striped rows taller than the rest and the playing song's outline touching its neighbours.
+- Phones: the Script library's list and search bar fit the screen again (the sort dropdown no longer pushes the page 30 points past its right edge), and an empty Wishlist's note wraps instead of running off the side.
 
 ## 2.5.0 (2026-11-02)
 
