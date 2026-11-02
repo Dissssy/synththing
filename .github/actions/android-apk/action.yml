@@ -9,7 +9,7 @@
 # (src/updater.rs, ASSET_NAME).
 #
 # On GitHub's runners or Ethan's own (vars.RUNNER, deploy/ci-runner.compose.yml):
-# there, the SDK and NDK (ANDROID_HOME), Gradle's caches (~/.gradle), the
+# there, the SDK and NDK (~/.android/sdk), Gradle's caches (~/.gradle), the
 # JDK (the tool cache) and cargo's builds (CARGO_TARGET_DIR) are kept on
 # volumes, so the GitHub caches are skipped.
 name: Android APK
