@@ -19,6 +19,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### Fixed
 - Previews count as a recording from the script's first line, so a script that hides its controls when `recording()` is set does it in its preview too.
 - Previews made in the app no longer use your saved script data or settings: they match the server's. Previews made before are made again.
+- Layout > Edit layouts... looks like Preferences: the layouts are rows in a section, with New layout and Close in its header. Drag a layout by its grip to put the Layout menu in order, or onto the trash in the header to delete it (asking first). A pencil by each name renames it in place, and the showing one is marked.
+- Layout > Edit layouts... looks like Preferences: the layouts are rows in a section, with New layout and Close in its header, a pencil by each name to rename it in place, a trash button to delete it (asking first in a dialog of its own), and the showing one marked.
 
 ## 2.3.0 (2026-11-02)
 

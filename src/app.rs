@@ -4249,8 +4249,9 @@ impl eframe::App for App {
             self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);
             self.history_ui(&ctx);
-            self.layout_new_ui(&ctx);
+            // (New layout after Edit layouts: Edit's + opens it over it.)
             self.layout_edit_ui(&ctx);
+            self.layout_new_ui(&ctx);
             self.new_sprite_ui(&ctx);
             drop(windows);
         }
@@ -4595,26 +4596,26 @@ impl<'a> SettingsGroup<'a> {
                 .inner_margin(egui::Margin::symmetric(GROUP_MARGIN, 5))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        if let Some(name) = self.icon {
-                            ui.label(egui::RichText::new(icon(name)).size(16.0).color(visuals.weak_text_color()));
+                    // (The caret and buttons go in first, at the right end,
+                    // so the title and hint wrap in the room left of them.)
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if toggle.is_some() {
+                            ui.label(icon(if open { "caret-up" } else { "caret-down" }));
                         }
-                        ui.vertical(|ui| {
-                            ui.strong(self.title);
-                            if let Some(hint) = self.hint {
-                                ui.add(egui::Label::new(egui::RichText::new(hint).weak()).wrap());
+                        if let Some(buttons) = self.buttons.as_mut() {
+                            buttons(ui);
+                        }
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            if let Some(name) = self.icon {
+                                ui.label(egui::RichText::new(icon(name)).size(16.0).color(visuals.weak_text_color()));
                             }
-                        });
-                        if toggle.is_some() || self.buttons.is_some() {
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if toggle.is_some() {
-                                    ui.label(icon(if open { "caret-up" } else { "caret-down" }));
-                                }
-                                if let Some(buttons) = self.buttons.as_mut() {
-                                    buttons(ui);
+                            ui.vertical(|ui| {
+                                ui.strong(self.title);
+                                if let Some(hint) = self.hint {
+                                    ui.add(egui::Label::new(egui::RichText::new(hint).weak()).wrap());
                                 }
                             });
-                        }
+                        });
                     });
                 });
             if let Some(toggle) = toggle
