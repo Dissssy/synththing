@@ -659,6 +659,8 @@ pub enum StreamEvent {
     /// A live message from one of the identity's devices (or this one),
     /// sealed (`device_messages::open`).
     Live(String),
+    /// A script's preview is being made on the server, or is done.
+    Preview(super::PreviewEvent),
     /// The stream is open: anything from now on comes on it.
     Opened,
 }
@@ -705,6 +707,8 @@ fn read_stream(response: Reply, mut each: impl FnMut(StreamEvent) -> bool) -> Re
             StreamEvent::Sync(changed.sync)
         } else if let Ok(live) = serde_json::from_str::<super::sync::LiveEvent>(data) {
             StreamEvent::Live(live.live)
+        } else if let Ok(preview) = serde_json::from_str::<super::PreviewEventMessage>(data) {
+            StreamEvent::Preview(preview.preview)
         } else if let Ok(notification) = serde_json::from_str(data) {
             StreamEvent::Notification(notification)
         } else {
@@ -808,9 +812,12 @@ pub fn admin<T: serde::de::DeserializeOwned>(
 
 /// A script's preview for `version` (the newest version's up to it that
 /// has one): the animation (`sheet`), or the still. PNG.
-pub fn preview(base: &str, id: &str, version: u32, sheet: bool) -> Result<Vec<u8>, String> {
+pub fn preview(base: &str, id: &str, version: u32, rev: u64, sheet: bool) -> Result<Vec<u8>, String> {
     let file = if sheet { "preview-sheet.png" } else { "preview.png" };
-    let request = agent().get(format!("{base}/api/v1/scripts/{id}/{file}")).query("version", version.to_string());
+    let request = agent()
+        .get(format!("{base}/api/v1/scripts/{id}/{file}"))
+        .query("version", version.to_string())
+        .query("rev", rev.to_string());
     let mut response = check(request.call())?;
     response
         .body_mut()
@@ -1044,23 +1051,50 @@ mod tests {
         assert_eq!(wait_for(&bars.id, 1), crate::library::Preview::Animated);
         assert_eq!(wait_for(&blank.id, 1), crate::library::Preview::Still);
         assert_eq!(wait_for(&nothing.id, 1), crate::library::Preview::None);
-        assert!(preview(&base, &nothing.id, 1, false).unwrap_err().contains("no preview"));
+        assert!(preview(&base, &nothing.id, 1, 0, false).unwrap_err().contains("no preview"));
         // One that doesn't run isn't taken.
         let broken = upload_of("Broken", "visualizer", "function render() if FRAME > 2 then nope() end end");
         let refused = upload(&base, &key, &broken, None).unwrap_err();
         assert!(refused.contains("doesn't run") && refused.contains("nope"), "{refused}");
-        let sheet = preview(&base, &bars.id, 1, true).unwrap();
+        let sheet = preview(&base, &bars.id, 1, 0, true).unwrap();
         let (w, h, _) = crate::preview::decode_png(&sheet).unwrap();
         assert_eq!((w, h), (crate::preview::WIDTH * crate::preview::COLUMNS, crate::preview::HEIGHT * 6));
-        assert!(crate::preview::decode_png(&preview(&base, &blank.id, 1, false).unwrap()).is_ok());
-        assert!(preview(&base, &blank.id, 1, true).unwrap_err().contains("no preview"));
+        assert!(crate::preview::decode_png(&preview(&base, &blank.id, 1, 0, false).unwrap()).is_ok());
+        assert!(preview(&base, &blank.id, 1, 0, true).unwrap_err().contains("no preview"));
         // A later version asked for: the newest one up to it with a preview.
-        assert!(preview(&base, &bars.id, 7, false).is_ok());
+        assert!(preview(&base, &bars.id, 7, 0, false).is_ok());
         // By the source's hash, as Android asks: the same images.
         let moving_sha = crate::library::sha256_hex(moving.as_bytes());
         assert_eq!(preview_of_source(&base, &moving_sha, true).unwrap(), sheet);
         assert!(preview_of_source(&base, &crate::library::sha256_hex(quitter.as_bytes()), true).is_err());
         assert!(preview_of_source(&base, &crate::library::sha256_hex(b"unknown"), false).unwrap_err().contains("no preview"));
+        // An admin has one made again: everyone listening hears it start
+        // and finish, and it's a new making (`preview_rev`).
+        let made = details(&base, &bars.id).unwrap().versions[0].preview_rev;
+        assert!(made > 0);
+        let listener = Identity::generate().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let (base, key) = (base.clone(), key.clone());
+            std::thread::spawn(move || {
+                let _ = notification_stream(&base, &key, &listener, |event| match event {
+                    StreamEvent::Preview(p) => tx.send(p).is_ok(),
+                    _ => true,
+                });
+            });
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        let server_id = Identity::from_secret_hex(&std::fs::read_to_string(dir.join("server.key")).unwrap()).unwrap();
+        let again = crate::library::AdminAction::Rerender { script: Some(bars.id.clone()) };
+        let queued = admin::<serde_json::Value>(&base, &key, &server_id, &again).unwrap();
+        assert_eq!(queued["queued"], 1);
+        let heard = |rendering| crate::library::PreviewEvent { script: bars.id.clone(), version: 1, rendering };
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), heard(true));
+        assert_eq!(rx.recv_timeout(Duration::from_secs(120)).unwrap(), heard(false));
+        let after = details(&base, &bars.id).unwrap();
+        assert_eq!(after.versions[0].preview, crate::library::Preview::Animated);
+        assert!(!after.versions[0].rendering);
+        assert!(after.versions[0].preview_rev >= made);
         running.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1564,7 +1598,7 @@ mod tests {
             std::thread::spawn(move || {
                 let _ = notification_stream(&base, &key, &alice, |event| match event {
                     StreamEvent::Notification(n) => tx.send(n).is_ok(),
-                    StreamEvent::Sync(_) | StreamEvent::Live(_) | StreamEvent::Opened => true,
+                    StreamEvent::Sync(_) | StreamEvent::Live(_) | StreamEvent::Preview(_) | StreamEvent::Opened => true,
                 });
             });
         }

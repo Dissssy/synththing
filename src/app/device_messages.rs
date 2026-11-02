@@ -64,7 +64,7 @@ impl App {
             match event {
                 StreamEvent::Opened => self.live_opened(),
                 StreamEvent::Live(sealed) => self.live_heard(&sealed),
-                StreamEvent::Notification(_) | StreamEvent::Sync(_) => {}
+                StreamEvent::Notification(_) | StreamEvent::Sync(_) | StreamEvent::Preview(_) => {}
             }
         }
     }

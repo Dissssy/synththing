@@ -46,6 +46,10 @@ pub fn run(args: &AdminArgs) -> Result<(), String> {
         AdminCommand::Hide { script, reason } => done(send(AdminAction::Hide { script: script.clone(), reason: reason.clone() })?),
         AdminCommand::Unhide { script } => done(send(AdminAction::Unhide { script: script.clone() })?),
         AdminCommand::Delete { script } => done(send(AdminAction::Delete { script: script.clone() })?),
+        AdminCommand::Rerender { script } => {
+            let reply = send(AdminAction::Rerender { script: script.clone() })?;
+            println!("{} preview(s) queued to be made again", reply["queued"].as_u64().unwrap_or(0));
+        }
         AdminCommand::Ban { target, reason, hours, hide_scripts, ban_addresses } => {
             let reply = send(AdminAction::Ban {
                 target: target.clone(),

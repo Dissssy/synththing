@@ -76,6 +76,16 @@ impl PreviewImage {
     }
 }
 
+/// Over a preview being made again (`rect`, where it's drawn): dimmed,
+/// with a spinner, and hover saying so.
+pub fn rendering_overlay(ui: &mut egui::Ui, rect: egui::Rect) {
+    ui.painter().rect_filled(rect, 4.0, egui::Color32::from_black_alpha(140));
+    let size = (rect.height() * 0.25).clamp(16.0, 48.0);
+    egui::Spinner::new().size(size).paint_at(ui, egui::Rect::from_center_size(rect.center(), egui::vec2(size, size)));
+    ui.interact(rect, ui.id().with("rendering_overlay"), egui::Sense::hover())
+        .on_hover_text("The server is making a new preview: it shows here once it's done");
+}
+
 /// A space the size of a preview `width` wide, with `text` in it.
 pub fn placeholder_ui(ui: &mut egui::Ui, width: f32, text: &str, spinner: bool) {
     let size = egui::vec2(width, width * preview::HEIGHT as f32 / preview::WIDTH as f32);

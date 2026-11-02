@@ -23,7 +23,7 @@
 //! up each frame (`poll_library`). The server's key is built in
 //! (`library::server_key`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -75,6 +75,8 @@ enum Event {
     Opened(Result<ScriptDetails, String>),
     /// An encore given or taken back: the script, its encores now.
     Encored(String, Result<library::EncoreState, String>),
+    /// A script's preview asked to be made again (by an admin).
+    Rerendered(Result<(), String>),
 }
 
 /// What a click in the Library's list or details asks for, done once
@@ -91,6 +93,8 @@ struct LibraryActions {
     delete: Option<String>,
     encore: Option<(String, bool)>,
     report: Option<(String, String, u32)>,
+    /// Make the script's preview again (an admin's).
+    rerender: Option<String>,
 }
 
 /// A script's preview from the server: the still's and the sheet's PNGs,
@@ -100,7 +104,9 @@ type FetchedPreview = (Vec<u8>, Option<Vec<u8>>, Result<previews::Decoded, Strin
 /// The selected script's preview, from the server.
 struct LibraryPreview {
     id: String,
-    /// The version it's of.
+    /// The version it's for (Install's), and the version it's of (that
+    /// one, or the newest earlier one with a preview).
+    target: u32,
     version: u32,
     state: PreviewState,
 }
@@ -213,6 +219,8 @@ pub struct LibraryState {
     selected: Option<String>,
     details: Option<ScriptDetails>,
     preview: Option<LibraryPreview>,
+    /// The previews the server says it's making now: (script, version).
+    rendering: HashSet<(String, u32)>,
     /// A download, upload or delete is under way.
     busy: bool,
     /// An encore is being given or taken back.
@@ -266,6 +274,7 @@ impl LibraryState {
             selected: None,
             details: None,
             preview: None,
+            rendering: HashSet::new(),
             busy: false,
             encoring: false,
             document: None,
@@ -580,6 +589,12 @@ impl App {
                     }
                     Err(e) => self.status = format!("Couldn't open it: {e}"),
                 },
+                Event::Rerendered(result) => {
+                    self.status = match result {
+                        Ok(()) => "The server is making its preview again.".to_string(),
+                        Err(e) => format!("Couldn't have its preview made again: {e}"),
+                    }
+                }
                 Event::Encored(id, result) => {
                     self.library.encoring = false;
                     match result {
@@ -677,13 +692,17 @@ impl App {
         self.library.preview = None;
         let target = details.newest_for(library::supported_version()).or(details.newest()).map_or(0, |v| v.version);
         let pending = details.versions.iter().any(|v| v.version == target && v.preview == library::Preview::Pending);
-        let found = details.preview_for(target).map(|v| (v.version, v.preview == library::Preview::Animated));
+        let id = &details.summary.id;
+        if details.versions.iter().any(|v| v.version == target && v.rendering) {
+            self.library.rendering.insert((id.clone(), target));
+        }
+        let found = details.preview_for(target).map(|v| (v.version, v.preview_rev, v.preview == library::Preview::Animated));
         let (version, state) = match found {
-            Some((version, animated)) => {
-                let (server, id) = (library::official_url(), details.summary.id.clone());
+            Some((version, rev, animated)) => {
+                let (server, id) = (library::official_url(), id.clone());
                 self.spawn_request(move || {
-                    let result = client::preview(&server, &id, version, false).and_then(|still| {
-                        let sheet = if animated { Some(client::preview(&server, &id, version, true)?) } else { None };
+                    let result = client::preview(&server, &id, version, rev, false).and_then(|still| {
+                        let sheet = if animated { Some(client::preview(&server, &id, version, rev, true)?) } else { None };
                         let decoded = previews::Decoded::from_png(&still, sheet.as_deref());
                         Ok((still, sheet, decoded))
                     });
@@ -694,7 +713,24 @@ impl App {
             None if pending => (target, PreviewState::Pending),
             None => (target, PreviewState::None),
         };
-        self.library.preview = Some(LibraryPreview { id: details.summary.id.clone(), version, state });
+        self.library.preview = Some(LibraryPreview { id: details.summary.id.clone(), target, version, state });
+    }
+
+    /// The server started making a script's preview, or finished: one
+    /// being shown is fetched again once it's done.
+    pub(super) fn library_preview_event(&mut self, event: library::PreviewEvent) {
+        let key = (event.script.clone(), event.version);
+        if event.rendering {
+            self.library.rendering.insert(key);
+            return;
+        }
+        self.library.rendering.remove(&key);
+        if self.library.selected.as_ref() == Some(&event.script) {
+            let viewer = self.library.identity.as_ref().map(Identity::public);
+            let server = library::official_url();
+            let id = event.script;
+            self.spawn_request(move || Event::Details(client::details_as(&server, &id, viewer.as_deref())));
+        }
     }
 
     /// The selected script's preview, at the top of its details: always
@@ -707,13 +743,21 @@ impl App {
             ui.separator();
             return;
         };
+        let rendering = self.library.rendering.contains(&(preview.id.clone(), preview.target));
         match &preview.state {
             PreviewState::Loading => previews::placeholder_ui(ui, width, "Loading...", true),
+            PreviewState::Pending if rendering => previews::placeholder_ui(ui, width, "The server is making its preview...", true),
             PreviewState::Pending => previews::placeholder_ui(ui, width, "The server is still making its preview.", false),
+            PreviewState::None | PreviewState::Failed(_) if rendering => {
+                previews::placeholder_ui(ui, width, "The server is making its preview...", true)
+            }
             PreviewState::None => previews::placeholder_ui(ui, width, "No preview.", false),
             PreviewState::Failed(e) => previews::placeholder_ui(ui, width, &format!("Couldn't get its preview: {e}"), false),
             PreviewState::Ready { image: Ok(image), .. } => {
-                image.ui(ui, width);
+                let shown = image.ui(ui, width);
+                if rendering {
+                    previews::rendering_overlay(ui, shown.rect);
+                }
             }
             PreviewState::Ready { image: Err(e), .. } => {
                 previews::placeholder_ui(ui, width, &format!("Its preview didn't load: {e}"), false)
@@ -987,7 +1031,19 @@ impl App {
 
     /// Carry out what was clicked in the Library's list or details.
     fn library_act(&mut self, act: LibraryActions) {
-        let LibraryActions { pick, open, install, update, use_script, show_author, delete, encore, report } = act;
+        let LibraryActions { pick, open, install, update, use_script, show_author, delete, encore, report, rerender } = act;
+        if let Some(id) = rerender {
+            match Identity::load() {
+                Some(identity) => {
+                    let (server, key) = (library::official_url(), library::server_key());
+                    self.spawn_request(move || {
+                        let action = library::AdminAction::Rerender { script: Some(id) };
+                        Event::Rerendered(client::admin::<serde_json::Value>(&server, &key, &identity, &action).map(|_| ()))
+                    });
+                }
+                None => self.status = "Couldn't ask: your identity isn't here.".to_string(),
+            }
+        }
 
         if let Some(id) = pick {
             if self.library.selected.as_ref() != Some(&id) {
@@ -1127,6 +1183,7 @@ impl App {
     fn library_details_ui(&mut self, ui: &mut egui::Ui, act: &mut LibraryActions) {
         let my_id = self.library.my_id();
         let can_sign = self.can_sign();
+        let is_admin = PUBLISHING && self.moderation.is_admin();
         let official_id = library::official_id();
         let Some(id) = self.library.selected.clone() else {
             ui.weak("Pick a script to see more.");
@@ -1225,7 +1282,16 @@ impl App {
             {
                 act.report = Some((id.clone(), s.name.clone(), version));
             }
+
         });
+        if is_admin
+            && ui
+                .button("Make preview again")
+                .on_hover_text("Have the server make its newest version's preview again (you're an admin)")
+                .clicked()
+        {
+            act.rerender = Some(id.clone());
+        }
         ui.add_space(6.0);
         let description = match here {
             Some(d) => d.summary.description.clone(),
