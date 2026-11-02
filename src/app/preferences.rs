@@ -177,9 +177,10 @@ impl App {
         }
     }
 
-    /// Playback > Media controls (Android): the buttons beside
-    /// play/pause, in order, each moved up or down or taken out, and more
-    /// added.
+    /// Playback > Quick actions: the buttons beside play/pause in the
+    /// phone's media controls and the controls bar's star and tag
+    /// buttons, in order, each moved up or down or taken out, and more
+    /// added. (One list, synced: `App::quick_actions`.)
     fn media_buttons_ui(&self, ui: &mut egui::Ui, buttons: &mut config::MediaButtons) {
         use config::MediaButton;
         let tags = self.songs.tags();
@@ -197,22 +198,26 @@ impl App {
             })
         };
         buttons.0.retain(|b| describe(b).is_some());
-        let info = "The buttons beside play/pause in the notification, on the lock screen and in the mini player, \
-                    most wanted first: each place shows as many as it has room for, as the lines say. Star and tag \
-                    buttons give the song playing its star or the tag, or take it off: to sort songs out as they \
-                    play (a \"Don't keep\" tag, say). They show only the tag's icon, set in Song info's Tags. \
-                    Previous and next always sit either side of play/pause.";
+        let info = "Star and tag buttons give the song playing its star or the tag, or take it off: to sort songs \
+                    out as they play (a \"Don't keep\" tag, say). They show only the tag's icon, set in Song info's \
+                    Tags. Most wanted first: the controls bar shows the star and tags that fit beside the devices \
+                    button, and on a phone the notification, lock screen and mini player show as many as they have \
+                    room for, as the lines there say. Previous and next are for the phone, always either side of \
+                    play/pause.";
         // Where each place's room runs out: the lines drawn there.
         #[cfg(target_os = "android")]
         let mini_player = crate::android::picture_in_picture_room();
         #[cfg(not(target_os = "android"))]
         let mini_player = 2;
         let cutoff = |i: usize| -> Option<String> {
+            if !cfg!(target_os = "android") {
+                return None;
+            }
             let places: Vec<&str> =
                 [(config::NOTIFICATION_BUTTONS, "notification"), (mini_player, "mini player")].into_iter().filter(|(room, _)| *room == i).map(|(_, p)| p).collect();
             (!places.is_empty()).then(|| format!("The {} shows the ones above", places.join(" and the ")))
         };
-        settings_group("Media controls").icon("bell-simple").hint("Buttons beside play/pause, most wanted first").show(ui, |ui| {
+        settings_group("Quick actions").icon("lightning").hint("Star and tag buttons by play/pause, most wanted first").show(ui, |ui| {
             let last = buttons.0.len().saturating_sub(1);
             let mut moved = None;
             let mut remove = None;
@@ -536,8 +541,8 @@ impl App {
                             });
                         });
                     });
-                    self.media_buttons_ui(ui, &mut media_buttons);
                 }
+                self.media_buttons_ui(ui, &mut media_buttons);
                 settings_group("Loading").icon("hourglass").show(ui, |ui| {
                     // (No pointer to rest on a touch screen.)
                     if !cfg!(target_os = "android") {

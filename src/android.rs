@@ -28,6 +28,7 @@ use jni::objects::{GlobalRef, JObject, JObjectArray, JString, JThrowable, JValue
 use jni::{JNIEnv, JavaVM};
 
 use crate::app::App;
+use crate::config::QuickAction;
 use crate::import::{self, Kind};
 
 mod keyboard;
@@ -288,29 +289,7 @@ pub struct Playback {
     pub length_ms: i64,
     pub has_next: bool,
     /// The buttons beside play/pause, in order (`config::MediaButtons`).
-    pub buttons: Vec<Button>,
-}
-
-/// One of the media controls' buttons beside play/pause.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Button {
-    Previous,
-    Next,
-    Toggle(Toggle),
-}
-
-/// A button in the media controls for the song playing: a tag (the star
-/// too) to give it or take off it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Toggle {
-    pub tag: String,
-    /// What it's called (for accessibility; Android shows only the icon).
-    pub label: String,
-    /// Its icon, by its Phosphor name (one of `song_store::TAG_ICONS`, or
-    /// the star's): the Java side's `ic_<name>` drawable, `_on` while `on`.
-    pub icon: String,
-    /// Whether the song has the tag.
-    pub on: bool,
+    pub buttons: Vec<QuickAction>,
 }
 
 /// Tell the Java side what's playing (it starts or stops the playback
@@ -324,9 +303,9 @@ pub fn set_playback(playback: &Playback) {
         let buttons = env.new_object_array(5 * playback.buttons.len() as i32, "java/lang/String", JObject::null())?;
         for (i, button) in playback.buttons.iter().enumerate() {
             let texts = match button {
-                Button::Previous => ["previous", "", "", "", ""],
-                Button::Next => ["next", "", "", "", ""],
-                Button::Toggle(t) => ["tag", t.tag.as_str(), t.label.as_str(), t.icon.as_str(), if t.on { "1" } else { "0" }],
+                QuickAction::Previous => ["previous", "", "", "", ""],
+                QuickAction::Next => ["next", "", "", "", ""],
+                QuickAction::Toggle(t) => ["tag", t.tag.as_str(), t.label.as_str(), t.icon.as_str(), if t.on { "1" } else { "0" }],
             };
             for (j, text) in texts.into_iter().enumerate() {
                 let text = env.new_string(text)?;
@@ -399,7 +378,7 @@ pub enum MediaCommand {
     Next,
     Previous,
     Seek(f64),
-    /// One of the `Toggle`s: give the song playing the tag (`true`) or
+    /// One of the `QuickToggle`s: give the song playing the tag (`true`) or
     /// take it off.
     SetTag(String, bool),
 }
@@ -419,7 +398,7 @@ pub fn media_command(command: i32, position_ms: i64) {
     MEDIA_COMMANDS.lock().unwrap().push(command);
 }
 
-/// From Java: a `Toggle` was tapped, to set its tag to `on`.
+/// From Java: a `QuickToggle` was tapped, to set its tag to `on`.
 pub fn set_tag(tag: String, on: bool) {
     MEDIA_COMMANDS.lock().unwrap().push(MediaCommand::SetTag(tag, on));
 }

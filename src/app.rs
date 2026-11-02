@@ -608,6 +608,9 @@ pub struct App {
     song_notes: Option<Arc<crate::midi_notes::NoteList>>,
     /// The transport's accent as last drawn (it eases toward the tempo's).
     accent: Option<[f32; 3]>,
+    /// The points per pixel the window's minimum size (`MIN_WINDOW`) was
+    /// last set for: set again when the UI scale changes.
+    min_window_scale: f32,
     /// The reference spot to show (section, block), when it was asked for,
     /// and whether it still needs scrolling to.
     docs_target: Option<((usize, usize), Instant, bool)>,
@@ -877,6 +880,7 @@ impl App {
             script_art: mpsc::channel(),
             song_notes: None,
             accent: None,
+            min_window_scale: 0.0,
             docs_target: None,
             pending_focus: None,
             sprite: sprite_editor::SpriteEditorState::default(),
@@ -1259,37 +1263,54 @@ impl App {
         Some(egui::Color32::from_rgb(r, g, b))
     }
 
+    /// The window's minimum size, `MIN_WINDOW` points at the UI scale
+    /// it's at (set again when that changes), so the controls bar and the
+    /// title bar always fit.
+    fn keep_min_window(&mut self, ctx: &egui::Context) {
+        let scale = ctx.pixels_per_point();
+        if scale != self.min_window_scale {
+            self.min_window_scale = scale;
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(MIN_WINDOW));
+        }
+    }
+
     /// The bottom transport bar, across the window's width: the song (title
     /// over a weak detail line) with the status line at the right, the seek
-    /// bar between the times, then the view toggles, the transport in the
-    /// middle, and speed and volume. Shown identically whether fullscreen or
-    /// not, so it's the one thing that's always reachable.
+    /// bar between the times, then the devices button and quick actions,
+    /// the transport in the middle, and speed and volume. When the sides
+    /// don't fit beside the transport, it goes on a line of its own over
+    /// them. Shown identically whether fullscreen or not, so it's the one
+    /// thing that's always reachable.
     fn controls_bar_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         if self.following() {
             return self.following_bar_ui(ui, view);
         }
         ui.add_space(6.0);
 
-        let line = egui::vec2(ui.available_width(), 34.0);
-        ui.allocate_ui_with_layout(line, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.scope(|ui| {
-                    ui.set_max_width(ui.available_width() * 0.45);
-                    if status_line_ui(ui, &self.status, &mut self.unseen_failure, applog::elapsed, applog::entries) {
-                        self.log_search = STATUS_TARGET.to_string();
-                        self.log_open = true;
-                    }
-                });
-                ui.add_space(12.0);
-                let title = match self.current_song.clone() {
-                    Some(path) => self.song_title(&path),
-                    None => view.track_name.clone().unwrap_or_else(|| "Nothing playing".to_string()),
-                };
-                let detail = self.song_detail(view);
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    select_list::two_lines(ui, std::iter::empty(), egui::RichText::new(title).strong(), Some(detail), true);
-                });
-            });
+        // The song at the left, the status line at the right taking at
+        // most `STATUS_SHARE` of the line (cut short past that).
+        let width = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 34.0), egui::Sense::hover());
+        let right = egui::Layout::right_to_left(egui::Align::Center);
+        let status = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(rect).layout(right), |ui| {
+                ui.set_max_width(width * STATUS_SHARE);
+                if status_line_ui(ui, &self.status, &mut self.unseen_failure, applog::elapsed, applog::entries) {
+                    self.log_search = STATUS_TARGET.to_string();
+                    self.log_open = true;
+                }
+            })
+            .response
+            .rect;
+        let title = match self.current_song.clone() {
+            Some(path) => self.song_title(&path),
+            None => view.track_name.clone().unwrap_or_else(|| "Nothing playing".to_string()),
+        };
+        let detail = Some(self.song_detail(view)).filter(|d| !d.is_empty());
+        let song = rect.with_max_x(status.left() - 12.0);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(song).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+            ui.set_clip_rect(song.intersect(ui.clip_rect()));
+            select_list::two_lines(ui, std::iter::empty(), egui::RichText::new(title).strong(), detail, true);
         });
 
         let accent = self.transport_accent(ui.ctx(), view);
@@ -1306,38 +1327,31 @@ impl App {
         });
         ui.add_space(2.0);
 
-        // The devices button at the left, the transport centred, speed and
-        // volume at the right; when they don't fit, the transport centred
-        // over the rest.
-        let width = ui.available_width();
-        let center = TRANSPORT_WIDTH;
-        let side = (width - center) / 2.0;
+        let gap = ui.spacing().item_spacing.x;
+        let sides = speed_volume_width(gap, MIN_SLIDER);
         let line = |ui: &mut egui::Ui| ui.allocate_exact_size(egui::vec2(width, TRANSPORT_HEIGHT), egui::Sense::hover()).0;
         let zone = |rect: egui::Rect, x: f32, width: f32, layout: egui::Layout| {
             egui::UiBuilder::new()
                 .max_rect(egui::Rect::from_min_size(egui::pos2(rect.left() + x, rect.top()), egui::vec2(width, rect.height())))
                 .layout(layout)
         };
-        let (left, right) = (egui::Layout::left_to_right(egui::Align::Center), egui::Layout::right_to_left(egui::Align::Center));
-        if side >= SIDE_WIDTH {
+        let left = egui::Layout::left_to_right(egui::Align::Center);
+        let side = (width - TRANSPORT_WIDTH) / 2.0;
+        if side >= sides + SIDE_GAP {
             let rect = line(ui);
-            ui.scope_builder(zone(rect, 0.0, side, left), |ui| self.devices_button_ui(ui, view));
-            ui.scope_builder(zone(rect, side, center, left), |ui| self.transport_ui(ui, view));
-            ui.scope_builder(zone(rect, side + center, side, right), |ui| self.speed_volume_ui(ui, view));
+            ui.scope_builder(zone(rect, 0.0, side - SIDE_GAP, left), |ui| self.bar_left_ui(ui, view));
+            ui.scope_builder(zone(rect, side, TRANSPORT_WIDTH, left), |ui| self.transport_ui(ui, view));
+            ui.scope_builder(zone(rect, side + TRANSPORT_WIDTH + SIDE_GAP, side - SIDE_GAP, right), |ui| self.speed_volume_ui(ui, view));
         } else {
             let rect = line(ui);
-            ui.scope_builder(zone(rect, side.max(0.0), center, left), |ui| self.transport_ui(ui, view));
+            ui.scope_builder(zone(rect, side.max(0.0), TRANSPORT_WIDTH, left), |ui| self.transport_ui(ui, view));
             ui.add_space(4.0);
-            if width >= DEVICES_WIDTH + SIDE_WIDTH {
-                let rect = line(ui);
-                ui.scope_builder(zone(rect, 0.0, DEVICES_WIDTH, left), |ui| self.devices_button_ui(ui, view));
-                ui.scope_builder(zone(rect, DEVICES_WIDTH, width - DEVICES_WIDTH, right), |ui| self.speed_volume_ui(ui, view));
-            } else {
-                ui.horizontal_wrapped(|ui| {
-                    self.devices_button_ui(ui, view);
-                    self.speed_volume_ui(ui, view);
-                });
-            }
+            // (Speed and volume take what's left after the devices button
+            // and a few quick actions, or more for longer sliders.)
+            let rest = (width * 0.6).clamp(sides.min(width - ICON_BUTTON_WIDTH), width - ICON_BUTTON_WIDTH);
+            let rect = line(ui);
+            ui.scope_builder(zone(rect, 0.0, width - rest, left), |ui| self.bar_left_ui(ui, view));
+            ui.scope_builder(zone(rect, width - rest, rest, right), |ui| self.speed_volume_ui(ui, view));
         }
         ui.add_space(6.0);
     }
@@ -1360,6 +1374,29 @@ impl App {
         }
         parts.retain(|p| !p.is_empty());
         parts.join("  ·  ")
+    }
+
+    /// The bar's left end: the devices button, then the quick actions'
+    /// star and tag buttons for the song playing (`App::quick_actions`),
+    /// as many as fit, most wanted first.
+    fn bar_left_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        self.devices_button_ui(ui, view);
+        let size = egui::vec2(ICON_BUTTON_WIDTH, TRANSPORT_HEIGHT);
+        let mut clicked = None;
+        for button in self.quick_actions() {
+            let config::QuickAction::Toggle(toggle) = button else { continue };
+            if ui.available_width() < size.x {
+                break;
+            }
+            if tags::quick_toggle_button(ui, &self.songs, &toggle, 16.0, size).clicked() {
+                clicked = Some(toggle);
+            }
+        }
+        if let Some(toggle) = clicked
+            && let Some(song) = self.current_song.clone()
+        {
+            self.tag_songs(tags::TagAction::Set(toggle.tag, !toggle.on), &[song]);
+        }
     }
 
     /// Shuffle, stop, previous, play/pause, next and loop.
@@ -1414,10 +1451,14 @@ impl App {
     }
 
     /// Speed and volume, each an icon, a slider and its value (in a
-    /// right-to-left layout). The speed's icon puts it back to 1x.
+    /// right-to-left layout), the sliders sharing the room there is
+    /// (between `MIN_SLIDER` and `MAX_SLIDER`). The speed's icon puts it
+    /// back to 1x.
     fn speed_volume_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
-        ui.add_sized([36.0, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.0}%", self.volume * 100.0)).weak()));
-        ui.spacing_mut().slider_width = 96.0;
+        let gap = ui.spacing().item_spacing.x;
+        let slider = ((ui.available_width() - speed_volume_width(gap, 0.0)) / 2.0).clamp(MIN_SLIDER, MAX_SLIDER);
+        ui.spacing_mut().slider_width = slider;
+        ui.add_sized([VOLUME_TEXT_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.0}%", self.volume * 100.0)).weak()));
         if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false)).changed() {
             self.send_volume();
         }
@@ -1426,10 +1467,10 @@ impl App {
             v if v < 0.5 => "speaker-low",
             _ => "speaker-high",
         };
-        ui.label(egui::RichText::new(icon(speaker)).size(16.0)).on_hover_text("Volume");
+        ui.add_sized([SPEAKER_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(icon(speaker)).size(16.0))).on_hover_text("Volume");
 
-        ui.add_space(12.0);
-        ui.add_sized([40.0, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.2}x", view.speed)).weak()));
+        ui.add_space(SPEED_VOLUME_GAP);
+        ui.add_sized([SPEED_TEXT_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.2}x", view.speed)).weak()));
         let mut speed = view.speed;
         if ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).show_value(false)).changed() {
             self.send(AudioCommand::SetSpeed(speed));
@@ -3979,6 +4020,7 @@ impl eframe::App for App {
             self.history_ui(&ctx);
             self.status_toast_ui(&ctx);
         } else {
+            self.keep_min_window(&ctx);
             egui::Panel::top("top_bar")
                 .show_separator_line(false)
                 .exact_size(title_bar::HEIGHT)
@@ -4657,10 +4699,11 @@ fn status_line_ui(
     if shown {
         *unseen_failure = false;
     }
-    match status_color(ui.visuals(), status) {
-        Some(color) => ui.colored_label(color, status),
-        None => ui.weak(status),
+    let text = match status_color(ui.visuals(), status) {
+        Some(color) => egui::RichText::new(status).color(color),
+        None => egui::RichText::new(status).weak(),
     };
+    ui.add(egui::Label::new(text).truncate());
     open_log
 }
 
@@ -4715,7 +4758,7 @@ pub(super) fn palette_color(index: u8) -> egui::Color32 {
 /// A toolbar button: just its icon (Phosphor), a little larger than text.
 /// Give it a hover text saying what it does.
 pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(icon(name)).size(16.0)).min_size(egui::vec2(28.0, 24.0))
+    egui::Button::new(egui::RichText::new(icon(name)).size(16.0)).min_size(egui::vec2(ICON_BUTTON_WIDTH, 24.0))
 }
 
 /// An icon button as tall as the other controls in a row of settings (or
@@ -4734,11 +4777,30 @@ pub(crate) fn row_icon_button_room(ui: &egui::Ui) -> f32 {
 
 /// How wide the transport (`App::transport_ui`) is: five icon buttons and
 /// play, with the gaps between.
-const TRANSPORT_WIDTH: f32 = 5.0 * 28.0 + PLAY_WIDTH + 5.0 * 8.0;
-/// How wide each side of it has to be for the bar to fit on one line.
-const SIDE_WIDTH: f32 = 380.0;
-/// How wide the devices button (`App::devices_button_ui`) is.
-const DEVICES_WIDTH: f32 = 28.0;
+const TRANSPORT_WIDTH: f32 = 5.0 * ICON_BUTTON_WIDTH + PLAY_WIDTH + 5.0 * 8.0;
+/// How wide speed and volume's sliders get (`App::speed_volume_ui`).
+const MIN_SLIDER: f32 = 60.0;
+const MAX_SLIDER: f32 = 160.0;
+const VOLUME_TEXT_WIDTH: f32 = 36.0;
+const SPEED_TEXT_WIDTH: f32 = 40.0;
+const SPEAKER_WIDTH: f32 = 20.0;
+/// The room between volume and speed.
+const SPEED_VOLUME_GAP: f32 = 12.0;
+/// The least room between the transport and the bar's sides.
+const SIDE_GAP: f32 = 24.0;
+/// How much of the bar's first line the status line may take.
+const STATUS_SHARE: f32 = 0.4;
+/// The window's smallest size, in points: room for the title bar and the
+/// controls bar with the transport over the rest.
+const MIN_WINDOW: egui::Vec2 = egui::vec2(440.0, 420.0);
+
+/// How wide speed and volume are with `slider` wide sliders, `gap`
+/// between each of their widgets.
+fn speed_volume_width(gap: f32, slider: f32) -> f32 {
+    VOLUME_TEXT_WIDTH + SPEAKER_WIDTH + SPEED_VOLUME_GAP + SPEED_TEXT_WIDTH + ICON_BUTTON_WIDTH + 2.0 * slider + 7.0 * gap
+}
+/// How wide an `icon_button` is.
+const ICON_BUTTON_WIDTH: f32 = 28.0;
 const PLAY_WIDTH: f32 = 44.0;
 /// The Soundfonts list's Size column's own width.
 const SOUNDFONT_SIZE_WIDTH: f32 = 72.0;

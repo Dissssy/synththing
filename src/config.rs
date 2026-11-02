@@ -360,6 +360,30 @@ pub enum MediaButton {
     Tag(String),
 }
 
+/// A quick action for the song playing (`MediaButtons` resolved by
+/// `App::quick_actions`): the phone's media controls show them all beside
+/// play/pause, the controls bar its toggles.
+#[derive(Clone, Debug, PartialEq)]
+pub enum QuickAction {
+    Previous,
+    Next,
+    Toggle(QuickToggle),
+}
+
+/// A quick action for the song playing: a tag (the star
+/// too) to give it or take off it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuickToggle {
+    pub tag: String,
+    /// What it's called (for accessibility; Android shows only the icon).
+    pub label: String,
+    /// Its icon, by its Phosphor name (one of `song_store::TAG_ICONS`, or
+    /// the star's): the Java side's `ic_<name>` drawable, `_on` while `on`.
+    pub icon: String,
+    /// Whether the song has the tag.
+    pub on: bool,
+}
+
 /// How synththing opens when it starts with Windows (`cli::Cli::autostart`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StartupOpens {
