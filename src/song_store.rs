@@ -18,7 +18,8 @@
 //!
 //! Songs can carry tags of the user's own (a name and a color, defined
 //! once in `tags.json`), by the tags' IDs, and one built in: starred
-//! (`STARRED`), never defined and never shown as a tag.
+//! (`STARRED`), never defined and never shown as a tag. How starred songs
+//! are marked can be the user's own too (`star.json`: `StarLook`).
 //!
 //! Each song keeps what its file says of itself (`Meta`: its tags, length
 //! and size), read on the device that has it (`App::note_song_meta`) and
@@ -66,10 +67,34 @@ const TOGETHER: &str = "together.json";
 const ARTISTS: &str = "artists.json";
 const REMOVED: &str = "removed.json";
 const STATS: &str = "stats.json";
+const STAR: &str = "star.json";
 
 /// The built-in tag starred songs have: hidden from the tag editor and
 /// the chips, it syncs like any other.
 pub const STARRED: &str = "starred";
+
+/// The icon starred songs are marked with unless the user picks another
+/// (`StarLook`): an alien, filled when starred, in outline when not.
+pub const STAR_ICON: &str = "alien";
+
+/// How starred songs are marked: a color and an icon (one of `TAG_ICONS`)
+/// of the user's own, or the theme's star color and `STAR_ICON`. Synced
+/// with the tags.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct StarLook {
+    /// sRGB.
+    #[serde(default)]
+    pub color: Option<[u8; 3]>,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+impl StarLook {
+    /// Its icon's Phosphor name: the one picked, or `STAR_ICON`.
+    pub fn icon_name(&self) -> &'static str {
+        self.icon.as_deref().and_then(|name| TAG_ICONS.into_iter().find(|i| *i == name)).unwrap_or(STAR_ICON)
+    }
+}
 
 /// What's known of a stored song.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -350,6 +375,8 @@ pub struct SongStore {
     removed: BTreeMap<String, Removed>,
     /// The tags, by ID.
     tags: BTreeMap<String, Tag>,
+    /// How starred songs are marked.
+    star: StarLook,
     /// The songs that play together, by the set's ID: their keys, in order.
     together: BTreeMap<String, Vec<String>>,
     /// The pictures picked for artists: their keys, by the artists' names
@@ -386,6 +413,10 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{TAGS}: {e}")).ok())
             .unwrap_or_default();
+        let star = std::fs::read_to_string(dir.join(STAR))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{STAR}: {e}")).ok())
+            .unwrap_or_default();
         let together = std::fs::read_to_string(dir.join(TOGETHER))
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{TOGETHER}: {e}")).ok())
@@ -402,7 +433,7 @@ impl SongStore {
             .ok()
             .and_then(|text| serde_json::from_str(&text).map_err(|e| log::warn!("{STATS}: {e}")).ok())
             .unwrap_or_default();
-        let mut store = Self { dir, songs: Arc::new(songs), present, blocked, removed, tags, together, stats: Arc::new(stats), artist_images, revision: 0 };
+        let mut store = Self { dir, songs: Arc::new(songs), present, blocked, removed, tags, star, together, stats: Arc::new(stats), artist_images, revision: 0 };
         // (A file that couldn't be deleted when it was removed everywhere,
         // or found again: it goes now.)
         let leftover: Vec<String> = store.removed.keys().filter(|key| store.songs.contains_key(*key)).cloned().collect();
@@ -689,6 +720,21 @@ impl SongStore {
                 song.tags.retain(|t| t != id);
             }
             self.save();
+        }
+    }
+
+    /// How starred songs are marked.
+    pub fn star(&self) -> &StarLook {
+        &self.star
+    }
+
+    /// Mark starred songs this way.
+    pub fn set_star(&mut self, look: StarLook) {
+        if self.star != look {
+            self.star = look;
+            self.revision += 1;
+            let look = self.star.clone();
+            write_later(self.dir.join(STAR), move || serde_json::to_string_pretty(&look));
         }
     }
 

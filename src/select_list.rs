@@ -617,20 +617,43 @@ pub fn scrolls(row: &Row, playing: bool) -> bool {
     playing || row.response.contains_pointer()
 }
 
-/// The icon starred songs are marked with (`star`): an alien, filled when
-/// starred, in outline when not.
-pub const STAR_ICON: &str = "alien";
+/// How starred songs are marked (`SongStore::star`), kept where lists
+/// find it (`star_icon`, `star_color`): the app sets it every frame.
+pub fn show_star_look(ctx: &egui::Context, look: &crate::song_store::StarLook) {
+    let color = look.color.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b));
+    ctx.data_mut(|d| d.insert_temp(star_look_id(), (color, look.icon_name())));
+}
+
+fn star_look_id() -> egui::Id {
+    egui::Id::new("star_look")
+}
+
+fn star_look(ctx: &egui::Context) -> (Option<egui::Color32>, &'static str) {
+    ctx.data(|d| d.get_temp(star_look_id())).unwrap_or((None, crate::song_store::STAR_ICON))
+}
+
+/// The icon starred songs are marked with, by its Phosphor name: filled
+/// when starred, in outline when not.
+pub fn star_icon(ctx: &egui::Context) -> &'static str {
+    star_look(ctx).1
+}
+
+/// The color starred songs are marked in: the user's own, or the theme's.
+pub fn star_color(ctx: &egui::Context) -> egui::Color32 {
+    star_look(ctx).0.unwrap_or_else(|| crate::theme::star_color(ctx))
+}
+
 /// How wide a song's star is, at the left of its row.
 pub const STAR_WIDTH: f32 = 14.0;
 
-/// A song's star, at the left of its row: its alien filled in the theme's
-/// star color when it's starred, a faint outline when it isn't. Whether it
+/// A song's star, at the left of its row: its icon filled in the star
+/// color when it's starred, a faint outline when it isn't. Whether it
 /// was clicked (to star or unstar it).
 pub fn star(ui: &mut egui::Ui, starred: bool) -> bool {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(STAR_WIDTH, ui.available_height()), egui::Sense::click());
     let weak = ui.visuals().weak_text_color();
     let color = match (starred, response.hovered()) {
-        (true, _) => crate::theme::star_color(ui.ctx()),
+        (true, _) => star_color(ui.ctx()),
         (false, true) => weak,
         (false, false) => weak.gamma_multiply(0.2),
     };
@@ -638,7 +661,7 @@ pub fn star(ui: &mut egui::Ui, starred: bool) -> bool {
     if starred {
         font.family = egui::FontFamily::Name(crate::app::fonts::PHOSPHOR_FILL.into());
     }
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, crate::app::icon(STAR_ICON), font, color);
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, crate::app::icon(star_icon(ui.ctx())), font, color);
     response.on_hover_text(if starred { "Starred: click to unstar" } else { "Click to star" }).clicked()
 }
 

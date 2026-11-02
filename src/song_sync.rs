@@ -4,8 +4,8 @@
 //! - `library`: every song in any device's library, by key, with its name,
 //!   tags, when it was first imported and what its file says of itself
 //!   (`song_store::Song`: songs are only ever added: a song removed on one
-//!   device stays in the others'), the tags themselves (`tag/<id>`), and
-//!   the songs that play together (`group/<id>`: their keys, in order),
+//!   device stays in the others'), the tags themselves (`tag/<id>`), how
+//!   starred songs are marked (`star`, unless the usual way), and the songs that play together (`group/<id>`: their keys, in order),
 //!   the pictures picked for artists (`artist/<name>`: its key), and
 //!   the songs removed from every device (`removed/<key>`: gone from
 //!   the library, until a device imports one again).
@@ -49,13 +49,14 @@ use crate::library::client;
 use crate::library::identity::Identity;
 use crate::playlist::Library;
 use crate::settings_sync::Fields;
-use crate::song_store::{self, Removed, Song, SongStore, Tag};
+use crate::song_store::{self, Removed, Song, SongStore, StarLook, Tag};
 
 /// The synced data's names on the server.
 pub const LIBRARY: &str = "library";
 pub const TRANSFERS: &str = "transfers";
 
 const TAG: &str = "tag/";
+const STAR: &str = "star";
 const GROUP: &str = "group/";
 const ARTIST: &str = "artist/";
 const REMOVED: &str = "removed/";
@@ -72,7 +73,7 @@ const HAVE_PREFIX: usize = 12;
 pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
     let mut leaves: BTreeMap<String, Value> = applied
         .iter()
-        .filter(|(k, _)| !k.starts_with(TAG) && !k.starts_with(GROUP) && !k.starts_with(ARTIST) && !k.starts_with(REMOVED) && !store.is_removed(k))
+        .filter(|(k, _)| *k != STAR && !k.starts_with(TAG) && !k.starts_with(GROUP) && !k.starts_with(ARTIST) && !k.starts_with(REMOVED) && !store.is_removed(k))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     for (key, song) in store.known() {
@@ -82,6 +83,9 @@ pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> B
     }
     for (id, tag) in store.tags() {
         leaves.insert(format!("{TAG}{id}"), serde_json::to_value(tag).unwrap_or_default());
+    }
+    if *store.star() != StarLook::default() {
+        leaves.insert(STAR.to_string(), serde_json::to_value(store.star()).unwrap_or_default());
     }
     for (id, keys) in store.together() {
         leaves.insert(format!("{GROUP}{id}"), serde_json::to_value(keys).unwrap_or_default());
@@ -101,6 +105,7 @@ pub fn library_leaves(store: &SongStore, applied: &BTreeMap<String, Value>) -> B
 pub struct SyncedLibrary {
     removed: BTreeMap<String, Removed>,
     tags: BTreeMap<String, Tag>,
+    star: StarLook,
     together: BTreeMap<String, Vec<String>>,
     artist_images: BTreeMap<String, String>,
     songs: Vec<(String, Song)>,
@@ -120,6 +125,8 @@ pub fn read_library(fields: &Fields) -> SyncedLibrary {
             if let Ok(removed) = serde_json::from_value(value()) {
                 library.removed.insert(key.to_string(), removed);
             }
+        } else if key == STAR {
+            library.star = serde_json::from_value(value()).unwrap_or_default();
         } else if let Some(id) = key.strip_prefix(TAG) {
             if let Ok(tag) = serde_json::from_value(value()) {
                 library.tags.insert(id.to_string(), tag);
@@ -140,16 +147,18 @@ pub fn read_library(fields: &Fields) -> SyncedLibrary {
 }
 
 /// Take the synced library: every song's name, tags and what's known of
-/// it (those gone from it and not here forgotten), the tags and the songs
+/// it (those gone from it and not here forgotten), how starred songs are
+/// marked, the tags and the songs
 /// that play together (those gone from it deleted here), and the songs
 /// removed from every device. Whether any song was removed or forgotten.
 pub fn apply_library(store: &mut SongStore, library: SyncedLibrary) -> bool {
-    let SyncedLibrary { removed, tags, together, artist_images, songs } = library;
+    let SyncedLibrary { removed, tags, star, together, artist_images, songs } = library;
     let mut forgot = store.set_removed(removed);
     let listed: BTreeSet<String> = songs.iter().map(|(key, _)| key.clone()).collect();
     for (id, tag) in &tags {
         store.set_tag(id, tag.clone());
     }
+    store.set_star(star);
     for (id, keys) in &together {
         store.set_together(id, keys.clone());
     }
@@ -763,6 +772,7 @@ mod tests {
         desktop.set_together("g1", vec![song.key.clone(), elsewhere.clone()]);
         let picture = format!("{}.jpg", "c".repeat(64));
         desktop.set_artist_image("aloboi", Some(picture.clone()));
+        desktop.set_star(StarLook { color: Some([4, 5, 6]), icon: Some("heart".into()) });
         let library = library_leaves(&desktop, &BTreeMap::new());
         assert_eq!(library[&song.key]["name"], "Song.mid");
         desktop.note_meta([(song.key.clone(), song_store::Meta { title: Some("Song".into()), track: Some(3), size: 4, ..Default::default() })]);
@@ -774,6 +784,7 @@ mod tests {
         assert_eq!((phone.tags()["t1"].icon.as_deref(), phone.tags()["t1"].show), (Some("fire"), crate::song_store::TagShow::Both), "its icon too");
         assert_eq!(phone.together()["g1"], [song.key.clone(), elsewhere], "play together");
         assert_eq!(phone.artist_images()["aloboi"], picture, "an artist's picture");
+        assert_eq!(phone.star().icon_name(), "heart", "how starred songs are marked");
         let known = phone.known().find(|(k, _)| *k == song.key).unwrap().1.clone();
         assert_eq!(known.tags, ["t1"]);
         assert_eq!(known.meta.unwrap().title.as_deref(), Some("Song"), "known without the file");

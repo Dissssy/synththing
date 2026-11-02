@@ -179,7 +179,7 @@ impl App {
             Some(match button {
                 MediaButton::Previous => egui::RichText::new(format!("{}  Previous", super::icon("skip-back"))),
                 MediaButton::Next => egui::RichText::new(format!("{}  Next", super::icon("skip-forward"))),
-                MediaButton::Star => egui::RichText::new(format!("{}  Star", super::icon(crate::select_list::STAR_ICON))),
+                MediaButton::Star => egui::RichText::new(format!("{}  Star", super::icon(self.songs.star().icon_name()))),
                 MediaButton::Tag(id) => tag_entry_text(tags.get(id)?),
             })
         };
@@ -258,7 +258,7 @@ impl App {
                 BarItem::Loop => ("repeat", "Loop"),
                 BarItem::Volume => ("speaker-high", "Volume"),
                 BarItem::Speed => ("gauge", "Speed"),
-                BarItem::Star => (crate::select_list::STAR_ICON, "Star"),
+                BarItem::Star => (self.songs.star().icon_name(), "Star"),
             };
             Some(egui::RichText::new(format!("{}  {name}", super::icon(glyph))))
         };
@@ -528,7 +528,7 @@ impl App {
                         &format!(
                             "Shuffle, autoplay and playlists playing on go only to songs you've starred (the {} at the left of \
                              a song). A song you pick yourself still plays.",
-                            super::icon(crate::select_list::STAR_ICON)
+                            super::icon(self.songs.star().icon_name())
                         ),
                         |ui| ui.checkbox(&mut only_starred, "Only play starred songs"),
                     );
