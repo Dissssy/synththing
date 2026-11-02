@@ -577,8 +577,6 @@ pub struct App {
     playlist_find: String,
     /// What a picture's being picked for.
     picture_for: Option<pictures::PictureFor>,
-    /// Delete was clicked once; the next click confirms.
-    confirm_delete_playlist: bool,
     /// The section layout. Moved out into a local while `DockArea` draws it
     /// (it needs `&mut` to both the layout and the app), see `dock_ui`.
     dock: DockState<Section>,
@@ -880,7 +878,6 @@ impl App {
             playlist_rename: None,
             playlist_find: String::new(),
             picture_for: None,
-            confirm_delete_playlist: false,
             open_sections: Section::ALL.into_iter().filter(|&s| layout::is_open(&dock, s)).collect(),
             dock,
             dock_in_use: false,
@@ -2254,9 +2251,10 @@ impl App {
                     self.updates_message = Some((format!("{e:#}"), true));
                 }
                 if ui
-                    .add_enabled(!installing, egui::Button::new("Remove"))
-                    .on_hover_text("Delete this branch build and its settings")
-                    .clicked()
+                    .add_enabled_ui(!installing, |ui| {
+                        confirm_button(ui, ("branch_build", channel), egui::Button::new("Remove"), "Delete this branch build and its settings", "Really remove?")
+                    })
+                    .inner
                 {
                     let name = crate::channels::branch_name(channel);
                     self.updates_message = Some(match crate::channels::remove(channel) {
@@ -2402,6 +2400,11 @@ impl App {
                         .desired_width(240.0),
                 );
                 let search = self.credits_search.to_lowercase();
+                // (Hundreds of packages: a closed row out of sight only
+                // takes its space, measured off a row drawn earlier, or
+                // the page cost 8-11 ms every frame on a phone.)
+                let row_height_id = ui.id().with("credits_row_height");
+                let row_height: Option<f32> = ui.data(|d| d.get_temp(row_height_id));
                 for package in &third_party.packages {
                     let matches = search.is_empty()
                         || package.name.to_lowercase().contains(&search)
@@ -2413,6 +2416,16 @@ impl App {
                     // wraps or shortens, and long license names ran off a
                     // phone's screen.)
                     let id = ui.make_persistent_id(("credits_package", &package.name, &package.version));
+                    let closed = egui::collapsing_header::CollapsingState::load(ui.ctx(), id)
+                        .is_none_or(|state| state.openness(ui.ctx()) == 0.0);
+                    let top = ui.cursor().min.y;
+                    if closed && let Some(height) = row_height {
+                        let row = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + height);
+                        if !ui.is_rect_visible(row) {
+                            ui.add_space(height);
+                            continue;
+                        }
+                    }
                     let mut clicked = false;
                     let mut header = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
                         .show_header(ui, |ui| {
@@ -2433,6 +2446,13 @@ impl App {
                             ui.label(egui::RichText::new(text).monospace().small());
                         }
                     });
+                    if closed && !clicked {
+                        // (A closed body adds nothing.)
+                        let height = ui.cursor().min.y - top;
+                        if row_height != Some(height) {
+                            ui.data_mut(|d| d.insert_temp(row_height_id, height));
+                        }
+                    }
                 }
             },
         );
@@ -5027,6 +5047,31 @@ pub(super) fn palette_color(index: u8) -> egui::Color32 {
 /// Give it a hover text saying what it does.
 pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(icon(name)).size(16.0)).min_size(egui::vec2(ICON_BUTTON_WIDTH, 24.0))
+}
+
+/// A button for something that can't be taken back (`button`, with
+/// `hover`): its first click turns it into a red `confirm` ("Really
+/// delete?"), and only a click on that says yes. A click anywhere else,
+/// Esc, or the button going out of sight backs out. `id` tells apart such
+/// buttons shown at once (one per row, say).
+pub(crate) fn confirm_button(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, button: egui::Button<'_>, hover: &str, confirm: &str) -> bool {
+    let id = ui.id().with(("confirm_button", id));
+    let pass = ui.ctx().cumulative_pass_nr();
+    // Armed while it was shown armed the pass before.
+    let armed = ui.data(|d| d.get_temp::<u64>(id)).is_some_and(|shown| shown + 1 >= pass);
+    let clicked = if armed {
+        ui.add(egui::Button::new(egui::RichText::new(confirm).color(ui.visuals().error_fg_color))).clicked()
+    } else {
+        ui.add(button).on_hover_text(hover).clicked()
+    };
+    let backed_out = !clicked && ui.input(|i| i.pointer.any_click() || i.key_pressed(egui::Key::Escape));
+    let stays_armed = if armed { !clicked && !backed_out } else { clicked };
+    if stays_armed {
+        ui.data_mut(|d| d.insert_temp(id, pass));
+    } else {
+        ui.data_mut(|d| d.remove::<u64>(id));
+    }
+    armed && clicked
 }
 
 /// An icon button as tall as the other controls in a row of settings (or

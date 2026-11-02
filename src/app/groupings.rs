@@ -246,7 +246,6 @@ pub(super) enum PageButton {
     Play,
     Shuffle,
     Queue,
-    Star,
 }
 
 /// A group's (or a playlist's) header in `rect`: its art, `size` points
@@ -265,10 +264,9 @@ pub(super) fn page_header(ui: &mut egui::Ui, rect: egui::Rect, size: f32, art: &
     beside(&mut ui.new_child(egui::UiBuilder::new().max_rect(text)));
 }
 
-/// Play, shuffle, queue them and star them all (unstar, when
-/// `all_starred`), in a page's header: the one clicked. All but the star
-/// are off while there's nothing to play (`any`).
-pub(super) fn page_buttons(ui: &mut egui::Ui, any: bool, all_starred: bool) -> Option<PageButton> {
+/// Play, shuffle and queue them, in a page's header: the one clicked. Off
+/// while there's nothing to play (`any`).
+pub(super) fn page_buttons(ui: &mut egui::Ui, any: bool) -> Option<PageButton> {
     let mut pressed = None;
     if ui.add_enabled(any, icon_button("play")).on_hover_text("Play").clicked() {
         pressed = Some(PageButton::Play);
@@ -278,10 +276,6 @@ pub(super) fn page_buttons(ui: &mut egui::Ui, any: bool, all_starred: bool) -> O
     }
     if ui.add_enabled(any, icon_button("list-plus")).on_hover_text("Add them to the queue").clicked() {
         pressed = Some(PageButton::Queue);
-    }
-    let hover = if all_starred { "Unstar them all" } else { "Star them all" };
-    if ui.add(icon_button(select_list::star_icon(ui.ctx())).selected(all_starred)).on_hover_text(hover).clicked() {
-        pressed = Some(PageButton::Star);
     }
     pressed
 }
@@ -572,7 +566,6 @@ impl App {
         self.viewed_playlist = list;
         self.playlist_rename = None;
         self.playlist_find.clear();
-        self.confirm_delete_playlist = false;
         self.playlist_selection.clear();
     }
 
@@ -1096,7 +1089,6 @@ impl App {
         }
 
         let playable: Vec<PathBuf> = tracks.iter().filter(|t| t.here).map(|t| t.path.clone()).collect();
-        let all_starred = tracks.iter().filter(|t| !t.missing).all(|t| t.starred);
         let length: f64 = tracks.iter().filter(|t| !t.missing).filter_map(|t| t.length).sum();
         let songs = tracks.iter().filter(|t| !t.missing).count();
         let art_cache = &mut self.groupings.art;
@@ -1127,11 +1119,10 @@ impl App {
                 }
                 ui.weak(format!("{} \u{b7} {}", count(songs, "song"), format_length(length)));
                 ui.horizontal(|ui| {
-                    match page_buttons(ui, !playable.is_empty(), all_starred) {
+                    match page_buttons(ui, !playable.is_empty()) {
                         Some(PageButton::Play) => act = Some(Act::Play(playable.clone(), 0)),
                         Some(PageButton::Shuffle) => act = Some(Act::Shuffle(playable.clone())),
                         Some(PageButton::Queue) => act = Some(Act::Queue(playable.clone(), false)),
-                        Some(PageButton::Star) => act = Some(Act::Star(tracks.iter().map(|t| t.path.clone()).collect(), !all_starred)),
                         None => {}
                     }
                     if albums && ui.add(icon_button("image")).on_hover_text("Choose art").clicked() {

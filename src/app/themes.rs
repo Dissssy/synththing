@@ -26,7 +26,6 @@ pub(super) struct ThemesState {
     /// with it.
     renaming: Option<(String, Option<String>)>,
     /// Delete was clicked once; the next click deletes.
-    confirm_delete: bool,
     /// The UI scale while its slider is being dragged (applied on release,
     /// or the slider would rescale under the pointer).
     scale_drag: Option<f32>,
@@ -67,7 +66,6 @@ impl App {
 
     pub(super) fn pick_theme(&mut self, ctx: &egui::Context, name: String) {
         self.themes.renaming = None;
-        self.themes.confirm_delete = false;
         self.config.theme = (name != theme::DEFAULT_THEME).then_some(name);
         self.current_theme().apply(ctx);
         if let Err(e) = self.config.save() {
@@ -249,13 +247,8 @@ impl App {
             if ui.button("Rename...").clicked() {
                 self.themes.renaming = Some((current.name.clone(), None));
             }
-            let label = if self.themes.confirm_delete { "Really delete?" } else { "Delete" };
-            if ui.button(label).clicked() {
-                if self.themes.confirm_delete {
-                    action = Some(ThemeAction::Delete);
-                } else {
-                    self.themes.confirm_delete = true;
-                }
+            if super::confirm_button(ui, ("theme", &current.name), egui::Button::new("Delete"), "Delete this theme", "Really delete?") {
+                action = Some(ThemeAction::Delete);
             }
         });
         action

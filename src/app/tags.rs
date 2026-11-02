@@ -94,10 +94,17 @@ pub(super) enum TagAction {
     Edit,
 }
 
-/// The Tags submenu for the songs at `paths`: their tags to switch
-/// (`tag_checklist`, without the star), then New tag and Edit tags.
+/// Star (Unstar, when every one is starred) for the songs at `paths`,
+/// then the Tags submenu: their tags to switch (`tag_checklist`, without
+/// the star), then New tag and Edit tags.
 pub(super) fn tags_menu(ui: &mut egui::Ui, store: &SongStore, paths: &[PathBuf]) -> Option<TagAction> {
     let mut action = None;
+    let starred = paths.iter().all(|p| store.is_starred(p));
+    let count = if paths.len() > 1 { format!(" ({})", paths.len()) } else { String::new() };
+    let label = format!("{} {}{count}", icon(store.star().icon_name()), if starred { "Unstar" } else { "Star" });
+    if ui.button(label).clicked() {
+        action = Some(TagAction::Set(STARRED.into(), !starred));
+    }
     ui.menu_button("Tags", |ui| {
         action = tag_checks(ui, store, paths, false, |ui, text, on, mixed| ui.add(egui::Checkbox::new(on, text).indeterminate(mixed)));
         if !store.tags().is_empty() {
@@ -322,7 +329,7 @@ impl App {
                         ui.color_edit_button_srgb(&mut tag.color);
                         icon_picker(ui, &mut tag.icon, TAG_ICONS[0]);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(super::row_icon_button(ui, "trash")).on_hover_text("Delete it (from every song)").clicked() {
+                            if super::confirm_button(ui, ("tag", &id), super::row_icon_button(ui, "trash"), "Delete it (from every song)", "Really delete?") {
                                 delete = Some(id.clone());
                             }
                             egui::ComboBox::from_id_salt(("tag_show", &id))

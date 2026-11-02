@@ -252,7 +252,6 @@ impl App {
                 self.playlists_changed();
                 self.viewed_playlist = Some(idx);
                 self.playlist_rename = None;
-                self.confirm_delete_playlist = false;
                 self.playlist_selection.clear();
             }
             Err(e) => self.status = format!("Couldn't create playlist: {e}"),
@@ -602,8 +601,8 @@ impl App {
 
     /// Back and "find in here", then the playlist's header as a group's:
     /// its tile, name (a text box in its place while renaming; a phone's
-    /// top bar has it otherwise), count and length, play, shuffle, queue
-    /// and star them all, then continue, its rules, rename, export and
+    /// top bar has it otherwise), count and length, play, shuffle and
+    /// queue them, then continue, its rules, rename, export and
     /// delete.
     fn playlist_header_ui(&mut self, ui: &mut egui::Ui, list: usize) {
         use super::groupings::{page_art, page_buttons, page_header, page_header_height, PageButton};
@@ -636,7 +635,6 @@ impl App {
         let smart = stored.playlist.smart.is_some();
         let entries = &stored.playlist.entries;
         let here: Vec<PathBuf> = entries.iter().filter(|e| !e.missing).map(|e| e.path.clone()).collect();
-        let all_starred = here.iter().all(|p| self.songs.is_starred(p));
         // Total time from what's been read so far.
         let (mut total, mut unknown) = (0.0, 0usize);
         for entry in entries {
@@ -665,7 +663,6 @@ impl App {
         let size = page_art(phone);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), page_header_height(size)), egui::Sense::hover());
         let rename = &mut self.playlist_rename;
-        let confirm_delete = &mut self.confirm_delete_playlist;
         let mut renamed = None;
         let mut press = None;
         let from = image.as_deref().map(AlbumArtSource::image).unwrap_or_default();
@@ -685,7 +682,7 @@ impl App {
             }
             ui.weak(summary);
             ui.horizontal_wrapped(|ui| {
-                if let Some(button) = page_buttons(ui, !here.is_empty(), all_starred) {
+                if let Some(button) = page_buttons(ui, !here.is_empty()) {
                     press = Some(Press::Page(button));
                 }
                 if let Some((entry, title)) = &left_at
@@ -724,19 +721,8 @@ impl App {
                 if ui.add(super::icon_button("export")).on_hover_text("Export .m3u...: save as an .m3u8 playlist other players can open").clicked() {
                     press = Some(Press::Export);
                 }
-                let response = if *confirm_delete {
-                    ui.add(egui::Button::new(egui::RichText::new("Really delete?").color(ui.visuals().error_fg_color)))
-                } else {
-                    ui.add(super::icon_button("trash")).on_hover_text("Delete this playlist")
-                };
-                if response.clicked() {
-                    if *confirm_delete {
-                        press = Some(Press::Delete);
-                    }
-                    *confirm_delete = !*confirm_delete;
-                } else if *confirm_delete && ui.input(|i| i.pointer.any_click()) {
-                    // Any click elsewhere backs out of the confirmation.
-                    *confirm_delete = false;
+                if super::confirm_button(ui, ("playlist", list), super::icon_button("trash"), "Delete this playlist", "Really delete?") {
+                    press = Some(Press::Delete);
                 }
             });
         });
@@ -755,7 +741,6 @@ impl App {
                 self.play_playlist(list);
             }
             Some(Press::Page(PageButton::Queue)) => self.queue_songs(ui.ctx(), here, false),
-            Some(Press::Page(PageButton::Star)) => self.tag_songs(super::tags::TagAction::Set(crate::song_store::STARRED.into(), !all_starred), &here),
             Some(Press::Continue(entry)) => self.play_entry(list, entry),
             Some(Press::Rules) => self.edit_playlist_rules(ui.ctx(), Some(list)),
             Some(Press::Freeze) => self.freeze_playlist(list),
