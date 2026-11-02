@@ -1,8 +1,9 @@
 //! Song tags (`song_store::Tag`): given to songs from the Tags submenu of
 //! their right-click menu, Song info's Tags page and the quick Tags dialog
 //! (the phone's Now playing); made, renamed, colored, given icons and
-//! deleted in Preferences > Library > Tags. They sync with the library
-//! (`song_sync.rs`).
+//! deleted in Preferences > Library > Tags, where starred songs' color
+//! and icon are picked too (`song_store::StarLook`). They sync with the
+//! library (`song_sync.rs`).
 
 use std::path::PathBuf;
 
@@ -11,7 +12,7 @@ use eframe::egui::{self, AtomExt as _};
 use super::preferences::PrefTab;
 use super::{fit_width, icon, setting_row, settings_group, App};
 use crate::config::QuickToggle;
-use crate::song_store::{SongStore, Tag, TagShow, STARRED, TAG_ICONS};
+use crate::song_store::{SongStore, StarLook, Tag, TagShow, STARRED, TAG_ICONS};
 
 /// The colors new tags take, in turn.
 const PALETTE: [[u8; 3]; 8] = [
@@ -42,24 +43,44 @@ pub(crate) fn tag_label(tag: &Tag) -> String {
     }
 }
 
-/// The button that picks `tag`'s icon (from `TAG_ICONS`), in a popup
-/// under it (picked again: none).
-fn icon_picker(ui: &mut egui::Ui, tag: &mut Tag) {
+/// The button that picks a tag's (or the star's) icon from `TAG_ICONS`,
+/// in a popup under it (picked again: none, showing `default`).
+fn icon_picker(ui: &mut egui::Ui, picked: &mut Option<String>, default: &str) {
     let size = ui.spacing().interact_size.y;
-    let glyph = egui::RichText::new(icon(tag.icon_or_default())).size(size - 6.0);
-    let glyph = if tag.icon.is_some() { glyph } else { glyph.weak() };
+    let glyph = egui::RichText::new(icon(picked.as_deref().unwrap_or(default))).size(size - 6.0);
+    let glyph = if picked.is_some() { glyph } else { glyph.weak() };
     let button = ui.add(egui::Button::new(glyph).min_size(egui::vec2(size, size))).on_hover_text("Its icon (Android's media controls show only this)");
     egui::Popup::from_toggle_button_response(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_max_width(6.0 * (size + 10.0));
         ui.horizontal_wrapped(|ui| {
             for name in TAG_ICONS {
-                let selected = tag.icon.as_deref() == Some(name);
+                let selected = picked.as_deref() == Some(name);
                 let pick = egui::Button::new(egui::RichText::new(icon(name)).size(size - 4.0)).selected(selected).min_size(egui::vec2(size + 4.0, size + 4.0));
                 if ui.add(pick).on_hover_text(name.replace('-', " ")).clicked() {
-                    tag.icon = (!selected).then(|| name.to_string());
+                    *picked = (!selected).then(|| name.to_string());
                 }
             }
         });
+    });
+}
+
+/// Starred songs' row in Preferences > Library > Tags: their color (the
+/// theme's star color until one's picked) and icon, how many there are,
+/// and back to the usual look.
+fn star_row(ui: &mut egui::Ui, star: &mut StarLook, count: usize) {
+    let [r, g, b, _] = crate::theme::star_color(ui.ctx()).to_srgba_unmultiplied();
+    let mut color = star.color.unwrap_or([r, g, b]);
+    if ui.color_edit_button_srgb(&mut color).on_hover_text("Starred songs' color (until you pick one: the theme's star color)").changed() {
+        star.color = Some(color);
+    }
+    icon_picker(ui, &mut star.icon, crate::song_store::STAR_ICON);
+    ui.label("Starred").on_hover_text("Built in: the mark at the left of each song");
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let custom = *star != StarLook::default();
+        if ui.add_enabled(custom, super::row_icon_button(ui, "arrow-counter-clockwise")).on_hover_text("Back to the theme's star color and the alien").clicked() {
+            *star = StarLook::default();
+        }
+        ui.weak(count.to_string()).on_hover_text(format!("{count} song{} starred", if count == 1 { " is" } else { "s are" }));
     });
 }
 
@@ -105,7 +126,7 @@ fn tag_checks(
     let mut tags: Vec<(&str, String, egui::RichText)> = store.tags().iter().map(|(id, tag)| (id.as_str(), tag.name.clone(), tag_text(tag))).collect();
     tags.sort_by_key(|(_, name, _)| name.to_lowercase());
     if star {
-        let text = egui::RichText::new(format!("{}  Starred", icon(crate::select_list::STAR_ICON)));
+        let text = egui::RichText::new(format!("{}  Starred", icon(store.star().icon_name())));
         tags.insert(0, (crate::song_store::STARRED, "Starred".into(), text));
     }
     let mut action = None;
@@ -157,7 +178,7 @@ pub(super) fn quick_toggle_button(ui: &mut egui::Ui, store: &SongStore, toggle: 
     if toggle.on {
         let color = match store.tags().get(&toggle.tag) {
             Some(tag) if !star => egui::Color32::from_rgb(tag.color[0], tag.color[1], tag.color[2]),
-            _ => crate::theme::star_color(ui.ctx()),
+            _ => crate::select_list::star_color(ui.ctx()),
         };
         text = text.family(egui::FontFamily::Name(super::fonts::PHOSPHOR_FILL.into())).color(color);
     }
@@ -182,7 +203,7 @@ impl App {
     /// playing has it (off with none playing): None for a deleted tag.
     pub(super) fn tag_toggle(&self, id: &str) -> Option<QuickToggle> {
         let (label, glyph) = if id == STARRED {
-            ("Star".to_string(), crate::select_list::STAR_ICON)
+            ("Star".to_string(), self.songs.star().icon_name())
         } else {
             let tag = self.songs.tags().get(id)?;
             (tag.name.clone(), tag.icon_or_default())
@@ -271,9 +292,9 @@ impl App {
         }
     }
 
-    /// Preferences > Library > Tags: each tag's color, icon, name, how
-    /// it's shown (the Songs list's chips, menus), how many songs have it,
-    /// and deleting it; and New tag.
+    /// Preferences > Library > Tags: starred songs' color and icon first,
+    /// then each tag's color, icon, name, how it's shown (the Songs list's
+    /// chips, menus), how many songs have it, and deleting it; and New tag.
     pub(super) fn tags_preferences_ui(&mut self, ui: &mut egui::Ui) {
         let mut changed: Vec<(String, Tag)> = Vec::new();
         let mut delete = None;
@@ -287,16 +308,19 @@ impl App {
         }
         let mut tags: Vec<(String, Tag)> = self.songs.tags().iter().map(|(id, tag)| (id.clone(), tag.clone())).collect();
         tags.sort_by_key(|(_, tag)| tag.name.to_lowercase());
+        let mut star = self.songs.star().clone();
         settings_group("Tags")
             .icon("tag")
             .hint("Your own labels for songs, the same on all your devices with sync on. A song's menu, or Song info's Tags, tags it.")
             .show(ui, |ui| {
+                let count = counts.get(STARRED).copied().unwrap_or(0);
+                setting_row(ui, |ui| star_row(ui, &mut star, count));
                 for (id, mut tag) in tags {
                     let count = counts.get(id.as_str()).copied().unwrap_or(0);
                     setting_row(ui, |ui| {
                         let before = tag.clone();
                         ui.color_edit_button_srgb(&mut tag.color);
-                        icon_picker(ui, &mut tag);
+                        icon_picker(ui, &mut tag.icon, TAG_ICONS[0]);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.add(super::row_icon_button(ui, "trash")).on_hover_text("Delete it (from every song)").clicked() {
                                 delete = Some(id.clone());
@@ -336,7 +360,8 @@ impl App {
                     new = ui.button("New tag").clicked();
                 });
             });
-        let edited = !changed.is_empty() || delete.is_some();
+        let edited = !changed.is_empty() || delete.is_some() || star != *self.songs.star();
+        self.songs.set_star(star);
         for (id, tag) in changed {
             self.songs.set_tag(&id, tag);
         }

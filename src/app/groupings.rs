@@ -280,7 +280,7 @@ pub(super) fn page_buttons(ui: &mut egui::Ui, any: bool, all_starred: bool) -> O
         pressed = Some(PageButton::Queue);
     }
     let hover = if all_starred { "Unstar them all" } else { "Star them all" };
-    if ui.add(icon_button(select_list::STAR_ICON).selected(all_starred)).on_hover_text(hover).clicked() {
+    if ui.add(icon_button(select_list::star_icon(ui.ctx())).selected(all_starred)).on_hover_text(hover).clicked() {
         pressed = Some(PageButton::Star);
     }
     pressed

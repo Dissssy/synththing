@@ -4026,6 +4026,7 @@ impl App {
     /// is hidden or minimized; on Android also while the app is in the
     /// background, when eframe has no window and calls nothing).
     pub fn tick(&mut self, ctx: &egui::Context) {
+        crate::select_list::show_star_look(ctx, self.songs.star());
         let ui_ran = std::mem::take(&mut self.ui_drawn);
         if !ui_ran {
             self.nothing_drawn();

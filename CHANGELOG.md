@@ -9,6 +9,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - View in Library (after publishing, and in a notification) shows just that script's details in a dialog, leaving your layout as it is. Going to a panel your locked layout hasn't got shows it in the same dialog.
 - A preview the server is making shows dimmed with a spinner in the Library, and the new one appears as soon as it's done.
 - Admins can have a script's preview made again from its details, or every preview from Moderation > Server.
+- Starred songs can have a color and icon of your own: Preferences > Library > Tags lists Starred first, with the same color and icon pickers as your tags. It syncs with your library, and the arrow puts back the theme's color and the alien.
 
 ### Fixed
 - Previews count as a recording from the script's first line, so a script that hides its controls when `recording()` is set does it in its preview too.
