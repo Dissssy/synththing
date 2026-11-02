@@ -119,6 +119,10 @@ pub struct Config {
     /// channel's instrument, instead of numbered checkboxes.
     #[serde(default)]
     pub channel_chips: bool,
+    /// Preference: the controls bar has the speed slider even at 1x
+    /// (off: only while the speed isn't 1x).
+    #[serde(default)]
+    pub show_speed: bool,
     /// The Songs list's columns, sorting and grouping.
     #[serde(default)]
     pub songs_view: crate::song_list::View,

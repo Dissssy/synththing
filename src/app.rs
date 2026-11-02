@@ -611,6 +611,9 @@ pub struct App {
     /// The points per pixel the window's minimum size (`MIN_WINDOW`) was
     /// last set for: set again when the UI scale changes.
     min_window_scale: f32,
+    /// Whether the window's size is still to be checked against its new
+    /// minimum (`keep_min_window`).
+    min_window_check: bool,
     /// The reference spot to show (section, block), when it was asked for,
     /// and whether it still needs scrolling to.
     docs_target: Option<((usize, usize), Instant, bool)>,
@@ -881,6 +884,7 @@ impl App {
             song_notes: None,
             accent: None,
             min_window_scale: 0.0,
+            min_window_check: false,
             docs_target: None,
             pending_focus: None,
             sprite: sprite_editor::SpriteEditorState::default(),
@@ -1265,12 +1269,21 @@ impl App {
 
     /// The window's minimum size, `MIN_WINDOW` points at the UI scale
     /// it's at (set again when that changes), so the controls bar and the
-    /// title bar always fit.
+    /// title bar always fit. A window smaller than that after the scale
+    /// changes (zoomed in with Ctrl+) grows to it, on the next frame, once
+    /// the window's size is measured at the new scale.
     fn keep_min_window(&mut self, ctx: &egui::Context) {
         let scale = ctx.pixels_per_point();
         if scale != self.min_window_scale {
             self.min_window_scale = scale;
+            self.min_window_check = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(MIN_WINDOW));
+            ctx.request_repaint();
+        } else if std::mem::take(&mut self.min_window_check) {
+            let size = ctx.content_rect().size();
+            if size.x < MIN_WINDOW.x - 1.0 || size.y < MIN_WINDOW.y - 1.0 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size.max(MIN_WINDOW)));
+            }
         }
     }
 
@@ -1327,32 +1340,54 @@ impl App {
         });
         ui.add_space(2.0);
 
+        // One line: the devices button and quick actions at the left, the
+        // transport centred, volume (and speed) at the right. The left's
+        // buttons get their room first, the transport moving over for them
+        // or for volume; volume's slider takes what's left, and with too
+        // little for it volume is a button that opens one. Speed (when
+        // it's wanted) gives up its slider for a button first.
         let gap = ui.spacing().item_spacing.x;
-        let sides = speed_volume_width(gap, MIN_SLIDER);
-        let line = |ui: &mut egui::Ui| ui.allocate_exact_size(egui::vec2(width, TRANSPORT_HEIGHT), egui::Sense::hover()).0;
-        let zone = |rect: egui::Rect, x: f32, width: f32, layout: egui::Layout| {
+        let buttons = usize::from(self.has_other_devices())
+            + self.quick_actions().iter().filter(|a| matches!(a, config::QuickAction::Toggle(_))).count();
+        let left_need = buttons as f32 * (ICON_BUTTON_WIDTH + gap);
+        let speed_wanted = self.config.show_speed || view.speed != 1.0;
+        let room = width - TRANSPORT_WIDTH - 2.0 * gap - left_need;
+        let (volume, speed) = right_shapes(room, gap, speed_wanted);
+        let right_need = shape_width(volume, volume_width(gap, MIN_SLIDER), gap)
+            + speed.map_or(0.0, |speed| SPEED_VOLUME_GAP + shape_width(speed, speed_width(gap, MIN_SLIDER), gap));
+        let centred = (width - TRANSPORT_WIDTH) / 2.0;
+        let x = if centred >= left_need.max(right_need) + SIDE_GAP {
+            centred
+        } else {
+            centred.min(width - right_need - gap - TRANSPORT_WIDTH).max(left_need.min(width - TRANSPORT_WIDTH - gap - ICON_BUTTON_WIDTH) + gap)
+        };
+        let edge = if x == centred { SIDE_GAP } else { gap };
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, TRANSPORT_HEIGHT), egui::Sense::hover());
+        let zone = |from: f32, to: f32, layout: egui::Layout| {
             egui::UiBuilder::new()
-                .max_rect(egui::Rect::from_min_size(egui::pos2(rect.left() + x, rect.top()), egui::vec2(width, rect.height())))
+                .max_rect(egui::Rect::from_x_y_ranges(rect.left() + from..=rect.left() + to.max(from), rect.y_range()))
                 .layout(layout)
         };
         let left = egui::Layout::left_to_right(egui::Align::Center);
-        let side = (width - TRANSPORT_WIDTH) / 2.0;
-        if side >= sides + SIDE_GAP {
-            let rect = line(ui);
-            ui.scope_builder(zone(rect, 0.0, side - SIDE_GAP, left), |ui| self.bar_left_ui(ui, view));
-            ui.scope_builder(zone(rect, side, TRANSPORT_WIDTH, left), |ui| self.transport_ui(ui, view));
-            ui.scope_builder(zone(rect, side + TRANSPORT_WIDTH + SIDE_GAP, side - SIDE_GAP, right), |ui| self.speed_volume_ui(ui, view));
-        } else {
-            let rect = line(ui);
-            ui.scope_builder(zone(rect, side.max(0.0), TRANSPORT_WIDTH, left), |ui| self.transport_ui(ui, view));
-            ui.add_space(4.0);
-            // (Speed and volume take what's left after the devices button
-            // and a few quick actions, or more for longer sliders.)
-            let rest = (width * 0.6).clamp(sides.min(width - ICON_BUTTON_WIDTH), width - ICON_BUTTON_WIDTH);
-            let rect = line(ui);
-            ui.scope_builder(zone(rect, 0.0, width - rest, left), |ui| self.bar_left_ui(ui, view));
-            ui.scope_builder(zone(rect, width - rest, rest, right), |ui| self.speed_volume_ui(ui, view));
-        }
+        ui.scope_builder(zone(0.0, x - edge, left), |ui| self.bar_left_ui(ui, view));
+        ui.scope_builder(zone(x, x + TRANSPORT_WIDTH, left), |ui| self.transport_ui(ui, view));
+        // (The sliders share what room's left over.)
+        let sliders = [Some(volume), speed].iter().filter(|s| **s == Some(Shape::Slider)).count().max(1) as f32;
+        let slider = (MIN_SLIDER + (width - x - TRANSPORT_WIDTH - edge - right_need) / sliders).clamp(MIN_SLIDER, MAX_SLIDER);
+        ui.scope_builder(zone(x + TRANSPORT_WIDTH + edge, width, right), |ui| {
+            ui.spacing_mut().slider_width = slider;
+            match volume {
+                Shape::Slider => self.volume_ui(ui),
+                Shape::Button => self.volume_button_ui(ui),
+            }
+            if let Some(speed) = speed {
+                ui.add_space(SPEED_VOLUME_GAP);
+                match speed {
+                    Shape::Slider => self.speed_ui(ui, view),
+                    Shape::Button => self.speed_button_ui(ui, view),
+                }
+            }
+        });
         ui.add_space(6.0);
     }
 
@@ -1450,26 +1485,33 @@ impl App {
         }
     }
 
-    /// Speed and volume, each an icon, a slider and its value (in a
-    /// right-to-left layout), the sliders sharing the room there is
-    /// (between `MIN_SLIDER` and `MAX_SLIDER`). The speed's icon puts it
-    /// back to 1x.
-    fn speed_volume_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
-        let gap = ui.spacing().item_spacing.x;
-        let slider = ((ui.available_width() - speed_volume_width(gap, 0.0)) / 2.0).clamp(MIN_SLIDER, MAX_SLIDER);
-        ui.spacing_mut().slider_width = slider;
+    /// Volume: its value, a slider (`slider_width` wide) and an icon (in a
+    /// right-to-left layout).
+    fn volume_ui(&mut self, ui: &mut egui::Ui) {
         ui.add_sized([VOLUME_TEXT_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.0}%", self.volume * 100.0)).weak()));
         if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false)).changed() {
             self.send_volume();
         }
-        let speaker = match self.volume {
-            v if v <= 0.0 => "speaker-x",
-            v if v < 0.5 => "speaker-low",
-            _ => "speaker-high",
-        };
-        ui.add_sized([SPEAKER_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(icon(speaker)).size(16.0))).on_hover_text("Volume");
+        ui.add_sized([SPEAKER_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(icon(speaker_icon(self.volume))).size(16.0))).on_hover_text("Volume");
+    }
 
-        ui.add_space(SPEED_VOLUME_GAP);
+    /// Volume as a button, when the bar has no room for its slider: it
+    /// opens the slider in a popup.
+    fn volume_button_ui(&mut self, ui: &mut egui::Ui) {
+        let button = ui.add(icon_button(speaker_icon(self.volume))).on_hover_text(format!("Volume: {:.0}%", self.volume * 100.0));
+        bar_popup(&button, |ui| self.volume_ui(ui));
+    }
+
+    /// Speed as a button, when the bar has no room for its slider: it
+    /// opens the slider in a popup.
+    fn speed_button_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        let button = ui.add(icon_button("gauge").selected(view.speed != 1.0)).on_hover_text(format!("Speed: {:.2}x", view.speed));
+        bar_popup(&button, |ui| self.speed_ui(ui, view));
+    }
+
+    /// Speed: its value, a slider and its icon, which puts it back to 1x
+    /// (in a right-to-left layout, after `volume_ui`).
+    fn speed_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         ui.add_sized([SPEED_TEXT_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.2}x", view.speed)).weak()));
         let mut speed = view.speed;
         if ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).show_value(false)).changed() {
@@ -4778,7 +4820,7 @@ pub(crate) fn row_icon_button_room(ui: &egui::Ui) -> f32 {
 /// How wide the transport (`App::transport_ui`) is: five icon buttons and
 /// play, with the gaps between.
 const TRANSPORT_WIDTH: f32 = 5.0 * ICON_BUTTON_WIDTH + PLAY_WIDTH + 5.0 * 8.0;
-/// How wide speed and volume's sliders get (`App::speed_volume_ui`).
+/// How wide volume and speed's sliders get in the controls bar.
 const MIN_SLIDER: f32 = 60.0;
 const MAX_SLIDER: f32 = 160.0;
 const VOLUME_TEXT_WIDTH: f32 = 36.0;
@@ -4790,15 +4832,70 @@ const SPEED_VOLUME_GAP: f32 = 12.0;
 const SIDE_GAP: f32 = 24.0;
 /// How much of the bar's first line the status line may take.
 const STATUS_SHARE: f32 = 0.4;
-/// The window's smallest size, in points: room for the title bar and the
-/// controls bar with the transport over the rest.
-const MIN_WINDOW: egui::Vec2 = egui::vec2(440.0, 420.0);
+/// The window's smallest size, in points: room for the title bar, and the
+/// controls bar's transport with a button either side.
+const MIN_WINDOW: egui::Vec2 = egui::vec2(400.0, 420.0);
 
-/// How wide speed and volume are with `slider` wide sliders, `gap`
-/// between each of their widgets.
-fn speed_volume_width(gap: f32, slider: f32) -> f32 {
-    VOLUME_TEXT_WIDTH + SPEAKER_WIDTH + SPEED_VOLUME_GAP + SPEED_TEXT_WIDTH + ICON_BUTTON_WIDTH + 2.0 * slider + 7.0 * gap
+/// How the controls bar shows volume or speed, by the room it has.
+#[derive(Clone, Copy, PartialEq)]
+enum Shape {
+    /// Its slider, with its value and icon.
+    Slider,
+    /// A button opening the slider in a popup.
+    Button,
 }
+
+/// How volume and speed (`None` when it isn't `wanted`) fit in `room`:
+/// sliders where they fit, speed giving its up first.
+fn right_shapes(room: f32, gap: f32, wanted: bool) -> (Shape, Option<Shape>) {
+    use Shape::{Button, Slider};
+    let choices: &[(Shape, Option<Shape>)] =
+        if wanted { &[(Slider, Some(Slider)), (Slider, Some(Button)), (Button, Some(Button))] } else { &[(Slider, None), (Button, None)] };
+    let need = |(volume, speed): (Shape, Option<Shape>)| {
+        shape_width(volume, volume_width(gap, MIN_SLIDER), gap)
+            + speed.map_or(0.0, |speed| SPEED_VOLUME_GAP + shape_width(speed, speed_width(gap, MIN_SLIDER), gap))
+    };
+    let last = *choices.last().expect("choices");
+    choices.iter().copied().find(|&c| need(c) <= room).unwrap_or(last)
+}
+
+/// How wide a `Shape` is: `slider` as a slider, else a button.
+fn shape_width(shape: Shape, slider: f32, gap: f32) -> f32 {
+    match shape {
+        Shape::Slider => slider,
+        Shape::Button => ICON_BUTTON_WIDTH + gap,
+    }
+}
+
+/// A popup under a controls bar button holding one of its sliders, laid
+/// out as in the bar (right to left).
+fn bar_popup(button: &egui::Response, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Popup::from_toggle_button_response(button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.spacing_mut().slider_width = MAX_SLIDER;
+        ui.allocate_ui_with_layout(egui::vec2(0.0, TRANSPORT_HEIGHT), egui::Layout::right_to_left(egui::Align::Center), add);
+    });
+}
+
+/// The speaker icon for `volume`.
+fn speaker_icon(volume: f32) -> &'static str {
+    match volume {
+        v if v <= 0.0 => "speaker-x",
+        v if v < 0.5 => "speaker-low",
+        _ => "speaker-high",
+    }
+}
+
+/// How wide volume is (`App::volume_ui`) with a `slider` wide slider,
+/// `gap` between each of its widgets.
+fn volume_width(gap: f32, slider: f32) -> f32 {
+    VOLUME_TEXT_WIDTH + slider + SPEAKER_WIDTH + 2.0 * gap
+}
+
+/// How wide speed is (`App::speed_ui`), as `volume_width`.
+fn speed_width(gap: f32, slider: f32) -> f32 {
+    SPEED_TEXT_WIDTH + slider + ICON_BUTTON_WIDTH + 3.0 * gap
+}
+
 /// How wide an `icon_button` is.
 const ICON_BUTTON_WIDTH: f32 = 28.0;
 const PLAY_WIDTH: f32 = 44.0;

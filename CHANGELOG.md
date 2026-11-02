@@ -8,8 +8,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 - The controls bar has quick star and tag buttons for the song playing, beside the devices button. They come from the same list as the phone's media controls, now Preferences > Playback > Quick actions on every device, most wanted first; the bar shows as many as fit.
 
 ### Changed
-- The controls bar fits its window better: the song's name keeps its room next to the status line (which is cut short instead), the speed and volume sliders grow with the room there is, and below about 830 points wide the transport sits over one tidy line of the rest.
-- The window can't be made smaller than the controls bar and title bar need, at any UI scale.
+- The controls bar stays on one line at any width. Your quick action buttons get their room first and the volume slider takes what's left; when it runs short, speed and then volume become buttons that open their slider. The song's name keeps its room next to the status line, which is cut short instead.
+- The speed slider is hidden unless a song plays at another speed; Preferences > Appearance > Controls bar > Speed control keeps it there.
+- The window can't be made smaller than the controls bar and title bar need, at any UI scale, and zooming in with Ctrl+ grows a window that's become too small.
 
 ## 2.2.1 (2026-11-01)
 

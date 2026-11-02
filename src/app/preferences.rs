@@ -346,6 +346,7 @@ impl App {
         let mut script_log = self.config.script_log_to_app;
         let mut visualizer_scale = config::visualizer_scale_down(self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE));
         let mut channel_chips = self.config.channel_chips;
+        let mut show_speed = self.config.show_speed;
         let mut buffer_ms = self.buffer_ms;
         let mut even_volume = self.config.even_volume.unwrap_or(true);
         let mut volume_target = self.config.volume_target.unwrap_or(loudness::DEFAULT_TARGET);
@@ -380,7 +381,13 @@ impl App {
                     }
                     self.ui_scale_ui(ui);
                 });
-                settings_group("Seek bar").icon("sliders-horizontal").show(ui, |ui| {
+                settings_group("Controls bar").icon("sliders-horizontal").show(ui, |ui| {
+                    with_info(
+                        ui,
+                        "The speed slider by the volume. Off: it only shows while a song plays at another \
+                         speed than 1x, to put it back. Either way it's left out when the window is too narrow.",
+                        |ui| ui.checkbox(&mut show_speed, "Speed control"),
+                    );
                     with_info(
                         ui,
                         "The seek bar is colored by the song's tempo (slow songs blue, fast ones pink), \
@@ -792,6 +799,7 @@ impl App {
             || script_log != self.config.script_log_to_app
             || visualizer_scale != self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE)
             || channel_chips != self.config.channel_chips
+            || show_speed != self.config.show_speed
             || buffer_ms != self.buffer_ms
             || even_volume != self.config.even_volume.unwrap_or(true)
             || volume_target != self.config.volume_target.unwrap_or(loudness::DEFAULT_TARGET)
@@ -820,6 +828,7 @@ impl App {
             self.config.album_volume = album_volume;
             self.send_volume();
             self.config.channel_chips = channel_chips;
+            self.config.show_speed = show_speed;
             self.config.script_log_to_app = script_log;
             self.config.visualizer_scale = (visualizer_scale != config::DEFAULT_VISUALIZER_SCALE).then_some(visualizer_scale);
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);

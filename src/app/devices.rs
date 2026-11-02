@@ -299,6 +299,11 @@ impl App {
         }
     }
 
+    /// Whether another device is online: the Devices button is there.
+    pub(super) fn has_other_devices(&self) -> bool {
+        !self.devices.players.all().is_empty()
+    }
+
     /// The Devices button, while another device is online: what each one
     /// plays, with its controls, Join and Bring here, in a popup.
     pub(super) fn devices_button_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
