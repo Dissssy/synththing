@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Fixed
+- Help > Credits & licenses no longer slows every frame while it's open: only the libraries in sight are drawn, instead of all of them (8 to 11 ms a frame on a phone).
 - Groupings: the songs on an album's, artist's or other group's page are spaced like every other list again, instead of cramped with striped rows taller than the rest and the playing song's outline touching its neighbours.
 
 ## 2.5.0 (2026-11-02)
