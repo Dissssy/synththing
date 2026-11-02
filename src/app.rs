@@ -44,6 +44,7 @@ mod lookup;
 mod background;
 mod groupings;
 mod recording;
+mod reorder;
 mod repair;
 mod script_windows;
 mod smart;
@@ -1382,11 +1383,9 @@ impl App {
     /// them.
     fn controls_line_ui(&mut self, ui: &mut egui::Ui, view: &EngineView, width: f32) {
         let gap = ui.spacing().item_spacing.x;
-        let devices = self.has_other_devices();
         let mut sections = self.config.controls_bar.sections().map(|items| {
             items
                 .into_iter()
-                .filter(|item| **item != BarItem::Devices || devices)
                 .filter(|item| self.bar_item_shown(item))
                 .map(|item| Slot::Item(item.clone()))
                 .collect::<Vec<_>>()
@@ -1473,9 +1472,13 @@ impl App {
     }
 
     /// Some of the controls bar's slots, left to right, as many as fit.
+    /// (The line's layout already made room for them all: this only drops
+    /// what a section has no room for at all, with half a button to spare,
+    /// as widgets snapped to whole pixels can run a point or two past what
+    /// was worked out.)
     fn controls_slots_ui(&mut self, ui: &mut egui::Ui, view: &EngineView, slots: &[Slot], shapes: Shapes) {
         for slot in slots {
-            if ui.available_width() < ICON_BUTTON_WIDTH {
+            if ui.available_width() < ICON_BUTTON_WIDTH / 2.0 {
                 break;
             }
             match slot {
@@ -1519,6 +1522,9 @@ impl App {
 
     /// One of the controls bar's items.
     fn controls_item_ui(&mut self, ui: &mut egui::Ui, view: &EngineView, item: &BarItem, shapes: Shapes) {
+        // (Stop, previous and play have nothing to act on without a song.)
+        let has_song = view.has_midi || view.has_audio_file;
+        let no_song = "Nothing to play yet: pick a song";
         match item {
             BarItem::Middle | BarItem::Right => {}
             BarItem::Devices => self.devices_button_ui(ui, view),
@@ -1530,7 +1536,7 @@ impl App {
                 }
             }
             BarItem::Stop => {
-                if ui.add(icon_button("stop")).on_hover_text("Stop").clicked() {
+                if ui.add_enabled(has_song, icon_button("stop")).on_hover_text("Stop").on_disabled_hover_text(no_song).clicked() {
                     self.send(AudioCommand::Seek(0.0));
                     if !view.paused {
                         self.send(AudioCommand::TogglePause);
@@ -1539,11 +1545,12 @@ impl App {
             }
             BarItem::Previous => {
                 if ui
-                    .add(icon_button("skip-back"))
+                    .add_enabled(has_song, icon_button("skip-back"))
                     .on_hover_text(format!(
                         "Previous: the previous playlist track, or this one from the start if it's been playing a few seconds{}",
                         commands::hint(ui.ctx(), Command::PreviousTrack)
                     ))
+                    .on_disabled_hover_text(no_song)
                     .clicked()
                 {
                     self.previous_track(view.position);
@@ -1553,7 +1560,7 @@ impl App {
                 let hover = if view.paused { "Play" } else { "Pause" };
                 let hover = format!("{hover}{}", commands::hint(ui.ctx(), Command::TogglePause));
                 let play = play_button(ui.ctx(), view.paused, 18.0, egui::vec2(PLAY_WIDTH, TRANSPORT_HEIGHT));
-                if ui.add(play).on_hover_text(hover).clicked() {
+                if ui.add_enabled(has_song, play).on_hover_text(hover).on_disabled_hover_text(no_song).clicked() {
                     self.send(AudioCommand::TogglePause);
                 }
             }

@@ -299,13 +299,8 @@ impl App {
         }
     }
 
-    /// Whether another device is online: the Devices button is there.
-    pub(super) fn has_other_devices(&self) -> bool {
-        !self.devices.players.all().is_empty()
-    }
-
-    /// The Devices button, while another device is online: what each one
-    /// plays, with its controls, Join and Bring here, in a popup.
+    /// The Devices button: what each other device online plays, with its
+    /// controls, Join and Bring here, in a popup (greyed out while none is).
     pub(super) fn devices_button_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let me = self.this_device().id;
         // (Which devices' songs this one has, to continue here.)
@@ -314,6 +309,7 @@ impl App {
         let following = following.as_ref().map(|f| f.leader.as_str());
         let all = players.all();
         if all.is_empty() {
+            ui.add_enabled(false, icon_button("devices")).on_disabled_hover_text("Your other devices, when one is online: what they're playing");
             return;
         }
         let hover = match all.len() {
