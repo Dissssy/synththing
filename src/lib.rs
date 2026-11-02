@@ -72,6 +72,8 @@ mod marquee;
 mod matching;
 mod menu;
 #[cfg(not(target_os = "android"))]
+mod discord;
+#[cfg(not(target_os = "android"))]
 mod media_controls;
 mod midi_notes;
 mod offline;

@@ -58,6 +58,9 @@ pub(super) struct ApiState {
     media: Option<crate::media_controls::MediaControls>,
     /// Why the media controls couldn't start (not tried again this run).
     media_failed: Option<String>,
+    /// Showing what's playing on Discord, while that's on.
+    #[cfg(not(target_os = "android"))]
+    discord: Option<crate::discord::Discord>,
 }
 
 impl ApiState {
@@ -488,6 +491,13 @@ impl App {
                 }
             }
         }
+        if !self.config.api.discord() {
+            self.api.discord = None;
+        } else if self.api.discord.is_none() {
+            self.api.discord = Some(crate::discord::Discord::new());
+            // (Shown from scratch.)
+            self.api.seen = None;
+        }
         let Some(media) = &self.api.media else { return };
         let controls: Vec<Control> = media.controls().collect();
         for control in controls {
@@ -528,7 +538,7 @@ impl App {
             }
         }
         #[cfg(not(target_os = "android"))]
-        let media = self.api.media.is_some();
+        let media = self.api.media.is_some() || self.api.discord.is_some();
         #[cfg(target_os = "android")]
         let media = false;
         if !streams && !media {
@@ -555,10 +565,16 @@ impl App {
         let last = self.api.seen.replace((seen.clone(), view.generation, revision));
         let changed = last.as_ref().is_none_or(|(s, g, _)| *s != seen || *g != view.generation);
         #[cfg(not(target_os = "android"))]
-        if changed && self.api.media.is_some() {
+        if changed && (self.api.media.is_some() || self.api.discord.is_some()) {
             let shown = self.media_shown(view);
             if let Some(media) = &mut self.api.media {
                 media.show(&shown);
+            }
+            if let Some(discord) = &self.api.discord {
+                // (A device following another shows nothing: the one it
+                // follows shows the song.)
+                let presence = crate::discord::Presence::of(&shown, view.speed, self.playing_cover()).filter(|_| !self.following());
+                discord.show(presence);
             }
         }
         let Some((last_seen, last_generation, last_revision)) = last else { return };
@@ -653,6 +669,19 @@ impl App {
         }
     }
 
+    /// The playing song's cover as a picture online, for Discord: the one
+    /// chosen for its album, else its release's front cover at the Cover
+    /// Art Archive, once it's matched at MusicBrainz.
+    #[cfg(not(target_os = "android"))]
+    fn playing_cover(&self) -> Option<String> {
+        let online = self.songs.get(self.current_song.as_deref()?)?.online.as_ref()?;
+        match &online.art {
+            Some(crate::song_store::Art::Url(url)) => Some(url.clone()),
+            Some(_) => None,
+            None => online.release.as_ref().map(|release| format!("https://coverartarchive.org/release/{release}/front-250")),
+        }
+    }
+
     pub(super) fn api_playlist(&self) -> Option<PlaylistRef> {
         let np = self.playing_entry()?;
         let list = self.playlists.lists.get(np.list)?;
@@ -727,6 +756,12 @@ impl App {
             if let Some(why) = media_failed.as_ref().filter(|_| media) {
                 setting_row(ui, |ui| ui.colored_label(ui.visuals().error_fg_color, format!("They couldn't be reached: {why}")));
             }
+        });
+        #[cfg(not(target_os = "android"))]
+        settings_group("Discord").icon("discord-logo").show(ui, |ui| {
+            with_info(ui, "Your Discord friends see the song, its artist and its cover while one's playing, from the Discord app on this computer.", |ui| {
+                ui.checkbox(&mut settings.discord, "Show what's playing on Discord")
+            });
         });
         let hint = "Programs you run on this computer can see what's playing, browse the library, follow events and run commands.";
         let (server, failed) = (&self.api.server, &self.api.failed);

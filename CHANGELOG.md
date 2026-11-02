@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Discord (desktop): show what you're listening to on Discord, with the song, its artist, a progress bar and its album cover once it's matched online. Off until you turn it on in Preferences > Integrations > Discord; it needs the Discord app running on the same computer, and shows nothing while paused or while following another device.
+
 ## 2.4.1 (2026-11-02)
 
 ### Fixed
