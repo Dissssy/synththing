@@ -1230,6 +1230,19 @@ fn server_tab_ui(ui: &mut egui::Ui, window: &Window, actions: &mut Vec<(String, 
         }
         (None, None) => {}
     }
+    ui.add_space(8.0);
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .button("Make every preview again")
+            .on_hover_text(
+                "The newest version of every script shown gets its preview made again, one at a time (the old one \
+                 shows until then): after a change to how previews are made",
+            )
+            .clicked()
+        {
+            actions.push(("Every preview is being made again.".into(), vec![AdminAction::Rerender { script: None }]));
+        }
+    });
 }
 
 fn now() -> i64 {

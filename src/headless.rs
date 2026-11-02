@@ -76,12 +76,14 @@ fn run_inner(args: &RunScriptArgs, config: &Config) -> Result<usize, String> {
     let source = std::fs::read_to_string(&args.script)
         .map_err(|e| format!("couldn't read {}: {e}", args.script.display()))?;
 
-    let mut stage = Stage::new(source, Some(args.script.clone()), width, height, args.fps);
+    let kind = if args.song.is_some() { RecordKind::Song } else { RecordKind::Free };
+    let starting = args.video.is_some().then_some(RecordingTake { phase: RecordPhase::Preparing, kind, auto: args.auto });
+    let mut stage = Stage::new(source, Some(args.script.clone()), width, height, args.fps, starting, true);
     // A video is a recording: of the song, or free without one.
     let options = stage.visualizer.options();
     let mut take = args.video.is_some().then(|| RecordingTake {
         phase: if options.record_prepare { RecordPhase::Preparing } else { RecordPhase::Recording },
-        kind: if args.song.is_some() { RecordKind::Song } else { RecordKind::Free },
+        kind,
         auto: args.auto && options.record_auto,
     });
     if args.auto && !options.record_auto {

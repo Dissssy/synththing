@@ -413,6 +413,24 @@ fn act(state: &State, action: &AdminAction) -> Acted {
             }
             changed(n, "deleted")
         }
+        AdminAction::Rerender { script } => {
+            let newest: Vec<(String, u32)> = db
+                .prepare("SELECT id, latest FROM scripts WHERE (?1 IS NULL AND hidden = 0) OR id = ?1 ORDER BY updated DESC")
+                .and_then(|mut s| s.query_map([script], |r| Ok((r.get(0)?, r.get(1)?)))?.collect())
+                .map_err(db_error)?;
+            drop(db);
+            if script.is_some() && newest.is_empty() {
+                return Err((404, "no such script".into()));
+            }
+            let mut queued = 0;
+            for (id, version) in newest {
+                if !state.queue_preview(&id, version, true) {
+                    return Err((400, "this server doesn't make previews".into()));
+                }
+                queued += 1;
+            }
+            Ok(serde_json::json!({ "queued": queued }))
+        }
         AdminAction::Ban { target, hours, reason, hide_scripts, ban_addresses } => {
             let target = resolve_target(&db, target)?;
             if target == state.key_hex {

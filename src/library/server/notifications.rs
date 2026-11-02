@@ -119,6 +119,15 @@ pub(super) fn push(state: &State, key: &str, message: &str) -> usize {
     senders.len()
 }
 
+/// Send `message` to every open stream, whoever's (what anyone looking at
+/// the Library may want to know: a preview being made).
+pub(super) fn push_all(state: &State, message: &str) {
+    let mut streams = state.streams.lock().unwrap_or_else(|p| p.into_inner());
+    for senders in streams.senders.values_mut() {
+        senders.retain(|sender| sender.send(message.to_string()).is_ok());
+    }
+}
+
 /// Tell every admin (moderators' notifications).
 pub(super) fn notify_admins(state: &State, db: &Connection, kind: &str, data: serde_json::Value) {
     let admins: Vec<String> = db

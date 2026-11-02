@@ -231,6 +231,9 @@ pub enum AdminCommand {
     Unhide { script: String },
     /// Delete a script, every version, for good.
     Delete { script: String },
+    /// Make a script's preview again (its newest version's), or every
+    /// script's without one.
+    Rerender { script: Option<String> },
     /// Ban a key (hex, or an ID the server has seen) or an address.
     Ban {
         target: String,

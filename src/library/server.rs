@@ -351,6 +351,7 @@ pub fn start(data: &Path, bind: Option<String>) -> Result<Running, String> {
         streams: Mutex::default(),
         open_streams: AtomicUsize::new(0),
         previews: Mutex::new(previews.then_some(queue)),
+        rendering: Mutex::default(),
         pepper,
         mailer,
         intake_token,
@@ -426,8 +427,11 @@ struct State {
     /// The notification streams open, by key, and how many in all.
     streams: Mutex<notifications::Streams>,
     open_streams: AtomicUsize,
-    /// Versions to make previews of (none if previews are off).
-    previews: Mutex<Option<Sender<(String, u32)>>>,
+    /// Versions to make previews of, and whether to make one again over
+    /// the one there (none if previews are off).
+    previews: Mutex<Option<Sender<(String, u32, bool)>>>,
+    /// The version whose preview is being made now.
+    rendering: Mutex<Option<(String, u32)>>,
     /// What email addresses are hashed with, and the mail sender.
     pepper: Vec<u8>,
     mailer: mail::Mailer,
@@ -444,10 +448,18 @@ impl State {
         self.db.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn queue_preview(&self, id: &str, version: u32) {
-        if let Some(queue) = &*self.previews.lock().unwrap_or_else(|p| p.into_inner()) {
-            let _ = queue.send((id.to_string(), version));
+    /// Make a version's preview (`again`: over the one it has); false if
+    /// previews are off.
+    fn queue_preview(&self, id: &str, version: u32, again: bool) -> bool {
+        match &*self.previews.lock().unwrap_or_else(|p| p.into_inner()) {
+            Some(queue) => queue.send((id.to_string(), version, again)).is_ok(),
+            None => false,
         }
+    }
+
+    /// Whether `version` of `id` is having its preview made now.
+    fn is_rendering(&self, id: &str, version: u32) -> bool {
+        self.rendering.lock().unwrap_or_else(|p| p.into_inner()).as_ref().is_some_and(|(i, v)| i == id && *v == version)
     }
 
     fn previews_dir(&self) -> PathBuf {
@@ -460,7 +472,7 @@ impl State {
 }
 
 /// The previews thread: those never made (at startup), then each upload's.
-fn make_previews(state: &State, jobs: Receiver<(String, u32)>) {
+fn make_previews(state: &State, jobs: Receiver<(String, u32, bool)>) {
     let soundfont = match preview_soundfont(state) {
         Ok(soundfont) => soundfont,
         Err(e) => {
@@ -481,8 +493,8 @@ fn make_previews(state: &State, jobs: Receiver<(String, u32)>) {
     if !waiting.is_empty() {
         println!("making {} preview{} not made yet", waiting.len(), if waiting.len() == 1 { "" } else { "s" });
     }
-    for (id, version) in waiting.into_iter().chain(jobs.iter()) {
-        make_preview(state, &soundfont, &id, version);
+    for (id, version, again) in waiting.into_iter().map(|(id, version)| (id, version, false)).chain(jobs.iter()) {
+        make_preview(state, &soundfont, &id, version, again);
     }
 }
 
@@ -502,20 +514,36 @@ fn preview_soundfont(state: &State) -> Result<PathBuf, String> {
     }
 }
 
-/// Make one version's preview (unless it has one), and note what came of it.
-fn make_preview(state: &State, soundfont: &Path, id: &str, version: u32) {
+/// Make one version's preview (unless it has one, or `again`), and note
+/// what came of it. Everyone listening is told it's being made, and when
+/// it's done (`PreviewEvent`).
+fn make_preview(state: &State, soundfont: &Path, id: &str, version: u32, again: bool) {
     // (Songs have none: the app plays theirs.)
     let source: Option<String> = state
         .db()
         .query_row(
-            "SELECT source FROM versions WHERE script_id = ? AND version = ? AND preview IS NULL",
-            params![id, version],
+            "SELECT source FROM versions WHERE script_id = ? AND version = ? AND (preview IS NULL OR ?)",
+            params![id, version, again],
             |r| r.get(0),
         )
         .optional()
         .ok()
         .flatten();
     let Some(source) = source else { return };
+    *state.rendering.lock().unwrap_or_else(|p| p.into_inner()) = Some((id.to_string(), version));
+    tell_preview(state, id, version, true);
+    make_preview_now(state, soundfont, id, version, source);
+    *state.rendering.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    tell_preview(state, id, version, false);
+}
+
+/// Tell everyone listening that a preview is being made, or is done.
+fn tell_preview(state: &State, id: &str, version: u32, rendering: bool) {
+    let event = super::PreviewEventMessage { preview: super::PreviewEvent { script: id.to_string(), version, rendering } };
+    notifications::push_all(state, &serde_json::to_string(&event).unwrap_or_default());
+}
+
+fn make_preview_now(state: &State, soundfont: &Path, id: &str, version: u32, source: String) {
     let work = state.previews_dir().join("work");
     let _ = std::fs::remove_dir_all(&work);
     let script = work.join(format!("{id}.lua"));
@@ -1171,6 +1199,8 @@ fn details(state: &State, id: &str, query: &HashMap<String, String>) -> Reply {
                         app_version: r.get(2)?,
                         created: r.get(3)?,
                         min_app_version: r.get(4)?,
+                        rendering: state.is_rendering(id, r.get(0)?),
+                        preview_rev: preview_rev(state, id, r.get(0)?),
                         preview: match r.get::<_, Option<String>>(5)?.as_deref() {
                             Some("animated") => Preview::Animated,
                             Some("still") => Preview::Still,
@@ -1221,6 +1251,16 @@ fn source(state: &State, id: &str, query: &HashMap<String, String>) -> Reply {
         Ok(None) => error(404, "no such version"),
         Err(e) => error(500, format!("database: {e}")),
     }
+}
+
+/// Which making of a version's preview the server has: when its still
+/// was written, in seconds (0 for none).
+fn preview_rev(state: &State, id: &str, version: u32) -> u64 {
+    std::fs::metadata(state.preview_file(id, version, false))
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs())
 }
 
 /// `GET /api/v1/scripts/{id}/preview.png` (or `preview-sheet.png`):
@@ -1560,7 +1600,7 @@ fn upload(state: &State, request: &mut Request, ip: &str) -> Reply {
         });
     }
     drop(db);
-    state.queue_preview(&id, version);
+    state.queue_preview(&id, version, false);
     let who = author_id.map(|id| format!(" (#{id})")).unwrap_or_default();
     println!("uploaded {id} v{version} \"{}\" by {}{who} from {ip}", upload.name, upload.author_name);
     json(201, &signed_receipt(state, id, version, sha256))
