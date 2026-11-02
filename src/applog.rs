@@ -49,9 +49,14 @@ static LOGGER: OnceLock<Logger> = OnceLock::new();
 
 impl Log for Logger {
     /// The app's own messages from Info up; other crates (egui, wgpu, ...)
-    /// only from Warn up, they're chatty.
+    /// only from Warn up, they're chatty. Nothing from symphonia: it logs
+    /// files it can't read (even at error level, "probe reach EOF") that
+    /// it also hands back as an `Err`, which the app handles where it
+    /// probes (no info, no picture, or ffmpeg instead).
     fn enabled(&self, metadata: &Metadata) -> bool {
-        if metadata.target().starts_with("synththing") {
+        if metadata.target().starts_with("symphonia") {
+            false
+        } else if metadata.target().starts_with("synththing") {
             metadata.level() <= Level::Info
         } else {
             metadata.level() <= Level::Warn
