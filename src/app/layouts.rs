@@ -1,17 +1,19 @@
 //! The Layout menu on the title bar: the layouts (arrangements under a
 //! name) to switch between, locking one, making a new one (from the
-//! current arrangement or a template), the Edit layouts window (rename or
-//! delete one), and the mobile layout.
+//! current arrangement or a template), the Edit layouts window (order,
+//! rename or delete them), and the mobile layout.
 
 use eframe::egui;
 
-use super::{fit_width, layout, row_icon_button, row_icon_button_room, setting_row, settings_group, App};
+use super::reorder::{reorder_list, trash_ui, ListEntry};
+use super::{fit_width, layout, row_icon_button, row_icon_button_room, settings_group, App};
 
 /// What the Edit layouts window is in the middle of.
 #[derive(Default)]
 pub(super) struct Editing {
-    /// The saved layout being renamed, and its new name so far.
-    renaming: Option<(usize, String)>,
+    /// The saved layout being renamed (by its name), and its new name so
+    /// far.
+    renaming: Option<(String, String)>,
     /// The rename's field still has to take the keyboard.
     focus: bool,
     /// The saved layout asked to be deleted, waiting to be confirmed.
@@ -29,7 +31,7 @@ pub(super) struct NewLayout {
 /// What the menu or the window asked for.
 enum Ask {
     Switch(String),
-    Rename(usize, String),
+    Rename(String, String),
     Delete(usize),
     Lock(String, bool),
 }
@@ -84,75 +86,87 @@ impl App {
         }
     }
 
-    /// Edit layouts: a section of the layouts, one per row, the showing one
-    /// marked, with New layout and Close in its header; a pencil by its name renames it in place, the trash at the
-    /// row's end deletes it (asking first, in a dialog of its own).
+    /// Edit layouts: a section of the layouts, one per row in the Layout
+    /// menu's order, the showing one marked, with New layout and Close in
+    /// its header. A row's grip drags it to its place, or onto the header's
+    /// trash to delete it (asking first, in a dialog of its own); a pencil by
+    /// its name renames it in place.
     pub(super) fn layout_edit_ui(&mut self, ctx: &egui::Context) {
         let Some(editing) = &mut self.layout_edit else { return };
         let active = self.config.active_layout.as_deref();
-        let presets = &self.config.layout_presets;
+        let presets = &mut self.config.layout_presets;
+        let len = presets.len();
+        let order: Vec<String> = presets.iter().map(|p| p.name.clone()).collect();
         let mut ask = None;
         let mut close = false;
         let mut add = false;
         let mut stop_renaming = false;
+        // (Renaming stops when a row's dragged.)
+        if egui::DragAndDrop::has_any_payload(ctx) {
+            editing.renaming = None;
+        }
         let response = egui::Modal::new(egui::Id::new("edit_layouts")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 400.0));
             let mut buttons = |ui: &mut egui::Ui| {
                 close = ui.add(row_icon_button(ui, "x")).on_hover_text("Close").clicked();
                 add = ui.add(row_icon_button(ui, "plus")).on_hover_text("New layout: from this arrangement, or from a template").clicked();
+                trash_ui(ui, "layouts", len);
             };
-            let group = settings_group("Layouts").icon("layout").hint("Add, rename or delete them. Switch between them from the Layout menu.");
+            let group = settings_group("Layouts").icon("layout").hint("Drag to put them in order, or onto the trash to delete one. Switch between them from the Layout menu.");
             group.buttons(&mut buttons).show(ui, |ui| {
-                for (n, saved) in presets.iter().enumerate() {
-                    setting_row(ui, |ui| match &mut editing.renaming {
-                        Some((at, name)) if *at == n => {
-                            let focus = &mut editing.focus;
-                            let taken = presets.iter().enumerate().any(|(i, p)| i != n && p.name.eq_ignore_ascii_case(name.trim()));
-                            let fine = !name.trim().is_empty() && !taken;
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.add(row_icon_button(ui, "x")).on_hover_text("Cancel").clicked() {
-                                    stop_renaming = true;
-                                    return;
-                                }
-                                let save = ui
-                                    .add_enabled(fine, row_icon_button(ui, "check"))
-                                    .on_hover_text("Rename")
-                                    .on_disabled_hover_text(if taken { "Another layout has this name" } else { "Give it a name" });
-                                let field = ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()));
-                                if *focus {
-                                    field.request_focus();
-                                    *focus = false;
-                                }
-                                if fine && (save.clicked() || (field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))) {
-                                    ask = Some(Ask::Rename(n, name.trim().to_string()));
-                                }
-                            });
-                        }
-                        _ => {
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.add(row_icon_button(ui, "trash")).on_hover_text("Delete this layout").clicked() {
-                                    editing.deleting = Some(n);
-                                    editing.renaming = None;
-                                }
-                                if active == Some(saved.name.as_str()) {
-                                    ui.weak("Showing");
-                                }
-                                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                    ui.scope(|ui| {
-                                        ui.set_max_width(ui.available_width() - row_icon_button_room(ui));
-                                        ui.add(egui::Label::new(&saved.name).truncate());
-                                    });
-                                    if ui.add(row_icon_button(ui, "pencil-simple")).on_hover_text("Rename this layout").clicked() {
-                                        editing.renaming = Some((n, saved.name.clone()));
-                                        editing.focus = true;
-                                    }
+                let entry = |_: usize, _: &layout::SavedLayout| ListEntry { lines: Vec::new(), row: true };
+                let row = |ui: &mut egui::Ui, saved: &layout::SavedLayout| match &mut editing.renaming {
+                    Some((old, name)) if *old == saved.name => {
+                        let taken = order.iter().any(|other| *other != saved.name && other.eq_ignore_ascii_case(name.trim()));
+                        let fine = !name.trim().is_empty() && !taken;
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(row_icon_button(ui, "x")).on_hover_text("Cancel").clicked() {
+                                stop_renaming = true;
+                                return;
+                            }
+                            let save = ui
+                                .add_enabled(fine, row_icon_button(ui, "check"))
+                                .on_hover_text("Rename")
+                                .on_disabled_hover_text(if taken { "Another layout has this name" } else { "Give it a name" });
+                            let field = ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()));
+                            if editing.focus {
+                                field.request_focus();
+                                editing.focus = false;
+                            }
+                            if fine && (save.clicked() || (field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))) {
+                                ask = Some(Ask::Rename(old.clone(), name.trim().to_string()));
+                            }
+                        });
+                    }
+                    _ => {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if active == Some(saved.name.as_str()) {
+                                ui.weak("Showing");
+                            }
+                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                ui.scope(|ui| {
+                                    ui.set_max_width(ui.available_width() - row_icon_button_room(ui));
+                                    ui.add(egui::Label::new(&saved.name).truncate());
                                 });
+                                if ui.add(row_icon_button(ui, "pencil-simple")).on_hover_text("Rename this layout").clicked() {
+                                    editing.renaming = Some((saved.name.clone(), saved.name.clone()));
+                                    editing.focus = true;
+                                }
                             });
-                        }
-                    });
+                        });
+                    }
+                };
+                if let Some(n) = reorder_list(ui, "layouts", presets, entry, row) {
+                    editing.deleting = Some(n);
                 }
             });
         });
+        let reordered = presets.iter().map(|p| &p.name).ne(order.iter());
+        if reordered && let Err(e) = self.config.save() {
+            self.status = format!("Couldn't save the layouts: {e}");
+        }
+        let Some(editing) = &mut self.layout_edit else { return };
+        let presets = &self.config.layout_presets;
         // (A new layout's dialog shows over this one, which lists it once
         // it's made.)
         if add {
@@ -205,8 +219,9 @@ impl App {
                     self.status = format!("Couldn't save the layouts: {e}");
                 }
             }
-            Ask::Rename(n, name) => {
-                let old = std::mem::replace(&mut self.config.layout_presets[n].name, name.clone());
+            Ask::Rename(old, name) => {
+                let Some(saved) = self.config.layout_presets.iter_mut().find(|p| p.name == old) else { return };
+                saved.name = name.clone();
                 if self.config.locked_layouts.remove(&old) {
                     self.config.locked_layouts.insert(name.clone());
                 }
