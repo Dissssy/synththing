@@ -312,18 +312,21 @@ fn wished_veil(ui: &egui::Ui, rect: egui::Rect) {
 }
 
 /// Draw only the rows of `heights` in sight, in a scroll area filling
-/// `ui`, each by `draw` into the rect it's given.
+/// `ui`, each by `draw` into the rect it's given. Rows are the item
+/// spacing apart, as a `select_list`'s are, so `select_list::paint_row`
+/// stripes and outlines them the same (its stripes reach into that gap).
 fn virtual_rows(ui: &mut egui::Ui, id: impl egui::AsIdSalt, heights: &[f32], mut draw: impl FnMut(&mut egui::Ui, egui::Rect, usize)) {
+    let gap = ui.spacing().item_spacing.y;
     egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
         let width = ui.available_width();
         let origin = ui.max_rect().min;
-        ui.set_min_height(heights.iter().sum());
+        ui.set_min_height(heights.iter().sum::<f32>() + gap * heights.len().saturating_sub(1) as f32);
         let mut top = 0.0;
         for (i, &height) in heights.iter().enumerate() {
             if top + height >= viewport.min.y && top <= viewport.max.y {
                 draw(ui, egui::Rect::from_min_size(origin + egui::vec2(0.0, top), egui::vec2(width, height)), i);
             }
-            top += height;
+            top += height + gap;
         }
     });
 }
