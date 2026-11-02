@@ -1383,7 +1383,7 @@ mod tests {
         admin_of(&AdminAction::UsageRules { set: Some(vec!["warn * keep".into(), "info synththing::sync keep".into()]) });
         assert_eq!(usage_rules(&base).unwrap(), vec!["warn * keep", "info synththing::sync keep"]);
 
-        let line = |level: &str, target: &str| UsageLine { level: level.into(), target: target.into(), signature: format!("{target}:1"), count: 2 };
+        let line = |level: &str, target: &str| UsageLine { level: level.into(), target: target.into(), signature: format!("{target}:1"), count: 2, ..Default::default() };
         let report = UsageReport {
             perf: Vec::new(),
             version: "1.7.0".into(),

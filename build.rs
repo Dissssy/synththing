@@ -509,7 +509,7 @@ fn log_calls(text: &str) -> Vec<(usize, usize)> {
 }
 
 /// The first string literal in a call's arguments, after a `target: ...,`
-/// if there is one, as it's written (escapes and all, `\` line
+/// and key-values (`page, side;`) if there are any, as it's written (escapes and all, `\` line
 /// continuations joined up).
 fn format_string(args: &str) -> Option<String> {
     let mut rest = args.trim_start();
@@ -533,6 +533,11 @@ fn format_string(args: &str) -> Option<String> {
             }
         })?;
         rest = after[comma.0 + 1..].trim_start();
+    }
+    if !rest.starts_with('"') {
+        // Key-values first (`page, side = x; "..."`, what usage data may
+        // send): up to the `;` outside strings.
+        rest = rest[rest.find(';')? + 1..].trim_start();
     }
     let body = rest.strip_prefix('"')?;
     let mut out = String::new();

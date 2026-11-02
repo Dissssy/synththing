@@ -275,8 +275,8 @@ pub enum AdminCommand {
         note: String,
     },
     /// Anonymous usage data, as a tree: versions, then (under a version)
-    /// platforms, levels, targets and signatures, each with its total, the
-    /// count new since intake last took it, and app starts.
+    /// platforms, levels, targets, signatures and marked values, each with
+    /// its total, the count new since intake last took it, and app starts.
     Usage {
         /// Where in the tree: e.g. `1.7.0 "windows x86_64" warn`.
         path: Vec<String>,

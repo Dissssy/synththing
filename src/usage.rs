@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use crate::build_info::{self, Channel};
 use crate::library::usage::{
     frame_bucket, kept, parse_rules, Hardware, PerfGroup, PerfSettings, SectionStat, UsageLine, UsageReport, FRAME_BUCKETS_US,
-    MAX_PERF_GROUPS, MAX_PERF_SECTIONS, MAX_USAGE_LINES, MAX_USAGE_TEXT,
+    MAX_DETAIL_VALUE, MAX_PERF_GROUPS, MAX_PERF_SECTIONS, MAX_USAGE_LINES, MAX_USAGE_TEXT,
 };
 use crate::library::{client, official_url};
 
@@ -61,11 +61,11 @@ struct Counts {
 }
 
 impl Counts {
-    fn add(&mut self, level: &str, target: String, signature: String) {
+    fn add(&mut self, level: &str, target: String, signature: String, details: String) {
         let full = self.lines.len() >= MAX_USAGE_LINES;
-        match self.lines.iter_mut().find(|l| l.level == level && l.target == target && l.signature == signature) {
+        match self.lines.iter_mut().find(|l| l.level == level && l.target == target && l.signature == signature && l.details == details) {
             Some(line) => line.count += 1,
-            None if !full => self.lines.push(UsageLine { level: level.to_string(), target, signature, count: 1 }),
+            None if !full => self.lines.push(UsageLine { level: level.to_string(), target, signature, details, count: 1 }),
             None => {}
         }
     }
@@ -75,7 +75,11 @@ impl Counts {
     fn subtract(&mut self, sent: &Counts) {
         self.sessions = self.sessions.saturating_sub(sent.sessions);
         for line in &sent.lines {
-            if let Some(mine) = self.lines.iter_mut().find(|l| l.level == line.level && l.target == line.target && l.signature == line.signature) {
+            if let Some(mine) = self
+                .lines
+                .iter_mut()
+                .find(|l| l.level == line.level && l.target == line.target && l.signature == line.signature && l.details == line.details)
+            {
                 mine.count = mine.count.saturating_sub(line.count);
             }
         }
@@ -185,7 +189,31 @@ pub fn count(record: &Record) {
         _ => return,
     };
     let signature = signature(record.module_path().unwrap_or(record.target()), record.line(), record.args().as_str());
-    loaded(&mut lock()).add(level, clip(record.target(), MAX_USAGE_TEXT), signature);
+    let details = details(record.key_values());
+    loaded(&mut lock()).add(level, clip(record.target(), MAX_USAGE_TEXT), signature, details);
+}
+
+/// The values a log call marked as fine to send: its key-values
+/// (`log::warn!(page, side; "...")`), as `key=value key=value`. Only for
+/// fixed words from the code (a page's name, a kind of thing, a state):
+/// everything else a line was filled in with stays on the device. As a
+/// guard against a mistake, a value that doesn't look like one (too long,
+/// or with anything but letters, digits, spaces and `_ - . : ,`) is sent
+/// as `?`.
+fn details(source: &dyn log::kv::Source) -> String {
+    struct Collect(Vec<String>);
+    impl<'kvs> log::kv::VisitSource<'kvs> for Collect {
+        fn visit_pair(&mut self, key: log::kv::Key<'kvs>, value: log::kv::Value<'kvs>) -> Result<(), log::kv::Error> {
+            let value = value.to_string();
+            let plain = value.chars().count() <= MAX_DETAIL_VALUE
+                && value.chars().all(|c| c.is_alphanumeric() || matches!(c, ' ' | '_' | '-' | '.' | ':' | ','));
+            self.0.push(format!("{key}={}", if plain { value.as_str() } else { "?" }));
+            Ok(())
+        }
+    }
+    let mut collect = Collect(Vec::new());
+    let _ = source.visit(&mut collect);
+    clip(&collect.0.join(" "), MAX_USAGE_TEXT)
 }
 
 /// Count a panic and save it at once: the app may be going down. (From
@@ -205,7 +233,7 @@ pub fn panicked(info: &std::panic::PanicHookInfo) {
         .or_else(|| info.payload().downcast_ref::<String>().cloned())
         .unwrap_or_default();
     let counts = loaded(&mut counts);
-    counts.add("panic", thread, clip(&format!("{place}: {}", clean(&message)), MAX_USAGE_TEXT));
+    counts.add("panic", thread, clip(&format!("{place}: {}", clean(&message)), MAX_USAGE_TEXT), String::new());
     counts.panicked = true;
     save(counts);
 }
@@ -444,6 +472,16 @@ mod tests {
     }
 
     #[test]
+    fn only_marked_values_are_sent() {
+        let page = "Songs";
+        let name = "My Song (live).mid";
+        let kvs: [(&str, log::kv::Value); 3] = [("page", page.into()), ("side", "right".into()), ("name", name.into())];
+        assert_eq!(details(&kvs.as_slice()), "page=Songs side=right name=?", "what doesn't look like a word from the code isn't sent");
+        let none: [(&str, log::kv::Value); 0] = [];
+        assert_eq!(details(&none.as_slice()), "");
+    }
+
+    #[test]
     fn panic_messages_lose_what_could_be_personal() {
         assert_eq!(
             clean("index out of bounds: the len is 3 but the index is 15"),
@@ -485,10 +523,10 @@ mod tests {
     #[test]
     fn a_sent_report_leaves_what_came_in_since() {
         let mut counts = Counts { sessions: 2, panicked: true, ..Default::default() };
-        counts.add("warn", "a".into(), "a:1".into());
+        counts.add("warn", "a".into(), "a:1".into(), String::new());
         let sent = counts.clone();
-        counts.add("warn", "a".into(), "a:1".into());
-        counts.add("error", "b".into(), "b:2".into());
+        counts.add("warn", "a".into(), "a:1".into(), String::new());
+        counts.add("error", "b".into(), "b:2".into(), String::new());
         counts.subtract(&sent);
         assert_eq!(counts.sessions, 0);
         assert!(!counts.panicked);

@@ -4331,6 +4331,16 @@ impl eframe::App for App {
     /// keeps polling either way.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
         frame_timing::begin(ctx.input(|i| i.viewport().inner_rect).map(|r| r.size()));
+        let (minimized, focused) = ctx.input(|i| (i.viewport().minimized.unwrap_or(false), i.viewport().focused.unwrap_or(true)));
+        frame_timing::set_window(if self.hidden {
+            frame_timing::Window::Hidden
+        } else if minimized {
+            frame_timing::Window::Minimized
+        } else if focused {
+            frame_timing::Window::Focused
+        } else {
+            frame_timing::Window::Unfocused
+        });
         frame_timing::time("tick", || self.tick(ctx));
         frame_timing::logic_done();
     }

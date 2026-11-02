@@ -123,7 +123,8 @@ pub fn run(args: &AdminArgs) -> Result<(), String> {
             }
             for node in nodes {
                 let sessions = node.sessions.map(|n| format!(", {n} app starts")).unwrap_or_default();
-                println!("{:>8} ({} new{sessions})  {}", node.total, node.new, node.name);
+                let name = if node.name.is_empty() { "(nothing marked)" } else { node.name.as_str() };
+                println!("{:>8} ({} new{sessions})  {name}", node.total, node.new);
             }
         }
         AdminCommand::UsagePerf { version } => {

@@ -158,6 +158,7 @@ fn background_ticks(app: Arc<Mutex<App>>, last_frame: Arc<Mutex<Instant>>, ctx: 
             std::thread::sleep(BACKGROUND_TICK);
             let idle = last_frame.lock().unwrap().elapsed() > BACKGROUND_TICK * 2;
             if idle {
+                crate::frame_timing::set_window(crate::frame_timing::Window::Background);
                 let mut app = app.lock().unwrap();
                 if !background {
                     app.backgrounded();
@@ -202,7 +203,7 @@ fn call<R>(what: &str, f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Res
     let mut env = match vm.attach_current_thread_permanently() {
         Ok(env) => env,
         Err(e) => {
-            log::warn!("{what}: couldn't attach to the JVM: {e}");
+            log::warn!(what; "{what}: couldn't attach to the JVM: {e}");
             return None;
         }
     };
@@ -210,12 +211,12 @@ fn call<R>(what: &str, f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Res
         Ok(r) => Ok(Some(r)),
         Err(e) => {
             let exception = java_exception(env);
-            log::warn!("{what}: {}", exception.unwrap_or_else(|| e.to_string()));
+            log::warn!(what; "{what}: {}", exception.unwrap_or_else(|| e.to_string()));
             Ok(None)
         }
     });
     result.unwrap_or_else(|e: jni::errors::Error| {
-        log::warn!("{what}: {e}");
+        log::warn!(what; "{what}: {e}");
         None
     })
 }
