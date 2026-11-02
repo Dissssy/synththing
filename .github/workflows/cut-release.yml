@@ -26,7 +26,7 @@ on:
 
 permissions:
   contents: read
-  checks: read
+  actions: write  # cancels master's test builds
 
 concurrency:
   group: cut-release
@@ -38,32 +38,51 @@ jobs:
     if: github.ref == 'refs/heads/master'
     runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
     steps:
-      # Only a commit CI passed is released: wait for master's required
-      # checks on this commit (they may still be running after a merge),
-      # and stop if any of them failed.
+      # Only a commit CI passed is released. Master's test builds are
+      # cancelled first, except on a dry run (the release commit makes its own nightly), then
+      # every other workflow run on this commit is waited for (they may
+      # still be running after a merge): if any of them fails, this stops
+      # here, before anything is committed, tagged or pushed.
       - name: Wait for CI on ${{ github.sha }}
         uses: actions/github-script@v8
         with:
           script: |
-            const required = ['test', 'linux', 'android', 'docs'];
+            const own = await github.rest.actions.getWorkflowRun({ ...context.repo, run_id: context.runId });
+            const isTestBuild = run => run.path === '.github/workflows/test-builds.yml';
+            const isOwn = run => run.workflow_id === own.data.workflow_id;
+            const unfinished = run => run.status !== 'completed';
+
+            const testBuilds = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              ...context.repo, branch: 'master', per_page: 100,
+            });
+            // (Not on a dry run, which changes nothing.)
+            const dryRun = ${{ inputs.dry_run }};
+            for (const run of testBuilds.filter(r => !dryRun && isTestBuild(r) && unfinished(r))) {
+              core.info(`cancelling test build ${run.html_url}`);
+              await github.rest.actions.cancelWorkflowRun({ ...context.repo, run_id: run.id });
+            }
+
             const deadline = Date.now() + 90 * 60 * 1000;
             while (true) {
-              const runs = await github.paginate(github.rest.checks.listForRef, {
-                ...context.repo, ref: context.sha, per_page: 100,
-              });
-              // The newest run of each check (a re-run replaces the old one).
+              const runs = (await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                ...context.repo, head_sha: context.sha, per_page: 100,
+              })).filter(r => !isTestBuild(r) && !isOwn(r));
+              // The newest run of each workflow (each lists its latest attempt).
               const latest = {};
               for (const run of runs) {
-                if (!required.includes(run.name)) continue;
-                if (!latest[run.name] || run.id > latest[run.name].id) latest[run.name] = run;
+                const prev = latest[run.workflow_id];
+                if (!prev || run.id > prev.id) latest[run.workflow_id] = run;
               }
-              const failed = required.filter(n => latest[n]?.status === 'completed' && latest[n].conclusion !== 'success');
-              if (failed.length) core.setFailed(`CI failed on ${context.sha}: ${failed.join(', ')}`);
-              if (failed.length) return;
-              const waiting = required.filter(n => latest[n]?.status !== 'completed');
-              if (!waiting.length) return core.info('CI passed');
-              if (Date.now() > deadline) return core.setFailed(`CI still hasn't finished: ${waiting.join(', ')}`);
-              core.info(`waiting for ${waiting.join(', ')}`);
+              const all = Object.values(latest);
+              const failed = all.filter(r => !unfinished(r) && !['success', 'skipped', 'neutral'].includes(r.conclusion));
+              if (failed.length) {
+                return core.setFailed(`CI failed on ${context.sha}, nothing released: ${failed.map(r => `${r.name} (${r.conclusion}) ${r.html_url}`).join(', ')}`);
+              }
+              const waiting = all.filter(unfinished);
+              if (!all.some(r => r.name === 'CI')) core.info('CI hasn\'t started on this commit yet');
+              else if (!waiting.length) return core.info(`passed: ${all.map(r => r.name).join(', ')}`);
+              if (Date.now() > deadline) return core.setFailed('CI still hasn\'t finished after 90 minutes, nothing released');
+              if (waiting.length) core.info(`waiting for ${waiting.map(r => r.name).join(', ')}`);
               await new Promise(r => setTimeout(r, 30000));
             }
 
