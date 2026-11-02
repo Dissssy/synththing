@@ -399,10 +399,13 @@ impl App {
                         ui.add(egui::Label::new(name.as_str()).truncate());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if library
-                                && ui
-                                    .add(row_icon_button(ui, "trash"))
-                                    .on_hover_text("Remove from all devices: your other devices delete it too, until one imports it again")
-                                    .clicked()
+                                && super::confirm_button(
+                                    ui,
+                                    ("remove_everywhere", &key),
+                                    row_icon_button(ui, "trash"),
+                                    "Remove from all devices: your other devices delete it too, until one imports it again",
+                                    "Really remove everywhere?",
+                                )
                             {
                                 everywhere = Some(key.clone());
                             }
@@ -438,10 +441,13 @@ impl App {
         let hint = "Every device removed these, or only devices that are gone had them. Your library still lists them, as unavailable.";
         settings_group(&title).icon("cloud-slash").hint(hint).closable("sync_unheld").show(ui, |ui| {
             setting_row(ui, |ui| {
-                clear = ui
-                    .button(format!("{}  Clear them from your library", icon("trash")))
-                    .on_hover_text("Your other devices stop listing them too. Playlists keep them, as unavailable.")
-                    .clicked();
+                clear = super::confirm_button(
+                    ui,
+                    "clear_unheld",
+                    egui::Button::new(format!("{}  Clear them from your library", icon("trash"))),
+                    "Your other devices stop listing them too. Playlists keep them, as unavailable.",
+                    "Really clear them?",
+                );
             });
             egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
                 for key in unheld {

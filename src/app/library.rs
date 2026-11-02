@@ -231,7 +231,6 @@ pub struct LibraryState {
     /// it's just been opened (or brought back), and searches again.
     drawn_at: u64,
     /// Delete was clicked once (for this script); the next click confirms.
-    confirm_delete: Option<String>,
     publish: Option<PublishDraft>,
     /// Installed scripts by ID, and by (author ID, slug) (bundled ones
     /// don't know their ID until they're first checked): their file and
@@ -279,7 +278,6 @@ impl LibraryState {
             encoring: false,
             document: None,
             drawn_at: 0,
-            confirm_delete: None,
             publish: None,
             installed: HashMap::new(),
             installed_by_slug: HashMap::new(),
@@ -583,7 +581,6 @@ impl App {
                             self.library.results.insert(0, details.summary.clone());
                         }
                         self.library.selected = Some(id);
-                        self.library.confirm_delete = None;
                         self.fetch_library_preview(&details);
                         self.library.details = Some(details);
                     }
@@ -673,12 +670,10 @@ impl App {
     pub(super) fn library_close_details(&mut self) {
         self.library.selected = None;
         self.library.details = None;
-        self.library.confirm_delete = None;
     }
 
     /// Show a script in the Library's details.
     pub(super) fn library_open_script(&mut self, id: String) {
-        self.library.confirm_delete = None;
         self.library.selected = Some(id.clone());
         self.library.details = None;
         let viewer = self.library.identity.as_ref().map(Identity::public);
@@ -1046,9 +1041,6 @@ impl App {
         }
 
         if let Some(id) = pick {
-            if self.library.selected.as_ref() != Some(&id) {
-                self.library.confirm_delete = None;
-            }
             self.library.selected = Some(id.clone());
             self.library.details = None;
             let viewer = self.library.identity.as_ref().map(Identity::public);
@@ -1075,7 +1067,6 @@ impl App {
             });
         }
         if let Some(id) = delete {
-            self.library.confirm_delete = None;
             match Identity::load() {
                 Some(identity) => {
                     self.library.busy = true;
@@ -1245,19 +1236,11 @@ impl App {
                 }
             }
             if s.author_id.is_some() && s.author_id == my_id {
-                let confirming = self.library.confirm_delete.as_ref() == Some(&id);
-                let label = if confirming { "Click again to delete it" } else { "Delete" };
-                if ui
-                    .add_enabled(!self.library.busy, egui::Button::new(label))
-                    .on_hover_text("Take it off the server, every version (your copy stays)")
-                    .clicked()
-                {
-                    if confirming {
+                ui.add_enabled_ui(!self.library.busy, |ui| {
+                    if super::confirm_button(ui, ("published", &id), egui::Button::new("Delete"), "Take it off the server, every version (your copy stays)", "Really delete?") {
                         act.delete = Some(id.clone());
-                    } else {
-                        self.library.confirm_delete = Some(id.clone());
                     }
-                }
+                });
             }
         });
         // Encores and reports (not of your own).

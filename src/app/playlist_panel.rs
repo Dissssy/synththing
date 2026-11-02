@@ -252,7 +252,6 @@ impl App {
                 self.playlists_changed();
                 self.viewed_playlist = Some(idx);
                 self.playlist_rename = None;
-                self.confirm_delete_playlist = false;
                 self.playlist_selection.clear();
             }
             Err(e) => self.status = format!("Couldn't create playlist: {e}"),
@@ -664,7 +663,6 @@ impl App {
         let size = page_art(phone);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), page_header_height(size)), egui::Sense::hover());
         let rename = &mut self.playlist_rename;
-        let confirm_delete = &mut self.confirm_delete_playlist;
         let mut renamed = None;
         let mut press = None;
         let from = image.as_deref().map(AlbumArtSource::image).unwrap_or_default();
@@ -723,19 +721,8 @@ impl App {
                 if ui.add(super::icon_button("export")).on_hover_text("Export .m3u...: save as an .m3u8 playlist other players can open").clicked() {
                     press = Some(Press::Export);
                 }
-                let response = if *confirm_delete {
-                    ui.add(egui::Button::new(egui::RichText::new("Really delete?").color(ui.visuals().error_fg_color)))
-                } else {
-                    ui.add(super::icon_button("trash")).on_hover_text("Delete this playlist")
-                };
-                if response.clicked() {
-                    if *confirm_delete {
-                        press = Some(Press::Delete);
-                    }
-                    *confirm_delete = !*confirm_delete;
-                } else if *confirm_delete && ui.input(|i| i.pointer.any_click()) {
-                    // Any click elsewhere backs out of the confirmation.
-                    *confirm_delete = false;
+                if super::confirm_button(ui, ("playlist", list), super::icon_button("trash"), "Delete this playlist", "Really delete?") {
+                    press = Some(Press::Delete);
                 }
             });
         });

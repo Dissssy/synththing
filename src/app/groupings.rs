@@ -563,7 +563,6 @@ impl App {
         self.viewed_playlist = list;
         self.playlist_rename = None;
         self.playlist_find.clear();
-        self.confirm_delete_playlist = false;
         self.playlist_selection.clear();
     }
 
