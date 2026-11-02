@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 2.4.1 (2026-11-02)
+
 ### Fixed
 - The first section of a page (as in What's new, Preferences and Edit layouts) no longer stretches its heading down the whole window, pushing what's in it out of sight.
 
