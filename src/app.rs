@@ -1830,16 +1830,20 @@ impl App {
             log_file_note_ui(ui);
         }
         ui.separator();
-        egui::ScrollArea::both()
+        let scroll = egui::ScrollArea::both()
             .id_salt("app_log_scroll")
             .max_height(if page { f32::INFINITY } else { 420.0 })
             .auto_shrink([false, !page])
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                if shown.is_empty() {
-                    ui.weak("(nothing)");
-                }
-                for entry in &shown {
+            .stick_to_bottom(true);
+        if shown.is_empty() {
+            scroll.show(ui, |ui| ui.weak("(nothing)"));
+        } else {
+            // (Only the lines in sight: there are up to thousands, and
+            // laying them all out cost tens of milliseconds a frame on a
+            // phone. Each is one line, never wrapped.)
+            let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
+            scroll.show_rows(ui, row_height, shown.len(), |ui, rows| {
+                for entry in &shown[rows] {
                     let color = match entry.level {
                         log::Level::Error => egui::Color32::from_rgb(220, 90, 90),
                         log::Level::Warn => egui::Color32::from_rgb(220, 180, 80),
@@ -1848,6 +1852,7 @@ impl App {
                     ui.add(egui::Label::new(egui::RichText::new(entry.line()).monospace().color(color)).extend());
                 }
             });
+        }
         if !page {
             ui.separator();
             log_file_note_ui(ui);

@@ -253,7 +253,7 @@ pub struct DeviceSync {
     /// Listening for songs streamed here: set to stop.
     listener: Option<Arc<AtomicBool>>,
     /// The songs this device wants, and by relay ID, for the listener.
-    wanted: BTreeSet<String>,
+    /// The songs wanted, by their relay IDs (the sync worker keeps it).
     wanted_ids: Arc<Mutex<HashMap<String, String>>>,
     /// How the songs being moved are going.
     progress: Progress,
@@ -315,7 +315,8 @@ enum Moving {
 impl Default for DeviceSync {
     fn default() -> Self {
         let events = mpsc::channel();
-        let worker = songs::spawn(events.0.clone());
+        let wanted_ids = Arc::default();
+        let worker = songs::spawn(events.0.clone(), Arc::clone(&wanted_ids));
         Self {
             on: false,
             for_identity: None,
@@ -333,8 +334,7 @@ impl Default for DeviceSync {
             sends_paused: None,
             given: BTreeMap::new(),
             listener: None,
-            wanted: BTreeSet::new(),
-            wanted_ids: Arc::default(),
+            wanted_ids,
             progress: Progress::default(),
             worker,
             songs_pending: false,
@@ -1040,13 +1040,6 @@ impl DeviceSync {
             starred: settings_sync::syncs(&self.choices, &settings_sync::STARRED_SONGS),
             every: settings_sync::syncs(&self.choices, &settings_sync::EVERY_SONG),
         };
-        let wanted = song_sync::wanted(here.songs, here.playlists, wants);
-        if wanted != self.wanted
-            && let Some(sync_key) = identity::sync_key()
-        {
-            *self.wanted_ids.lock().unwrap_or_else(|p| p.into_inner()) = song_sync::wanted_ids(&sync_key, &wanted);
-            self.wanted = wanted.clone();
-        }
         if self.syncing(Blob::Transfers) && !self.held() {
             self.listen_for_songs(link, here.songs, &device);
         }
@@ -1054,7 +1047,8 @@ impl DeviceSync {
         let hub_offer = self.hub_offer.clone();
         Box::new(songs::Songs {
             store: here.songs.clone(),
-            wanted,
+            listed: song_sync::listed(here.songs, here.playlists),
+            wants,
             device,
             device_name,
             given: self.given.keys().cloned().collect(),

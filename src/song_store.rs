@@ -1122,7 +1122,10 @@ pub fn path_of(dir: &Path, key: &str) -> PathBuf {
 /// The key of the song at `path`, if it's a file of the store in `dir`.
 pub fn key_in<'a>(dir: &Path, path: &'a Path) -> Option<&'a str> {
     let key = path.file_name()?.to_str().filter(|n| is_key(n))?;
-    (path.parent()? == path_of(dir, key).parent()?).then_some(key)
+    // (As `path_of` puts it, without building that path: this runs for
+    // every playlist entry.)
+    let bucket = path.parent()?;
+    (*bucket.file_name()? == *key.get(..2)? && bucket.parent()? == dir).then_some(key)
 }
 
 /// The keys of the songs whose files are in the store in `dir`.
