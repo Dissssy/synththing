@@ -116,7 +116,7 @@ pub(super) fn reorder_list<T>(
             }
         }
     }
-    // The dragged row, following the pointer (gone into the trash while
+    // The dragged row, as wide as it needs, following the pointer (gone into the trash while
     // it's over it, so the trash shows).
     let over_trash = ui.ctx().data(|d| d.get_temp::<bool>(list.with("trash"))).unwrap_or(false);
     if let Some(p) = pointer.filter(|_| !over_trash) {
@@ -126,7 +126,7 @@ pub(super) fn reorder_list<T>(
             .interactable(false)
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_width(width);
+                    ui.set_max_width(width);
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(icon("dots-six-vertical")).weak());
                         row(ui, &items[from]);
