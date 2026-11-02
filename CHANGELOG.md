@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 2.5.0 (2026-11-02)
+
 ### Changed
 - Anonymous usage data now says where a problem came up, without saying anything about you: for slow frames, which part of the app took the time; for "UI stuck" and stalled frames, which part it was in and whether the window was in the background, minimized or hidden; for things that don't fit a phone's screen, which page and what kind of thing. Only fixed names from synththing's own code are sent this way, never song names, files or anything you typed. The server counts usage lines per set of these values (it updates its database on start).
 
