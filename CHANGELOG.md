@@ -9,6 +9,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Buttons that can't be taken back now ask first: the first click turns them into a red "Really delete?" (or remove, or clear), and a second click on it does it; a click anywhere else or Esc backs out. That's deleting a tag, a grouping ruleset, a theme or a playlist, removing a song from all devices, clearing songs on none of your devices from your library, and removing a branch build.
 
 ### Fixed
+- Help > Credits & licenses no longer slows every frame while it's open: only the libraries in sight are drawn, instead of all of them (8 to 11 ms a frame on a phone).
 - Groupings: the songs on an album's, artist's or other group's page are spaced like every other list again, instead of cramped with striped rows taller than the rest and the playing song's outline touching its neighbours.
 - The log (and usage data) no longer warns "UI stuck" or "stalled frame" while the window is in the background, minimized or hidden: with nothing on screen, no frames are drawn, which isn't a hang. A hang in the app's own code is still caught there.
 

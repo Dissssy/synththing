@@ -2400,6 +2400,11 @@ impl App {
                         .desired_width(240.0),
                 );
                 let search = self.credits_search.to_lowercase();
+                // (Hundreds of packages: a closed row out of sight only
+                // takes its space, measured off a row drawn earlier, or
+                // the page cost 8-11 ms every frame on a phone.)
+                let row_height_id = ui.id().with("credits_row_height");
+                let row_height: Option<f32> = ui.data(|d| d.get_temp(row_height_id));
                 for package in &third_party.packages {
                     let matches = search.is_empty()
                         || package.name.to_lowercase().contains(&search)
@@ -2411,6 +2416,16 @@ impl App {
                     // wraps or shortens, and long license names ran off a
                     // phone's screen.)
                     let id = ui.make_persistent_id(("credits_package", &package.name, &package.version));
+                    let closed = egui::collapsing_header::CollapsingState::load(ui.ctx(), id)
+                        .is_none_or(|state| state.openness(ui.ctx()) == 0.0);
+                    let top = ui.cursor().min.y;
+                    if closed && let Some(height) = row_height {
+                        let row = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + height);
+                        if !ui.is_rect_visible(row) {
+                            ui.add_space(height);
+                            continue;
+                        }
+                    }
                     let mut clicked = false;
                     let mut header = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
                         .show_header(ui, |ui| {
@@ -2431,6 +2446,13 @@ impl App {
                             ui.label(egui::RichText::new(text).monospace().small());
                         }
                     });
+                    if closed && !clicked {
+                        // (A closed body adds nothing.)
+                        let height = ui.cursor().min.y - top;
+                        if row_height != Some(height) {
+                            ui.data_mut(|d| d.insert_temp(row_height_id, height));
+                        }
+                    }
                 }
             },
         );
