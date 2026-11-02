@@ -1,0 +1,128 @@
+# Cuts a release from GitHub: Actions > Cut release > Run workflow, picking
+# patch, minor or major. It runs `cargo release <level> --execute` on one of
+# our runners, as on a dev machine (docs/RELEASING.md): bumps Cargo.toml,
+# turns CHANGELOG.md's Unreleased section into the version's, commits
+# "Release X.Y.Z", tags vX.Y.Z and pushes both. The pushed tag starts
+# release.yml. With "Dry run" ticked it only shows what it would do.
+#
+# The push needs the RELEASE_TOKEN secret: a fine-grained personal access
+# token of a repository admin with Contents read and write on this
+# repository. GITHUB_TOKEN won't do: it can't bypass master's ruleset, and
+# a tag pushed with it doesn't start release.yml.
+name: Cut release
+
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: Version to bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      dry_run:
+        description: Dry run (show what it would do, push nothing)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: write  # cancels master's test builds
+
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # release.toml only allows master; this says so before anything runs.
+    if: github.ref == 'refs/heads/master'
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
+    steps:
+      # Only a commit CI passed is released. Master's test builds are
+      # cancelled first, except on a dry run (the release commit makes its own nightly), then
+      # every other workflow run on this commit is waited for (they may
+      # still be running after a merge): if any of them fails, this stops
+      # here, before anything is committed, tagged or pushed.
+      - name: Wait for CI on ${{ github.sha }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const own = await github.rest.actions.getWorkflowRun({ ...context.repo, run_id: context.runId });
+            const isTestBuild = run => run.path === '.github/workflows/test-builds.yml';
+            const isOwn = run => run.workflow_id === own.data.workflow_id;
+            const unfinished = run => run.status !== 'completed';
+
+            const testBuilds = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              ...context.repo, branch: 'master', per_page: 100,
+            });
+            // (Not on a dry run, which changes nothing.)
+            const dryRun = ${{ inputs.dry_run }};
+            for (const run of testBuilds.filter(r => !dryRun && isTestBuild(r) && unfinished(r))) {
+              core.info(`cancelling test build ${run.html_url}`);
+              await github.rest.actions.cancelWorkflowRun({ ...context.repo, run_id: run.id });
+            }
+
+            const deadline = Date.now() + 90 * 60 * 1000;
+            while (true) {
+              const runs = (await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                ...context.repo, head_sha: context.sha, per_page: 100,
+              })).filter(r => !isTestBuild(r) && !isOwn(r));
+              // The newest run of each workflow (each lists its latest attempt).
+              const latest = {};
+              for (const run of runs) {
+                const prev = latest[run.workflow_id];
+                if (!prev || run.id > prev.id) latest[run.workflow_id] = run;
+              }
+              const all = Object.values(latest);
+              const failed = all.filter(r => !unfinished(r) && !['success', 'skipped', 'neutral'].includes(r.conclusion));
+              if (failed.length) {
+                return core.setFailed(`CI failed on ${context.sha}, nothing released: ${failed.map(r => `${r.name} (${r.conclusion}) ${r.html_url}`).join(', ')}`);
+              }
+              const waiting = all.filter(unfinished);
+              if (!all.some(r => r.name === 'CI')) core.info('CI hasn\'t started on this commit yet');
+              else if (!waiting.length) return core.info(`passed: ${all.map(r => r.name).join(', ')}`);
+              if (Date.now() > deadline) return core.setFailed('CI still hasn\'t finished after 90 minutes, nothing released');
+              if (waiting.length) core.info(`waiting for ${waiting.map(r => r.name).join(', ')}`);
+              await new Promise(r => setTimeout(r, 30000));
+            }
+
+      # On master itself (not detached), with the tags cargo-release
+      # compares against, and RELEASE_TOKEN as the push credential.
+      - uses: actions/checkout@v5
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ inputs.dry_run && github.token || secrets.RELEASE_TOKEN }}
+
+      # Master moved on since CI passed: release what was checked, or nothing.
+      - name: Master is still ${{ github.sha }}
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]; then
+            echo "::error::master moved past $GITHUB_SHA; run this again for the new commit"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-release
+
+      # The commit and tag are by whoever ran this.
+      - name: Git identity
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR_ID+$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: cargo release ${{ inputs.level }}
+        env:
+          LEVEL: ${{ inputs.level }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            cargo release "$LEVEL" --no-confirm
+          else
+            cargo release "$LEVEL" --execute --no-confirm
+            version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+            echo "Released v$version: release.yml is building it." >> "$GITHUB_STEP_SUMMARY"
+          fi
