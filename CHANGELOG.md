@@ -22,6 +22,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Help > Support synththing opens Ko-fi, for anyone who wants to chip in. The website and docs link it too.
 
 ### Changed
+- In Songs (grouped) and the Wishlist, the header of the group you're scrolled into stays pinned to the top of the list until the next group's header pushes it out of the way.
 - A playlist's page looks like an album's: its tile, name, count and length at the top, with Shuffle and Star them all next to Play, and a find-in-here box that narrows its songs.
 - While following another device, media keys, the phone's media buttons and the local API's seek drive that device's playing, as the transport does.
 - Check again under your hub, in the sync settings, also has the hub check its addresses from the internet again, instead of only after its next 6-hourly check.

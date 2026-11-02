@@ -839,13 +839,11 @@ impl SongList {
             _ => None,
         };
         let grouped_by = group_title(&view.group);
-        let output = select_list::show(ui, "songs", items, &mut self.selection, active, |ui, row, item| {
+        let is_header = |item: &Item| matches!(item, Item::Group { .. });
+        let output = select_list::show_grouped(ui, "songs", items, &mut self.selection, active, is_header, |ui, row, item| {
             let entry = match item {
                 Item::Group { label, key, count, collapsed } => {
                     let arrow = crate::app::icon(if *collapsed { "caret-right" } else { "caret-down" });
-                    let rect = row.response.rect;
-                    ui.painter().rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
-                    ui.painter().hline(rect.x_range(), rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
                     ui.label(egui::RichText::new(arrow).strong());
                     if let Some(title) = grouped_by {
                         ui.label(egui::RichText::new(format!("{title}:")).weak());
