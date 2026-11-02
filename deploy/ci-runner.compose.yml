@@ -70,14 +70,13 @@ services:
       <<: *env
       RUNNER_NAME: ethan-docker-synththing-android
       LABELS: synththing-runner,synththing-runner-android
-      # Where android-actions/setup-android installs the SDK and NDK.
-      ANDROID_HOME: /root/android-sdk
     volumes:
       - ${RUNNER_ROOT}/rustup-android:/root/.rustup
       - ${RUNNER_ROOT}/cargo:/root/.cargo
       - ${RUNNER_ROOT}/target-android:/root/target
-      # the Android SDK, NDK and licences
-      - ${RUNNER_ROOT}/android-sdk:/root/android-sdk
+      # the Android SDK, NDK and licences, where android-actions/setup-android
+      # puts them (~/.android/sdk)
+      - ${RUNNER_ROOT}/android-sdk:/root/.android/sdk
       # Gradle's dependencies, the Android Gradle plugin and Gradle itself
       - ${RUNNER_ROOT}/gradle:/root/.gradle
       # JDKs from setup-java
