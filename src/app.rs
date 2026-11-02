@@ -4506,7 +4506,6 @@ const GROUP_ROW_MARGIN: i8 = 3;
 /// A box of settings under a heading, drawn as a list is: outlined, the
 /// heading (an icon, the title, a line of hint under it) on the header's
 /// color, the rows (`setting_row`) striped. Built up, then drawn by `show`.
-#[derive(Clone, Copy)]
 struct SettingsGroup<'a> {
     title: &'a str,
     icon: Option<&'a str>,
@@ -4514,10 +4513,13 @@ struct SettingsGroup<'a> {
     /// Opens and closes by its heading (closed at first), kept by this
     /// whatever the title says.
     closable: Option<&'a str>,
+    /// Draws the heading's buttons at its right end (in a right-to-left
+    /// layout): what acts on the whole group, as adding to its list.
+    buttons: Option<&'a mut dyn FnMut(&mut egui::Ui)>,
 }
 
 fn settings_group(title: &str) -> SettingsGroup<'_> {
-    SettingsGroup { title, icon: None, hint: None, closable: None }
+    SettingsGroup { title, icon: None, hint: None, closable: None, buttons: None }
 }
 
 impl<'a> SettingsGroup<'a> {
@@ -4533,8 +4535,12 @@ impl<'a> SettingsGroup<'a> {
         Self { closable: Some(id_salt), ..self }
     }
 
+    fn buttons(self, buttons: &'a mut dyn FnMut(&mut egui::Ui)) -> Self {
+        Self { buttons: Some(buttons), ..self }
+    }
+
     /// Draw it, `add` drawing its contents (unless it's closed: `None`).
-    fn show<R>(self, ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    fn show<R>(mut self, ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
         let id = egui::Id::new(SETTINGS_GROUP);
         let visuals = ui.visuals().clone();
         let radius = 6u8;
@@ -4561,9 +4567,14 @@ impl<'a> SettingsGroup<'a> {
                                 ui.add(egui::Label::new(egui::RichText::new(hint).weak()).wrap());
                             }
                         });
-                        if toggle.is_some() {
+                        if toggle.is_some() || self.buttons.is_some() {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(icon(if open { "caret-up" } else { "caret-down" }));
+                                if toggle.is_some() {
+                                    ui.label(icon(if open { "caret-up" } else { "caret-down" }));
+                                }
+                                if let Some(buttons) = self.buttons.as_mut() {
+                                    buttons(ui);
+                                }
                             });
                         }
                     });

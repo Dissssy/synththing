@@ -123,15 +123,16 @@ struct ListEntry {
 
 /// An ordered list as settings rows, each with Higher, Lower and Take it
 /// out at its right; moving past a line moves the entry into the section
-/// under (or over) it.
+/// under (or over) it. Lines take a row each.
 fn reorder_list<T>(ui: &mut egui::Ui, items: &mut Vec<T>, entry: impl Fn(usize, &T) -> ListEntry) {
     let last = items.len().saturating_sub(1);
     let mut moved = None;
     let mut remove = None;
     for (i, item) in items.iter().enumerate() {
         let ListEntry { lines, row } = entry(i, item);
+        // (A line is a row of its own, striped in turn as the rows are.)
         for line in lines {
-            cutoff_line(ui, &line);
+            setting_row(ui, |ui| cutoff_line(ui, &line));
         }
         let Some(text) = row else { continue };
         setting_row(ui, |ui| {
@@ -283,10 +284,11 @@ impl App {
         });
     }
 
-    /// Appearance > Controls bar's buttons: the bar's line of buttons and
-    /// sliders as a list, its left, middle and right sections under their
-    /// lines, each moved up or down (past a line into the next section) or
-    /// taken out, and more added at the left's end.
+    /// Appearance > Controls bar: the bar's line of buttons and sliders as
+    /// a list, its left, middle and right sections under their lines, each
+    /// moved up or down (past a line into the next section) or taken out;
+    /// the heading's + adds more at the left's end, and ↺ puts back the
+    /// usual ones.
     fn controls_bar_list_ui(&self, ui: &mut egui::Ui, bar: &mut config::ControlsBar) {
         use config::BarItem;
         let tags = self.songs.tags();
@@ -322,7 +324,6 @@ impl App {
             }
             ListEntry { lines, row: describe(item) }
         };
-        reorder_list(ui, &mut bar.0, entry);
         let mut sorted: Vec<(&String, &crate::song_store::Tag)> = tags.iter().collect();
         sorted.sort_by_key(|(_, tag)| tag.name.to_lowercase());
         let unused: Vec<BarItem> = BarItem::SINGLE
@@ -333,27 +334,37 @@ impl App {
         let info = "The buttons and sliders under the seek bar, left to right. Moving one past a line moves it into \
                     that section: the middle stays centred, the left and right hug their ends. Star and tag buttons \
                     give the song playing its star or the tag, or take it off. When the window gets narrow, speed \
-                    and then volume become buttons that open their slider.";
-        with_info(ui, info, |ui| {
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(!unused.is_empty(), |ui| {
-                    setting_combo(ui, "controls_bar_add", 0.0).selected_text("Add a button...").show_ui(ui, |ui| {
-                        for item in unused {
-                            if let Some(text) = describe(&item)
-                                && ui.selectable_label(false, text).clicked()
-                            {
-                                let at = bar.0.iter().position(|i| *i == BarItem::Middle).unwrap_or(0);
-                                bar.0.insert(at, item);
-                            }
-                        }
-                    });
-                });
-                if ui.add_enabled(*bar != config::ControlsBar::default(), row_icon_button(ui, "arrow-counter-clockwise")).on_hover_text("Back to the usual buttons").clicked() {
-                    *bar = config::ControlsBar::default();
+                    and then volume become buttons that open their slider, and then star and tag buttons fold into \
+                    a list.";
+        let mut added = None;
+        let mut reset = false;
+        let usual = *bar == config::ControlsBar::default();
+        let mut buttons = |ui: &mut egui::Ui| {
+            super::info_icon(ui, info);
+            if ui.add_enabled(!usual, row_icon_button(ui, "arrow-counter-clockwise")).on_hover_text("Back to the usual buttons").clicked() {
+                reset = true;
+            }
+            let add = ui.add_enabled(!unused.is_empty(), row_icon_button(ui, "plus")).on_hover_text("Add a button");
+            egui::Popup::menu(&add).show(|ui| {
+                for item in &unused {
+                    if let Some(text) = describe(item)
+                        && ui.button(text).clicked()
+                    {
+                        added = Some(item.clone());
+                    }
                 }
-            })
-            .response
+            });
+        };
+        settings_group("Controls bar").icon("faders-horizontal").hint("Left to right, the middle kept centred").buttons(&mut buttons).show(ui, |ui| {
+            reorder_list(ui, &mut bar.0, entry);
         });
+        if let Some(item) = added {
+            let at = bar.0.iter().position(|i| *i == BarItem::Middle).unwrap_or(0);
+            bar.0.insert(at, item);
+        }
+        if reset {
+            *bar = config::ControlsBar::default();
+        }
     }
 
     /// Playback > Loaded right now: each file in memory, with what it takes
@@ -466,10 +477,10 @@ impl App {
                     }
                     self.ui_scale_ui(ui);
                 });
-                settings_group(if self.mobile() { "Seek bar" } else { "Controls bar" }).icon("sliders-horizontal").show(ui, |ui| {
-                    if !self.mobile() {
-                        self.controls_bar_list_ui(ui, &mut controls_bar);
-                    }
+                if !self.mobile() {
+                    self.controls_bar_list_ui(ui, &mut controls_bar);
+                }
+                settings_group("Seek bar").icon("sliders-horizontal").show(ui, |ui| {
                     with_info(
                         ui,
                         "The seek bar is colored by the song's tempo (slow songs blue, fast ones pink), \

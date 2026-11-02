@@ -125,7 +125,7 @@ fn tag_checks(
 pub(super) fn tag_checklist(ui: &mut egui::Ui, store: &SongStore, paths: &[PathBuf], editing: Result<(), &str>) -> Option<TagAction> {
     let mut action = settings_group("Tags")
         .icon("tag")
-        .hint("Changed straight away. Preferences > Playback puts a tag's button in the controls bar and the phone's notification.")
+        .hint("Changed straight away. Preferences > Playback puts a tag's button in the phone's notification.")
         .show(ui, |ui| {
             let action = tag_checks(ui, store, paths, true, |ui, text, on, mixed| {
                 setting_row(ui, |ui| ui.add(egui::Checkbox::new(on, text).indeterminate(mixed)))
