@@ -8,7 +8,7 @@
 
 use eframe::egui;
 
-use super::{App, changelog_body_ui, icon, open_in_file_manager, row_icon_button, setting_row, settings_group};
+use super::{App, changelog_body_ui, icon, row_icon_button, setting_row, settings_group};
 use crate::changelog;
 
 /// One page of the flow. They're always in this order: installing last,
@@ -264,8 +264,9 @@ impl App {
                 for (note, kept) in &self.set_aside {
                     setting_row(ui, |ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            #[cfg(not(target_os = "android"))]
                             if ui.add(row_icon_button(ui, "folder-open")).on_hover_text(format!("Show {}", kept.display())).clicked() {
-                                open_in_file_manager(kept);
+                                super::file_manager::show_in_folder(kept);
                             }
                             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                                 ui.add(egui::Label::new(note).wrap());

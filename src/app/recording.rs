@@ -27,7 +27,9 @@ use eframe::egui::TextureHandle;
 
 use eframe::egui;
 
-use super::{is_midi_path, open_in_file_manager, App};
+use super::{is_midi_path, App};
+#[cfg(not(target_os = "android"))]
+use super::file_manager;
 use crate::config::nice_name;
 use crate::audio::AudioCommand;
 use crate::engine::EngineView;
@@ -820,14 +822,18 @@ impl App {
         if !self.recording.finishing.is_empty() {
             ui.add(egui::Spinner::new());
             ui.weak("Saving...");
-        } else if let Some(path) = self.last_recording.clone()
+            return;
+        }
+        // (Android has no file manager to show it in.)
+        #[cfg(not(target_os = "android"))]
+        if let Some(path) = self.last_recording.clone()
             && self.recording.recorder.is_none()
             && ui
                 .add(super::icon_button("film-strip"))
                 .on_hover_text(format!("Show the last recording: {} ({})", path.display(), file_size(&path)))
                 .clicked()
         {
-            open_in_file_manager(&path);
+            file_manager::show_in_folder(&path);
         }
     }
 
@@ -942,9 +948,9 @@ impl App {
         super::setting_row(ui, |ui| {
             super::setting_label(ui, "Saved to");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                #[cfg(not(target_os = "android"))]
                 if ui.add(super::row_icon_button(ui, "folder-open")).on_hover_text("Open the folder").clicked() {
-                    let _ = std::fs::create_dir_all(&dir);
-                    open_in_file_manager(&dir.join("."));
+                    file_manager::open_folder(&dir);
                 }
                 if let Some(pick) = pick {
                     *pick = ui.add(super::row_icon_button(ui, "pencil-simple")).on_hover_text("Save them somewhere else").clicked();

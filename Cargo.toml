@@ -72,6 +72,7 @@ percent-encoding = "2"
 [target.'cfg(not(target_os = "android"))'.dependencies]
 eframe = "0.36.1"
 rfd = "0.15"                                              # native file and folder dialogs
+opener = { version = "0.9", features = ["reveal"] }       # "Show in folder": the system file manager, file selected (file_manager.rs)
 gethostname = "1.1"                                       # the default name of this device, for sign-ins (device.rs)
 souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] } # the system's media controls (media_controls.rs): MPRIS, Windows, macOS
 
