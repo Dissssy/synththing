@@ -10,7 +10,7 @@ use eframe::egui::{self, AtomExt as _};
 
 use super::preferences::PrefTab;
 use super::{fit_width, icon, setting_row, settings_group, App};
-use crate::config::{MediaButton, QuickAction, QuickToggle};
+use crate::config::QuickToggle;
 use crate::song_store::{SongStore, Tag, TagShow, STARRED, TAG_ICONS};
 
 /// The colors new tags take, in turn.
@@ -148,7 +148,7 @@ pub(super) fn tag_checklist(ui: &mut egui::Ui, store: &SongStore, paths: &[PathB
     action
 }
 
-/// A quick action's toggle (`App::quick_toggle`) as an icon button:
+/// A star or tag toggle (`App::tag_toggle`) as an icon button:
 /// filled in the tag's color (the star's for the star) while the song has
 /// it, outlined otherwise. With its hover text; a click means toggle it.
 pub(super) fn quick_toggle_button(ui: &mut egui::Ui, store: &SongStore, toggle: &QuickToggle, glyph: f32, size: egui::Vec2) -> egui::Response {
@@ -171,36 +171,25 @@ pub(super) fn quick_toggle_button(ui: &mut egui::Ui, store: &SongStore, toggle: 
 }
 
 impl App {
-    /// The quick actions for the song playing, in the user's order
-    /// (`config::MediaButtons`, Preferences > Playback): the phone's media
-    /// controls show them all, the controls bar its toggles. No star or
-    /// tags for a song not in the library, which can't be tagged, nor a
-    /// tag since deleted.
-    pub(super) fn quick_actions(&self) -> Vec<QuickAction> {
-        self.config
-            .media_buttons
-            .0
-            .iter()
-            .filter_map(|button| match button {
-                MediaButton::Previous => Some(QuickAction::Previous),
-                MediaButton::Next => Some(QuickAction::Next),
-                MediaButton::Star => self.quick_toggle(STARRED).map(QuickAction::Toggle),
-                MediaButton::Tag(id) => self.quick_toggle(id.as_str()).map(QuickAction::Toggle),
-            })
-            .collect()
-    }
-
     /// The song playing's toggle for the tag `id` (`STARRED`: its star):
     /// None with no song in the library playing, or for a deleted tag.
     pub(super) fn quick_toggle(&self, id: &str) -> Option<QuickToggle> {
-        let song = self.current_song.as_deref().and_then(|p| self.songs.get(p))?;
+        self.current_song.as_deref().and_then(|p| self.songs.get(p))?;
+        self.tag_toggle(id)
+    }
+
+    /// The toggle for the tag `id` (`STARRED`: the star), on when the song
+    /// playing has it (off with none playing): None for a deleted tag.
+    pub(super) fn tag_toggle(&self, id: &str) -> Option<QuickToggle> {
         let (label, glyph) = if id == STARRED {
             ("Star".to_string(), crate::select_list::STAR_ICON)
         } else {
             let tag = self.songs.tags().get(id)?;
             (tag.name.clone(), tag.icon_or_default())
         };
-        Some(QuickToggle { tag: id.into(), label, icon: glyph.into(), on: song.tags.iter().any(|t| t == id) })
+        let song = self.current_song.as_deref().and_then(|p| self.songs.get(p));
+        let on = song.is_some_and(|s| s.tags.iter().any(|t| t == id));
+        Some(QuickToggle { tag: id.into(), label, icon: glyph.into(), on })
     }
 
     /// Do what a Tags list asked for, on the songs at `paths`.

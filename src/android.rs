@@ -28,7 +28,7 @@ use jni::objects::{GlobalRef, JObject, JObjectArray, JString, JThrowable, JValue
 use jni::{JNIEnv, JavaVM};
 
 use crate::app::App;
-use crate::config::QuickAction;
+use crate::config::QuickToggle;
 use crate::import::{self, Kind};
 
 mod keyboard;
@@ -289,7 +289,16 @@ pub struct Playback {
     pub length_ms: i64,
     pub has_next: bool,
     /// The buttons beside play/pause, in order (`config::MediaButtons`).
-    pub buttons: Vec<QuickAction>,
+    pub buttons: Vec<Button>,
+}
+
+/// One of the media controls' buttons beside play/pause
+/// (`config::MediaButtons`, resolved by `App::media_buttons`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Button {
+    Previous,
+    Next,
+    Toggle(QuickToggle),
 }
 
 /// Tell the Java side what's playing (it starts or stops the playback
@@ -303,9 +312,9 @@ pub fn set_playback(playback: &Playback) {
         let buttons = env.new_object_array(5 * playback.buttons.len() as i32, "java/lang/String", JObject::null())?;
         for (i, button) in playback.buttons.iter().enumerate() {
             let texts = match button {
-                QuickAction::Previous => ["previous", "", "", "", ""],
-                QuickAction::Next => ["next", "", "", "", ""],
-                QuickAction::Toggle(t) => ["tag", t.tag.as_str(), t.label.as_str(), t.icon.as_str(), if t.on { "1" } else { "0" }],
+                Button::Previous => ["previous", "", "", "", ""],
+                Button::Next => ["next", "", "", "", ""],
+                Button::Toggle(t) => ["tag", t.tag.as_str(), t.label.as_str(), t.icon.as_str(), if t.on { "1" } else { "0" }],
             };
             for (j, text) in texts.into_iter().enumerate() {
                 let text = env.new_string(text)?;

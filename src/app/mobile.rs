@@ -913,7 +913,7 @@ impl App {
             position_ms: (view.position * 1000.0) as i64,
             length_ms: (view.length * 1000.0) as i64,
             has_next: self.has_next(),
-            buttons: self.quick_actions(),
+            buttons: self.media_buttons(),
         };
         // The session moves the position along by itself while playing:
         // only a change, or a jump (a seek), is worth telling it.
@@ -983,6 +983,25 @@ impl App {
         if let Err(e) = std::thread::Builder::new().name("notification art".into()).spawn(read) {
             log::warn!("couldn't read the notification's art: {e}");
         }
+    }
+
+    /// The media controls' buttons for the song playing
+    /// (`config::MediaButtons`): no star or tags for a song not in the
+    /// library, which can't be tagged, nor a tag since deleted.
+    fn media_buttons(&self) -> Vec<crate::android::Button> {
+        use crate::android::Button;
+        use crate::config::MediaButton;
+        self.config
+            .media_buttons
+            .0
+            .iter()
+            .filter_map(|button| match button {
+                MediaButton::Previous => Some(Button::Previous),
+                MediaButton::Next => Some(Button::Next),
+                MediaButton::Star => self.quick_toggle(crate::song_store::STARRED).map(Button::Toggle),
+                MediaButton::Tag(id) => self.quick_toggle(id.as_str()).map(Button::Toggle),
+            })
+            .collect()
     }
 }
 
