@@ -1,8 +1,7 @@
 //! An ordered list as settings rows (`reorder_list`): Preferences' Media
 //! controls and Controls bar, and any list the user puts in order. Each
-//! row is dragged by its grip, or moved with Higher and Lower; lines across
-//! the list mark its sections, and moving past one moves the row into the
-//! section beyond it.
+//! row is dragged by its grip to its place; lines across the list mark its
+//! sections, and dropping a row past one moves it into the section beyond.
 
 use eframe::egui;
 
@@ -25,70 +24,132 @@ struct Dragged {
 }
 
 /// An ordered list as settings rows: a grip at each row's left to drag it
-/// to its place, and Higher, Lower and Take it out at its right. Lines
-/// (`ListEntry::lines`) take a row each, striped in turn as the rows are.
-/// `id_salt` tells it from other lists on the page.
+/// to its place, and Take it out at its right. While a
+/// row is dragged it follows the pointer, and the others make room for it
+/// where it would land (with an empty row), showing just their names.
+/// Lines (`ListEntry::lines`) take a row each, striped in turn as the rows
+/// are, and belong to the place in the list, not to an entry: dropping a
+/// row past one moves it into the section beyond. `id_salt` tells it from
+/// other lists on the page.
 pub(super) fn reorder_list<T>(ui: &mut egui::Ui, id_salt: &str, items: &mut Vec<T>, entry: impl Fn(usize, &T) -> ListEntry) {
     let list = ui.make_persistent_id(("reorder_list", id_salt));
-    let dragging = egui::DragAndDrop::payload::<Dragged>(ui.ctx()).map(|d| *d).filter(|d| d.list == list);
-    let last = items.len().saturating_sub(1);
-    let mut moved = None;
-    let mut remove = None;
-    let mut dropped = None;
-    for (i, item) in items.iter().enumerate() {
-        let ListEntry { lines, row } = entry(i, item);
+    let landing = list.with("landing");
+    let dragging = egui::DragAndDrop::payload::<Dragged>(ui.ctx()).map(|d| *d).filter(|d| d.list == list && d.from < items.len());
+    let Some(drag) = dragging else {
+        ui.ctx().data_mut(|d| d.remove::<usize>(landing));
+        return still_list_ui(ui, list, items, entry);
+    };
+    // Where the dragged row would land, among the others (as worked out
+    // last frame from where the pointer was).
+    let from = drag.from;
+    let mut to = ui.ctx().data(|d| d.get_temp::<usize>(landing)).unwrap_or(from).min(items.len() - 1);
+    let mut shown: Vec<Option<usize>> = (0..items.len()).filter(|&i| i != from).map(Some).collect();
+    shown.insert(to, None);
+    let pointer = ui.ctx().pointer_interact_pos();
+    let mut others = 0;
+    let mut name = None;
+    for (at, slot) in shown.iter().enumerate() {
+        let ListEntry { lines, row } = entry(at, &items[slot.unwrap_or(from)]);
         let top = ui.cursor().top();
         for line in lines {
             setting_row(ui, |ui| cutoff_line(ui, &line));
         }
-        if let Some(text) = row {
+        let row_top = ui.cursor().top();
+        if let Some(text) = &row {
             setting_row(ui, |ui| {
-                let grip = ui
-                    .add(egui::Label::new(egui::RichText::new(icon("dots-six-vertical")).weak()).selectable(false).sense(egui::Sense::drag()))
-                    .on_hover_cursor(egui::CursorIcon::Grab)
-                    .on_hover_text("Drag to move it");
-                grip.dnd_set_drag_payload(Dragged { list, from: i });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(row_icon_button(ui, "x")).on_hover_text("Take it out").clicked() {
-                        remove = Some(i);
-                    }
-                    if ui.add_enabled(i < last, row_icon_button(ui, "arrow-down")).on_hover_text("Lower").clicked() {
-                        moved = Some(i + 1);
-                    }
-                    if ui.add_enabled(i > 0, row_icon_button(ui, "arrow-up")).on_hover_text("Higher").clicked() {
-                        moved = Some(i);
-                    }
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(egui::Label::new(text).selectable(false).truncate()));
-                });
+                // (The dragged row's grip stays, so the drag carries on.)
+                grip(ui, list, slot.unwrap_or(from), slot.is_some());
+                if slot.is_some() {
+                    ui.add(egui::Label::new(text.clone()).selectable(false).truncate());
+                } else {
+                    ui.allocate_space(egui::vec2(ui.available_width(), ui.spacing().interact_size.y));
+                }
             });
         }
-        // The entry's lines and row take a drop: before it when it lands on
-        // the top half, after it on the bottom half.
         let rect = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().top());
-        let Some(drag) = dragging else { continue };
-        let target = ui.interact(rect, list.with(("drop", i)), egui::Sense::hover());
-        let Some(pointer) = ui.ctx().pointer_interact_pos().filter(|p| rect.contains(*p)) else { continue };
-        let before = pointer.y < rect.center().y;
-        let to = if before { i } else { i + 1 };
-        if drag.from == i {
-            ui.painter().rect_filled(rect, 2.0, ui.visuals().selection.bg_fill.gamma_multiply(0.3));
-        } else {
-            let y = if before { rect.top() } else { rect.bottom() };
-            ui.painter().hline(rect.x_range(), y, egui::Stroke::new(2.0, ui.visuals().selection.stroke.color));
-        }
-        if target.dnd_release_payload::<Dragged>().is_some() {
-            dropped = Some((drag.from, to));
+        match slot {
+            None => {
+                name = row;
+                let hole = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), row_top..=ui.cursor().top()).shrink(1.0);
+                ui.painter().rect_stroke(hole, 4.0, egui::Stroke::new(1.0, ui.visuals().selection.stroke.color), egui::StrokeKind::Inside);
+            }
+            // (Over another entry, its row or its lines: land before it on
+            // its top half, after it on its bottom half.)
+            Some(_) => {
+                if let Some(p) = pointer.filter(|p| p.y >= rect.top() && p.y < rect.bottom()) {
+                    to = if p.y < rect.center().y { others } else { others + 1 };
+                }
+                others += 1;
+            }
         }
     }
-    if let Some(i) = moved {
-        items.swap(i - 1, i);
+    // The dragged row, following the pointer.
+    if let (Some(p), Some(text)) = (pointer, name) {
+        egui::Area::new(list.with("dragged"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(p + egui::vec2(-8.0, -12.0))
+            .interactable(false)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(icon("dots-six-vertical")).weak());
+                        ui.add(egui::Label::new(text).selectable(false));
+                    });
+                });
+            });
+    }
+    if ui.ctx().input(|i| i.pointer.any_released()) {
+        ui.ctx().data_mut(|d| d.remove::<usize>(landing));
+        egui::DragAndDrop::clear_payload(ui.ctx());
+        let item = items.remove(from);
+        items.insert(to.min(items.len()), item);
+    } else {
+        ui.ctx().data_mut(|d| d.insert_temp(landing, to));
+        ui.ctx().request_repaint();
+    }
+}
+
+/// `reorder_list` while nothing's dragged: each row with its grip, name,
+/// and Take it out.
+fn still_list_ui<T>(ui: &mut egui::Ui, list: egui::Id, items: &mut Vec<T>, entry: impl Fn(usize, &T) -> ListEntry) {
+    let mut remove = None;
+    for (i, item) in items.iter().enumerate() {
+        let ListEntry { lines, row } = entry(i, item);
+        for line in lines {
+            setting_row(ui, |ui| cutoff_line(ui, &line));
+        }
+        let Some(text) = row else { continue };
+        setting_row(ui, |ui| {
+            grip(ui, list, i, true);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(row_icon_button(ui, "x")).on_hover_text("Take it out").clicked() {
+                    remove = Some(i);
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(egui::Label::new(text).selectable(false).truncate()));
+            });
+        });
     }
     if let Some(i) = remove {
         items.remove(i);
     }
-    if let Some((from, to)) = dropped {
-        let item = items.remove(from);
-        items.insert(if to > from { to - 1 } else { to }, item);
+}
+
+/// A row's grip, at its left: dragging it drags entry `index` (its id
+/// stays the entry's, wherever the row is drawn, so a drag carries on as
+/// the rows make room). Drawn faint when `shown` is false (its row is the
+/// empty place the dragged one would land in).
+fn grip(ui: &mut egui::Ui, list: egui::Id, index: usize, shown: bool) {
+    let glyph = icon("dots-six-vertical");
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let width = ui.fonts_mut(|f| f.layout_no_wrap(glyph.to_string(), font.clone(), egui::Color32::WHITE).size().x);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, ui.spacing().interact_size.y), egui::Sense::hover());
+    let response = ui.interact(rect, list.with(("grip", index)), egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::Grab);
+    if shown {
+        let response = response.on_hover_text("Drag to move it");
+        response.dnd_set_drag_payload(Dragged { list, from: index });
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, glyph, font, ui.visuals().weak_text_color());
+    } else {
+        response.dnd_set_drag_payload(Dragged { list, from: index });
     }
 }
 
