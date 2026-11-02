@@ -73,8 +73,9 @@ pub struct Config {
     /// or quits (`Some(false)`); `None` until the first close asks.
     #[serde(default)]
     pub close_to_tray: Option<bool>,
-    /// The offer to install synththing (Windows, `app/install.rs`) was
-    /// answered: it isn't made again (Preferences > App still installs).
+    /// The offer to install synththing (Windows, `app/install.rs`) or add it
+    /// to the applications menu (Linux, `app/desktop_entry.rs`) was answered:
+    /// it isn't made again (Preferences > App still does it).
     #[serde(default)]
     pub install_asked: bool,
     /// How synththing opens when it starts with Windows.

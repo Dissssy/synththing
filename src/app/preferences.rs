@@ -786,6 +786,8 @@ impl App {
                     });
                     #[cfg(windows)]
                     self.install_preferences_ui(ui);
+                    #[cfg(target_os = "linux")]
+                    self.desktop_entry_preferences_ui(ui);
                 }
                 settings_group("Updates").icon("arrows-clockwise").show(ui, |ui| {
                     with_info(
