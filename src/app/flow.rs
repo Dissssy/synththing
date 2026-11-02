@@ -1,10 +1,11 @@
 //! The page of things to go through before the rest of the app: what the
 //! launch has to say or ask (settings that couldn't be read, the welcome,
-//! usage data, what's new, an update, installing), and Help's Welcome,
-//! Updates and Changelog. Drawn as Preferences is, in place of the panels
-//! (the whole screen on a phone), with the rest of the app disabled until
-//! it's done: one step per page, pills down the side, Back and Next at the
-//! bottom. Answers are kept until Done, which applies them all.
+//! usage data, what's new, an update, installing or adding to the
+//! applications menu), and Help's Welcome, Updates and Changelog. Drawn as
+//! Preferences is, in place of the panels (the whole screen on a phone),
+//! with the rest of the app disabled until it's done: one step per page,
+//! pills down the side, Back and Next at the bottom. Answers are kept
+//! until Done, which applies them all.
 
 use eframe::egui;
 
@@ -23,6 +24,8 @@ pub(super) enum Step {
     Update,
     #[cfg(windows)]
     Install,
+    #[cfg(target_os = "linux")]
+    DesktopEntry,
 }
 
 impl Step {
@@ -35,6 +38,8 @@ impl Step {
             Step::Update => 4,
             #[cfg(windows)]
             Step::Install => 5,
+            #[cfg(target_os = "linux")]
+            Step::DesktopEntry => 5,
         }
     }
 
@@ -49,6 +54,8 @@ impl Step {
             Step::Update => "Updates",
             #[cfg(windows)]
             Step::Install => "Install",
+            #[cfg(target_os = "linux")]
+            Step::DesktopEntry => "Applications menu",
         }
     }
 
@@ -61,6 +68,8 @@ impl Step {
             Step::Update => "arrow-circle-up",
             #[cfg(windows)]
             Step::Install => "download-simple",
+            #[cfg(target_os = "linux")]
+            Step::DesktopEntry => "app-window",
         }
     }
 
@@ -75,6 +84,8 @@ impl Step {
             Step::Update => "Updates",
             #[cfg(windows)]
             Step::Install => "Install synththing?",
+            #[cfg(target_os = "linux")]
+            Step::DesktopEntry => "Add to the applications menu?",
         }
     }
 }
@@ -215,6 +226,10 @@ impl App {
 
     /// Whether any step asks something (not only says it).
     fn flow_asks(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if self.flow.has(Step::DesktopEntry) {
+            return true;
+        }
         self.flow.steps.iter().any(|s| matches!(s, Step::Welcome | Step::UsageData)) || self.flow_restarts()
     }
 
@@ -251,6 +266,11 @@ impl App {
             #[cfg(windows)]
             Step::Install => {
                 self.install_step_ui(ui);
+                false
+            }
+            #[cfg(target_os = "linux")]
+            Step::DesktopEntry => {
+                self.desktop_entry_step_ui(ui);
                 false
             }
         }
@@ -298,6 +318,8 @@ impl App {
                         return;
                     }
                 }
+                #[cfg(target_os = "linux")]
+                Step::DesktopEntry => self.desktop_entry_done(),
             }
         }
         if tour {
