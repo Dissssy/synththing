@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 2.3.0 (2026-11-02)
+
 ### Added
 - The controls bar is yours to arrange: Preferences > Appearance > Controls bar lists its buttons and sliders in a left, middle (kept centred) and right section. Move them up and down (past a line into the next section), take them out, or add shuffle, stop, previous, play/pause, next, loop, devices, volume, speed, a star button and buttons for your own tags, which give the song playing the tag or take it off.
 
