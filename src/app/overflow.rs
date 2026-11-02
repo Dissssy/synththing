@@ -80,6 +80,7 @@ impl Overflow {
                 egui::Order::Tooltip | egui::Order::Debug => "a popup, menu or toast",
             };
             log::warn!(
+                page, kind, layer, side;
                 "overflow: on {page}, {kind} on {layer} runs {worst:.0} pt off the {side} of the {:.0} pt wide screen \
                  (at x {:.0}..{:.0}, y {:.0}; widget {:?}, in {:?})",
                 screen.width(),

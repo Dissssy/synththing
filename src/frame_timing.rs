@@ -41,6 +41,47 @@ const STATS_BUCKET: Duration = Duration::from_secs(1);
 /// How late past its due time a frame has to come to be logged as stalled.
 const STALL: Duration = Duration::from_secs(1);
 
+/// What the window was last doing (`set_window`), for the stalled-frame
+/// and UI-stuck lines: a frame long in coming while the app was in the
+/// background isn't a hang.
+static WINDOW: Mutex<Window> = Mutex::new(Window::Focused);
+
+/// What the window's doing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Window {
+    Focused,
+    /// Shown, but another window has the keyboard.
+    Unfocused,
+    Minimized,
+    /// Hidden in the tray.
+    Hidden,
+    /// No window at all: an Android app in the background.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    Background,
+}
+
+impl Window {
+    fn name(self) -> &'static str {
+        match self {
+            Window::Focused => "focused",
+            Window::Unfocused => "unfocused",
+            Window::Minimized => "minimized",
+            Window::Hidden => "hidden",
+            Window::Background => "background",
+        }
+    }
+}
+
+/// Say what the window's doing now (each frame's logic, and Android's
+/// background ticks).
+pub fn set_window(window: Window) {
+    *WINDOW.lock().unwrap() = window;
+}
+
+fn window() -> &'static str {
+    WINDOW.lock().unwrap().name()
+}
+
 /// How often the watchdog looks at the UI thread.
 const WATCH_EVERY: Duration = Duration::from_millis(500);
 
@@ -62,7 +103,7 @@ struct Watch {
     logged: Duration,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Stage {
     /// Between `begin` and `end`.
     App,
@@ -152,18 +193,22 @@ struct Finished {
 /// dropped unreported. One that comes well after it was due (the app
 /// asked for it, `expect_next_within`) is logged as stalled: that time
 /// went outside the app's code, to egui's painting, the GPU or the window
-/// system, which the slow-frame line doesn't see. `window` is the window's
+/// system, which the slow-frame line doesn't see. `size` is the window's
 /// size, for the line.
-pub fn begin(window: Option<egui::Vec2>) {
+pub fn begin(size: Option<egui::Vec2>) {
     puffin::GlobalProfiler::lock().new_frame();
     FRAME.with_borrow_mut(|f| {
         let now = Instant::now();
         if let (Some(end), Some(due)) = (f.last_end.take(), f.due.take()) {
             let gap = now - end;
             if gap > due + STALL {
-                let window = window.map_or("unknown".to_string(), |w| format!("{:.0}x{:.0} pt", w.x, w.y));
+                let size = size.map_or("unknown".to_string(), |w| format!("{:.0}x{:.0} pt", w.x, w.y));
+                // (What the window was doing in the gap: the frame's logic
+                // hasn't said what it's doing now yet.)
+                let window = window();
                 log::warn!(
-                    "stalled frame: {} ms after the last one, due within {} ms; window {window}",
+                    window;
+                    "stalled frame: {} ms after the last one, due within {} ms; window {size}, {window}",
                     ms(gap),
                     ms(due)
                 );
@@ -307,6 +352,9 @@ pub fn report(cpu_usage: Option<f32>) {
             .filter(|(_, time)| *time >= SHOWN)
             .map(|(name, time)| format!("{name} {}", ms(*time)))
             .collect();
+        // (Sent with usage data: where the time went, by the section's name
+        // in the code.)
+        let slowest = frame.sections.first().map_or("none", |(name, _)| *name);
         let skipped = std::mem::take(&mut f.skipped);
         let skipped = if skipped > 0 {
             format!(" (+{skipped} slow frames not logged)")
@@ -314,6 +362,7 @@ pub fn report(cpu_usage: Option<f32>) {
             String::new()
         };
         log::warn!(
+            slowest;
             "slow frame: {} ms (budget {} ms): {}{skipped}",
             ms(total),
             ms(FRAME_BUDGET),
@@ -379,33 +428,51 @@ pub fn summary() -> Option<String> {
     })
 }
 
-/// Every `WATCH_EVERY`, logs a UI thread stuck (`Watch::stuck`).
+/// Every `WATCH_EVERY`, logs a UI thread stuck (`Watch::stuck`): where it
+/// is, in the app's code (and the section it last went into) or outside
+/// it, and what the window was doing.
 fn watchdog() {
     loop {
         std::thread::sleep(WATCH_EVERY);
-        if let Some(line) = WATCH.lock().unwrap().as_mut().and_then(|w| w.stuck(Instant::now())) {
-            log::warn!("{line}");
+        let Some(Stuck { stuck, due, stage, section }) = WATCH.lock().unwrap().as_mut().and_then(|w| w.stuck(Instant::now())) else {
+            continue;
+        };
+        let (stuck, due, window) = (ms(stuck), ms(due), window());
+        let section = section.unwrap_or("none");
+        match stage {
+            Stage::App => log::warn!(
+                section, window;
+                "UI stuck: no frame for {stuck} ms, due within {due} ms; in the app's code (last in {section}), window {window}"
+            ),
+            Stage::Outside => log::warn!(
+                window;
+                "UI stuck: no frame for {stuck} ms, due within {due} ms; outside the app's code \
+                 (egui painting, the GPU or the window system), window {window}"
+            ),
         }
     }
 }
 
+/// The UI thread, stuck: for how long, and where (`Watch`).
+#[derive(Debug, PartialEq)]
+struct Stuck {
+    stuck: Duration,
+    due: Duration,
+    stage: Stage,
+    section: Option<&'static str>,
+}
+
 impl Watch {
-    /// A line saying the UI thread is stuck, well past when its next frame
-    /// was due, and where: in the app's code (the section it last went
-    /// into), or outside it. Again each time the stuck time doubles.
-    fn stuck(&mut self, now: Instant) -> Option<String> {
+    /// The UI thread stuck, well past when its next frame was due: again
+    /// each time the stuck time doubles.
+    fn stuck(&mut self, now: Instant) -> Option<Stuck> {
         let due = self.due?;
         let stuck = now - self.since;
         if stuck < due + STALL || stuck < self.logged * 2 {
             return None;
         }
         self.logged = stuck;
-        let place = match (self.stage, self.section) {
-            (Stage::App, Some(section)) => format!("in the app's code (last in {section})"),
-            (Stage::App, None) => "in the app's code".to_string(),
-            (Stage::Outside, _) => "outside the app's code (egui painting, the GPU or the window system)".to_string(),
-        };
-        Some(format!("UI stuck: no frame for {} ms, due within {} ms; {place}", ms(stuck), ms(due)))
+        Some(Stuck { stuck, due, stage: self.stage, section: self.section })
     }
 }
 
@@ -445,11 +512,12 @@ mod tests {
         assert_eq!(watch.stuck(at(10_000)), None, "nothing due: idle");
         watch.due = Some(Duration::from_millis(200));
         assert_eq!(watch.stuck(at(1_000)), None, "not late enough yet");
-        let line = watch.stuck(at(1_500)).unwrap();
-        assert!(line.starts_with("UI stuck: no frame for 1500.0 ms, due within 200.0 ms; outside"), "{line}");
+        let stuck = Stuck { stuck: Duration::from_millis(1_500), due: Duration::from_millis(200), stage: Stage::Outside, section: None };
+        assert_eq!(watch.stuck(at(1_500)), Some(stuck));
         assert_eq!(watch.stuck(at(2_500)), None, "said once till it doubles");
         assert!(watch.stuck(at(3_000)).is_some(), "and again once it has");
         (watch.stage, watch.section, watch.logged) = (Stage::App, Some("Songs"), Duration::ZERO);
-        assert!(watch.stuck(at(3_000)).unwrap().ends_with("in the app's code (last in Songs)"));
+        let stuck = watch.stuck(at(3_000)).unwrap();
+        assert_eq!((stuck.stage, stuck.section), (Stage::App, Some("Songs")));
     }
 }

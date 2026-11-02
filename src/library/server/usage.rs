@@ -98,17 +98,46 @@ PRAGMA user_version = 23;
 COMMIT;
 ";
 
+/// The values each line's log call marked as fine to send
+/// (`UsageLine::details`), part of what a row is counted by: the `usage`
+/// table again, with `details` in its key.
+pub(super) const SCHEMA_V25: &str = "
+BEGIN;
+CREATE TABLE usage_new (
+    version TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    level TEXT NOT NULL,
+    target TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    details TEXT NOT NULL,
+    total INTEGER NOT NULL,
+    new INTEGER NOT NULL,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    offered INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (version, platform, level, target, signature, details)
+);
+INSERT INTO usage_new (version, platform, level, target, signature, details, total, new, first_seen, last_seen, offered)
+    SELECT version, platform, level, target, signature, '', total, new, first_seen, last_seen, offered FROM usage;
+DROP TABLE usage;
+ALTER TABLE usage_new RENAME TO usage;
+PRAGMA user_version = 25;
+COMMIT;
+";
+
 /// The most lines one collection hands intake; the rest wait for the next.
 const DIGEST_LINES: usize = 100;
 /// Examples given of each, at most: signatures, versions, platforms.
 const DIGEST_EXAMPLES: usize = 5;
+/// Sets of marked values given per line, at most, the most new first.
+const DIGEST_DETAILS: usize = 10;
 
 /// Reports one address may send in a day: the daily one, and a few for
 /// panics, which go as soon as the app starts again.
 const REPORTS_PER_DAY: usize = 6;
 
 /// The tree's levels, in order: the `usage` columns.
-const LEVELS: [&str; 5] = ["version", "platform", "level", "target", "signature"];
+const LEVELS: [&str; 6] = ["version", "platform", "level", "target", "signature", "details"];
 
 /// The rules, in order.
 pub(super) fn rules(db: &Connection) -> rusqlite::Result<Vec<String>> {
@@ -161,6 +190,9 @@ fn check(report: &UsageReport) -> Result<(), String> {
         }
         if !short(&line.target) || !short(&line.signature) {
             return Err("a line's target and signature are needed, and short".into());
+        }
+        if line.details.len() > MAX_USAGE_TEXT {
+            return Err("a line's details are short".into());
         }
     }
     if report.perf.len() > MAX_PERF_GROUPS {
@@ -277,10 +309,10 @@ fn add(db: &mut Connection, report: &UsageReport) -> rusqlite::Result<usize> {
     let mut kept_lines = 0;
     for line in report.lines.iter().filter(|line| line.count > 0 && kept(&rules, line)) {
         tx.execute(
-            "INSERT INTO usage (version, platform, level, target, signature, total, new, first_seen, last_seen)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?7)
-             ON CONFLICT DO UPDATE SET total = total + ?6, new = new + ?6, last_seen = ?7",
-            params![report.version, report.platform, line.level, line.target, line.signature, line.count as i64, now],
+            "INSERT INTO usage (version, platform, level, target, signature, details, total, new, first_seen, last_seen)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?8)
+             ON CONFLICT DO UPDATE SET total = total + ?7, new = new + ?7, last_seen = ?8",
+            params![report.version, report.platform, line.level, line.target, line.signature, line.details, line.count as i64, now],
         )?;
         kept_lines += 1;
     }
@@ -387,6 +419,10 @@ pub(super) struct DigestLine {
     pub key: String,
     /// Its signatures (with line numbers), a few.
     pub signatures: Vec<String>,
+    /// The values its log call marked as fine to send, each set with its
+    /// counts, the most new first (a few). Empty when it marks none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub details: Vec<DigestDetails>,
     pub versions: Vec<String>,
     pub platforms: Vec<String>,
     /// Since intake last took it, and ever.
@@ -396,6 +432,15 @@ pub(super) struct DigestLine {
     /// The issue it was filed as, if it was: comment there at most, never
     /// file it again.
     pub filed: Option<i64>,
+}
+
+/// One set of a line's marked values (`page=Songs side=right`), and how
+/// often the line came up with it.
+#[derive(Debug, Serialize, PartialEq)]
+pub(super) struct DigestDetails {
+    pub details: String,
+    pub new: u64,
+    pub total: u64,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -429,16 +474,30 @@ fn level_rank(level: &str) -> usize {
 /// out are marked offered, for `take`.
 pub(super) fn digest(db: &mut Connection) -> rusqlite::Result<(Vec<DigestLine>, Vec<DigestSessions>)> {
     let tx = db.transaction()?;
-    type Row = (String, String, String, String, String, u64, u64, i64);
+    type Row = (String, String, String, String, String, String, u64, u64, i64);
     let rows: Vec<Row> = tx
-        .prepare("SELECT version, platform, level, target, signature, total, new, first_seen FROM usage")?
+        .prepare("SELECT version, platform, level, target, signature, details, total, new, first_seen FROM usage")?
         .query_map([], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get::<_, i64>(5)? as u64, r.get::<_, i64>(6)? as u64, r.get(7)?))
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get::<_, i64>(6)? as u64,
+                r.get::<_, i64>(7)? as u64,
+                r.get(8)?,
+            ))
         })?
         .collect::<rusqlite::Result<_>>()?;
-    let mut groups: BTreeMap<(String, String, String), (DigestLine, Vec<usize>)> = BTreeMap::new();
-    let mut sets: BTreeMap<(String, String, String), [BTreeSet<String>; 3]> = BTreeMap::new();
-    for (i, (version, platform, level, target, signature, total, new, first_seen)) in rows.iter().enumerate() {
+    // (A line is its level, target and key.)
+    type Id = (String, String, String);
+    let mut groups: BTreeMap<Id, (DigestLine, Vec<usize>)> = BTreeMap::new();
+    let mut sets: BTreeMap<Id, [BTreeSet<String>; 3]> = BTreeMap::new();
+    // (Each line's new and total counts per set of marked values.)
+    let mut details: BTreeMap<Id, BTreeMap<String, (u64, u64)>> = BTreeMap::new();
+    for (i, (version, platform, level, target, signature, marked, total, new, first_seen)) in rows.iter().enumerate() {
         let id = (level.clone(), target.clone(), key(signature));
         let (line, members) = groups.entry(id.clone()).or_insert_with(|| {
             (
@@ -447,6 +506,7 @@ pub(super) fn digest(db: &mut Connection) -> rusqlite::Result<(Vec<DigestLine>, 
                     target: target.clone(),
                     key: id.2.clone(),
                     signatures: Vec::new(),
+                    details: Vec::new(),
                     versions: Vec::new(),
                     platforms: Vec::new(),
                     new: 0,
@@ -461,6 +521,10 @@ pub(super) fn digest(db: &mut Connection) -> rusqlite::Result<(Vec<DigestLine>, 
         line.total += total;
         line.first_seen = line.first_seen.min(*first_seen);
         members.push(i);
+        if !marked.is_empty() {
+            let counts = details.entry(id.clone()).or_default().entry(marked.clone()).or_default();
+            (counts.0, counts.1) = (counts.0 + new, counts.1 + total);
+        }
         let [signatures, versions, platforms] = sets.entry(id).or_default();
         signatures.insert(signature.clone());
         versions.insert(version.clone());
@@ -472,6 +536,15 @@ pub(super) fn digest(db: &mut Connection) -> rusqlite::Result<(Vec<DigestLine>, 
         .map(|(id, (mut line, members))| {
             let [signatures, versions, platforms] = sets.remove(&id).unwrap_or_default();
             line.signatures = signatures.into_iter().take(DIGEST_EXAMPLES).collect();
+            let mut marked: Vec<DigestDetails> = details
+                .remove(&id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(details, (new, total))| DigestDetails { details, new, total })
+                .collect();
+            marked.sort_by(|a, b| b.new.cmp(&a.new).then(b.total.cmp(&a.total)));
+            marked.truncate(DIGEST_DETAILS);
+            line.details = marked;
             line.versions = versions.into_iter().rev().take(DIGEST_EXAMPLES).collect();
             line.platforms = platforms.into_iter().take(DIGEST_EXAMPLES).collect();
             (line, members)
@@ -490,10 +563,11 @@ pub(super) fn digest(db: &mut Connection) -> rusqlite::Result<(Vec<DigestLine>, 
             )
             .optional()?;
         for &i in members.iter() {
-            let (version, platform, level, target, signature, ..) = &rows[i];
+            let (version, platform, level, target, signature, marked, ..) = &rows[i];
             tx.execute(
-                "UPDATE usage SET offered = new WHERE version = ? AND platform = ? AND level = ? AND target = ? AND signature = ?",
-                params![version, platform, level, target, signature],
+                "UPDATE usage SET offered = new
+                 WHERE version = ? AND platform = ? AND level = ? AND target = ? AND signature = ? AND details = ?",
+                params![version, platform, level, target, signature, marked],
             )?;
         }
     }
@@ -569,6 +643,7 @@ mod tests {
         db.execute_batch(SCHEMA_V21).unwrap();
         db.execute_batch(SCHEMA_V22).unwrap();
         db.execute_batch(SCHEMA_V23).unwrap();
+        db.execute_batch(SCHEMA_V25).unwrap();
         db
     }
 
@@ -653,6 +728,7 @@ mod tests {
                     target: target.into(),
                     signature: signature.into(),
                     count,
+                    ..Default::default()
                 })
                 .collect(),
         }
@@ -675,6 +751,34 @@ mod tests {
 
         assert_eq!(clear(&db, &["1.7.0".into(), "windows x86_64".into()]).unwrap(), 2);
         assert_eq!(tree(&db, &[]).unwrap()[0].total, 1);
+    }
+
+    #[test]
+    fn marked_values_are_counted_apart_and_given_to_intake() {
+        let mut db = db();
+        let signature = "synththing::app::overflow:82 overflow: on {page}";
+        let overflow = |page: &str, count| UsageLine {
+            level: "warn".into(),
+            target: "synththing::app::overflow".into(),
+            signature: signature.into(),
+            details: format!("page={page} side=right"),
+            count,
+        };
+        let mut sent = report("2.4.0", "android aarch64", &[("warn", "synththing::app::overflow", signature, 1)]);
+        sent.lines.extend([overflow("Songs", 2), overflow("Queue", 5)]);
+        add(&mut db, &sent).unwrap();
+
+        let path = ["2.4.0", "android aarch64", "warn", "synththing::app::overflow", signature].map(String::from);
+        let names: Vec<String> = tree(&db, &path).unwrap().into_iter().map(|n| n.name).collect();
+        assert_eq!(names, vec!["page=Queue side=right", "page=Songs side=right", ""]);
+
+        let (lines, _) = digest(&mut db).unwrap();
+        assert_eq!(lines.len(), 1, "one line, whatever its values");
+        assert_eq!(lines[0].new, 8);
+        let details: Vec<(&str, u64)> = lines[0].details.iter().map(|d| (d.details.as_str(), d.new)).collect();
+        assert_eq!(details, vec![("page=Queue side=right", 5), ("page=Songs side=right", 2)]);
+        take(&mut db, &[]).unwrap();
+        assert!(digest(&mut db).unwrap().0.is_empty());
     }
 
     #[test]

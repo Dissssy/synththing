@@ -1003,7 +1003,8 @@ impl DeviceSync {
         state.fields = result;
         self.channel(blob).revisions = outcome.revisions;
         if let Err(e) = state.save(blob.name()) {
-            log::warn!("{} sync: {e}", blob.name());
+            let blob = blob.name();
+            log::warn!(blob; "{blob} sync: {e}");
         }
     }
 

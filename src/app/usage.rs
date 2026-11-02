@@ -9,8 +9,9 @@ use super::{setting_row, settings_group, with_info, App};
 /// What's sent, in a sentence or two, for the question and Preferences.
 const WHAT: &str = "Once a day: how often each kind of warning and error came up, which version and system it \
                     was, how long frames took on what kind of graphics chip and with which display settings, and \
-                    crashes, as soon as synththing runs again. Only where in the code something happened, never \
-                    what it was about: no song names, files, account or anything that says who you are.";
+                    crashes, as soon as synththing runs again. Only where in the code something happened (and \
+                    which page or part of the app, or whether the window was in the background), never what it \
+                    was about: no song names, files, account or anything that says who you are.";
 
 impl App {
     /// The flow's Usage data page: the answer's taken when it's done.

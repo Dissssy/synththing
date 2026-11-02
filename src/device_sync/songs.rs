@@ -192,7 +192,8 @@ impl Worker {
         if let Some(state) = self.state(blob)
             && let Err(e) = state.save(blob.name())
         {
-            log::warn!("{} sync: {e}", blob.name());
+            let blob = blob.name();
+            log::warn!(blob; "{blob} sync: {e}");
         }
     }
 

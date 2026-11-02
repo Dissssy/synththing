@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 /// The most lines one report may carry, and the longest any of its text.
 pub const MAX_USAGE_LINES: usize = 1000;
 pub const MAX_USAGE_TEXT: usize = 300;
+/// The longest a marked value (`UsageLine::details`) may be.
+pub const MAX_DETAIL_VALUE: usize = 40;
 
 /// The levels a line can have: the log's, and panics.
 pub const USAGE_LEVELS: [&str; 4] = ["panic", "error", "warn", "info"];
@@ -106,6 +108,12 @@ pub struct UsageLine {
     /// Where in the code it was logged, and its text when that's fixed:
     /// never anything the message was filled in with (`crate::usage`).
     pub signature: String,
+    /// The values the log call marked as fine to send (its `log` key-values,
+    /// like `page = "Songs"`), as `key=value` with a space between: a fixed
+    /// word from the code, never something a person wrote or named. Empty
+    /// when it marked none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub details: String,
     pub count: u64,
 }
 
@@ -175,7 +183,7 @@ mod tests {
     use super::*;
 
     fn line(level: &str, target: &str) -> UsageLine {
-        UsageLine { level: level.into(), target: target.into(), signature: "x:1".into(), count: 1 }
+        UsageLine { level: level.into(), target: target.into(), signature: "x:1".into(), count: 1, ..Default::default() }
     }
 
     #[test]
