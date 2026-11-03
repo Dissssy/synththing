@@ -749,6 +749,9 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     if version < 25 {
         db.execute_batch(usage::SCHEMA_V25)?;
     }
+    if version < 26 {
+        db.execute_batch(feedback::SCHEMA_V26)?;
+    }
     remixes::fingerprint_stored(&db)?;
     Ok(db)
 }
@@ -944,6 +947,7 @@ fn handle(state: &Arc<State>, mut request: Request) {
         (Method::Post, ["api", "v1", "intake", "usage", "taken"]) => usage::intake_taken(state, &mut request),
         (Method::Get, ["api", "v1", "intake"]) => intake::waiting(state, &request),
         (Method::Post, ["api", "v1", "intake", "taken"]) => intake::taken(state, &mut request),
+        (Method::Post, ["api", "v1", "intake", "resolved"]) => intake::resolved(state, &mut request),
         (Method::Post, ["api", "v1", "admin"]) => moderation::admin(state, &mut request),
         (Method::Get, ["pair"]) => pairing::page(),
         (Method::Get, [".well-known", "assetlinks.json"]) => pairing::asset_links(state),

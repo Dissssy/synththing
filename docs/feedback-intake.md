@@ -32,10 +32,25 @@ Take the batch as a whole: first group the notes that are about the same thing, 
 3. **Bug or feature request.** Decide which each group is, and label its issue with it: `bug` when something doesn't work as it should (a crash, a freeze, a wrong result, something that used to work), `enhancement` when it asks for something synththing doesn't do yet. When a note mixes both, split it. When you can't tell, it's an `enhancement`: a developer decides what's in scope. Only bugs go on to automatic fixes; a feature request waits for a developer to approve it or mark it not planned.
 4. **Everything else:** search the issues labelled `feedback` (create the label if it's missing) for one about the same thing, the same bug or the same wish: the open ones, and the closed ones marked not planned.
    - **An open one matches:** comment on it: "Another report: feedback #12 (0.8.0, windows x86_64)", and anything the note adds (steps, a detail, how often it happens). A feature request that adds to an open one expands it there, not in a new issue.
-   - **One closed as not planned matches:** don't reopen it or open a new one. Comment on it the same way, so a developer sees it's still being asked for.
+   - **One closed as not planned matches:** don't reopen it or open a new one. Comment on it the same way, so a developer sees it's still being asked for. Then tell the sender it isn't planned (see "What came of it" below).
    - **None matches:** open an issue labelled `feedback` and `bug` or `enhancement`. Title: what's wrong or wanted, in plain words. Body: a summary of the notes, what the logs show if it's relevant (described, not pasted), the builds, and the feedback numbers ("Feedback #12, #14"). If you can tell from the code where the problem is, add a short "Where to look" with file paths; don't go further than that. End the body with the line `<!-- synththing-intake -->`: it's how watching tells the issues intake opened from ones written by hand.
    - **A note about several things** goes to one issue (or comment) for each.
+   - Always write a note's number as "feedback #12" (or "Feedback #12, #14"): that's how the release finds whose feedback an issue came from.
 5. **Keep it public-safe.** Issues and comments are public; the notes were sent privately. Never paste a note's text or log verbatim, and leave out anything that could identify the sender or anyone else: names, emails, file paths with user names, IDs, links.
+
+## What came of it
+
+Senders who were signed in can ask to hear what comes of their note. The server keeps who asked; you never see it, and you never need to know.
+
+- **Fixed or added:** nothing to do. When a release goes out, the release workflow (`.github/scripts/feedback-replies.sh`) finds the issues its pull requests closed, reads the feedback numbers on them, and tells those senders which version it's in. That's why the numbers have to be in the issue or its comments.
+- **Not planned:** closing an issue as not planned tells nobody. Only a new note that matches an issue already closed as not planned gets an answer, straight away:
+
+  ```sh
+  curl -sS -X POST -H "Authorization: Bearer $SYNTHTHING_INTAKE_TOKEN" -H "Content-Type: application/json" \
+    -d '{"feedback": [12], "outcome": "not_planned"}' https://synththing.p51.nl/api/v1/intake/resolved
+  ```
+
+  It answers `{"told": n}`: 0 when the sender didn't ask, which is fine.
 
 ## Marking the batch taken
 

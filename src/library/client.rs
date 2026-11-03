@@ -780,9 +780,21 @@ pub fn report(base: &str, server_key: &str, id: &str, identity: &Identity, repor
 
 const FEEDBACK_PATH: &str = "/api/v1/feedback";
 
-/// Send feedback to the server's admins; its number.
-pub fn feedback(base: &str, feedback: &FeedbackRequest) -> Result<i64, String> {
-    let reply: serde_json::Value = read(check(agent().post(format!("{base}{FEEDBACK_PATH}")).send_json(feedback))?)?;
+/// Send feedback to the server's admins; its number. Signed by `reply_to`
+/// when they want to hear what comes of it (a notification, once it's
+/// fixed, added or turned down).
+pub fn feedback(
+    base: &str,
+    server_key: &str,
+    feedback: &FeedbackRequest,
+    reply_to: Option<&Identity>,
+) -> Result<i64, String> {
+    let body = serde_json::to_vec(feedback).map_err(|e| e.to_string())?;
+    let mut request = agent().post(format!("{base}{FEEDBACK_PATH}")).header("Content-Type", "application/json");
+    if let Some(identity) = reply_to {
+        request = signed(request, server_key, identity, "POST", FEEDBACK_PATH, &body);
+    }
+    let reply: serde_json::Value = read(check(request.send(&body[..]))?)?;
     reply["feedback"].as_i64().ok_or_else(|| "the server sent something unexpected".to_string())
 }
 
@@ -1428,10 +1440,10 @@ mod tests {
             log: None,
             performance: None,
         };
-        assert!(feedback(&base, &note("   ", "stable")).is_err());
-        let stable = feedback(&base, &note(" The seek bar is tiny ", "stable")).unwrap();
-        let kept = feedback(&base, &note("Lanes work great", "branch-lanes")).unwrap();
-        let gone = feedback(&base, &note("Old idea", "branch-merged")).unwrap();
+        assert!(feedback(&base, &key, &note("   ", "stable"), None).is_err());
+        let stable = feedback(&base, &key, &note(" The seek bar is tiny ", "stable"), None).unwrap();
+        let kept = feedback(&base, &key, &note("Lanes work great", "branch-lanes"), None).unwrap();
+        let gone = feedback(&base, &key, &note("Old idea", "branch-merged"), None).unwrap();
         let theirs = notifications(&base, &key, &mod_, None).unwrap();
         assert_eq!((theirs[2].kind.as_str(), theirs[2].data["feedback"].as_i64()), ("new_feedback", Some(stable)));
 
@@ -1486,9 +1498,9 @@ mod tests {
 
         let stats = "3412 frames drawn in the last 60 s, 12 over 16.7 ms\n".to_string();
         let stutter = FeedbackRequest { performance: Some(stats.clone()), ..note("Lanes stutter", Some(format!("é{}the end", "x".repeat(20_000)))) };
-        let first = feedback(&base, &stutter).unwrap();
-        let second = feedback(&base, &note("Lanes are great", None)).unwrap();
-        let done = feedback(&base, &note("Old news", None)).unwrap();
+        let first = feedback(&base, &key, &stutter, None).unwrap();
+        let second = feedback(&base, &key, &note("Lanes are great", None), None).unwrap();
+        let done = feedback(&base, &key, &note("Old news", None), None).unwrap();
         admin::<serde_json::Value>(&base, &key, &server_id, &AdminAction::FeedbackDone { feedback: done, note: "#3".into() })
             .unwrap();
         assert_eq!(waiting("not-it").0, 401);
@@ -1508,6 +1520,28 @@ mod tests {
             .unwrap();
         assert_eq!(response.body_mut().read_json::<serde_json::Value>().unwrap()["taken"], 1);
         assert_eq!(ids(&waiting(&token).1), vec![second]);
+
+        // What came of it: told once, to those who signed their note.
+        let alice = Identity::generate().unwrap();
+        let hers = feedback(&base, &key, &note("Add a queue page", None), Some(&alice)).unwrap();
+        let resolve = |body: serde_json::Value| {
+            let mut response = agent
+                .post(format!("{base}/api/v1/intake/resolved"))
+                .header("Authorization", format!("Bearer {token}"))
+                .send_json(body)
+                .unwrap();
+            let status = response.status().as_u16();
+            (status, response.body_mut().read_json::<serde_json::Value>().unwrap())
+        };
+        assert_eq!(resolve(serde_json::json!({ "feedback": [hers], "outcome": "added" })).0, 400, "needs a version");
+        assert_eq!(resolve(serde_json::json!({ "feedback": [hers], "outcome": "maybe", "version": "3.1.2" })).0, 400);
+        let (status, body) = resolve(serde_json::json!({ "feedback": [second, hers], "outcome": "added", "version": "3.1.2" }));
+        assert_eq!((status, body["told"].as_i64()), (200, Some(1)), "only hers was signed");
+        let told = notifications(&base, &key, &alice, None).unwrap();
+        assert_eq!(told.len(), 1);
+        assert_eq!(told[0].kind, "feedback_added");
+        assert_eq!((told[0].data["version"].as_str(), told[0].data["preview"].as_str()), (Some("3.1.2"), Some("Add a queue page")));
+        assert_eq!(resolve(serde_json::json!({ "feedback": [hers], "outcome": "fixed", "version": "3.1.3" })).1["told"], 0, "once");
         running.stop();
         let _ = std::fs::remove_dir_all(&dir);
     }
