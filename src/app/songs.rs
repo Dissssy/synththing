@@ -12,7 +12,7 @@ use crate::song_store::{self, SongStore, Stored};
 use crate::select_list;
 use crate::playlist::Library;
 
-use super::{App, SONG_EXTENSIONS, autoplay, describe_song, file_manager, icon_button, naming, queue, song_info_widgets, sync, tags, toast, wishlist};
+use super::{App, SONG_EXTENSIONS, autoplay, describe_song, icon_button, naming, queue, song_info_widgets, sync, tags, toast, wishlist};
 
 impl App {
     /// The revision of what the songs are listed from: it changes whenever
@@ -157,7 +157,7 @@ impl App {
             }
             #[cfg(not(target_os = "android"))]
             if let [path] = paths {
-                file_manager::show_in_folder_button(ui, path);
+                super::file_manager::show_in_folder_button(ui, path);
             }
             if ui.button("Song info").clicked() {
                 info_for = Some(paths.to_vec());

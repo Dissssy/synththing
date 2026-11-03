@@ -5,7 +5,7 @@ use eframe::egui;
 use crate::config::nice_name;
 use crate::select_list;
 
-use super::{App, DraggedSoundfont, file_manager, icon, icon_button, placeholder, shift_active};
+use super::{App, DraggedSoundfont, icon, icon_button, placeholder, shift_active};
 
 impl App {
     pub(super) fn soundfont_ui(&mut self, ui: &mut egui::Ui) {
@@ -72,7 +72,7 @@ impl App {
                     remove = Some(rows);
                 }
                 #[cfg(not(target_os = "android"))]
-                file_manager::show_in_folder_button(ui, path);
+                super::file_manager::show_in_folder_button(ui, path);
             });
             let active = Some(row.idx) == active_sf;
             let text = egui::RichText::new(nice_name(path));

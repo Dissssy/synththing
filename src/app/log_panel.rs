@@ -6,7 +6,7 @@ use eframe::egui;
 
 use crate::applog;
 
-use super::{App, file_manager, fit_width};
+use super::{App, fit_width};
 
 impl App {
     /// The app log viewer, as a modal (the mobile layout shows it as a
@@ -119,7 +119,7 @@ pub(super) fn log_actions_ui(ui: &mut egui::Ui, shown: &[&applog::Entry]) {
         if let Some(path) = applog::file_path()
             && ui.button("Open log folder").clicked()
         {
-            file_manager::show_in_folder(&path);
+            super::file_manager::show_in_folder(&path);
         }
         #[cfg(target_os = "android")]
         if let Some(path) = applog::file_path()

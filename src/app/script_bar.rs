@@ -14,7 +14,7 @@ use crate::lua_visualizer::{
 };
 use crate::visualizer::NotesSnapshot;
 
-use super::{App, colored_icon_button, editor, file_manager, fit_width, icon_button, on_color, previews, toast, toggle_chip, tour};
+use super::{App, colored_icon_button, editor, fit_width, icon_button, on_color, previews, toast, toggle_chip, tour};
 
 impl App {
     pub(super) fn load_script(&mut self, idx: usize) {
@@ -233,7 +233,7 @@ impl App {
                     .on_hover_text(format!("Open the script's assets folder ({}), for the files it reads", folder.display()))
                     .clicked()
                 {
-                    file_manager::open_folder(&folder);
+                    super::file_manager::open_folder(&folder);
                 }
             }
             if visualizer {
@@ -298,7 +298,7 @@ impl App {
             self.rename = Some(RenameScript { path: path.to_path_buf(), name, error: None, focused_once: false, waiting: None });
         }
         #[cfg(not(target_os = "android"))]
-        file_manager::show_in_folder_button(ui, path);
+        super::file_manager::show_in_folder_button(ui, path);
         self.script_share_button(ui);
     }
 
