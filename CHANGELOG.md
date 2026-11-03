@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Fixed
+- The Scripting Reference no longer slows every frame while it's open: only the part in sight is drawn.
+
 ## 2.6.0 (2026-11-03)
 
 ### Added
