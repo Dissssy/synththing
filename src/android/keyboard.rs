@@ -135,7 +135,7 @@ pub(super) fn after_frame(ctx: &egui::Context) {
         let mut tapped = false;
         for event in &o.events {
             let info = event.widget_info();
-            if info.typ == egui::WidgetType::TextEdit && info.current_text_value.is_some() {
+            if info.role == egui::Role::TextInput && info.current_text_value.is_some() {
                 edited.clone_from(&info.current_text_value);
                 tapped |= matches!(event, egui::output::OutputEvent::Clicked(_));
             }

@@ -126,7 +126,7 @@ impl App {
         let mut close = false;
         let mut save = false;
         let mut preview = None;
-        let response = egui::Modal::new(egui::Id::new("song_details")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("song_details")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 480.0));
             self.details_heading_ui(ui, &details);
             ui.add_space(4.0);

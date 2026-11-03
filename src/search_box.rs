@@ -56,7 +56,7 @@ impl SearchBox {
     ) -> Output {
         // (One ID wherever it's drawn, so it keeps the focus moving under
         // the buttons or back.)
-        let id = egui::Id::new(kind.id);
+        let id = egui::Id::unique(kind.id);
         let ctx = ui.ctx().clone();
         let focused = ctx.memory(|m| m.has_focus(id));
         let mut changed = false;
@@ -211,7 +211,7 @@ mod tests {
         };
         let mut out = None;
         let mut output = ctx.run_ui(input, |ui| {
-            ui.ctx().memory_mut(|m| m.request_focus(egui::Id::new("songs_search")));
+            ui.ctx().memory_mut(|m| m.request_focus(egui::Id::unique("songs_search")));
             let mut values = |field: Field, _: &str| if field == Field::Artist { vec!["Daft Punk".to_string()] } else { Vec::new() };
             let mut complete = |query: &str, cursor, mode| crate::search::complete(query, cursor, mode, &mut values);
             let kind = Kind { id: "songs_search", hint: "", help: "", keys: true, save: true };

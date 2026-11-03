@@ -1712,7 +1712,7 @@ impl App {
         } else if touch {
             0.0
         } else {
-            let id = egui::Id::new("soundfonts_header");
+            let id = egui::Id::unique("soundfonts_header");
             let widths: select_list::Widths = ui.ctx().data_mut(|d| d.get_persisted(id.with("widths"))).unwrap_or_default();
             let width = select_list::column_width(ui.ctx(), id, "size", &widths, SOUNDFONT_SIZE_WIDTH);
             let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y), egui::Sense::hover());
@@ -1787,7 +1787,7 @@ impl App {
             return;
         }
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("app_log")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("app_log")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 720.0));
             ui.heading("Log");
             close = self.log_body_ui(ui, false);
@@ -2286,7 +2286,7 @@ impl App {
             return;
         }
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("credits")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("credits")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 660.0));
             ui.heading("Credits & licenses");
             self.credits_body_ui(ui, false);
@@ -2409,7 +2409,7 @@ impl App {
                 // (Hundreds of packages: a closed row out of sight only
                 // takes its space, measured off a row drawn earlier, or
                 // the page cost 8-11 ms every frame on a phone.)
-                let row_height_id = ui.id().with("credits_row_height");
+                let row_height_id = ui.scope_id().with("credits_row_height");
                 let row_height: Option<f32> = ui.data(|d| d.get_temp(row_height_id));
                 for package in &third_party.packages {
                     let matches = search.is_empty()
@@ -2473,7 +2473,7 @@ impl App {
         let waiting = rename.waiting.is_some() && answer.is_none();
         let mut submit = false;
         let mut cancel = false;
-        let response = egui::Modal::new(egui::Id::new("rename_script")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("rename_script")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 380.0));
             ui.heading("Rename script");
             ui.add_space(4.0);
@@ -2731,7 +2731,7 @@ impl App {
         let frame = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 8 });
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             DockArea::new(&mut dock)
-                .id(egui::Id::new("section_dock"))
+                .id(egui::Id::unique("section_dock"))
                 .style({
                     let mut style = crate::theme::dock_style(ui.style());
                     if locked {
@@ -2814,9 +2814,11 @@ impl App {
         };
         let selected = self.song_list.selected();
         let mut info_for: Option<Vec<PathBuf>> = None;
+        #[cfg_attr(target_os = "android", expect(unused_mut, reason = "phones have no Song info button here"))]
         let mut info_clicked = false;
         let can_undo = self.last_edit.is_some();
         let mut undo_clicked = false;
+        #[cfg_attr(target_os = "android", expect(unused_mut, reason = "phones have no Clean up button here"))]
         let mut cleanup_clicked = false;
         let moving = self.songs_moving();
         let autoplay = self.autoplay;
@@ -3074,7 +3076,7 @@ impl App {
         let mut remove = false;
         let synced = self.syncs_library();
         let everywhere = &mut self.remove_everywhere;
-        let modal = egui::Modal::new(egui::Id::new("remove_songs")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("remove_songs")).show(ctx, |ui| {
             ui.set_max_width(360.0);
             ui.heading("Remove from library?");
             if synced {
@@ -3675,7 +3677,7 @@ impl App {
         let ctx = ui.ctx().clone();
         let elapsed = ctx.input(|i| i.time) - self.dedicated.as_ref().map_or(0.0, |d| d.since);
         if elapsed < DEDICATED_HINT_SECS {
-            egui::Area::new(egui::Id::new("dedicated_exit_hint"))
+            egui::Area::new(egui::Id::unique("dedicated_exit_hint"))
                 .order(egui::Order::Foreground)
                 .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 24.0))
                 .interactable(false)
@@ -3697,7 +3699,7 @@ impl App {
         }
         let name = self.script.path().map(nice_name).unwrap_or_else(|| "The script".to_string());
         let mut stop = false;
-        egui::Area::new(egui::Id::new("script_busy_notice"))
+        egui::Area::new(egui::Id::unique("script_busy_notice"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::LEFT_BOTTOM)
             .fixed_pos(rect.left_bottom() + egui::vec2(12.0, -12.0))
@@ -4409,7 +4411,7 @@ impl TabViewer for SectionTabs<'_> {
     type Tab = Section;
 
     fn id(&mut self, tab: &mut Section) -> egui::Id {
-        egui::Id::new(("section_tab", *tab))
+        egui::Id::unique(("section_tab", *tab))
     }
 
     fn title(&mut self, tab: &mut Section) -> egui::WidgetText {
@@ -4563,7 +4565,7 @@ fn with_info(ui: &mut egui::Ui, info: &str, add: impl FnOnce(&mut egui::Ui) -> e
 /// wraps). In a `settings_group`, every other one is on the striped
 /// background, as a list's rows are.
 fn setting_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let id = egui::Id::new(SETTINGS_GROUP);
+    let id = egui::Id::unique(SETTINGS_GROUP);
     let striped = ui.ctx().data_mut(|d| {
         d.get_temp_mut_or_default::<Option<usize>>(id).as_mut().map(|rows| {
             *rows += 1;
@@ -4631,7 +4633,7 @@ impl<'a> SettingsGroup<'a> {
 
     /// Draw it, `add` drawing its contents (unless it's closed: `None`).
     fn show<R>(mut self, ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
-        let id = egui::Id::new(SETTINGS_GROUP);
+        let id = egui::Id::unique(SETTINGS_GROUP);
         let visuals = ui.visuals().clone();
         let radius = 6u8;
         let toggle = self.closable.map(|salt| ui.make_persistent_id(("settings_group_open", salt)));
@@ -4718,7 +4720,7 @@ fn control_width(ui: &egui::Ui, beside: f32) -> f32 {
 
 /// A setting's dropdown, as wide as `control_width` makes it: a choice too
 /// long for it is cut off (not wrapped, as the rest of a `setting_row` is).
-fn setting_combo(ui: &egui::Ui, id_salt: &str, beside: f32) -> egui::ComboBox {
+fn setting_combo<'a>(ui: &egui::Ui, id_salt: &str, beside: f32) -> egui::ComboBox<'a> {
     egui::ComboBox::from_id_salt(id_salt).width(control_width(ui, beside)).truncate()
 }
 
@@ -4727,7 +4729,7 @@ fn setting_combo(ui: &egui::Ui, id_salt: &str, beside: f32) -> egui::ComboBox {
 /// it is, so a wrapping row can't move one to the next line: it runs past
 /// the edge (and widens the page under it). This starts the next line first
 /// when it wouldn't fit on this one.
-pub(super) fn wrapping_combo(ui: &mut egui::Ui, id_salt: &str, selected: &str) -> egui::ComboBox {
+pub(super) fn wrapping_combo<'a>(ui: &mut egui::Ui, id_salt: &str, selected: &str) -> egui::ComboBox<'a> {
     let font = egui::TextStyle::Button.resolve(ui.style());
     let text = ui.painter().layout_no_wrap(selected.to_string(), font, egui::Color32::PLACEHOLDER).size().x;
     let spacing = ui.spacing();
@@ -4766,7 +4768,7 @@ fn info_icon(ui: &mut egui::Ui, info: impl Into<String>) -> egui::Response {
     let size = ui.text_style_height(&egui::TextStyle::Body).min(16.0);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     if response.clicked() {
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(mobile::INFO_TOAST), info.clone()));
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(mobile::INFO_TOAST), info.clone()));
     }
     let response = response.on_hover_text(info);
     let color = if response.hovered() { ui.visuals().strong_text_color() } else { ui.visuals().weak_text_color() };
@@ -4890,7 +4892,7 @@ pub(super) fn toggle_chip(ui: &mut egui::Ui, on: bool, text: &str, color: egui::
         }
         ui.painter().galley(rect.min + padding, galley, on_color(fill));
     }
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, text));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, text));
     response
 }
 
@@ -5062,7 +5064,7 @@ pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
 /// Esc, or the button going out of sight backs out. `id` tells apart such
 /// buttons shown at once (one per row, say).
 pub(crate) fn confirm_button(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, button: egui::Button<'_>, hover: &str, confirm: &str) -> bool {
-    let id = ui.id().with(("confirm_button", id));
+    let id = ui.scope_id().with(("confirm_button", id));
     let pass = ui.ctx().cumulative_pass_nr();
     // Armed while it was shown armed the pass before.
     let armed = ui.data(|d| d.get_temp::<u64>(id)).is_some_and(|shown| shown + 1 >= pass);
@@ -5331,7 +5333,7 @@ fn drag_ghost_ui(ctx: &egui::Context) {
     let Some(pos) = ctx.pointer_latest_pos() else {
         return;
     };
-    egui::Area::new(egui::Id::new("drag_ghost"))
+    egui::Area::new(egui::Id::unique("drag_ghost"))
         .order(egui::Order::Tooltip)
         .fixed_pos(pos + egui::vec2(14.0, 10.0))
         .interactable(false)

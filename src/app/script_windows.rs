@@ -131,7 +131,7 @@ impl App {
         let Some(window) = self.script_window else { return };
         let script = self.script.path().map(display_name).unwrap_or_else(|| "script".to_string());
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("script_window")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("script_window")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 600.0));
             match window {
                 ScriptWindow::Settings => {

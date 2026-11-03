@@ -131,7 +131,7 @@ impl App {
                 });
                 // (What's left between the wordmark and the buttons.)
                 let rest = ui.available_rect_before_wrap();
-                let grip = ui.interact(rest, ui.id().with("title_drag"), egui::Sense::click_and_drag());
+                let grip = ui.interact(rest, ui.scope_id().with("title_drag"), egui::Sense::click_and_drag());
                 if !self.wants_native_frame() {
                     if grip.double_clicked() {
                         let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));

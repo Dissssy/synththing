@@ -107,7 +107,7 @@ fn light_star() -> Hex {
 
 /// The theme's `Palette::star`, kept where lists find it (`star_color`).
 fn star_id() -> egui::Id {
-    egui::Id::new("theme_star_color")
+    egui::Id::unique("theme_star_color")
 }
 
 /// The color starred songs' note is in, in lists.
@@ -117,7 +117,7 @@ pub fn star_color(ctx: &egui::Context) -> Color32 {
 
 /// The theme's `Palette::playing`, kept where lists find it (`playing_color`).
 fn playing_id() -> egui::Id {
-    egui::Id::new("theme_playing_color")
+    egui::Id::unique("theme_playing_color")
 }
 
 /// The color the song playing is marked with in lists.

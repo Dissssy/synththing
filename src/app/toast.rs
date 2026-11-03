@@ -33,7 +33,7 @@ pub(super) fn draw(
     least: Duration,
 ) -> bool {
     let mut shown_for = least;
-    let response = egui::Area::new(egui::Id::new(id))
+    let response = egui::Area::new(egui::Id::unique(id))
         .order(egui::Order::Tooltip)
         .sense(egui::Sense::click())
         .anchor(anchor, offset)
@@ -67,7 +67,7 @@ pub(super) fn draw(
 }
 
 fn button_id() -> egui::Id {
-    egui::Id::new("button_toast")
+    egui::Id::unique("button_toast")
 }
 
 /// Show `text` as a button's note, in place of any still showing.

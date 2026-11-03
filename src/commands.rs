@@ -533,7 +533,7 @@ impl Keymap {
 pub const ESCAPE: Key = Key::Escape;
 
 fn keymap_id() -> egui::Id {
-    egui::Id::new("keymap")
+    egui::Id::unique("keymap")
 }
 
 /// Whether a press still works while a text field has the keyboard: with

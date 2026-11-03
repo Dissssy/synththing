@@ -384,7 +384,7 @@ fn picture_ui(ui: &mut egui::Ui, picture: &Picture, state: &mut State, act: &imp
     });
     // Its left edge (the window's) resizes it, between 9:16 and 16:9.
     let edge = egui::Rect::from_min_max(rect.min - egui::vec2(10.0, 0.0), egui::pos2(rect.min.x + 6.0, rect.max.y));
-    let grip = ui.interact(edge, egui::Id::new("tray_picture_edge"), egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    let grip = ui.interact(edge, egui::Id::unique("tray_picture_edge"), egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
     if grip.drag_started() {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::BeginResize(egui::viewport::ResizeDirection::West));
     }
@@ -475,7 +475,7 @@ fn switcher_ui(
             }
         });
     });
-    state.strip_offset = output.state.offset.x;
+    state.strip_offset = output.state.clamped_offset().x;
 }
 
 /// Where a `size` picture shows inside `rect`, keeping its shape.
@@ -536,7 +536,7 @@ fn controls_ui(ui: &mut egui::Ui, ctx: &egui::Context, state: &mut State, act: &
         // (Up to the buttons, so they still take their own clicks.)
         let mut grip = header.response.rect;
         grip.max.x = grip.max.x.min(buttons_left - 4.0);
-        let drag = ui.interact(grip, egui::Id::new("tray_panel_drag"), egui::Sense::drag());
+        let drag = ui.interact(grip, egui::Id::unique("tray_panel_drag"), egui::Sense::drag());
         if drag.drag_started() {
             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }

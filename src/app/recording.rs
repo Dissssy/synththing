@@ -844,7 +844,7 @@ impl App {
         }
         let state = self.recording.download.state();
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("ffmpeg_prompt")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("ffmpeg_prompt")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 420.0));
             ui.heading("Recording needs ffmpeg");
             ui.add_space(6.0);
@@ -1095,7 +1095,7 @@ impl App {
             .map(|np| np.list)
             .or(self.viewed_playlist)
             .is_some_and(|l| self.playlists.lists.get(l).is_some_and(|l| !l.playlist.entries.is_empty()));
-        let response = egui::Modal::new(egui::Id::new("record_window")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("record_window")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 540.0));
             ui.heading("Record");
             ui.add_space(6.0);

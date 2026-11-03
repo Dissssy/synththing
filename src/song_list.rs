@@ -543,12 +543,12 @@ fn shown_columns(ui: &egui::Ui, view: &View, header_id: egui::Id, touch: bool) -
 /// the queue. Whether its star was clicked.
 pub fn playing_ui(ui: &mut egui::Ui, id_salt: &'static str, song: &(PathBuf, Described), view: &View) -> bool {
     let touch = select_list::touch(ui.ctx());
-    let shown = shown_columns(ui, view, egui::Id::new(id_salt).with("header"), touch);
+    let shown = shown_columns(ui, view, egui::Id::unique(id_salt).with("header"), touch);
     let mut star = false;
     let height = select_list::row_height(ui);
     ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
         let songs = std::slice::from_ref(song);
-        select_list::show(ui, egui::Id::new(id_salt).with("playing"), songs, &mut Selection::default(), Some(0), |ui, row, (path, song)| {
+        select_list::show(ui, egui::Id::unique(id_salt).with("playing"), songs, &mut Selection::default(), Some(0), |ui, row, (path, song)| {
             star = song_row(ui, path, song, &Hits::default(), &shown, select_list::scrolls(row, true), touch, &mut |_, _| {});
         });
     });
@@ -574,7 +574,7 @@ pub fn ordered_ui(
     menu: &mut dyn FnMut(&mut egui::Ui, &[usize]),
 ) -> OrderedOutput {
     let touch = select_list::touch(ui.ctx());
-    let header_id = egui::Id::new(id_salt).with("header");
+    let header_id = egui::Id::unique(id_salt).with("header");
     let shown = shown_columns(ui, view, header_id, touch);
     let mut view_changed = false;
     if !touch && !songs.is_empty() {
@@ -805,12 +805,12 @@ impl SongList {
         let mut used = 0.0;
         let sorted = column(&view.sort);
         let shown: Vec<(&'static Def, f32)> = if touch {
-            view.widths(ui.ctx(), egui::Id::new(HEADER), sorted.into_iter().collect())
+            view.widths(ui.ctx(), egui::Id::unique(HEADER), sorted.into_iter().collect())
         } else {
             let hidden = sorted.filter(|c| !view.columns.iter().any(|k| k == c.key));
             // (One that isn't a column of the user's goes first, to fit.)
             let columns = hidden.into_iter().chain(view.columns.iter().filter_map(|k| column(k))).collect();
-            view.widths(ui.ctx(), egui::Id::new(HEADER), columns)
+            view.widths(ui.ctx(), egui::Id::unique(HEADER), columns)
                 .into_iter()
                 .take_while(|(_, width)| {
                     used += width + ui.spacing().item_spacing.x;
@@ -947,14 +947,14 @@ impl SongList {
         // them. (Its ID stays put whatever the columns, so the view's menu
         // stays open while they're ticked on and off.)
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
-        let background = ui.interact(rect, egui::Id::new(HEADER).with("row"), egui::Sense::click());
+        let background = ui.interact(rect, egui::Id::unique(HEADER).with("row"), egui::Sense::click());
         let arrow = format!(" {}", crate::app::icon(if view.descending { "caret-down" } else { "caret-up" }));
         let title = |key: &str, title: &str| {
             let text = if view.sort == key { format!("{title}{arrow}") } else { title.to_string() };
             egui::RichText::new(text).strong()
         };
         let hint = "Click to sort by it (again to turn it around); right-click for columns and groups";
-        let output = header(ui, egui::Id::new(HEADER), rect, shown, title);
+        let output = header(ui, egui::Id::unique(HEADER), rect, shown, title);
         let mut changed = view.resize(output.resized);
         let mut sort_by = None;
         let keys = shown.iter().map(|(c, _)| c.key).chain(["name"]);

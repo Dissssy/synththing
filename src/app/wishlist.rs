@@ -1157,7 +1157,7 @@ impl App {
         let Some((id, note)) = &mut self.wishlist.note else { return };
         let title = self.wishlist.list.wishes.get(id.as_str()).map_or_else(String::new, |w| w.title.clone());
         let mut done = None;
-        egui::Modal::new(egui::Id::new("wish_note")).show(ctx, |ui| {
+        egui::Modal::new(egui::Id::unique("wish_note")).show(ctx, |ui| {
             ui.strong(format!("A note on {title}"));
             ui.add(egui::TextEdit::multiline(note).hint_text("Which edition, who told you of it...").desired_rows(3));
             ui.horizontal(|ui| {
