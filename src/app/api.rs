@@ -45,8 +45,13 @@ pub(super) struct ApiState {
     scripts_seen: Option<u64>,
     /// Drawing the visualizer off screen for whoever's watching it.
     unseen: Option<Unseen>,
-    /// A token just made, shown until Preferences close: (app name, token).
+    /// A token or stream URL just made, shown until Preferences close:
+    /// (what it is, the text to copy).
     new_token: Option<(String, String)>,
+    /// The stream URL builder's choices: the pixel scale (0 until picked:
+    /// the Visualizer scale preference's), and whether it plays the audio.
+    stream_scale: u32,
+    stream_audio: bool,
     /// The name being typed for a new app.
     new_name: String,
     /// The program asked to be removed, by name, waiting to be confirmed.
@@ -817,6 +822,10 @@ impl App {
         let mut remove_songs = None;
         let new_name = &mut self.api.new_name;
         let new_token = &mut self.api.new_token;
+        if self.api.stream_scale == 0 {
+            self.api.stream_scale = crate::config::visualizer_scale_down(self.config.visualizer_scale.unwrap_or(crate::config::DEFAULT_VISUALIZER_SCALE));
+        }
+        let (stream_scale, stream_audio) = (&mut self.api.stream_scale, &mut self.api.stream_audio);
         settings_group("Programs").icon("key").hint("What each program may do: hover an icon for what it allows.").show(ui, |ui| {
             if settings.apps.is_empty() {
                 setting_row(ui, |ui| ui.weak("None yet. Add one below to get its token."));
@@ -832,12 +841,13 @@ impl App {
                 if !name.is_empty() && (add.clicked() || entered) {
                     let (access, token) = Access::new(&name);
                     settings.apps.push(access);
-                    *new_token = Some((name, token));
+                    *new_token = Some((format!("{name}'s token."), token));
                     new_name.clear();
                 }
             });
-            if let Some((name, token)) = &*new_token {
-                setting_row(ui, |ui| ui.label(format!("{name}'s token. Copy it now: it isn't shown again.")));
+            stream_url_ui(ui, settings, stream_scale, stream_audio, new_token);
+            if let Some((what, token)) = &*new_token {
+                setting_row(ui, |ui| ui.label(format!("{what} Copy it now: it isn't shown again.")));
                 setting_row(ui, |ui| {
                     if ui.add(super::row_icon_button(ui, "copy")).on_hover_text("Copy").clicked() {
                         ui.ctx().copy_text(token.clone());
@@ -981,6 +991,47 @@ const PERMISSIONS: [(&str, &str, fn(&mut Access) -> &mut bool); 8] = [
     ("app-window", "Show a panel: put a panel of its own in the Apps tab, and hear what you do in it", |a| &mut a.panel),
     ("devices", "Show on my other devices: its panel shows in the Apps tab on your other devices too (with sync on), and hears what you do there", |a| &mut a.share),
 ];
+
+/// Make a visualizer page URL for OBS's Browser Source: a new program
+/// that may read (and listen, with the audio), with its token in the URL,
+/// which is shown once like any new token. The page draws at the Browser
+/// Source's size, so the URL needs none.
+fn stream_url_ui(ui: &mut egui::Ui, settings: &mut api::Settings, scale: &mut u32, audio: &mut bool, made: &mut Option<(String, String)>) {
+    with_info(
+        ui,
+        "Makes a program that may see the visualizer (and hear what plays, with audio) and gives you its URL for a \
+         Browser Source in OBS. The visualizer draws at the source's size: resize it and refresh.",
+        |ui| {
+            let label = setting_label(ui, "Stream URL");
+            let combo = egui::ComboBox::from_id_salt("stream_url_scale").selected_text(format!("{scale}x")).show_ui(ui, |ui| {
+                for choice in crate::config::VISUALIZER_SCALES {
+                    ui.selectable_value(scale, choice, format!("{choice}x"));
+                }
+            });
+            let combo = combo.response.on_hover_text("Pixel scale, like the Visualizer's");
+            let tick = ui.checkbox(audio, "With audio");
+            let make = ui.button(format!("{}  Make", super::icon("link")));
+            if make.clicked() {
+                let name = (1..)
+                    .map(|n| if n == 1 { "OBS stream".to_string() } else { format!("OBS stream {n}") })
+                    .find(|name| !settings.apps.iter().any(|app| &app.name == name))
+                    .unwrap_or_default();
+                let (mut access, token) = Access::new(&name);
+                access.listen = *audio;
+                settings.apps.push(access);
+                let mut url = format!("http://127.0.0.1:{}/v1/visualizer?token={token}", settings.port());
+                if *scale != 1 {
+                    url += &format!("&scale={scale}");
+                }
+                if *audio {
+                    url += "&audio=1";
+                }
+                *made = Some((format!("{name}'s URL, for a Browser Source in OBS."), url));
+            }
+            label | combo | tick | make
+        },
+    );
+}
 
 /// The programs down the side, what each may do across the top, the cells
 /// in a checkerboard so a tick's row and column are easy to follow. By
