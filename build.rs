@@ -79,7 +79,8 @@ fn main() {
     generate_reference(&manifest_dir, &out_dir);
     generate_log_lines(&manifest_dir, &out_dir);
     let channel = stamp_build();
-    // (Built by CI, a release included, or anywhere else.)
+    // Local: built anywhere but GitHub Actions (which sets it for CI and
+    // releases).
     println!("cargo:rerun-if-env-changed=GITHUB_ACTIONS");
     let local = env::var("GITHUB_ACTIONS").as_deref() != Ok("true");
     println!("cargo:rustc-env=SYNTHTHING_LOCAL={local}");
