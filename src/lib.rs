@@ -23,6 +23,7 @@ mod app;
 mod android_id;
 mod applog;
 mod audio;
+mod audio_output;
 mod audio_stream;
 mod art_fill;
 mod background;

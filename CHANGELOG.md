@@ -15,6 +15,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Groupings: the songs on an album's, artist's or other group's page are spaced like every other list again, instead of cramped with striped rows taller than the rest and the playing song's outline touching its neighbours.
 - Phones: the Script library's list and search bar fit the screen again (the sort dropdown no longer pushes the page 30 points past its right edge), and an empty Wishlist's note wraps instead of running off the side.
 - The log (and usage data) no longer warns "UI stuck" or "stalled frame" while the window is in the background, minimized or hidden: with nothing on screen, no frames are drawn, which isn't a hang. A hang in the app's own code is still caught there.
+- Android: the app no longer drains the battery in the background. Going to the background could leave it running a whole CPU core flat out, doing nothing, until it was opened again, and with nothing playing it still kept the phone's audio output (and with it the phone) awake.
+- The audio output now closes after 10 seconds with nothing to play, and opens again when something plays, on whatever is the default output device by then.
 
 ## 2.5.0 (2026-11-02)
 

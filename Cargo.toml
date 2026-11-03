@@ -93,3 +93,11 @@ raw-window-handle = "0.6"                                   # the window's HWND,
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_SystemInformation"] }  # re-attach to the terminal for CLI use; local time for recording names
 windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Shell"] }  # the Start menu shortcut (install.rs)
 windows-registry = "0.6"                                    # the uninstall entry and starting with Windows (install.rs)
+
+[patch.crates-io]
+# Vendored copy of eframe 0.36.1 with eframe 0.37's fix for its event loop
+# spinning a whole core once nothing's left to repaint (on Android, the app
+# in the background, the battery draining). Search vendor/eframe/src for
+# "LOCAL PATCH". Drop it for eframe 0.37 once egui_dock and egui-phosphor
+# support that.
+eframe = { path = "vendor/eframe" }

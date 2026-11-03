@@ -9,15 +9,15 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Result};
 
 use crate::app::App;
-use crate::audio::{AudioEngine, AudioRing, Output, PlaybackShared, Volume};
+use crate::audio::{AudioEngine, AudioRing, PlaybackShared, Volume};
+use crate::audio_output::AudioOutput;
 use crate::audio_stream::Listeners;
 use crate::config::Config;
 use crate::engine::Engine;
 use crate::visualizer::SampleTap;
 
-/// Start playback and make the app, ready to hand to eframe. The audio
-/// output has to stay alive for as long as the app runs: drop it after.
-pub fn start() -> Result<(App, rodio::MixerDeviceSink)> {
+/// Start playback and make the app, ready to hand to eframe.
+pub fn start() -> Result<App> {
     let sample_rate = crate::audio::SAMPLE_RATE;
 
     let engine = Engine::new(sample_rate);
@@ -42,17 +42,9 @@ pub fn start() -> Result<(App, rodio::MixerDeviceSink)> {
     // Whoever listens through the local API (`GET /v1/audio/stream`).
     let listeners = Listeners::new();
 
-    // Audio output, a pure consumer of the rings.
-    let stream = rodio::DeviceSinkBuilder::open_default_sink()
-        .map_err(|e| anyhow!("could not open an audio output device: {e}"))?;
-    stream.mixer().add(Output::new(
-        ring.clone(),
-        Arc::clone(&flush),
-        live_ring.clone(),
-        volume.clone(),
-        Arc::clone(&listeners),
-        sample_rate,
-    ));
+    // Audio output, a pure consumer of the rings, open while they hold
+    // something.
+    let output = AudioOutput::new(ring.clone(), Arc::clone(&flush), live_ring.clone(), volume.clone(), Arc::clone(&listeners), sample_rate);
 
     // Render thread, owns the engine, produces into the ring.
     let audio = AudioEngine::new(
@@ -76,12 +68,12 @@ pub fn start() -> Result<(App, rodio::MixerDeviceSink)> {
     config.soundfonts.sort();
 
     crate::usage::start(config.usage_data == Some(true));
-    let mut app = App::new(command_tx, shared, config, tap, listeners, stream.mixer().clone(), sample_rate);
+    let mut app = App::new(command_tx, shared, config, tap, listeners, output, sample_rate);
     app.autoload_soundfont();
     app.check_for_updates_on_launch();
     app.whats_new_on_launch(ran_before);
     if !ran_before {
         app.open_welcome();
     }
-    Ok((app, stream))
+    Ok(app)
 }
