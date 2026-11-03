@@ -563,9 +563,9 @@ impl App {
         };
         let revision = self.songs.revision();
         let last = self.api.seen.replace((seen.clone(), view.generation, revision));
-        let changed = last.as_ref().is_none_or(|(s, g, _)| *s != seen || *g != view.generation);
+        // The media controls and Discord: desktop only.
         #[cfg(not(target_os = "android"))]
-        if changed && (self.api.media.is_some() || self.api.discord.is_some()) {
+        if last.as_ref().is_none_or(|(s, g, _)| *s != seen || *g != view.generation) && (self.api.media.is_some() || self.api.discord.is_some()) {
             let shown = self.media_shown(view);
             if let Some(media) = &mut self.api.media {
                 media.show(&shown);
@@ -852,7 +852,7 @@ impl App {
         }
         if let Some(name) = self.api.removing.clone() {
             let mut close = false;
-            let modal = egui::Modal::new(egui::Id::new("remove_program")).show(ui.ctx(), |ui| {
+            let modal = egui::Modal::new(egui::Id::unique("remove_program")).show(ui.ctx(), |ui| {
                 ui.set_width(super::fit_width(ui, 360.0));
                 ui.heading(format!("Remove {name}?"));
                 ui.label("Its token stops working. The songs it added stay.");

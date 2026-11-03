@@ -91,7 +91,7 @@ impl App {
         let mut pick_own = false;
         let art = &mut self.groupings.art;
         egui::Window::new(format!("Art for {}", choose.title))
-            .id(egui::Id::new("choose_art"))
+            .id(egui::Id::unique("choose_art"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)

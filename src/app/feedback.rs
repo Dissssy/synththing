@@ -122,7 +122,7 @@ impl App {
         let sending = state.sending.is_some();
         let mut send = false;
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("feedback")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("feedback")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 520.0));
             ui.heading("Send feedback");
             if let Channel::Branch(name) = build_info::channel() {

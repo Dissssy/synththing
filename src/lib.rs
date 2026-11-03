@@ -113,6 +113,7 @@ mod startup;
 mod storage;
 mod theme;
 mod together;
+#[cfg(windows)]
 mod tray;
 mod typing;
 mod updater;

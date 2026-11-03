@@ -65,6 +65,9 @@ mod themes;
 mod layouts;
 mod title_bar;
 mod toast;
+#[cfg(windows)]
+mod tray;
+#[cfg(windows)]
 mod tray_panel;
 mod tour;
 mod usage;
@@ -511,6 +514,7 @@ pub struct App {
     desktop_entry: desktop_entry::DesktopEntry,
     /// Started with Windows to open as the mini player: it opens on the
     /// first frame (`handle_tray`).
+    #[cfg(windows)]
     open_mini_at_start: bool,
     /// The category showing in Preferences.
     preferences_tab: PrefTab,
@@ -642,13 +646,14 @@ pub struct App {
     recording: recording::Recording,
     /// The wordmark in the menu bar, drawn for the current size and theme.
     wordmark: branding::Wordmark,
-    /// The notification-area icon (Windows; `None` elsewhere, or if it
-    /// couldn't be made).
+    /// The notification-area icon (`None` if it couldn't be made).
+    #[cfg(windows)]
     tray: Option<crate::tray::Tray>,
     /// Raised when synththing is launched again for this config folder
     /// (`instance.rs`): the window comes back.
     second_launch: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// The mini player, what clicking the tray icon shows.
+    #[cfg(windows)]
     tray_panel: tray_panel::TrayPanel,
     /// The window's hidden in the tray.
     hidden: bool,
@@ -704,6 +709,7 @@ impl App {
         let mut script = ScriptHost::spawn(source.clone(), active_path, sample_rate);
         let visualizer =
             Arc::new(Mutex::new(VisualizerPanel::new(script.take_pipe(), VISUALIZER_WIDTH, VISUALIZER_HEIGHT)));
+        #[cfg(windows)]
         let picture = tray_panel::Picture {
             panel: Arc::clone(&visualizer),
             tap: tap.clone(),
@@ -849,6 +855,7 @@ impl App {
             install: install::Install::new(),
             #[cfg(target_os = "linux")]
             desktop_entry: desktop_entry::DesktopEntry::new(),
+            #[cfg(windows)]
             open_mini_at_start: false,
             preferences_tab: PrefTab::default(),
             themes: themes::ThemesState::default(),
@@ -908,8 +915,10 @@ impl App {
             editor_saved: String::new(),
             recording: recording::Recording::new(),
             wordmark: branding::Wordmark::default(),
+            #[cfg(windows)]
             tray: None,
             second_launch: None,
+            #[cfg(windows)]
             tray_panel: tray_panel::TrayPanel::new(picture),
             hidden: false,
             api: api::ApiState::default(),
@@ -1712,7 +1721,7 @@ impl App {
         } else if touch {
             0.0
         } else {
-            let id = egui::Id::new("soundfonts_header");
+            let id = egui::Id::unique("soundfonts_header");
             let widths: select_list::Widths = ui.ctx().data_mut(|d| d.get_persisted(id.with("widths"))).unwrap_or_default();
             let width = select_list::column_width(ui.ctx(), id, "size", &widths, SOUNDFONT_SIZE_WIDTH);
             let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y), egui::Sense::hover());
@@ -1787,7 +1796,7 @@ impl App {
             return;
         }
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("app_log")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("app_log")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 720.0));
             ui.heading("Log");
             close = self.log_body_ui(ui, false);
@@ -2286,7 +2295,7 @@ impl App {
             return;
         }
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("credits")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("credits")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 660.0));
             ui.heading("Credits & licenses");
             self.credits_body_ui(ui, false);
@@ -2371,6 +2380,13 @@ impl App {
                 egui::CollapsingHeader::new("Noto Sans CJK's license").id_salt("credits_noto_cjk").show(ui, |ui| {
                     ui.label(egui::RichText::new(credits::NOTO_CJK_LICENSE.trim()).monospace());
                 });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Emoji use Noto Emoji by Google, under the SIL Open Font License 1.1.");
+                    ui.hyperlink_to("github.com/googlefonts/noto-emoji", "https://github.com/googlefonts/noto-emoji");
+                });
+                egui::CollapsingHeader::new("Noto Emoji's license").id_salt("credits_noto_emoji").show(ui, |ui| {
+                    ui.label(egui::RichText::new(credits::NOTO_EMOJI_LICENSE.trim()).monospace());
+                });
 
                 ui.separator();
                 ui.strong("Starter pack soundfonts");
@@ -2409,7 +2425,7 @@ impl App {
                 // (Hundreds of packages: a closed row out of sight only
                 // takes its space, measured off a row drawn earlier, or
                 // the page cost 8-11 ms every frame on a phone.)
-                let row_height_id = ui.id().with("credits_row_height");
+                let row_height_id = ui.scope_id().with("credits_row_height");
                 let row_height: Option<f32> = ui.data(|d| d.get_temp(row_height_id));
                 for package in &third_party.packages {
                     let matches = search.is_empty()
@@ -2473,7 +2489,7 @@ impl App {
         let waiting = rename.waiting.is_some() && answer.is_none();
         let mut submit = false;
         let mut cancel = false;
-        let response = egui::Modal::new(egui::Id::new("rename_script")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("rename_script")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 380.0));
             ui.heading("Rename script");
             ui.add_space(4.0);
@@ -2731,7 +2747,7 @@ impl App {
         let frame = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 8 });
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             DockArea::new(&mut dock)
-                .id(egui::Id::new("section_dock"))
+                .id(egui::Id::unique("section_dock"))
                 .style({
                     let mut style = crate::theme::dock_style(ui.style());
                     if locked {
@@ -2814,9 +2830,11 @@ impl App {
         };
         let selected = self.song_list.selected();
         let mut info_for: Option<Vec<PathBuf>> = None;
+        #[cfg_attr(target_os = "android", expect(unused_mut, reason = "phones have no Song info button here"))]
         let mut info_clicked = false;
         let can_undo = self.last_edit.is_some();
         let mut undo_clicked = false;
+        #[cfg_attr(target_os = "android", expect(unused_mut, reason = "phones have no Clean up button here"))]
         let mut cleanup_clicked = false;
         let moving = self.songs_moving();
         let autoplay = self.autoplay;
@@ -3074,7 +3092,7 @@ impl App {
         let mut remove = false;
         let synced = self.syncs_library();
         let everywhere = &mut self.remove_everywhere;
-        let modal = egui::Modal::new(egui::Id::new("remove_songs")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("remove_songs")).show(ctx, |ui| {
             ui.set_max_width(360.0);
             ui.heading("Remove from library?");
             if synced {
@@ -3326,127 +3344,15 @@ impl App {
         (tags, crate::album_art::Source::of_song(Some(path.to_path_buf()), song))
     }
 
-    /// Put synththing's icon in the tray. Once the window exists (desktop.rs,
-    /// as eframe starts).
-    pub fn attach_tray(&mut self, ctx: &egui::Context) {
-        self.tray = crate::tray::Tray::new(ctx);
-    }
-
     /// The main window's handle (an HWND on Windows), for the system's media
     /// controls.
     pub fn attach_window(&mut self, window: Option<usize>) {
         self.api.window = window;
     }
 
-    /// Started with Windows (`--autostart`): open as Preferences says, the
-    /// window hidden in the tray, or as the mini player. (Without a tray,
-    /// as the window.)
-    pub fn started_with_windows(&mut self, ctx: &egui::Context) {
-        if self.tray.is_none() {
-            return;
-        }
-        match self.config.startup_opens {
-            config::StartupOpens::Window => {}
-            config::StartupOpens::Tray => self.hide_window(ctx),
-            config::StartupOpens::MiniPlayer => {
-                self.hide_window(ctx);
-                self.open_mini_at_start = true;
-            }
-        }
-    }
-
     /// Watch `flag`, raised when synththing is launched again here.
     pub fn listen_for_second_launch(&mut self, flag: Arc<std::sync::atomic::AtomicBool>) {
         self.second_launch = Some(flag);
-    }
-
-    /// Clicks on the tray icon since last frame, and what was clicked in
-    /// the tray panel.
-    fn handle_tray(&mut self, ctx: &egui::Context, view: &EngineView) {
-        if self.tray.is_none() {
-            return;
-        }
-        if std::mem::take(&mut self.open_mini_at_start) {
-            let native = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
-            match self.tray.as_ref().and_then(crate::tray::Tray::corner) {
-                Some(corner) => {
-                    let snapshot = self.tray_snapshot(view);
-                    self.tray_panel.update(ctx, snapshot);
-                    self.tray_panel.toggle_mini(ctx, corner, native * ctx.zoom_factor());
-                }
-                None => self.show_window(ctx),
-            }
-        }
-        let Some(tray) = &self.tray else { return };
-        for click in tray.clicks() {
-            let native = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
-            let snapshot = self.tray_snapshot(view);
-            self.tray_panel.update(ctx, snapshot);
-            match click {
-                crate::tray::TrayClick::Primary { cursor } => {
-                    // The mini player takes over from the main window.
-                    if !self.tray_panel.is_open() {
-                        self.hide_window(ctx);
-                    }
-                    self.tray_panel.toggle_mini(ctx, cursor, native * ctx.zoom_factor());
-                }
-                crate::tray::TrayClick::Secondary => self.show_window(ctx),
-            }
-        }
-        for action in self.tray_panel.actions() {
-            match action {
-                tray_panel::Action::TogglePause => self.send(AudioCommand::TogglePause),
-                tray_panel::Action::Previous => self.previous_track(view.position),
-                tray_panel::Action::Next => {
-                    if self.has_next() {
-                        self.next_track();
-                    }
-                }
-                tray_panel::Action::Volume(volume) => {
-                    self.volume = volume.clamp(0.0, 1.0);
-                    self.send_volume();
-                }
-                tray_panel::Action::Soundfont(index) => self.activate_soundfont(index),
-                tray_panel::Action::Play(list, entry) => self.play_entry(list, entry),
-                tray_panel::Action::ShowWindow => self.show_window(ctx),
-                tray_panel::Action::Quit => self.close_with(ctx, close::CloseAction::Quit),
-                tray_panel::Action::Effects(effects) => self.apply_script_effects(effects, view),
-                tray_panel::Action::Script(index) => self.load_script(index),
-            }
-        }
-        if self.tray_panel.is_open() {
-            let snapshot = self.tray_snapshot(view);
-            self.tray_panel.update(ctx, snapshot);
-        }
-    }
-
-    /// What the tray panel shows.
-    fn tray_snapshot(&mut self, view: &EngineView) -> tray_panel::Snapshot {
-        tray_panel::Snapshot {
-            title: self.current_title().or_else(|| view.track_name.clone()),
-            paused: view.paused,
-            position: view.position,
-            length: view.length,
-            volume: self.volume,
-            soundfonts: self.config.soundfonts.iter().map(|p| nice_name(p)).collect(),
-            active_soundfont: self.active_sf,
-            playlists: self
-                .playlists
-                .lists
-                .iter()
-                .map(|l| {
-                    let naming = naming(&self.config, &self.songs);
-                    let names = l.playlist.entries.iter().map(|e| title_of(&mut self.song_info, &naming, &e.path)).collect();
-                    (l.playlist.name.clone(), names)
-                })
-                .collect(),
-            playing: self.playing_entry().map(|n| (n.list, n.entry)),
-            script: self.script.path().map(nice_name),
-            scripts: self.available_scripts.iter().map(|p| nice_name(p)).collect(),
-            active_script: self.active_script,
-            transport: self.script_transport(),
-            main_shows_visualizer: !self.hidden && self.visualizer_was_drawn,
-        }
     }
 
     /// Bring the main window back and to the front: un-hidden,
@@ -3675,7 +3581,7 @@ impl App {
         let ctx = ui.ctx().clone();
         let elapsed = ctx.input(|i| i.time) - self.dedicated.as_ref().map_or(0.0, |d| d.since);
         if elapsed < DEDICATED_HINT_SECS {
-            egui::Area::new(egui::Id::new("dedicated_exit_hint"))
+            egui::Area::new(egui::Id::unique("dedicated_exit_hint"))
                 .order(egui::Order::Foreground)
                 .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 24.0))
                 .interactable(false)
@@ -3697,7 +3603,7 @@ impl App {
         }
         let name = self.script.path().map(nice_name).unwrap_or_else(|| "The script".to_string());
         let mut stop = false;
-        egui::Area::new(egui::Id::new("script_busy_notice"))
+        egui::Area::new(egui::Id::unique("script_busy_notice"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::LEFT_BOTTOM)
             .fixed_pos(rect.left_bottom() + egui::vec2(12.0, -12.0))
@@ -4111,6 +4017,7 @@ impl App {
         }
         self.minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
         let view = self.shared.lock().unwrap().view.clone();
+        #[cfg(windows)]
         frame_timing::time("handle_tray", || self.handle_tray(ctx, &view));
         if self.second_launch.as_ref().is_some_and(|f| f.swap(false, std::sync::atomic::Ordering::Relaxed)) {
             log::info!("launched again: showing the window");
@@ -4119,6 +4026,7 @@ impl App {
         // The main window and the mini player are never up together: the
         // main window on screen, however it got there (`show_window`, or
         // restored from the taskbar), puts the mini player away.
+        #[cfg(windows)]
         if !self.hidden && !self.minimized && self.tray_panel.is_open() {
             self.tray_panel.hide(ctx);
         }
@@ -4204,6 +4112,7 @@ impl eframe::App for App {
             // visualizer, which would run the script at this window's
             // size between the mini player's frames. Only keep the tray
             // window there.
+            #[cfg(windows)]
             if self.tray.is_some() {
                 self.tray_panel.register(&ctx);
             }
@@ -4325,6 +4234,7 @@ impl eframe::App for App {
         self.rules_editor_ui(&ctx);
         self.close_requested_ui(&ctx);
         self.close_prompt_ui(&ctx);
+        #[cfg(windows)]
         if self.tray.is_some() {
             self.tray_panel.register(&ctx);
         }
@@ -4429,7 +4339,7 @@ impl TabViewer for SectionTabs<'_> {
     type Tab = Section;
 
     fn id(&mut self, tab: &mut Section) -> egui::Id {
-        egui::Id::new(("section_tab", *tab))
+        egui::Id::unique(("section_tab", *tab))
     }
 
     fn title(&mut self, tab: &mut Section) -> egui::WidgetText {
@@ -4583,7 +4493,7 @@ fn with_info(ui: &mut egui::Ui, info: &str, add: impl FnOnce(&mut egui::Ui) -> e
 /// wraps). In a `settings_group`, every other one is on the striped
 /// background, as a list's rows are.
 fn setting_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let id = egui::Id::new(SETTINGS_GROUP);
+    let id = egui::Id::unique(SETTINGS_GROUP);
     let striped = ui.ctx().data_mut(|d| {
         d.get_temp_mut_or_default::<Option<usize>>(id).as_mut().map(|rows| {
             *rows += 1;
@@ -4651,7 +4561,7 @@ impl<'a> SettingsGroup<'a> {
 
     /// Draw it, `add` drawing its contents (unless it's closed: `None`).
     fn show<R>(mut self, ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
-        let id = egui::Id::new(SETTINGS_GROUP);
+        let id = egui::Id::unique(SETTINGS_GROUP);
         let visuals = ui.visuals().clone();
         let radius = 6u8;
         let toggle = self.closable.map(|salt| ui.make_persistent_id(("settings_group_open", salt)));
@@ -4738,7 +4648,7 @@ fn control_width(ui: &egui::Ui, beside: f32) -> f32 {
 
 /// A setting's dropdown, as wide as `control_width` makes it: a choice too
 /// long for it is cut off (not wrapped, as the rest of a `setting_row` is).
-fn setting_combo(ui: &egui::Ui, id_salt: &str, beside: f32) -> egui::ComboBox {
+fn setting_combo<'a>(ui: &egui::Ui, id_salt: &str, beside: f32) -> egui::ComboBox<'a> {
     egui::ComboBox::from_id_salt(id_salt).width(control_width(ui, beside)).truncate()
 }
 
@@ -4747,7 +4657,7 @@ fn setting_combo(ui: &egui::Ui, id_salt: &str, beside: f32) -> egui::ComboBox {
 /// it is, so a wrapping row can't move one to the next line: it runs past
 /// the edge (and widens the page under it). This starts the next line first
 /// when it wouldn't fit on this one.
-pub(super) fn wrapping_combo(ui: &mut egui::Ui, id_salt: &str, selected: &str) -> egui::ComboBox {
+pub(super) fn wrapping_combo<'a>(ui: &mut egui::Ui, id_salt: &str, selected: &str) -> egui::ComboBox<'a> {
     let font = egui::TextStyle::Button.resolve(ui.style());
     let text = ui.painter().layout_no_wrap(selected.to_string(), font, egui::Color32::PLACEHOLDER).size().x;
     let spacing = ui.spacing();
@@ -4786,7 +4696,7 @@ fn info_icon(ui: &mut egui::Ui, info: impl Into<String>) -> egui::Response {
     let size = ui.text_style_height(&egui::TextStyle::Body).min(16.0);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     if response.clicked() {
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(mobile::INFO_TOAST), info.clone()));
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(mobile::INFO_TOAST), info.clone()));
     }
     let response = response.on_hover_text(info);
     let color = if response.hovered() { ui.visuals().strong_text_color() } else { ui.visuals().weak_text_color() };
@@ -4910,7 +4820,7 @@ pub(super) fn toggle_chip(ui: &mut egui::Ui, on: bool, text: &str, color: egui::
         }
         ui.painter().galley(rect.min + padding, galley, on_color(fill));
     }
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, text));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, text));
     response
 }
 
@@ -5082,7 +4992,7 @@ pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
 /// Esc, or the button going out of sight backs out. `id` tells apart such
 /// buttons shown at once (one per row, say).
 pub(crate) fn confirm_button(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, button: egui::Button<'_>, hover: &str, confirm: &str) -> bool {
-    let id = ui.id().with(("confirm_button", id));
+    let id = ui.scope_id().with(("confirm_button", id));
     let pass = ui.ctx().cumulative_pass_nr();
     // Armed while it was shown armed the pass before.
     let armed = ui.data(|d| d.get_temp::<u64>(id)).is_some_and(|shown| shown + 1 >= pass);
@@ -5351,7 +5261,7 @@ fn drag_ghost_ui(ctx: &egui::Context) {
     let Some(pos) = ctx.pointer_latest_pos() else {
         return;
     };
-    egui::Area::new(egui::Id::new("drag_ghost"))
+    egui::Area::new(egui::Id::unique("drag_ghost"))
         .order(egui::Order::Tooltip)
         .fixed_pos(pos + egui::vec2(14.0, 10.0))
         .interactable(false)

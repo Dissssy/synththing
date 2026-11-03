@@ -280,7 +280,7 @@ impl App {
         let Some(paths) = self.tags_for.clone() else { return };
         let mut close = false;
         let mut action = None;
-        let response = egui::Modal::new(egui::Id::new("tags")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("tags")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 360.0));
             if let [path] = paths.as_slice() {
                 ui.heading(self.song_title(path));

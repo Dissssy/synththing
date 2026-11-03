@@ -216,6 +216,8 @@ pub fn main() -> Result<()> {
             .with_inner_size(app.start_size())
             .with_decorations(app.wants_native_frame())
             .with_icon(icon),
+        // app::fonts adds installed fonts itself, without colour emoji.
+        system_font_fallback: false,
         ..Default::default()
     };
     // DX12 on Windows, unless WGPU_BACKEND picks another: wgpu's own pick
@@ -235,9 +237,12 @@ pub fn main() -> Result<()> {
                 log::info!("graphics: {:?} on {} ({} {})", info.backend, info.name, info.driver, info.driver_info);
             }
             app::fonts::install(&cc.egui_ctx);
-            app.attach_tray(&cc.egui_ctx);
-            if cli.autostart {
-                app.started_with_windows(&cc.egui_ctx);
+            #[cfg(windows)]
+            {
+                app.attach_tray(&cc.egui_ctx);
+                if cli.autostart {
+                    app.started_with_windows(&cc.egui_ctx);
+                }
             }
             app.attach_window(hwnd(cc));
             if let Some(guard) = &instance {

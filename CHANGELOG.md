@@ -7,12 +7,17 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### Fixed
 - The Scripting Reference no longer slows every frame while it's open: only the part in sight is drawn.
 
+### Changed
+- Emoji are drawn with Noto Emoji: flat and the same on every computer and phone, never in colour, and now covering every current emoji.
+- Characters the built-in fonts lack (other scripts, rarer symbols) are drawn with an installed font that's found the first time one shows up, instead of reading every installed font at startup. Phones get this too.
+
 ## 2.6.0 (2026-11-03)
 
 ### Added
 - Send feedback: when you're signed in, tick "Let me know what comes of this" and you'll get a notification once it's fixed or added, saying which version it's in (or, if it's been asked for before and isn't planned, that it isn't). Unticked, feedback stays anonymous as before. The server keeps who asked until they've been told (it updates its database on start).
 
 ### Changed
+- Updated the UI toolkit (egui) to 0.37: its own fixes and accessibility improvements come with it.
 - The star button in album, artist and playlist headers is gone: one click starred or unstarred every song on the page with no way back. To star several songs, select them (Ctrl+A for all) and right-click > Star, which says Unstar when every selected song is already starred.
 - Buttons that can't be taken back now ask first: the first click turns them into a red "Really delete?" (or remove, or clear), and a second click on it does it; a click anywhere else or Esc backs out. That's deleting a tag, a grouping ruleset, a theme or a playlist, removing a song from all devices, clearing songs on none of your devices from your library, and removing a branch build.
 

@@ -823,7 +823,7 @@ impl App {
                         let group = &groups[i];
                         let min = line.min + egui::vec2(column as f32 * (tile + gap), 0.0);
                         let rect = egui::Rect::from_min_size(min, egui::vec2(tile, tile + 40.0));
-                        let response = ui.interact(rect, ui.id().with(("group_tile", &group.key)), egui::Sense::click());
+                        let response = ui.interact(rect, ui.scope_id().with(("group_tile", &group.key)), egui::Sense::click());
                         let cover = egui::Rect::from_min_size(rect.min, egui::vec2(tile, tile));
                         let from = self.art_from(id, albums, group);
                         tile_ui(ui, &mut self.groupings.art, cover, from, group);
@@ -1271,7 +1271,7 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
         (true, true) => egui::Sense::click(),
         (true, false) => egui::Sense::click_and_drag(),
     };
-    let mut response = ui.interact(rect, ui.id().with(("track", &track.path)), sense - egui::Sense::FOCUSABLE);
+    let mut response = ui.interact(rect, ui.scope_id().with(("track", &track.path)), sense - egui::Sense::FOCUSABLE);
     if !track.here {
         let hover = match (track.missing, &track.wish, track.number) {
             (true, Some(_), _) => MISSING_ALBUM,

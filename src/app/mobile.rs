@@ -445,7 +445,7 @@ impl App {
             }
             state.seen_status = Some(self.status.clone());
         }
-        if let Some(info) = ctx.data_mut(|d| d.remove_temp::<String>(egui::Id::new(INFO_TOAST))) {
+        if let Some(info) = ctx.data_mut(|d| d.remove_temp::<String>(egui::Id::unique(INFO_TOAST))) {
             state.toast = Some((info, Instant::now()));
         }
         let Some((text, since)) = &state.toast else { return };
@@ -629,7 +629,7 @@ impl App {
 
     /// With the controls folded away: the way back, in a corner.
     fn mobile_expand_handle_ui(&mut self, ctx: &egui::Context) {
-        egui::Area::new(egui::Id::new("mobile_expand_handle"))
+        egui::Area::new(egui::Id::unique("mobile_expand_handle"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0))
             .show(ctx, |ui| {
@@ -670,7 +670,7 @@ impl App {
     /// everything else (a tap outside it closes it).
     fn mobile_drawer_ui(&mut self, ctx: &egui::Context) {
         let screen = ctx.content_rect();
-        let backdrop = egui::Area::new(egui::Id::new("mobile_drawer_backdrop"))
+        let backdrop = egui::Area::new(egui::Id::unique("mobile_drawer_backdrop"))
             .order(egui::Order::Foreground)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
@@ -684,7 +684,7 @@ impl App {
         }
 
         let width = (screen.width() * 0.8).min(320.0);
-        let drawer = egui::Area::new(egui::Id::new("mobile_drawer"))
+        let drawer = egui::Area::new(egui::Id::unique("mobile_drawer"))
             .order(egui::Order::Foreground)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {

@@ -186,7 +186,7 @@ impl App {
         let mut go = false;
         let mut again = false;
         let mut check = None;
-        egui::Modal::new(egui::Id::new("pairing_flow")).show(ctx, |ui| {
+        egui::Modal::new(egui::Id::unique("pairing_flow")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 360.0));
             match &mut state.flow {
                 Flow::Show { code, taken, checked, checking } => {

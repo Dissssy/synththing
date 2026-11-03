@@ -451,6 +451,8 @@ pub enum StartupOpens {
     Window,
 }
 
+// Only Windows starts with the system (app/install.rs).
+#[cfg(windows)]
 impl StartupOpens {
     pub const ALL: [Self; 3] = [Self::Tray, Self::MiniPlayer, Self::Window];
 

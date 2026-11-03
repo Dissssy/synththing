@@ -62,7 +62,7 @@ pub fn main(android: AndroidApp) {
     };
     let app = Arc::new(Mutex::new(app));
     let last_frame = Arc::new(Mutex::new(Instant::now()));
-    let options = eframe::NativeOptions { android_app: Some(android), ..Default::default() };
+    let options = eframe::NativeOptions { android_app: Some(android), system_font_fallback: false, ..Default::default() };
     let shared = Shared { app: Arc::clone(&app), last_frame: Arc::clone(&last_frame) };
     let result = eframe::run_native(
         "synththing",

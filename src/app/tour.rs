@@ -280,7 +280,7 @@ impl App {
         }
         // In the dedicated fullscreen: just a reminder of the way back.
         if self.dedicated.is_some() {
-            egui::Area::new(egui::Id::new("tour_fullscreen_hint"))
+            egui::Area::new(egui::Id::unique("tour_fullscreen_hint"))
                 .order(egui::Order::Tooltip)
                 .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
                 .interactable(false)
@@ -296,7 +296,7 @@ impl App {
         let target = step.target.and_then(|t| self.tour.marks.get(&t).copied());
         let source = step.drag_from.and_then(|t| self.tour.marks.get(&t).copied());
         let time = ctx.input(|i| i.time);
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tour_dim")));
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("tour_dim")));
         let dim = egui::Color32::from_black_alpha(150);
         // Everything dimmed but the target (and a drag's source).
         let holes: Vec<egui::Rect> =
@@ -343,7 +343,7 @@ impl App {
         let done = self.tour.done_at.is_some();
         let waiting_for_soundfont = index == 0 && self.active_sf.is_none();
         let download = self.welcome.downloader.state();
-        egui::Area::new(egui::Id::new("tour_card"))
+        egui::Area::new(egui::Id::unique("tour_card"))
             .order(egui::Order::Tooltip)
             .fixed_pos(pos)
             .pivot(pivot)
