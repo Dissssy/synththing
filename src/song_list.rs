@@ -512,7 +512,7 @@ pub struct OrderedOutput {
 /// being moved within it: the selection if the dragged row is part of it,
 /// else just that row.
 pub struct DraggedRows {
-    /// The list's `id_salt`.
+    /// The list's `list_key`.
     pub list: &'static str,
     pub rows: Vec<usize>,
     /// What's being dragged, for the label following the pointer.
@@ -539,16 +539,16 @@ fn shown_columns(ui: &egui::Ui, view: &View, header_id: egui::Id, touch: bool) -
 }
 
 /// One song (described by [`column_keys`]) as a row of [`ordered_ui`]'s
-/// list `id_salt` would show it, marked as playing: the song playing, over
+/// list `list_key` would show it, marked as playing: the song playing, over
 /// the queue. Whether its star was clicked.
-pub fn playing_ui(ui: &mut egui::Ui, id_salt: &'static str, song: &(PathBuf, Described), view: &View) -> bool {
+pub fn playing_ui(ui: &mut egui::Ui, list_key: &'static str, song: &(PathBuf, Described), view: &View) -> bool {
     let touch = select_list::touch(ui.ctx());
-    let shown = shown_columns(ui, view, egui::Id::unique(id_salt).with("header"), touch);
+    let shown = shown_columns(ui, view, egui::Id::unique(list_key).with("header"), touch);
     let mut star = false;
     let height = select_list::row_height(ui);
     ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
         let songs = std::slice::from_ref(song);
-        select_list::show(ui, egui::Id::unique(id_salt).with("playing"), songs, &mut Selection::default(), Some(0), |ui, row, (path, song)| {
+        select_list::show(ui, egui::Id::unique(list_key).with("playing"), songs, &mut Selection::default(), Some(0), |ui, row, (path, song)| {
             star = song_row(ui, path, song, &Hits::default(), &shown, select_list::scrolls(row, true), touch, &mut |_, _| {});
         });
     });
@@ -565,7 +565,7 @@ pub fn playing_ui(ui: &mut egui::Ui, id_salt: &'static str, song: &(PathBuf, Des
 #[allow(clippy::too_many_arguments)]
 pub fn ordered_ui(
     ui: &mut egui::Ui,
-    id_salt: &'static str,
+    list_key: &'static str,
     songs: &[(PathBuf, Described)],
     movable: usize,
     selection: &mut Selection,
@@ -574,7 +574,7 @@ pub fn ordered_ui(
     menu: &mut dyn FnMut(&mut egui::Ui, &[usize]),
 ) -> OrderedOutput {
     let touch = select_list::touch(ui.ctx());
-    let header_id = egui::Id::unique(id_salt).with("header");
+    let header_id = egui::Id::unique(list_key).with("header");
     let shown = shown_columns(ui, view, header_id, touch);
     let mut view_changed = false;
     if !touch && !songs.is_empty() {
@@ -589,14 +589,14 @@ pub fn ordered_ui(
     let area = ui.max_rect();
     let ctx = ui.ctx().clone();
     let released = ui.input(|i| i.pointer.any_released());
-    let output = select_list::show(ui, id_salt, songs, selection, None, |ui, row, (path, song)| {
+    let output = select_list::show(ui, list_key, songs, selection, None, |ui, row, (path, song)| {
         if row.response.drag_started() && row.idx < movable {
             let rows: Vec<usize> = row.rows().into_iter().filter(|&i| i < movable).collect();
             let label = match rows.len() {
                 1 => song.name.clone(),
                 n => format!("{} and {} more", song.name, n - 1),
             };
-            row.response.dnd_set_drag_payload(DraggedRows { list: id_salt, rows, label });
+            row.response.dnd_set_drag_payload(DraggedRows { list: list_key, rows, label });
         }
         // Dropped onto this row: before it in its top half, else after it.
         if row.response.contains_pointer() && row.idx < movable {
@@ -611,7 +611,7 @@ pub fn ordered_ui(
                     insert = Some((files.paths.clone(), at));
                 }
             } else if let Some(dragged) = egui::DragAndDrop::payload::<DraggedRows>(&ctx)
-                && dragged.list == id_salt
+                && dragged.list == list_key
             {
                 ui.painter().hline(rect.x_range(), line, stroke);
                 if released {
@@ -634,7 +634,7 @@ pub fn ordered_ui(
         if let Some(files) = egui::DragAndDrop::take_payload::<DraggedFiles>(&ctx) {
             insert = Some((files.paths.clone(), movable));
         } else if let Some(dragged) = egui::DragAndDrop::payload::<DraggedRows>(&ctx)
-            && dragged.list == id_salt
+            && dragged.list == list_key
         {
             egui::DragAndDrop::clear_payload(&ctx);
             moved = Some((dragged.rows.clone(), movable));
