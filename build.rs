@@ -79,7 +79,11 @@ fn main() {
     generate_reference(&manifest_dir, &out_dir);
     generate_log_lines(&manifest_dir, &out_dir);
     let channel = stamp_build();
-    let accent = accent(&channel);
+    // (Built by CI, a release included, or anywhere else.)
+    println!("cargo:rerun-if-env-changed=GITHUB_ACTIONS");
+    let local = env::var("GITHUB_ACTIONS").as_deref() != Ok("true");
+    println!("cargo:rustc-env=SYNTHTHING_LOCAL={local}");
+    let accent = accent(&channel, local);
     println!("cargo:rustc-env=SYNTHTHING_ACCENT={accent}");
     generate_icon(&manifest_dir, &out_dir, &accent);
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
@@ -156,9 +160,8 @@ fn stamp_build() -> String {
 /// anywhere but GitHub Actions (which sets `GITHUB_ACTIONS`), off-white,
 /// whatever the channel: a local build, debug or release, never passes for
 /// one users get.
-fn accent(channel: &str) -> String {
-    println!("cargo:rerun-if-env-changed=GITHUB_ACTIONS");
-    if env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+fn accent(channel: &str, local: bool) -> String {
+    if local {
         return "#E6E1D6".to_string();
     }
     match channel {
