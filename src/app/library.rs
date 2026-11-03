@@ -2171,6 +2171,7 @@ impl App {
     }
 
     /// Carry out what the identity menu asked for.
+    #[cfg_attr(target_os = "android", expect(unused_variables, reason = "exporting and importing an identity file is desktop only"))]
     fn identity_actions(&mut self, make: bool, export: bool, import: bool) {
         if make {
             self.library.identity_message = match self.ensure_identity() {

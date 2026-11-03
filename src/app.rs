@@ -2814,9 +2814,11 @@ impl App {
         };
         let selected = self.song_list.selected();
         let mut info_for: Option<Vec<PathBuf>> = None;
+        #[cfg_attr(target_os = "android", expect(unused_mut, reason = "phones have no Song info button here"))]
         let mut info_clicked = false;
         let can_undo = self.last_edit.is_some();
         let mut undo_clicked = false;
+        #[cfg_attr(target_os = "android", expect(unused_mut, reason = "phones have no Clean up button here"))]
         let mut cleanup_clicked = false;
         let moving = self.songs_moving();
         let autoplay = self.autoplay;

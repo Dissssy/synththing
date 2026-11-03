@@ -9,7 +9,9 @@
 
 use eframe::egui;
 
-use super::{App, changelog_body_ui, icon, row_icon_button, setting_row, settings_group};
+#[cfg(not(target_os = "android"))]
+use super::row_icon_button;
+use super::{App, changelog_body_ui, icon, setting_row, settings_group};
 use crate::changelog;
 
 /// One page of the flow. They're always in this order: installing last,
@@ -282,6 +284,9 @@ impl App {
             .hint("Nothing was deleted: the build that saved them can still read the kept copies.")
             .show(ui, |ui| {
                 for (note, kept) in &self.set_aside {
+                    // (Android has no file manager to show it in.)
+                    #[cfg(target_os = "android")]
+                    let _ = kept;
                     setting_row(ui, |ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             #[cfg(not(target_os = "android"))]
