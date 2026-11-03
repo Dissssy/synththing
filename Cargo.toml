@@ -70,7 +70,7 @@ ebur128 = "0.1.11"                                        # songs' loudness, to 
 # accesskit, which needs the game-activity one).
 percent-encoding = "2"
 [target.'cfg(not(target_os = "android"))'.dependencies]
-eframe = "0.36.1"
+eframe = "0.36.2"
 rfd = "0.15"                                              # native file and folder dialogs
 opener = { version = "0.9", features = ["reveal"] }       # "Show in folder": the system file manager, file selected (file_manager.rs)
 gethostname = "1.1"                                       # the default name of this device, for sign-ins (device.rs)
@@ -78,7 +78,7 @@ souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"
 discord-rich-presence = "1.1"                                # what's playing, shown on Discord (discord.rs)
 
 [target.'cfg(target_os = "android")'.dependencies]
-eframe = { version = "0.36.1", default-features = false, features = ["android-native-activity", "default_fonts", "links", "wgpu"] }
+eframe = { version = "0.36.2", default-features = false, features = ["android-native-activity", "default_fonts", "links", "wgpu"] }
 android-activity = "0.6"                                  # the AndroidApp eframe runs in (android.rs)
 jni = "0.21"                                              # calling the app's Java side (android.rs)
 
@@ -93,3 +93,4 @@ raw-window-handle = "0.6"                                   # the window's HWND,
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_SystemInformation"] }  # re-attach to the terminal for CLI use; local time for recording names
 windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Shell"] }  # the Start menu shortcut (install.rs)
 windows-registry = "0.6"                                    # the uninstall entry and starting with Windows (install.rs)
+

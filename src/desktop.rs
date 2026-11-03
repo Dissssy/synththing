@@ -197,7 +197,7 @@ pub fn main() -> Result<()> {
     #[cfg(windows)]
     crate::install::refresh();
 
-    let (mut app, stream) = startup::start()?;
+    let mut app = startup::start()?;
     if cli.visualizer {
         app.set_visualizer_open(true);
     }
@@ -247,10 +247,6 @@ pub fn main() -> Result<()> {
         }),
     )
         .map_err(|e| anyhow!("failed to run the GUI: {e}"))?;
-
-    // App drops here, closing the command channel; the render thread sees the
-    // disconnect and exits. Keep the audio stream alive until then.
-    drop(stream);
     Ok(())
 }
 

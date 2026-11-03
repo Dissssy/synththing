@@ -315,10 +315,15 @@ impl App {
 
 impl App {
     /// The wordmark's hop sound, at the volume slider's volume.
-    fn play_hop(&self) {
+    fn play_hop(&mut self) {
         use rodio::Source as _;
+        let volume = self.volume;
         match rodio::Decoder::new(std::io::Cursor::new(HOP_SOUND)) {
-            Ok(sound) => self.mixer.add(sound.amplify(self.volume)),
+            Ok(sound) => {
+                if let Some(mixer) = self.output.mixer() {
+                    mixer.add(sound.amplify(volume));
+                }
+            }
             Err(e) => log::warn!("the hop sound: {e}"),
         }
     }

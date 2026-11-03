@@ -320,8 +320,9 @@ pub struct App {
     tap: SampleTap,
     /// Whoever listens to what plays, through the API.
     listeners: Arc<crate::audio_stream::Listeners>,
-    /// The audio output, for sounds the app itself makes.
-    mixer: rodio::mixer::Mixer,
+    /// The audio output, open while there's something to hear; sounds the
+    /// app itself makes go to it too.
+    output: crate::audio_output::AudioOutput,
     /// The visualizer's picture, shared with the windows that show it
     /// (`lock_panel`).
     visualizer: Arc<Mutex<VisualizerPanel>>,
@@ -677,7 +678,7 @@ impl App {
         config: Config,
         tap: SampleTap,
         listeners: Arc<crate::audio_stream::Listeners>,
-        mixer: rodio::mixer::Mixer,
+        output: crate::audio_output::AudioOutput,
         sample_rate: u32,
     ) -> Self {
         let songs_dir = config::music_dir().unwrap_or_else(|_| PathBuf::from("music"));
@@ -757,7 +758,7 @@ impl App {
             soundfont_selection: Selection::default(),
             tap,
             listeners,
-            mixer,
+            output,
             visualizer: Arc::clone(&visualizer),
             script,
             scripts_dir,
@@ -4103,6 +4104,7 @@ impl App {
         }
         frame_timing::time("sync_script_song", || self.sync_script_song(&view));
         frame_timing::time("poll_loads", || self.poll_loads());
+        frame_timing::time("audio_output", || self.output.tick());
         frame_timing::time("poll_imports", || self.poll_imports(ctx));
         frame_timing::time("poll_old_import", || self.poll_old_import());
         #[cfg(target_os = "android")]
