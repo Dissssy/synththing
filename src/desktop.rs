@@ -237,9 +237,12 @@ pub fn main() -> Result<()> {
                 log::info!("graphics: {:?} on {} ({} {})", info.backend, info.name, info.driver, info.driver_info);
             }
             app::fonts::install(&cc.egui_ctx);
-            app.attach_tray(&cc.egui_ctx);
-            if cli.autostart {
-                app.started_with_windows(&cc.egui_ctx);
+            #[cfg(windows)]
+            {
+                app.attach_tray(&cc.egui_ctx);
+                if cli.autostart {
+                    app.started_with_windows(&cc.egui_ctx);
+                }
             }
             app.attach_window(hwnd(cc));
             if let Some(guard) = &instance {
