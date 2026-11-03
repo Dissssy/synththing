@@ -13,7 +13,8 @@
 //! which device or person it came from. Branch builds never send it.
 //!
 //! The counts are kept in `<config dir>/usage.json` until they're sent, so
-//! they survive restarts and crashes.
+//! they survive restarts and crashes. Each version's counts go under that
+//! version: what an update left unsent goes as soon as the new one starts.
 
 use std::fs;
 use std::path::PathBuf;
@@ -33,6 +34,8 @@ use crate::library::{client, official_url};
 
 /// A report goes once this long after the last one.
 const REPORT_EVERY: i64 = 24 * 60 * 60;
+/// The most earlier versions' unsent counts kept, the oldest dropped first.
+const EARLIER_KEPT: usize = 3;
 /// How often the counts are saved and a report is considered.
 const TICK: Duration = Duration::from_secs(10 * 60);
 /// The longest a panic's message is kept.
@@ -40,7 +43,7 @@ const MESSAGE_CHARS: usize = 200;
 
 static ON: AtomicBool = AtomicBool::new(false);
 /// The counts, once loaded.
-static COUNTS: Mutex<Option<Counts>> = Mutex::new(None);
+static COUNTS: Mutex<Option<Stored>> = Mutex::new(None);
 /// What the app runs on, once the window's graphics have started.
 static HARDWARE: OnceLock<Hardware> = OnceLock::new();
 /// The settings frames are counted under (`set_view`).
@@ -48,8 +51,34 @@ static MOBILE_LAYOUT: AtomicBool = AtomicBool::new(false);
 static VISUALIZER_SCALE: AtomicU32 = AtomicU32::new(1);
 static WINDOW_KPX: AtomicU32 = AtomicU32::new(0);
 
+/// `usage.json`: this version's counts, and what earlier versions left
+/// unsent.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+struct Stored {
+    counts: Counts,
+    earlier: Vec<Counts>,
+}
+
+impl Stored {
+    /// Move counts from another version (an update, or the app went back
+    /// to an older one) aside to send as they are.
+    fn for_version(mut self, version: &str) -> Stored {
+        if self.counts.version != version {
+            let earlier = std::mem::replace(&mut self.counts, Counts::new(version));
+            if !earlier.is_empty() {
+                self.earlier.push(earlier);
+            }
+            let extra = self.earlier.len().saturating_sub(EARLIER_KEPT);
+            self.earlier.drain(..extra);
+        }
+        self
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 struct Counts {
+    /// The version they were counted on.
+    version: String,
     /// When counting started, or the last report went (unix time).
     since: i64,
     sessions: u64,
@@ -61,6 +90,14 @@ struct Counts {
 }
 
 impl Counts {
+    fn new(version: &str) -> Counts {
+        Counts { version: version.to_string(), since: now(), ..Default::default() }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.sessions == 0 && self.lines.is_empty() && self.perf.is_empty()
+    }
+
     fn add(&mut self, level: &str, target: String, signature: String, details: String) {
         let full = self.lines.len() >= MAX_USAGE_LINES;
         match self.lines.iter_mut().find(|l| l.level == level && l.target == target && l.signature == signature && l.details == details) {
@@ -116,24 +153,21 @@ fn path() -> Option<PathBuf> {
     crate::config::config_dir().ok().map(|dir| dir.join("usage.json"))
 }
 
-fn lock() -> MutexGuard<'static, Option<Counts>> {
+fn lock() -> MutexGuard<'static, Option<Stored>> {
     COUNTS.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 /// The counts, loaded from the file the first time.
-fn loaded(counts: &mut Option<Counts>) -> &mut Counts {
-    counts.get_or_insert_with(|| {
-        let mut counts: Counts = path().and_then(|p| fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-        if counts.since == 0 {
-            counts.since = now();
-        }
-        counts
+fn loaded(stored: &mut Option<Stored>) -> &mut Stored {
+    stored.get_or_insert_with(|| {
+        let stored: Stored = path().and_then(|p| fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        stored.for_version(&version())
     })
 }
 
-fn save(counts: &Counts) {
+fn save(stored: &Stored) {
     if let Some(path) = path()
-        && let Ok(bytes) = serde_json::to_vec(counts)
+        && let Ok(bytes) = serde_json::to_vec(stored)
     {
         let _ = fs::write(path, bytes);
     }
@@ -149,7 +183,7 @@ pub fn available() -> bool {
 pub fn start(on: bool) {
     set_on(on);
     if ON.load(Ordering::Relaxed) {
-        loaded(&mut lock()).sessions += 1;
+        loaded(&mut lock()).counts.sessions += 1;
     }
     let spawned = std::thread::Builder::new().name("usage-data".to_string()).spawn(|| loop {
         tick();
@@ -190,7 +224,7 @@ pub fn count(record: &Record) {
     };
     let signature = signature(record.module_path().unwrap_or(record.target()), record.line(), record.args().as_str());
     let details = details(record.key_values());
-    loaded(&mut lock()).add(level, clip(record.target(), MAX_USAGE_TEXT), signature, details);
+    loaded(&mut lock()).counts.add(level, clip(record.target(), MAX_USAGE_TEXT), signature, details);
 }
 
 /// The values a log call marked as fine to send: its key-values
@@ -223,7 +257,7 @@ pub fn panicked(info: &std::panic::PanicHookInfo) {
         return;
     }
     // (try_lock: the panic may have happened while the counts were locked.)
-    let Ok(mut counts) = COUNTS.try_lock() else { return };
+    let Ok(mut stored) = COUNTS.try_lock() else { return };
     let thread = clean(std::thread::current().name().unwrap_or("unnamed"));
     let place = info.location().map_or_else(|| "unknown".to_string(), |l| format!("{}:{}", short_path(l.file()), l.line()));
     let message = info
@@ -232,10 +266,10 @@ pub fn panicked(info: &std::panic::PanicHookInfo) {
         .map(|s| s.to_string())
         .or_else(|| info.payload().downcast_ref::<String>().cloned())
         .unwrap_or_default();
-    let counts = loaded(&mut counts);
-    counts.add("panic", thread, clip(&format!("{place}: {}", clean(&message)), MAX_USAGE_TEXT), String::new());
-    counts.panicked = true;
-    save(counts);
+    let stored = loaded(&mut stored);
+    stored.counts.add("panic", thread, clip(&format!("{place}: {}", clean(&message)), MAX_USAGE_TEXT), String::new());
+    stored.counts.panicked = true;
+    save(stored);
 }
 
 /// What the app runs on: the graphics adapter (from the window, once it's
@@ -279,8 +313,8 @@ pub fn frame(total: Duration, sections: &[(&'static str, Duration)]) {
         visualizer_scale: VISUALIZER_SCALE.load(Ordering::Relaxed),
         window_kpx: WINDOW_KPX.load(Ordering::Relaxed),
     };
-    let mut counts = lock();
-    let counts = loaded(&mut counts);
+    let mut stored = lock();
+    let counts = &mut loaded(&mut stored).counts;
     let group = match counts.perf.iter().position(|g| &g.hardware == hardware && g.settings == settings) {
         Some(i) => &mut counts.perf[i],
         None if counts.perf.len() < MAX_PERF_GROUPS => {
@@ -400,7 +434,7 @@ fn version() -> String {
 
 fn report(counts: &Counts, rules: Option<&[crate::library::usage::UsageRule]>) -> UsageReport {
     UsageReport {
-        version: version(),
+        version: counts.version.clone(),
         platform: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
         sessions: counts.sessions,
         lines: counts.lines.iter().filter(|line| rules.is_none_or(|rules| kept(rules, line))).cloned().collect(),
@@ -408,47 +442,61 @@ fn report(counts: &Counts, rules: Option<&[crate::library::usage::UsageRule]>) -
     }
 }
 
-/// What the next report holds so far, before the server's rules leave
-/// lines out, for Preferences to show. `None` while it's off.
+/// What the next reports hold so far (earlier versions' first), before
+/// the server's rules leave lines out, for Preferences to show. `None`
+/// while it's off.
 pub fn preview() -> Option<String> {
     if !ON.load(Ordering::Relaxed) {
         return None;
     }
-    let counts = loaded(&mut lock()).clone();
-    serde_json::to_string_pretty(&report(&counts, None)).ok()
+    let stored = loaded(&mut lock()).clone();
+    let reports: Vec<UsageReport> = stored.earlier.iter().chain([&stored.counts]).map(|c| report(c, None)).collect();
+    serde_json::to_string_pretty(&reports).ok()
 }
 
-/// Save the counts, and send a report if one's due.
+/// Save the counts, and send what's due: earlier versions' counts at once,
+/// this version's once a day (or after a panic).
 fn tick() {
     if !ON.load(Ordering::Relaxed) {
         return;
     }
-    let counts = {
+    let stored = {
         let mut guard = lock();
-        let counts = loaded(&mut guard);
-        save(counts);
-        counts.clone()
+        let stored = loaded(&mut guard);
+        save(stored);
+        stored.clone()
     };
-    if !counts.panicked && now() - counts.since < REPORT_EVERY {
+    let due = stored.counts.panicked || now() - stored.counts.since >= REPORT_EVERY;
+    if stored.earlier.is_empty() && !due {
         return;
     }
-    let base = official_url();
-    let sent = client::usage_rules(&base)
-        .and_then(|rules| parse_rules(&rules))
-        .and_then(|rules| client::usage(&base, &report(&counts, Some(&rules))));
-    match sent {
-        Ok(()) => {
-            let mut guard = lock();
-            if let Some(mine) = guard.as_mut() {
-                mine.subtract(&counts);
-                save(mine);
-            }
-            drop(guard);
-            log::info!("sent the usage report");
-        }
-        // (Tried again next tick.)
-        Err(e) => log::info!("couldn't send the usage report: {e}"),
+    // (Whatever isn't sent is tried again next tick.)
+    if let Err(e) = send(&stored.earlier, due.then_some(&stored.counts)) {
+        log::info!("couldn't send the usage report: {e}");
     }
+}
+
+fn send(earlier: &[Counts], current: Option<&Counts>) -> Result<(), String> {
+    let base = official_url();
+    let rules = client::usage_rules(&base).and_then(|rules| parse_rules(&rules))?;
+    for counts in earlier {
+        client::usage(&base, &report(counts, Some(&rules)))?;
+        let mut guard = lock();
+        if let Some(stored) = guard.as_mut() {
+            stored.earlier.retain(|c| c != counts);
+            save(stored);
+        }
+    }
+    if let Some(counts) = current {
+        client::usage(&base, &report(counts, Some(&rules)))?;
+        let mut guard = lock();
+        if let Some(stored) = guard.as_mut() {
+            stored.counts.subtract(counts);
+            save(stored);
+        }
+    }
+    log::info!("sent the usage report");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -531,5 +579,30 @@ mod tests {
         assert_eq!(counts.sessions, 0);
         assert!(!counts.panicked);
         assert_eq!(counts.lines.iter().map(|l| (l.signature.as_str(), l.count)).collect::<Vec<_>>(), vec![("a:1", 1), ("b:2", 1)]);
+    }
+
+    #[test]
+    fn an_update_sets_the_old_versions_counts_aside() {
+        let mut old = Counts::new("2.4.0");
+        old.add("error", "a".into(), "a:1".into(), String::new());
+        let stored = Stored { counts: old.clone(), earlier: Vec::new() }.for_version("2.6.0");
+        assert_eq!(stored.earlier, vec![old.clone()]);
+        assert_eq!(stored.counts.version, "2.6.0");
+        assert!(stored.counts.is_empty());
+        assert_eq!(report(&stored.earlier[0], None).version, "2.4.0");
+        // (The same version, or nothing counted, sets nothing aside.)
+        assert_eq!(stored.clone().for_version("2.6.0"), stored);
+        assert!(Stored::default().for_version("2.6.0").earlier.is_empty());
+    }
+
+    #[test]
+    fn only_the_latest_earlier_versions_are_kept() {
+        let mut stored = Stored::default();
+        for version in ["1", "2", "3", "4", "5"] {
+            stored = stored.for_version(version);
+            stored.counts.sessions = 1;
+        }
+        let versions: Vec<_> = stored.for_version("6").earlier.into_iter().map(|c| c.version).collect();
+        assert_eq!(versions, vec!["3", "4", "5"]);
     }
 }
