@@ -1995,6 +1995,11 @@ impl App {
         PUBLISHING || self.library.identity.is_some()
     }
 
+    /// Whether this device has an identity (is signed in), without making one.
+    pub(super) fn signed_in(&self) -> bool {
+        self.library.identity.is_some()
+    }
+
     /// The identity (a fresh copy for a request's thread), made and saved
     /// first if there isn't one.
     pub(super) fn ensure_identity(&mut self) -> Result<Identity, String> {

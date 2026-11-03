@@ -1,5 +1,7 @@
-//! Feedback (docs/SERVER.md): a note about the app, from anyone, unsigned,
-//! for the server's admins. It says which build it came from; a branch
+//! Feedback (docs/SERVER.md): a note about the app, from anyone, for the
+//! server's admins. Unsigned, unless the sender asks to hear what comes of
+//! it: then it's signed, and their key is kept with it until they're told
+//! (`intake::resolved`). It says which build it came from; a branch
 //! build's feedback goes once that branch's test build is gone (the branch
 //! was merged or dropped), since what it was about went with it.
 //!
@@ -12,7 +14,7 @@ use rusqlite::{params, Connection};
 use tiny_http::Request;
 
 use super::moderation::{limit, refuse_banned};
-use super::{error, json, notifications, now, read_body, Reply, State};
+use super::{error, json, notifications, now, read_body, signer, Reply, State};
 use crate::library::{Feedback, FeedbackRequest, MAX_FEEDBACK_LOG, MAX_FEEDBACK_PERFORMANCE, MAX_FEEDBACK_TEXT};
 
 pub(super) const SCHEMA_V13: &str = "
@@ -41,6 +43,14 @@ PRAGMA user_version = 18;
 COMMIT;
 ";
 
+/// Who asked to hear what comes of it (their key), until they're told.
+pub(super) const SCHEMA_V26: &str = "
+BEGIN;
+ALTER TABLE feedback ADD COLUMN reply_key TEXT;
+PRAGMA user_version = 26;
+COMMIT;
+";
+
 /// Feedback one address may send in a day.
 const FEEDBACK_PER_DAY: usize = 10;
 /// How long addresses are kept, and feedback once it's dealt with.
@@ -49,15 +59,19 @@ const KEEP_HANDLED: i64 = 90 * 24 * 60 * 60;
 
 /// `POST /api/v1/feedback`.
 pub(super) fn send(state: &State, request: &mut Request, ip: &str) -> Reply {
-    if let Err(reply) = refuse_banned(state, None, ip)
-        .and_then(|()| limit(state, "feedback", ip, FEEDBACK_PER_DAY, Duration::from_secs(24 * 3600), "feedback"))
-    {
-        return reply;
-    }
     let body = match read_body(request, MAX_FEEDBACK_TEXT * 4 + MAX_FEEDBACK_LOG + MAX_FEEDBACK_PERFORMANCE + 4096) {
         Ok(body) => body,
         Err(reply) => return reply,
     };
+    let reply_key = match signer(state, request, "POST", "/api/v1/feedback", &body) {
+        Ok(key) => key,
+        Err(reply) => return reply,
+    };
+    if let Err(reply) = refuse_banned(state, reply_key.as_deref(), ip)
+        .and_then(|()| limit(state, "feedback", ip, FEEDBACK_PER_DAY, Duration::from_secs(24 * 3600), "feedback"))
+    {
+        return reply;
+    }
     let feedback: FeedbackRequest = match serde_json::from_slice(&body) {
         Ok(feedback) => feedback,
         Err(e) => return error(400, format!("not feedback: {e}")),
@@ -79,7 +93,7 @@ pub(super) fn send(state: &State, request: &mut Request, ip: &str) -> Reply {
     let short = |s: &str| s.trim().chars().take(100).collect::<String>();
     let db = state.db();
     let stored = db.execute(
-        "INSERT INTO feedback (text, app_version, channel, os, log, performance, ip, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO feedback (text, app_version, channel, os, log, performance, ip, created, reply_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             text,
             short(&feedback.app_version),
@@ -88,7 +102,8 @@ pub(super) fn send(state: &State, request: &mut Request, ip: &str) -> Reply {
             feedback.log,
             feedback.performance,
             ip,
-            now()
+            now(),
+            reply_key
         ],
     );
     match stored {
@@ -138,12 +153,13 @@ pub(super) fn done(db: &Connection, id: i64, note: &str) -> rusqlite::Result<usi
     db.execute("UPDATE feedback SET handled = ?, note = ? WHERE id = ? AND handled IS NULL", params![now(), note, id])
 }
 
-/// Forget old addresses and feedback dealt with long ago.
+/// Forget old addresses and feedback dealt with long ago (but not while
+/// its sender is still waiting to hear what came of it).
 pub(super) fn forget_old(state: &State) {
     let now = now();
     let result = state.db().execute_batch(&format!(
         "UPDATE feedback SET ip = NULL WHERE created < {} AND ip IS NOT NULL;
-         DELETE FROM feedback WHERE handled < {};",
+         DELETE FROM feedback WHERE handled < {} AND reply_key IS NULL;",
         now - KEEP_ADDRESSES,
         now - KEEP_HANDLED
     ));

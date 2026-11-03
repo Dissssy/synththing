@@ -4,12 +4,17 @@
 //! (`intake.token` in the data folder, made on first run), files the notes
 //! and then says which it has taken, so a run that fails partway loses
 //! none: until they're taken, the next run gets them again.
+//!
+//! What came of them comes back the same way (`resolved`): fixed or added
+//! in a release (the release workflow says so once it's out), or not
+//! planned (intake says so when a note asks for something already turned
+//! down). Whoever asked to hear is told.
 
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tiny_http::Request;
 
-use super::{error, json, now, read_body, sha256_hex, Reply, State};
+use super::{error, json, notifications, now, read_body, sha256_hex, Reply, State};
 
 pub(super) const SCHEMA_V14: &str = "
 BEGIN;
@@ -47,6 +52,18 @@ struct Waiting {
 struct Taken {
     feedback: Vec<i64>,
 }
+
+/// What came of some notes: `outcome` is `fixed` or `added` (in
+/// `version`), or `not_planned`.
+#[derive(Deserialize)]
+struct Resolved {
+    feedback: Vec<i64>,
+    outcome: String,
+    version: Option<String>,
+}
+
+/// How much of a note its sender is reminded of.
+const PREVIEW: usize = 80;
 
 /// The request carries the intake token (and intake is on).
 pub(super) fn authorized(state: &State, request: &Request) -> Result<(), Reply> {
@@ -120,6 +137,57 @@ pub(super) fn taken(state: &State, request: &mut Request) -> Reply {
     }
     println!("intake took {marked} feedback");
     json(200, &serde_json::json!({ "taken": marked }))
+}
+
+/// `POST /api/v1/intake/resolved`: tell the senders of `feedback` who
+/// asked to hear (a `feedback_fixed`, `feedback_added` or
+/// `feedback_not_planned` notification), once: then their key goes, and
+/// the note counts as dealt with.
+pub(super) fn resolved(state: &State, request: &mut Request) -> Reply {
+    if let Err(reply) = authorized(state, request) {
+        return reply;
+    }
+    let body = match read_body(request, 64 * 1024) {
+        Ok(body) => body,
+        Err(reply) => return reply,
+    };
+    let resolved: Resolved = match serde_json::from_slice(&body) {
+        Ok(resolved) => resolved,
+        Err(e) => return error(400, format!("not what came of some feedback: {e}")),
+    };
+    let version = resolved.version.as_deref().map(str::trim).filter(|v| !v.is_empty());
+    let kind = match (resolved.outcome.as_str(), version) {
+        ("fixed", Some(_)) => "feedback_fixed",
+        ("added", Some(_)) => "feedback_added",
+        ("fixed" | "added", None) => return error(400, "say which version it's in"),
+        ("not_planned", _) => "feedback_not_planned",
+        (other, _) => return error(400, format!("\"{other}\" isn't an outcome (fixed, added or not_planned)")),
+    };
+    let db = state.db();
+    let mut told = 0;
+    for id in &resolved.feedback {
+        let waiting = db
+            .query_row("SELECT reply_key, text FROM feedback WHERE id = ? AND reply_key IS NOT NULL", [id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .ok();
+        let Some((key, text)) = waiting else { continue };
+        let preview: String = text.chars().take(PREVIEW).collect();
+        let mut data = serde_json::json!({ "feedback": id, "preview": preview });
+        if let Some(version) = version {
+            data["version"] = version.into();
+        }
+        notifications::notify(state, &db, &key, kind, data, false);
+        if let Err(e) = db.execute(
+            "UPDATE feedback SET reply_key = NULL, handled = COALESCE(handled, ?) WHERE id = ?",
+            params![now(), id],
+        ) {
+            return error(500, format!("database: {e}"));
+        }
+        told += 1;
+    }
+    println!("told {told} feedback senders: {}", resolved.outcome);
+    json(200, &serde_json::json!({ "told": told }))
 }
 
 /// The end of a log, at most `LOG_TAIL` bytes of it.
