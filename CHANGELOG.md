@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 2.6.0 (2026-11-03)
+
 ### Added
 - Send feedback: when you're signed in, tick "Let me know what comes of this" and you'll get a notification once it's fixed or added, saying which version it's in (or, if it's been asked for before and isn't planned, that it isn't). Unticked, feedback stays anonymous as before. The server keeps who asked until they've been told (it updates its database on start).
 
