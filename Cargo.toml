@@ -51,16 +51,16 @@ argon2 = "0.6.0"
 chacha20poly1305 = "0.11.0"
 png = "0.18"                                              # script previews (preview.rs)
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] } # album art embedded in songs (album_art.rs)
-# egui's monochrome emoji fonts, bundled by default up to egui 0.36: song
-# names keep drawing their emoji as they did (eframe re-exports this egui).
-egui = { version = "0.37", default-features = false, features = ["monochrome_emoji_fonts"] }
+egui = { version = "0.37", default-features = false }      # eframe re-exports this egui
+# Installed fonts for characters the bundled ones lack (app/fonts.rs), found
+# when first drawn; the same one eframe would add on the desktop.
+egui_system_font_provider = "0.37"
 egui_commonmark = "0.26"                                  # library servers' documents (EULA, privacy policy), as Markdown
 egui-phosphor = { git = "https://github.com/xangelix/egui-phosphor", rev = "01e8c1144cac3f551ceb834b6d26ddf36ba502cd", features = ["regular", "fill"] } # icons; the filled set for starred songs (select_list::star)
 base64 = "0.23"                                           # sealed sync blobs (library/sync.rs)
 flate2 = "1.1.10"                                         # deflating sync blobs before they're sealed (library/sync.rs)
 resvg = { version = "0.45", default-features = false }      # the wordmark in the menu bar (app/branding.rs)                                    # icons (the Phosphor set, as a font)
-fontdb = "0.24"                                           # finding installed fonts to fall back on (app/fonts.rs)
-skrifa = "0.44"                                           # reading which characters a font has; the same copy egui renders with
+skrifa = "0.44"                                           # reading fonts: pixel_font, and app/fonts.rs refusing colour ones; the same copy egui renders with
 ab_glyph_rasterizer = "0.1"                               # drawing the bundled CJK fonts into script text (pixel_font)
 # The profiler overlay (app/profiler.rs). Pinned to a commit: the release on
 # crates.io is still on egui 0.33.
