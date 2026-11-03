@@ -72,6 +72,8 @@ curl -sS -H "Authorization: Bearer $SYNTHTHING_INTAKE_TOKEN" https://synththing.
 
 gives `{"lines": [...], "sessions": [...], "filed": [...]}`. Each line is one kind of log line or panic, its versions and platforms together, panics first and then the most frequent: `level` (`panic`, `error`, `warn`, `info`), `target`, `key`, a few `signatures` (each is `module:line` and the format string the line was written with, e.g. `synththing::library::sync:212 couldn't send {name}: {e}`, or a panic's `file:line: message`), `details` when the line marks values that are fine to send (up to ten sets, each `{"details": "page=Queue side=right", "new": 5, "total": 9}`, the most new first; say which page, section or state it comes up in), `versions`, `platforms`, `new` (since the last run), `total`, `first_seen`, and `filed`: the issue it was filed as, if it was. `sessions` is app starts per version and platform (`total`, and `new` since the last run), for reading counts as rates. `filed` is every line filed as an issue (`level`, `target`, `key`, `issue`) with `seen`: each version and platform it ever came up on and its `total` there, for the fixed check below. If the server says 404 (it doesn't have usage data yet), go on to watching.
 
+A version ending in ` local` (`2.6.0 local`) is a developer's own build of some branch, not anything users run. Its counts alone never file an issue or prompt a comment, and it's never a release for the fixed check below.
+
 ### The ledger
 
 `/mnt/project-files/feedback/usage-issues.md` keeps what intake last said on each usage-data issue, instead of reading back its comments. One section per issue, `## #<issue>`, with these lines (create the file, or an issue's section, when it's first needed):

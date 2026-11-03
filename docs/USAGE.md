@@ -4,11 +4,11 @@ Anonymous usage data tells the developers which warnings, errors and crashes peo
 
 ## What the app sends
 
-The app (`src/usage.rs`) counts every log line it keeps (its own from info up, other crates' from warn up) and every panic. Once a day it sends the counts to the official server; after a panic it sends them as soon as it starts again, without waiting for the day. The counts wait in `<config dir>/usage.json` until they're sent, and turning usage data off deletes them.
+The app (`src/usage.rs`) counts every log line it keeps (its own from info up, other crates' from warn up) and every panic. Once a day it sends the counts to the official server; after a panic it sends them as soon as it starts again, without waiting for the day. The counts wait in `<config dir>/usage.json` until they're sent, and turning usage data off deletes them. Counts are kept per version: what an update left unsent is sent under the version it was counted on, as soon as the new version starts.
 
 A report (`library::usage::UsageReport`) holds:
 
-- the release (`1.8.3`, or `1.8.3 nightly` for a canary build) and the platform (`windows x86_64`);
+- the release (`1.8.3`, `1.8.3 nightly` for a canary build, or `1.8.3 local` for one built on someone's own computer) and the platform (`windows x86_64`);
 - how many times the app was started;
 - for each kind of line, its level (`panic`, `error`, `warn`, `info`), target (the log target, or the thread for a panic), signature, marked values and count.
 
