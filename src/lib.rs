@@ -59,6 +59,7 @@ mod import;
 #[cfg(windows)]
 mod install;
 mod instance;
+mod latest;
 mod layout;
 mod library;
 mod lookup;

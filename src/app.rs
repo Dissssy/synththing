@@ -126,7 +126,7 @@ use crate::lua_completion::CompletionWorker;
 use crate::lua_visualizer;
 use crate::playlist::{Library, LoopMode, NowPlaying, Rng};
 use crate::fields::Field;
-use crate::song_info::{format_length, SongInfoCache};
+use crate::song_info::{format_length, SongInfo, SongInfoCache};
 use crate::song_title::Naming;
 use crate::updater::Updater;
 use crate::watch::{FolderWatch, Watched};
@@ -162,17 +162,16 @@ impl App {
 /// How songs are named: by the title patterns, from their tags and the
 /// names the library knows them by.
 fn naming<'a>(config: &'a Config, songs: &'a SongStore) -> Naming<'a> {
-    Naming::new(config, songs)
+    Naming::new(config.title_patterns.as_deref(), songs)
 }
 
 /// The song at `path` as the Songs list shows it: its name, file name, the
 /// columns `keys` and its tags.
-fn describe_song(cache: &mut SongInfoCache, naming: &Naming, store: &SongStore, path: &Path, keys: &[&str]) -> song_list::Described {
-    let info = cache.get(path);
-    let song = naming.song(path, info.as_deref());
+fn describe_song(info: Option<&SongInfo>, naming: &Naming, store: &SongStore, path: &Path, keys: &[&str]) -> song_list::Described {
+    let song = naming.song(path, info);
     let values = keys.iter().map(|&key| Field::by_key(key).and_then(|field| song.value(field))).collect();
     let tags = store.tags_of(path).into_iter().map(|(_, tag)| (tags::tag_label(tag), tag.color)).collect();
-    song_list::Described { name: naming.name(path, info.as_deref()), file_name: song.file_name.to_string(), values, tags, plays: plays(store, path) }
+    song_list::Described { name: naming.name(path, info), file_name: song.file_name.to_string(), values, tags, plays: plays(store, path) }
 }
 
 /// How the song at `path` plays (starred, skipped when shuffling, played

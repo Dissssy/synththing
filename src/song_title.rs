@@ -5,7 +5,6 @@
 
 use std::path::Path;
 
-use crate::config::Config;
 use crate::fields::{Facts, Field};
 use crate::song_info::SongInfo;
 use crate::song_store::SongStore;
@@ -21,8 +20,9 @@ pub struct Naming<'a> {
 }
 
 impl<'a> Naming<'a> {
-    pub fn new(config: &'a Config, store: &'a SongStore) -> Self {
-        Self { patterns: config.title_patterns.as_deref(), store }
+    /// By `patterns` (`Config::title_patterns`).
+    pub fn new(patterns: Option<&'a [String]>, store: &'a SongStore) -> Self {
+        Self { patterns, store }
     }
 
     /// What's known of the song at `path`, with what's been read of it
@@ -126,14 +126,13 @@ mod tests {
 
     #[test]
     fn falls_back_to_the_file_name() {
-        let config = Config::default();
         let dir = std::env::temp_dir().join(format!("synththing-naming-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut store = SongStore::open(dir.clone());
         let stored = crate::song_store::write_in(b"x", "03 shuffle.mp3", &dir).unwrap();
         let path = crate::song_store::path_of(&dir, &stored.key);
         store.add(stored);
-        let naming = Naming::new(&config, &store);
+        let naming = Naming::new(None, &store);
         assert_eq!(naming.name(&path, Some(&SongInfo::default())), "03 shuffle");
         assert_eq!(naming.name(Path::new("/elsewhere/song.mid"), None), "song");
     }

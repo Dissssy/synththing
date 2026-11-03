@@ -287,6 +287,7 @@ impl App {
         {
             return groups.clone();
         }
+        let _timing = crate::frame_timing::scope("ruleset_groups");
         let groups = Arc::new(rules.groups(&self.songs, &self.wishlist.list.wishes, settings_sync::now(), &self.config.group_ignore, self.config.sort_with_articles));
         self.ruleset_groups.insert(id.to_string(), (revision, rules.clone(), groups.clone()));
         groups
@@ -308,6 +309,7 @@ impl App {
         {
             return (revision, missing.clone());
         }
+        let _timing = crate::frame_timing::scope("missing_info");
         let now = settings_sync::now();
         let missing: Vec<Missing> = self
             .shown_rulesets()
