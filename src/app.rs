@@ -2371,6 +2371,13 @@ impl App {
                 egui::CollapsingHeader::new("Noto Sans CJK's license").id_salt("credits_noto_cjk").show(ui, |ui| {
                     ui.label(egui::RichText::new(credits::NOTO_CJK_LICENSE.trim()).monospace());
                 });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Emoji use Noto Emoji by Google, under the SIL Open Font License 1.1.");
+                    ui.hyperlink_to("github.com/googlefonts/noto-emoji", "https://github.com/googlefonts/noto-emoji");
+                });
+                egui::CollapsingHeader::new("Noto Emoji's license").id_salt("credits_noto_emoji").show(ui, |ui| {
+                    ui.label(egui::RichText::new(credits::NOTO_EMOJI_LICENSE.trim()).monospace());
+                });
 
                 ui.separator();
                 ui.strong("Starter pack soundfonts");
