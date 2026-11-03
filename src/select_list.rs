@@ -166,7 +166,7 @@ fn steers_id() -> egui::Id {
     egui::Id::unique("select_list_steers")
 }
 
-/// Which list the keys steer this frame, by the `id_salt` it's shown with
+/// Which list the keys steer this frame, by the `key` it's shown with
 /// (or none). Called each frame before any [`steer`]: moves a list that
 /// wasn't shown last frame didn't take are dropped.
 pub fn set_keyboard(ctx: &egui::Context, list: Option<&'static str>) {
@@ -249,15 +249,19 @@ pub struct ListOutput {
 /// the row's ends by `EDGE`. The row
 /// `playing` is outlined in the theme's playing color, over any
 /// selection or hover (tinted in it, without either).
+///
+/// `key` names the list across the whole app, not within `ui`: it's what
+/// [`set_keyboard`] picks the list the keys steer by, so two lists shown at
+/// once need different keys.
 pub fn show<T>(
     ui: &mut egui::Ui,
-    id_salt: impl egui::AsIdSalt,
+    key: impl egui::AsIdSalt,
     items: &[T],
     selection: &mut Selection,
     playing: Option<usize>,
     draw: impl FnMut(&mut egui::Ui, &Row, &T),
 ) -> ListOutput {
-    show_list(ui, id_salt, items, selection, playing, 0.0, None, draw)
+    show_list(ui, key, items, selection, playing, 0.0, None, draw)
 }
 
 /// How tall [`show`]'s rows are in `ui`.
@@ -269,14 +273,14 @@ pub fn row_height(ui: &egui::Ui) -> f32 {
 /// say).
 pub fn show_tall<T>(
     ui: &mut egui::Ui,
-    id_salt: impl egui::AsIdSalt,
+    key: impl egui::AsIdSalt,
     items: &[T],
     selection: &mut Selection,
     playing: Option<usize>,
     height: f32,
     draw: impl FnMut(&mut egui::Ui, &Row, &T),
 ) -> ListOutput {
-    show_list(ui, id_salt, items, selection, playing, height, None, draw)
+    show_list(ui, key, items, selection, playing, height, None, draw)
 }
 
 /// [`show`], for a list in groups: the rows `is_header` picks head the
@@ -285,20 +289,20 @@ pub fn show_tall<T>(
 /// under it, until the next header comes up and pushes it out.
 pub fn show_grouped<T>(
     ui: &mut egui::Ui,
-    id_salt: impl egui::AsIdSalt,
+    key: impl egui::AsIdSalt,
     items: &[T],
     selection: &mut Selection,
     playing: Option<usize>,
     is_header: impl Fn(&T) -> bool,
     draw: impl FnMut(&mut egui::Ui, &Row, &T),
 ) -> ListOutput {
-    show_list(ui, id_salt, items, selection, playing, 0.0, Some(&is_header), draw)
+    show_list(ui, key, items, selection, playing, 0.0, Some(&is_header), draw)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn show_list<T>(
     ui: &mut egui::Ui,
-    id_salt: impl egui::AsIdSalt,
+    key: impl egui::AsIdSalt,
     items: &[T],
     selection: &mut Selection,
     playing: Option<usize>,
@@ -306,7 +310,7 @@ fn show_list<T>(
     is_header: Option<&dyn Fn(&T) -> bool>,
     mut draw: impl FnMut(&mut egui::Ui, &Row, &T),
 ) -> ListOutput {
-    let id = egui::Id::unique(id_salt);
+    let id = egui::Id::unique(key);
     let mut output = ListOutput::default();
     let touch = touch(ui.ctx());
     let row_height = height.max(row_height(ui));

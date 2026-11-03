@@ -205,11 +205,13 @@ pub enum DisplayMode {
     Window,
     /// The dedicated visualizer fullscreen: nothing else on screen.
     Dedicated,
-    /// Small, in the mini player.
+    /// Small, in the mini player (Windows only, like the tray).
+    #[cfg(windows)]
     Mini,
     /// Android picture-in-picture: a small floating window over other apps.
-    // Only Android shows one; the tests use it everywhere.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    // Only Android shows one; the tests run the bundled scripts in it
+    // everywhere, since scripts are the same on every platform.
+    #[cfg_attr(not(any(target_os = "android", test)), expect(dead_code, reason = "only Android has picture-in-picture"))]
     Pip,
 }
 
@@ -218,6 +220,7 @@ impl DisplayMode {
         match self {
             Self::Window => "window",
             Self::Dedicated => "dedicated",
+            #[cfg(windows)]
             Self::Mini => "mini",
             Self::Pip => "pip",
         }
@@ -464,12 +467,12 @@ impl VisualizerPanel {
         }
     }
 
-    /// The last picture, as a texture, and its size in pixels.
+    /// The last picture, as a texture, and its size in pixels: the mini
+    /// player (Windows only) draws it itself.
+    #[cfg(windows)]
     pub fn picture(&self) -> Option<(egui::TextureId, egui::Vec2)> {
         self.texture.as_ref().map(|t| (t.id(), t.size_vec2()))
     }
-
-
 
     /// This frame's controller input, for the next `show`.
     pub fn set_pads(&mut self, pads: PadFrame) {

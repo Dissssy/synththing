@@ -45,7 +45,7 @@ impl App {
         if self.quitting || !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
-        let action = match (self.tray.is_some(), self.config.close_to_tray) {
+        let action = match (self.has_tray(), self.config.close_to_tray) {
             (false, _) | (true, Some(false)) => CloseAction::Quit,
             (true, Some(true)) => CloseAction::Hide,
             (true, None) => {
@@ -77,6 +77,14 @@ impl App {
     pub(super) fn quit(&mut self, ctx: &egui::Context) {
         self.quitting = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// The tray icon is up, so closing can hide the window in it.
+    pub(super) fn has_tray(&self) -> bool {
+        #[cfg(windows)]
+        return self.tray.is_some();
+        #[cfg(not(windows))]
+        false
     }
 
     /// Hide the window; the tray icon brings it back.
