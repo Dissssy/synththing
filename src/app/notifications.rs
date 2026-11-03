@@ -418,7 +418,7 @@ impl App {
         let mut moderate_feedback = false;
         let mut copyright = false;
         let mut notice: Option<(i64, bool)> = None;
-        let response = egui::Modal::new(egui::Id::new("notification")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("notification")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 440.0));
             ui.horizontal(|ui| {
                 ui.heading(egui::RichText::new(icon_of(&n.kind)).color(color_of(ui, &n)));

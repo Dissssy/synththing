@@ -9,6 +9,7 @@
 
 /// What a click on the tray icon asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(not(windows), expect(dead_code, reason = "only Windows has a tray; elsewhere no click ever arrives"))]
 pub enum TrayClick {
     /// Left button: the mini player, by `cursor` the first time (physical
     /// screen pixels).

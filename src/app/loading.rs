@@ -430,7 +430,7 @@ impl App {
         let mut play = false;
         let mut cancel = false;
         let mut dont_ask = !self.config.warn_heavy_midi.unwrap_or(true);
-        let response = egui::Modal::new(egui::Id::new("heavy_midi")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("heavy_midi")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 420.0));
             ui.heading("Very large MIDI file");
             ui.add_space(6.0);

@@ -165,7 +165,7 @@ impl App {
         let ruleset = matches!(editor.editing, Editing::Ruleset(_));
         let new = matches!(editor.editing, Editing::Playlist(None) | Editing::Ruleset(None));
         let mut done = None;
-        let response = egui::Modal::new(egui::Id::new("rules_editor")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("rules_editor")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 560.0));
             ui.heading(match (ruleset, new) {
                 (false, true) => "New smart playlist",

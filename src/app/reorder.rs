@@ -28,7 +28,7 @@ struct Dragged {
 /// The id of the list `id_salt` names: one per page, shared by the list
 /// and its trash.
 fn list_id(id_salt: &str) -> egui::Id {
-    egui::Id::new(("reorder_list", id_salt))
+    egui::Id::unique(("reorder_list", id_salt))
 }
 
 /// The entry of list `list` being dragged, if one is (and it's still in a

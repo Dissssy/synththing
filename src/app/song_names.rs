@@ -119,7 +119,7 @@ impl App {
         let mut hasher = DefaultHasher::new();
         (patterns, self.songs.revision()).hash(&mut hasher);
         let key = hasher.finish();
-        let id = egui::Id::new("title_pattern_counts");
+        let id = egui::Id::unique("title_pattern_counts");
         if let Some((at, counts)) = ctx.data(|d| d.get_temp::<(u64, Vec<usize>)>(id))
             && at == key
         {

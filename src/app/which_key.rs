@@ -20,7 +20,7 @@ impl App {
             return;
         }
         let next = Keymap::of(ctx).next(&pending.presses);
-        egui::Area::new(egui::Id::new("which_key"))
+        egui::Area::new(egui::Id::unique("which_key"))
             .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -72.0])
             .order(egui::Order::Foreground)
             .interactable(false)

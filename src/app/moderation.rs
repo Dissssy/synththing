@@ -457,7 +457,7 @@ impl App {
         let Some(mut draft) = self.moderation.report.take() else { return };
         let mut send = false;
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("library_report")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("library_report")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 680.0));
             ui.heading(format!("Report \"{}\"", draft.name));
             ui.horizontal(|ui| {
@@ -619,7 +619,7 @@ impl App {
         let mut actions: Vec<(String, Vec<AdminAction>)> = Vec::new();
         let mut fetch_source: Vec<(String, u32)> = Vec::new();
         let mut ban_author: Option<String> = None;
-        let response = egui::Modal::new(egui::Id::new("library_moderation")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("library_moderation")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 760.0));
             ui.heading("Moderation");
             ui.horizontal(|ui| {

@@ -114,7 +114,7 @@ impl App {
         }
         let picture = self.tray_picture.clone();
         let mut answer: Option<Answer> = None;
-        let response = egui::Modal::new(egui::Id::new("close_prompt")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("close_prompt")).show(ctx, |ui| {
             ui.set_width(if prompt == ClosePrompt::FirstTime { 560.0 } else { 460.0 });
             match prompt {
                 ClosePrompt::FirstTime => first_time_ui(ui, picture.as_ref(), &mut answer),

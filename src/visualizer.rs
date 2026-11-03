@@ -208,6 +208,8 @@ pub enum DisplayMode {
     /// Small, in the mini player.
     Mini,
     /// Android picture-in-picture: a small floating window over other apps.
+    // Only Android shows one; the tests use it everywhere.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     Pip,
 }
 

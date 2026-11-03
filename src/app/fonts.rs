@@ -71,7 +71,7 @@ fn installed_fallbacks(fonts: &FontDefinitions) -> Vec<(String, FontData)> {
     let covered = fonts
         .font_data
         .values()
-        .filter_map(|data| characters(&data.font, data.index))
+        .filter_map(|data| characters((*data.font).as_ref(), data.index))
         .flatten()
         .collect();
     let chosen = choose(&db, covered);
@@ -182,7 +182,7 @@ mod tests {
     use super::*;
 
     fn bundled_font(name: &str) -> Vec<u8> {
-        bundled().font_data[name].font.to_vec()
+        (*bundled().font_data[name].font).as_ref().to_vec()
     }
 
     #[test]

@@ -132,7 +132,7 @@ const TOUCH_ROW_HEIGHT: f32 = 44.0;
 pub const EDGE: f32 = 4.0;
 
 fn touch_id() -> egui::Id {
-    egui::Id::new("select_list_touch")
+    egui::Id::unique("select_list_touch")
 }
 
 /// Lay lists out for touch (or not) from now on.
@@ -159,11 +159,11 @@ pub enum Steer {
 }
 
 fn keyboard_id() -> egui::Id {
-    egui::Id::new("select_list_keyboard")
+    egui::Id::unique("select_list_keyboard")
 }
 
 fn steers_id() -> egui::Id {
-    egui::Id::new("select_list_steers")
+    egui::Id::unique("select_list_steers")
 }
 
 /// Which list the keys steer this frame, by the `id_salt` it's shown with
@@ -171,7 +171,7 @@ fn steers_id() -> egui::Id {
 /// wasn't shown last frame didn't take are dropped.
 pub fn set_keyboard(ctx: &egui::Context, list: Option<&'static str>) {
     ctx.data_mut(|d| {
-        d.insert_temp(keyboard_id(), list.map(egui::Id::new));
+        d.insert_temp(keyboard_id(), list.map(egui::Id::unique));
         d.remove::<Vec<(Steer, bool)>>(steers_id());
     });
 }
@@ -251,7 +251,7 @@ pub struct ListOutput {
 /// selection or hover (tinted in it, without either).
 pub fn show<T>(
     ui: &mut egui::Ui,
-    id_salt: impl egui::AsId,
+    id_salt: impl egui::AsIdSalt,
     items: &[T],
     selection: &mut Selection,
     playing: Option<usize>,
@@ -269,7 +269,7 @@ pub fn row_height(ui: &egui::Ui) -> f32 {
 /// say).
 pub fn show_tall<T>(
     ui: &mut egui::Ui,
-    id_salt: impl egui::AsId,
+    id_salt: impl egui::AsIdSalt,
     items: &[T],
     selection: &mut Selection,
     playing: Option<usize>,
@@ -285,7 +285,7 @@ pub fn show_tall<T>(
 /// under it, until the next header comes up and pushes it out.
 pub fn show_grouped<T>(
     ui: &mut egui::Ui,
-    id_salt: impl egui::AsId,
+    id_salt: impl egui::AsIdSalt,
     items: &[T],
     selection: &mut Selection,
     playing: Option<usize>,
@@ -298,7 +298,7 @@ pub fn show_grouped<T>(
 #[allow(clippy::too_many_arguments)]
 fn show_list<T>(
     ui: &mut egui::Ui,
-    id_salt: impl egui::AsId,
+    id_salt: impl egui::AsIdSalt,
     items: &[T],
     selection: &mut Selection,
     playing: Option<usize>,
@@ -306,7 +306,7 @@ fn show_list<T>(
     is_header: Option<&dyn Fn(&T) -> bool>,
     mut draw: impl FnMut(&mut egui::Ui, &Row, &T),
 ) -> ListOutput {
-    let id = egui::Id::new(id_salt);
+    let id = egui::Id::unique(id_salt);
     let mut output = ListOutput::default();
     let touch = touch(ui.ctx());
     let row_height = height.max(row_height(ui));
@@ -412,7 +412,7 @@ fn show_list<T>(
         }
     });
 
-    ui.ctx().data_mut(|d| d.insert_temp(view_id, (scroll.state.offset.y, scroll.inner_rect.height())));
+    ui.ctx().data_mut(|d| d.insert_temp(view_id, (scroll.state.clamped_offset().y, scroll.inner_rect.height())));
 
     if footer {
         ui.horizontal(|ui| {
@@ -703,7 +703,7 @@ pub fn show_star_look(ctx: &egui::Context, look: &crate::song_store::StarLook) {
 }
 
 fn star_look_id() -> egui::Id {
-    egui::Id::new("star_look")
+    egui::Id::unique("star_look")
 }
 
 fn star_look(ctx: &egui::Context) -> (Option<egui::Color32>, &'static str) {
