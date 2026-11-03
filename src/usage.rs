@@ -425,10 +425,14 @@ fn clip(text: &str, chars: usize) -> String {
     text.chars().take(chars).collect()
 }
 
+/// The version reports go under. A local build (a test of a branch, say)
+/// says so, or its counts pass for the release it shares a version with.
 fn version() -> String {
+    let version = env!("CARGO_PKG_VERSION");
     match build_info::channel() {
-        Channel::Nightly => format!("{} nightly", env!("CARGO_PKG_VERSION")),
-        _ => env!("CARGO_PKG_VERSION").to_string(),
+        _ if build_info::LOCAL => format!("{version} local"),
+        Channel::Nightly => format!("{version} nightly"),
+        _ => version.to_string(),
     }
 }
 

@@ -15,6 +15,10 @@ pub const VERSION: &str = env!("SYNTHTHING_VERSION");
 /// this is, at a glance (build.rs, `accent`). Off-white for a local build.
 pub const ACCENT: &str = env!("SYNTHTHING_ACCENT");
 
+/// Built outside CI (on someone's own computer), not a release or a CI
+/// build: its version says nothing about what's in it.
+pub const LOCAL: bool = matches!(env!("SYNTHTHING_LOCAL").as_bytes(), b"true");
+
 /// The commit it's built from, when CI said.
 const COMMIT: &str = env!("SYNTHTHING_COMMIT");
 

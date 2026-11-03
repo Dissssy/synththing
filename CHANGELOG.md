@@ -12,6 +12,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Emoji are drawn with Noto Emoji: flat and the same on every computer and phone, never in colour, and now covering every current emoji.
 - Characters the built-in fonts lack (other scripts, rarer symbols) are drawn with an installed font that's found the first time one shows up, instead of reading every installed font at startup. Phones get this too.
 
+### Fixed
+- Anonymous usage data from a build made on someone's own computer (not downloaded) is marked as such, instead of passing for the release it shares a version with.
+
 ## 2.6.0 (2026-11-03)
 
 ### Added

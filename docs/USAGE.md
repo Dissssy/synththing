@@ -8,7 +8,7 @@ The app (`src/usage.rs`) counts every log line it keeps (its own from info up, o
 
 A report (`library::usage::UsageReport`) holds:
 
-- the release (`1.8.3`, or `1.8.3 nightly` for a canary build) and the platform (`windows x86_64`);
+- the release (`1.8.3`, `1.8.3 nightly` for a canary build, or `1.8.3 local` for one built on someone's own computer) and the platform (`windows x86_64`);
 - how many times the app was started;
 - for each kind of line, its level (`panic`, `error`, `warn`, `info`), target (the log target, or the thread for a panic), signature, marked values and count.
 
