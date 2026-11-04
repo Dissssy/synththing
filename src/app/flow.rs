@@ -176,7 +176,7 @@ impl App {
                 if pills {
                     let titles: Vec<String> =
                         self.flow.steps.iter().map(|s| format!("{}  {}", icon(s.icon()), s.name())).collect();
-                    super::categories_body(ui, "flow", &titles, &mut index, height, |ui, i| {
+                    super::categories_body(ui, "flow", &titles, &mut index, height, |_| true, |ui, i| {
                         let step = self.flow.steps[i];
                         advance = self.flow_step_ui(ui, step);
                     });

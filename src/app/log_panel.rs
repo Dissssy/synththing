@@ -6,30 +6,12 @@ use eframe::egui;
 
 use crate::applog;
 
-use super::{App, fit_width};
+use super::App;
 
 impl App {
-    /// The app log viewer, as a modal (the mobile layout shows it as a
-    /// page instead).
-    pub(super) fn log_ui(&mut self, ctx: &egui::Context) {
-        if !self.log_open || self.mobile() {
-            return;
-        }
-        let mut close = false;
-        let response = egui::Modal::new(egui::Id::unique("app_log")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 720.0));
-            ui.heading("Log");
-            close = self.log_body_ui(ui, false);
-        });
-        if close || response.should_close() {
-            self.log_open = false;
-        }
-    }
-
-    /// The log: level filter, search, copy, and the log file's location.
-    /// On a page the entries fill what's left, under the buttons, and
-    /// there's no Close; whether Close was clicked.
-    pub(super) fn log_body_ui(&mut self, ui: &mut egui::Ui, page: bool) -> bool {
+    /// The log: level filter, search, its actions and the log file's
+    /// location, then the entries filling what's left.
+    pub(super) fn log_body_ui(&mut self, ui: &mut egui::Ui) {
         let entries = applog::entries();
         let search = self.log_search.to_lowercase();
         let shown: Vec<&applog::Entry> = entries
@@ -39,7 +21,6 @@ impl App {
             .collect();
         ui.ctx().request_repaint_after(Duration::from_millis(250));
 
-        let mut close = false;
         ui.horizontal_wrapped(|ui| {
             egui::ComboBox::from_id_salt("log_min_level")
                 .selected_text(match self.log_min_level {
@@ -55,15 +36,12 @@ impl App {
             ui.add(egui::TextEdit::singleline(&mut self.log_search).hint_text("search...").desired_width(200.0));
             ui.weak(format!("{} of {}", shown.len(), entries.len()));
         });
-        if page {
-            log_actions_ui(ui, &shown);
-            log_file_note_ui(ui);
-        }
+        log_actions_ui(ui, &shown);
+        log_file_note_ui(ui);
         ui.separator();
         let scroll = egui::ScrollArea::both()
             .id_salt("app_log_scroll")
-            .max_height(if page { f32::INFINITY } else { 420.0 })
-            .auto_shrink([false, !page])
+            .auto_shrink([false, false])
             .stick_to_bottom(true);
         if shown.is_empty() {
             scroll.show(ui, |ui| ui.weak("(nothing)"));
@@ -83,19 +61,6 @@ impl App {
                 }
             });
         }
-        if !page {
-            ui.separator();
-            log_file_note_ui(ui);
-            ui.horizontal(|ui| {
-                log_actions_ui(ui, &shown);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Close").clicked() {
-                        close = true;
-                    }
-                });
-            });
-        }
-        close
     }
 }
 

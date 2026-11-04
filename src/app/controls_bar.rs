@@ -79,7 +79,7 @@ impl App {
                 ui.set_max_width(width * STATUS_SHARE);
                 if status_line_ui(ui, &self.status, &mut self.unseen_failure, applog::elapsed, applog::entries) {
                     self.log_search = STATUS_TARGET.to_string();
-                    self.log_open = true;
+                    self.open_help(super::help::HelpTab::Log);
                 }
             })
             .response

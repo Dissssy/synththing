@@ -7,36 +7,13 @@ use eframe::egui;
 use crate::credits::{self, ContributorsState};
 use crate::updater;
 
-use super::{App, fit_width};
+use super::App;
+use super::widgets::Culled;
 
 impl App {
-    /// Help > Credits & licenses: contributors (from GitHub), the font, Lua,
-    /// and every library in the app with its license text.
-    pub(super) fn credits_ui(&mut self, ctx: &egui::Context) {
-        if !self.credits_open || self.mobile() {
-            return;
-        }
-        let mut close = false;
-        let response = egui::Modal::new(egui::Id::unique("credits")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 660.0));
-            ui.heading("Credits & licenses");
-            self.credits_body_ui(ui, false);
-            ui.separator();
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if ui.button("Close").clicked() {
-                    close = true;
-                }
-            });
-        });
-        if close || response.should_close() {
-            self.credits_open = false;
-        }
-    }
-
     /// Contributors (from GitHub), the font, Lua, and every library in
-    /// the app with its license text. On a page the list fills what's
-    /// left.
-    pub(super) fn credits_body_ui(&mut self, ui: &mut egui::Ui, page: bool) {
+    /// the app with its license text, the list filling what's left.
+    pub(super) fn credits_body_ui(&mut self, ui: &mut egui::Ui) {
         self.contributors.fetch_once();
         let contributors = self.contributors.state();
         if matches!(contributors, ContributorsState::Fetching) {
@@ -55,8 +32,7 @@ impl App {
         ui.separator();
         egui::ScrollArea::vertical()
             .id_salt("credits_scroll")
-            .max_height(if page { f32::INFINITY } else { 480.0 })
-            .auto_shrink([false, !page])
+            .auto_shrink([false, false])
             .show(
             ui,
             |ui| {
@@ -144,11 +120,9 @@ impl App {
                         .desired_width(240.0),
                 );
                 let search = self.credits_search.to_lowercase();
-                // (Hundreds of packages: a closed row out of sight only
-                // takes its space, measured off a row drawn earlier, or
-                // the page cost 8-11 ms every frame on a phone.)
-                let row_height_id = ui.scope_id().with("credits_row_height");
-                let row_height: Option<f32> = ui.data(|d| d.get_temp(row_height_id));
+                // (Hundreds of packages: the page cost 8-11 ms every frame
+                // on a phone drawn whole.)
+                let mut culled = Culled::begin(ui, "credits_packages");
                 for package in &third_party.packages {
                     let matches = search.is_empty()
                         || package.name.to_lowercase().contains(&search)
@@ -160,44 +134,30 @@ impl App {
                     // wraps or shortens, and long license names ran off a
                     // phone's screen.)
                     let id = ui.make_persistent_id(("credits_package", &package.name, &package.version));
-                    let closed = egui::collapsing_header::CollapsingState::load(ui.ctx(), id)
-                        .is_none_or(|state| state.openness(ui.ctx()) == 0.0);
-                    let top = ui.cursor().min.y;
-                    if closed && let Some(height) = row_height {
-                        let row = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + height);
-                        if !ui.is_rect_visible(row) {
-                            ui.add_space(height);
-                            continue;
+                    culled.block(ui, id, false, |ui| {
+                        let mut clicked = false;
+                        let mut header = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+                            .show_header(ui, |ui| {
+                                let text = format!("{} {}   {}", package.name, package.version, package.license);
+                                clicked = ui.add(egui::Label::new(text).truncate().sense(egui::Sense::click())).clicked();
+                            });
+                        if clicked {
+                            header.toggle();
                         }
-                    }
-                    let mut clicked = false;
-                    let mut header = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
-                        .show_header(ui, |ui| {
-                            let text = format!("{} {}   {}", package.name, package.version, package.license);
-                            clicked = ui.add(egui::Label::new(text).truncate().sense(egui::Sense::click())).clicked();
+                        header.body(|ui| {
+                            if !package.authors.is_empty() {
+                                ui.weak(format!("By {}", package.authors.join(", ")));
+                            }
+                            if let Some(repository) = &package.repository {
+                                ui.hyperlink_to(repository, repository);
+                            }
+                            for text in third_party.texts_for(package) {
+                                ui.label(egui::RichText::new(text).monospace().small());
+                            }
                         });
-                    if clicked {
-                        header.toggle();
-                    }
-                    header.body(|ui| {
-                        if !package.authors.is_empty() {
-                            ui.weak(format!("By {}", package.authors.join(", ")));
-                        }
-                        if let Some(repository) = &package.repository {
-                            ui.hyperlink_to(repository, repository);
-                        }
-                        for text in third_party.texts_for(package) {
-                            ui.label(egui::RichText::new(text).monospace().small());
-                        }
                     });
-                    if closed && !clicked {
-                        // (A closed body adds nothing.)
-                        let height = ui.cursor().min.y - top;
-                        if row_height != Some(height) {
-                            ui.data_mut(|d| d.insert_temp(row_height_id, height));
-                        }
-                    }
                 }
+                culled.end(ui);
             },
         );
     }

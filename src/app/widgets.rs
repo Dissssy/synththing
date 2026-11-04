@@ -13,13 +13,15 @@ pub(super) const CATEGORIES_HEIGHT: f32 = 340.0;
 
 /// The body of a page laid out like Preferences: `categories` down the
 /// side (`selected` the one picked), and `body` drawing the picked one's
-/// contents beside them. Each side scrolls by itself, `height` tall.
+/// contents beside them, `height` tall. Each side scrolls by itself (the
+/// body only when `scrolls` says, for one that has its own scrolling).
 pub(super) fn categories_body<S: AsRef<str>>(
     ui: &mut egui::Ui,
     id: &str,
     categories: &[S],
     selected: &mut usize,
     height: f32,
+    scrolls: impl Fn(usize) -> bool,
     body: impl FnOnce(&mut egui::Ui, usize),
 ) {
     // A fixed height: the divider takes the height it's given, so in a
@@ -41,6 +43,11 @@ pub(super) fn categories_body<S: AsRef<str>>(
         });
         ui.separator();
         ui.vertical(|ui| {
+            if !scrolls(*selected) {
+                ui.set_height(height);
+                body(ui, *selected);
+                return;
+            }
             egui::ScrollArea::vertical()
                 .id_salt((id, "body"))
                 .max_height(height)
@@ -51,6 +58,48 @@ pub(super) fn categories_body<S: AsRef<str>>(
                 });
         });
     });
+}
+
+/// A page in the panels' place, like Preferences: `title` with a close
+/// button, then `categories` down the side (`selected` the one picked)
+/// and `body` beside them (scrolling as `scrolls` says, as
+/// [`categories_body`]). Whether it's to close: the button, or Esc (when
+/// `esc` lets it, and no dropdown or dialog takes it first).
+pub(super) fn page_ui<S: AsRef<str>>(
+    ui: &mut egui::Ui,
+    title: &str,
+    categories: &[S],
+    selected: &mut usize,
+    esc: bool,
+    scrolls: impl Fn(usize) -> bool,
+    body: impl FnOnce(&mut egui::Ui, usize),
+) -> bool {
+    let mut close = false;
+    let outer = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 8 });
+    egui::CentralPanel::default().frame(outer).show(ui, |ui| {
+        let page = egui::Frame::new().fill(ui.visuals().window_fill).corner_radius(6).inner_margin(12);
+        page.show(ui, |ui| {
+            ui.set_min_size(ui.available_size());
+            ui.horizontal(|ui| {
+                ui.heading(title);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    close = ui.add(icon_button("x")).on_hover_text("Close (Esc)").clicked();
+                });
+            });
+            ui.add_space(6.0);
+            let height = ui.available_height();
+            categories_body(ui, title, categories, selected, height, scrolls, body);
+        });
+    });
+    let ctx = ui.ctx().clone();
+    if esc
+        && !egui::Popup::is_any_open(&ctx)
+        && ctx.memory(|m| m.top_modal_layer()).is_none()
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        close = true;
+    }
+    close
 }
 
 /// `width`, or less on a screen too narrow for it (a phone's): what windows
@@ -461,9 +510,83 @@ pub(super) fn colored_icon_button(name: &str, color: egui::Color32) -> egui::But
     egui::Button::new(egui::RichText::new(icon(name)).size(16.0).color(color)).min_size(egui::vec2(28.0, 24.0))
 }
 
+/// Long content drawn block by block, where a block out of sight only
+/// takes its space, as measured when it was last drawn at this width:
+/// laying all of it out every frame made Credits and the Scripting
+/// Reference cost 8-45 ms a frame. `begin` it, draw each `block`, `end` it.
+pub(super) struct Culled {
+    id: egui::Id,
+    width: f32,
+    heights: std::collections::HashMap<egui::Id, f32>,
+}
+
+impl Culled {
+    pub(super) fn begin(ui: &egui::Ui, salt: impl egui::AsIdSalt) -> Self {
+        let id = ui.scope_id().with(salt);
+        let width = ui.available_width();
+        let (seen, heights): (f32, _) = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+        Self { id, width, heights: if seen == width { heights } else { Default::default() } }
+    }
+
+    /// Draws block `key` with `draw`, unless it's out of sight and not
+    /// `shown` (to be scrolled to, say): then it only takes its space.
+    pub(super) fn block<R>(&mut self, ui: &mut egui::Ui, key: impl egui::AsIdSalt, shown: bool, draw: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+        let key = self.id.with(key);
+        let top = ui.cursor().min.y;
+        if !shown
+            && let Some(&height) = self.heights.get(&key)
+            && !ui.is_rect_visible(egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + height))
+        {
+            ui.add_space(height);
+            return None;
+        }
+        let drawn = draw(ui);
+        self.heights.insert(key, ui.cursor().min.y - top);
+        Some(drawn)
+    }
+
+    pub(super) fn end(self, ui: &egui::Ui) {
+        ui.data_mut(|d| d.insert_temp(self.id, (self.width, self.heights)));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Blocks out of sight are only drawn once, to measure them, and take
+    /// the same room after.
+    #[test]
+    fn culled_blocks_out_of_sight_take_their_room() {
+        let ctx = egui::Context::default();
+        let frame = || {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 300.0))),
+                ..Default::default()
+            };
+            let (mut drawn, mut bottom) = (0, 0.0);
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let mut culled = Culled::begin(ui, "test");
+                    for i in 0..100 {
+                        culled.block(ui, i, false, |ui| {
+                            drawn += 1;
+                            ui.label(format!("Block {i}"));
+                        });
+                    }
+                    bottom = ui.cursor().min.y;
+                    culled.end(ui);
+                });
+            });
+            output.textures_delta.clear();
+            (drawn, bottom)
+        };
+        let (first, height) = frame();
+        let (second, again) = frame();
+        assert_eq!(first, 100, "all measured the first time");
+        assert!(second < 30, "only those in sight drawn after: {second}");
+        assert_eq!(height, again, "the same room either way");
+    }
 
     /// A dropdown that doesn't fit on a wrapping row's line goes on the
     /// next one, instead of past the edge.

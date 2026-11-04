@@ -11,7 +11,7 @@ synththing [--visualizer] [--console] [--config-dir DIR] [--online KINDS]
 ```
 
 - `--visualizer` (or `--viz`): open with the Visualizer tab showing.
-- `--console`: also print the app's log (what Help > Log... shows: script errors, warnings, panics) to the terminal as it happens. Handy for watching a release build, which otherwise has no console (see below).
+- `--console`: also print the app's log (what Help > Log shows: script errors, warnings, panics) to the terminal as it happens. Handy for watching a release build, which otherwise has no console (see below).
 - `--config-dir DIR`: keep everything (preferences, scripts, soundfonts, playlists, the library identity, the log) in DIR instead of the usual config folder, made if it isn't there. For trying a test build without touching your real setup. It works with every command (`synththing --config-dir DIR serve` keeps the server's data in `DIR/server` by default, say), and so does the `SYNTHTHING_CONFIG_DIR` environment variable. Branch builds installed from Help > Check for updates go in `DIR/channels` then, each started with its own config folder there, so nothing outside DIR is touched.
 - `--online KINDS`: in a branch build, turn on these online features for this run, comma-separated: `scripts` (the Online Library), `sync` (sign-in and sync) and `lookup` (album art and details). Branch builds start with all of them off; this is the same as their switches in Preferences > Account, and like those it's never saved. Elsewhere they're always on and it does nothing.
 

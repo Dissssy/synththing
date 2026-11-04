@@ -266,10 +266,8 @@ impl App {
                         super::changelog_body_ui(ui, None);
                     });
                 }
-                Page::Log => {
-                    self.log_body_ui(ui, true);
-                }
-                Page::Credits => self.credits_body_ui(ui, true),
+                Page::Log => self.log_body_ui(ui),
+                Page::Credits => self.credits_body_ui(ui),
             });
         }
         if self.mobile_state.drawer_open {
@@ -281,12 +279,10 @@ impl App {
     /// log, the credits) opens its page here instead.
     pub(super) fn open_mobile_pages(&mut self, ctx: &egui::Context) {
         let state = &mut self.mobile_state;
-        let page = if std::mem::take(&mut self.log_open) {
-            Page::Log
-        } else if std::mem::take(&mut self.credits_open) {
-            Page::Credits
-        } else {
-            return;
+        let page = match self.help.take() {
+            Some(super::help::HelpTab::Log) => Page::Log,
+            Some(super::help::HelpTab::Credits) => Page::Credits,
+            None => return,
         };
         state.page = page;
         state.drawer_open = false;
