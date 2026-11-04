@@ -461,9 +461,83 @@ pub(super) fn colored_icon_button(name: &str, color: egui::Color32) -> egui::But
     egui::Button::new(egui::RichText::new(icon(name)).size(16.0).color(color)).min_size(egui::vec2(28.0, 24.0))
 }
 
+/// Long content drawn block by block, where a block out of sight only
+/// takes its space, as measured when it was last drawn at this width:
+/// laying all of it out every frame made Credits and the Scripting
+/// Reference cost 8-45 ms a frame. `begin` it, draw each `block`, `end` it.
+pub(super) struct Culled {
+    id: egui::Id,
+    width: f32,
+    heights: std::collections::HashMap<egui::Id, f32>,
+}
+
+impl Culled {
+    pub(super) fn begin(ui: &egui::Ui, salt: impl egui::AsIdSalt) -> Self {
+        let id = ui.scope_id().with(salt);
+        let width = ui.available_width();
+        let (seen, heights): (f32, _) = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+        Self { id, width, heights: if seen == width { heights } else { Default::default() } }
+    }
+
+    /// Draws block `key` with `draw`, unless it's out of sight and not
+    /// `shown` (to be scrolled to, say): then it only takes its space.
+    pub(super) fn block<R>(&mut self, ui: &mut egui::Ui, key: impl egui::AsIdSalt, shown: bool, draw: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+        let key = self.id.with(key);
+        let top = ui.cursor().min.y;
+        if !shown
+            && let Some(&height) = self.heights.get(&key)
+            && !ui.is_rect_visible(egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + height))
+        {
+            ui.add_space(height);
+            return None;
+        }
+        let drawn = draw(ui);
+        self.heights.insert(key, ui.cursor().min.y - top);
+        Some(drawn)
+    }
+
+    pub(super) fn end(self, ui: &egui::Ui) {
+        ui.data_mut(|d| d.insert_temp(self.id, (self.width, self.heights)));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Blocks out of sight are only drawn once, to measure them, and take
+    /// the same room after.
+    #[test]
+    fn culled_blocks_out_of_sight_take_their_room() {
+        let ctx = egui::Context::default();
+        let frame = || {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 300.0))),
+                ..Default::default()
+            };
+            let (mut drawn, mut bottom) = (0, 0.0);
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let mut culled = Culled::begin(ui, "test");
+                    for i in 0..100 {
+                        culled.block(ui, i, false, |ui| {
+                            drawn += 1;
+                            ui.label(format!("Block {i}"));
+                        });
+                    }
+                    bottom = ui.cursor().min.y;
+                    culled.end(ui);
+                });
+            });
+            output.textures_delta.clear();
+            (drawn, bottom)
+        };
+        let (first, height) = frame();
+        let (second, again) = frame();
+        assert_eq!(first, 100, "all measured the first time");
+        assert!(second < 30, "only those in sight drawn after: {second}");
+        assert_eq!(height, again, "the same room either way");
+    }
 
     /// A dropdown that doesn't fit on a wrapping row's line goes on the
     /// next one, instead of past the edge.

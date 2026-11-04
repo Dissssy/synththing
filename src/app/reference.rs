@@ -5,6 +5,7 @@ use eframe::egui;
 use crate::lua_docs;
 
 use super::{App, inline_code_job};
+use super::widgets::Culled;
 
 impl App {
     /// The scripting-API reference: one embedded, structured page (see
@@ -23,29 +24,13 @@ impl App {
             None => (None, 0.0, false),
         };
         egui::ScrollArea::vertical().id_salt("docs_scroll").auto_shrink([false, false]).show(ui, |ui| {
-            // (A block out of sight only takes its space, as measured when
-            // it was last drawn at this width: laying out the whole
-            // reference cost 30-45 ms every frame.)
-            let heights_id = ui.scope_id().with("docs_heights");
-            let width = ui.available_width();
-            let mut heights: (f32, std::collections::HashMap<(usize, usize), f32>) = ui.data(|d| d.get_temp(heights_id)).unwrap_or_default();
-            if heights.0 != width {
-                heights = (width, Default::default());
-            }
+            let mut culled = Culled::begin(ui, "docs_blocks");
             for (s, section) in lua_docs::sections().iter().enumerate() {
                 ui.heading(section.title);
                 for (b, block) in section.blocks.iter().enumerate() {
-                    let top = ui.cursor().min.y;
-                    if target_at != Some((s, b))
-                        && let Some(&height) = heights.1.get(&(s, b))
-                        && !ui.is_rect_visible(egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + height))
-                    {
-                        ui.add_space(height);
-                        ui.add_space(4.0);
-                        continue;
-                    }
-                    let response = ui
-                        .vertical(|ui| match block {
+                    let target = target_at == Some((s, b));
+                    let drawn = culled.block(ui, (s, b), target, |ui| {
+                        ui.vertical(|ui| match block {
                             lua_docs::Block::P(text) => {
                                 ui.label(inline_code_job(ui, "", text));
                             }
@@ -58,9 +43,9 @@ impl App {
                                 }
                             }
                         })
-                        .response;
-                    heights.1.insert((s, b), ui.cursor().min.y - top);
-                    if target_at == Some((s, b)) {
+                        .response
+                    });
+                    if target && let Some(response) = drawn {
                         if std::mem::take(&mut scroll) {
                             response.scroll_to_me(Some(egui::Align::TOP));
                         }
@@ -74,7 +59,7 @@ impl App {
                 }
                 ui.separator();
             }
-            ui.data_mut(|d| d.insert_temp(heights_id, heights));
+            culled.end(ui);
         });
         if fade <= 0.0 && target_at.is_some() {
             self.docs_target = None;
