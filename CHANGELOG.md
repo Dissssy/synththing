@@ -6,6 +6,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Changed
 - The visualizer page for OBS (`/v1/visualizer`) draws at its own size when the URL gives no `width` and `height`: resize the Browser Source, refresh it, and the visualizer follows. A new `scale` query argument works like the Visualizer scale preference (`&scale=4` for chunky pixels).
+- Preferences > Programs can make a visualizer URL for OBS (Stream URL): pick the pixel scale and whether it plays the audio, and it adds a program for it and shows the URL. Paste a URL back in to change it and copy it again.
 - The star button in album, artist and playlist headers is gone: one click starred or unstarred every song on the page with no way back. To star several songs, select them (Ctrl+A for all) and right-click > Star, which says Unstar when every selected song is already starred.
 - Buttons that can't be taken back now ask first: the first click turns them into a red "Really delete?" (or remove, or clear), and a second click on it does it; a click anywhere else or Esc backs out. That's deleting a tag, a grouping ruleset, a theme or a playlist, removing a song from all devices, clearing songs on none of your devices from your library, and removing a branch build.
 
