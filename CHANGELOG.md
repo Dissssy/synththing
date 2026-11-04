@@ -4,9 +4,25 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Fixed
+- Usage data no longer counts what an older version logged under the version you updated to: counts left unsent at an update are sent under the version they came from, right after the update.
+- The Scripting Reference no longer slows every frame while it's open: only the part in sight is drawn.
+
 ### Changed
 - The visualizer page for OBS (`/v1/visualizer`) draws at its own size for whichever of `width` and `height` the URL leaves out: resize the Browser Source, refresh it, and the visualizer follows. A new `scale` query argument works like the Visualizer scale preference (`&scale=4` for chunky pixels).
 - Preferences > Programs can make a visualizer URL for OBS (Stream URL): pick the pixel scale, whether it plays the audio and a fixed or automatic width and height, and it adds a program for it and shows the URL. Paste a URL back in to change it and copy it again.
+- Emoji are drawn with Noto Emoji: flat and the same on every computer and phone, never in colour, and now covering every current emoji.
+- Characters the built-in fonts lack (other scripts, rarer symbols) are drawn with an installed font that's found the first time one shows up, instead of reading every installed font at startup. Phones get this too.
+
+### Fixed
+- Anonymous usage data from a build made on someone's own computer (not downloaded) is marked as such, instead of passing for the release it shares a version with.
+
+## 2.6.0 (2026-11-03)
+
+### Added
+- Send feedback: when you're signed in, tick "Let me know what comes of this" and you'll get a notification once it's fixed or added, saying which version it's in (or, if it's been asked for before and isn't planned, that it isn't). Unticked, feedback stays anonymous as before. The server keeps who asked until they've been told (it updates its database on start).
+
+### Changed
 - The star button in album, artist and playlist headers is gone: one click starred or unstarred every song on the page with no way back. To star several songs, select them (Ctrl+A for all) and right-click > Star, which says Unstar when every selected song is already starred.
 - Buttons that can't be taken back now ask first: the first click turns them into a red "Really delete?" (or remove, or clear), and a second click on it does it; a click anywhere else or Esc backs out. That's deleting a tag, a grouping ruleset, a theme or a playlist, removing a song from all devices, clearing songs on none of your devices from your library, and removing a branch build.
 
@@ -17,6 +33,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Groupings: the songs on an album's, artist's or other group's page are spaced like every other list again, instead of cramped with striped rows taller than the rest and the playing song's outline touching its neighbours.
 - Phones: the Script library's list and search bar fit the screen again (the sort dropdown no longer pushes the page 30 points past its right edge), and an empty Wishlist's note wraps instead of running off the side.
 - The log (and usage data) no longer warns "UI stuck" or "stalled frame" while the window is in the background, minimized or hidden: with nothing on screen, no frames are drawn, which isn't a hang. A hang in the app's own code is still caught there.
+- Android: the app no longer drains the battery in the background. Going to the background could leave it running a whole CPU core flat out, doing nothing, until it was opened again, and with nothing playing it still kept the phone's audio output (and with it the phone) awake.
+- The audio output now closes after 10 seconds with nothing to play, and opens again when something plays, on whatever is the default output device by then.
 
 ## 2.5.0 (2026-11-02)
 

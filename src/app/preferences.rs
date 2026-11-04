@@ -773,7 +773,7 @@ impl App {
                              middle to move the window, double-click it to maximize).",
                             |ui| ui.checkbox(&mut native_frame, "Use the system's window frame"),
                         );
-                        if self.tray.is_some() {
+                        if self.has_tray() {
                             with_info(
                                 ui,
                                 "On: closing the window hides synththing in the tray (by the clock), still \
@@ -846,7 +846,7 @@ impl App {
             || unsearched != self.config.songs_view.unsearched
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
             || canary != self.config.canary_updates()
-            || (self.tray.is_some() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
+            || (self.has_tray() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
             || warn_heavy != self.config.warn_heavy_midi.unwrap_or(true)
             || native_frame != self.config.native_frame
             || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
@@ -895,7 +895,7 @@ impl App {
             if canary != self.config.canary_updates() {
                 self.config.canary_updates = Some(canary);
             }
-            if self.tray.is_some() && (close_to_tray || self.config.close_to_tray.is_some()) {
+            if self.has_tray() && (close_to_tray || self.config.close_to_tray.is_some()) {
                 self.config.close_to_tray = Some(close_to_tray);
             }
             self.config.preload_expiry_secs = expiry;

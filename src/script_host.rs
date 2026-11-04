@@ -96,6 +96,9 @@ pub struct Effects {
 }
 
 impl Effects {
+    /// For the mini player (Windows only), which hands effects back only
+    /// when there are any.
+    #[cfg(windows)]
     pub fn is_empty(&self) -> bool {
         self.channel_requests.is_empty() && self.live_commands.is_empty() && self.playback_requests.is_empty()
     }

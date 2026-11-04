@@ -440,7 +440,7 @@ impl App {
     pub(super) fn handle_os_file_drops(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
             let screen = ctx.content_rect();
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("file_drop_dim")));
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("file_drop_dim")));
             painter.rect_filled(screen, 0.0, egui::Color32::from_black_alpha(170));
             painter.text(
                 screen.center(),

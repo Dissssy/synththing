@@ -103,7 +103,7 @@ impl App {
             .map(|path| self.song_title(path))
             .collect();
         let state = &self.repair;
-        let modal = egui::Modal::new(egui::Id::new("repair_library")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("repair_library")).show(ctx, |ui| {
             ui.set_max_width(420.0);
             ui.heading("Repair library");
             if let Some(check) = &state.check {

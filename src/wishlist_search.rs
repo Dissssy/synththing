@@ -84,10 +84,6 @@ impl Filter {
         filter
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.tests.is_empty() && self.text.is_empty()
-    }
-
     /// Whether `wish`, `state` as it is here, is kept, `now` (Unix
     /// seconds) saying when "the last 30 days" are.
     pub fn keeps(&self, wish: &Wish, state: State, now: i64) -> bool {
@@ -245,7 +241,8 @@ mod tests {
         for bad in ["kind:playlist", "got:maybe", "type:boxset", "year:soon", "added:yesterday"] {
             assert_eq!(Filter::parse(bad).problems.len(), 1, "{bad}");
         }
-        assert!(Filter::parse("kind:").is_empty(), "still being typed");
+        let typing = Filter::parse("kind:");
+        assert!(typing.tests.is_empty() && typing.text.is_empty(), "still being typed");
     }
 
     #[test]

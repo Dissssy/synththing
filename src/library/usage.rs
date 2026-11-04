@@ -20,7 +20,8 @@ pub const DEFAULT_USAGE_RULES: [&str; 3] = ["error * keep", "warn * keep", "info
 /// One report: counts since the last one. Nothing in it says who sent it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct UsageReport {
-    /// The release ("1.7.0"), with " nightly" for a canary build.
+    /// The release ("1.7.0"), with " nightly" for a canary build or " local"
+    /// for one built outside CI.
     pub version: String,
     /// OS and CPU ("windows x86_64").
     pub platform: String,

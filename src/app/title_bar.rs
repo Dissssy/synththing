@@ -131,7 +131,7 @@ impl App {
                 });
                 // (What's left between the wordmark and the buttons.)
                 let rest = ui.available_rect_before_wrap();
-                let grip = ui.interact(rest, ui.id().with("title_drag"), egui::Sense::click_and_drag());
+                let grip = ui.interact(rest, ui.scope_id().with("title_drag"), egui::Sense::click_and_drag());
                 if !self.wants_native_frame() {
                     if grip.double_clicked() {
                         let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
@@ -315,10 +315,15 @@ impl App {
 
 impl App {
     /// The wordmark's hop sound, at the volume slider's volume.
-    fn play_hop(&self) {
+    fn play_hop(&mut self) {
         use rodio::Source as _;
+        let volume = self.volume;
         match rodio::Decoder::new(std::io::Cursor::new(HOP_SOUND)) {
-            Ok(sound) => self.mixer.add(sound.amplify(self.volume)),
+            Ok(sound) => {
+                if let Some(mixer) = self.output.mixer() {
+                    mixer.add(sound.amplify(volume));
+                }
+            }
             Err(e) => log::warn!("the hop sound: {e}"),
         }
     }

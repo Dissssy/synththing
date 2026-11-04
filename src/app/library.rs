@@ -632,7 +632,7 @@ impl App {
     pub(super) fn document_ui(&mut self, ctx: &egui::Context) {
         let Some(mut open) = self.library.document.take() else { return };
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("library_document")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("library_document")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 640.0));
             ui.heading(&open.title);
             ui.separator();
@@ -1582,7 +1582,7 @@ impl App {
         let mut apply = false;
         let mut keep = false;
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("library_update")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("library_update")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 560.0));
             ui.heading(format!("Update \"{}\"", draft.summary.name));
             ui.label(format!("Version {} is out; you have version {}.", draft.summary.version, draft.installed.version));
@@ -1706,7 +1706,7 @@ impl App {
             .filter(|_| !draft.anonymous && !draft.as_new);
         if let Some((id, said)) = draft.done.clone() {
             let mut show = false;
-            let response = egui::Modal::new(egui::Id::new("library_publish")).show(ctx, |ui| {
+            let response = egui::Modal::new(egui::Id::unique("library_publish")).show(ctx, |ui| {
                 ui.set_width(super::fit_width(ui, 480.0));
                 ui.heading("Published");
                 ui.label(said.as_str());
@@ -1727,7 +1727,7 @@ impl App {
             }
             return;
         }
-        let response = egui::Modal::new(egui::Id::new("library_publish")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("library_publish")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 480.0));
             ui.heading(match (&updating, &draft.remix) {
                 (Some(_), _) => "Publish a new version",
@@ -1995,6 +1995,11 @@ impl App {
         PUBLISHING || self.library.identity.is_some()
     }
 
+    /// Whether this device has an identity (is signed in), without making one.
+    pub(super) fn signed_in(&self) -> bool {
+        self.library.identity.is_some()
+    }
+
     /// The identity (a fresh copy for a request's thread), made and saved
     /// first if there isn't one.
     pub(super) fn ensure_identity(&mut self) -> Result<Identity, String> {
@@ -2166,6 +2171,7 @@ impl App {
     }
 
     /// Carry out what the identity menu asked for.
+    #[cfg_attr(target_os = "android", expect(unused_variables, reason = "exporting and importing an identity file is desktop only"))]
     fn identity_actions(&mut self, make: bool, export: bool, import: bool) {
         if make {
             self.library.identity_message = match self.ensure_identity() {

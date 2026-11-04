@@ -162,7 +162,7 @@ impl App {
         let mut bring_back = false;
         let mut close = false;
         let mut reviewed: Option<Reviewed> = None;
-        let response = egui::Modal::new(egui::Id::new("cleanup")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("cleanup")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 640.0));
             ui.heading("Clean up");
             ui.weak("Suggestions from what your songs' details say. Nothing changes until you apply one, and the files themselves are never written.");

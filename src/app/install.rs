@@ -178,7 +178,7 @@ impl App {
         }
         let data = crate::config::config_dir().map(|d| d.display().to_string()).unwrap_or_default();
         let mut answer = None;
-        let response = egui::Modal::new(egui::Id::new("uninstall")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("uninstall")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 420.0));
             ui.heading("Uninstall synththing?");
             ui.add_space(4.0);
