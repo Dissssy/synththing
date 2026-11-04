@@ -997,6 +997,9 @@ const PERMISSIONS: [(&str, &str, fn(&mut Access) -> &mut bool); 8] = [
 struct StreamUrl {
     scale: u32,
     audio: bool,
+    /// Fixed sides, in pixels: `None` is the Browser Source's own.
+    width: Option<u32>,
+    height: Option<u32>,
     /// A URL pasted to change: its program's name, its token, and the
     /// rest of its query (kept as it was).
     editing: Option<(String, String, Vec<String>)>,
@@ -1010,18 +1013,23 @@ impl StreamUrl {
     fn load(&mut self, apps: &[Access]) -> Result<(), String> {
         let query = self.pasted.trim().split_once('?').map_or("", |(_, q)| q);
         let (mut token, mut scale, mut audio, mut rest) = (None, 1, false, Vec::new());
+        let (mut width, mut height) = (None, None);
+        let pixels = |n: &str| n.parse::<u32>().map_err(|_| "Its width or height isn't a number of pixels.");
         for part in query.split('&').filter(|p| !p.is_empty()) {
             match part.split_once('=').unwrap_or((part, "")) {
                 ("token", t) => token = Some(t.to_string()),
                 ("scale", n) => scale = n.parse().ok().filter(|n| crate::config::VISUALIZER_SCALES.contains(n)).ok_or("Its scale isn't one synththing offers.")?,
                 ("audio", a) => audio = a == "1",
+                ("width", n) => width = Some(pixels(n)?),
+                ("height", n) => height = Some(pixels(n)?),
                 _ => rest.push(part.to_string()),
             }
         }
         let token = token.ok_or("That isn't a stream URL: it has no token.")?;
         let hash = crate::library::sha256_hex(token.as_bytes());
         let app = apps.iter().find(|app| app.token == hash).ok_or("Its token isn't one of your programs (removed?).")?;
-        (self.scale, self.audio, self.editing) = (scale, audio, Some((app.name.clone(), token, rest)));
+        (self.scale, self.audio, self.width, self.height) = (scale, audio, width, height);
+        self.editing = Some((app.name.clone(), token, rest));
         self.pasted.clear();
         Ok(())
     }
@@ -1072,6 +1080,11 @@ fn stream_url_ui(ui: &mut egui::Ui, settings: &mut api::Settings, stream: &mut S
                         for part in &rest {
                             url += &format!("&{part}");
                         }
+                        for (name, side) in [("width", stream.width), ("height", stream.height)] {
+                            if let Some(side) = side {
+                                url += &format!("&{name}={side}");
+                            }
+                        }
                         if stream.scale != 1 {
                             url += &format!("&scale={}", stream.scale);
                         }
@@ -1088,6 +1101,26 @@ fn stream_url_ui(ui: &mut egui::Ui, settings: &mut api::Settings, stream: &mut S
                 stream.editing = None;
             }
             label | combo | tick | make
+        },
+    );
+    with_info(
+        ui,
+        "Untick a side to use the Browser Source's own: resize the source and refresh, and the visualizer follows. \
+         A ticked side is drawn at that many pixels whatever the source's size.",
+        |ui| {
+            let label = setting_label(ui, "Size");
+            let mut responses = label;
+            for (name, side) in [("Width", &mut stream.width), ("Height", &mut stream.height)] {
+                let mut fixed = side.is_some();
+                responses |= ui.checkbox(&mut fixed, name);
+                *side = fixed.then(|| side.unwrap_or(if name == "Width" { 1920 } else { 1080 }));
+                match side {
+                    Some(pixels) => responses |= ui.add(egui::DragValue::new(pixels).range(64..=4096).suffix(" px")),
+                    None => responses |= ui.weak("auto"),
+                }
+                ui.add_space(8.0);
+            }
+            responses
         },
     );
     setting_row(ui, |ui| {
@@ -1175,7 +1208,8 @@ mod tests {
         let mut stream = StreamUrl { pasted: format!("http://127.0.0.1:7340/v1/visualizer?token={token}&width=500&height=190&scale=4&audio=1"), ..StreamUrl::default() };
         stream.load(&apps).unwrap();
         assert_eq!((stream.scale, stream.audio), (4, true));
-        assert_eq!(stream.editing, Some(("OBS stream".to_string(), token, vec!["width=500".to_string(), "height=190".to_string()])));
+        assert_eq!((stream.width, stream.height), (Some(500), Some(190)));
+        assert_eq!(stream.editing, Some(("OBS stream".to_string(), token, Vec::new())));
         stream.pasted = "http://127.0.0.1:7340/v1/visualizer?token=st_nope".into();
         assert!(stream.load(&apps).is_err());
     }

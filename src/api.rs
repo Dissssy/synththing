@@ -1822,15 +1822,18 @@ fn page(title: &str, raw_query: &str, video: bool, audio: bool) -> Reply {
     if video {
         let has = |name: &str| raw_query.split('&').any(|p| p.split('=').next() == Some(name));
         let png = if has("format") { "" } else { "&format=png" };
-        if has("width") || has("height") {
+        if has("width") && has("height") {
             page += &format!("<img src=\"/v1/visualizer/stream?{query}{}\" alt=\"\">", png.replace('&', "&amp;"));
         } else {
-            // No size given: draw at the page's own, so resizing OBS's
-            // Browser Source and refreshing it is all a new size takes.
+            // A side not given is the page's own, so resizing OBS's Browser
+            // Source and refreshing it is all a new size takes.
             let stream = serde_json::to_string(&format!("/v1/visualizer/stream?{raw_query}{png}")).unwrap_or_default().replace('<', "\\u003c");
+            let side = |name: &str, js: &str| if has(name) { String::new() } else { format!(" + \"&{name}=\" + Math.round({js} * ratio)") };
             page += &format!(
                 "<img alt=\"\"><script>const ratio = window.devicePixelRatio || 1;\n\
-                 document.querySelector(\"img\").src = {stream} + \"&width=\" + Math.round(innerWidth * ratio) + \"&height=\" + Math.round(innerHeight * ratio);</script>"
+                 document.querySelector(\"img\").src = {stream}{}{};</script>",
+                side("width", "innerWidth"),
+                side("height", "innerHeight")
             );
         }
     }
@@ -2281,6 +2284,8 @@ mod tests {
         let (_, page) = get(&server, "/v1/visualizer?token=x", &read_token);
         assert!(page.contains(r#""/v1/visualizer/stream?token=x&format=png" + "&width=""#), "{page}");
         assert_eq!(get(&server, "/v1/visualizer/stream?width=640&height=360&scale=3", &read_token).0, 400);
+        let (_, page) = get(&server, "/v1/visualizer?width=500&token=x", &read_token);
+        assert!(page.contains(r#""/v1/visualizer/stream?width=500&token=x&format=png" + "&height=""#), "{page}");
         assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &read_token)), 403);
         assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &control_token)), 204);
         assert_eq!(answering(&server, empty, set("queue/move?from=2", &control_token)), 400);
