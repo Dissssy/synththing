@@ -424,6 +424,7 @@ impl App {
 
     /// Which scripts in the scripts folder came from (or went to) the server.
     fn refresh_installed(&mut self) {
+        let _timing = crate::frame_timing::scope("refresh_installed");
         let all: Vec<(PathBuf, Installed)> =
             self.available_scripts.iter().filter_map(|p| Installed::read(p).map(|i| (p.clone(), i))).collect();
         self.library.installed =
