@@ -81,6 +81,7 @@ mod devices;
 mod widgets;
 mod controls_bar;
 mod soundfonts_panel;
+mod help;
 mod log_panel;
 mod updates;
 mod credits_window;
@@ -92,7 +93,7 @@ mod dedicated;
 mod dispatch;
 mod reference;
 
-use widgets::{CATEGORIES_HEIGHT, categories_body, fit_width, window_room, with_info, setting_row, settings_group, LABEL_WIDTH, control_width, setting_combo, setting_slider, setting_label, info_icon, inline_code_job, colored_icon_button};
+use widgets::{CATEGORIES_HEIGHT, categories_body, page_ui, fit_width, window_room, with_info, setting_row, settings_group, LABEL_WIDTH, control_width, setting_combo, setting_slider, setting_label, info_icon, inline_code_job, colored_icon_button};
 pub(crate) use widgets::{placeholder, icon, wrapping_combo, toggle_chip, chip, on_color, palette_color, icon_button, confirm_button, row_icon_button, row_icon_button_room};
 use controls_bar::{ICON_BUTTON_WIDTH, drag_handle, square_corner, loop_text, shuffle_text, seek_bar_ui, status_color, status_outcome, STATUS_TARGET};
 pub(crate) use controls_bar::play_button;
@@ -341,8 +342,8 @@ pub struct App {
     /// The startup update check is running: show its result only if it
     /// finds something new (and not a skipped version).
     launch_update_check: bool,
-    /// The Log viewer (Help > Log...).
-    log_open: bool,
+    /// The Help page, open at a section.
+    help: Option<help::HelpTab>,
     /// Lowest level shown in the Log viewer.
     log_min_level: log::Level,
     log_search: String,
@@ -449,8 +450,6 @@ pub struct App {
     themes: themes::ThemesState,
     /// The guided tour (Help > Tour).
     tour: tour::Tour,
-    /// Help > Credits & licenses.
-    credits_open: bool,
     contributors: Contributors,
     credits_search: String,
     /// Watches the scripts folder for changes on disk.
@@ -729,7 +728,7 @@ impl App {
             confirm_recopy: false,
             updates_message: None,
             launch_update_check: false,
-            log_open: false,
+            help: None,
             log_min_level: log::Level::Info,
             log_search: String::new(),
             unseen_failure: false,
@@ -787,7 +786,6 @@ impl App {
             preferences_tab: PrefTab::default(),
             themes: themes::ThemesState::default(),
             tour: tour::Tour::default(),
-            credits_open: false,
             contributors: Contributors::default(),
             credits_search: String::new(),
             playlists,
@@ -943,15 +941,13 @@ impl App {
         }
     }
 
-    /// Whether one of the app's modals (Log, Updates, Rename script) is up,
+    /// Whether one of the app's modals (Rename script, Song info...) or the flow is up,
     /// or Preferences is waiting for keys. They get the keyboard: app shortcuts and the global
     /// keys pause.
     fn any_modal_open(&self) -> bool {
         self.keymap_capture.is_some()
-            || self.log_open
             || self.flow.open()
             || self.rename.is_some()
-            || self.credits_open
             || self.song_details.is_some()
             || self.cleanup.is_some()
             || self.palette.is_some()
@@ -1252,14 +1248,14 @@ impl eframe::App for App {
                 self.flow_ui(ui);
             } else if self.preferences_open {
                 self.preferences_ui(ui);
+            } else if self.help.is_some() {
+                self.help_ui(ui);
             } else {
                 frame_timing::time("dock", || self.dock_ui(ui, &shared));
             }
             frame_timing::time("autosave_layout", || self.autosave_layout(&ctx));
             let windows = frame_timing::scope("windows");
-            self.log_ui(&ctx);
             self.rename_ui(&ctx);
-            self.credits_ui(&ctx);
             #[cfg(windows)]
             self.uninstall_ui(&ctx);
             self.cleanup_ui(&ctx);

@@ -13,13 +13,15 @@ pub(super) const CATEGORIES_HEIGHT: f32 = 340.0;
 
 /// The body of a page laid out like Preferences: `categories` down the
 /// side (`selected` the one picked), and `body` drawing the picked one's
-/// contents beside them. Each side scrolls by itself, `height` tall.
+/// contents beside them, `height` tall. Each side scrolls by itself (the
+/// body only when `scrolls` says, for one that has its own scrolling).
 pub(super) fn categories_body<S: AsRef<str>>(
     ui: &mut egui::Ui,
     id: &str,
     categories: &[S],
     selected: &mut usize,
     height: f32,
+    scrolls: impl Fn(usize) -> bool,
     body: impl FnOnce(&mut egui::Ui, usize),
 ) {
     // A fixed height: the divider takes the height it's given, so in a
@@ -41,6 +43,11 @@ pub(super) fn categories_body<S: AsRef<str>>(
         });
         ui.separator();
         ui.vertical(|ui| {
+            if !scrolls(*selected) {
+                ui.set_height(height);
+                body(ui, *selected);
+                return;
+            }
             egui::ScrollArea::vertical()
                 .id_salt((id, "body"))
                 .max_height(height)
@@ -51,6 +58,48 @@ pub(super) fn categories_body<S: AsRef<str>>(
                 });
         });
     });
+}
+
+/// A page in the panels' place, like Preferences: `title` with a close
+/// button, then `categories` down the side (`selected` the one picked)
+/// and `body` beside them (scrolling as `scrolls` says, as
+/// [`categories_body`]). Whether it's to close: the button, or Esc (when
+/// `esc` lets it, and no dropdown or dialog takes it first).
+pub(super) fn page_ui<S: AsRef<str>>(
+    ui: &mut egui::Ui,
+    title: &str,
+    categories: &[S],
+    selected: &mut usize,
+    esc: bool,
+    scrolls: impl Fn(usize) -> bool,
+    body: impl FnOnce(&mut egui::Ui, usize),
+) -> bool {
+    let mut close = false;
+    let outer = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 8 });
+    egui::CentralPanel::default().frame(outer).show(ui, |ui| {
+        let page = egui::Frame::new().fill(ui.visuals().window_fill).corner_radius(6).inner_margin(12);
+        page.show(ui, |ui| {
+            ui.set_min_size(ui.available_size());
+            ui.horizontal(|ui| {
+                ui.heading(title);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    close = ui.add(icon_button("x")).on_hover_text("Close (Esc)").clicked();
+                });
+            });
+            ui.add_space(6.0);
+            let height = ui.available_height();
+            categories_body(ui, title, categories, selected, height, scrolls, body);
+        });
+    });
+    let ctx = ui.ctx().clone();
+    if esc
+        && !egui::Popup::is_any_open(&ctx)
+        && ctx.memory(|m| m.top_modal_layer()).is_none()
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        close = true;
+    }
+    close
 }
 
 /// `width`, or less on a screen too narrow for it (a phone's): what windows

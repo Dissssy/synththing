@@ -155,10 +155,10 @@ impl App {
         match item {
             // (Not while Preferences has the panels' room.)
             Item::View => {
-                ui.add_enabled_ui(!self.preferences_open, |ui| menu(button).ui(ui, |ui| self.view_menu_ui(ui)));
+                ui.add_enabled_ui(!self.page_open(), |ui| menu(button).ui(ui, |ui| self.view_menu_ui(ui)));
             }
             Item::Layout => {
-                ui.add_enabled_ui(!self.preferences_open, |ui| menu(button).ui(ui, |ui| self.layout_menu_ui(ui)));
+                ui.add_enabled_ui(!self.page_open(), |ui| menu(button).ui(ui, |ui| self.layout_menu_ui(ui)));
             }
             Item::Help => {
                 menu(button).ui(ui, |ui| self.help_menu_ui(ui));
@@ -185,10 +185,10 @@ impl App {
                 let text = format!("{}  {}", icon(item.icon()), item.label());
                 match item {
                     Item::View => {
-                        ui.add_enabled_ui(!self.preferences_open, |ui| ui.menu_button(text, |ui| self.view_menu_ui(ui)));
+                        ui.add_enabled_ui(!self.page_open(), |ui| ui.menu_button(text, |ui| self.view_menu_ui(ui)));
                     }
                     Item::Layout => {
-                        ui.add_enabled_ui(!self.preferences_open, |ui| ui.menu_button(text, |ui| self.layout_menu_ui(ui)));
+                        ui.add_enabled_ui(!self.page_open(), |ui| ui.menu_button(text, |ui| self.layout_menu_ui(ui)));
                     }
                     Item::Help => {
                         ui.menu_button(text, |ui| self.help_menu_ui(ui));
@@ -266,8 +266,8 @@ impl App {
         if ui.button("Changelog...").clicked() {
             self.flow.show(super::flow::Step::Changelog(None));
         }
-        if ui.button("Log...").clicked() {
-            self.log_open = true;
+        if ui.button("Log").clicked() {
+            self.open_help(super::help::HelpTab::Log);
         }
         let mut profiler = profiler::is_open();
         if ui
@@ -277,8 +277,8 @@ impl App {
         {
             profiler::set_open(profiler);
         }
-        if ui.button("Credits & licenses...").clicked() {
-            self.credits_open = true;
+        if ui.button("Credits & licenses").clicked() {
+            self.open_help(super::help::HelpTab::Credits);
         }
         ui.separator();
         ui.weak(format!("synththing v{}", crate::build_info::describe()));

@@ -913,13 +913,13 @@ See `keyboard.lua` (play along on the keyboard) for `note_on`/`note_off` in use.
 <!-- api: log log_app -->
 ```lua
 log(message)       -- append to this script's log (identical repeats collapse) (since 0.1.1)
-log_app(message)   -- like log(), and also copied to the app's log (Help > Log...) (since 0.2.2)
+log_app(message)   -- like log(), and also copied to the app's log (Help > Log) (since 0.2.2)
 ```
 <!-- /api -->
 
 Appends to this script's log, in the Debug window (the Debug button above the visualizer, under Log), along with the script's own errors. Identical consecutive messages collapse into one entry with a count instead of flooding the pane, safe to call every single frame.
 
-Help > Log... is the app's own log (also written to `synththing.log`, and printed by `synththing --console`). The script's errors always go there; its `log()` messages do too when "Copy script logs to the app log" is on in Preferences, or when the script asks for it with `script_options({ app_log = true })`, and `log_app()` messages always do (for the odd message worth seeing there, like a chart that failed to build), all labelled with the script's name (`highway: chart ready`). Only new messages are copied, not repeats of the one before, so the app's log doesn't fill up with a message logged every frame.
+Help > Log is the app's own log (also written to `synththing.log`, and printed by `synththing --console`). The script's errors always go there; its `log()` messages do too when "Copy script logs to the app log" is on in Preferences, or when the script asks for it with `script_options({ app_log = true })`, and `log_app()` messages always do (for the odd message worth seeing there, like a chart that failed to build), all labelled with the script's name (`highway: chart ready`). Only new messages are copied, not repeats of the one before, so the app's log doesn't fill up with a message logged every frame.
 
 ## Debugging
 

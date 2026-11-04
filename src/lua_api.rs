@@ -255,7 +255,7 @@ pub const ITEMS: &[Item] = &[
     f("sequence_stop", SEQUENCES, "0.1.8", &[p("handle", "integer")], &[], "stop one sequence_play"),
     // Logging and debugging
     f("log", LOGGING, "0.1.1", &[p("message", "any")], &[], "append to this script's log (identical repeats collapse)"),
-    f("log_app", LOGGING, "0.2.2", &[p("message", "any")], &[], "like log(), and also copied to the app's log (Help > Log...)"),
+    f("log_app", LOGGING, "0.2.2", &[p("message", "any")], &[], "like log(), and also copied to the app's log (Help > Log)"),
     f("debug_locals", DEBUGGING, "0.1.1", &[opt("label", "string")], &[], "snapshot the locals in scope right here, shown in the Debug window"),
     // Settings
     f("setting_bool", SETTINGS, "0.1.1", &[p("key", "string"), p("default", "boolean"), LABELS], &[p("value", "boolean")], "a checkbox in the Settings window"),

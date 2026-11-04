@@ -7,37 +7,13 @@ use eframe::egui;
 use crate::credits::{self, ContributorsState};
 use crate::updater;
 
-use super::{App, fit_width};
+use super::App;
 use super::widgets::Culled;
 
 impl App {
-    /// Help > Credits & licenses: contributors (from GitHub), the font, Lua,
-    /// and every library in the app with its license text.
-    pub(super) fn credits_ui(&mut self, ctx: &egui::Context) {
-        if !self.credits_open || self.mobile() {
-            return;
-        }
-        let mut close = false;
-        let response = egui::Modal::new(egui::Id::unique("credits")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 660.0));
-            ui.heading("Credits & licenses");
-            self.credits_body_ui(ui, false);
-            ui.separator();
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if ui.button("Close").clicked() {
-                    close = true;
-                }
-            });
-        });
-        if close || response.should_close() {
-            self.credits_open = false;
-        }
-    }
-
     /// Contributors (from GitHub), the font, Lua, and every library in
-    /// the app with its license text. On a page the list fills what's
-    /// left.
-    pub(super) fn credits_body_ui(&mut self, ui: &mut egui::Ui, page: bool) {
+    /// the app with its license text, the list filling what's left.
+    pub(super) fn credits_body_ui(&mut self, ui: &mut egui::Ui) {
         self.contributors.fetch_once();
         let contributors = self.contributors.state();
         if matches!(contributors, ContributorsState::Fetching) {
@@ -56,8 +32,7 @@ impl App {
         ui.separator();
         egui::ScrollArea::vertical()
             .id_salt("credits_scroll")
-            .max_height(if page { f32::INFINITY } else { 480.0 })
-            .auto_shrink([false, !page])
+            .auto_shrink([false, false])
             .show(
             ui,
             |ui| {

@@ -1,7 +1,7 @@
 //! The app-wide log. Release builds have no console, so everything worth
 //! knowing about (status messages, failed loads, update checks, warnings
 //! from egui/wgpu/winit, panics on any thread) goes here instead: kept in
-//! memory for the Log viewer (Help > Log...) and written to
+//! memory for the Log viewer (Help > Log) and written to
 //! `<config dir>/synththing.log`. The previous run's file is kept as
 //! `synththing.prev.log`, so a crash's log survives the restart after it.
 //!
