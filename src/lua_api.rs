@@ -451,7 +451,7 @@ pub const CLASSES: &[Class] = &[
             od("start_paused", "boolean", "songs load paused, for the script to start them"),
             od("app_log", "boolean", "log() also goes to the app's log"),
             od("record_prepare", "boolean", "recordings wait for recording_ready() and recording_done()"),
-            od("record_auto", "boolean", "it can play itself: the Record window offers Auto"),
+            od("record_auto", "boolean", "it can play itself: the Record page offers Auto"),
             od("transparent", "boolean", "its frames can be see-through"),
             od("assets", "boolean", "it reads data files: its assets folder is made, with a button to open it"),
         ],

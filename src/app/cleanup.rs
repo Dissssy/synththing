@@ -15,7 +15,8 @@ use std::sync::mpsc;
 use eframe::egui;
 
 use super::lookup::{self, Reviewed, Unsure};
-use super::{App, fit_width, icon_button};
+use super::{App, icon_button, page_ui};
+use crate::select_list;
 use crate::cleanup::{self, Kind, Suggestion, What};
 use crate::duplicates;
 use crate::lookup::{Kept, Tried};
@@ -122,8 +123,14 @@ impl App {
         hasher.finish()
     }
 
-    /// The Clean up modal, while it's open.
-    pub(super) fn cleanup_ui(&mut self, ctx: &egui::Context) {
+    /// Open Clean up, in the panels' place (closing the other pages).
+    pub(super) fn open_cleanup(&mut self) {
+        self.close_pages();
+        self.cleanup = Some(Default::default());
+    }
+
+    /// The Clean up page, while it's open.
+    pub(super) fn cleanup_ui(&mut self, ui: &mut egui::Ui) {
         let Some(mut cleanup) = self.cleanup.take() else { return };
         if let Some((made_from, receive)) = &cleanup.working {
             match receive.try_recv() {
@@ -141,7 +148,7 @@ impl App {
         if cleanup.made_from != Some(revision) && cleanup.working.is_none() {
             let (store, kept, tried, ignore) = (self.songs.clone(), self.lookup.kept.clone(), self.lookup_tried(), self.config.group_ignore.clone());
             let (send, receive) = mpsc::channel();
-            let repaint = ctx.clone();
+            let repaint = ui.ctx().clone();
             let spawned = std::thread::Builder::new().name("clean up".into()).spawn(move || {
                 let _ = send.send(Rows::of(&store, &kept, tried.as_ref(), &ignore));
                 repaint.request_repaint();
@@ -160,20 +167,38 @@ impl App {
         let mut dismiss: Vec<String> = Vec::new();
         let mut show: Option<Vec<PathBuf>> = None;
         let mut bring_back = false;
-        let mut close = false;
         let mut reviewed: Option<Reviewed> = None;
-        let response = egui::Modal::new(egui::Id::unique("cleanup")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 640.0));
-            ui.heading("Clean up");
+        // (Possible duplicates are guesses: each one's applied alone.)
+        let applicable: Vec<usize> =
+            shown.iter().map(|(i, _)| *i).filter(|&i| !matches!(cleanup.suggestions[i].kind, Kind::LengthDiffers | Kind::PossibleDuplicate)).collect();
+        let close = page_ui(ui, "Clean up", &[] as &[&str], &mut 0, true, |_| false, |ui, _| {
             ui.weak("Suggestions from what your songs' details say. Nothing changes until you apply one, and the files themselves are never written.");
             ui.add_space(4.0);
+            let count = match shown.len() {
+                1 => "1 suggestion".to_string(),
+                n => format!("{n} suggestions"),
+            };
+            select_list::toolbar(
+                ui,
+                |ui| {
+                    if !applicable.is_empty() && ui.button(format!("Apply all {}", applicable.len())).clicked() {
+                        apply = applicable.clone();
+                    }
+                },
+                count,
+                |ui| {
+                    if hidden > 0 && ui.button(format!("Bring back {hidden} dismissed")).clicked() {
+                        bring_back = true;
+                    }
+                },
+            );
             if cleanup.made_from.is_none() {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.weak("Looking through your songs...");
                 });
             } else if shown.is_empty() && cleanup.unsure.is_empty() {
-                ui.label("Nothing to clean up.");
+                super::placeholder(ui, "Nothing to clean up.\nYour songs' details all look right.");
             }
             let row_height = ui.spacing().interact_size.y;
             let from_width = (ui.available_width() * 0.4).max(120.0);
@@ -186,7 +211,7 @@ impl App {
             if !cleanup.unsure.is_empty() {
                 ui.separator();
             }
-            egui::ScrollArea::vertical().max_height(400.0).auto_shrink([false, true]).show_rows(ui, row_height, shown.len(), |ui, rows| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_height, shown.len(), |ui, rows| {
                 for (i, id) in &shown[rows] {
                     let suggestion = &cleanup.suggestions[*i];
                     let to = cleanup.to.entry(id.clone()).or_insert_with(|| suggestion.to.clone());
@@ -239,24 +264,6 @@ impl App {
                         });
                     });
                 }
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if hidden > 0 && ui.button(format!("Bring back {hidden} dismissed")).clicked() {
-                    bring_back = true;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    close |= ui.button("Close").clicked();
-                    // (Possible duplicates are guesses: each one's applied alone.)
-                    let applicable: Vec<usize> = shown
-                        .iter()
-                        .map(|(i, _)| *i)
-                        .filter(|&i| !matches!(cleanup.suggestions[i].kind, Kind::LengthDiffers | Kind::PossibleDuplicate))
-                        .collect();
-                    if !applicable.is_empty() && ui.button(format!("Apply all {}", applicable.len())).clicked() {
-                        apply = applicable;
-                    }
-                });
             });
         });
         if let Some(reviewed) = reviewed {
@@ -319,7 +326,7 @@ impl App {
             // (The details open over it; Clean up's there when they close.)
             self.details_for = Some(paths);
         }
-        if !(close || response.should_close()) {
+        if !close {
             self.cleanup = Some(cleanup);
         }
     }

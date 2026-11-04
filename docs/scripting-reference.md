@@ -557,10 +557,10 @@ recording_done()           -- with record_prepare: this song's take is over; the
 
 ```lua
 script_options({ record_prepare = true })  -- recordings wait for the script before each song, and for it to end each take
-script_options({ record_auto = true })     -- it can play itself: the Record window offers Auto
+script_options({ record_auto = true })     -- it can play itself: the Record page offers Auto
 ```
 
-The record button above the visualizer opens the Record window: what to record (a song from the start, the one playing or another you choose, with its soundfont; this playlist from the start; or free), how (Live, or Render), the script, the video's size, frame rate and quality, and, for a script that can play itself, Auto or Manual. F9 starts a free recording straight away.
+The record button above the visualizer opens the Record page: what to record (a song from the start, the one playing or another you choose, with its soundfont; this playlist from the start; or free), how (Live, or Render), the script, the video's size, frame rate and quality, and, for a script that can play itself, Auto or Manual. F9 starts a free recording straight away.
 
 Live records what's on screen as it plays. Render makes the video in the background instead: a copy of the script and the synth on a thread of their own, one video frame at a time, however long each takes, with the visualizer showing its progress meanwhile. Every frame gets its own picture and the sound is exactly in step, at any size, so nothing repeats, and it can be faster or slower than real time. Nobody can play along with a render: `recording().mode` is `"auto"` for a script with `record_auto`, and any other script just runs. A render reads the script's file (saved first), its settings and its saved data, but never writes the saved data.
 
@@ -1253,7 +1253,7 @@ ScriptOptions                  -- how the app treats the script (script_options(
     start_paused?: boolean     -- songs load paused, for the script to start them
     app_log?: boolean          -- log() also goes to the app's log
     record_prepare?: boolean   -- recordings wait for recording_ready() and recording_done()
-    record_auto?: boolean      -- it can play itself: the Record window offers Auto
+    record_auto?: boolean      -- it can play itself: the Record page offers Auto
     transparent?: boolean      -- its frames can be see-through
     assets?: boolean           -- it reads data files: its assets folder is made, with a button to open it
 ```

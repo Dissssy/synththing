@@ -140,6 +140,8 @@ impl App {
     pub(super) fn toggle_preferences(&mut self) {
         self.preferences_open = !self.preferences_open;
         self.help = None;
+        self.cleanup = None;
+        self.recording.window = None;
         if !self.preferences_open {
             self.keymap_capture = None;
             self.api_preferences_closed();

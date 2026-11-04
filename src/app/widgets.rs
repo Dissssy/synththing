@@ -63,7 +63,7 @@ pub(super) fn categories_body<S: AsRef<str>>(
 /// A page in the panels' place, like Preferences: `title` with a close
 /// button, then `categories` down the side (`selected` the one picked)
 /// and `body` beside them (scrolling as `scrolls` says, as
-/// [`categories_body`]). Whether it's to close: the button, or Esc (when
+/// [`categories_body`]); with no categories, the body alone. Whether it's to close: the button, or Esc (when
 /// `esc` lets it, and no dropdown or dialog takes it first).
 pub(super) fn page_ui<S: AsRef<str>>(
     ui: &mut egui::Ui,
@@ -88,7 +88,13 @@ pub(super) fn page_ui<S: AsRef<str>>(
             });
             ui.add_space(6.0);
             let height = ui.available_height();
-            categories_body(ui, title, categories, selected, height, scrolls, body);
+            if !categories.is_empty() {
+                categories_body(ui, title, categories, selected, height, scrolls, body);
+            } else if scrolls(0) {
+                egui::ScrollArea::vertical().id_salt((title, "body")).auto_shrink([false, false]).show(ui, |ui| body(ui, 0));
+            } else {
+                body(ui, 0);
+            }
         });
     });
     let ctx = ui.ctx().clone();

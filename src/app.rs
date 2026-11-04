@@ -1222,12 +1222,13 @@ impl eframe::App for App {
                 self.flow_ui(ui);
             } else if self.song_details_open() {
                 self.mobile_song_details_ui(ui);
+            } else if self.cleanup.is_some() {
+                self.cleanup_ui(ui);
             } else {
                 frame_timing::time("mobile", || self.mobile_ui(ui, &shared));
             }
             self.open_mobile_pages(&ctx);
             self.rename_ui(&ctx);
-            self.cleanup_ui(&ctx);
             self.choose_art_ui(&ctx);
             self.history_ui(&ctx);
             self.status_toast_ui(&ctx);
@@ -1250,6 +1251,10 @@ impl eframe::App for App {
                 self.preferences_ui(ui);
             } else if self.help.is_some() {
                 self.help_ui(ui);
+            } else if self.cleanup.is_some() {
+                self.cleanup_ui(ui);
+            } else if self.recording.window.is_some() {
+                self.record_ui(ui, view);
             } else {
                 frame_timing::time("dock", || self.dock_ui(ui, &shared));
             }
@@ -1258,7 +1263,6 @@ impl eframe::App for App {
             self.rename_ui(&ctx);
             #[cfg(windows)]
             self.uninstall_ui(&ctx);
-            self.cleanup_ui(&ctx);
             self.choose_art_ui(&ctx);
             self.song_details_ui(&ctx);
             self.history_ui(&ctx);
@@ -1284,7 +1288,6 @@ impl eframe::App for App {
         // Outside the layout: F9 can ask for ffmpeg from the dedicated
         // fullscreen too.
         self.ffmpeg_prompt_ui(&ctx);
-        self.record_window_ui(&ctx, view);
         self.script_window_ui(&ctx);
         self.publish_ui(&ctx);
         self.document_ui(&ctx);
