@@ -290,7 +290,7 @@ struct Request {
 
 /// Makes the rows on a thread of its own, so a big library doesn't hold
 /// the frame up.
-struct Builder(Latest<Request, Built>);
+struct Builder(Latest<(), Request, Built>);
 
 impl Default for Builder {
     fn default() -> Self {
@@ -888,7 +888,7 @@ impl SongList {
         }
 
         let key = Key { revision, view: view.listing(), keys: keys.clone(), query: self.search.query.clone(), collapsed: self.collapsed.clone() };
-        if let Some(built) = self.builder.0.take() {
+        if let Some(((), built)) = self.builder.0.take().last() {
             self.accept(built);
         }
         if self.requested.as_ref() != Some(&key) {
@@ -905,7 +905,7 @@ impl SongList {
                 articles,
                 snapshot: source.snapshot(),
             };
-            self.builder.0.ask(request, ui.ctx());
+            self.builder.0.ask((), request, ui.ctx());
             self.requested = Some(key);
         }
         let Some(built) = self.built.as_ref() else {
@@ -1407,7 +1407,7 @@ mod tests {
 
     /// Waits for `list`'s builder to make the rows asked for.
     fn made(list: &mut SongList) {
-        let built = list.builder.0.wait(std::time::Duration::from_secs(10)).expect("the rows made");
+        let ((), built) = list.builder.0.wait(std::time::Duration::from_secs(10)).expect("the rows made");
         list.accept(built);
     }
 

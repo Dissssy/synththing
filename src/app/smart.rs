@@ -15,7 +15,9 @@ use crate::select_list;
 use crate::settings_sync;
 use crate::fields::{self, Field, Kind};
 use crate::smart::{self, Group, Limit, Op, Order, Rule, Rules, Ruleset, Split, SplitBy, Unit};
-use crate::song_store::Tag;
+use crate::latest::Latest;
+use crate::song_store::{SongStore, Tag};
+use crate::wishlist::Wishes;
 
 /// Whether rules can be edited on a touch screen (they can always be
 /// looked at): off until editing there is good to use.
@@ -277,20 +279,21 @@ impl App {
         hasher.finish()
     }
 
-    /// The playlists ruleset `id` (with `rules`) makes, worked out again
-    /// when the library, the rules or grouping change.
-    pub(super) fn groups_of(&mut self, id: &str, rules: &Rules) -> Arc<Vec<Group>> {
+    /// The playlists ruleset `id` (with `rules`) makes, as last worked
+    /// out: worked out again on another thread when the library, the
+    /// rules or grouping change, repainting `ctx` once they are. `None`
+    /// until they first are.
+    pub(super) fn groups_of(&mut self, ctx: &egui::Context, id: &str, rules: &Rules) -> Option<Arc<Vec<Group>>> {
         let revision = self.groups_revision();
-        if let Some((seen, cached, groups)) = self.ruleset_groups.get(id)
-            && *seen == revision
-            && cached == rules
-        {
-            return groups.clone();
-        }
-        let _timing = crate::frame_timing::scope("ruleset_groups");
-        let groups = Arc::new(rules.groups(&self.songs, &self.wishlist.list.wishes, settings_sync::now(), &self.config.group_ignore, self.config.sort_with_articles));
-        self.ruleset_groups.insert(id.to_string(), (revision, rules.clone(), groups.clone()));
-        groups
+        let (songs, wishes, config) = (&self.songs, &self.wishlist.list.wishes, &self.config);
+        self.ruleset_groups.get(ctx, id, revision, rules, || GroupsJob {
+            rules: rules.clone(),
+            store: songs.clone(),
+            wishes: wishes.clone(),
+            now: settings_sync::now(),
+            ignore: config.group_ignore.clone(),
+            articles: config.sort_with_articles,
+        })
     }
 
     /// What each ruleset leaves out of its playlists for want of what it
@@ -350,7 +353,7 @@ impl App {
         super::settings_group("Rulesets").icon(SMART_ICON).hint(hint).show(ui, |ui| {
             let editable = rules_editable(ui.ctx());
             for (id, ruleset, builtin) in all {
-                let groups = self.groups_of(&id, &ruleset.rules).len();
+                let groups = self.groups_of(ui.ctx(), &id, &ruleset.rules).map(|g| g.len());
                 let hidden = self.config.hidden_rulesets.contains(&id);
                 super::setting_row(ui, |ui| {
                     let (eye, hover) = if hidden { ("eye-slash", "Hidden from Groupings: click to show it") } else { ("eye", "Shown in Groupings: click to hide it") };
@@ -384,7 +387,10 @@ impl App {
                         if ui.add(super::row_icon_button(ui, name)).on_hover_text(hover).clicked() {
                             open = Some((id.clone(), ruleset.clone(), builtin));
                         }
-                        ui.weak(format!("{groups} playlist{}", if groups == 1 { "" } else { "s" }));
+                        match groups {
+                            Some(n) => ui.weak(format!("{n} playlist{}", if n == 1 { "" } else { "s" })),
+                            None => ui.spinner(),
+                        };
                     });
                 });
             }
@@ -440,9 +446,64 @@ fn lacking(by: SplitBy) -> &'static str {
     }
 }
 
-/// The ruleset playlists last worked out, by ruleset ID: for which
-/// revision (`App::groups_revision`) and rules.
-pub(super) type RulesetGroups = BTreeMap<String, (u64, Rules, Arc<Vec<Group>>)>;
+/// What a ruleset's playlists are worked out from, on the thread.
+pub(super) struct GroupsJob {
+    rules: Rules,
+    store: SongStore,
+    wishes: Wishes,
+    now: i64,
+    ignore: String,
+    articles: bool,
+}
+
+/// What they were worked out from (the revision, `App::groups_revision`,
+/// and the rules), and what they came to.
+type Made = (u64, Rules, Arc<Vec<Group>>);
+
+/// The rulesets' playlists, by ruleset ID: as last worked out, and asked
+/// for of the thread that works them out.
+pub(super) struct RulesetGroups {
+    made: BTreeMap<String, Made>,
+    asked: BTreeMap<String, (u64, Rules)>,
+    worker: Latest<String, (u64, GroupsJob), Made>,
+}
+
+impl Default for RulesetGroups {
+    fn default() -> Self {
+        Self { made: BTreeMap::new(), asked: BTreeMap::new(), worker: Latest::new("ruleset-groups", make_groups) }
+    }
+}
+
+fn make_groups((revision, job): (u64, GroupsJob)) -> Made {
+    let groups = job.rules.groups(&job.store, &job.wishes, job.now, &job.ignore, job.articles);
+    (revision, job.rules, Arc::new(groups))
+}
+
+impl RulesetGroups {
+    /// Ruleset `id`'s playlists as last worked out, asking for them again
+    /// (from `job`) if that wasn't for `revision` and `rules`.
+    fn get(&mut self, ctx: &egui::Context, id: &str, revision: u64, rules: &Rules, job: impl FnOnce() -> GroupsJob) -> Option<Arc<Vec<Group>>> {
+        for (id, made) in self.worker.take() {
+            self.made.insert(id, made);
+        }
+        if self.asked.get(id).is_none_or(|(seen, cached)| *seen != revision || cached != rules) {
+            self.worker.ask(id.to_string(), (revision, job()), ctx);
+            self.asked.insert(id.to_string(), (revision, rules.clone()));
+        }
+        self.made.get(id).map(|(_, _, groups)| groups.clone())
+    }
+
+    /// Ruleset `id`'s playlists as last worked out, if they have been.
+    pub(super) fn known(&self, id: &str) -> Option<&[Group]> {
+        self.made.get(id).map(|(_, _, groups)| groups.as_slice())
+    }
+
+    /// Forgets ruleset `id` (deleted).
+    fn remove(&mut self, id: &str) {
+        self.made.remove(id);
+        self.asked.remove(id);
+    }
+}
 
 /// What `rules` come to in `store` now, in a line.
 fn summary(rules: &Rules, store: &crate::song_store::SongStore, wishes: &crate::wishlist::Wishes, ignore: &str, articles: bool) -> String {
