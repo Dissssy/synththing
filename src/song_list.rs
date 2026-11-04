@@ -21,6 +21,7 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use crate::fields::{self, Def, Field, Kind, Value};
+use crate::latest::Latest;
 use crate::matching::Term;
 use crate::search::{Problem, Search};
 use crate::search_box::{self, SearchBox};
@@ -264,13 +265,41 @@ struct Hits {
     values: Vec<Vec<usize>>,
 }
 
-/// The rows as last made, and what they were made from: made again only
-/// when that changes, not every frame.
-struct Built {
+/// What the rows are made from: they're made again only when it changes,
+/// not every frame.
+#[derive(Clone, PartialEq)]
+struct Key {
     revision: u64,
     view: View,
     keys: Vec<&'static str>,
     query: String,
+    collapsed: BTreeSet<String>,
+}
+
+/// Rows to make, on the builder's thread.
+struct Request {
+    key: Key,
+    sort_at: Option<usize>,
+    group_at: Option<usize>,
+    /// The values at these of `key.keys` are searched.
+    searched: Vec<usize>,
+    ignore: String,
+    articles: bool,
+    snapshot: Box<dyn Snapshot>,
+}
+
+/// Makes the rows on a thread of its own, so a big library doesn't hold
+/// the frame up.
+struct Builder(Latest<Request, Built>);
+
+impl Default for Builder {
+    fn default() -> Self {
+        Self(Latest::new("song-rows", build))
+    }
+}
+
+/// The rows as last made.
+struct Built {
     /// There are no songs at all.
     empty: bool,
     items: Vec<Item>,
@@ -310,6 +339,9 @@ pub struct SongList {
     /// The groups closed, by their headers' text (lowercase).
     collapsed: BTreeSet<String>,
     built: Option<Built>,
+    /// What the rows were last asked to be made from.
+    requested: Option<Key>,
+    builder: Builder,
     /// Counts the times the rows were made, so autoplay knows when to
     /// look again at what comes next.
     generation: u64,
@@ -332,12 +364,21 @@ pub struct Output {
 
 /// Where the list's songs come from.
 pub trait Source {
-    /// The songs a query's filters keep, and the query parsed
-    /// (`search::parse`).
-    fn songs(&mut self, query: &str) -> (Vec<PathBuf>, Search);
+    /// The songs as they are now, for the rows to be made from on another
+    /// thread.
+    fn snapshot(&mut self) -> Box<dyn Snapshot>;
     /// A field's values (the tags' names for `Field::Tag`) in the songs
     /// `query`'s filters keep, to complete a filter with.
     fn values(&mut self, field: Field, query: &str) -> Vec<String>;
+}
+
+/// The songs as they were when the rows were asked for.
+pub trait Snapshot: Send {
+    /// The songs a query's filters keep, and the query parsed
+    /// (`search::parse`).
+    fn songs(&self, query: &str) -> (Vec<PathBuf>, Search);
+    /// The song at `path`, with the values of the columns `keys`.
+    fn describe(&self, path: &Path, keys: &[&str]) -> Described;
 }
 
 /// What a song sorts by for `value`: what it sorts as, else its text
@@ -681,6 +722,13 @@ impl SongList {
         self.selection.clear();
     }
 
+    /// Shows rows the builder made.
+    fn accept(&mut self, built: Built) {
+        self.built = Some(built);
+        self.generation += 1;
+        self.active_row = None;
+    }
+
     /// Goes up each time the rows are made again (the songs, the view, the
     /// search or the groups closed changed).
     pub fn generation(&self) -> u64 {
@@ -745,7 +793,6 @@ impl SongList {
         ignore: &str,
         articles: bool,
         tools: &mut dyn FnMut(&mut egui::Ui),
-        describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
         marks: &mut dyn FnMut(&mut egui::Ui, &Path),
         menu: RowMenu,
     ) -> Output {
@@ -840,35 +887,31 @@ impl SongList {
             view_changed |= self.header_ui(ui, view, &shown);
         }
 
-        let query = self.search.query.as_str();
-        let stale = self
-            .built
-            .as_ref()
-            .is_none_or(|b| b.revision != revision || b.view != view.listing() || b.keys != keys || b.query != query);
-        if stale {
-            let (songs, search) = source.songs(query);
-            let text = search.text;
-            let mut found = songs.len();
-            let (items, queue) = if text.is_empty() {
-                self.sorted(&songs, view, &keys, sort_at, group_at, ignore, articles, describe)
-            } else {
-                let searched: Vec<usize> = (0..keys.len())
-                    .filter(|&i| shown.iter().any(|(c, _)| c.key == keys[i]) || view.columns.iter().any(|k| k == keys[i]))
-                    .filter(|&i| !view.unsearched.iter().any(|k| k == keys[i]))
-                    .collect();
-                let (matches, total) = ranked_matches(&songs, &text, &keys, &searched, &view.unsearched, describe);
-                found = total;
-                let queue = matches.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false, plays: e.song.plays.clone() }).collect();
-                (matches.into_iter().map(Item::Song).collect(), queue)
-            };
-            let total = if query.trim().is_empty() { songs.len() } else { source.songs("").0.len() };
-            let empty = songs.is_empty() && query.trim().is_empty();
-            let query = query.to_string();
-            self.generation += 1;
-            self.built = Some(Built { revision, view: view.listing(), keys: keys.clone(), query, empty, items, queue, problems: search.problems, found, total });
-            self.active_row = None;
+        let key = Key { revision, view: view.listing(), keys: keys.clone(), query: self.search.query.clone(), collapsed: self.collapsed.clone() };
+        if let Some(built) = self.builder.0.take() {
+            self.accept(built);
         }
-        let built = self.built.as_ref().expect("the rows were just made");
+        if self.requested.as_ref() != Some(&key) {
+            let searched = (0..keys.len())
+                .filter(|&i| shown.iter().any(|(c, _)| c.key == keys[i]) || view.columns.iter().any(|k| k == keys[i]))
+                .filter(|&i| !view.unsearched.iter().any(|k| k == keys[i]))
+                .collect();
+            let request = Request {
+                key: key.clone(),
+                sort_at,
+                group_at,
+                searched,
+                ignore: ignore.to_string(),
+                articles,
+                snapshot: source.snapshot(),
+            };
+            self.builder.0.ask(request, ui.ctx());
+            self.requested = Some(key);
+        }
+        let Some(built) = self.built.as_ref() else {
+            ui.centered_and_justified(|ui| ui.spinner());
+            return Output { view_changed, save_search: save_search.then(|| self.search.query.clone()), ..Output::default() };
+        };
         let items = built.items.as_slice();
         if built.empty {
             crate::app::placeholder(ui, "No songs yet.\nImport some with +, or download them from the Library.");
@@ -930,7 +973,6 @@ impl SongList {
             if !self.collapsed.remove(&key) {
                 self.collapsed.insert(key);
             }
-            self.built = None;
             self.selection.clear();
         }
         if view_changed {
@@ -979,120 +1021,140 @@ impl SongList {
         }
         changed
     }
+}
 
-    /// Every song in `songs`, sorted as `view` says, by the value at
-    /// `sort_at` (or the name), and grouped by the one at `group_at` (or by
-    /// tag, a song in each of its tags' groups), each group's header before
-    /// its songs (left out if it's closed). The songs without a value (or
-    /// tag) are a group of their own, last.
-    fn sorted(
-        &self,
-        songs: &[PathBuf],
-        view: &View,
-        keys: &[&str],
-        sort_at: Option<usize>,
-        group_at: Option<usize>,
-        ignore: &str,
-        articles: bool,
-        describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
-    ) -> (Vec<Item>, Vec<Queued>) {
-        /// A song in one of its groups, and what it sorts by: the group
-        /// (its header's text and that in lowercase, `None` for the songs
-        /// without a value, and the value) and its place in it.
-        struct Sorting {
-            label: Option<String>,
-            group: Option<String>,
-            value: Option<Value>,
-            order: Option<Value>,
-            entry: Entry,
-        }
-        let by_tag = view.group == TAG;
-        let mut sorting: Vec<Sorting> = Vec::with_capacity(songs.len());
-        for path in songs {
-            let entry = Entry { song: describe(path, keys), path: path.clone(), hits: Hits::default() };
-            let order = match sort_at {
-                Some(i) => sort_value(entry.song.values[i].as_ref(), articles),
-                None => Some(Value { text: fields::sort_text(&entry.song.name, articles), ..Value::default() }),
-            };
-            let groups: Vec<(Option<String>, Option<Value>)> = match group_at {
-                _ if by_tag && !entry.song.tags.is_empty() => {
-                    entry.song.tags.iter().map(|(name, _)| (Some(name.clone()), Some(Value { text: name.to_lowercase(), ..Value::default() }))).collect()
-                }
-                Some(g) => {
-                    let value = entry.song.values[g].as_ref();
-                    // (Sorted by what tells the groups apart, so their
-                    // songs stay together.)
-                    let group = |label: String| {
-                        let key = Value { text: fields::group_key(&label, ignore), number: value.and_then(|v| v.number), sort: None };
-                        (Some(label), Some(key))
-                    };
-                    match group_label(&view.group, value) {
-                        // (A song in each of a list's items' groups.)
-                        Some(label) if let Some(def) = column(&view.group).filter(|c| c.is_list()) => {
-                            let items: Vec<_> = def.split(&label).map(|i| group(i.to_string())).collect();
-                            if items.is_empty() { vec![(None, None)] } else { items }
-                        }
-                        Some(label) => vec![group(label)],
-                        None => vec![(None, None)],
-                    }
-                }
-                None => vec![(None, None)],
-            };
-            let mut seen = BTreeSet::new();
-            for (label, value) in groups {
-                let group = value.as_ref().map(|v| v.text.clone());
-                // (Once, even with two tags that differ only in case.)
-                if seen.insert(group.clone()) {
-                    sorting.push(Sorting { label, group, value, order: order.clone(), entry: entry.clone() });
-                }
-            }
-        }
-        sorting.sort_by(|a, b| {
-            if a.group == b.group {
-                let order = compare(a.order.as_ref(), b.order.as_ref());
-                if view.descending { order.reverse() } else { order }
-            } else {
-                compare(a.value.as_ref(), b.value.as_ref()).then_with(|| a.group.cmp(&b.group))
-            }
-        });
-        if group_at.is_none() && !by_tag {
-            let queue = sorting.iter().map(|s| Queued { path: s.entry.path.clone(), group: None, collapsed: false, plays: s.entry.song.plays.clone() }).collect();
-            return (sorting.into_iter().map(|s| Item::Song(s.entry)).collect(), queue);
-        }
-        // Each group's header shows the best of its songs' spellings.
-        let mut spellings: HashMap<&str, Vec<&str>> = HashMap::new();
-        for s in &sorting {
-            if let (Some(group), Some(label)) = (&s.group, &s.label) {
-                spellings.entry(group).or_default().push(label);
-            }
-        }
-        let best: HashMap<String, String> =
-            spellings.into_iter().filter_map(|(group, labels)| Some((group.to_string(), fields::best_spelling(labels)?.to_string()))).collect();
-        let missing = if by_tag { "Untagged" } else { "Unknown" };
-        let mut items = Vec::new();
-        let mut queue = Vec::with_capacity(sorting.len());
-        let mut current: Option<(usize, Option<String>)> = None;
-        for Sorting { label, group, entry, .. } in sorting {
-            let at = match &current {
-                Some((at, key)) if *key == group => *at,
-                _ => {
-                    let key = group.clone().unwrap_or_default();
-                    let collapsed = self.collapsed.contains(&key);
-                    let label = best.get(&key).cloned().or(label).unwrap_or_else(|| missing.to_string());
-                    items.push(Item::Group { label, key, count: 0, collapsed });
-                    current = Some((items.len() - 1, group));
-                    items.len() - 1
-                }
-            };
-            let Item::Group { key, count, collapsed, .. } = &mut items[at] else { unreachable!("`current` is a group's header") };
-            *count += 1;
-            queue.push(Queued { path: entry.path.clone(), group: Some(key.clone()), collapsed: *collapsed, plays: entry.song.plays.clone() });
-            if !*collapsed {
-                items.push(Item::Song(entry));
-            }
-        }
-        (items, queue)
+/// The rows `request` asks for.
+fn build(request: Request) -> Built {
+    let Request { key, sort_at, group_at, searched, ignore, articles, snapshot, .. } = request;
+    let describe = |path: &Path, keys: &[&str]| snapshot.describe(path, keys);
+    let (songs, search) = snapshot.songs(&key.query);
+    let mut found = songs.len();
+    let (items, queue) = if search.text.is_empty() {
+        sorted(&songs, &key.view, &key.keys, sort_at, group_at, &ignore, articles, &key.collapsed, &describe)
+    } else {
+        let (matches, total) = ranked_matches(&songs, &search.text, &key.keys, &searched, &key.view.unsearched, &describe);
+        found = total;
+        let queue = matches.iter().map(|e| Queued { path: e.path.clone(), group: None, collapsed: false, plays: e.song.plays.clone() }).collect();
+        (matches.into_iter().map(Item::Song).collect(), queue)
+    };
+    let all = key.query.trim().is_empty();
+    let total = if all { songs.len() } else { snapshot.songs("").0.len() };
+    let empty = songs.is_empty() && all;
+    Built { empty, items, queue, problems: search.problems, found, total }
+}
+
+/// Every song in `songs`, sorted as `view` says, by the value at
+/// `sort_at` (or the name), and grouped by the one at `group_at` (or by
+/// tag, a song in each of its tags' groups), each group's header before
+/// its songs (left out if it's closed). The songs without a value (or
+/// tag) are a group of their own, last.
+fn sorted(
+    songs: &[PathBuf],
+    view: &View,
+    keys: &[&str],
+    sort_at: Option<usize>,
+    group_at: Option<usize>,
+    ignore: &str,
+    articles: bool,
+    collapsed: &BTreeSet<String>,
+    describe: &dyn Fn(&Path, &[&str]) -> Described,
+) -> (Vec<Item>, Vec<Queued>) {
+    /// A song in one of its groups, and what it sorts by: the group
+    /// (its header's text and that in lowercase, `None` for the songs
+    /// without a value, and the value) and its place in it.
+    struct Sorting {
+        label: Option<String>,
+        group: Option<String>,
+        value: Option<Value>,
+        order: Option<Value>,
+        entry: Entry,
     }
+    let by_tag = view.group == TAG;
+    let mut sorting: Vec<Sorting> = Vec::with_capacity(songs.len());
+    for path in songs {
+        let entry = Entry { song: describe(path, keys), path: path.clone(), hits: Hits::default() };
+        let order = match sort_at {
+            Some(i) => sort_value(entry.song.values[i].as_ref(), articles),
+            None => Some(Value { text: fields::sort_text(&entry.song.name, articles), ..Value::default() }),
+        };
+        let groups: Vec<(Option<String>, Option<Value>)> = match group_at {
+            _ if by_tag && !entry.song.tags.is_empty() => {
+                entry.song.tags.iter().map(|(name, _)| (Some(name.clone()), Some(Value { text: name.to_lowercase(), ..Value::default() }))).collect()
+            }
+            Some(g) => {
+                let value = entry.song.values[g].as_ref();
+                // (Sorted by what tells the groups apart, so their
+                // songs stay together.)
+                let group = |label: String| {
+                    let key = Value { text: fields::group_key(&label, ignore), number: value.and_then(|v| v.number), sort: None };
+                    (Some(label), Some(key))
+                };
+                match group_label(&view.group, value) {
+                    // (A song in each of a list's items' groups.)
+                    Some(label) if let Some(def) = column(&view.group).filter(|c| c.is_list()) => {
+                        let items: Vec<_> = def.split(&label).map(|i| group(i.to_string())).collect();
+                        if items.is_empty() { vec![(None, None)] } else { items }
+                    }
+                    Some(label) => vec![group(label)],
+                    None => vec![(None, None)],
+                }
+            }
+            None => vec![(None, None)],
+        };
+        let mut seen = BTreeSet::new();
+        for (label, value) in groups {
+            let group = value.as_ref().map(|v| v.text.clone());
+            // (Once, even with two tags that differ only in case.)
+            if seen.insert(group.clone()) {
+                sorting.push(Sorting { label, group, value, order: order.clone(), entry: entry.clone() });
+            }
+        }
+    }
+    sorting.sort_by(|a, b| {
+        if a.group == b.group {
+            let order = compare(a.order.as_ref(), b.order.as_ref());
+            if view.descending { order.reverse() } else { order }
+        } else {
+            compare(a.value.as_ref(), b.value.as_ref()).then_with(|| a.group.cmp(&b.group))
+        }
+    });
+    if group_at.is_none() && !by_tag {
+        let queue = sorting.iter().map(|s| Queued { path: s.entry.path.clone(), group: None, collapsed: false, plays: s.entry.song.plays.clone() }).collect();
+        return (sorting.into_iter().map(|s| Item::Song(s.entry)).collect(), queue);
+    }
+    // Each group's header shows the best of its songs' spellings.
+    let mut spellings: HashMap<&str, Vec<&str>> = HashMap::new();
+    for s in &sorting {
+        if let (Some(group), Some(label)) = (&s.group, &s.label) {
+            spellings.entry(group).or_default().push(label);
+        }
+    }
+    let best: HashMap<String, String> =
+        spellings.into_iter().filter_map(|(group, labels)| Some((group.to_string(), fields::best_spelling(labels)?.to_string()))).collect();
+    let missing = if by_tag { "Untagged" } else { "Unknown" };
+    let mut items = Vec::new();
+    let mut queue = Vec::with_capacity(sorting.len());
+    let mut current: Option<(usize, Option<String>)> = None;
+    for Sorting { label, group, entry, .. } in sorting {
+        let at = match &current {
+            Some((at, key)) if *key == group => *at,
+            _ => {
+                let key = group.clone().unwrap_or_default();
+                let collapsed = collapsed.contains(&key);
+                let label = best.get(&key).cloned().or(label).unwrap_or_else(|| missing.to_string());
+                items.push(Item::Group { label, key, count: 0, collapsed });
+                current = Some((items.len() - 1, group));
+                items.len() - 1
+            }
+        };
+        let Item::Group { key, count, collapsed, .. } = &mut items[at] else { unreachable!("`current` is a group's header") };
+        *count += 1;
+        queue.push(Queued { path: entry.path.clone(), group: Some(key.clone()), collapsed: *collapsed, plays: entry.song.plays.clone() });
+        if !*collapsed {
+            items.push(Item::Song(entry));
+        }
+    }
+    (items, queue)
 }
 
 /// The row of `path` in `items`: under the header of `group` if it's
@@ -1222,7 +1284,7 @@ fn ranked_matches(
     keys: &[&str],
     searched: &[usize],
     unsearched: &[String],
-    describe: &mut dyn FnMut(&Path, &[&str]) -> Described,
+    describe: &dyn Fn(&Path, &[&str]) -> Described,
 ) -> (Vec<Entry>, usize) {
     let skips = |key: &str| unsearched.iter().any(|k| k == key);
     let (file_name, tags) = (!skips("file_name"), !skips("tag"));
@@ -1283,14 +1345,28 @@ fn highlighted(ui: &egui::Ui, text: &str, hits: &[usize], weak: bool) -> egui::W
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
     use super::*;
 
-    /// The same songs whatever the query.
-    struct Fixed(Vec<PathBuf>);
+    /// The same songs whatever the query, described by `describe`,
+    /// counting the songs described.
+    #[derive(Clone)]
+    struct Fixed {
+        songs: Vec<PathBuf>,
+        describe: fn(&Path, &[&str]) -> Described,
+        described: Arc<AtomicUsize>,
+    }
+
+    impl Fixed {
+        fn new(songs: &[PathBuf], describe: fn(&Path, &[&str]) -> Described) -> Self {
+            Self { songs: songs.to_vec(), describe, described: Arc::default() }
+        }
+    }
 
     impl Source for Fixed {
-        fn songs(&mut self, query: &str) -> (Vec<PathBuf>, Search) {
-            (self.0.clone(), crate::search::parse(query, &Default::default()))
+        fn snapshot(&mut self) -> Box<dyn Snapshot> {
+            Box::new(self.clone())
         }
 
         fn values(&mut self, _: Field, _: &str) -> Vec<String> {
@@ -1298,24 +1374,41 @@ mod tests {
         }
     }
 
-    /// Draws `list` for one frame of `songs`, grouped by artist, counting
-    /// the songs described into `described`.
-    fn frame(ctx: &egui::Context, list: &mut SongList, songs: &[PathBuf], revision: u64, described: &mut usize) {
+    impl Snapshot for Fixed {
+        fn songs(&self, query: &str) -> (Vec<PathBuf>, Search) {
+            (self.songs.clone(), crate::search::parse(query, &Default::default()))
+        }
+
+        fn describe(&self, path: &Path, keys: &[&str]) -> Described {
+            self.described.fetch_add(1, AtomicOrdering::Relaxed);
+            (self.describe)(path, keys)
+        }
+    }
+
+    /// "Song n", by "Artist n % 3".
+    fn numbered(path: &Path, keys: &[&str]) -> Described {
+        let n: usize = path.to_str().unwrap().parse().unwrap();
+        let values = keys.iter().map(|&k| (k == "artist").then(|| Value { text: format!("Artist {}", n % 3), ..Value::default() })).collect();
+        Described { name: format!("Song {n}"), file_name: String::new(), values, tags: Vec::new(), plays: Plays::default() }
+    }
+
+    /// Draws `list` for one frame of `source`, grouped by artist.
+    fn frame(ctx: &egui::Context, list: &mut SongList, source: &mut Fixed, revision: u64) {
         let mut view = View { group: "artist".into(), ..View::default() };
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
             ..Default::default()
         };
         let mut output = ctx.run_ui(input, |ui| {
-            let mut describe = |path: &Path, keys: &[&str]| {
-                *described += 1;
-                let n: usize = path.to_str().unwrap().parse().unwrap();
-                let values = keys.iter().map(|&k| (k == "artist").then(|| Value { text: format!("Artist {}", n % 3), ..Value::default() })).collect();
-                Described { name: format!("Song {n}"), file_name: String::new(), values, tags: Vec::new(), plays: Plays::default() }
-            };
-            list.ui(ui, &mut Fixed(songs.to_vec()), revision, &mut view, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
+            list.ui(ui, source, revision, &mut view, "", false, &mut |_| {}, &mut |_, _| {}, &mut |_, _| {});
         });
         output.textures_delta.clear();
+    }
+
+    /// Waits for `list`'s builder to make the rows asked for.
+    fn made(list: &mut SongList) {
+        let built = list.builder.0.wait(std::time::Duration::from_secs(10)).expect("the rows made");
+        list.accept(built);
     }
 
     #[test]
@@ -1324,13 +1417,13 @@ mod tests {
         let songs: Vec<PathBuf> = (0..3).map(|n| PathBuf::from(n.to_string())).collect();
         let mut list = SongList::default();
         let mut view = View::default();
+        let mut source = Fixed::new(&songs, |_, keys| Described { name: "Song".into(), file_name: String::new(), values: vec![None; keys.len()], tags: Vec::new(), plays: Plays::default() });
         let mut frame = |view: &mut View, events: Vec<egui::Event>, modifiers: egui::Modifiers| {
             let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
             let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), events, ..Default::default() };
             let mut output = ctx.run_ui(input, |ui| {
-                let mut describe = |_: &Path, keys: &[&str]| Described { name: "Song".into(), file_name: String::new(), values: vec![None; keys.len()], tags: Vec::new(), plays: Plays::default() };
                 let mut changed = view.clone();
-                if list.ui(ui, &mut Fixed(songs.clone()), 1, &mut changed, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {}).view_changed {
+                if list.ui(ui, &mut source, 1, &mut changed, "", false, &mut |_| {}, &mut |_, _| {}, &mut |_, _| {}).view_changed {
                     *view = changed;
                 }
             });
@@ -1386,18 +1479,21 @@ mod tests {
         let mut list = SongList::default();
         let mut view = View { columns: vec!["artist".into(), "year".into()], ..View::default() };
         view.widths.insert("year".into(), 45.0);
+        let mut source = Fixed::new(&songs, |_, keys| {
+            let values = keys.iter().map(|&k| Some(Value { text: if k == "year" { "2024".into() } else { "Artist".into() }, ..Value::default() })).collect();
+            Described { name: "Song".into(), file_name: String::new(), values, tags: Vec::new(), plays: Plays::default() }
+        });
         let mut texts = Vec::new();
-        // (The first frame lays the fonts out.)
-        for _ in 0..2 {
+        // (The first frame asks for the rows and lays the fonts out.)
+        for first in [true, false] {
             let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
             let mut output = ctx.run_ui(input, |ui| {
-                let mut describe = |_: &Path, keys: &[&str]| {
-                    let values = keys.iter().map(|&k| Some(Value { text: if k == "year" { "2024".into() } else { "Artist".into() }, ..Value::default() })).collect();
-                    Described { name: "Song".into(), file_name: String::new(), values, tags: Vec::new(), plays: Plays::default() }
-                };
-                list.ui(ui, &mut Fixed(songs.clone()), 1, &mut view, "", false, &mut |_| {}, &mut describe, &mut |_, _| {}, &mut |_, _| {});
+                list.ui(ui, &mut source, 1, &mut view, "", false, &mut |_| {}, &mut |_, _| {}, &mut |_, _| {});
             });
             output.textures_delta.clear();
+            if first {
+                made(&mut list);
+            }
             texts = output
                 .shapes
                 .into_iter()
@@ -1420,15 +1516,20 @@ mod tests {
         let ctx = egui::Context::default();
         let songs: Vec<PathBuf> = (0..30).map(|n| PathBuf::from(n.to_string())).collect();
         let mut list = SongList::default();
-        let mut described = 0;
-        frame(&ctx, &mut list, &songs, 1, &mut described);
-        assert_eq!(described, 30);
+        let mut source = Fixed::new(&songs, numbered);
+        let counter = Arc::clone(&source.described);
+        let described = || counter.load(AtomicOrdering::Relaxed);
+        frame(&ctx, &mut list, &mut source, 1);
+        made(&mut list);
+        assert_eq!(described(), 30);
         for _ in 0..5 {
-            frame(&ctx, &mut list, &songs, 1, &mut described);
+            frame(&ctx, &mut list, &mut source, 1);
         }
-        assert_eq!(described, 30, "nothing changed, so nothing was described again");
-        frame(&ctx, &mut list, &songs, 2, &mut described);
-        assert_eq!(described, 60, "a new revision makes the rows again");
+        assert!(list.builder.0.wait(std::time::Duration::from_millis(100)).is_none(), "nothing changed, so nothing was asked for again");
+        assert_eq!(described(), 30, "nothing changed, so nothing was described again");
+        frame(&ctx, &mut list, &mut source, 2);
+        made(&mut list);
+        assert_eq!(described(), 60, "a new revision makes the rows again");
     }
 
     #[test]
@@ -1436,24 +1537,14 @@ mod tests {
         let ctx = egui::Context::default();
         let songs: Vec<PathBuf> = (0..6).map(|n| PathBuf::from(n.to_string())).collect();
         let mut list = SongList::default();
-        let mut described = 0;
-        frame(&ctx, &mut list, &songs, 1, &mut described);
-        let rows = |list: &SongList| -> Vec<String> {
-            list.built
-                .as_ref()
-                .unwrap()
-                .items
-                .iter()
-                .map(|item| match item {
-                    Item::Group { label, count, .. } => format!("{label} ({count})"),
-                    Item::Song(entry) => entry.song.name.clone(),
-                })
-                .collect()
-        };
+        let mut source = Fixed::new(&songs, numbered);
+        frame(&ctx, &mut list, &mut source, 1);
+        made(&mut list);
+        let rows = |list: &SongList| shape(&list.built.as_ref().unwrap().items);
         assert_eq!(rows(&list), ["Artist 0 (2)", "Song 0", "Song 3", "Artist 1 (2)", "Song 1", "Song 4", "Artist 2 (2)", "Song 2", "Song 5"]);
         list.collapsed.insert("artist1".into());
-        list.built = None;
-        frame(&ctx, &mut list, &songs, 1, &mut described);
+        frame(&ctx, &mut list, &mut source, 1);
+        made(&mut list);
         assert_eq!(rows(&list), ["Artist 0 (2)", "Song 0", "Song 3", "Artist 1 (2)", "Artist 2 (2)", "Song 2", "Song 5"]);
     }
 
@@ -1468,10 +1559,11 @@ mod tests {
             .collect()
     }
 
-    /// `songs` (name, album, tags) as `list` lists them, grouped by `group`.
-    fn grouped(list: &SongList, group: &str, songs: &[(&str, Option<&str>, &[&str])]) -> Vec<String> {
+    /// `songs` (name, album, tags) as listed grouped by `group`, with the
+    /// groups `collapsed` closed.
+    fn grouped(collapsed: &BTreeSet<String>, group: &str, songs: &[(&str, Option<&str>, &[&str])]) -> Vec<String> {
         let paths: Vec<PathBuf> = songs.iter().map(|(name, ..)| PathBuf::from(name)).collect();
-        let mut describe = |path: &Path, _: &[&str]| {
+        let describe = |path: &Path, _: &[&str]| {
             let (name, album, tags) = songs.iter().find(|(name, ..)| Path::new(name) == path).unwrap();
             let values = vec![album.map(|a| Value { text: a.to_string(), ..Value::default() })];
             let tags = tags.iter().map(|t| (t.to_string(), [0; 3])).collect();
@@ -1479,42 +1571,40 @@ mod tests {
         };
         let view = View { group: group.into(), ..View::default() };
         let group_at = (group == "album").then_some(0);
-        shape(&list.sorted(&paths, &view, &["album"], None, group_at, "", false, &mut describe).0)
+        shape(&sorted(&paths, &view, &["album"], None, group_at, "", false, collapsed, &describe).0)
     }
 
     #[test]
     fn songs_with_several_tags_are_in_each_group() {
         let songs: &[(&str, Option<&str>, &[&str])] = &[("c", None, &[]), ("b", None, &["Rock", "chill", "ROCK"]), ("a", None, &["rock"])];
-        let rows = grouped(&SongList::default(), TAG, songs);
+        let rows = grouped(&BTreeSet::new(), TAG, songs);
         assert_eq!(rows, ["chill (1)", "b", "Rock (2)", "a", "b", "Untagged (1)", "c"], "under the best spelling");
     }
 
     #[test]
     fn closed_tag_groups_keep_their_counts() {
-        let mut list = SongList::default();
-        list.collapsed.insert("rock".into());
-        list.collapsed.insert(String::new());
+        let collapsed = BTreeSet::from(["rock".to_string(), String::new()]);
         let songs: &[(&str, Option<&str>, &[&str])] = &[("c", None, &[]), ("b", None, &["rock", "chill"]), ("a", None, &["rock"])];
-        assert_eq!(grouped(&list, TAG, songs), ["chill (1)", "b", "rock (2)", "Untagged (1)"]);
+        assert_eq!(grouped(&collapsed, TAG, songs), ["chill (1)", "b", "rock (2)", "Untagged (1)"]);
     }
 
     #[test]
     fn songs_without_a_value_go_last_apart_from_one_named_unknown() {
         let songs: &[(&str, Option<&str>, &[&str])] = &[("a", None, &[]), ("b", Some("Unknown"), &[]), ("c", Some("Abc"), &[])];
-        assert_eq!(grouped(&SongList::default(), "album", songs), ["Abc (1)", "c", "Unknown (1)", "b", "Unknown (1)", "a"]);
+        assert_eq!(grouped(&BTreeSet::new(), "album", songs), ["Abc (1)", "c", "Unknown (1)", "b", "Unknown (1)", "a"]);
     }
 
     #[test]
     fn songs_are_in_each_of_their_genres() {
         let songs: &[(&str, Option<&str>, &[&str])] = &[("a", Some("Avant-Garde, Rock"), &[]), ("b", Some("rock; Blues"), &[])];
         let paths: Vec<PathBuf> = songs.iter().map(|(name, ..)| PathBuf::from(name)).collect();
-        let mut describe = |path: &Path, _: &[&str]| {
+        let describe = |path: &Path, _: &[&str]| {
             let (name, genre, _) = songs.iter().find(|(name, ..)| Path::new(name) == path).unwrap();
             let values = vec![genre.map(|a| Value { text: a.to_string(), ..Value::default() })];
             Described { name: name.to_string(), file_name: name.to_string(), values, tags: Vec::new(), plays: Plays::default() }
         };
         let view = View { group: "genre".into(), ..View::default() };
-        let rows = shape(&SongList::default().sorted(&paths, &view, &["genre"], None, Some(0), "", false, &mut describe).0);
+        let rows = shape(&sorted(&paths, &view, &["genre"], None, Some(0), "", false, &BTreeSet::new(), &describe).0);
         assert_eq!(rows, ["Avant-Garde (1)", "a", "Blues (1)", "b", "Rock (2)", "a", "b"]);
     }
 
@@ -1528,7 +1618,7 @@ mod tests {
             ("e", Some("OST"), &[]),
             ("f", Some("justcore  extravaganza"), &[]),
         ];
-        let rows = grouped(&SongList::default(), "album", songs);
+        let rows = grouped(&BTreeSet::new(), "album", songs);
         assert_eq!(rows, ["Justcore Extravaganza (3)", "a", "c", "f", "Modal Soul (1)", "d", "<OST> (2)", "b", "e"]);
     }
 
@@ -1661,12 +1751,12 @@ mod tests {
     fn the_playing_row_is_in_the_group_it_plays_in() {
         let songs: &[(&str, Option<&str>, &[&str])] = &[("a", None, &["rock", "chill"]), ("b", None, &["rock"])];
         let paths: Vec<PathBuf> = songs.iter().map(|(name, ..)| PathBuf::from(name)).collect();
-        let mut describe = |path: &Path, _: &[&str]| {
+        let describe = |path: &Path, _: &[&str]| {
             let (name, _, tags) = songs.iter().find(|(name, ..)| Path::new(name) == path).unwrap();
             Described { name: name.to_string(), file_name: name.to_string(), values: vec![None], tags: tags.iter().map(|t| (t.to_string(), [0; 3])).collect(), plays: Plays::default() }
         };
         let view = View { group: TAG.into(), ..View::default() };
-        let (items, _) = SongList::default().sorted(&paths, &view, &["album"], None, None, "", false, &mut describe);
+        let (items, _) = sorted(&paths, &view, &["album"], None, None, "", false, &BTreeSet::new(), &describe);
         assert_eq!(shape(&items), ["chill (1)", "a", "rock (2)", "a", "b"]);
         assert_eq!(active_row(&items, Path::new("a"), Some("rock")), Some(3));
         assert_eq!(active_row(&items, Path::new("a"), None), Some(1), "its first, with no group known");

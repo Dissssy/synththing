@@ -1,14 +1,21 @@
 //! The Songs panel and the library around it: adding, copying and removing
 //! songs, missing files, imports.
 
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use eframe::egui;
 
 use crate::frame_timing;
 use crate::config::{self, Config};
 use crate::song_list;
-use crate::song_store::{self, SongStore, Stored};
+use crate::smart::Rules;
+use crate::song_info::{SongInfo, SongInfoCache};
+use crate::song_store::{self, Song, SongStore, Stored};
+use crate::song_title::Naming;
+use crate::wishlist::Wishes;
 use crate::select_list;
 use crate::playlist::Library;
 
@@ -33,12 +40,11 @@ impl App {
             });
             return;
         }
-        let extensions = SONG_EXTENSIONS;
         // Only the songs a ruleset leaves out, when asked.
         let missing_only = self.songs_missing_only;
         let (missing_revision, missing) = self.missing_info();
         let any_missing = !missing.is_empty();
-        let only: Option<std::collections::HashSet<&str>> = missing_only.then(|| missing.iter().flat_map(|m| m.keys.iter().map(String::as_str)).collect());
+        let only: Option<HashSet<&str>> = missing_only.then(|| missing.iter().flat_map(|m| m.keys.iter().map(String::as_str)).collect());
         let mut missing_clicked = false;
         // What the list's made from: it's made again when this changes.
         let revision = {
@@ -103,10 +109,9 @@ impl App {
             sync::songs_moving_ui(ui, moving);
             autoplay_clicked |= autoplay::button_ui(ui, autoplay);
         };
-        // (Both the names and the trailing widgets read the song info, one
-        // after the other.)
-        let cache = std::cell::RefCell::new(&mut self.song_info);
-        let naming = naming(&self.config, &self.songs);
+        // (Both the list's snapshot and the trailing widgets read the song
+        // info, one after the other.)
+        let cache = RefCell::new(&mut self.song_info);
         let mut view = self.config.songs_view.clone();
         #[cfg(not(target_os = "android"))]
         let mut save_copy = None;
@@ -175,15 +180,15 @@ impl App {
                 remove = paths.to_vec();
             }
         };
+        let patterns = self.config.title_patterns.as_deref();
         let output = self.song_list.ui(
             ui,
-            &mut Listed { store, wishes: &wishes.wishes, extensions, only: only.as_ref() },
+            &mut Listed { store, wishes: &wishes.wishes, only: only.as_ref(), patterns, cache: &cache },
             revision,
             &mut view,
             &self.config.group_ignore,
             self.config.sort_with_articles,
             &mut tools,
-            &mut |path, keys| describe_song(&mut cache.borrow_mut(), &naming, &self.songs, path, keys),
             &mut |ui, path| song_info_widgets(ui, &mut cache.borrow_mut(), path, false),
             &mut menu,
         );
@@ -472,34 +477,71 @@ pub(super) fn start_old_import(dir: PathBuf) -> std::sync::mpsc::Receiver<song_s
     rx
 }
 
-/// The Songs list's songs: the library's (with `extensions`, and only
-/// those in `only` when given), as a query's filters keep them.
-pub(super) struct Listed<'a> {
+/// The Songs list's songs: the library's (only those in `only` when
+/// given), as a query's filters keep them.
+pub(super) struct Listed<'a, 'c> {
     store: &'a SongStore,
-    wishes: &'a crate::wishlist::Wishes,
-    extensions: &'a [&'a str],
-    only: Option<&'a std::collections::HashSet<&'a str>>,
+    wishes: &'a Wishes,
+    only: Option<&'a HashSet<&'a str>>,
+    /// The title patterns (`Config::title_patterns`).
+    patterns: Option<&'a [String]>,
+    cache: &'a RefCell<&'c mut SongInfoCache>,
 }
 
-impl song_list::Source for Listed<'_> {
-    fn songs(&mut self, query: &str) -> (Vec<PathBuf>, crate::search::Search) {
+/// The library's songs (of the kinds listed) that `rules` keep.
+fn kept<'s>(store: &'s SongStore, wishes: &'s Wishes, rules: &'s Rules) -> impl Iterator<Item = (PathBuf, &'s Song)> {
+    let matches = rules.matcher(store, wishes, crate::settings_sync::now());
+    store.songs().filter(move |(path, song)| song_store::has_extension(path, SONG_EXTENSIONS) && song_store::key_in(store.dir(), path).is_some_and(|key| matches(key, song)))
+}
+
+/// The library as the Songs list's rows are made from it, with what's
+/// been read of its songs.
+struct Snapshot {
+    store: SongStore,
+    wishes: Wishes,
+    only: Option<HashSet<String>>,
+    patterns: Option<Vec<String>>,
+    infos: HashMap<PathBuf, Arc<SongInfo>>,
+}
+
+impl song_list::Snapshot for Snapshot {
+    fn songs(&self, query: &str) -> (Vec<PathBuf>, crate::search::Search) {
         let search = crate::search::parse(query, self.store.tags());
-        let songs = {
-            let matches = search.rules.matcher(self.store, self.wishes, crate::settings_sync::now());
-            self.store
-                .songs()
-                .filter(|(path, song)| song_store::has_extension(path, self.extensions) && song_store::key_in(self.store.dir(), path).is_some_and(|key| matches(key, song)))
-                .map(|(path, _)| path)
-                .filter(|p| self.only.is_none_or(|only| song_store::key_in(self.store.dir(), p).is_some_and(|k| only.contains(k))))
-                .collect()
-        };
+        let songs = kept(&self.store, &self.wishes, &search.rules)
+            .map(|(path, _)| path)
+            .filter(|p| self.only.as_ref().is_none_or(|only| song_store::key_in(self.store.dir(), p).is_some_and(|k| only.contains(k))))
+            .collect();
         (songs, search)
+    }
+
+    fn describe(&self, path: &Path, keys: &[&str]) -> song_list::Described {
+        let naming = Naming::new(self.patterns.as_deref(), &self.store);
+        describe_song(self.infos.get(path).map(Arc::as_ref), &naming, &self.store, path, keys)
+    }
+}
+
+impl song_list::Source for Listed<'_, '_> {
+    fn snapshot(&mut self) -> Box<dyn song_list::Snapshot> {
+        let _timing = frame_timing::scope("song_rows_snapshot");
+        let mut cache = self.cache.borrow_mut();
+        let infos = self
+            .store
+            .songs()
+            .filter(|(path, _)| song_store::has_extension(path, SONG_EXTENSIONS))
+            .filter_map(|(path, _)| Some((path.clone(), cache.get(&path)?)))
+            .collect();
+        Box::new(Snapshot {
+            store: self.store.clone(),
+            wishes: self.wishes.clone(),
+            only: self.only.map(|only| only.iter().map(|k| k.to_string()).collect()),
+            patterns: self.patterns.map(<[String]>::to_vec),
+            infos,
+        })
     }
 
     fn values(&mut self, field: crate::fields::Field, query: &str) -> Vec<String> {
         let rules = crate::search::parse(query, self.store.tags()).rules;
-        let matches = rules.matcher(self.store, self.wishes, crate::settings_sync::now());
-        let songs = self.store.songs().filter(|(path, song)| song_store::has_extension(path, self.extensions) && song_store::key_in(self.store.dir(), path).is_some_and(|key| matches(key, song))).map(|(_, song)| song);
+        let songs = kept(self.store, self.wishes, &rules).map(|(_, song)| song);
         if field == crate::fields::Field::Wish {
             // (Those the songs kept fill.)
             let index = crate::wishlist::Index::new(self.wishes);

@@ -13,6 +13,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Preferences > Programs can make a visualizer URL for OBS (Stream URL): pick the pixel scale, whether it plays the audio and a fixed or automatic width and height, and it adds a program for it and shows the URL. Paste a URL back in to change it and copy it again.
 - Emoji are drawn with Noto Emoji: flat and the same on every computer and phone, never in colour, and now covering every current emoji.
 - Characters the built-in fonts lack (other scripts, rarer symbols) are drawn with an installed font that's found the first time one shows up, instead of reading every installed font at startup. Phones get this too.
+- The Songs list is made on a background thread: opening Songs, searching and opening or closing a group no longer hold the app up on a big library. A spinner shows until the list is first ready.
 
 ### Fixed
 - Anonymous usage data from a build made on someone's own computer (not downloaded) is marked as such, instead of passing for the release it shares a version with.
