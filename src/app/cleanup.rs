@@ -8,14 +8,15 @@
 //! thread of their own (from a copy of the songs), so applying one
 //! doesn't hold the window up.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 use eframe::egui;
 
 use super::lookup::{self, Reviewed, Unsure};
-use super::{App, icon_button, page_ui};
+use super::widgets::Culled;
+use super::{App, icon_button, page_ui, setting_row, settings_group};
 use crate::select_list;
 use crate::cleanup::{self, Kind, Suggestion, What};
 use crate::duplicates;
@@ -40,9 +41,6 @@ pub(super) struct CleanUp {
     keep: BTreeMap<String, usize>,
     /// The rows being worked out, and what from.
     working: Option<(u64, mpsc::Receiver<Rows>)>,
-    /// The groups folded shut.
-    folded: BTreeSet<Group>,
-    selection: select_list::Selection,
 }
 
 /// A group of Clean up's rows: the albums that need a look, first, then
@@ -60,12 +58,30 @@ impl Group {
             Self::Kind(kind) => kind.label(),
         }
     }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Unsure => "question",
+            Self::Kind(kind) => match kind {
+                Kind::Junk => "trash",
+                Kind::Duplicate => "copy",
+                Kind::PossibleDuplicate => "copy-simple",
+                Kind::FileName => "file-text",
+                Kind::NumberInTitle => "list-numbers",
+                Kind::VideoTitle => "video",
+                Kind::Split => "arrows-split",
+                Kind::Same => "text-aa",
+                Kind::Compilation => "users-three",
+                Kind::Tidy => "broom",
+                Kind::MusicBrainz => "globe",
+                Kind::LengthDiffers => "timer",
+            },
+        }
+    }
 }
 
 /// One of Clean up's rows.
 enum Item {
-    /// A group's header, with how many rows it has.
-    Header(Group, usize),
     /// An album that needs a look, by index.
     Unsure(usize),
     /// A suggestion, by index, with its ID.
@@ -201,24 +217,18 @@ impl App {
         // (Possible duplicates are guesses: each one's applied alone.)
         let applicable: Vec<usize> =
             shown.iter().map(|(i, _)| *i).filter(|&i| !matches!(cleanup.suggestions[i].kind, Kind::LengthDiffers | Kind::PossibleDuplicate)).collect();
-        let mut items: Vec<Item> = Vec::new();
-        let group = |items: &mut Vec<Item>, group: Group, rows: Vec<Item>| {
-            if !rows.is_empty() {
-                items.push(Item::Header(group, rows.len()));
-                if !cleanup.folded.contains(&group) {
-                    items.extend(rows);
-                }
-            }
-        };
-        group(&mut items, Group::Unsure, (0..cleanup.unsure.len()).map(Item::Unsure).collect());
+        // (Each group only while it has rows.)
+        let mut groups: Vec<(Group, Vec<Item>)> = Vec::new();
+        if !cleanup.unsure.is_empty() {
+            groups.push((Group::Unsure, (0..cleanup.unsure.len()).map(Item::Unsure).collect()));
+        }
         let mut by_kind = shown.clone();
         // (Stable, so each kind's keep their order.)
         by_kind.sort_by_key(|(i, _)| cleanup.suggestions[*i].kind);
         for chunk in by_kind.chunk_by(|(a, _), (b, _)| cleanup.suggestions[*a].kind == cleanup.suggestions[*b].kind) {
             let kind = cleanup.suggestions[chunk[0].0].kind;
-            group(&mut items, Group::Kind(kind), chunk.iter().map(|(i, id)| Item::Suggestion(*i, id.clone())).collect());
+            groups.push((Group::Kind(kind), chunk.iter().map(|(i, id)| Item::Suggestion(*i, id.clone())).collect()));
         }
-        let mut toggle = None;
         let close = page_ui(ui, "Clean up", &[] as &[&str], &mut 0, true, |_| false, |ui, _| {
             ui.weak("Suggestions from what your songs' details say. Nothing changes until you apply one, and the files themselves are never written.");
             ui.add_space(4.0);
@@ -248,89 +258,44 @@ impl App {
             } else if shown.is_empty() && cleanup.unsure.is_empty() {
                 super::placeholder(ui, "Nothing to clean up.\nYour songs' details all look right.");
             }
-            let from_width = (ui.available_width() * 0.4).max(120.0);
-            let is_header = |item: &Item| matches!(item, Item::Header(..));
-            let folded = &cleanup.folded;
-            let output = select_list::show_grouped(ui, "cleanup", &items, &mut cleanup.selection, None, is_header, |ui, row, item| {
-                let (i, id) = match item {
-                    Item::Header(group, count) => {
-                        let caret = super::icon(if folded.contains(group) { "caret-right" } else { "caret-down" });
-                        ui.label(egui::RichText::new(caret).strong());
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(egui::RichText::new(format!("({count})")).weak());
-                            select_list::label(ui, egui::RichText::new(group.label()).strong(), None, select_list::scrolls(row, false));
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                let from_width = (ui.available_width() * 0.4).max(120.0);
+                // (A whole group's drawn or not, so its rows stay striped.)
+                let mut culled = Culled::begin(ui, "cleanup");
+                for (group, items) in &groups {
+                    let title = format!("{} ({})", group.label(), items.len());
+                    culled.block(ui, group.label(), false, |ui| {
+                        settings_group(&title).icon(group.icon()).closable(group.label()).open_at_first().show(ui, |ui| {
+                            for item in items {
+                                setting_row(ui, |ui| match item {
+                                    Item::Unsure(i) => {
+                                        let unsure = &cleanup.unsure[*i];
+                                        let pick = cleanup.picks.entry(unsure.album.id.clone()).or_default();
+                                        if let Some(r) = unsure_row_ui(ui, unsure, pick, from_width, &mut show, |k| self.songs.path(k)) {
+                                            reviewed = Some(r);
+                                        }
+                                    }
+                                    Item::Suggestion(i, id) => {
+                                        let suggestion = &cleanup.suggestions[*i];
+                                        let to = cleanup.to.entry(id.clone()).or_insert_with(|| suggestion.to.clone());
+                                        let keep = cleanup.keep.entry(id.clone()).or_default();
+                                        let act = suggestion_row_ui(ui, suggestion, id, to, keep, from_width, &self.songs);
+                                        match act {
+                                            Some(Act::Apply) => apply.push(*i),
+                                            Some(Act::Dismiss) => dismiss.push(id.clone()),
+                                            Some(Act::Show) => show = Some(suggestion.keys.iter().map(|k| self.songs.path(k)).collect()),
+                                            None => {}
+                                        }
+                                    }
+                                });
+                            }
                         });
-                        return;
-                    }
-                    Item::Unsure(i) => {
-                        let unsure = &cleanup.unsure[*i];
-                        let pick = cleanup.picks.entry(unsure.album.id.clone()).or_default();
-                        if let Some(r) = unsure_row_ui(ui, unsure, pick, from_width, &mut show, |k| self.songs.path(k)) {
-                            reviewed = Some(r);
-                        }
-                        return;
-                    }
-                    Item::Suggestion(i, id) => (*i, id),
-                };
-                let suggestion = &cleanup.suggestions[i];
-                let to = cleanup.to.entry(id.clone()).or_insert_with(|| suggestion.to.clone());
-                let (from, hover) = describe(suggestion);
-                ui.allocate_ui_with_layout(egui::vec2(from_width, ui.available_height()), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.set_width(from_width);
-                    ui.add(egui::Label::new(from).truncate()).on_hover_text(hover);
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let songs = suggestion.keys.len();
-                    if ui.add(icon_button("info")).on_hover_text(format!("See its {songs} song{}", if songs == 1 { "" } else { "s" })).clicked() {
-                        show = Some(suggestion.keys.iter().map(|k| self.songs.path(k)).collect());
-                    }
-                    if ui.add(icon_button("x")).on_hover_text("Dismiss: leave it as it is").clicked() {
-                        dismiss.push(id.clone());
-                    }
-                    let fixed = matches!(suggestion.kind, Kind::Compilation | Kind::Junk | Kind::Duplicate | Kind::PossibleDuplicate)
-                        || matches!(suggestion.what, What::Fields { .. } | What::Online { .. });
-                    let look = suggestion.kind == Kind::LengthDiffers;
-                    if !look && ui.add_enabled(fixed || !to.trim().is_empty(), icon_button("check")).on_hover_text("Apply").clicked() {
-                        apply.push(i);
-                    }
-                    if look {
-                        ui.add(egui::Label::new(to.as_str()).truncate());
-                    } else if suggestion.kind == Kind::Junk {
-                        ui.label("Remove from the library");
-                    } else if matches!(suggestion.kind, Kind::Duplicate | Kind::PossibleDuplicate) {
-                        let keep = cleanup.keep.entry(id.clone()).or_default();
-                        let copy = |key: &String| self.songs.get_by_key(key).map(duplicates::describe).unwrap_or_default();
-                        egui::ComboBox::from_id_salt(("duplicate", id))
-                            .width(ui.available_width())
-                            .truncate()
-                            .selected_text(format!("Keep {}", copy(&suggestion.keys[*keep])))
-                            .show_ui(ui, |ui| {
-                                for (i, key) in suggestion.keys.iter().enumerate() {
-                                    ui.selectable_value(keep, i, copy(key));
-                                }
-                            });
-                    } else if suggestion.kind == Kind::Compilation {
-                        ui.label(format!("Mark a compilation, by {to}"));
-                    } else if fixed {
-                        let more = if songs > 1 { format!(", and {} more like it", songs - 1) } else { String::new() };
-                        ui.add(egui::Label::new(format!("{to}{more}")).truncate());
-                    } else {
-                        ui.add(egui::TextEdit::singleline(to).desired_width(f32::INFINITY))
-                            .on_hover_text("What it'll be written as. Separate artists with semicolons.");
-                    }
-                });
+                        ui.add_space(ui.spacing().item_spacing.y);
+                    });
+                }
+                culled.end(ui);
             });
-            if let Some(idx) = output.activated
-                && let Some(Item::Header(group, _)) = items.get(idx)
-            {
-                toggle = Some(*group);
-            }
         });
-        if let Some(group) = toggle
-            && !cleanup.folded.remove(&group)
-        {
-            cleanup.folded.insert(group);
-        }
         if let Some(reviewed) = reviewed {
             // (Gone from the rows now, not once they're worked out again.)
             let album = match &reviewed {
@@ -410,7 +375,7 @@ fn unsure_row_ui(
     let album = &unsure.album;
     *pick = (*pick).min(unsure.releases.len() - 1);
     let mut reviewed = None;
-    ui.allocate_ui_with_layout(egui::vec2(from_width, ui.available_height()), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+    ui.allocate_ui_with_layout(egui::vec2(from_width, ui.spacing().interact_size.y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.set_width(from_width);
         let by = album.artist.as_deref().map(|a| format!(" by {a}")).unwrap_or_default();
         ui.add(egui::Label::new(&album.name).truncate()).on_hover_text(format!(
@@ -441,6 +406,75 @@ fn unsure_row_ui(
         });
     });
     reviewed
+}
+
+/// What's done to a suggestion from its row.
+enum Act {
+    Apply,
+    Dismiss,
+    /// See its songs.
+    Show,
+}
+
+/// A suggestion's row: what it's of, then what it'd be (`to`, written
+/// here; or the copy to `keep`, for duplicates), and Apply, Dismiss and
+/// its songs.
+#[allow(clippy::too_many_arguments)]
+fn suggestion_row_ui(
+    ui: &mut egui::Ui,
+    suggestion: &Suggestion,
+    id: &str,
+    to: &mut String,
+    keep: &mut usize,
+    from_width: f32,
+    store: &SongStore,
+) -> Option<Act> {
+    let mut act = None;
+    let (from, hover) = describe(suggestion);
+    ui.allocate_ui_with_layout(egui::vec2(from_width, ui.spacing().interact_size.y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_width(from_width);
+        ui.add(egui::Label::new(from).truncate()).on_hover_text(hover);
+    });
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let songs = suggestion.keys.len();
+        if ui.add(icon_button("info")).on_hover_text(format!("See its {songs} song{}", if songs == 1 { "" } else { "s" })).clicked() {
+            act = Some(Act::Show);
+        }
+        if ui.add(icon_button("x")).on_hover_text("Dismiss: leave it as it is").clicked() {
+            act = Some(Act::Dismiss);
+        }
+        let fixed = matches!(suggestion.kind, Kind::Compilation | Kind::Junk | Kind::Duplicate | Kind::PossibleDuplicate)
+            || matches!(suggestion.what, What::Fields { .. } | What::Online { .. });
+        let look = suggestion.kind == Kind::LengthDiffers;
+        if !look && ui.add_enabled(fixed || !to.trim().is_empty(), icon_button("check")).on_hover_text("Apply").clicked() {
+            act = Some(Act::Apply);
+        }
+        if look {
+            ui.add(egui::Label::new(to.as_str()).truncate());
+        } else if suggestion.kind == Kind::Junk {
+            ui.label("Remove from the library");
+        } else if matches!(suggestion.kind, Kind::Duplicate | Kind::PossibleDuplicate) {
+            let copy = |key: &String| store.get_by_key(key).map(duplicates::describe).unwrap_or_default();
+            egui::ComboBox::from_id_salt(("duplicate", id))
+                .width(ui.available_width())
+                .truncate()
+                .selected_text(format!("Keep {}", copy(&suggestion.keys[*keep])))
+                .show_ui(ui, |ui| {
+                    for (i, key) in suggestion.keys.iter().enumerate() {
+                        ui.selectable_value(keep, i, copy(key));
+                    }
+                });
+        } else if suggestion.kind == Kind::Compilation {
+            ui.label(format!("Mark a compilation, by {to}"));
+        } else if fixed {
+            let more = if songs > 1 { format!(", and {} more like it", songs - 1) } else { String::new() };
+            ui.add(egui::Label::new(format!("{to}{more}")).truncate());
+        } else {
+            ui.add(egui::TextEdit::singleline(to).desired_width(f32::INFINITY))
+                .on_hover_text("What it'll be written as. Separate artists with semicolons.");
+        }
+    });
+    act
 }
 
 /// What a suggestion's of, short and in full.

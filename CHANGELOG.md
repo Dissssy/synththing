@@ -16,7 +16,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - The Songs list is made on a background thread: opening Songs, searching and opening or closing a group no longer hold the app up on a big library. A spinner shows until the list is first ready.
 - Groupings' playlists (By Album, By Artist and your own rulesets) are worked out on a background thread too: opening Groupings or Preferences > Rulesets no longer holds the app up, with a spinner until they're first ready.
 - Help > Log and Help > Credits & licenses are one Help page in the panels' place, laid out like Preferences, instead of popups: playback and the visualizer keep going while it's open.
-- Clean up and Record are pages in the panels' place too, instead of popups. Clean up's Apply all and Bring back dismissed sit over its suggestions, which fill the page, grouped by kind (Needs a look first) in groups that fold shut like Songs' groups.
+- Clean up and Record are pages in the panels' place too, instead of popups. Clean up's Apply all and Bring back dismissed sit over its suggestions, which fill the page, in a box for each kind (Needs a look first), like Preferences' groups, each folding shut by its heading.
 
 ### Fixed
 - Anonymous usage data from a build made on someone's own computer (not downloaded) is marked as such, instead of passing for the release it shares a version with.
