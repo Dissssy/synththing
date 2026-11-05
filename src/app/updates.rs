@@ -347,122 +347,117 @@ impl App {
         });
     }
 
-    /// The Updates window's Branch builds section: trying a feature before
-    /// it's merged. Each installs into a folder of its own with a copy of
-    /// the settings, or on Android as an app of its own (`channels.rs`), so
-    /// this install isn't touched.
+    /// Updates' Branch builds group: trying a feature before it's merged.
+    /// Each installs into a folder of its own with a copy of the settings,
+    /// or on Android as an app of its own (`channels.rs`), so this install
+    /// isn't touched. The list is fetched when Updates opens, and the group
+    /// is shown only once there's a build (or an installed one), folded
+    /// shut at first.
     pub(super) fn branch_builds_ui(&mut self, ui: &mut egui::Ui) {
-        let response = egui::CollapsingHeader::new("Branch builds").id_salt("branch_builds").show(ui, |ui| {
-            if cfg!(target_os = "android") {
-                ui.label(
-                    "Try a feature before it's merged. Each branch build installs as an app of its own, with \
-                     settings of its own, and its online features are off. This synththing isn't touched.",
-                );
-            } else {
-                ui.label(
-                    "Try a feature before it's merged. Each branch build installs separately, starting with a \
-                     copy of your settings, and its online features are off. This synththing isn't touched.",
-                );
+        if matches!(self.branches.list(), crate::channels::ListState::Idle) {
+            self.branches.refresh();
+        }
+        let installed = crate::channels::installed();
+        let list = self.branches.list();
+        let install = self.branches.install_state();
+        let builds: &[updater::Release] = match &list {
+            crate::channels::ListState::Loaded(builds) => builds,
+            _ => &[],
+        };
+        // Every branch with a build, then installed ones whose build is gone.
+        let mut rows: Vec<(String, Option<&updater::Release>)> = builds.iter().map(|b| (b.tag.clone(), Some(b))).collect();
+        for channel in &installed {
+            if !builds.iter().any(|b| &b.tag == channel) {
+                rows.push((channel.clone(), None));
             }
-            // Android has to let this app install others first.
-            #[cfg(target_os = "android")]
-            let can_install = crate::android::can_install_packages();
-            #[cfg(not(target_os = "android"))]
-            let can_install = true;
+        }
+        if rows.is_empty() && matches!(install, crate::channels::InstallState::Idle) {
+            return;
+        }
+        let installing = matches!(install, crate::channels::InstallState::Installing { .. });
+        // Android has to let this app install others first.
+        #[cfg(target_os = "android")]
+        let can_install = crate::android::can_install_packages();
+        #[cfg(not(target_os = "android"))]
+        let can_install = true;
+        let hint = format!("{} to try before they're merged", rows.len());
+        let busy = self.branches.busy();
+        let branches = self.branches.clone();
+        let mut refresh = |ui: &mut egui::Ui| {
+            if ui.add_enabled(!busy, super::row_icon_button(ui, "arrows-clockwise")).on_hover_text("Look again").clicked() {
+                branches.refresh();
+            }
+        };
+        settings_group("Branch builds").icon("git-branch").hint(&hint).closable("branch_builds").buttons(&mut refresh).show(ui, |ui| {
+            setting_row(ui, |ui| {
+                ui.weak(if cfg!(target_os = "android") {
+                    "Each branch build installs as an app of its own, with settings of its own, and its online \
+                     features are off. This synththing isn't touched."
+                } else {
+                    "Each branch build installs separately, starting with a copy of your settings, and its online \
+                     features are off. This synththing isn't touched."
+                })
+            });
             #[cfg(target_os = "android")]
             if !can_install {
-                ui.label("Android doesn't allow synththing to install apps yet.");
-                if ui.button("Allow it...").on_hover_text("Settings > Install unknown apps, for synththing").clicked() {
-                    crate::android::open_install_settings();
-                }
-            }
-            ui.add_space(4.0);
-            let installed = crate::channels::installed();
-            let list = self.branches.list();
-            let install = self.branches.install_state();
-            let installing = matches!(install, crate::channels::InstallState::Installing { .. });
-            let builds: &[updater::Release] = match &list {
-                crate::channels::ListState::Loaded(builds) => builds,
-                _ => &[],
-            };
-            match &list {
-                crate::channels::ListState::Idle => {}
-                crate::channels::ListState::Loading => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("Looking for branch builds...");
-                    });
-                }
-                crate::channels::ListState::Failed(error) => {
-                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
-                }
-                crate::channels::ListState::Loaded(builds) if builds.is_empty() && installed.is_empty() => {
-                    ui.weak("There are no branch builds right now.");
-                }
-                crate::channels::ListState::Loaded(_) => {}
-            }
-            // Every branch with a build, then installed ones whose build is
-            // gone.
-            let mut rows: Vec<(String, Option<&updater::Release>)> =
-                builds.iter().map(|b| (b.tag.clone(), Some(b))).collect();
-            for channel in &installed {
-                if !builds.iter().any(|b| &b.tag == channel) {
-                    rows.push((channel.clone(), None));
-                }
-            }
-            // A grid, or on a narrow screen (a phone's) each branch's name
-            // over its version and buttons.
-            let narrow = ui.available_width() < 480.0;
-            if narrow {
-                for (channel, build) in rows {
-                    ui.strong(crate::channels::branch_name(&channel));
-                    ui.horizontal_wrapped(|ui| self.branch_build_row_ui(ui, &channel, build, &installed, installing, can_install));
-                    ui.add_space(4.0);
-                }
-            } else {
-                egui::Grid::new("branch_builds_grid").num_columns(3).spacing([12.0, 4.0]).show(ui, |ui| {
-                    for (channel, build) in rows {
-                        ui.strong(crate::channels::branch_name(&channel));
-                        self.branch_build_row_ui(ui, &channel, build, &installed, installing, can_install);
-                        ui.end_row();
+                setting_row(ui, |ui| {
+                    ui.label("Android doesn't allow synththing to install apps yet.");
+                    if ui.button("Allow it...").on_hover_text("Settings > Install unknown apps, for synththing").clicked() {
+                        crate::android::open_install_settings();
                     }
+                });
+            }
+            for (channel, build) in rows {
+                setting_row(ui, |ui| {
+                    ui.strong(crate::channels::branch_name(&channel));
+                    match build {
+                        Some(b) => {
+                            let commit = b.commit.as_deref().map(|c| &c[..c.len().min(7)]).unwrap_or_default();
+                            ui.weak(format!("{} {commit}", b.version)).on_hover_text(b.notes.trim());
+                        }
+                        None => {
+                            ui.weak("its build is gone (merged?)");
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        self.branch_build_buttons_ui(ui, &channel, build, &installed, installing, can_install);
+                    });
                 });
             }
             match &install {
                 crate::channels::InstallState::Idle => {}
                 crate::channels::InstallState::Installing { channel, downloaded, size } => {
-                    ui.label(format!("Installing the {} build...", crate::channels::branch_name(channel)));
-                    ui.add(
-                        egui::ProgressBar::new(*downloaded as f32 / (*size).max(1) as f32)
-                            .text(format!("{:.1} / {:.1} MB", *downloaded as f64 / 1e6, *size as f64 / 1e6)),
-                    );
+                    setting_row(ui, |ui| {
+                        ui.label(format!("Installing the {} build", crate::channels::branch_name(channel)));
+                        ui.add(
+                            egui::ProgressBar::new(*downloaded as f32 / (*size).max(1) as f32)
+                                .text(format!("{:.1} / {:.1} MB", *downloaded as f64 / 1e6, *size as f64 / 1e6)),
+                        );
+                    });
                 }
                 crate::channels::InstallState::Done(channel) if cfg!(target_os = "android") => {
-                    ui.label(format!(
-                        "Android asks you to install the {} build. Once it's in, open it here or from your apps.",
-                        crate::channels::branch_name(channel)
-                    ));
+                    setting_row(ui, |ui| {
+                        ui.label(format!(
+                            "Android asks you to install the {} build. Once it's in, open it here or from your apps.",
+                            crate::channels::branch_name(channel)
+                        ))
+                    });
                 }
                 crate::channels::InstallState::Done(channel) => {
-                    ui.label(format!("The {} build is installed and starting.", crate::channels::branch_name(channel)));
+                    setting_row(ui, |ui| {
+                        ui.label(format!("The {} build is installed and starting.", crate::channels::branch_name(channel)))
+                    });
                 }
                 crate::channels::InstallState::Failed(error) => {
-                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
+                    setting_row(ui, |ui| ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error));
                 }
             }
-            if ui.add_enabled(!self.branches.busy(), egui::Button::new("Refresh")).clicked() {
-                self.branches.refresh();
-            }
         });
-        // The list is fetched the first time the section opens.
-        if response.body_returned.is_some() && matches!(self.branches.list(), crate::channels::ListState::Idle) {
-            self.branches.refresh();
-        }
     }
 
-    /// A branch build's version and its buttons (Install, or Open and
-    /// Remove), side by side.
-    pub(super) fn branch_build_row_ui(
+    /// A branch build's buttons, in a right-to-left layout: Install, or
+    /// Open and Remove.
+    fn branch_build_buttons_ui(
         &mut self,
         ui: &mut egui::Ui,
         channel: &str,
@@ -471,43 +466,30 @@ impl App {
         installing: bool,
         can_install: bool,
     ) {
-        match build {
-            Some(b) => {
-                let commit = b.commit.as_deref().map(|c| &c[..c.len().min(7)]).unwrap_or_default();
-                ui.weak(format!("{} {commit}", b.version)).on_hover_text(b.notes.trim());
-            }
-            None => {
-                ui.weak("its build is gone (merged?)");
-            }
-        }
-        ui.horizontal(|ui| {
-            if installed.iter().any(|c| c == channel) {
-                if ui.add_enabled(!installing, egui::Button::new("Open")).clicked()
-                    && let Err(e) = crate::channels::launch(channel)
-                {
-                    self.updates_message = Some((format!("{e:#}"), true));
-                }
-                if ui
-                    .add_enabled_ui(!installing, |ui| {
-                        confirm_button(ui, ("branch_build", channel), egui::Button::new("Remove"), "Delete this branch build and its settings", "Really remove?")
-                    })
-                    .inner
-                {
-                    let name = crate::channels::branch_name(channel);
-                    self.updates_message = Some(match crate::channels::remove(channel) {
-                        Ok(()) if cfg!(target_os = "android") => {
-                            (format!("Android asks you to uninstall the {name} build."), false)
-                        }
-                        Ok(()) => (format!("Removed the {name} build."), false),
-                        Err(e) => (format!("{e:#}"), true),
-                    });
-                }
-            } else if let Some(b) = build
-                && ui.add_enabled(!installing && can_install, egui::Button::new("Install")).clicked()
+        if installed.iter().any(|c| c == channel) {
+            if ui
+                .add_enabled_ui(!installing, |ui| {
+                    confirm_button(ui, ("branch_build", channel), egui::Button::new("Remove"), "Delete this branch build and its settings", "Really remove?")
+                })
+                .inner
             {
-                self.branches.install(b.clone());
+                let name = crate::channels::branch_name(channel);
+                self.updates_message = Some(match crate::channels::remove(channel) {
+                    Ok(()) if cfg!(target_os = "android") => (format!("Android asks you to uninstall the {name} build."), false),
+                    Ok(()) => (format!("Removed the {name} build."), false),
+                    Err(e) => (format!("{e:#}"), true),
+                });
             }
-        });
+            if ui.add_enabled(!installing, egui::Button::new("Open")).clicked()
+                && let Err(e) = crate::channels::launch(channel)
+            {
+                self.updates_message = Some((format!("{e:#}"), true));
+            }
+        } else if let Some(b) = build
+            && ui.add_enabled(!installing && can_install, egui::Button::new("Install")).clicked()
+        {
+            self.branches.install(b.clone());
+        }
     }
 }
 
