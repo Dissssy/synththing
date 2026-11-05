@@ -528,6 +528,12 @@ pub(super) struct Shapes {
     speed: Shape,
 }
 
+impl Shapes {
+    /// Volume and speed as their sliders.
+    #[cfg(windows)]
+    pub(super) const SLIDERS: Self = Self { volume: Shape::Slider, speed: Shape::Slider };
+}
+
 /// A popup right above a controls bar button (as a dropdown, but up),
 /// holding one of its sliders upright, `POPUP_SLIDER` tall, down its
 /// middle.

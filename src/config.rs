@@ -123,6 +123,10 @@ pub struct Config {
     /// The controls bar's buttons and sliders, left to right.
     #[serde(default)]
     pub controls_bar: ControlsBar,
+    /// The mini player's buttons and sliders, left to right (Windows' tray
+    /// mini player); what doesn't fit goes behind its ⋯ button.
+    #[serde(default)]
+    pub mini_controls: MiniControls,
     /// The Songs list's columns, sorting and grouping.
     #[serde(default)]
     pub songs_view: crate::song_list::View,
@@ -410,8 +414,25 @@ impl ControlsBar {
     }
 }
 
-/// One of `ControlsBar`'s items.
+/// The mini player's buttons and sliders, left to right
+/// (`Config::mini_controls`): one line, no sections.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MiniControls(pub Vec<BarItem>);
+
+impl MiniControls {
+    pub const USUAL: [BarItem; 7] =
+        [BarItem::Shuffle, BarItem::Previous, BarItem::PlayPause, BarItem::Next, BarItem::Loop, BarItem::Star, BarItem::Volume];
+}
+
+impl Default for MiniControls {
+    fn default() -> Self {
+        Self(Self::USUAL.to_vec())
+    }
+}
+
+/// One of `ControlsBar`'s or `MiniControls`' items.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BarItem {
     /// Where the middle section starts (not drawn).
     Middle,

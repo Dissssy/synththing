@@ -1,7 +1,7 @@
 //! The mini player: what clicking the tray icon turns the window into. A
 //! small strip, always on top and out of the taskbar, with what's playing,
-//! the seek bar and the controls bar's own buttons (`controls_line_ui`, laid
-//! out as Preferences > Appearance > Controls bar says). Its drawer opens
+//! the seek bar and a line of its own buttons (`mini_controls_ui`,
+//! Preferences > Appearance > Mini player buttons). Its drawer opens
 //! the Queue, Groupings, Soundfonts and the visualizer (scripts see
 //! `display_mode() == "mini"`), the same panels the main window has.
 //!
@@ -19,6 +19,7 @@ use eframe::egui;
 
 use super::{App, MIN_WINDOW, icon_button};
 use crate::audio::PlaybackShared;
+use crate::config::BarItem;
 use crate::visualizer::DisplayMode;
 
 /// The strip's width, in points, and its height to begin with: the song
@@ -137,6 +138,12 @@ pub(super) struct MiniPlayer {
     /// no mouse move tells it, so the button under it wouldn't take a
     /// click until the mouse moved.
     pointer_frames: u8,
+    /// The controls line's items that don't fit show on a line of their
+    /// own (its ⋯ button).
+    more: bool,
+    /// How wide each controls line item was drawn (`mini_controls_ui`),
+    /// and its ⋯ button, to tell what fits next frame.
+    drawn: std::collections::HashMap<Option<BarItem>, f32>,
     /// Frames left to wait for the drawer's resize to land
     /// (`RESIZE_FRAMES`); the drawer button waits too.
     resize_frames: u8,
@@ -159,6 +166,8 @@ impl Default for MiniPlayer {
             picking: false,
             pointer_frames: 0,
             resize_frames: 0,
+            more: false,
+            drawn: std::collections::HashMap::new(),
             strip_height: STRIP.y,
         }
     }
@@ -409,8 +418,7 @@ impl App {
 
         ui.add_space(2.0);
         self.seek_line_ui(ui, view);
-        let width = ui.available_width();
-        self.controls_line_ui(ui, view, width);
+        self.mini_controls_ui(ui, view);
 
         // As tall as it turned out (once, or when the theme changes).
         let height = ui.min_rect().bottom() - top + 2.0 * MARGIN;
@@ -418,6 +426,59 @@ impl App {
             self.mini.strip_height = height;
             self.mini.size_limits(&ctx);
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.mini.size()));
+        }
+    }
+
+    /// The mini player's buttons and sliders (`Config::mini_controls`),
+    /// left to right, as many as fit; the rest behind a ⋯ button at the
+    /// end, which shows them on a line of their own under it (a popup
+    /// would be cut off by the small window).
+    fn mini_controls_ui(&mut self, ui: &mut egui::Ui, view: &crate::engine::EngineView) {
+        use super::controls_bar::{ICON_BUTTON_WIDTH, MIN_SLIDER, PLAY_WIDTH, Shapes, SPEAKER_WIDTH, SPEED_TEXT_WIDTH, VOLUME_TEXT_WIDTH};
+        let items: Vec<BarItem> = self.config.mini_controls.0.iter().filter(|item| self.bar_item_shown(item)).cloned().collect();
+        let gap = ui.spacing().item_spacing.x;
+        // How wide each is, as drawn last frame (buttons come out a little
+        // wider than their least size), else as worked out.
+        let width = |drawn: &std::collections::HashMap<Option<BarItem>, f32>, item: Option<&BarItem>| {
+            drawn.get(&item.cloned()).copied().unwrap_or(match item {
+                Some(BarItem::PlayPause) => PLAY_WIDTH,
+                Some(BarItem::Volume) => SPEAKER_WIDTH + MIN_SLIDER + VOLUME_TEXT_WIDTH + 2.0 * gap,
+                Some(BarItem::Speed) => ICON_BUTTON_WIDTH + MIN_SLIDER + SPEED_TEXT_WIDTH + 2.0 * gap,
+                _ => ICON_BUTTON_WIDTH,
+            })
+        };
+        ui.spacing_mut().slider_width = MIN_SLIDER;
+        let mut rest = Vec::new();
+        ui.horizontal(|ui| {
+            let more = width(&self.mini.drawn, None);
+            for (i, item) in items.iter().enumerate() {
+                let last = i + 1 == items.len();
+                let room = ui.available_width() - if last { 0.0 } else { gap + more };
+                if !rest.is_empty() || width(&self.mini.drawn, Some(item)) > room {
+                    rest.push(item.clone());
+                    continue;
+                }
+                let before = ui.cursor().left();
+                self.controls_item_ui(ui, view, item, Shapes::SLIDERS);
+                self.mini.drawn.insert(Some(item.clone()), ui.cursor().left() - before - gap);
+            }
+            if !rest.is_empty() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let hover = if self.mini.more { "Hide the rest" } else { "The rest of the buttons" };
+                    let button = ui.add(icon_button("dots-three").selected(self.mini.more)).on_hover_text(hover);
+                    if button.clicked() {
+                        self.mini.more = !self.mini.more;
+                    }
+                    self.mini.drawn.insert(None, button.rect.width());
+                });
+            }
+        });
+        if self.mini.more && !rest.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                for item in &rest {
+                    self.controls_item_ui(ui, view, item, Shapes::SLIDERS);
+                }
+            });
         }
     }
 
