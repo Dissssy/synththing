@@ -93,7 +93,7 @@ mod dedicated;
 mod dispatch;
 mod reference;
 
-use widgets::{CATEGORIES_HEIGHT, categories_body, page_ui, fit_width, window_room, with_info, setting_row, settings_group, LABEL_WIDTH, control_width, setting_combo, setting_slider, setting_label, info_icon, inline_code_job, colored_icon_button};
+use widgets::{CATEGORIES_HEIGHT, categories_body, page_ui, fit_width, window_room, with_info, setting_row, settings_group, LABEL_WIDTH, control_width, setting_combo, setting_slider, setting_label, info_icon, inline_code_job, colored_icon_button, follow_button_ui};
 pub(crate) use widgets::{placeholder, icon, wrapping_combo, toggle_chip, chip, on_color, palette_color, icon_button, confirm_button, row_icon_button, row_icon_button_room};
 use controls_bar::{ICON_BUTTON_WIDTH, drag_handle, square_corner, loop_text, shuffle_text, seek_bar_ui, status_color, status_outcome, STATUS_TARGET};
 pub(crate) use controls_bar::play_button;
@@ -489,9 +489,6 @@ pub struct App {
     /// The engine's song load count once the current song's loaded
     /// (`EngineView::loads`): till then its view is another's.
     song_loads: u64,
-    /// How many songs have started, for song lists to follow playback by
-    /// (`select_list::songs_started`).
-    songs_started: u64,
     /// Where the current song is, and its length, while it plays: where
     /// it was left, for a song that remembers that (`song_options.rs`).
     playing_at: Option<(f64, f64)>,
@@ -806,7 +803,6 @@ impl App {
             queue_rows: None,
             advance_armed: false,
             song_loads: 0,
-            songs_started: 0,
             playing_at: None,
             listening: Default::default(),
             stopped_in: None,
@@ -1079,7 +1075,6 @@ impl App {
         }
         frame_timing::time("sync_script_song", || self.sync_script_song(&view));
         frame_timing::time("poll_loads", || self.poll_loads());
-        crate::select_list::songs_started(ctx, self.songs_started);
         frame_timing::time("audio_output", || self.output.tick());
         frame_timing::time("poll_imports", || self.poll_imports(ctx));
         frame_timing::time("poll_old_import", || self.poll_old_import());

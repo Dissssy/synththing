@@ -5,7 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
-- Song lists follow playback: when the next song starts and the song before it was in view in Songs, a playlist or the Soundfonts list, the list scrolls to the new one. Scroll away and it stays where you left it, and it never switches to another list or view.
+- Follow playback (the crosshair button atop Songs and a playlist): the list keeps the playing song in view, scrolling to each song as it starts. Scrolling the list yourself turns it off. It never switches to another list or view.
 
 ### Fixed
 - Usage data no longer counts what an older version logged under the version you updated to: counts left unsent at an update are sent under the version they came from, right after the update.

@@ -269,7 +269,6 @@ impl App {
         self.remember_position();
         self.listening_to(&path);
         self.song_loads = loads;
-        self.songs_started += 1;
         self.current_song = Some(path);
         self.playing_queued = queued;
         self.song_options_loaded();
