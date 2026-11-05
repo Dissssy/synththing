@@ -209,7 +209,6 @@ pub fn main() -> Result<()> {
         width: 256,
         height: 256,
     };
-    #[cfg_attr(not(windows), expect(unused_mut))]
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(build_info::window_title())
