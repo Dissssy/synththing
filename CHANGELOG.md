@@ -16,6 +16,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - The Songs list is made on a background thread: opening Songs, searching and opening or closing a group no longer hold the app up on a big library. A spinner shows until the list is first ready.
 - Groupings' playlists (By Album, By Artist and your own rulesets) are worked out on a background thread too: opening Groupings or Preferences > Rulesets no longer holds the app up, with a spinner until they're first ready.
 - Help > Log and Help > Credits & licenses are one Help page in the panels' place, laid out like Preferences, instead of popups: playback and the visualizer keep going while it's open.
+- The mini player (click the tray icon) is redesigned: a small strip with the song's art and name, the seek bar and your controls bar's buttons (laid out as in Preferences > Appearance > Controls bar), and a drawer that opens the Queue, Groupings, Soundfonts and the visualizer, the same panels as the window, with all they can do. The visualizer's corner button opens the script picker. The drawer opens above the strip when there's no room below it, and can be resized. Show synththing puts the window back where and as big as it was.
 - Clean up and Record are pages in the panels' place too, instead of popups. Clean up's Apply all and Bring back dismissed sit over its suggestions, which fill the page, in a box for each kind (Needs a look first), like Preferences' groups, each folding shut by its heading.
 
 ### Fixed

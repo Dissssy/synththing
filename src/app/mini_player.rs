@@ -284,7 +284,14 @@ impl App {
         let art = 40.0;
         let (line, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), art), egui::Sense::hover());
         let square = egui::Rect::from_min_size(line.min, egui::Vec2::splat(art));
-        self.now_playing_art_ui(ui, square);
+        if self.current_song.is_some() {
+            self.now_playing_art_ui(ui, square);
+        } else {
+            let visuals = ui.visuals();
+            ui.painter().rect_filled(square, 4.0, visuals.faint_bg_color);
+            let font = egui::FontId::proportional(20.0);
+            ui.painter().text(square.center(), egui::Align2::CENTER_CENTER, super::icon("music-note"), font, visuals.weak_text_color());
+        }
 
         // The buttons at the right.
         let mut buttons = ui.new_child(egui::UiBuilder::new().max_rect(line).layout(egui::Layout::right_to_left(egui::Align::Center)));
