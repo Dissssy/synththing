@@ -757,10 +757,8 @@ impl App {
                         if cfg!(windows) {
                             with_info(
                                 ui,
-                                "What draws the window, from the next time synththing starts. DirectX 12 \
-                                 by default. Vulkan can freeze the window while it resizes quickly (such \
-                                 as the mini player's drawer opening and closing); try it if DirectX \
-                                 12 makes the window or another monitor flicker. The \
+                                "What draws the window, from the next time synththing starts. Vulkan by \
+                                 default; try DirectX 12 if the window misbehaves with it. The \
                                  WGPU_BACKEND environment variable overrides this. Help > Log's \
                                  \"graphics:\" line says which is in use.",
                                 |ui| {

@@ -220,7 +220,7 @@ pub fn main() -> Result<()> {
         system_font_fallback: false,
         ..Default::default()
     };
-    // On Windows, the graphics API picked in Preferences (DX12 unless
+    // On Windows, the graphics API picked in Preferences (Vulkan unless
     // changed, see `GraphicsBackend`); WGPU_BACKEND still overrides it.
     #[cfg(windows)]
     if eframe::wgpu::Backends::from_env().is_none()

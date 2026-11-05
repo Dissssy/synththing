@@ -337,20 +337,19 @@ impl MiniPlayerShape {
     }
 }
 
-/// The graphics API that draws the window on Windows. DX12 by default:
-/// with Vulkan, wgpu's own pick there, the window can freeze for good
-/// while it resizes quickly (#179; the mini player's drawer toggled fast
-/// does it). Vulkan is the way out where DX12 misbehaves instead, such as
-/// a flickering second monitor.
+/// The graphics API that draws the window on Windows. Vulkan by default;
+/// it once froze the window for good on fast resizes, which frame latency
+/// 2 and mailbox presenting (`desktop.rs`) put right. DirectX 12 is the
+/// fallback where Vulkan misbehaves.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphicsBackend {
     #[default]
-    Dx12,
     Vulkan,
+    Dx12,
 }
 
 impl GraphicsBackend {
-    pub const ALL: [Self; 2] = [Self::Dx12, Self::Vulkan];
+    pub const ALL: [Self; 2] = [Self::Vulkan, Self::Dx12];
 
     pub fn name(self) -> &'static str {
         match self {
