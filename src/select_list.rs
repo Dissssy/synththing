@@ -23,7 +23,7 @@
 //! the top stays pinned there as its rows scroll by, until the next
 //! header pushes it out.
 //!
-//! A list follows playback: when the next song starts ([`song_changed`])
+//! A list follows playback: when the next song starts ([`songs_started`])
 //! and the list's playing row was in view, it scrolls to the new playing
 //! row. Whether it was in view is taken when the list last scrolled or
 //! last followed, so a list scrolled away from it stays put, and one the
@@ -176,15 +176,18 @@ fn songs_id() -> egui::Id {
     egui::Id::unique("select_list_songs")
 }
 
-/// A new song started playing: lists showing the one before scroll to it.
-pub fn song_changed(ctx: &egui::Context) {
-    ctx.data_mut(|d| *d.get_temp_mut_or_default::<u64>(songs_id()) += 1);
+/// How many songs have started playing, each frame: when it goes up,
+/// lists showing the song before scroll to the new one. (A count, not a
+/// call each time, as a song can start anywhere in a frame, even before
+/// the lists are drawn.)
+pub fn songs_started(ctx: &egui::Context, count: u64) {
+    ctx.data_mut(|d| d.insert_temp(songs_id(), count));
 }
 
 /// What a list remembers to follow playback from frame to frame.
 #[derive(Clone, Copy)]
 struct Follow {
-    /// The [`song_changed`] count it last saw.
+    /// The [`songs_started`] count it last saw.
     songs: u64,
     /// Whether its playing row was in view when it last scrolled or
     /// followed. (Not since: a playlist's playing row moves on when the

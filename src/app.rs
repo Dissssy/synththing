@@ -489,6 +489,9 @@ pub struct App {
     /// The engine's song load count once the current song's loaded
     /// (`EngineView::loads`): till then its view is another's.
     song_loads: u64,
+    /// How many songs have started, for song lists to follow playback by
+    /// (`select_list::songs_started`).
+    songs_started: u64,
     /// Where the current song is, and its length, while it plays: where
     /// it was left, for a song that remembers that (`song_options.rs`).
     playing_at: Option<(f64, f64)>,
@@ -803,6 +806,7 @@ impl App {
             queue_rows: None,
             advance_armed: false,
             song_loads: 0,
+            songs_started: 0,
             playing_at: None,
             listening: Default::default(),
             stopped_in: None,
@@ -1074,13 +1078,8 @@ impl App {
             self.tray_panel.hide(ctx);
         }
         frame_timing::time("sync_script_song", || self.sync_script_song(&view));
-        let asked = self.pending_play.is_some();
         frame_timing::time("poll_loads", || self.poll_loads());
-        if asked && self.pending_play.is_none() {
-            // (A song that didn't load leaves the playing rows be, so lists
-            // following them stay put.)
-            crate::select_list::song_changed(ctx);
-        }
+        crate::select_list::songs_started(ctx, self.songs_started);
         frame_timing::time("audio_output", || self.output.tick());
         frame_timing::time("poll_imports", || self.poll_imports(ctx));
         frame_timing::time("poll_old_import", || self.poll_old_import());
