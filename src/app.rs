@@ -1332,6 +1332,13 @@ impl eframe::App for App {
         frame_timing::logic_done();
     }
 
+    /// Each frame's input before egui sees it: the mini player corrects
+    /// where the pointer is after it moved the window under it.
+    #[cfg(windows)]
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.mini_raw_input(ctx, raw_input);
+    }
+
     /// Last chance to save a layout change the once-a-second autosave
     /// hasn't caught yet, and what to start with next time.
     fn on_exit(&mut self) {

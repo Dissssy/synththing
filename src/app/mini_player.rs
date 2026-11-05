@@ -10,8 +10,8 @@
 //! together. Going back (Show synththing, a right-click on the tray icon,
 //! launching again) puts the window back where and as big as it was.
 //!
-//! It stays until closed and drags around by its song line, opening where
-//! it was left; unpinned, it goes away like a menu when it loses focus (or
+//! It drags around by its song line and opens where it was left. Pinned,
+//! it stays until closed; unpinned, it goes away like a menu when it loses focus (or
 //! on Escape). Where it was, its size, its page and whether its drawer is
 //! open are kept for the session; nothing's saved.
 
@@ -21,8 +21,9 @@ use super::{App, MIN_WINDOW, icon_button};
 use crate::audio::PlaybackShared;
 use crate::visualizer::DisplayMode;
 
-/// The strip's size, in points: the song line, the seek bar and the
-/// controls line, inside its margins.
+/// The strip's width, in points, and its height to begin with: the song
+/// line, the seek bar and the controls line, inside its margins (measured
+/// once it's drawn, `MiniPlayer::strip_height`).
 const STRIP: egui::Vec2 = egui::vec2(400.0, 132.0);
 
 /// The drawer's height to begin with, and the least it can be dragged to.
@@ -98,7 +99,7 @@ pub(super) struct MiniPlayer {
     taskbar_frames: u8,
     /// It's had focus since it was opened, so losing it closes it (unpinned).
     focused_once: bool,
-    /// It stays until closed, and drags by its song line.
+    /// It stays until closed.
     pinned: bool,
     /// Where it was last (its top-left, in points), to open there again.
     at: Option<egui::Pos2>,
@@ -108,6 +109,15 @@ pub(super) struct MiniPlayer {
     /// The drawer opens above the strip (there's no room below it).
     drawer_above: bool,
     page: Page,
+    /// The strip's height as drawn (its line heights are the theme's).
+    strip_height: f32,
+    /// The Visualizer page shows the script picker instead.
+    picking: bool,
+    /// How far the pointer moved inside the window when the window moved
+    /// under it (the drawer opening above), for the next frame's input:
+    /// no mouse move tells egui, so the button under it wouldn't take a
+    /// click until the mouse moved.
+    pointer_shift: Option<egui::Vec2>,
 }
 
 impl Default for MiniPlayer {
@@ -125,6 +135,9 @@ impl Default for MiniPlayer {
             drawer_height: DRAWER,
             drawer_above: false,
             page: Page::default(),
+            picking: false,
+            pointer_shift: None,
+            strip_height: STRIP.y,
         }
     }
 }
@@ -136,13 +149,13 @@ impl MiniPlayer {
 
     /// The window's size for how it's laid out now.
     fn size(&self) -> egui::Vec2 {
-        if self.drawer { egui::vec2(self.width, STRIP.y + self.drawer_height) } else { egui::vec2(self.width, STRIP.y) }
+        if self.drawer { egui::vec2(self.width, self.strip_height + self.drawer_height) } else { egui::vec2(self.width, self.strip_height) }
     }
 
     /// Let it be resized (by its edges) only with the drawer open.
     fn size_limits(&self, ctx: &egui::Context) {
         let (min, max) = if self.drawer {
-            (egui::vec2(MIN_WIDTH, STRIP.y + MIN_DRAWER), egui::Vec2::INFINITY)
+            (egui::vec2(MIN_WIDTH, self.strip_height + MIN_DRAWER), egui::Vec2::INFINITY)
         } else {
             (self.size(), self.size())
         };
@@ -166,6 +179,13 @@ impl App {
     /// time.
     pub(super) fn open_mini(&mut self, ctx: &egui::Context, cursor: [f32; 2], pixels_per_point: f32) {
         if self.mini.open {
+            // Put away (hidden as the mini player): just shown again.
+            self.hidden = false;
+            self.mini.focused_once = false;
+            self.mini.taskbar_frames = SETTLE_FRAMES;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ctx.request_repaint();
             return;
         }
         self.exit_dedicated(ctx);
@@ -197,8 +217,9 @@ impl App {
         ctx.request_repaint();
     }
 
-    /// Back from the mini player to the main window as it was (shown or
-    /// not, as the caller goes on to make it).
+    /// Back from the mini player to the main window as it was, before
+    /// it's shown (`show_window`). Closing the mini player only hides it,
+    /// as the mini player, so nothing moves or resizes on screen.
     pub(super) fn leave_mini(&mut self, ctx: &egui::Context) {
         if !std::mem::take(&mut self.mini.open) {
             return;
@@ -208,6 +229,7 @@ impl App {
         if !self.hidden {
             show_in_taskbar(self.api.window, true);
         }
+        self.mini.picking = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
         ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(egui::Vec2::INFINITY));
         ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(MIN_WINDOW));
@@ -243,7 +265,7 @@ impl App {
             if self.mini.drawer {
                 let size = ctx.content_rect().size();
                 self.mini.width = size.x.max(MIN_WIDTH);
-                self.mini.drawer_height = (size.y - STRIP.y).max(MIN_DRAWER);
+                self.mini.drawer_height = (size.y - self.mini.strip_height).max(MIN_DRAWER);
             }
         }
         if !self.mini.pinned {
@@ -261,10 +283,11 @@ impl App {
         }
 
         let view = &shared.view;
-        let frame = egui::Frame::window(ui.style()).corner_radius(0).inner_margin(egui::Margin::same(MARGIN as i8));
+        // (No outline: the panels' separator is the only line between them.)
+        let frame = egui::Frame::window(ui.style()).corner_radius(0).stroke(egui::Stroke::NONE).inner_margin(egui::Margin::same(MARGIN as i8));
         let strip = |above: bool| {
             let panel = if above { egui::Panel::bottom("mini_strip") } else { egui::Panel::top("mini_strip") };
-            panel.exact_size(STRIP.y).frame(frame).show_separator_line(self.mini.drawer)
+            panel.exact_size(self.mini.strip_height).frame(frame).show_separator_line(self.mini.drawer)
         };
         strip(self.mini.drawer_above).show(ui, |ui| self.mini_strip_ui(ui, view));
         if self.mini.drawer {
@@ -281,6 +304,7 @@ impl App {
     /// drawer, pin and close buttons; the seek bar; the controls line.
     fn mini_strip_ui(&mut self, ui: &mut egui::Ui, view: &crate::engine::EngineView) {
         let ctx = ui.ctx().clone();
+        let top = ui.cursor().top();
         let art = 40.0;
         let (line, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), art), egui::Sense::hover());
         let square = egui::Rect::from_min_size(line.min, egui::Vec2::splat(art));
@@ -302,7 +326,7 @@ impl App {
         let (pin, pin_hover) = if self.mini.pinned {
             ("push-pin-slash", "Unpin: it closes when you click elsewhere")
         } else {
-            ("push-pin", "Pin: it stays, on top, and drags by the song's name")
+            ("push-pin", "Pin: it stays, on top, until it's closed")
         };
         if buttons.add(icon_button(pin)).on_hover_text(pin_hover).clicked() {
             self.mini.pinned = !self.mini.pinned;
@@ -320,6 +344,9 @@ impl App {
         if buttons.add(icon_button("app-window")).on_hover_text("Show synththing: back to the whole window").clicked() {
             self.show_window(&ctx);
         }
+        if buttons.add(icon_button("power")).on_hover_text("Quit: close synththing completely").clicked() {
+            self.close_with(&ctx, super::close::CloseAction::Quit);
+        }
         let buttons_left = buttons.min_rect().left();
 
         // The song, between the art and the buttons; what it's dragged by.
@@ -329,7 +356,7 @@ impl App {
         let mut name = ui.new_child(egui::UiBuilder::new().max_rect(song).layout(egui::Layout::left_to_right(egui::Align::Center)));
         name.set_clip_rect(song.intersect(ui.clip_rect()));
         crate::select_list::two_lines(&mut name, std::iter::empty(), egui::RichText::new(title).strong(), detail, true);
-        if self.mini.pinned {
+        {
             let drag = ui.interact(line.with_max_x(buttons_left - 4.0), egui::Id::unique("mini_drag"), egui::Sense::drag());
             if drag.drag_started() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
@@ -340,6 +367,14 @@ impl App {
         self.seek_line_ui(ui, view);
         let width = ui.available_width();
         self.controls_line_ui(ui, view, width);
+
+        // As tall as it turned out (once, or when the theme changes).
+        let height = ui.min_rect().bottom() - top + 2.0 * MARGIN;
+        if (height - self.mini.strip_height).abs() > 0.5 {
+            self.mini.strip_height = height;
+            self.mini.size_limits(&ctx);
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.mini.size()));
+        }
     }
 
     /// Open or close the drawer: below the strip, or above it when there's
@@ -359,6 +394,7 @@ impl App {
             let at = outer.min + egui::vec2(0.0, shift);
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(at));
             self.mini.at = Some(at);
+            self.mini.pointer_shift = Some(egui::vec2(0.0, -shift));
         }
         if !open {
             // (Back to the strip's own width.)
@@ -369,10 +405,9 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.mini.size()));
     }
 
-    /// The drawer: its pages down the rail at the left (and the way out at
-    /// its foot), the page open beside it.
+    /// The drawer: its pages down the rail at the left, the page open
+    /// beside it.
     fn mini_drawer_ui(&mut self, ui: &mut egui::Ui, shared: &PlaybackShared) {
-        let ctx = ui.ctx().clone();
         let full = ui.available_rect_before_wrap();
         let rail = full.with_max_x(full.left() + RAIL);
         let page = full.with_min_x(rail.right() + MARGIN);
@@ -384,11 +419,6 @@ impl App {
                 self.mini.page = item;
             }
         }
-        rail_ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-            if ui.add(icon_button("power")).on_hover_text("Quit: close synththing completely").clicked() {
-                self.close_with(&ctx, super::close::CloseAction::Quit);
-            }
-        });
 
         let mut page_ui = ui.new_child(egui::UiBuilder::new().id_salt("mini_page").max_rect(page).layout(egui::Layout::top_down(egui::Align::Min)));
         page_ui.set_clip_rect(page.intersect(ui.clip_rect()));
@@ -400,10 +430,23 @@ impl App {
         }
     }
 
-    /// The visualizer filling the page, with a button on its corner
-    /// opening the script picker (the one the visualizer's bar drops
-    /// down).
+    /// The visualizer filling the page, with a button on its corner that
+    /// swaps it for the script picker (the list the visualizer's bar drops
+    /// down): a script picked starts at once, Back goes back to it.
     fn mini_visualizer_ui(&mut self, ui: &mut egui::Ui, shared: &PlaybackShared) {
+        if self.mini.picking {
+            ui.horizontal(|ui| {
+                if ui.button(format!("{}  Back", super::icon("arrow-left"))).on_hover_text("Back to the visualizer").clicked() {
+                    self.mini.picking = false;
+                }
+                ui.strong("Pick a visualizer");
+            });
+            ui.add_space(4.0);
+            if let Some(super::previews::Picked::Script(idx)) = self.script_list_ui(ui, false) {
+                self.load_script(idx);
+            }
+            return;
+        }
         let rect = ui.available_rect_before_wrap();
         let mut picture = ui.new_child(egui::UiBuilder::new().id_salt("mini_picture").max_rect(rect));
         self.show_visualizer(&mut picture, &shared.notes, &shared.view, DisplayMode::Mini);
@@ -414,8 +457,21 @@ impl App {
         let mut button_ui = ui.new_child(egui::UiBuilder::new().id_salt("mini_script_button").max_rect(corner));
         button_ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::from_black_alpha(140);
         let name = self.script.path().map(super::nice_name).unwrap_or_else(|| "No script".to_string());
-        let button = button_ui.add(icon_button("swap")).on_hover_text(format!("{name}: pick another visualizer"));
-        self.script_picker_popup(&button, rect.width() - 12.0);
+        if button_ui.add(icon_button("swap")).on_hover_text(format!("{name}: pick another visualizer")).clicked() {
+            self.mini.picking = true;
+        }
+    }
+
+    /// Before a frame's input reaches egui: where the pointer is now if
+    /// the window moved under it last frame (`MiniPlayer::pointer_shift`).
+    pub(super) fn mini_raw_input(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let Some(shift) = self.mini.pointer_shift.take() else { return };
+        let moved = raw_input.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerGone));
+        if let Some(pos) = ctx.input(|i| i.pointer.latest_pos())
+            && !moved
+        {
+            raw_input.events.insert(0, egui::Event::PointerMoved(pos + shift));
+        }
     }
 }
 

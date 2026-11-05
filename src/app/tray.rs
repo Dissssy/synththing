@@ -31,7 +31,7 @@ impl App {
     }
 
     /// Clicks on the tray icon since last frame: a left-click turns the
-    /// window into the mini player, or puts the mini player away; a
+    /// window into the mini player (or shows it again), or puts it away; a
     /// right-click brings the window back.
     pub(super) fn handle_tray(&mut self, ctx: &egui::Context) {
         let Some(tray) = &self.tray else { return };
@@ -45,7 +45,7 @@ impl App {
         }
         for click in clicks {
             match click {
-                crate::tray::TrayClick::Primary { .. } if self.mini_open() => self.hide_window(ctx),
+                crate::tray::TrayClick::Primary { .. } if self.mini_open() && !self.hidden => self.hide_window(ctx),
                 crate::tray::TrayClick::Primary { cursor } => self.open_mini(ctx, cursor, native),
                 crate::tray::TrayClick::Secondary => self.show_window(ctx),
             }

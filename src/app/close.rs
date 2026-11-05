@@ -87,13 +87,11 @@ impl App {
         false
     }
 
-    /// Hide the window (the mini player too, the window going back to how
-    /// it was behind the scenes); the tray icon brings it back.
+    /// Hide the window (the mini player stays the mini player, hidden);
+    /// the tray icon brings it back.
     pub(super) fn hide_window(&mut self, ctx: &egui::Context) {
         self.hidden = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        #[cfg(windows)]
-        self.leave_mini(ctx);
     }
 
     /// The window is the mini player.

@@ -621,7 +621,9 @@ impl App {
     /// On the Visualizers page, in the running script's card: its
     /// Settings, Controls and Debug, finger-sized.
     pub(super) fn mobile_script_window_buttons_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        // (Not in the mini player, too small for the windows they open.)
+        let enabled = !self.mini_open();
+        ui.add_enabled_ui(enabled, |ui| ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0;
             self.script_window_buttons_ui(ui, |name, color| {
                 let mut text = egui::RichText::new(icon(name)).size(20.0);
@@ -630,7 +632,9 @@ impl App {
                 }
                 egui::Button::new(text.atom_grow(true)).min_size(egui::Vec2::splat(40.0))
             });
-        });
+        }))
+        .response
+        .on_disabled_hover_text("Show synththing for the script's settings, controls and debug view");
     }
 
     /// The menu: the pages, then what the desktop's menus open, over
