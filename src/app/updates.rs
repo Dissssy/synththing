@@ -132,7 +132,7 @@ impl App {
             UpdateState::Available(release) => {
                 ui.heading(format!("synththing v{} is available", release.version));
                 ui.weak(format!("You have v{current}."));
-                if !release.notes.trim().is_empty() || release.merged.is_some() {
+                if !release.notes.trim().is_empty() || release.changes.is_some() {
                     ui.add_space(4.0);
                     if page {
                         release_notes_ui(ui, release);
@@ -463,24 +463,38 @@ impl App {
     }
 }
 
-/// A release's notes, and for a nightly the pull requests merged since
-/// this build, each linking to its page.
+/// What an offered update brings: for a nightly the pull requests not in
+/// a release yet, then its changelog's versions newer than this build's,
+/// each linking to its page. Its notes, when its changelog couldn't be
+/// read.
 fn release_notes_ui(ui: &mut egui::Ui, release: &updater::Release) {
-    if !release.notes.trim().is_empty() {
-        ui.label(release.notes.trim());
-    }
-    let Some(merged) = &release.merged else { return };
-    ui.add_space(4.0);
-    if merged.is_empty() {
-        ui.weak("No pull requests merged since your build.");
+    let Some(changes) = &release.changes else {
+        if !release.notes.trim().is_empty() {
+            ui.label(release.notes.trim());
+        }
         return;
-    }
-    ui.strong(format!("Merged since your build ({}), newest first:", merged.len()));
-    for pr in merged {
-        ui.horizontal_wrapped(|ui| {
-            ui.hyperlink_to(format!("#{}", pr.number), pr.url());
-            ui.label(&pr.title);
+    };
+    if let Some(unreleased) = &changes.unreleased {
+        let hint = format!("Merged since {}, newest first", unreleased.since);
+        settings_group("Not released yet").icon("git-merge").hint(&hint).show(ui, |ui| match &unreleased.merged {
+            Some(merged) if merged.is_empty() => {
+                setting_row(ui, |ui| ui.weak("No pull requests merged since then."));
+            }
+            Some(merged) => {
+                for pr in merged {
+                    setting_row(ui, |ui| {
+                        ui.hyperlink_to(format!("#{}", pr.number), pr.url());
+                        ui.label(&pr.title);
+                    });
+                }
+            }
+            None => {
+                setting_row(ui, |ui| ui.weak("Couldn't list them: see the release page."));
+            }
         });
+    }
+    for version in &changes.releases {
+        changelog_release_ui(ui, version, true);
     }
 }
 
@@ -512,41 +526,48 @@ pub(super) fn changelog_body_ui(ui: &mut egui::Ui, since: Option<changelog::Vers
                 );
             });
         }
-        let (title, date) = match release.version {
-            Some(v) => {
-                let date = release.heading.split_once('(').map(|(_, d)| d.trim_end_matches(')').trim().to_string());
-                (format!("v{}", changelog::format_version(v)), date)
-            }
-            None => (release.heading.clone(), Some("Not in a release yet".to_string())),
-        };
-        let mut group = settings_group(&title).icon("tag");
-        if let Some(date) = &date {
-            group = group.hint(date);
+        changelog_release_ui(ui, release, new);
+    }
+}
+
+/// One version of a changelog as a settings group: its groups (Added,
+/// Changed, Fixed) as dividers and a row per line. Folds away by its
+/// heading unless `open`.
+fn changelog_release_ui(ui: &mut egui::Ui, release: &changelog::Release, open: bool) {
+    let (title, date) = match release.version {
+        Some(v) => {
+            let date = release.heading.split_once('(').map(|(_, d)| d.trim_end_matches(')').trim().to_string());
+            (format!("v{}", changelog::format_version(v)), date)
         }
-        if !new {
-            group = group.closable(&release.heading);
-        }
-        group.show(ui, |ui| {
-            for block in &release.blocks {
-                match block {
-                    changelog::Block::Heading(text) => {
-                        setting_row(ui, |ui| {
-                            let kind = match text.as_str() {
-                                "Added" | "New" => "plus-circle",
-                                "Changed" => "arrows-clockwise",
-                                "Fixed" => "wrench",
-                                "Removed" => "minus-circle",
-                                _ => "dot-outline",
-                            };
-                            ui.label(egui::RichText::new(icon(kind)).color(ui.visuals().weak_text_color()));
-                            ui.strong(text);
-                        });
-                    }
-                    changelog::Block::Bullet(text) | changelog::Block::Paragraph(text) => {
-                        setting_row(ui, |ui| ui.label(inline_code_job(ui, "", text)));
-                    }
+        None => (release.heading.clone(), Some("Not in a release yet".to_string())),
+    };
+    let mut group = settings_group(&title).icon("tag");
+    if let Some(date) = &date {
+        group = group.hint(date);
+    }
+    if !open {
+        group = group.closable(&release.heading);
+    }
+    group.show(ui, |ui| {
+        for block in &release.blocks {
+            match block {
+                changelog::Block::Heading(text) => {
+                    setting_row(ui, |ui| {
+                        let kind = match text.as_str() {
+                            "Added" | "New" => "plus-circle",
+                            "Changed" => "arrows-clockwise",
+                            "Fixed" => "wrench",
+                            "Removed" => "minus-circle",
+                            _ => "dot-outline",
+                        };
+                        ui.label(egui::RichText::new(icon(kind)).color(ui.visuals().weak_text_color()));
+                        ui.strong(text);
+                    });
+                }
+                changelog::Block::Bullet(text) | changelog::Block::Paragraph(text) => {
+                    setting_row(ui, |ui| ui.label(inline_code_job(ui, "", text)));
                 }
             }
-        });
-    }
+        }
+    });
 }

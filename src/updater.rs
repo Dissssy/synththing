@@ -25,6 +25,8 @@ use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use crate::changelog;
+
 /// `owner/name` of the GitHub repository releases come from.
 pub const REPO: &str = "Dissssy/synththing";
 /// The release asset for this platform (named by the release workflow).
@@ -78,13 +80,33 @@ pub struct Release {
     pub commit: Option<String>,
     pub notes: String,
     pub page_url: String,
-    /// For a nightly offered as an update: the pull requests merged since
-    /// this build, newest first. `None` when they couldn't be listed.
-    pub merged: Option<Vec<MergedPr>>,
+    /// What it brings, when it's offered as an update and its changelog
+    /// could be read.
+    pub changes: Option<Changes>,
     asset_url: String,
     asset_size: u64,
     /// Hex SHA-256 of the asset, when GitHub provides one.
     asset_sha256: Option<String>,
+}
+
+/// What an update brings over this build.
+#[derive(Clone, Debug)]
+pub struct Changes {
+    /// Its changelog's versions newer than the release this build is
+    /// (or is built on), newest first.
+    pub releases: Vec<changelog::Release>,
+    /// For a nightly: what's merged since the newest release in it.
+    pub unreleased: Option<Unreleased>,
+}
+
+/// A nightly's changes not in a release yet.
+#[derive(Clone, Debug)]
+pub struct Unreleased {
+    /// What they're counted from: "v2.6.0", or "your build".
+    pub since: String,
+    /// The pull requests merged, newest first; `None` when they couldn't
+    /// be listed.
+    pub merged: Option<Vec<MergedPr>>,
 }
 
 /// A pull request merged into master.
@@ -157,9 +179,7 @@ impl Updater {
             let state = match fetch_for(&track) {
                 Ok(Some(mut release)) if is_update(&track, &release) => {
                     log::info!("update available: v{}", release.version);
-                    if release.tag == "nightly" {
-                        release.merged = merged_since_this_build(&release);
-                    }
+                    release.changes = changes_in(&release);
                     UpdateState::Available(release)
                 }
                 Ok(Some(release)) => {
@@ -265,23 +285,37 @@ struct ApiCommitDetail {
     message: String,
 }
 
-/// The pull requests merged between this build and `release` (a nightly),
-/// newest first. This build is its commit, or for a release its tag; a
-/// local build's version says nothing about what's in it, so it has none.
-fn merged_since_this_build(release: &Release) -> Option<Vec<MergedPr>> {
-    let head = release.commit.as_deref()?;
-    let base = match crate::build_info::commit() {
-        Some(commit) => commit.to_string(),
-        None if crate::build_info::LOCAL => return None,
-        None => format!("v{}", crate::build_info::VERSION),
-    };
-    match merged_between(&base, head) {
-        Ok(merged) => Some(merged),
+/// What `release` brings over this build: the newer versions in its
+/// changelog, and for a nightly the pull requests merged since the newest
+/// of them (or since this build, when it's already past that). `None` when
+/// its changelog can't be read.
+fn changes_in(release: &Release) -> Option<Changes> {
+    let at = release.commit.as_deref().unwrap_or(&release.tag);
+    let text = match api_get_raw(&format!("contents/CHANGELOG.md?ref={at}")) {
+        Ok(text) => text,
         Err(e) => {
-            log::warn!("couldn't list the pull requests merged since this build: {e:#}");
-            None
+            log::warn!("couldn't read the update's changelog: {e:#}");
+            return None;
         }
-    }
+    };
+    let ours = changelog::current_version();
+    let releases: Vec<changelog::Release> = changelog::parse(&text)
+        .into_iter()
+        .filter(|r| r.version.is_some_and(|v| ours.is_none_or(|ours| v > ours)))
+        .collect();
+    let unreleased = (release.tag == "nightly").then(|| {
+        let head = release.commit.as_deref().unwrap_or(&release.tag);
+        let (base, since) = match (releases.first().and_then(|r| r.version), crate::build_info::commit()) {
+            (Some(newest), _) => (format!("v{}", changelog::format_version(newest)), None),
+            (None, Some(commit)) => (commit.to_string(), Some("your build".to_string())),
+            (None, None) => (format!("v{}", env!("CARGO_PKG_VERSION")), None),
+        };
+        let merged = merged_between(&base, head)
+            .map_err(|e| log::warn!("couldn't list the pull requests merged since {base}: {e:#}"))
+            .ok();
+        Unreleased { since: since.unwrap_or(base), merged }
+    });
+    Some(Changes { releases, unreleased })
 }
 
 /// The pull requests merged in `base..head`, newest first, from the merge
@@ -316,6 +350,16 @@ fn merged_pr(message: &str) -> Option<MergedPr> {
     }
     let (title, number) = first.strip_suffix(')')?.rsplit_once(" (#")?;
     Some(MergedPr { number: number.parse().ok()?, title: title.trim().to_string() })
+}
+
+/// GET `path` from the repository's API as raw text (a file's contents).
+fn api_get_raw(path: &str) -> Result<String> {
+    let url = format!("https://api.github.com/repos/{REPO}/{path}");
+    let mut response = ureq::get(&url)
+        .header("Accept", "application/vnd.github.raw+json")
+        .header("User-Agent", user_agent())
+        .call()?;
+    Ok(response.body_mut().read_to_string()?)
 }
 
 fn fetch_latest() -> Result<Release> {
@@ -425,7 +469,7 @@ fn parse_release(api: ApiRelease) -> Result<Release> {
         commit,
         notes,
         page_url: api.html_url,
-        merged: None,
+        changes: None,
         asset_url: asset.browser_download_url,
         asset_size: asset.size,
         asset_sha256: asset.digest.and_then(|d| d.strip_prefix("sha256:").map(str::to_ascii_lowercase)),
