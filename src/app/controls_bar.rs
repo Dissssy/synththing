@@ -248,8 +248,14 @@ impl App {
         ui.spacing_mut().slider_width = slider;
         ui.scope_builder(zone(0.0, x - gap), |ui| self.controls_slots_ui(ui, view, &left, shapes));
         ui.scope_builder(zone(x, x + middle_w), |ui| self.controls_slots_ui(ui, view, &middle, shapes));
-        let right_x = (width - right_w).max(x + middle_w + gap);
-        ui.scope_builder(zone(right_x, width), |ui| self.controls_slots_ui(ui, view, &right, shapes));
+        // The right section ends at the right edge, as wide as it was drawn
+        // last frame when that's wider than worked out (buttons run a point
+        // or two past their icons' own widths).
+        let drawn_id = ui.scope_id().with("controls_right_drawn");
+        let drawn = ui.data(|d| d.get_temp::<f32>(drawn_id)).unwrap_or(0.0);
+        let right_x = (width - right_w.max(drawn)).max(x + middle_w + gap);
+        let drawn = ui.scope_builder(zone(right_x, width), |ui| self.controls_slots_ui(ui, view, &right, shapes)).response.rect.width();
+        ui.data_mut(|d| d.insert_temp(drawn_id, drawn));
     }
 
     /// Whether a controls bar item has something to show (a tag still

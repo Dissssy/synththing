@@ -233,6 +233,14 @@ pub fn main() -> Result<()> {
     // (the mini player's drawer), each frame waiting half a second for its
     // surface (#332).
     options.wgpu_options.surface.desired_maximum_frame_latency = Some(2);
+    // Mailbox on Windows: a resized window's next frame shows at once
+    // instead of the old one stretched or a gap for a frame. (The app
+    // paces its own repaints, the visualizer at 60 a second, so it doesn't
+    // draw flat out. DX12 and Windows' Vulkan drivers all have it.)
+    #[cfg(windows)]
+    {
+        options.wgpu_options.surface.present_mode = eframe::wgpu::PresentMode::Mailbox;
+    }
     eframe::run_native(
         "synththing",
         options,
