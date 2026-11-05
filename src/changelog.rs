@@ -19,6 +19,7 @@ const CHANGELOG: &str = include_str!("../CHANGELOG.md");
 /// A version number, comparable (`(0, 2, 2)`).
 pub type Version = (u32, u32, u32);
 
+#[derive(Clone, Debug)]
 pub struct Release {
     /// The heading as written: "0.2.2 (2026-10-03)", "Unreleased".
     pub heading: String,
@@ -27,7 +28,7 @@ pub struct Release {
     pub blocks: Vec<Block>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Block {
     /// A group: "New", "Changed", "Fixed".
     Heading(String),
@@ -71,7 +72,10 @@ pub fn previous_version(version: Version) -> Option<Version> {
     releases().iter().filter_map(|r| r.version).find(|&v| v < version)
 }
 
-fn parse(text: &str) -> Vec<Release> {
+/// A changelog's versions with something in them, newest first: this
+/// build's (`releases`), or a newer build's fetched to show what an update
+/// brings.
+pub fn parse(text: &str) -> Vec<Release> {
     let mut releases: Vec<Release> = Vec::new();
     // The paragraph or bullet being built, to join wrapped lines into.
     let mut open = false;

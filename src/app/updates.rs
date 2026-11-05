@@ -8,7 +8,7 @@ use eframe::egui;
 use crate::updater::{self, Track, UpdateState};
 use crate::changelog;
 
-use super::{App, close, confirm_button, flow, icon, inline_code_job, setting_row, settings_group};
+use super::{App, card, card_badge, close, confirm_button, flow, icon, inline_code_job, setting_row, settings_group, status_pill};
 
 impl App {
     /// What the updater follows: this branch build's branch, or canary or
@@ -92,11 +92,11 @@ impl App {
         }
     }
 
-    /// What the update check found, release notes, and installing. On a
-    /// page there's no Close (back leaves), and the release notes aren't
-    /// a scroll area of their own; whether a way out (Close, Not now,
-    /// Skip, Later) was clicked.
-    pub(super) fn updates_body_ui(&mut self, ui: &mut egui::Ui, page: bool) -> bool {
+    /// The Updates page: a card with what the update check found and its
+    /// buttons, then for an update what it brings (its changelog back to
+    /// this version), then branch builds. Whether a way out (Not now,
+    /// Skip, Later, OK) was clicked.
+    pub(super) fn updates_body_ui(&mut self, ui: &mut egui::Ui) -> bool {
         let state = self.updater.state();
         let current = updater::current_version();
         let mut close = false;
@@ -104,124 +104,194 @@ impl App {
             crate::build_info::Channel::Branch(name) => Some(name),
             _ => None,
         };
-        if let Some(name) = branch {
-            ui.label(format!(
-                "This is a test build of the {name} branch. It updates from that branch and keeps settings of \
-                 its own, so your usual synththing isn't affected."
-            ));
+        let accent = ui.visuals().selection.stroke.color;
+        let test_color = egui::Color32::from_rgb(224, 180, 104);
+        let error_color = egui::Color32::from_rgb(220, 90, 90);
+        let (badge, badge_color) = match &state {
+            UpdateState::Idle | UpdateState::Checking => ("arrows-clockwise", accent),
+            UpdateState::UpToDate => ("check-circle", crate::theme::playing_color(ui.ctx())),
+            UpdateState::Available(_) | UpdateState::Downloading { .. } => ("download-simple", accent),
+            UpdateState::Installed(_) => ("check-circle", crate::theme::playing_color(ui.ctx())),
+            UpdateState::Gone => ("git-branch", test_color),
+            UpdateState::Failed(_) => ("warning", error_color),
+        };
+        // What this build follows, said under each card's title.
+        let follows = match branch {
+            Some(name) => format!(
+                "A test build of the {name} branch: it updates from that branch and keeps settings of its own, so \
+                 your usual synththing isn't affected."
+            ),
+            None if self.config.canary_updates() => "Canary updates are on (Preferences > App).".to_string(),
+            None => String::new(),
+        };
+        card(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                card_badge(ui, badge_color.gamma_multiply(0.2), badge, badge_color);
+                ui.add_space(8.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    let title = |ui: &mut egui::Ui, text: &str| {
+                        ui.label(egui::RichText::new(text).size(20.0).strong());
+                    };
+                    match &state {
+                        UpdateState::Idle => {
+                            title(ui, "Updates");
+                            ui.weak(format!("You have v{current}."));
+                        }
+                        UpdateState::Checking => {
+                            ui.horizontal(|ui| {
+                                title(ui, "Checking for updates");
+                                ui.spinner();
+                            });
+                            ui.weak(format!("You have v{current}."));
+                        }
+                        UpdateState::UpToDate => {
+                            title(ui, "You're up to date");
+                            ui.weak(format!("v{current} is the newest."));
+                        }
+                        UpdateState::Available(release) => {
+                            ui.horizontal(|ui| {
+                                title(ui, &format!("v{}", release.version));
+                                match release.tag.as_str() {
+                                    "nightly" => status_pill(ui, "Nightly", test_color),
+                                    tag if tag.starts_with("branch-") => status_pill(ui, "Branch build", test_color),
+                                    _ => {}
+                                }
+                            });
+                            if release.tag == "nightly" {
+                                ui.weak("The newest build from master. For testing: it may be broken.");
+                            }
+                            ui.weak(format!("You have v{current} · {:.0} MB", release.size() as f64 / 1e6));
+                        }
+                        UpdateState::Downloading { release, downloaded } => {
+                            title(ui, &format!("Downloading v{}", release.version));
+                            let total = release.size().max(1);
+                            ui.add(
+                                egui::ProgressBar::new(*downloaded as f32 / total as f32)
+                                    .text(format!("{:.1} / {:.1} MB", *downloaded as f64 / 1e6, total as f64 / 1e6)),
+                            );
+                        }
+                        UpdateState::Installed(version) if cfg!(target_os = "android") => {
+                            title(ui, &format!("Installing v{version}"));
+                            ui.weak("Android asks you to install it; synththing restarts with it.");
+                        }
+                        UpdateState::Installed(version) => {
+                            title(ui, &format!("v{version} is installed"));
+                            ui.weak("It runs the next time synththing starts.");
+                        }
+                        UpdateState::Gone => {
+                            title(ui, "This branch build is gone");
+                            let name = branch.unwrap_or_default();
+                            if cfg!(target_os = "android") {
+                                ui.weak(format!(
+                                    "The {name} branch was merged or deleted, so this app won't get updates any \
+                                     more. Uninstall it when you're done with it."
+                                ));
+                            } else {
+                                ui.weak(format!(
+                                    "The {name} branch was merged or deleted, so this build won't get updates any \
+                                     more. Go back to your usual synththing, and remove this one there, under Help > \
+                                     Check for updates > Branch builds."
+                                ));
+                            }
+                        }
+                        UpdateState::Failed(error) => {
+                            title(ui, "Something went wrong");
+                            ui.colored_label(error_color, error);
+                        }
+                    }
+                    if !follows.is_empty() && !matches!(state, UpdateState::Gone) {
+                        ui.weak(&follows);
+                    }
+                    ui.add_space(4.0);
+                    close = self.update_card_buttons_ui(ui, &state);
+                });
+            });
+        });
+        if let UpdateState::Available(release) = &state {
             ui.add_space(4.0);
-        } else if self.config.canary_updates() {
-            ui.weak("Canary updates: the newest build from master (Preferences > App).");
-            ui.add_space(4.0);
+            release_changes_ui(ui, release, current);
         }
-        match &state {
+        if branch.is_none() {
+            self.branch_builds_ui(ui);
+        } else if !cfg!(target_os = "android") {
+            self.recopy_settings_ui(ui);
+        }
+        if let Some((message, error)) = &self.updates_message {
+            if *error {
+                ui.colored_label(error_color, message);
+            } else {
+                ui.label(message);
+            }
+        }
+        close
+    }
+
+    /// The update card's buttons for `state`; whether a way out was
+    /// clicked.
+    fn update_card_buttons_ui(&mut self, ui: &mut egui::Ui, state: &UpdateState) -> bool {
+        let mut close = false;
+        ui.horizontal_wrapped(|ui| match state {
             UpdateState::Idle => {
                 if ui.button("Check for updates").clicked() {
                     self.updater.check(self.update_track());
                 }
             }
-            UpdateState::Checking => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Checking for updates...");
-                });
-            }
             UpdateState::UpToDate => {
-                ui.label(format!("You're on the latest version (v{current})."));
+                if ui.button("Check again").clicked() {
+                    self.updater.check(self.update_track());
+                }
+            }
+            UpdateState::Failed(_) => {
+                if ui.button("Try again").clicked() {
+                    self.updater.check(self.update_track());
+                }
             }
             UpdateState::Available(release) => {
-                ui.heading(format!("synththing v{} is available", release.version));
-                ui.weak(format!("You have v{current}."));
-                if !release.notes.trim().is_empty() {
-                    ui.add_space(4.0);
-                    if page {
-                        ui.label(release.notes.trim());
-                    } else {
-                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                            ui.label(release.notes.trim());
-                        });
-                    }
-                }
-                ui.hyperlink_to("Release page", &release.page_url);
-                ui.add_space(6.0);
-                let dev_build = cfg!(debug_assertions);
                 if let Some(announce) = self.android_update_ui(ui) {
                     if announce {
                         // Shown this once: next time, only if there's a newer one.
-                        self.config.skipped_update = Some(release.version.to_string());
-                        if let Err(e) = self.config.save() {
-                            self.status = format!("Couldn't save preferences: {e}");
-                        }
+                        self.skip_update(release);
                         close = true;
                     }
                 } else {
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(!dev_build, egui::Button::new("Install"))
-                            .on_disabled_hover_text(
-                                "This is a development build (cargo run); updates install into release builds.",
-                            )
-                            .clicked()
-                        {
-                            self.updater.install(release.clone());
-                        }
-                        if ui.button("Skip this version").clicked() {
-                            self.config.skipped_update = Some(release.version.to_string());
-                            if let Err(e) = self.config.save() {
-                                self.status = format!("Couldn't save preferences: {e}");
-                            }
-                            close = true;
-                        }
-                        if ui.button("Not now").clicked() {
-                            close = true;
-                        }
-                    });
+                    if ui
+                        .add_enabled(!cfg!(debug_assertions), egui::Button::new("Install"))
+                        .on_disabled_hover_text("This is a development build (cargo run); updates install into release builds.")
+                        .clicked()
+                    {
+                        self.updater.install(release.clone());
+                    }
+                    if ui.button("Skip this version").clicked() {
+                        self.skip_update(release);
+                        close = true;
+                    }
+                    if ui.button("Not now").clicked() {
+                        close = true;
+                    }
                 }
+                ui.hyperlink_to("Release page", &release.page_url);
             }
-            UpdateState::Downloading { release, downloaded } => {
-                ui.label(format!("Downloading v{}...", release.version));
-                let total = release.size().max(1);
-                ui.add(
-                    egui::ProgressBar::new(*downloaded as f32 / total as f32)
-                        .text(format!("{:.1} / {:.1} MB", *downloaded as f64 / 1e6, total as f64 / 1e6)),
-                );
-            }
-            UpdateState::Installed(version) if cfg!(target_os = "android") => {
-                ui.label(format!("Android asks you to install v{version}; synththing restarts with it."));
+            UpdateState::Installed(_) if cfg!(target_os = "android") => {
                 if ui.button("OK").clicked() {
                     close = true;
                 }
             }
-            UpdateState::Installed(version) => {
-                ui.label(format!("v{version} is installed. It runs the next time synththing starts."));
-                ui.horizontal(|ui| {
-                    if ui.button("Restart now").clicked() {
-                        match updater::relaunch() {
-                            // (Quit, not close: closing may only hide it in the tray.)
-                            Ok(()) => self.close_with(&ui.ctx().clone(), close::CloseAction::Quit),
-                            Err(e) => self.updates_message = Some((format!("Couldn't restart: {e}"), true)),
-                        }
+            UpdateState::Installed(_) => {
+                if ui.button("Restart now").clicked() {
+                    match updater::relaunch() {
+                        // (Quit, not close: closing may only hide it in the tray.)
+                        Ok(()) => self.close_with(&ui.ctx().clone(), close::CloseAction::Quit),
+                        Err(e) => self.updates_message = Some((format!("Couldn't restart: {e}"), true)),
                     }
-                    if ui.button("Later").clicked() {
-                        close = true;
-                    }
-                });
-            }
-            UpdateState::Gone if cfg!(target_os = "android") => {
-                let name = branch.unwrap_or_default();
-                ui.label(format!(
-                    "The {name} branch's build is gone: the branch was merged or deleted, so this app won't get \
-                     updates any more. Uninstall it when you're done with it."
-                ));
+                }
+                if ui.button("Later").clicked() {
+                    close = true;
+                }
             }
             UpdateState::Gone => {
-                let name = branch.unwrap_or_default();
-                ui.label(format!(
-                    "The {name} branch's build is gone: the branch was merged or deleted, so this build won't \
-                     get updates any more. Go back to your usual synththing, and remove this one there, under \
-                     Help > Check for updates > Branch builds."
-                ));
-                if let Some(stable) = crate::channels::installed_by()
+                if !cfg!(target_os = "android")
+                    && let Some(stable) = crate::channels::installed_by()
                     && ui.button("Open the usual synththing").clicked()
                 {
                     match std::process::Command::new(&stable).spawn() {
@@ -232,41 +302,17 @@ impl App {
                     }
                 }
             }
-            UpdateState::Failed(error) => {
-                ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
-                if ui.button("Try again").clicked() {
-                    self.updater.check(self.update_track());
-                }
-            }
-        }
-        if branch.is_none() {
-            ui.add_space(8.0);
-            self.branch_builds_ui(ui);
-        } else if !cfg!(target_os = "android") {
-            ui.add_space(8.0);
-            self.recopy_settings_ui(ui);
-        }
-        if let Some((message, error)) = &self.updates_message {
-            ui.add_space(6.0);
-            if *error {
-                ui.colored_label(egui::Color32::from_rgb(220, 90, 90), message);
-            } else {
-                ui.label(message);
-            }
-        }
-        // Every state but Available has its own way out above, so a
-        // plain Close for the rest. (A download carries on in the
-        // background if this closes, and Help > Check for updates
-        // shows how it went.)
-        if !page && !matches!(state, UpdateState::Available(_) | UpdateState::Installed(_)) {
-            ui.add_space(8.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if ui.button("Close").clicked() {
-                    close = true;
-                }
-            });
-        }
+            UpdateState::Checking | UpdateState::Downloading { .. } => {}
+        });
         close
+    }
+
+    /// Don't offer `release` again: only a newer one.
+    fn skip_update(&mut self, release: &updater::Release) {
+        self.config.skipped_update = Some(release.version.to_string());
+        if let Err(e) = self.config.save() {
+            self.status = format!("Couldn't save preferences: {e}");
+        }
     }
 
     /// In a branch build's Updates window: start its settings over from a
@@ -301,122 +347,117 @@ impl App {
         });
     }
 
-    /// The Updates window's Branch builds section: trying a feature before
-    /// it's merged. Each installs into a folder of its own with a copy of
-    /// the settings, or on Android as an app of its own (`channels.rs`), so
-    /// this install isn't touched.
+    /// Updates' Branch builds group: trying a feature before it's merged.
+    /// Each installs into a folder of its own with a copy of the settings,
+    /// or on Android as an app of its own (`channels.rs`), so this install
+    /// isn't touched. The list is fetched when Updates opens, and the group
+    /// is shown only once there's a build (or an installed one), folded
+    /// shut at first.
     pub(super) fn branch_builds_ui(&mut self, ui: &mut egui::Ui) {
-        let response = egui::CollapsingHeader::new("Branch builds").id_salt("branch_builds").show(ui, |ui| {
-            if cfg!(target_os = "android") {
-                ui.label(
-                    "Try a feature before it's merged. Each branch build installs as an app of its own, with \
-                     settings of its own, and its online features are off. This synththing isn't touched.",
-                );
-            } else {
-                ui.label(
-                    "Try a feature before it's merged. Each branch build installs separately, starting with a \
-                     copy of your settings, and its online features are off. This synththing isn't touched.",
-                );
+        if matches!(self.branches.list(), crate::channels::ListState::Idle) {
+            self.branches.refresh();
+        }
+        let installed = crate::channels::installed();
+        let list = self.branches.list();
+        let install = self.branches.install_state();
+        let builds: &[updater::Release] = match &list {
+            crate::channels::ListState::Loaded(builds) => builds,
+            _ => &[],
+        };
+        // Every branch with a build, then installed ones whose build is gone.
+        let mut rows: Vec<(String, Option<&updater::Release>)> = builds.iter().map(|b| (b.tag.clone(), Some(b))).collect();
+        for channel in &installed {
+            if !builds.iter().any(|b| &b.tag == channel) {
+                rows.push((channel.clone(), None));
             }
-            // Android has to let this app install others first.
-            #[cfg(target_os = "android")]
-            let can_install = crate::android::can_install_packages();
-            #[cfg(not(target_os = "android"))]
-            let can_install = true;
+        }
+        if rows.is_empty() && matches!(install, crate::channels::InstallState::Idle) {
+            return;
+        }
+        let installing = matches!(install, crate::channels::InstallState::Installing { .. });
+        // Android has to let this app install others first.
+        #[cfg(target_os = "android")]
+        let can_install = crate::android::can_install_packages();
+        #[cfg(not(target_os = "android"))]
+        let can_install = true;
+        let hint = format!("{} to try before they're merged", rows.len());
+        let busy = self.branches.busy();
+        let branches = self.branches.clone();
+        let mut refresh = |ui: &mut egui::Ui| {
+            if ui.add_enabled(!busy, super::row_icon_button(ui, "arrows-clockwise")).on_hover_text("Look again").clicked() {
+                branches.refresh();
+            }
+        };
+        settings_group("Branch builds").icon("git-branch").hint(&hint).closable("branch_builds").buttons(&mut refresh).show(ui, |ui| {
+            setting_row(ui, |ui| {
+                ui.weak(if cfg!(target_os = "android") {
+                    "Each branch build installs as an app of its own, with settings of its own, and its online \
+                     features are off. This synththing isn't touched."
+                } else {
+                    "Each branch build installs separately, starting with a copy of your settings, and its online \
+                     features are off. This synththing isn't touched."
+                })
+            });
             #[cfg(target_os = "android")]
             if !can_install {
-                ui.label("Android doesn't allow synththing to install apps yet.");
-                if ui.button("Allow it...").on_hover_text("Settings > Install unknown apps, for synththing").clicked() {
-                    crate::android::open_install_settings();
-                }
-            }
-            ui.add_space(4.0);
-            let installed = crate::channels::installed();
-            let list = self.branches.list();
-            let install = self.branches.install_state();
-            let installing = matches!(install, crate::channels::InstallState::Installing { .. });
-            let builds: &[updater::Release] = match &list {
-                crate::channels::ListState::Loaded(builds) => builds,
-                _ => &[],
-            };
-            match &list {
-                crate::channels::ListState::Idle => {}
-                crate::channels::ListState::Loading => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("Looking for branch builds...");
-                    });
-                }
-                crate::channels::ListState::Failed(error) => {
-                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
-                }
-                crate::channels::ListState::Loaded(builds) if builds.is_empty() && installed.is_empty() => {
-                    ui.weak("There are no branch builds right now.");
-                }
-                crate::channels::ListState::Loaded(_) => {}
-            }
-            // Every branch with a build, then installed ones whose build is
-            // gone.
-            let mut rows: Vec<(String, Option<&updater::Release>)> =
-                builds.iter().map(|b| (b.tag.clone(), Some(b))).collect();
-            for channel in &installed {
-                if !builds.iter().any(|b| &b.tag == channel) {
-                    rows.push((channel.clone(), None));
-                }
-            }
-            // A grid, or on a narrow screen (a phone's) each branch's name
-            // over its version and buttons.
-            let narrow = ui.available_width() < 480.0;
-            if narrow {
-                for (channel, build) in rows {
-                    ui.strong(crate::channels::branch_name(&channel));
-                    ui.horizontal_wrapped(|ui| self.branch_build_row_ui(ui, &channel, build, &installed, installing, can_install));
-                    ui.add_space(4.0);
-                }
-            } else {
-                egui::Grid::new("branch_builds_grid").num_columns(3).spacing([12.0, 4.0]).show(ui, |ui| {
-                    for (channel, build) in rows {
-                        ui.strong(crate::channels::branch_name(&channel));
-                        self.branch_build_row_ui(ui, &channel, build, &installed, installing, can_install);
-                        ui.end_row();
+                setting_row(ui, |ui| {
+                    ui.label("Android doesn't allow synththing to install apps yet.");
+                    if ui.button("Allow it...").on_hover_text("Settings > Install unknown apps, for synththing").clicked() {
+                        crate::android::open_install_settings();
                     }
+                });
+            }
+            for (channel, build) in rows {
+                setting_row(ui, |ui| {
+                    ui.strong(crate::channels::branch_name(&channel));
+                    match build {
+                        Some(b) => {
+                            let commit = b.commit.as_deref().map(|c| &c[..c.len().min(7)]).unwrap_or_default();
+                            ui.weak(format!("{} {commit}", b.version)).on_hover_text(b.notes.trim());
+                        }
+                        None => {
+                            ui.weak("its build is gone (merged?)");
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        self.branch_build_buttons_ui(ui, &channel, build, &installed, installing, can_install);
+                    });
                 });
             }
             match &install {
                 crate::channels::InstallState::Idle => {}
                 crate::channels::InstallState::Installing { channel, downloaded, size } => {
-                    ui.label(format!("Installing the {} build...", crate::channels::branch_name(channel)));
-                    ui.add(
-                        egui::ProgressBar::new(*downloaded as f32 / (*size).max(1) as f32)
-                            .text(format!("{:.1} / {:.1} MB", *downloaded as f64 / 1e6, *size as f64 / 1e6)),
-                    );
+                    setting_row(ui, |ui| {
+                        ui.label(format!("Installing the {} build", crate::channels::branch_name(channel)));
+                        ui.add(
+                            egui::ProgressBar::new(*downloaded as f32 / (*size).max(1) as f32)
+                                .text(format!("{:.1} / {:.1} MB", *downloaded as f64 / 1e6, *size as f64 / 1e6)),
+                        );
+                    });
                 }
                 crate::channels::InstallState::Done(channel) if cfg!(target_os = "android") => {
-                    ui.label(format!(
-                        "Android asks you to install the {} build. Once it's in, open it here or from your apps.",
-                        crate::channels::branch_name(channel)
-                    ));
+                    setting_row(ui, |ui| {
+                        ui.label(format!(
+                            "Android asks you to install the {} build. Once it's in, open it here or from your apps.",
+                            crate::channels::branch_name(channel)
+                        ))
+                    });
                 }
                 crate::channels::InstallState::Done(channel) => {
-                    ui.label(format!("The {} build is installed and starting.", crate::channels::branch_name(channel)));
+                    setting_row(ui, |ui| {
+                        ui.label(format!("The {} build is installed and starting.", crate::channels::branch_name(channel)))
+                    });
                 }
                 crate::channels::InstallState::Failed(error) => {
-                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
+                    setting_row(ui, |ui| ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error));
                 }
             }
-            if ui.add_enabled(!self.branches.busy(), egui::Button::new("Refresh")).clicked() {
-                self.branches.refresh();
-            }
         });
-        // The list is fetched the first time the section opens.
-        if response.body_returned.is_some() && matches!(self.branches.list(), crate::channels::ListState::Idle) {
-            self.branches.refresh();
-        }
     }
 
-    /// A branch build's version and its buttons (Install, or Open and
-    /// Remove), side by side.
-    pub(super) fn branch_build_row_ui(
+    /// A branch build's buttons, in a right-to-left layout: Install, or
+    /// Open and Remove.
+    fn branch_build_buttons_ui(
         &mut self,
         ui: &mut egui::Ui,
         channel: &str,
@@ -425,44 +466,76 @@ impl App {
         installing: bool,
         can_install: bool,
     ) {
-        match build {
-            Some(b) => {
-                let commit = b.commit.as_deref().map(|c| &c[..c.len().min(7)]).unwrap_or_default();
-                ui.weak(format!("{} {commit}", b.version)).on_hover_text(b.notes.trim());
+        if installed.iter().any(|c| c == channel) {
+            if ui
+                .add_enabled_ui(!installing, |ui| {
+                    confirm_button(ui, ("branch_build", channel), egui::Button::new("Remove"), "Delete this branch build and its settings", "Really remove?")
+                })
+                .inner
+            {
+                let name = crate::channels::branch_name(channel);
+                self.updates_message = Some(match crate::channels::remove(channel) {
+                    Ok(()) if cfg!(target_os = "android") => (format!("Android asks you to uninstall the {name} build."), false),
+                    Ok(()) => (format!("Removed the {name} build."), false),
+                    Err(e) => (format!("{e:#}"), true),
+                });
             }
-            None => {
-                ui.weak("its build is gone (merged?)");
+            if ui.add_enabled(!installing, egui::Button::new("Open")).clicked()
+                && let Err(e) = crate::channels::launch(channel)
+            {
+                self.updates_message = Some((format!("{e:#}"), true));
             }
+        } else if let Some(b) = build
+            && ui.add_enabled(!installing && can_install, egui::Button::new("Install")).clicked()
+        {
+            self.branches.install(b.clone());
         }
-        ui.horizontal(|ui| {
-            if installed.iter().any(|c| c == channel) {
-                if ui.add_enabled(!installing, egui::Button::new("Open")).clicked()
-                    && let Err(e) = crate::channels::launch(channel)
-                {
-                    self.updates_message = Some((format!("{e:#}"), true));
-                }
-                if ui
-                    .add_enabled_ui(!installing, |ui| {
-                        confirm_button(ui, ("branch_build", channel), egui::Button::new("Remove"), "Delete this branch build and its settings", "Really remove?")
-                    })
-                    .inner
-                {
-                    let name = crate::channels::branch_name(channel);
-                    self.updates_message = Some(match crate::channels::remove(channel) {
-                        Ok(()) if cfg!(target_os = "android") => {
-                            (format!("Android asks you to uninstall the {name} build."), false)
-                        }
-                        Ok(()) => (format!("Removed the {name} build."), false),
-                        Err(e) => (format!("{e:#}"), true),
+    }
+}
+
+/// What an offered update brings: for a nightly the pull requests not in
+/// a release yet, then its changelog's versions newer than this build's,
+/// down to a marker for the version you have. Its notes, when its
+/// changelog couldn't be read.
+fn release_changes_ui(ui: &mut egui::Ui, release: &updater::Release, current: semver::Version) {
+    let Some(changes) = &release.changes else {
+        if !release.notes.trim().is_empty() {
+            ui.label(release.notes.trim());
+        }
+        return;
+    };
+    if let Some(unreleased) = &changes.unreleased {
+        let hint = format!("Merged since {}, newest first", unreleased.since);
+        settings_group("Not in a release yet").icon("git-merge").hint(&hint).show(ui, |ui| match &unreleased.merged {
+            Some(merged) if merged.is_empty() => {
+                setting_row(ui, |ui| ui.weak("No pull requests merged since then."));
+            }
+            Some(merged) => {
+                for pr in merged {
+                    setting_row(ui, |ui| {
+                        ui.hyperlink_to(format!("#{}", pr.number), pr.url());
+                        ui.label(&pr.title);
                     });
                 }
-            } else if let Some(b) = build
-                && ui.add_enabled(!installing && can_install, egui::Button::new("Install")).clicked()
-            {
-                self.branches.install(b.clone());
+            }
+            None => {
+                setting_row(ui, |ui| ui.weak("Couldn't list them: see the release page."));
             }
         });
     }
+    for version in &changes.releases {
+        changelog_release_ui(ui, version, true);
+    }
+    you_had_ui(ui, &format!("You have v{current}"));
+}
+
+/// Where the version you had (or have) starts, in a changelog.
+fn you_had_ui(ui: &mut egui::Ui, text: &str) {
+    let color = ui.visuals().selection.stroke.color;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(icon("map-pin")).color(color));
+        ui.label(egui::RichText::new(text).color(color));
+    });
 }
 
 /// The changelog in the settings look: a section per version, newest
@@ -485,49 +558,50 @@ pub(super) fn changelog_body_ui(ui: &mut egui::Ui, since: Option<changelog::Vers
             && !marked
         {
             marked = true;
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(icon("map-pin")).color(ui.visuals().selection.stroke.color));
-                ui.label(
-                    egui::RichText::new(format!("You had v{} before this update", changelog::format_version(since)))
-                        .color(ui.visuals().selection.stroke.color),
-                );
-            });
+            you_had_ui(ui, &format!("You had v{} before this update", changelog::format_version(since)));
         }
-        let (title, date) = match release.version {
-            Some(v) => {
-                let date = release.heading.split_once('(').map(|(_, d)| d.trim_end_matches(')').trim().to_string());
-                (format!("v{}", changelog::format_version(v)), date)
-            }
-            None => (release.heading.clone(), Some("Not in a release yet".to_string())),
-        };
-        let mut group = settings_group(&title).icon("tag");
-        if let Some(date) = &date {
-            group = group.hint(date);
+        changelog_release_ui(ui, release, new);
+    }
+}
+
+/// One version of a changelog as a settings group: its groups (Added,
+/// Changed, Fixed) as dividers and a row per line. Folds away by its
+/// heading unless `open`.
+fn changelog_release_ui(ui: &mut egui::Ui, release: &changelog::Release, open: bool) {
+    let (title, date) = match release.version {
+        Some(v) => {
+            let date = release.heading.split_once('(').map(|(_, d)| d.trim_end_matches(')').trim().to_string());
+            (format!("v{}", changelog::format_version(v)), date)
         }
-        if !new {
-            group = group.closable(&release.heading);
-        }
-        group.show(ui, |ui| {
-            for block in &release.blocks {
-                match block {
-                    changelog::Block::Heading(text) => {
-                        setting_row(ui, |ui| {
-                            let kind = match text.as_str() {
-                                "Added" | "New" => "plus-circle",
-                                "Changed" => "arrows-clockwise",
-                                "Fixed" => "wrench",
-                                "Removed" => "minus-circle",
-                                _ => "dot-outline",
-                            };
-                            ui.label(egui::RichText::new(icon(kind)).color(ui.visuals().weak_text_color()));
-                            ui.strong(text);
-                        });
-                    }
-                    changelog::Block::Bullet(text) | changelog::Block::Paragraph(text) => {
-                        setting_row(ui, |ui| ui.label(inline_code_job(ui, "", text)));
-                    }
+        None => (release.heading.clone(), Some("Not in a release yet".to_string())),
+    };
+    let mut group = settings_group(&title).icon("tag");
+    if let Some(date) = &date {
+        group = group.hint(date);
+    }
+    if !open {
+        group = group.closable(&release.heading);
+    }
+    group.show(ui, |ui| {
+        for block in &release.blocks {
+            match block {
+                changelog::Block::Heading(text) => {
+                    setting_row(ui, |ui| {
+                        let kind = match text.as_str() {
+                            "Added" | "New" => "plus-circle",
+                            "Changed" => "arrows-clockwise",
+                            "Fixed" => "wrench",
+                            "Removed" => "minus-circle",
+                            _ => "dot-outline",
+                        };
+                        ui.label(egui::RichText::new(icon(kind)).color(ui.visuals().weak_text_color()));
+                        ui.strong(text);
+                    });
+                }
+                changelog::Block::Bullet(text) | changelog::Block::Paragraph(text) => {
+                    setting_row(ui, |ui| ui.label(inline_code_job(ui, "", text)));
                 }
             }
-        });
-    }
+        }
+    });
 }
