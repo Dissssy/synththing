@@ -220,6 +220,9 @@ impl App {
         };
         ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop));
+        // (Without a maximize button, a double-click on what it's dragged
+        // by doesn't maximize it, as Windows does for a title bar.)
+        ctx.send_viewport_cmd(egui::ViewportCommand::EnableButtons { close: true, minimized: false, maximize: false });
         mini.size_limits(ctx);
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(at));
@@ -243,6 +246,7 @@ impl App {
         }
         self.mini.picking = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
+        ctx.send_viewport_cmd(egui::ViewportCommand::EnableButtons { close: true, minimized: true, maximize: true });
         ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(egui::Vec2::INFINITY));
         ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(MIN_WINDOW));
         // (Checked again at the main window's scale: `keep_min_window`.)
@@ -263,6 +267,11 @@ impl App {
         if self.mini.taskbar_frames > 0 {
             self.mini.taskbar_frames -= 1;
             show_in_taskbar(self.api.window, false);
+        }
+        // Never maximized as the mini player (Windows maximizes a window
+        // dragged by a double-click).
+        if ctx.input(|i| i.viewport().maximized == Some(true)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
         }
         if let Some((cursor, frames)) = self.mini.anchor {
             // Its own scale, now it's on its monitor (see `SETTLE_FRAMES`).
