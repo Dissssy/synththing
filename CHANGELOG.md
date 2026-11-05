@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Windows: Preferences > App > Window picks what draws the window, DirectX 12 (the default) or Vulkan, from the next launch. Vulkan helps where DirectX 12 makes a monitor flicker.
 - An offered update shows what it brings: its changelog back to your version, and for a nightly the pull requests merged since the last release, newest first, each linking to its page.
 - Updates is laid out like the rest of the app: a card on top says what the check found (the version, Nightly or Branch build, the size) with its buttons, and under it what the update brings, in the changelog's look, down to a marker for the version you have.
 
