@@ -35,10 +35,12 @@ impl App {
     /// right-click brings the window back.
     pub(super) fn handle_tray(&mut self, ctx: &egui::Context) {
         let Some(tray) = &self.tray else { return };
-        let (clicks, corner) = (tray.clicks(), tray.corner());
+        let clicks = tray.clicks();
         let native = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0) * ctx.zoom_factor();
+        // (Only when it's needed: asking where the icon is waits on the
+        // taskbar.)
         if std::mem::take(&mut self.open_mini_at_start) {
-            match corner {
+            match tray.corner() {
                 Some(corner) => self.open_mini(ctx, corner, native),
                 None => self.show_window(ctx),
             }
