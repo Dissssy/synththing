@@ -264,7 +264,7 @@ impl App {
                 changelog_body_ui(ui, since);
                 false
             }
-            Step::Update => self.updates_body_ui(ui, true),
+            Step::Update => self.updates_body_ui(ui),
             #[cfg(windows)]
             Step::Install => {
                 self.install_step_ui(ui);

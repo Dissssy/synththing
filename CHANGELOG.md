@@ -6,6 +6,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Added
 - An offered update shows what it brings: its changelog back to your version, and for a nightly the pull requests merged since the last release, newest first, each linking to its page.
+- Updates is laid out like the rest of the app: a card on top says what the check found (the version, Nightly or Branch build, the size) with its buttons, and under it what the update brings, in the changelog's look, down to a marker for the version you have.
 
 ### Fixed
 - Usage data no longer counts what an older version logged under the version you updated to: counts left unsent at an update are sent under the version they came from, right after the update.
