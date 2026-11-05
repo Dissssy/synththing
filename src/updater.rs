@@ -2,8 +2,8 @@
 //!
 //! Releases are built by `.github/workflows/release.yml` whenever a version
 //! tag (`vX.Y.Z`, made by `cargo release`) is pushed, and each carries the
-//! Windows exe as `ASSET_NAME`. The app asks the GitHub API for the latest
-//! release on a background thread, compares it with its own version, and if
+//! Windows exe as `ASSET_NAME`. The app asks the GitHub API for the newest
+//! release with its platform's file on a background thread, compares it with its own version, and if
 //! it's newer (and the user agrees) downloads it, checks it against the
 //! SHA-256 GitHub records for the asset, and swaps it in for the running
 //! exe. The new version runs from the next launch (or "Restart now").
@@ -321,8 +321,6 @@ fn changes_in(release: &Release) -> Option<Changes> {
 /// The pull requests merged in `base..head`, newest first, from the merge
 /// commits GitHub's compare lists, through every page up to `MAX_PAGES`.
 fn merged_between(base: &str, head: &str) -> Result<Vec<MergedPr>> {
-    const PER_PAGE: usize = 100;
-    const MAX_PAGES: usize = 10;
     let mut merged = Vec::new();
     for page in 1..=MAX_PAGES {
         let comparison: ApiComparison = api_get(&format!("compare/{base}...{head}?per_page={PER_PAGE}&page={page}"))?
@@ -362,10 +360,45 @@ fn api_get_raw(path: &str) -> Result<String> {
     Ok(response.body_mut().read_to_string()?)
 }
 
+/// The newest release (not a draft or prerelease) that has this platform's
+/// file. A release can go out without one platform's file (the release
+/// workflow doesn't hold the rest back for a failed Android build), so this
+/// goes back through the releases rather than taking `/releases/latest`.
 fn fetch_latest() -> Result<Release> {
-    // `/releases/latest` skips drafts and prereleases already.
-    let api: ApiRelease = api_get("releases/latest")?.ok_or_else(|| anyhow!("no releases published yet"))?;
-    parse_release(api)
+    for page in 1..=MAX_PAGES {
+        let (batch, last) = releases_page(page)?;
+        if let Some(release) = newest_installable(batch) {
+            return Ok(release);
+        }
+        if last {
+            break;
+        }
+    }
+    bail!("no release has {ASSET_NAME} yet")
+}
+
+/// The newest of `releases` that's a release (not a draft or prerelease)
+/// with this platform's file.
+fn newest_installable(releases: Vec<ApiRelease>) -> Option<Release> {
+    releases
+        .into_iter()
+        .filter(|r| !r.draft && !r.prerelease)
+        .filter_map(|r| {
+            let tag = r.tag_name.clone();
+            parse_release(r).map_err(|e| log::info!("skipping {tag}: {e:#}")).ok()
+        })
+        .max_by(|a, b| a.version.cmp(&b.version))
+}
+
+const PER_PAGE: usize = 100;
+const MAX_PAGES: usize = 10;
+
+/// One page of the repository's releases, newest made first, and whether
+/// it's the last.
+fn releases_page(page: usize) -> Result<(Vec<ApiRelease>, bool)> {
+    let batch: Vec<ApiRelease> = api_get(&format!("releases?per_page={PER_PAGE}&page={page}"))?.unwrap_or_default();
+    let last = batch.len() < PER_PAGE;
+    Ok((batch, last))
 }
 
 /// The newest build on `track`. `None`: a branch build's release is gone.
@@ -428,12 +461,9 @@ pub fn branch_channels() -> Result<Vec<String>> {
 }
 
 fn branch_releases() -> Result<Vec<ApiRelease>> {
-    const PER_PAGE: usize = 100;
-    const MAX_PAGES: usize = 10;
     let mut all: Vec<ApiRelease> = Vec::new();
     for page in 1..=MAX_PAGES {
-        let batch: Vec<ApiRelease> = api_get(&format!("releases?per_page={PER_PAGE}&page={page}"))?.unwrap_or_default();
-        let last = batch.len() < PER_PAGE;
+        let (batch, last) = releases_page(page)?;
         all.extend(batch);
         if last {
             break;
@@ -645,6 +675,26 @@ mod tests {
         assert_eq!(pick("0.7.1", "0.7.1-nightly.9"), "release", "the release it led up to");
         assert_eq!(pick("0.8.0", "0.7.1-nightly.9"), "release");
         assert_eq!(newest(None, Some(build("nightly", "0.7.1-nightly.1"))).unwrap().tag, "nightly");
+    }
+
+    /// A release without this platform's file is passed over for the
+    /// newest one that has it; prereleases and drafts never count.
+    #[test]
+    fn stable_skips_releases_without_this_platforms_file() {
+        let mut nightly = api("nightly", vec![asset(ASSET_NAME, None)]);
+        nightly.prerelease = true;
+        nightly.name = Some("2.3.0-nightly.1".into());
+        let mut draft = api("v2.4.0", vec![asset(ASSET_NAME, None)]);
+        draft.draft = true;
+        let releases = vec![
+            nightly,
+            draft,
+            api("v2.2.0", vec![asset("other.zip", None)]),
+            api("v2.0.0", vec![asset(ASSET_NAME, None)]),
+            api("v2.1.0", vec![asset(ASSET_NAME, None)]),
+        ];
+        assert_eq!(newest_installable(releases).unwrap().tag, "v2.1.0");
+        assert!(newest_installable(vec![api("v2.2.0", vec![asset("other.zip", None)])]).is_none());
     }
 
     #[test]
