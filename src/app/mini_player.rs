@@ -50,6 +50,9 @@ const SETTLE_FRAMES: u8 = 3;
 /// frame or two later.
 const POINTER_FRAMES: u8 = 6;
 
+/// The most frames the drawer button waits for its resize to land.
+const RESIZE_FRAMES: u8 = 30;
+
 /// The drawer's pages, down its rail.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Page {
@@ -123,6 +126,9 @@ pub(super) struct MiniPlayer {
     /// no mouse move tells it, so the button under it wouldn't take a
     /// click until the mouse moved.
     pointer_frames: u8,
+    /// Frames left to wait for the drawer's resize to land
+    /// (`RESIZE_FRAMES`); the drawer button waits too.
+    resize_frames: u8,
 }
 
 impl Default for MiniPlayer {
@@ -142,6 +148,7 @@ impl Default for MiniPlayer {
             page: Page::default(),
             picking: false,
             pointer_frames: 0,
+            resize_frames: 0,
             strip_height: STRIP.y,
         }
     }
@@ -264,6 +271,12 @@ impl App {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
             self.mini.anchor = (frames > 1).then_some((cursor, frames - 1));
             ctx.request_repaint();
+        } else if self.mini.resize_frames > 0 {
+            // A drawer resize on its way: until it's landed, the window's
+            // size is the old one.
+            let landed = (ctx.content_rect().size() - self.mini.size()).length() < 1.0;
+            self.mini.resize_frames = if landed { 0 } else { self.mini.resize_frames - 1 };
+            ctx.request_repaint();
         } else if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
             // Remembered where it's left, and how big (dragged by its edges).
             self.mini.at = Some(rect.min);
@@ -343,7 +356,10 @@ impl App {
             (true, false) => ("caret-up", "Close the drawer"),
             (true, true) => ("caret-down", "Close the drawer"),
         };
-        if buttons.add(icon_button(drawer).selected(self.mini.drawer)).on_hover_text(drawer_hover).clicked() {
+        // (Not again until the last resize has landed: resizes piling up
+        // can hang the graphics driver.)
+        let settled = self.mini.resize_frames == 0;
+        if buttons.add_enabled(settled, icon_button(drawer).selected(self.mini.drawer)).on_hover_text(drawer_hover).clicked() {
             self.set_mini_drawer(&ctx, !self.mini.drawer);
         }
         if buttons.add(icon_button("app-window")).on_hover_text("Show synththing: back to the whole window").clicked() {
@@ -408,6 +424,7 @@ impl App {
         self.mini.drawer = open;
         self.mini.size_limits(ctx);
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.mini.size()));
+        self.mini.resize_frames = RESIZE_FRAMES;
     }
 
     /// The drawer: its pages down the rail at the left, the page open
