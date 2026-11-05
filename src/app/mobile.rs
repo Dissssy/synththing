@@ -114,8 +114,6 @@ pub(super) struct Mobile {
     drawer_open: bool,
     /// The Now playing page's controls folded away.
     collapsed: bool,
-    /// The art shown instead of the visualizer (`now_playing_art_ui`).
-    art: crate::album_art::AlbumArt,
     /// What the media session was last told, and when.
     #[cfg(target_os = "android")]
     told: Option<(crate::android::Playback, std::time::Instant)>,
@@ -209,7 +207,7 @@ impl App {
         if crate::android::picture_in_picture() {
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                 if self.config.now_playing_art {
-                    self.now_playing_art_ui(ui, 0.0);
+                    self.now_playing_art_ui(ui, ui.max_rect());
                 } else {
                     self.show_visualizer(ui, &shared.notes, view, DisplayMode::Pip);
                 }
@@ -227,7 +225,7 @@ impl App {
             }
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                 if self.config.now_playing_art {
-                    self.now_playing_art_ui(ui, 24.0);
+                    self.now_playing_art_ui(ui, ui.max_rect().shrink(24.0));
                     return;
                 }
                 self.script_error_ui(ui, false);
@@ -574,33 +572,6 @@ impl App {
             self.devices_button_ui(ui, view);
         });
         ui.add_space(6.0);
-    }
-
-    /// The song playing's art in place of the visualizer, as big as fits
-    /// inside `margin`: its own (its file's, else its album's), else its
-    /// artist's picture, else a tile in its album's (or its name's) color.
-    fn now_playing_art_ui(&mut self, ui: &mut egui::Ui, margin: f32) {
-        let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
-        let title = self.current_title();
-        let art = &mut self.mobile_state.art;
-        art.frame(ui.ctx(), online);
-        let rect = ui.max_rect().shrink(margin);
-        let square = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(rect.width().min(rect.height()).max(0.0)));
-        let Some(path) = self.current_song.clone() else { return };
-        let song = self.songs.get(&path);
-        if art.picture(ui, square, &crate::album_art::Source::of_song(Some(path.clone()), song)) {
-            return;
-        }
-        let facts = song.map(crate::fields::Facts::of);
-        let text = |field| facts.as_ref().and_then(|f| f.text(field)).map(|t| t.into_owned());
-        let artist = text(crate::fields::Field::Artist).and_then(|a| a.split(';').next().map(|a| crate::fields::group_key(a.trim(), &self.config.group_ignore)));
-        if let Some(key) = artist.and_then(|a| self.songs.artist_images().get(&a))
-            && art.picture(ui, square, &crate::album_art::Source::image(key))
-        {
-            return;
-        }
-        let name = text(crate::fields::Field::Album).or(title).unwrap_or_default();
-        art.tile(ui, square, &crate::album_art::Source::default(), &name);
     }
 
     /// On the other pages: what's playing, with play/pause; tapping the

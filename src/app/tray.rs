@@ -1,10 +1,10 @@
 //! The tray icon's side of the app (Windows only, like `crate::tray`):
 //! putting the icon up, starting hidden in it, and carrying out what the
-//! icon and the mini player (`tray_panel`) are clicked for.
+//! icon is clicked for (the mini player is `mini_player`).
 
 use eframe::egui;
 
-use super::{App, AudioCommand, EngineView, close, config, naming, nice_name, title_of, tray_panel};
+use super::{App, config};
 
 impl App {
     /// Put synththing's icon in the tray. Once the window exists (desktop.rs,
@@ -30,92 +30,25 @@ impl App {
         }
     }
 
-    /// Clicks on the tray icon since last frame, and what was clicked in
-    /// the tray panel.
-    pub(super) fn handle_tray(&mut self, ctx: &egui::Context, view: &EngineView) {
-        if self.tray.is_none() {
-            return;
-        }
+    /// Clicks on the tray icon since last frame: a left-click turns the
+    /// window into the mini player, or puts the mini player away; a
+    /// right-click brings the window back.
+    pub(super) fn handle_tray(&mut self, ctx: &egui::Context) {
+        let Some(tray) = &self.tray else { return };
+        let (clicks, corner) = (tray.clicks(), tray.corner());
+        let native = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0) * ctx.zoom_factor();
         if std::mem::take(&mut self.open_mini_at_start) {
-            let native = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
-            match self.tray.as_ref().and_then(crate::tray::Tray::corner) {
-                Some(corner) => {
-                    let snapshot = self.tray_snapshot(view);
-                    self.tray_panel.update(ctx, snapshot);
-                    self.tray_panel.toggle_mini(ctx, corner, native * ctx.zoom_factor());
-                }
+            match corner {
+                Some(corner) => self.open_mini(ctx, corner, native),
                 None => self.show_window(ctx),
             }
         }
-        let Some(tray) = &self.tray else { return };
-        for click in tray.clicks() {
-            let native = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
-            let snapshot = self.tray_snapshot(view);
-            self.tray_panel.update(ctx, snapshot);
+        for click in clicks {
             match click {
-                crate::tray::TrayClick::Primary { cursor } => {
-                    // The mini player takes over from the main window.
-                    if !self.tray_panel.is_open() {
-                        self.hide_window(ctx);
-                    }
-                    self.tray_panel.toggle_mini(ctx, cursor, native * ctx.zoom_factor());
-                }
+                crate::tray::TrayClick::Primary { .. } if self.mini_open() => self.hide_window(ctx),
+                crate::tray::TrayClick::Primary { cursor } => self.open_mini(ctx, cursor, native),
                 crate::tray::TrayClick::Secondary => self.show_window(ctx),
             }
-        }
-        for action in self.tray_panel.actions() {
-            match action {
-                tray_panel::Action::TogglePause => self.send(AudioCommand::TogglePause),
-                tray_panel::Action::Previous => self.previous_track(view.position),
-                tray_panel::Action::Next => {
-                    if self.has_next() {
-                        self.next_track();
-                    }
-                }
-                tray_panel::Action::Volume(volume) => {
-                    self.volume = volume.clamp(0.0, 1.0);
-                    self.send_volume();
-                }
-                tray_panel::Action::Soundfont(index) => self.activate_soundfont(index),
-                tray_panel::Action::Play(list, entry) => self.play_entry(list, entry),
-                tray_panel::Action::ShowWindow => self.show_window(ctx),
-                tray_panel::Action::Quit => self.close_with(ctx, close::CloseAction::Quit),
-                tray_panel::Action::Effects(effects) => self.apply_script_effects(effects, view),
-                tray_panel::Action::Script(index) => self.load_script(index),
-            }
-        }
-        if self.tray_panel.is_open() {
-            let snapshot = self.tray_snapshot(view);
-            self.tray_panel.update(ctx, snapshot);
-        }
-    }
-
-    /// What the tray panel shows.
-    fn tray_snapshot(&mut self, view: &EngineView) -> tray_panel::Snapshot {
-        tray_panel::Snapshot {
-            title: self.current_title().or_else(|| view.track_name.clone()),
-            paused: view.paused,
-            position: view.position,
-            length: view.length,
-            volume: self.volume,
-            soundfonts: self.config.soundfonts.iter().map(|p| nice_name(p)).collect(),
-            active_soundfont: self.active_sf,
-            playlists: self
-                .playlists
-                .lists
-                .iter()
-                .map(|l| {
-                    let naming = naming(&self.config, &self.songs);
-                    let names = l.playlist.entries.iter().map(|e| title_of(&mut self.song_info, &naming, &e.path)).collect();
-                    (l.playlist.name.clone(), names)
-                })
-                .collect(),
-            playing: self.playing_entry().map(|n| (n.list, n.entry)),
-            script: self.script.path().map(nice_name),
-            scripts: self.available_scripts.iter().map(|p| nice_name(p)).collect(),
-            active_script: self.active_script,
-            transport: self.script_transport(),
-            main_shows_visualizer: !self.hidden && self.visualizer_was_drawn,
         }
     }
 }

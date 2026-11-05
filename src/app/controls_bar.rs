@@ -95,6 +95,15 @@ impl App {
             select_list::two_lines(ui, std::iter::empty(), egui::RichText::new(title).strong(), detail, true);
         });
 
+        self.seek_line_ui(ui, view);
+        ui.add_space(2.0);
+
+        self.controls_line_ui(ui, view, width);
+        ui.add_space(6.0);
+    }
+
+    /// The seek bar, between the time it's at and the song's length.
+    pub(super) fn seek_line_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let accent = self.transport_accent(ui.ctx(), view);
         ui.horizontal(|ui| {
             ui.weak(fmt_time(view.position));
@@ -107,10 +116,32 @@ impl App {
                 }
             });
         });
-        ui.add_space(2.0);
+    }
 
-        self.controls_line_ui(ui, view, width);
-        ui.add_space(6.0);
+    /// The song playing's art, as big a square as fits in `rect`: its own
+    /// (its file's, else its album's), else its artist's picture, else a
+    /// tile in its album's (or its name's) color.
+    pub(super) fn now_playing_art_ui(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
+        let title = self.current_title();
+        let art = &mut self.now_playing_art;
+        art.frame(ui.ctx(), online);
+        let square = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(rect.width().min(rect.height()).max(0.0)));
+        let Some(path) = self.current_song.clone() else { return };
+        let song = self.songs.get(&path);
+        if art.picture(ui, square, &crate::album_art::Source::of_song(Some(path.clone()), song)) {
+            return;
+        }
+        let facts = song.map(crate::fields::Facts::of);
+        let text = |field| facts.as_ref().and_then(|f| f.text(field)).map(|t| t.into_owned());
+        let artist = text(crate::fields::Field::Artist).and_then(|a| a.split(';').next().map(|a| crate::fields::group_key(a.trim(), &self.config.group_ignore)));
+        if let Some(key) = artist.and_then(|a| self.songs.artist_images().get(&a))
+            && art.picture(ui, square, &crate::album_art::Source::image(key))
+        {
+            return;
+        }
+        let name = text(crate::fields::Field::Album).or(title).unwrap_or_default();
+        art.tile(ui, square, &crate::album_art::Source::default(), &name);
     }
 
     /// The bar's detail line: where the song is on its playlist, its

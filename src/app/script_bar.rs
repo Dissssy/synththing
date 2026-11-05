@@ -278,6 +278,26 @@ impl App {
         }
     }
 
+    /// The script picker's list (`script_list_ui`, without what's done to
+    /// a script's file), in a popup under `button`, at most `width` wide;
+    /// the script picked starts. (The mini player's; Windows only.)
+    #[cfg(windows)]
+    pub(super) fn script_picker_popup(&mut self, button: &egui::Response, width: f32) {
+        let mut picked = None;
+        egui::Popup::from_toggle_button_response(button)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_max_width(width);
+                picked = self.script_list_ui(ui, false);
+                if picked.is_some() {
+                    ui.close();
+                }
+            });
+        if let Some(previews::Picked::Script(idx)) = picked {
+            self.load_script(idx);
+        }
+    }
+
     /// In the picker's sidebar, for the running script (at `path`): what
     /// can be done to its file.
     pub(super) fn script_file_buttons_ui(&mut self, ui: &mut egui::Ui, path: &Path) {
