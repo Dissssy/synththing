@@ -45,6 +45,11 @@ const MARGIN: f32 = 8.0;
 /// once it's shown (showing a window puts it back in).
 const SETTLE_FRAMES: u8 = 3;
 
+/// Frames the pointer is read from the system's cursor for after the
+/// window moves under it (`MiniPlayer::pointer_frames`): the move lands a
+/// frame or two later.
+const POINTER_FRAMES: u8 = 6;
+
 /// The drawer's pages, down its rail.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Page {
@@ -113,11 +118,11 @@ pub(super) struct MiniPlayer {
     strip_height: f32,
     /// The Visualizer page shows the script picker instead.
     picking: bool,
-    /// How far the pointer moved inside the window when the window moved
-    /// under it (the drawer opening above), for the next frame's input:
-    /// no mouse move tells egui, so the button under it wouldn't take a
+    /// Frames left to tell egui where the pointer is, from the system's
+    /// cursor, after the window moved under it (the drawer opening above):
+    /// no mouse move tells it, so the button under it wouldn't take a
     /// click until the mouse moved.
-    pointer_shift: Option<egui::Vec2>,
+    pointer_frames: u8,
 }
 
 impl Default for MiniPlayer {
@@ -136,7 +141,7 @@ impl Default for MiniPlayer {
             drawer_above: false,
             page: Page::default(),
             picking: false,
-            pointer_shift: None,
+            pointer_frames: 0,
             strip_height: STRIP.y,
         }
     }
@@ -394,7 +399,7 @@ impl App {
             let at = outer.min + egui::vec2(0.0, shift);
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(at));
             self.mini.at = Some(at);
-            self.mini.pointer_shift = Some(egui::vec2(0.0, -shift));
+            self.mini.pointer_frames = POINTER_FRAMES;
         }
         if !open {
             // (Back to the strip's own width.)
@@ -462,17 +467,37 @@ impl App {
         }
     }
 
-    /// Before a frame's input reaches egui: where the pointer is now if
-    /// the window moved under it last frame (`MiniPlayer::pointer_shift`).
+    /// Before a frame's input reaches egui: where the pointer is, from the
+    /// system's cursor, for a few frames after the window moved under it
+    /// (`MiniPlayer::pointer_frames`), unless the mouse moved itself.
     pub(super) fn mini_raw_input(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        let Some(shift) = self.mini.pointer_shift.take() else { return };
+        if self.mini.pointer_frames == 0 {
+            return;
+        }
+        self.mini.pointer_frames -= 1;
+        ctx.request_repaint();
         let moved = raw_input.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerGone));
-        if let Some(pos) = ctx.input(|i| i.pointer.latest_pos())
-            && !moved
-        {
-            raw_input.events.insert(0, egui::Event::PointerMoved(pos + shift));
+        let inner = raw_input.viewports.get(&egui::ViewportId::ROOT).and_then(|v| v.inner_rect);
+        if moved {
+            return;
+        }
+        if let (Some(inner), Some(cursor)) = (inner, cursor_position()) {
+            let pos = (cursor / ctx.pixels_per_point()) - inner.min.to_vec2();
+            if egui::Rect::from_min_size(egui::Pos2::ZERO, inner.size()).contains(pos) {
+                raw_input.events.insert(0, egui::Event::PointerMoved(pos));
+            }
         }
     }
+}
+
+/// Where the mouse cursor is on screen, in physical pixels.
+fn cursor_position() -> Option<egui::Pos2> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut point = POINT::default();
+    // SAFETY: writes the cursor's position into `point`.
+    unsafe { GetCursorPos(&mut point) }.ok()?;
+    Some(egui::pos2(point.x as f32, point.y as f32))
 }
 
 /// Put the window in the taskbar, or take it out (the mini player isn't
