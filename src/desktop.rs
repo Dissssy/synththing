@@ -228,6 +228,7 @@ pub fn main() -> Result<()> {
     {
         setup.instance_descriptor.backends = eframe::wgpu::Backends::DX12;
     }
+    options.wgpu_options.on_surface_status = std::sync::Arc::new(surface_status);
     eframe::run_native(
         "synththing",
         options,
@@ -253,6 +254,29 @@ pub fn main() -> Result<()> {
     )
         .map_err(|e| anyhow!("failed to run the GUI: {e}"))?;
     Ok(())
+}
+
+/// What to do when the window's surface gives no frame to draw into
+/// (egui_wgpu's own choices), noting in the log each time that changes to
+/// another reason: a window whose picture stops while the app goes on
+/// (clicks still work) shows here why.
+fn surface_status(status: &eframe::wgpu::CurrentSurfaceTexture) -> eframe::egui_wgpu::SurfaceErrorAction {
+    use eframe::egui_wgpu::SurfaceErrorAction;
+    use eframe::wgpu::CurrentSurfaceTexture;
+    static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    let action = match status {
+        CurrentSurfaceTexture::Outdated => SurfaceErrorAction::Reconfigure,
+        CurrentSurfaceTexture::Lost => SurfaceErrorAction::RecreateSurface,
+        _ => SurfaceErrorAction::SkipFrame,
+    };
+    let name = format!("{status:?}");
+    if let Ok(mut last) = LAST.lock()
+        && *last != name
+    {
+        log::warn!("no frame to draw into: {name}");
+        *last = name;
+    }
+    action
 }
 
 /// The main window's HWND, which the system's media controls need on
