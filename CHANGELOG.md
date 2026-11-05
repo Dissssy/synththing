@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Song lists follow playback: when the next song starts and the song before it was in view in Songs, a playlist or the Soundfonts list, the list scrolls to the new one. Scroll away and it stays where you left it, and it never switches to another list or view.
+
 ### Fixed
 - Usage data no longer counts what an older version logged under the version you updated to: counts left unsent at an update are sent under the version they came from, right after the update.
 - The Scripting Reference no longer slows every frame while it's open: only the part in sight is drawn.

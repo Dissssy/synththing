@@ -22,6 +22,12 @@
 //! A list can be in groups ([`show_grouped`]): the header of the group at
 //! the top stays pinned there as its rows scroll by, until the next
 //! header pushes it out.
+//!
+//! A list follows playback: when the next song starts ([`song_changed`])
+//! and the list's playing row was in view, it scrolls to the new playing
+//! row. Whether it was in view is taken when the list last scrolled or
+//! last followed, so a list scrolled away from it stays put, and one the
+//! new song isn't in has no playing row to go to.
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
@@ -164,6 +170,27 @@ fn keyboard_id() -> egui::Id {
 
 fn steers_id() -> egui::Id {
     egui::Id::unique("select_list_steers")
+}
+
+fn songs_id() -> egui::Id {
+    egui::Id::unique("select_list_songs")
+}
+
+/// A new song started playing: lists showing the one before scroll to it.
+pub fn song_changed(ctx: &egui::Context) {
+    ctx.data_mut(|d| *d.get_temp_mut_or_default::<u64>(songs_id()) += 1);
+}
+
+/// What a list remembers to follow playback from frame to frame.
+#[derive(Clone, Copy)]
+struct Follow {
+    /// The [`song_changed`] count it last saw.
+    songs: u64,
+    /// Whether its playing row was in view when it last scrolled or
+    /// followed. (Not since: a playlist's playing row moves on when the
+    /// next song is asked for, before it's loaded and followed, and a
+    /// list re-sorted under it hasn't been scrolled away from.)
+    watching: bool,
 }
 
 /// Which list the keys steer this frame, by the `key` it's shown with
@@ -337,7 +364,15 @@ fn show_list<T>(
     if footer {
         area = area.max_height(ui.available_height() - row_height - ui.spacing().item_spacing.y);
     }
+    // Following playback: a new song, and the last one's row was in view.
+    let follow_id = id.with("follow");
+    let follow = ui.ctx().data(|d| d.get_temp::<Follow>(follow_id));
+    let songs = ui.ctx().data(|d| d.get_temp::<u64>(songs_id())).unwrap_or_default();
+    let new_song = follow.is_some_and(|f| f.songs != songs);
+    let mut follow_to = playing.filter(|_| new_song && follow.is_some_and(|f| f.watching));
     if let Some(row) = apply(selection, &steers, items.len(), page, playing, &mut output) {
+        // (The keys win over playback.)
+        follow_to = None;
         let top = row as f32 * pitch;
         let shown = if top < offset {
             top
@@ -401,6 +436,12 @@ fn show_list<T>(
         // Where row 0 would be, scrolled as the list is.
         let origin = ui.max_rect().top() - range.start as f32 * pitch;
         let x_range = ui.max_rect().x_range();
+        if let Some(idx) = follow_to {
+            // Room above it for a pinned group header.
+            let top = origin + idx as f32 * pitch - if is_header.is_some() { pitch } else { 0.0 };
+            let rect = egui::Rect::from_x_y_ranges(x_range, top..=origin + idx as f32 * pitch + row_height);
+            ui.scroll_to_rect(rect, None);
+        }
         for idx in range {
             let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), row_height));
             one_row(ui, idx, rect, 0.0, id.with(idx), &mut output);
@@ -416,7 +457,15 @@ fn show_list<T>(
         }
     });
 
-    ui.ctx().data_mut(|d| d.insert_temp(view_id, (scroll.state.clamped_offset().y, scroll.inner_rect.height())));
+    let view = (scroll.state.clamped_offset().y, scroll.inner_rect.height());
+    let watching = match follow {
+        Some(follow) if !new_song && view == (offset, height) => follow.watching,
+        _ => follow_to.is_some() || playing.is_some_and(|row| in_view(row as f32 * pitch, row_height, view.0, view.1)),
+    };
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(view_id, view);
+        d.insert_temp(follow_id, Follow { songs, watching });
+    });
 
     if footer {
         ui.horizontal(|ui| {
@@ -444,6 +493,12 @@ fn show_list<T>(
         output.delete = delete && !selection.is_empty();
     }
     output
+}
+
+/// Whether a row `top` down the list and `row_height` tall shows at all in
+/// a view of `height` scrolled down by `offset`.
+fn in_view(top: f32, row_height: f32, offset: f32, height: f32) -> bool {
+    top + row_height > offset && top < offset + height
 }
 
 /// Paint a group header's background in `rect`: set off from the rows,
@@ -787,6 +842,15 @@ mod tests {
             selection.click(idx, modifiers);
         }
         selection.rows().to_vec()
+    }
+
+    #[test]
+    fn rows_partly_shown_count_as_in_view() {
+        // Rows 20 tall, a view 100 tall scrolled down 50.
+        assert!(!in_view(10.0, 20.0, 50.0, 100.0), "above it");
+        assert!(in_view(40.0, 20.0, 50.0, 100.0), "half shown at the top");
+        assert!(in_view(140.0, 20.0, 50.0, 100.0), "half shown at the bottom");
+        assert!(!in_view(150.0, 20.0, 50.0, 100.0), "under it");
     }
 
     #[test]

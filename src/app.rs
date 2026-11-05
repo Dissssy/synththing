@@ -1074,7 +1074,13 @@ impl App {
             self.tray_panel.hide(ctx);
         }
         frame_timing::time("sync_script_song", || self.sync_script_song(&view));
+        let asked = self.pending_play.is_some();
         frame_timing::time("poll_loads", || self.poll_loads());
+        if asked && self.pending_play.is_none() {
+            // (A song that didn't load leaves the playing rows be, so lists
+            // following them stay put.)
+            crate::select_list::song_changed(ctx);
+        }
         frame_timing::time("audio_output", || self.output.tick());
         frame_timing::time("poll_imports", || self.poll_imports(ctx));
         frame_timing::time("poll_old_import", || self.poll_old_import());
