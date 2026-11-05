@@ -85,6 +85,18 @@ impl Page {
     }
 }
 
+/// Where the mini player goes as it settles.
+#[derive(Clone, Copy, Debug)]
+enum Place {
+    /// By the tray icon (its bottom-right at the cursor, in physical
+    /// screen pixels): its window only knows its scale (the monitor's,
+    /// times the UI scale) once it's on that monitor, so it's worked out
+    /// again each frame.
+    Cursor([f32; 2]),
+    /// Its top-left, in points.
+    At(egui::Pos2),
+}
+
 /// The main window as it was before it became the mini player.
 #[derive(Clone, Copy, Debug)]
 struct Window {
@@ -100,9 +112,9 @@ pub(super) struct MiniPlayer {
     open: bool,
     /// What the window goes back to.
     window: Option<Window>,
-    /// Where it was opened by (the tray icon, in physical screen pixels)
-    /// and how many more frames to place it there for (`SETTLE_FRAMES`).
-    anchor: Option<([f32; 2], u8)>,
+    /// Where to put it, and how many more frames to put it there for
+    /// (`SETTLE_FRAMES`).
+    placing: Option<(Place, u8)>,
     /// Frames left to keep it out of the taskbar for (`SETTLE_FRAMES`).
     taskbar_frames: u8,
     /// It's had focus since it was opened, so losing it closes it (unpinned).
@@ -136,7 +148,7 @@ impl Default for MiniPlayer {
         Self {
             open: false,
             window: None,
-            anchor: None,
+            placing: None,
             taskbar_frames: 0,
             focused_once: false,
             pinned: true,
@@ -211,13 +223,13 @@ impl App {
         mini.focused_once = false;
         mini.taskbar_frames = SETTLE_FRAMES;
         let size = mini.size();
-        let at = match mini.at {
-            Some(at) => at,
-            None => {
-                mini.anchor = Some((cursor, SETTLE_FRAMES));
-                placement(cursor, pixels_per_point, size)
-            }
+        let (place, at) = match mini.at {
+            Some(at) => (Place::At(at), at),
+            None => (Place::Cursor(cursor), placement(cursor, pixels_per_point, size)),
         };
+        // (Placed again as it settles: a window coming out of being
+        // maximized goes back to its old size first.)
+        mini.placing = Some((place, SETTLE_FRAMES));
         ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop));
         // (Without a maximize button, a double-click on what it's dragged
@@ -239,7 +251,7 @@ impl App {
         if !std::mem::take(&mut self.mini.open) {
             return;
         }
-        self.mini.anchor = None;
+        self.mini.placing = None;
         // (A hidden window goes back in by itself once it's shown.)
         if !self.hidden {
             show_in_taskbar(self.api.window, true);
@@ -268,17 +280,23 @@ impl App {
             self.mini.taskbar_frames -= 1;
             show_in_taskbar(self.api.window, false);
         }
-        // Never maximized as the mini player (Windows maximizes a window
-        // dragged by a double-click).
+        // Never maximized as the mini player: un-maximizing puts a window
+        // back at its old size and place (the main window's), so it's put
+        // where it was again after.
         if ctx.input(|i| i.viewport().maximized == Some(true)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+            let at = self.mini.at.unwrap_or_default();
+            self.mini.placing = Some((Place::At(at), SETTLE_FRAMES));
         }
-        if let Some((cursor, frames)) = self.mini.anchor {
-            // Its own scale, now it's on its monitor (see `SETTLE_FRAMES`).
+        if let Some((place, frames)) = self.mini.placing {
             let size = self.mini.size();
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(placement(cursor, ctx.pixels_per_point(), size)));
+            let at = match place {
+                Place::Cursor(cursor) => placement(cursor, ctx.pixels_per_point(), size),
+                Place::At(at) => at,
+            };
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(at));
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-            self.mini.anchor = (frames > 1).then_some((cursor, frames - 1));
+            self.mini.placing = (frames > 1).then_some((place, frames - 1));
             ctx.request_repaint();
         } else if self.mini.resize_frames > 0 {
             // A drawer resize on its way: until it's landed, the window's
