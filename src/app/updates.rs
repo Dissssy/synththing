@@ -132,14 +132,12 @@ impl App {
             UpdateState::Available(release) => {
                 ui.heading(format!("synththing v{} is available", release.version));
                 ui.weak(format!("You have v{current}."));
-                if !release.notes.trim().is_empty() {
+                if !release.notes.trim().is_empty() || release.merged.is_some() {
                     ui.add_space(4.0);
                     if page {
-                        ui.label(release.notes.trim());
+                        release_notes_ui(ui, release);
                     } else {
-                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                            ui.label(release.notes.trim());
-                        });
+                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| release_notes_ui(ui, release));
                     }
                 }
                 ui.hyperlink_to("Release page", &release.page_url);
@@ -461,6 +459,27 @@ impl App {
             {
                 self.branches.install(b.clone());
             }
+        });
+    }
+}
+
+/// A release's notes, and for a nightly the pull requests merged since
+/// this build, each linking to its page.
+fn release_notes_ui(ui: &mut egui::Ui, release: &updater::Release) {
+    if !release.notes.trim().is_empty() {
+        ui.label(release.notes.trim());
+    }
+    let Some(merged) = &release.merged else { return };
+    ui.add_space(4.0);
+    if merged.is_empty() {
+        ui.weak("No pull requests merged since your build.");
+        return;
+    }
+    ui.strong(format!("Merged since your build ({}), newest first:", merged.len()));
+    for pr in merged {
+        ui.horizontal_wrapped(|ui| {
+            ui.hyperlink_to(format!("#{}", pr.number), pr.url());
+            ui.label(&pr.title);
         });
     }
 }

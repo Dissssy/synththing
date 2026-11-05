@@ -78,10 +78,26 @@ pub struct Release {
     pub commit: Option<String>,
     pub notes: String,
     pub page_url: String,
+    /// For a nightly offered as an update: the pull requests merged since
+    /// this build, newest first. `None` when they couldn't be listed.
+    pub merged: Option<Vec<MergedPr>>,
     asset_url: String,
     asset_size: u64,
     /// Hex SHA-256 of the asset, when GitHub provides one.
     asset_sha256: Option<String>,
+}
+
+/// A pull request merged into master.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergedPr {
+    pub number: u64,
+    pub title: String,
+}
+
+impl MergedPr {
+    pub fn url(&self) -> String {
+        format!("https://github.com/{REPO}/pull/{}", self.number)
+    }
 }
 
 impl Release {
@@ -139,8 +155,11 @@ impl Updater {
         let this = self.clone();
         thread::spawn(move || {
             let state = match fetch_for(&track) {
-                Ok(Some(release)) if is_update(&track, &release) => {
+                Ok(Some(mut release)) if is_update(&track, &release) => {
                     log::info!("update available: v{}", release.version);
+                    if release.tag == "nightly" {
+                        release.merged = merged_since_this_build(&release);
+                    }
                     UpdateState::Available(release)
                 }
                 Ok(Some(release)) => {
@@ -228,6 +247,75 @@ fn api_get<T: serde::de::DeserializeOwned>(path: &str) -> Result<Option<T>> {
         Err(ureq::Error::StatusCode(404)) => Ok(None),
         Err(e) => Err(anyhow!(e)),
     }
+}
+
+#[derive(Deserialize)]
+struct ApiComparison {
+    /// Oldest first.
+    commits: Vec<ApiCommit>,
+}
+
+#[derive(Deserialize)]
+struct ApiCommit {
+    commit: ApiCommitDetail,
+}
+
+#[derive(Deserialize)]
+struct ApiCommitDetail {
+    message: String,
+}
+
+/// The pull requests merged between this build and `release` (a nightly),
+/// newest first. This build is its commit, or for a release its tag; a
+/// local build's version says nothing about what's in it, so it has none.
+fn merged_since_this_build(release: &Release) -> Option<Vec<MergedPr>> {
+    let head = release.commit.as_deref()?;
+    let base = match crate::build_info::commit() {
+        Some(commit) => commit.to_string(),
+        None if crate::build_info::LOCAL => return None,
+        None => format!("v{}", crate::build_info::VERSION),
+    };
+    match merged_between(&base, head) {
+        Ok(merged) => Some(merged),
+        Err(e) => {
+            log::warn!("couldn't list the pull requests merged since this build: {e:#}");
+            None
+        }
+    }
+}
+
+/// The pull requests merged in `base..head`, newest first, from the merge
+/// commits GitHub's compare lists, through every page up to `MAX_PAGES`.
+fn merged_between(base: &str, head: &str) -> Result<Vec<MergedPr>> {
+    const PER_PAGE: usize = 100;
+    const MAX_PAGES: usize = 10;
+    let mut merged = Vec::new();
+    for page in 1..=MAX_PAGES {
+        let comparison: ApiComparison = api_get(&format!("compare/{base}...{head}?per_page={PER_PAGE}&page={page}"))?
+            .ok_or_else(|| anyhow!("GitHub doesn't know {base} or {head}"))?;
+        let last = comparison.commits.len() < PER_PAGE;
+        merged.extend(comparison.commits.iter().filter_map(|c| merged_pr(&c.commit.message)));
+        if last {
+            break;
+        }
+    }
+    merged.reverse();
+    Ok(merged)
+}
+
+/// The pull request a commit merged, from its message: a merge commit's
+/// ("Merge pull request #12 from owner/branch", then its title) or a
+/// squash merge's ("Its title (#12)").
+fn merged_pr(message: &str) -> Option<MergedPr> {
+    let mut lines = message.lines();
+    let first = lines.next()?.trim();
+    if let Some(rest) = first.strip_prefix("Merge pull request #") {
+        let (number, branch) = rest.split_once(" from ")?;
+        let title = lines.map(str::trim).find(|l| !l.is_empty()).unwrap_or(branch);
+        return Some(MergedPr { number: number.parse().ok()?, title: title.to_string() });
+    }
+    let (title, number) = first.strip_suffix(')')?.rsplit_once(" (#")?;
+    Some(MergedPr { number: number.parse().ok()?, title: title.trim().to_string() })
 }
 
 fn fetch_latest() -> Result<Release> {
@@ -337,6 +425,7 @@ fn parse_release(api: ApiRelease) -> Result<Release> {
         commit,
         notes,
         page_url: api.html_url,
+        merged: None,
         asset_url: asset.browser_download_url,
         asset_size: asset.size,
         asset_sha256: asset.digest.and_then(|d| d.strip_prefix("sha256:").map(str::to_ascii_lowercase)),
@@ -512,6 +601,19 @@ mod tests {
         assert_eq!(pick("0.7.1", "0.7.1-nightly.9"), "release", "the release it led up to");
         assert_eq!(pick("0.8.0", "0.7.1-nightly.9"), "release");
         assert_eq!(newest(None, Some(build("nightly", "0.7.1-nightly.1"))).unwrap().tag, "nightly");
+    }
+
+    #[test]
+    fn reads_merged_prs_from_commit_messages() {
+        let pr = |number, title: &str| Some(MergedPr { number, title: title.to_string() });
+        assert_eq!(
+            merged_pr("Merge pull request #327 from Dissssy/claude/design-pass-2\n\nDesign pass 2: pages"),
+            pr(327, "Design pass 2: pages")
+        );
+        assert_eq!(merged_pr("Merge pull request #5 from a/b"), pr(5, "a/b"), "no title: its branch");
+        assert_eq!(merged_pr("Fix the thing (#12)\n\n* a commit"), pr(12, "Fix the thing"));
+        assert_eq!(merged_pr("Merge branch 'master' into feature"), None);
+        assert_eq!(merged_pr("Just a commit"), None);
     }
 
     #[test]

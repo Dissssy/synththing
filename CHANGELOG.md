@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- With canary updates on, an offered nightly lists the pull requests merged since your build, newest first, each linking to its page, so you can tell what's new and whether it's worth updating.
+
 ### Fixed
 - Usage data no longer counts what an older version logged under the version you updated to: counts left unsent at an update are sent under the version they came from, right after the update.
 - The Scripting Reference no longer slows every frame while it's open: only the part in sight is drawn.

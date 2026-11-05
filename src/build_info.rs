@@ -95,9 +95,14 @@ pub fn set_online(kind: Online, on: bool) {
     TURNED_ON[kind as usize].store(on, Ordering::Relaxed);
 }
 
+/// The commit it's built from, when CI said.
+pub fn commit() -> Option<&'static str> {
+    (!COMMIT.is_empty()).then_some(COMMIT)
+}
+
 /// The commit, shortened as git does, if known.
 pub fn short_commit() -> Option<&'static str> {
-    (!COMMIT.is_empty()).then(|| &COMMIT[..COMMIT.len().min(7)])
+    commit().map(|c| &c[..c.len().min(7)])
 }
 
 /// What isn't in the version: the branch and the commit, for a test build
