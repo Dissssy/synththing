@@ -126,15 +126,14 @@ pub(super) struct MiniPlayer {
     width: f32,
     drawer: bool,
     drawer_height: f32,
-    /// The drawer opens above the strip (there's no room below it).
-    drawer_above: bool,
     page: Page,
     /// The strip's height as drawn (its line heights are the theme's).
     strip_height: f32,
     /// The Visualizer page shows the script picker instead.
     picking: bool,
     /// Frames left to tell egui where the pointer is, from the system's
-    /// cursor, after the window moved under it (the drawer opening above):
+    /// cursor, after the window moved under it (moved up to make room for
+    /// the drawer):
     /// no mouse move tells it, so the button under it wouldn't take a
     /// click until the mouse moved.
     pointer_frames: u8,
@@ -156,7 +155,6 @@ impl Default for MiniPlayer {
             width: STRIP.x,
             drawer: false,
             drawer_height: DRAWER,
-            drawer_above: false,
             page: Page::default(),
             picking: false,
             pointer_frames: 0,
@@ -272,8 +270,7 @@ impl App {
         }
     }
 
-    /// The window as the mini player: the strip, and its drawer above or
-    /// below it.
+    /// The window as the mini player: the strip, and its drawer below it.
     pub(super) fn mini_player_ui(&mut self, ui: &mut egui::Ui, shared: &PlaybackShared) {
         let ctx = ui.ctx().clone();
         if self.mini.taskbar_frames > 0 {
@@ -330,11 +327,11 @@ impl App {
         let view = &shared.view;
         // (No outline: the panels' separator is the only line between them.)
         let frame = egui::Frame::window(ui.style()).corner_radius(0).stroke(egui::Stroke::NONE).inner_margin(egui::Margin::same(MARGIN as i8));
-        let strip = |above: bool| {
-            let panel = if above { egui::Panel::bottom("mini_strip") } else { egui::Panel::top("mini_strip") };
-            panel.exact_size(self.mini.strip_height).frame(frame).show_separator_line(self.mini.drawer)
-        };
-        strip(self.mini.drawer_above).show(ui, |ui| self.mini_strip_ui(ui, view));
+        egui::Panel::top("mini_strip")
+            .exact_size(self.mini.strip_height)
+            .frame(frame)
+            .show_separator_line(self.mini.drawer)
+            .show(ui, |ui| self.mini_strip_ui(ui, view));
         if self.mini.drawer {
             egui::CentralPanel::default().frame(frame).show(ui, |ui| self.mini_drawer_ui(ui, shared));
         }
@@ -377,11 +374,10 @@ impl App {
             self.mini.pinned = !self.mini.pinned;
             self.mini.focused_once = true;
         }
-        let (drawer, drawer_hover) = match (self.mini.drawer, self.mini.drawer_above) {
-            (false, false) => ("caret-down", "Open the drawer: Queue, Groupings, Soundfonts and the visualizer"),
-            (false, true) => ("caret-up", "Open the drawer: Queue, Groupings, Soundfonts and the visualizer"),
-            (true, false) => ("caret-up", "Close the drawer"),
-            (true, true) => ("caret-down", "Close the drawer"),
+        let (drawer, drawer_hover) = if self.mini.drawer {
+            ("caret-up", "Close the drawer")
+        } else {
+            ("caret-down", "Open the drawer below: Queue, Groupings, Soundfonts and the visualizer")
         };
         // (Not again until the last resize has landed: resizes piling up
         // can hang the graphics driver.)
@@ -425,24 +421,21 @@ impl App {
         }
     }
 
-    /// Open or close the drawer: below the strip, or above it when there's
-    /// no room below, the strip staying where it is on screen.
+    /// Open or close the drawer, always below the strip (so the button
+    /// stays under the mouse); without room below, the window moves up to
+    /// make it.
     fn set_mini_drawer(&mut self, ctx: &egui::Context, open: bool) {
         let (outer, monitor) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().monitor_size));
-        if open {
-            self.mini.drawer_above = match (outer, monitor) {
-                (Some(outer), Some(monitor)) => outer.bottom() + self.mini.drawer_height > monitor.y,
-                _ => false,
-            };
-        }
-        if let Some(outer) = outer
-            && self.mini.drawer_above
+        if open
+            && let (Some(outer), Some(monitor)) = (outer, monitor)
         {
-            let shift = if open { -self.mini.drawer_height } else { self.mini.drawer_height };
-            let at = outer.min + egui::vec2(0.0, shift);
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(at));
-            self.mini.at = Some(at);
-            self.mini.pointer_frames = POINTER_FRAMES;
+            let over = outer.bottom() + self.mini.drawer_height - monitor.y;
+            if over > 0.0 {
+                let at = outer.min - egui::vec2(0.0, over.min(outer.top()));
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(at));
+                self.mini.at = Some(at);
+                self.mini.pointer_frames = POINTER_FRAMES;
+            }
         }
         if !open {
             // (Back to the strip's own width.)
