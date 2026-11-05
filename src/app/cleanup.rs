@@ -15,7 +15,9 @@ use std::sync::mpsc;
 use eframe::egui;
 
 use super::lookup::{self, Reviewed, Unsure};
-use super::{App, fit_width, icon_button};
+use super::widgets::Culled;
+use super::{App, icon_button, page_ui, setting_row, settings_group};
+use crate::select_list;
 use crate::cleanup::{self, Kind, Suggestion, What};
 use crate::duplicates;
 use crate::lookup::{Kept, Tried};
@@ -39,6 +41,51 @@ pub(super) struct CleanUp {
     keep: BTreeMap<String, usize>,
     /// The rows being worked out, and what from.
     working: Option<(u64, mpsc::Receiver<Rows>)>,
+}
+
+/// A group of Clean up's rows: the albums that need a look, first, then
+/// the suggestions of each kind.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Group {
+    Unsure,
+    Kind(Kind),
+}
+
+impl Group {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Unsure => "Needs a look",
+            Self::Kind(kind) => kind.label(),
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Unsure => "question",
+            Self::Kind(kind) => match kind {
+                Kind::Junk => "trash",
+                Kind::Duplicate => "copy",
+                Kind::PossibleDuplicate => "copy-simple",
+                Kind::FileName => "file-text",
+                Kind::NumberInTitle => "list-numbers",
+                Kind::VideoTitle => "video",
+                Kind::Split => "arrows-split",
+                Kind::Same => "text-aa",
+                Kind::Compilation => "users-three",
+                Kind::Tidy => "broom",
+                Kind::MusicBrainz => "globe",
+                Kind::LengthDiffers => "timer",
+            },
+        }
+    }
+}
+
+/// One of Clean up's rows.
+enum Item {
+    /// An album that needs a look, by index.
+    Unsure(usize),
+    /// A suggestion, by index, with its ID.
+    Suggestion(usize, String),
 }
 
 /// Clean up's rows.
@@ -122,8 +169,14 @@ impl App {
         hasher.finish()
     }
 
-    /// The Clean up modal, while it's open.
-    pub(super) fn cleanup_ui(&mut self, ctx: &egui::Context) {
+    /// Open Clean up, in the panels' place (closing the other pages).
+    pub(super) fn open_cleanup(&mut self) {
+        self.close_pages();
+        self.cleanup = Some(Default::default());
+    }
+
+    /// The Clean up page, while it's open.
+    pub(super) fn cleanup_ui(&mut self, ui: &mut egui::Ui) {
         let Some(mut cleanup) = self.cleanup.take() else { return };
         if let Some((made_from, receive)) = &cleanup.working {
             match receive.try_recv() {
@@ -141,7 +194,7 @@ impl App {
         if cleanup.made_from != Some(revision) && cleanup.working.is_none() {
             let (store, kept, tried, ignore) = (self.songs.clone(), self.lookup.kept.clone(), self.lookup_tried(), self.config.group_ignore.clone());
             let (send, receive) = mpsc::channel();
-            let repaint = ctx.clone();
+            let repaint = ui.ctx().clone();
             let spawned = std::thread::Builder::new().name("clean up".into()).spawn(move || {
                 let _ = send.send(Rows::of(&store, &kept, tried.as_ref(), &ignore));
                 repaint.request_repaint();
@@ -160,103 +213,87 @@ impl App {
         let mut dismiss: Vec<String> = Vec::new();
         let mut show: Option<Vec<PathBuf>> = None;
         let mut bring_back = false;
-        let mut close = false;
         let mut reviewed: Option<Reviewed> = None;
-        let response = egui::Modal::new(egui::Id::unique("cleanup")).show(ctx, |ui| {
-            ui.set_width(fit_width(ui, 640.0));
-            ui.heading("Clean up");
+        // (Possible duplicates are guesses: each one's applied alone.)
+        let applicable: Vec<usize> =
+            shown.iter().map(|(i, _)| *i).filter(|&i| !matches!(cleanup.suggestions[i].kind, Kind::LengthDiffers | Kind::PossibleDuplicate)).collect();
+        // (Each group only while it has rows.)
+        let mut groups: Vec<(Group, Vec<Item>)> = Vec::new();
+        if !cleanup.unsure.is_empty() {
+            groups.push((Group::Unsure, (0..cleanup.unsure.len()).map(Item::Unsure).collect()));
+        }
+        let mut by_kind = shown.clone();
+        // (Stable, so each kind's keep their order.)
+        by_kind.sort_by_key(|(i, _)| cleanup.suggestions[*i].kind);
+        for chunk in by_kind.chunk_by(|(a, _), (b, _)| cleanup.suggestions[*a].kind == cleanup.suggestions[*b].kind) {
+            let kind = cleanup.suggestions[chunk[0].0].kind;
+            groups.push((Group::Kind(kind), chunk.iter().map(|(i, id)| Item::Suggestion(*i, id.clone())).collect()));
+        }
+        let close = page_ui(ui, "Clean up", &[] as &[&str], &mut 0, true, |_| false, |ui, _| {
             ui.weak("Suggestions from what your songs' details say. Nothing changes until you apply one, and the files themselves are never written.");
             ui.add_space(4.0);
+            let count = match shown.len() {
+                1 => "1 suggestion".to_string(),
+                n => format!("{n} suggestions"),
+            };
+            select_list::toolbar(
+                ui,
+                |ui| {
+                    if !applicable.is_empty() && ui.button(format!("Apply all {}", applicable.len())).clicked() {
+                        apply = applicable.clone();
+                    }
+                },
+                count,
+                |ui| {
+                    if hidden > 0 && ui.button(format!("Bring back {hidden} dismissed")).clicked() {
+                        bring_back = true;
+                    }
+                },
+            );
             if cleanup.made_from.is_none() {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.weak("Looking through your songs...");
                 });
             } else if shown.is_empty() && cleanup.unsure.is_empty() {
-                ui.label("Nothing to clean up.");
+                super::placeholder(ui, "Nothing to clean up.\nYour songs' details all look right.");
             }
-            let row_height = ui.spacing().interact_size.y;
-            let from_width = (ui.available_width() * 0.4).max(120.0);
-            for unsure in &cleanup.unsure {
-                let pick = cleanup.picks.entry(unsure.album.id.clone()).or_default();
-                if let Some(r) = unsure_row_ui(ui, unsure, pick, from_width, row_height, &mut show, |k| self.songs.path(k)) {
-                    reviewed = Some(r);
-                }
-            }
-            if !cleanup.unsure.is_empty() {
-                ui.separator();
-            }
-            egui::ScrollArea::vertical().max_height(400.0).auto_shrink([false, true]).show_rows(ui, row_height, shown.len(), |ui, rows| {
-                for (i, id) in &shown[rows] {
-                    let suggestion = &cleanup.suggestions[*i];
-                    let to = cleanup.to.entry(id.clone()).or_insert_with(|| suggestion.to.clone());
-                    ui.horizontal(|ui| {
-                        let (from, hover) = describe(suggestion);
-                        ui.allocate_ui_with_layout(egui::vec2(from_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.set_width(from_width);
-                            ui.weak(suggestion.kind.label());
-                            ui.add(egui::Label::new(from).truncate()).on_hover_text(hover);
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let songs = suggestion.keys.len();
-                            if ui.add(icon_button("info")).on_hover_text(format!("See its {songs} song{}", if songs == 1 { "" } else { "s" })).clicked() {
-                                show = Some(suggestion.keys.iter().map(|k| self.songs.path(k)).collect());
-                            }
-                            if ui.add(icon_button("x")).on_hover_text("Dismiss: leave it as it is").clicked() {
-                                dismiss.push(id.clone());
-                            }
-                            let fixed = matches!(suggestion.kind, Kind::Compilation | Kind::Junk | Kind::Duplicate | Kind::PossibleDuplicate)
-                                || matches!(suggestion.what, What::Fields { .. } | What::Online { .. });
-                            let look = suggestion.kind == Kind::LengthDiffers;
-                            if !look && ui.add_enabled(fixed || !to.trim().is_empty(), icon_button("check")).on_hover_text("Apply").clicked() {
-                                apply.push(*i);
-                            }
-                            if look {
-                                ui.add(egui::Label::new(to.as_str()).truncate());
-                            } else if suggestion.kind == Kind::Junk {
-                                ui.label("Remove from the library");
-                            } else if matches!(suggestion.kind, Kind::Duplicate | Kind::PossibleDuplicate) {
-                                let keep = cleanup.keep.entry(id.clone()).or_default();
-                                let copy = |key: &String| self.songs.get_by_key(key).map(duplicates::describe).unwrap_or_default();
-                                egui::ComboBox::from_id_salt(("duplicate", id))
-                                    .width(ui.available_width())
-                                    .truncate()
-                                    .selected_text(format!("Keep {}", copy(&suggestion.keys[*keep])))
-                                    .show_ui(ui, |ui| {
-                                        for (i, key) in suggestion.keys.iter().enumerate() {
-                                            ui.selectable_value(keep, i, copy(key));
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                let from_width = (ui.available_width() * 0.4).max(120.0);
+                // (A whole group's drawn or not, so its rows stay striped.)
+                let mut culled = Culled::begin(ui, "cleanup");
+                for (group, items) in &groups {
+                    let title = format!("{} ({})", group.label(), items.len());
+                    culled.block(ui, group.label(), false, |ui| {
+                        settings_group(&title).icon(group.icon()).closable(group.label()).open_at_first().show(ui, |ui| {
+                            for item in items {
+                                setting_row(ui, |ui| match item {
+                                    Item::Unsure(i) => {
+                                        let unsure = &cleanup.unsure[*i];
+                                        let pick = cleanup.picks.entry(unsure.album.id.clone()).or_default();
+                                        if let Some(r) = unsure_row_ui(ui, unsure, pick, from_width, &mut show, |k| self.songs.path(k)) {
+                                            reviewed = Some(r);
                                         }
-                                    });
-                            } else if suggestion.kind == Kind::Compilation {
-                                ui.label(format!("Mark a compilation, by {to}"));
-                            } else if fixed {
-                                let more = if songs > 1 { format!(", and {} more like it", songs - 1) } else { String::new() };
-                                ui.add(egui::Label::new(format!("{to}{more}")).truncate());
-                            } else {
-                                ui.add(egui::TextEdit::singleline(to).desired_width(f32::INFINITY))
-                                    .on_hover_text("What it'll be written as. Separate artists with semicolons.");
+                                    }
+                                    Item::Suggestion(i, id) => {
+                                        let suggestion = &cleanup.suggestions[*i];
+                                        let to = cleanup.to.entry(id.clone()).or_insert_with(|| suggestion.to.clone());
+                                        let keep = cleanup.keep.entry(id.clone()).or_default();
+                                        let act = suggestion_row_ui(ui, suggestion, id, to, keep, from_width, &self.songs);
+                                        match act {
+                                            Some(Act::Apply) => apply.push(*i),
+                                            Some(Act::Dismiss) => dismiss.push(id.clone()),
+                                            Some(Act::Show) => show = Some(suggestion.keys.iter().map(|k| self.songs.path(k)).collect()),
+                                            None => {}
+                                        }
+                                    }
+                                });
                             }
                         });
+                        ui.add_space(ui.spacing().item_spacing.y);
                     });
                 }
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if hidden > 0 && ui.button(format!("Bring back {hidden} dismissed")).clicked() {
-                    bring_back = true;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    close |= ui.button("Close").clicked();
-                    // (Possible duplicates are guesses: each one's applied alone.)
-                    let applicable: Vec<usize> = shown
-                        .iter()
-                        .map(|(i, _)| *i)
-                        .filter(|&i| !matches!(cleanup.suggestions[i].kind, Kind::LengthDiffers | Kind::PossibleDuplicate))
-                        .collect();
-                    if !applicable.is_empty() && ui.button(format!("Apply all {}", applicable.len())).clicked() {
-                        apply = applicable;
-                    }
-                });
+                culled.end(ui);
             });
         });
         if let Some(reviewed) = reviewed {
@@ -319,7 +356,7 @@ impl App {
             // (The details open over it; Clean up's there when they close.)
             self.details_for = Some(paths);
         }
-        if !(close || response.should_close()) {
+        if !close {
             self.cleanup = Some(cleanup);
         }
     }
@@ -332,47 +369,112 @@ fn unsure_row_ui(
     unsure: &Unsure,
     pick: &mut usize,
     from_width: f32,
-    row_height: f32,
     show: &mut Option<Vec<PathBuf>>,
     path: impl Fn(&str) -> PathBuf,
 ) -> Option<Reviewed> {
     let album = &unsure.album;
     *pick = (*pick).min(unsure.releases.len() - 1);
     let mut reviewed = None;
-    ui.horizontal(|ui| {
-        ui.allocate_ui_with_layout(egui::vec2(from_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.set_width(from_width);
-            ui.weak("Needs a look");
-            let by = album.artist.as_deref().map(|a| format!(" by {a}")).unwrap_or_default();
-            ui.add(egui::Label::new(&album.name).truncate()).on_hover_text(format!(
-                "{}{by}, {} songs: the lookup isn't sure which release it is.",
-                album.name,
-                album.songs.len()
-            ));
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let songs = album.songs.len();
-            if ui.add(icon_button("info")).on_hover_text(format!("See its {songs} song{}", if songs == 1 { "" } else { "s" })).clicked() {
-                *show = Some(album.songs.iter().map(|s| path(&s.key)).collect());
+    ui.allocate_ui_with_layout(egui::vec2(from_width, ui.spacing().interact_size.y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_width(from_width);
+        let by = album.artist.as_deref().map(|a| format!(" by {a}")).unwrap_or_default();
+        ui.add(egui::Label::new(&album.name).truncate()).on_hover_text(format!(
+            "{}{by}, {} songs: the lookup isn't sure which release it is.",
+            album.name,
+            album.songs.len()
+        ));
+    });
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let songs = album.songs.len();
+        if ui.add(icon_button("info")).on_hover_text(format!("See its {songs} song{}", if songs == 1 { "" } else { "s" })).clicked() {
+            *show = Some(album.songs.iter().map(|s| path(&s.key)).collect());
+        }
+        if ui.add(icon_button("x")).on_hover_text("None of these: leave it unmatched, and never take these for it").clicked() {
+            reviewed = Some(Reviewed::NoneOf(album.clone(), unsure.releases.iter().map(|r| r.id.clone()).collect()));
+        }
+        let release = &unsure.releases[*pick];
+        if ui.add(icon_button("check")).on_hover_text("This one: match it to the release picked").clicked() {
+            reviewed = Some(Reviewed::This(album.clone(), release.clone()));
+        }
+        if ui.add(icon_button("arrow-square-out")).on_hover_text("Open the release picked on MusicBrainz").clicked() {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(format!("https://musicbrainz.org/release/{}", release.id)));
+        }
+        egui::ComboBox::from_id_salt(("unsure", &album.id)).width(ui.available_width()).truncate().selected_text(&unsure.lines[*pick]).show_ui(ui, |ui| {
+            for (i, line) in unsure.lines.iter().enumerate() {
+                ui.selectable_value(pick, i, line);
             }
-            if ui.add(icon_button("x")).on_hover_text("None of these: leave it unmatched, and never take these for it").clicked() {
-                reviewed = Some(Reviewed::NoneOf(album.clone(), unsure.releases.iter().map(|r| r.id.clone()).collect()));
-            }
-            let release = &unsure.releases[*pick];
-            if ui.add(icon_button("check")).on_hover_text("This one: match it to the release picked").clicked() {
-                reviewed = Some(Reviewed::This(album.clone(), release.clone()));
-            }
-            if ui.add(icon_button("arrow-square-out")).on_hover_text("Open the release picked on MusicBrainz").clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab(format!("https://musicbrainz.org/release/{}", release.id)));
-            }
-            egui::ComboBox::from_id_salt(("unsure", &album.id)).width(ui.available_width()).truncate().selected_text(&unsure.lines[*pick]).show_ui(ui, |ui| {
-                for (i, line) in unsure.lines.iter().enumerate() {
-                    ui.selectable_value(pick, i, line);
-                }
-            });
         });
     });
     reviewed
+}
+
+/// What's done to a suggestion from its row.
+enum Act {
+    Apply,
+    Dismiss,
+    /// See its songs.
+    Show,
+}
+
+/// A suggestion's row: what it's of, then what it'd be (`to`, written
+/// here; or the copy to `keep`, for duplicates), and Apply, Dismiss and
+/// its songs.
+#[allow(clippy::too_many_arguments)]
+fn suggestion_row_ui(
+    ui: &mut egui::Ui,
+    suggestion: &Suggestion,
+    id: &str,
+    to: &mut String,
+    keep: &mut usize,
+    from_width: f32,
+    store: &SongStore,
+) -> Option<Act> {
+    let mut act = None;
+    let (from, hover) = describe(suggestion);
+    ui.allocate_ui_with_layout(egui::vec2(from_width, ui.spacing().interact_size.y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_width(from_width);
+        ui.add(egui::Label::new(from).truncate()).on_hover_text(hover);
+    });
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let songs = suggestion.keys.len();
+        if ui.add(icon_button("info")).on_hover_text(format!("See its {songs} song{}", if songs == 1 { "" } else { "s" })).clicked() {
+            act = Some(Act::Show);
+        }
+        if ui.add(icon_button("x")).on_hover_text("Dismiss: leave it as it is").clicked() {
+            act = Some(Act::Dismiss);
+        }
+        let fixed = matches!(suggestion.kind, Kind::Compilation | Kind::Junk | Kind::Duplicate | Kind::PossibleDuplicate)
+            || matches!(suggestion.what, What::Fields { .. } | What::Online { .. });
+        let look = suggestion.kind == Kind::LengthDiffers;
+        if !look && ui.add_enabled(fixed || !to.trim().is_empty(), icon_button("check")).on_hover_text("Apply").clicked() {
+            act = Some(Act::Apply);
+        }
+        if look {
+            ui.add(egui::Label::new(to.as_str()).truncate());
+        } else if suggestion.kind == Kind::Junk {
+            ui.label("Remove from the library");
+        } else if matches!(suggestion.kind, Kind::Duplicate | Kind::PossibleDuplicate) {
+            let copy = |key: &String| store.get_by_key(key).map(duplicates::describe).unwrap_or_default();
+            egui::ComboBox::from_id_salt(("duplicate", id))
+                .width(ui.available_width())
+                .truncate()
+                .selected_text(format!("Keep {}", copy(&suggestion.keys[*keep])))
+                .show_ui(ui, |ui| {
+                    for (i, key) in suggestion.keys.iter().enumerate() {
+                        ui.selectable_value(keep, i, copy(key));
+                    }
+                });
+        } else if suggestion.kind == Kind::Compilation {
+            ui.label(format!("Mark a compilation, by {to}"));
+        } else if fixed {
+            let more = if songs > 1 { format!(", and {} more like it", songs - 1) } else { String::new() };
+            ui.add(egui::Label::new(format!("{to}{more}")).truncate());
+        } else {
+            ui.add(egui::TextEdit::singleline(to).desired_width(f32::INFINITY))
+                .on_hover_text("What it'll be written as. Separate artists with semicolons.");
+        }
+    });
+    act
 }
 
 /// What a suggestion's of, short and in full.

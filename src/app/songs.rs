@@ -224,7 +224,7 @@ impl App {
             self.undo_edit();
         }
         if cleanup_clicked {
-            self.cleanup = Some(Default::default());
+            self.open_cleanup();
         }
         if missing_clicked {
             self.songs_missing_only = !missing_only;

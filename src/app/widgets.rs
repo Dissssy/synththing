@@ -63,7 +63,7 @@ pub(super) fn categories_body<S: AsRef<str>>(
 /// A page in the panels' place, like Preferences: `title` with a close
 /// button, then `categories` down the side (`selected` the one picked)
 /// and `body` beside them (scrolling as `scrolls` says, as
-/// [`categories_body`]). Whether it's to close: the button, or Esc (when
+/// [`categories_body`]); with no categories, the body alone. Whether it's to close: the button, or Esc (when
 /// `esc` lets it, and no dropdown or dialog takes it first).
 pub(super) fn page_ui<S: AsRef<str>>(
     ui: &mut egui::Ui,
@@ -88,7 +88,13 @@ pub(super) fn page_ui<S: AsRef<str>>(
             });
             ui.add_space(6.0);
             let height = ui.available_height();
-            categories_body(ui, title, categories, selected, height, scrolls, body);
+            if !categories.is_empty() {
+                categories_body(ui, title, categories, selected, height, scrolls, body);
+            } else if scrolls(0) {
+                egui::ScrollArea::vertical().id_salt((title, "body")).auto_shrink([false, false]).show(ui, |ui| body(ui, 0));
+            } else {
+                body(ui, 0);
+            }
         });
     });
     let ctx = ui.ctx().clone();
@@ -192,16 +198,19 @@ pub(super) struct SettingsGroup<'a> {
     title: &'a str,
     icon: Option<&'a str>,
     hint: Option<&'a str>,
-    /// Opens and closes by its heading (closed at first), kept by this
+    /// Opens and closes by its heading (closed at first, unless
+    /// `open_at_first`), kept by this
     /// whatever the title says.
     closable: Option<&'a str>,
+    /// Starts a `closable` group open.
+    open_at_first: bool,
     /// Draws the heading's buttons at its right end (in a right-to-left
     /// layout): what acts on the whole group, as adding to its list.
     buttons: Option<&'a mut dyn FnMut(&mut egui::Ui)>,
 }
 
 pub(super) fn settings_group(title: &str) -> SettingsGroup<'_> {
-    SettingsGroup { title, icon: None, hint: None, closable: None, buttons: None }
+    SettingsGroup { title, icon: None, hint: None, closable: None, open_at_first: false, buttons: None }
 }
 
 impl<'a> SettingsGroup<'a> {
@@ -217,6 +226,10 @@ impl<'a> SettingsGroup<'a> {
         Self { closable: Some(id_salt), ..self }
     }
 
+    pub(super) fn open_at_first(self) -> Self {
+        Self { open_at_first: true, ..self }
+    }
+
     pub(super) fn buttons(self, buttons: &'a mut dyn FnMut(&mut egui::Ui)) -> Self {
         Self { buttons: Some(buttons), ..self }
     }
@@ -227,7 +240,7 @@ impl<'a> SettingsGroup<'a> {
         let visuals = ui.visuals().clone();
         let radius = 6u8;
         let toggle = self.closable.map(|salt| ui.make_persistent_id(("settings_group_open", salt)));
-        let open = toggle.is_none_or(|toggle| ui.ctx().data_mut(|d| *d.get_persisted_mut_or_default::<bool>(toggle)));
+        let open = toggle.is_none_or(|toggle| ui.ctx().data_mut(|d| *d.get_persisted_mut_or_insert_with(toggle, || self.open_at_first)));
         // (No room of its own around it: the item spacing between groups
         // is about the room at its sides.)
         let group = ui.vertical(|ui| {

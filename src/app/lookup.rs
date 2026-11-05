@@ -257,7 +257,7 @@ impl App {
         ui.label(line("Albums", counts[0]));
         ui.label(line("Songs on no album", counts[1]));
         if counts[0][1] + counts[1][1] > 0 && ui.button("Needs a look").on_hover_text("Pick the release each unsure album or song is, in Clean up").clicked() {
-            self.cleanup = Some(Default::default());
+            self.open_cleanup();
         }
         if let Some(name) = busy {
             ui.horizontal(|ui| {

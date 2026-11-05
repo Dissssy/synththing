@@ -31,18 +31,28 @@ impl HelpTab {
 }
 
 impl App {
-    /// Open Help at `tab` (closing Preferences, which takes the same room).
+    /// Open Help at `tab` (closing the other pages, which take the same
+    /// room).
     pub(super) fn open_help(&mut self, tab: HelpTab) {
-        if self.preferences_open {
-            self.toggle_preferences();
-        }
+        self.close_pages();
         self.help = Some(tab);
     }
 
-    /// Whether Preferences or Help is up, in the panels' place (and the
-    /// View and Layout menus, which change the panels, are off).
+    /// Close whichever page is up in the panels' place.
+    pub(super) fn close_pages(&mut self) {
+        if self.preferences_open {
+            self.toggle_preferences();
+        }
+        self.help = None;
+        self.cleanup = None;
+        self.recording.window = None;
+    }
+
+    /// Whether a page (Preferences, Help, Clean up, Record) is up in the
+    /// panels' place (and the View and Layout menus, which change the
+    /// panels, are off).
     pub(super) fn page_open(&self) -> bool {
-        self.preferences_open || self.help.is_some()
+        self.preferences_open || self.help.is_some() || self.cleanup.is_some() || self.recording.window.is_some()
     }
 
     /// The desktop's Help page, while it's open.
