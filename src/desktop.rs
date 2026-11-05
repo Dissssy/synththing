@@ -228,6 +228,21 @@ pub fn main() -> Result<()> {
         setup.instance_descriptor.backends = eframe::wgpu::Backends::DX12;
     }
     options.wgpu_options.on_surface_status = std::sync::Arc::new(surface_status);
+    // Temporary, for the mini player's frozen picture (#332): try other
+    // present modes and frame latencies without a rebuild.
+    let surface = &mut options.wgpu_options.surface;
+    match std::env::var("SYNTHTHING_PRESENT").as_deref() {
+        Ok("fifo") => surface.present_mode = eframe::wgpu::PresentMode::Fifo,
+        Ok("fifo-relaxed") => surface.present_mode = eframe::wgpu::PresentMode::FifoRelaxed,
+        Ok("mailbox") => surface.present_mode = eframe::wgpu::PresentMode::Mailbox,
+        Ok("immediate") => surface.present_mode = eframe::wgpu::PresentMode::Immediate,
+        Ok("novsync") => surface.present_mode = eframe::wgpu::PresentMode::AutoNoVsync,
+        _ => {}
+    }
+    if let Some(latency) = std::env::var("SYNTHTHING_FRAME_LATENCY").ok().and_then(|n| n.parse().ok()) {
+        surface.desired_maximum_frame_latency = Some(latency);
+    }
+    log::info!("surface: {:?}", options.wgpu_options.surface);
     eframe::run_native(
         "synththing",
         options,
