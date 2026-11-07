@@ -50,6 +50,7 @@ impl App {
         let take = self.recording.take();
         self.script.set_recording(recording, take);
         self.script.set_theme(self.current_theme());
+        self.sync_script_up_next();
         {
             let mut panel = lock_panel(&self.visualizer);
             panel.set_pads(self.pad_frame.clone());
@@ -182,6 +183,41 @@ impl App {
         while let Ok((path, art)) = self.script_art.1.try_recv() {
             self.script.set_art(path, art);
         }
+    }
+
+    /// What plays after the song playing (`up_next()`), made again when
+    /// the queue, what's planned after it or the library changes.
+    fn sync_script_up_next(&mut self) {
+        let planned = self.planned();
+        let revision = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (&self.queue, &planned, self.songs_revision()).hash(&mut hasher);
+            hasher.finish()
+        };
+        if self.script_up_next == Some(revision) {
+            return;
+        }
+        self.script_up_next = Some(revision);
+        let naming = naming(&self.config, &self.songs);
+        let queued = self.queue.iter().map(|path| (path, true));
+        let songs = queued
+            .chain(planned.iter().map(|path| (path, false)))
+            .map(|(path, queued)| {
+                let song = self.songs.get(path);
+                let facts = song.map(crate::fields::Facts::of);
+                let text = |field| facts.as_ref().and_then(|f| f.text(field)).map(|t| t.into_owned());
+                crate::script_queue::UpNextSong {
+                    name: title_of(&mut self.song_info, &naming, path),
+                    title: text(crate::fields::Field::Title),
+                    artist: text(crate::fields::Field::Artist),
+                    album: text(crate::fields::Field::Album),
+                    length: facts.as_ref().and_then(|f| f.number(crate::fields::Field::Length)),
+                    queued,
+                }
+            })
+            .collect();
+        self.script.set_up_next(songs);
     }
 
     /// The playlist scripts see (`playlist()`): the one playing, else the

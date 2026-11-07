@@ -123,6 +123,7 @@ enum Message {
     SetStreaming(bool),
     SetTheme(Box<crate::theme::Theme>),
     SetSongDetails(Option<crate::script_song::SongDetails>),
+    SetUpNext(Vec<crate::script_queue::UpNextSong>),
     /// Read the script's variables now and then, as far as the request
     /// opens them (the Debug window shows them), or stop (`None`).
     WatchState(Option<StateRequest>),
@@ -424,6 +425,12 @@ impl ScriptHost {
         }
     }
 
+    /// What plays after the song playing, for `up_next()` (the app
+    /// sends it when it changes).
+    pub fn set_up_next(&self, songs: Vec<crate::script_queue::UpNextSong>) {
+        self.send(Message::SetUpNext(songs));
+    }
+
     /// The app's theme, for `theme()` (sent on a change).
     pub fn set_theme(&mut self, theme: crate::theme::Theme) {
         if self.theme.as_ref() != Some(&theme) {
@@ -671,6 +678,7 @@ fn handle(visualizer: &mut LuaVisualizer, message: Message) -> Option<FrameDone>
         Message::SetStreaming(on) => visualizer.set_streaming(on),
         Message::SetTheme(theme) => visualizer.set_theme(*theme),
         Message::SetSongDetails(details) => visualizer.set_song_details(details),
+        Message::SetUpNext(songs) => visualizer.set_up_next(songs),
         Message::WatchState(_) => {} // (handled by the worker)
         Message::SetSetting { key, value } => visualizer.set_setting(&key, value),
         Message::SetActionBindings { index, bindings } => visualizer.set_action_bindings(index, bindings),

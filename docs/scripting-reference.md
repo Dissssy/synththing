@@ -674,14 +674,16 @@ Render and `run-script --video` work the same way: the frames a script spends pr
 
 ## Playlist
 
-<!-- api: playlist play_track next_track previous_track set_loop set_shuffle -->
+<!-- api: playlist up_next play_track next_track previous_track set_loop set_shuffle -->
 ```lua
-playlist() -> playlist   -- the current playlist, read-only, or nil (since 0.2.0)
-play_track(index)        -- play the current playlist's index-th song (since 0.2.0)
-next_track()             -- the Next button (since 0.2.0)
-previous_track()         -- the Previous button (since 0.2.0)
-set_loop(mode)           -- the Loop mode (since 0.2.0)
-set_shuffle(on)          -- shuffle the playlist or not (since 0.2.0)
+playlist() -> playlist      -- the current playlist, read-only, or nil (since 0.2.0)
+up_next([count]) -> songs   -- what plays after the song playing: the queue, then what the playlist, album or Autoplay plays after it (since next)
+                            -- count: at most this many, all if not given
+play_track(index)           -- play the current playlist's index-th song (since 0.2.0)
+next_track()                -- the Next button (since 0.2.0)
+previous_track()            -- the Previous button (since 0.2.0)
+set_loop(mode)              -- the Loop mode (since 0.2.0)
+set_shuffle(on)             -- shuffle the playlist or not (since 0.2.0)
 ```
 <!-- /api -->
 
@@ -691,6 +693,14 @@ A script can see the current playlist and move between its songs, enough to draw
 - `playing`: whether it's the one playing (rather than only open)
 - `current`: the index of the song playing from it, or nil
 - `entries`: its songs in order, each `{name, length, missing}`; `length` is in seconds once it's been read (nil until then), `missing` is true for a song whose file isn't there any more
+
+`up_next()` is what plays after the song playing, in order: every song in the queue (`queued` true), then what the playlist, album or Songs list with Autoplay plays after them, as far ahead as the Queue page shows (Preferences' Songs coming up). Each is `{name, title, artist, album, length, queued}`; `name` is how the app shows the song, the rest are nil where the library doesn't know them. `up_next(3)` gives at most the first 3. It's an empty list when nothing comes next, and in previews and command-line runs.
+
+```lua
+for i, song in ipairs(up_next(3)) do
+    text(10, 10 + i * 14, (song.queued and "Queued: " or "Then: ") .. song.name, theme().weak_text)
+end
+```
 
 `play_track` starts the playlist from that song, as clicking it does; an index past the end is an error. `next_track` and `previous_track` do what the app's buttons do (previous restarts the song if it's been playing a little while), and follow the loop and shuffle modes. `set_loop` and `set_shuffle` change the same modes as the buttons; `playback()` reports them as `loop_mode` and `shuffle`. Like `set_paused`, these happen right after the frame. The volume stays the user's.
 
@@ -1247,6 +1257,14 @@ SongNote                -- a whole note of the song (notes_between()), times in 
     velocity: integer
     start: number
     stop: number
+
+UpNextSong            -- a song coming up (up_next())
+    name: string      -- as the app shows it
+    title?: string
+    artist?: string
+    album?: string
+    length?: number   -- seconds
+    queued: boolean   -- in the queue, rather than what plays after it
 
 SongDetails                        -- what the library knows of a song (song_details()), with the user's edits; a field it doesn't know is nil. Keys are the ones song name patterns use
     title?: string

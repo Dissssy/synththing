@@ -214,6 +214,7 @@ pub const ITEMS: &[Item] = &[
     f("recording_done", RECORDING, "0.4.0", &[], &[], "with record_prepare: this song's take is over; the recording ends or the playlist moves on"),
     // Playlist
     f("playlist", PLAYLIST, "0.2.0", &[], &[p("playlist", "Playlist|nil")], "the current playlist, read-only, or nil"),
+    f("up_next", PLAYLIST, "next", &[od("count", "integer", "at most this many, all if not given")], &[p("songs", "UpNextSong[]")], "what plays after the song playing: the queue, then what the playlist, album or Autoplay plays after it"),
     f("play_track", PLAYLIST, "0.2.0", &[p("index", "integer")], &[], "play the current playlist's index-th song"),
     f("next_track", PLAYLIST, "0.2.0", &[], &[], "the Next button"),
     f("previous_track", PLAYLIST, "0.2.0", &[], &[], "the Previous button"),
@@ -364,6 +365,18 @@ pub const CLASSES: &[Class] = &[
         name: "SongNote",
         summary: "a whole note of the song (notes_between()), times in song seconds",
         fields: &[p("id", "integer"), p("channel", "integer"), p("key", "integer"), p("velocity", "integer"), p("start", "number"), p("stop", "number")],
+    },
+    Class {
+        name: "UpNextSong",
+        summary: "a song coming up (up_next())",
+        fields: &[
+            d("name", "string", "as the app shows it"),
+            opt("title", "string"),
+            opt("artist", "string"),
+            opt("album", "string"),
+            od("length", "number", "seconds"),
+            d("queued", "boolean", "in the queue, rather than what plays after it"),
+        ],
     },
     Class {
         name: "SongDetails",

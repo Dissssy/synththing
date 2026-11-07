@@ -544,6 +544,9 @@ pub struct App {
     /// The song the script has, and the library's revision its details
     /// (`song_details()`) were last made from.
     script_details: Option<(PathBuf, u64)>,
+    /// What `up_next()` was last made from (a hash of the queue, what
+    /// plays after it and the library).
+    script_up_next: Option<u64>,
     /// Songs' art read for the script (`album_art()`), on threads of
     /// their own: the sending side for them, and what they've read.
     script_art: (mpsc::Sender<ScriptArtRead>, mpsc::Receiver<ScriptArtRead>),
@@ -828,6 +831,7 @@ impl App {
             loads_sent: 0,
             pending_script_song: None,
             script_details: None,
+            script_up_next: None,
             script_art: mpsc::channel(),
             song_notes: None,
             accent: None,
