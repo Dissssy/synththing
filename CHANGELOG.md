@@ -6,10 +6,14 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Added
 - Follow playback (the crosshair button atop Songs and a playlist): the list keeps the playing song in view, scrolling to each song as it starts. Scrolling the list yourself turns it off. It never switches to another list or view.
+- Windows: the window is drawn with Vulkan again, which no longer flickers other monitors the way DirectX 12 could. Preferences > App > Window > Graphics switches back to DirectX 12 (from the next launch).
+- An offered update shows what it brings: its changelog back to your version, and for a nightly the pull requests merged since the last release, newest first, each linking to its page.
+- Updates is laid out like the rest of the app: a card on top says what the check found (the version, Nightly or Branch build, the size) with its buttons, and under it what the update brings, in the changelog's look, down to a marker for the version you have.
 
 ### Fixed
 - Usage data no longer counts what an older version logged under the version you updated to: counts left unsent at an update are sent under the version they came from, right after the update.
 - The Scripting Reference no longer slows every frame while it's open: only the part in sight is drawn.
+- When a release goes out without this platform's file (an Android build that failed), the updater offers the newest release that has it instead of failing with "release ... has no ...".
 
 ### Changed
 - The visualizer page for OBS (`/v1/visualizer`) draws at its own size for whichever of `width` and `height` the URL leaves out: resize the Browser Source, refresh it, and the visualizer follows. A new `scale` query argument works like the Visualizer scale preference (`&scale=4` for chunky pixels).

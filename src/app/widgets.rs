@@ -662,3 +662,37 @@ mod tests {
         }
     }
 }
+
+/// A card: a box a little apart from the settings groups, for the one
+/// thing a page is about (the identity on Account, an update on Updates).
+pub(super) fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    let visuals = ui.visuals().clone();
+    egui::Frame::new()
+        .fill(visuals.faint_bg_color)
+        .stroke(visuals.widgets.noninteractive.bg_stroke)
+        .corner_radius(10)
+        .inner_margin(14)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+}
+
+/// A card's badge: a circle of `fill` with an icon in it.
+pub(super) fn card_badge(ui: &mut egui::Ui, fill: egui::Color32, name: &str, color: egui::Color32) {
+    let size = 56.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.circle_filled(rect.center(), size / 2.0, fill);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, icon(name), egui::FontId::proportional(30.0), color);
+}
+
+/// A small rounded label saying how something stands, in `color`.
+pub(super) fn status_pill(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
+    egui::Frame::new()
+        .fill(color.gamma_multiply(0.12))
+        .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.6)))
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(8, 1))
+        .show(ui, |ui| ui.label(egui::RichText::new(text).color(color)));
+}
