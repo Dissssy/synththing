@@ -105,7 +105,7 @@ impl App {
         if egui::DragAndDrop::has_any_payload(ctx) {
             editing.renaming = None;
         }
-        let response = egui::Modal::new(egui::Id::new("edit_layouts")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("edit_layouts")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 400.0));
             let mut buttons = |ui: &mut egui::Ui| {
                 close = ui.add(row_icon_button(ui, "x")).on_hover_text("Close").clicked();
@@ -181,7 +181,7 @@ impl App {
         }
         if let Some(n) = editing.deleting {
             let mut cancel = false;
-            let dialog = egui::Modal::new(egui::Id::new("delete_layout")).show(ctx, |ui| {
+            let dialog = egui::Modal::new(egui::Id::unique("delete_layout")).show(ctx, |ui| {
                 ui.set_width(fit_width(ui, 360.0));
                 ui.heading(format!("Delete \"{}\"?", presets[n].name));
                 ui.label("Its arrangement is gone for good. The panels showing now stay as they are.");
@@ -256,7 +256,7 @@ impl App {
         let name = new.name.trim().to_string();
         let taken = self.config.layout_presets.iter().any(|p| p.name.eq_ignore_ascii_case(&name));
         let fine = !name.is_empty() && !taken;
-        let response = egui::Modal::new(egui::Id::new("new_layout")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("new_layout")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 320.0));
             ui.heading("New layout");
             ui.label("Name:");

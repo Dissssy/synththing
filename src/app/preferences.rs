@@ -7,7 +7,7 @@
 use eframe::egui;
 
 use super::reorder::{reorder_list, trash_ui, ListEntry};
-use super::{categories_body, icon_button, row_icon_button, row_icon_button_room, nice_name, control_width, setting_label, setting_combo, setting_row, setting_slider, settings_group, toggle_chip, with_info, App};
+use super::{page_ui, row_icon_button, row_icon_button_room, nice_name, control_width, setting_label, setting_combo, setting_row, setting_slider, settings_group, toggle_chip, with_info, App};
 use crate::audio::{AudioCommand, DEFAULT_BUFFER_MS, MAX_BUFFER_MS, MIN_BUFFER_MS};
 use crate::config::{self, DEFAULT_PRELOAD_EXPIRY_SECS, PRELOAD_EXPIRY_RANGE};
 use crate::loudness;
@@ -109,38 +109,15 @@ impl App {
     /// bar and the bottom bar stay, and playback goes on.
     pub(super) fn preferences_ui(&mut self, ui: &mut egui::Ui) {
         let tabs = PrefTab::available();
-        let mut close = false;
         let mut jump = None;
-        let outer = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 8 });
-        egui::CentralPanel::default().frame(outer).show(ui, |ui| {
-            let page = egui::Frame::new().fill(ui.visuals().window_fill).corner_radius(6).inner_margin(12);
-            page.show(ui, |ui| {
-                ui.set_min_size(ui.available_size());
-                ui.horizontal(|ui| {
-                    ui.heading("Preferences");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        close = ui.add(icon_button("x")).on_hover_text("Close (Esc)").clicked();
-                    });
-                });
-                ui.add_space(6.0);
-                let titles: Vec<String> = tabs.iter().map(|t| format!("{}  {}", super::icon(t.icon()), t.title())).collect();
-                let mut index = tabs.iter().position(|&t| t == self.preferences_tab).unwrap_or(0);
-                let height = ui.available_height();
-                categories_body(ui, "preferences", &titles, &mut index, height, |ui, index| {
-                    jump = self.preference_tab_ui(ui, tabs[index]);
-                });
-                self.preferences_tab = tabs[index];
-            });
+        let titles: Vec<String> = tabs.iter().map(|t| format!("{}  {}", super::icon(t.icon()), t.title())).collect();
+        let mut index = tabs.iter().position(|&t| t == self.preferences_tab).unwrap_or(0);
+        // (Esc ends waiting for keys first.)
+        let esc = self.keymap_capture.is_none();
+        let close = page_ui(ui, "Preferences", &titles, &mut index, esc, |_| true, |ui, index| {
+            jump = self.preference_tab_ui(ui, tabs[index]);
         });
-        // (Esc closes an open dropdown, or ends waiting for keys, first.)
-        let ctx = ui.ctx().clone();
-        if self.keymap_capture.is_none()
-            && !egui::Popup::is_any_open(&ctx)
-            && ctx.memory(|m| m.top_modal_layer()).is_none()
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-        {
-            close = true;
-        }
+        self.preferences_tab = tabs[index];
         if close || jump.is_some() {
             self.toggle_preferences();
         }
@@ -162,6 +139,9 @@ impl App {
     /// Open Preferences, or close it (letting go of what it was doing).
     pub(super) fn toggle_preferences(&mut self) {
         self.preferences_open = !self.preferences_open;
+        self.help = None;
+        self.cleanup = None;
+        self.recording.window = None;
         if !self.preferences_open {
             self.keymap_capture = None;
             self.api_preferences_closed();
@@ -236,11 +216,40 @@ impl App {
     }
 
     /// Appearance > Controls bar: the bar's line of buttons and sliders as
-    /// a list, its left, middle and right sections under their lines, each
-    /// dragged to its place (past a line into the next section) or onto the heading's trash;
-    /// the heading's + adds more at the left's end, and ↺ puts back the
-    /// usual ones.
+    /// a list, its left, middle and right sections under their lines.
     fn controls_bar_list_ui(&self, ui: &mut egui::Ui, bar: &mut config::ControlsBar) {
+        let info = "The buttons and sliders under the seek bar, left to right. Moving one past a line moves it into \
+                    that section: the middle stays centred, the left and right hug their ends. Star and tag buttons \
+                    give the song playing its star or the tag, or take it off. When the window gets narrow, speed \
+                    and then volume become buttons that open their slider, and then star and tag buttons fold into \
+                    a list.";
+        let usual = config::ControlsBar::default().0;
+        let group = BarList { key: "controls_bar", title: "Controls bar", icon: "faders-horizontal", hint: "Left to right, the middle kept centred", info, usual: &usual, sections: true };
+        self.bar_list_ui(ui, &group, &mut bar.0);
+    }
+
+    /// Appearance > Mini player buttons: the mini player's one line of
+    /// buttons and sliders as a list.
+    fn mini_controls_list_ui(&self, ui: &mut egui::Ui, controls: &mut config::MiniControls) {
+        let info = "The buttons and sliders under the mini player's seek bar, left to right, on as many rows as \
+                    they take.";
+        let group = BarList {
+            key: "mini_controls",
+            title: "Mini player buttons",
+            icon: "picture-in-picture",
+            hint: "Left to right, on as many rows as they take",
+            info,
+            usual: &config::MiniControls::USUAL,
+            sections: false,
+        };
+        self.bar_list_ui(ui, &group, &mut controls.0);
+    }
+
+    /// A line of controls bar items as a list, each dragged to its place
+    /// (past a section's line into the next, with `sections`) or onto the
+    /// heading's trash; the heading's + adds more (at the left section's
+    /// end, or the line's), and ↺ puts back the usual ones.
+    fn bar_list_ui(&self, ui: &mut egui::Ui, group: &BarList, items: &mut Vec<config::BarItem>) {
         use config::BarItem;
         let tags = self.songs.tags();
         // Its icon and name (`None`: a section's start, or a tag since
@@ -262,16 +271,18 @@ impl App {
             };
             Some(egui::RichText::new(format!("{}  {name}", super::icon(glyph))))
         };
-        bar.0.retain(|item| matches!(item, BarItem::Middle | BarItem::Right) || describe(item).is_some());
+        items.retain(|item| (group.sections && matches!(item, BarItem::Middle | BarItem::Right)) || describe(item).is_some());
         let entry = |i: usize, item: &BarItem| {
             let mut lines = Vec::new();
-            if i == 0 {
-                lines.push("Left".to_string());
-            }
-            match item {
-                BarItem::Middle => lines.push("Middle (kept centred)".to_string()),
-                BarItem::Right => lines.push("Right".to_string()),
-                _ => {}
+            if group.sections {
+                if i == 0 {
+                    lines.push("Left".to_string());
+                }
+                match item {
+                    BarItem::Middle => lines.push("Middle (kept centred)".to_string()),
+                    BarItem::Right => lines.push("Right".to_string()),
+                    _ => {}
+                }
             }
             ListEntry { lines, row: !matches!(item, BarItem::Middle | BarItem::Right) }
         };
@@ -285,19 +296,14 @@ impl App {
         let unused: Vec<BarItem> = BarItem::SINGLE
             .into_iter()
             .chain(sorted.into_iter().map(|(id, _)| BarItem::Tag(id.clone())))
-            .filter(|item| !bar.0.contains(item))
+            .filter(|item| !items.contains(item))
             .collect();
-        let info = "The buttons and sliders under the seek bar, left to right. Moving one past a line moves it into \
-                    that section: the middle stays centred, the left and right hug their ends. Star and tag buttons \
-                    give the song playing its star or the tag, or take it off. When the window gets narrow, speed \
-                    and then volume become buttons that open their slider, and then star and tag buttons fold into \
-                    a list.";
         let mut added = None;
         let mut reset = false;
-        let usual = *bar == config::ControlsBar::default();
-        let len = bar.0.len();
+        let usual = items.as_slice() == group.usual;
+        let len = items.len();
         let mut buttons = |ui: &mut egui::Ui| {
-            super::info_icon(ui, info);
+            super::info_icon(ui, group.info);
             if ui.add_enabled(!usual, row_icon_button(ui, "arrow-counter-clockwise")).on_hover_text("Back to the usual buttons").clicked() {
                 reset = true;
             }
@@ -311,19 +317,19 @@ impl App {
                     }
                 }
             });
-            trash_ui(ui, "controls_bar", len);
+            trash_ui(ui, group.key, len);
         };
-        settings_group("Controls bar").icon("faders-horizontal").hint("Left to right, the middle kept centred").buttons(&mut buttons).show(ui, |ui| {
-            if let Some(i) = reorder_list(ui, "controls_bar", &mut bar.0, entry, row) {
-                bar.0.remove(i);
+        settings_group(group.title).icon(group.icon).hint(group.hint).buttons(&mut buttons).show(ui, |ui| {
+            if let Some(i) = reorder_list(ui, group.key, items, entry, row) {
+                items.remove(i);
             }
         });
         if let Some(item) = added {
-            let at = bar.0.iter().position(|i| *i == BarItem::Middle).unwrap_or(0);
-            bar.0.insert(at, item);
+            let at = items.iter().position(|i| *i == BarItem::Middle).unwrap_or(items.len());
+            items.insert(at, item);
         }
         if reset {
-            *bar = config::ControlsBar::default();
+            *items = group.usual.to_vec();
         }
     }
 
@@ -396,6 +402,8 @@ impl App {
         let mut canary = self.config.canary_updates();
         let mut close_to_tray = self.config.close_to_tray.unwrap_or(false);
         let mut native_frame = self.config.native_frame;
+        let mut playing_fps = self.config.playing_fps.unwrap_or(config::DEFAULT_PLAYING_FPS);
+        let mut graphics_backend = self.config.graphics_backend;
         let mut warn_heavy = self.config.warn_heavy_midi.unwrap_or(true);
         let mut beat_pulse = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE) * 100.0;
         let mut pulse_length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH) * 100.0;
@@ -403,6 +411,7 @@ impl App {
         let mut visualizer_scale = config::visualizer_scale_down(self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE));
         let mut channel_chips = self.config.channel_chips;
         let mut controls_bar = self.config.controls_bar.clone();
+        let mut mini_controls = self.config.mini_controls.clone();
         let mut buffer_ms = self.buffer_ms;
         let mut even_volume = self.config.even_volume.unwrap_or(true);
         let mut volume_target = self.config.volume_target.unwrap_or(loudness::DEFAULT_TARGET);
@@ -439,6 +448,9 @@ impl App {
                 });
                 if !self.mobile() {
                     self.controls_bar_list_ui(ui, &mut controls_bar);
+                }
+                if self.has_tray() {
+                    self.mini_controls_list_ui(ui, &mut mini_controls);
                 }
                 settings_group("Seek bar").icon("sliders-horizontal").show(ui, |ui| {
                     with_info(
@@ -750,7 +762,7 @@ impl App {
                     with_info(
                         ui,
                         "What visualizer scripts log() shows in their Debug window; with this \
-                         on, it also goes to Help > Log... (and the log file), labelled with the \
+                         on, it also goes to Help > Log (and the log file), labelled with the \
                          script's name. A script can turn it on for itself (script_options), or for \
                          single messages (log_app).",
                         |ui| ui.checkbox(&mut script_log, "Copy script logs to the app log"),
@@ -773,7 +785,42 @@ impl App {
                              middle to move the window, double-click it to maximize).",
                             |ui| ui.checkbox(&mut native_frame, "Use the system's window frame"),
                         );
-                        if self.tray.is_some() {
+                        with_info(
+                            ui,
+                            &format!(
+                                "How many times a second the window redraws while a song plays, when \
+                                 nothing else (the mouse, a visualizer) is redrawing it already. Higher \
+                                 makes the seek bar and time move smoothly; lower uses less CPU and \
+                                 battery. Hidden or minimized, it stays at {} a second. {} unless changed.",
+                                config::DEFAULT_PLAYING_FPS,
+                                config::DEFAULT_PLAYING_FPS,
+                            ),
+                            |ui| {
+                                let label = setting_label(ui, "Redraws while playing");
+                                label | setting_slider(ui, egui::Slider::new(&mut playing_fps, config::PLAYING_FPS_RANGE).suffix(" / s").logarithmic(true), 0.0)
+                            },
+                        );
+                        if cfg!(windows) {
+                            with_info(
+                                ui,
+                                "What draws the window, from the next time synththing starts. Vulkan by \
+                                 default; try DirectX 12 if the window misbehaves with it. The \
+                                 WGPU_BACKEND environment variable overrides this. Help > Log's \
+                                 \"graphics:\" line says which is in use.",
+                                |ui| {
+                                    let label = setting_label(ui, "Graphics");
+                                    let combo = setting_combo(ui, "graphics_backend", 0.0)
+                                        .selected_text(graphics_backend.name())
+                                        .show_ui(ui, |ui| {
+                                            for backend in crate::config::GraphicsBackend::ALL {
+                                                ui.selectable_value(&mut graphics_backend, backend, backend.name());
+                                            }
+                                        });
+                                    label | combo.response
+                                },
+                            );
+                        }
+                        if self.has_tray() {
                             with_info(
                                 ui,
                                 "On: closing the window hides synththing in the tray (by the clock), still \
@@ -846,15 +893,18 @@ impl App {
             || unsearched != self.config.songs_view.unsearched
             || check_updates != self.config.check_updates_on_launch.unwrap_or(true)
             || canary != self.config.canary_updates()
-            || (self.tray.is_some() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
+            || (self.has_tray() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
             || warn_heavy != self.config.warn_heavy_midi.unwrap_or(true)
             || native_frame != self.config.native_frame
+            || playing_fps != self.config.playing_fps.unwrap_or(config::DEFAULT_PLAYING_FPS)
+            || graphics_backend != self.config.graphics_backend
             || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
             || (pulse_length / 100.0 - self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH)).abs() > 1e-4
             || script_log != self.config.script_log_to_app
             || visualizer_scale != self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE)
             || channel_chips != self.config.channel_chips
             || controls_bar != self.config.controls_bar
+            || mini_controls != self.config.mini_controls
             || buffer_ms != self.buffer_ms
             || even_volume != self.config.even_volume.unwrap_or(true)
             || volume_target != self.config.volume_target.unwrap_or(loudness::DEFAULT_TARGET)
@@ -884,10 +934,13 @@ impl App {
             self.send_volume();
             self.config.channel_chips = channel_chips;
             self.config.controls_bar = controls_bar;
+            self.config.mini_controls = mini_controls;
             self.config.script_log_to_app = script_log;
             self.config.visualizer_scale = (visualizer_scale != config::DEFAULT_VISUALIZER_SCALE).then_some(visualizer_scale);
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
             self.config.native_frame = native_frame;
+            self.config.playing_fps = Some(playing_fps).filter(|&f| f != config::DEFAULT_PLAYING_FPS);
+            self.config.graphics_backend = graphics_backend;
             self.config.beat_pulse = Some(beat_pulse / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE).abs() > 1e-4);
             self.config.beat_pulse_length =
                 Some(pulse_length / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE_LENGTH).abs() > 1e-4);
@@ -895,7 +948,7 @@ impl App {
             if canary != self.config.canary_updates() {
                 self.config.canary_updates = Some(canary);
             }
-            if self.tray.is_some() && (close_to_tray || self.config.close_to_tray.is_some()) {
+            if self.has_tray() && (close_to_tray || self.config.close_to_tray.is_some()) {
                 self.config.close_to_tray = Some(close_to_tray);
             }
             self.config.preload_expiry_secs = expiry;
@@ -950,3 +1003,17 @@ fn cutoff_row(ui: &mut egui::Ui, label: &str, cutoff: &mut crate::play_stats::Cu
 
 /// The most seconds a play count's cutoff can be.
 const MAX_CUTOFF_SECS: f64 = 300.0;
+
+/// One of Appearance's lists of controls bar items (`App::bar_list_ui`).
+struct BarList<'a> {
+    /// The list's id (its drag and trash).
+    key: &'static str,
+    title: &'static str,
+    icon: &'static str,
+    hint: &'static str,
+    info: &'static str,
+    usual: &'a [config::BarItem],
+    /// Left, middle and right sections, split by `BarItem::Middle` and
+    /// `BarItem::Right`.
+    sections: bool,
+}

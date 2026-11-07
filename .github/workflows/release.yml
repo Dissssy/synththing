@@ -212,6 +212,36 @@ jobs:
             --title "synththing $GITHUB_REF_NAME" \
             --notes-file notes/notes.md
 
+  # Tell whoever sent the feedback behind what this release fixed or added
+  # (.github/scripts/feedback-replies.sh, docs/feedback-intake.md). Needs
+  # the intake token as the SYNTHTHING_INTAKE_TOKEN secret; without it,
+  # nobody is told.
+  feedback-replies:
+    needs: publish
+    # Publish runs even when Android fails, and without this its own
+    # dependents would still be skipped for that failure.
+    if: always() && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INTAKE_TOKEN: ${{ secrets.SYNTHTHING_INTAKE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Tell feedback senders
+        run: |
+          if [ -z "$INTAKE_TOKEN" ]; then
+            echo "::notice::no SYNTHTHING_INTAKE_TOKEN secret, so nobody was told"
+            exit 0
+          fi
+          .github/scripts/feedback-replies.sh "$GITHUB_REF_NAME"
+
   # The website (deploy/website.Dockerfile): the front page and the docs
   # rendered by mdBook (book.toml), pushed to
   # ghcr.io/<owner>/synththing-website as :<version> and :latest, which

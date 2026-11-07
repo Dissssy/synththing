@@ -70,6 +70,9 @@ fn wording(kind: &str) -> Option<&'static str> {
         "report_handled" => "Your report of \"{name}\" was dealt with: {outcome}",
         "new_report" => "New report of \"{name}\": {reason}",
         "new_feedback" => "New feedback ({channel}): {preview}",
+        "feedback_fixed" => "Thank you for your feedback! What you reported is fixed in {version}: \"{preview}\"",
+        "feedback_added" => "Thank you for your feedback! What you asked for is in {version}: \"{preview}\"",
+        "feedback_not_planned" => "Thank you for your feedback! It's been suggested before, and isn't planned for now: \"{preview}\"",
         "copyright_notice" => "\"{name}\" was taken down by a copyright notice from {claimant}, for {on_behalf_of}",
         "notice_disputed" => "{uploader} disputed your copyright notice on \"{name}\"",
         "dispute_upheld" => "Your dispute was upheld: \"{name}\" is back up",
@@ -94,7 +97,9 @@ fn icon_of(kind: &str) -> &'static str {
         "removed" => "trash",
         "remixed" => "git-fork",
         "report_handled" | "new_report" => "flag",
-        "new_feedback" => "chat-circle-dots",
+        "new_feedback" | "feedback_not_planned" => "chat-circle-dots",
+        "feedback_fixed" => "wrench",
+        "feedback_added" => "sparkle",
         "copyright_notice" | "takedown_stood" | "new_notice" => "copyright",
         "notice_disputed" | "new_dispute" | "notice_rejected" => "scales",
         "dispute_upheld" | "notice_withdrawn" => "check-circle",
@@ -109,8 +114,9 @@ fn icon_of(kind: &str) -> &'static str {
 /// kind this app doesn't know.
 fn tier_of(kind: &str) -> u8 {
     match kind {
-        "encore_milestone" | "download_milestone" | "remixed" => 1,
-        "reinstated" | "dispute_upheld" | "notice_withdrawn" | "report_handled" | "notice_rejected" | "hub_reachable" => 2,
+        "encore_milestone" | "download_milestone" | "remixed" | "feedback_fixed" | "feedback_added" => 1,
+        "reinstated" | "dispute_upheld" | "notice_withdrawn" | "report_handled" | "notice_rejected" | "hub_reachable"
+        | "feedback_not_planned" => 2,
         "new_report" | "new_feedback" | "new_notice" | "new_dispute" | "notice_disputed" | "hidden" => 3,
         "copyright_notice" | "takedown_stood" | "removed" | "hub_unreachable" => 4,
         _ => 0,
@@ -132,8 +138,8 @@ fn color_of(ui: &egui::Ui, n: &Notification) -> egui::Color32 {
         "encore_milestone" => palette(6),
         "download_milestone" => palette(2),
         "remixed" => palette(4),
-        "reinstated" | "dispute_upheld" | "notice_withdrawn" => palette(5),
-        "report_handled" | "notice_rejected" => palette(0),
+        "reinstated" | "dispute_upheld" | "notice_withdrawn" | "feedback_fixed" | "feedback_added" => palette(5),
+        "report_handled" | "notice_rejected" | "feedback_not_planned" => palette(0),
         "hidden" => palette(1),
         kind if tier_of(kind) == 3 => palette(3),
         kind if tier_of(kind) == 4 => ui.visuals().error_fg_color,
@@ -412,7 +418,7 @@ impl App {
         let mut moderate_feedback = false;
         let mut copyright = false;
         let mut notice: Option<(i64, bool)> = None;
-        let response = egui::Modal::new(egui::Id::new("notification")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("notification")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 440.0));
             ui.horizontal(|ui| {
                 ui.heading(egui::RichText::new(icon_of(&n.kind)).color(color_of(ui, &n)));
@@ -572,6 +578,9 @@ mod tests {
             "report_handled",
             "new_report",
             "new_feedback",
+            "feedback_fixed",
+            "feedback_added",
+            "feedback_not_planned",
             "copyright_notice",
             "notice_disputed",
             "dispute_upheld",

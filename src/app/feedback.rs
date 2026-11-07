@@ -2,8 +2,10 @@
 //! menu bar): a note to the people making synththing, through the official
 //! library server (docs/SERVER.md). One box to write in; the build and OS
 //! go along, and the log and the last minute's frame times only if they
-//! tick them. Branch builds send it too:
-//! their feedback is about what's being tried in them.
+//! tick them. Signed in, they can ask to hear what comes of it: the note is
+//! signed, and a notification says when it's fixed or added (in which
+//! version) or isn't planned. Branch builds send it too: their feedback is
+//! about what's being tried in them (and answered on its pull request).
 
 use std::sync::mpsc::{self, Receiver};
 
@@ -11,6 +13,7 @@ use eframe::egui;
 
 use super::App;
 use crate::build_info::{self, Channel};
+use crate::library::identity::Identity;
 use crate::library::{self, client, FeedbackRequest, MAX_FEEDBACK_LOG, MAX_FEEDBACK_TEXT};
 
 /// Lines of the log sent along, at most.
@@ -23,6 +26,8 @@ pub struct FeedbackState {
     text: String,
     include_log: bool,
     include_performance: bool,
+    /// Hear what comes of it (signed in only).
+    reply: bool,
     error: Option<String>,
     /// Being sent: how it went, when it has.
     sending: Option<Receiver<Result<i64, String>>>,
@@ -32,7 +37,7 @@ impl Default for FeedbackState {
     /// The frame times go along unless they untick it: nothing in them is
     /// about the person.
     fn default() -> Self {
-        Self { open: false, focus: false, text: String::new(), include_log: false, include_performance: true, error: None, sending: None }
+        Self { open: false, focus: false, text: String::new(), include_log: false, include_performance: true, reply: false, error: None, sending: None }
     }
 }
 
@@ -110,11 +115,14 @@ impl App {
         if !self.feedback.open {
             return;
         }
+        // (Signed-in only, and not from a branch build: its notes go to
+        // its pull request, and are gone with it.)
+        let can_reply = self.signed_in() && !matches!(build_info::channel(), Channel::Branch(_));
         let state = &mut self.feedback;
         let sending = state.sending.is_some();
         let mut send = false;
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("feedback")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("feedback")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 520.0));
             ui.heading("Send feedback");
             if let Channel::Branch(name) = build_info::channel() {
@@ -134,9 +142,15 @@ impl App {
                 .on_hover_text(format!("The last {LOG_LINES} lines of Help > Log"));
             ui.checkbox(&mut state.include_performance, "Include how smoothly the app ran (helps with stutters)")
                 .on_hover_text("How long the app took to draw over the last minute, on average and at worst, and in which parts");
+            if can_reply {
+                ui.checkbox(&mut state.reply, "Let me know what comes of this")
+                    .on_hover_text("A notification when it's fixed or added, and in which version (or if it isn't planned). This ties the note to your account.");
+            }
+            let reply = can_reply && state.reply;
             ui.weak(format!(
-                "Goes to synththing's developers with the app's version ({}) and your OS. No account, and nothing else about you.",
-                build_info::describe()
+                "Goes to synththing's developers with the app's version ({}) and your OS. {}",
+                build_info::describe(),
+                if reply { "Your account goes along until you've heard back." } else { "No account, and nothing else about you." }
             ));
             if let Some(error) = &state.error {
                 ui.colored_label(ui.visuals().warn_fg_color, error);
@@ -156,11 +170,12 @@ impl App {
         });
         if send {
             let feedback = request(&state.text, state.include_log, state.include_performance);
+            let reply_to = (can_reply && state.reply).then(Identity::load).flatten();
             let (tx, rx) = mpsc::channel();
             state.sending = Some(rx);
             state.error = None;
             std::thread::spawn(move || {
-                let _ = tx.send(client::feedback(&library::official_url(), &feedback));
+                let _ = tx.send(client::feedback(&library::official_url(), &library::server_key(), &feedback, reply_to.as_ref()));
             });
         }
         // (What's written stays for next time, unless it was sent.)

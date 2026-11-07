@@ -53,8 +53,8 @@ pub fn main(android: AndroidApp) {
     log::info!("synththing v{} starting on Android", crate::build_info::describe());
     keep_activity(&android);
 
-    let (app, stream) = match crate::startup::start() {
-        Ok(started) => started,
+    let app = match crate::startup::start() {
+        Ok(app) => app,
         Err(e) => {
             log::error!("couldn't start: {e:#}");
             return;
@@ -62,7 +62,7 @@ pub fn main(android: AndroidApp) {
     };
     let app = Arc::new(Mutex::new(app));
     let last_frame = Arc::new(Mutex::new(Instant::now()));
-    let options = eframe::NativeOptions { android_app: Some(android), ..Default::default() };
+    let options = eframe::NativeOptions { android_app: Some(android), system_font_fallback: false, ..Default::default() };
     let shared = Shared { app: Arc::clone(&app), last_frame: Arc::clone(&last_frame) };
     let result = eframe::run_native(
         "synththing",
@@ -76,7 +76,6 @@ pub fn main(android: AndroidApp) {
     if let Err(e) = result {
         log::error!("the GUI stopped: {e}");
     }
-    drop(stream);
 }
 
 /// The app as eframe sees it: shared with the background ticks.

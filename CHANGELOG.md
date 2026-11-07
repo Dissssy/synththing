@@ -7,18 +7,56 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### Added
 - Visualizer scripts can tell the time: `now()` gives today's date and the time of day (local, or UTC), `unix_time()` the seconds since 1970, and `format_time("%H:%M")` turns either into text. In a recording the clock is recording time, so a clock drawn into the video reads as it would have live.
 
+### Fixed
+- Recordings on Linux and macOS are named with the local time instead of UTC.
+
+## 2.7.0 (2026-11-07)
+
+### Added
+- Preferences > App > Window > Redraws while playing (desktop): how many times a second the window redraws while a song plays, so the seek bar and time can move smoothly without the mouse over the window. 5 a second unless changed, as before.
+- Follow playback (the crosshair button atop Songs and a playlist): the list keeps the playing song in view, scrolling to each song as it starts. Scrolling the list yourself turns it off. It never switches to another list or view.
+- Windows: the window is drawn with Vulkan again, which no longer flickers other monitors the way DirectX 12 could. Preferences > App > Window > Graphics switches back to DirectX 12 (from the next launch).
+- An offered update shows what it brings: its changelog back to your version, and for a nightly the pull requests merged since the last release, newest first, each linking to its page.
+- Updates is laid out like the rest of the app: a card on top says what the check found (the version, Nightly or Branch build, the size) with its buttons, and under it what the update brings, in the changelog's look, down to a marker for the version you have.
+
+### Fixed
+- Usage data no longer counts what an older version logged under the version you updated to: counts left unsent at an update are sent under the version they came from, right after the update.
+- The Scripting Reference no longer slows every frame while it's open: only the part in sight is drawn.
+- With Vulkan on NVIDIA graphics, the window no longer stops showing anything after quick resizes, and resizing no longer leaves a gap or stretches for a frame.
+- When a release goes out without this platform's file (an Android build that failed), the updater offers the newest release that has it instead of failing with "release ... has no ...".
+
+### Changed
+- The visualizer page for OBS (`/v1/visualizer`) draws at its own size for whichever of `width` and `height` the URL leaves out: resize the Browser Source, refresh it, and the visualizer follows. A new `scale` query argument works like the Visualizer scale preference (`&scale=4` for chunky pixels).
+- Preferences > Programs can make a visualizer URL for OBS (Stream URL): pick the pixel scale, whether it plays the audio and a fixed or automatic width and height, and it adds a program for it and shows the URL. Paste a URL back in to change it and copy it again.
+- Emoji are drawn with Noto Emoji: flat and the same on every computer and phone, never in colour, and now covering every current emoji.
+- Characters the built-in fonts lack (other scripts, rarer symbols) are drawn with an installed font that's found the first time one shows up, instead of reading every installed font at startup. Phones get this too.
+- The Songs list is made on a background thread: opening Songs, searching and opening or closing a group no longer hold the app up on a big library. A spinner shows until the list is first ready.
+- Groupings' playlists (By Album, By Artist and your own rulesets) are worked out on a background thread too: opening Groupings or Preferences > Rulesets no longer holds the app up, with a spinner until they're first ready.
+- Help > Log and Help > Credits & licenses are one Help page in the panels' place, laid out like Preferences, instead of popups: playback and the visualizer keep going while it's open.
+- The mini player (click the tray icon) is redesigned: a small strip with the song's art and name, the seek bar and buttons of its own (set in Preferences > Appearance > Mini player buttons, left to right, on as many rows as they take), and a drawer that opens the Queue, Groupings, Soundfonts and the visualizer, the same panels as the window, with all they can do. The visualizer's corner button opens the script picker. The drawer always opens below the strip (the window moves up when there's no room below), and can be resized. Show synththing puts the window back where and as big as it was.
+- Clean up and Record are pages in the panels' place too, instead of popups. Clean up's Apply all and Bring back dismissed sit over its suggestions, which fill the page, in a box for each kind (Needs a look first), like Preferences' groups, each folding shut by its heading.
+
+### Fixed
+- Anonymous usage data from a build made on someone's own computer (not downloaded) is marked as such, instead of passing for the release it shares a version with.
+
+## 2.6.0 (2026-11-03)
+
+### Added
+- Send feedback: when you're signed in, tick "Let me know what comes of this" and you'll get a notification once it's fixed or added, saying which version it's in (or, if it's been asked for before and isn't planned, that it isn't). Unticked, feedback stays anonymous as before. The server keeps who asked until they've been told (it updates its database on start).
+
 ### Changed
 - The star button in album, artist and playlist headers is gone: one click starred or unstarred every song on the page with no way back. To star several songs, select them (Ctrl+A for all) and right-click > Star, which says Unstar when every selected song is already starred.
 - Buttons that can't be taken back now ask first: the first click turns them into a red "Really delete?" (or remove, or clear), and a second click on it does it; a click anywhere else or Esc backs out. That's deleting a tag, a grouping ruleset, a theme or a playlist, removing a song from all devices, clearing songs on none of your devices from your library, and removing a branch build.
 
 ### Fixed
-- Recordings on Linux and macOS are named with the local time instead of UTC.
 - Help > Credits & licenses no longer slows every frame while it's open: only the libraries in sight are drawn, instead of all of them (8 to 11 ms a frame on a phone).
 - Song sync no longer stalls the app for tens of milliseconds at a time while songs come in (most of all right after starting): working out which songs this device still wants now happens in the background.
 - Help > Log no longer slows every frame while it's open: only the lines in sight are drawn, instead of the whole log.
 - Groupings: the songs on an album's, artist's or other group's page are spaced like every other list again, instead of cramped with striped rows taller than the rest and the playing song's outline touching its neighbours.
 - Phones: the Script library's list and search bar fit the screen again (the sort dropdown no longer pushes the page 30 points past its right edge), and an empty Wishlist's note wraps instead of running off the side.
 - The log (and usage data) no longer warns "UI stuck" or "stalled frame" while the window is in the background, minimized or hidden: with nothing on screen, no frames are drawn, which isn't a hang. A hang in the app's own code is still caught there.
+- Android: the app no longer drains the battery in the background. Going to the background could leave it running a whole CPU core flat out, doing nothing, until it was opened again, and with nothing playing it still kept the phone's audio output (and with it the phone) awake.
+- The audio output now closes after 10 seconds with nothing to play, and opens again when something plays, on whatever is the default output device by then.
 
 ## 2.5.0 (2026-11-02)
 

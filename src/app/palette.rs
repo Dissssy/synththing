@@ -84,7 +84,7 @@ impl App {
         palette.highlighted = palette.highlighted.min(matches.len().saturating_sub(1));
         let mut chosen = enter.then(|| matches.get(palette.highlighted).copied()).flatten();
 
-        let response = egui::Modal::new(egui::Id::new("command_palette")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("command_palette")).show(ctx, |ui| {
             ui.set_width(fit_width(ui, 420.0));
             let field = ui.add(
                 egui::TextEdit::singleline(&mut palette.query)
@@ -134,7 +134,7 @@ mod tests {
                 ..Default::default()
             };
             let mut output = ctx.run_ui(input, |ui| {
-                egui::Modal::new(egui::Id::new("test_palette")).show(ui.ctx(), |ui| {
+                egui::Modal::new(egui::Id::unique("test_palette")).show(ui.ctx(), |ui| {
                     list_ui(ui, matches, 0, false);
                     height = ui.min_rect().height();
                 });

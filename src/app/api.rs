@@ -45,8 +45,11 @@ pub(super) struct ApiState {
     scripts_seen: Option<u64>,
     /// Drawing the visualizer off screen for whoever's watching it.
     unseen: Option<Unseen>,
-    /// A token just made, shown until Preferences close: (app name, token).
+    /// A token or stream URL just made, shown until Preferences close:
+    /// (what it is, the text to copy).
     new_token: Option<(String, String)>,
+    /// The stream URL builder's choices.
+    stream: StreamUrl,
     /// The name being typed for a new app.
     new_name: String,
     /// The program asked to be removed, by name, waiting to be confirmed.
@@ -563,9 +566,9 @@ impl App {
         };
         let revision = self.songs.revision();
         let last = self.api.seen.replace((seen.clone(), view.generation, revision));
-        let changed = last.as_ref().is_none_or(|(s, g, _)| *s != seen || *g != view.generation);
+        // The media controls and Discord: desktop only.
         #[cfg(not(target_os = "android"))]
-        if changed && (self.api.media.is_some() || self.api.discord.is_some()) {
+        if last.as_ref().is_none_or(|(s, g, _)| *s != seen || *g != view.generation) && (self.api.media.is_some() || self.api.discord.is_some()) {
             let shown = self.media_shown(view);
             if let Some(media) = &mut self.api.media {
                 media.show(&shown);
@@ -817,6 +820,10 @@ impl App {
         let mut remove_songs = None;
         let new_name = &mut self.api.new_name;
         let new_token = &mut self.api.new_token;
+        let stream = &mut self.api.stream;
+        if stream.scale == 0 {
+            stream.scale = crate::config::visualizer_scale_down(self.config.visualizer_scale.unwrap_or(crate::config::DEFAULT_VISUALIZER_SCALE));
+        }
         settings_group("Programs").icon("key").hint("What each program may do: hover an icon for what it allows.").show(ui, |ui| {
             if settings.apps.is_empty() {
                 setting_row(ui, |ui| ui.weak("None yet. Add one below to get its token."));
@@ -832,12 +839,13 @@ impl App {
                 if !name.is_empty() && (add.clicked() || entered) {
                     let (access, token) = Access::new(&name);
                     settings.apps.push(access);
-                    *new_token = Some((name, token));
+                    *new_token = Some((format!("{name}'s token."), token));
                     new_name.clear();
                 }
             });
-            if let Some((name, token)) = &*new_token {
-                setting_row(ui, |ui| ui.label(format!("{name}'s token. Copy it now: it isn't shown again.")));
+            stream_url_ui(ui, settings, stream, new_token);
+            if let Some((what, token)) = &*new_token {
+                setting_row(ui, |ui| ui.label(format!("{what} Copy it now: it isn't shown again.")));
                 setting_row(ui, |ui| {
                     if ui.add(super::row_icon_button(ui, "copy")).on_hover_text("Copy").clicked() {
                         ui.ctx().copy_text(token.clone());
@@ -852,7 +860,7 @@ impl App {
         }
         if let Some(name) = self.api.removing.clone() {
             let mut close = false;
-            let modal = egui::Modal::new(egui::Id::new("remove_program")).show(ui.ctx(), |ui| {
+            let modal = egui::Modal::new(egui::Id::unique("remove_program")).show(ui.ctx(), |ui| {
                 ui.set_width(super::fit_width(ui, 360.0));
                 ui.heading(format!("Remove {name}?"));
                 ui.label("Its token stops working. The songs it added stay.");
@@ -982,6 +990,155 @@ const PERMISSIONS: [(&str, &str, fn(&mut Access) -> &mut bool); 8] = [
     ("devices", "Show on my other devices: its panel shows in the Apps tab on your other devices too (with sync on), and hears what you do there", |a| &mut a.share),
 ];
 
+/// The stream URL builder's choices: the pixel scale (0 until shown: the
+/// Visualizer scale preference's), whether it plays the audio, and the
+/// URL pasted back in to change, if one is.
+#[derive(Default)]
+struct StreamUrl {
+    scale: u32,
+    audio: bool,
+    /// Fixed sides, in pixels: `None` is the Browser Source's own.
+    width: Option<u32>,
+    height: Option<u32>,
+    /// A URL pasted to change: its program's name, its token, and the
+    /// rest of its query (kept as it was).
+    editing: Option<(String, String, Vec<String>)>,
+    pasted: String,
+    /// Why the pasted URL couldn't be read.
+    problem: Option<String>,
+}
+
+impl StreamUrl {
+    /// Read a pasted URL back in: its token must be one of `apps`.
+    fn load(&mut self, apps: &[Access]) -> Result<(), String> {
+        let query = self.pasted.trim().split_once('?').map_or("", |(_, q)| q);
+        let (mut token, mut scale, mut audio, mut rest) = (None, 1, false, Vec::new());
+        let (mut width, mut height) = (None, None);
+        let pixels = |n: &str| n.parse::<u32>().map_err(|_| "Its width or height isn't a number of pixels.");
+        for part in query.split('&').filter(|p| !p.is_empty()) {
+            match part.split_once('=').unwrap_or((part, "")) {
+                ("token", t) => token = Some(t.to_string()),
+                ("scale", n) => scale = n.parse().ok().filter(|n| crate::config::VISUALIZER_SCALES.contains(n)).ok_or("Its scale isn't one synththing offers.")?,
+                ("audio", a) => audio = a == "1",
+                ("width", n) => width = Some(pixels(n)?),
+                ("height", n) => height = Some(pixels(n)?),
+                _ => rest.push(part.to_string()),
+            }
+        }
+        let token = token.ok_or("That isn't a stream URL: it has no token.")?;
+        let hash = crate::library::sha256_hex(token.as_bytes());
+        let app = apps.iter().find(|app| app.token == hash).ok_or("Its token isn't one of your programs (removed?).")?;
+        (self.scale, self.audio, self.width, self.height) = (scale, audio, width, height);
+        self.editing = Some((app.name.clone(), token, rest));
+        self.pasted.clear();
+        Ok(())
+    }
+}
+
+/// Make a visualizer page URL for OBS's Browser Source: a new program
+/// that may read (and listen, with the audio), with its token in the URL,
+/// which is shown once like any new token. The page draws at the Browser
+/// Source's size, so the URL needs none. A URL pasted back in can be
+/// changed and copied again: its program keeps its token.
+fn stream_url_ui(ui: &mut egui::Ui, settings: &mut api::Settings, stream: &mut StreamUrl, made: &mut Option<(String, String)>) {
+    with_info(
+        ui,
+        "Makes a program that may see the visualizer (and hear what plays, with audio) and gives you its URL for a \
+         Browser Source in OBS. The visualizer draws at the source's size: resize it and refresh.",
+        |ui| {
+            let label = setting_label(ui, "Stream URL");
+            let combo = egui::ComboBox::from_id_salt("stream_url_scale").selected_text(format!("{}x", stream.scale)).show_ui(ui, |ui| {
+                for choice in crate::config::VISUALIZER_SCALES {
+                    ui.selectable_value(&mut stream.scale, choice, format!("{choice}x"));
+                }
+            });
+            let combo = combo.response.on_hover_text("Pixel scale, like the Visualizer's");
+            let tick = ui.checkbox(&mut stream.audio, "With audio");
+            let editing = stream.editing.as_ref().map(|(name, _, _)| name.clone());
+            let make = match &editing {
+                Some(name) => ui.button(format!("{}  Update", super::icon("link"))).on_hover_text(format!("Change {name}'s URL")),
+                None => ui.button(format!("{}  Make", super::icon("link"))),
+            };
+            if make.clicked() {
+                let (name, token, rest) = match stream.editing.take() {
+                    Some(editing) => editing,
+                    None => {
+                        let name = (1..)
+                            .map(|n| if n == 1 { "OBS stream".to_string() } else { format!("OBS stream {n}") })
+                            .find(|name| !settings.apps.iter().any(|app| &app.name == name))
+                            .unwrap_or_default();
+                        let (access, token) = Access::new(&name);
+                        settings.apps.push(access);
+                        (name, token, Vec::new())
+                    }
+                };
+                let hash = crate::library::sha256_hex(token.as_bytes());
+                match settings.apps.iter_mut().find(|app| app.token == hash) {
+                    Some(app) => {
+                        app.listen = stream.audio;
+                        let mut url = format!("http://127.0.0.1:{}/v1/visualizer?token={token}", settings.port());
+                        for part in &rest {
+                            url += &format!("&{part}");
+                        }
+                        for (name, side) in [("width", stream.width), ("height", stream.height)] {
+                            if let Some(side) = side {
+                                url += &format!("&{name}={side}");
+                            }
+                        }
+                        if stream.scale != 1 {
+                            url += &format!("&scale={}", stream.scale);
+                        }
+                        if stream.audio {
+                            url += "&audio=1";
+                        }
+                        *made = Some((format!("{name}'s URL, for a Browser Source in OBS."), url));
+                        stream.problem = None;
+                    }
+                    None => stream.problem = Some(format!("{name} was removed, so its URL can't change.")),
+                }
+            }
+            if editing.is_some() && ui.button("New").on_hover_text("Make a new URL instead").clicked() {
+                stream.editing = None;
+            }
+            label | combo | tick | make
+        },
+    );
+    with_info(
+        ui,
+        "Untick a side to use the Browser Source's own: resize the source and refresh, and the visualizer follows. \
+         A ticked side is drawn at that many pixels whatever the source's size.",
+        |ui| {
+            let label = setting_label(ui, "Size");
+            let mut responses = label;
+            for (name, side) in [("Width", &mut stream.width), ("Height", &mut stream.height)] {
+                let mut fixed = side.is_some();
+                responses |= ui.checkbox(&mut fixed, name);
+                *side = fixed.then(|| side.unwrap_or(if name == "Width" { 1920 } else { 1080 }));
+                match side {
+                    Some(pixels) => responses |= ui.add(egui::DragValue::new(pixels).range(64..=4096).suffix(" px")),
+                    None => responses |= ui.weak("auto"),
+                }
+                ui.add_space(8.0);
+            }
+            responses
+        },
+    );
+    setting_row(ui, |ui| {
+        let field = ui.add(
+            egui::TextEdit::singleline(&mut stream.pasted).hint_text("Paste a stream URL to change it").desired_width(super::control_width(ui, 0.0)),
+        );
+        let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        ui.add_space(6.0);
+        let load = ui.add_enabled(!stream.pasted.trim().is_empty(), egui::Button::new(format!("{}  Load", super::icon("pencil-simple"))));
+        if !stream.pasted.trim().is_empty() && (load.clicked() || entered) {
+            stream.problem = stream.load(&settings.apps).err();
+        }
+    });
+    if let Some(problem) = &stream.problem {
+        setting_row(ui, |ui| ui.colored_label(ui.visuals().error_fg_color, problem));
+    }
+}
+
 /// The programs down the side, what each may do across the top, the cells
 /// in a checkerboard so a tick's row and column are easy to follow. By
 /// each name, remove it (asked first) and remove the songs it added.
@@ -1038,4 +1195,22 @@ fn programs_ui<'a>(
         });
     }
     ui.add_space(4.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pasted_stream_url_loads_back_with_its_program() {
+        let (access, token) = Access::new("OBS stream");
+        let apps = vec![access];
+        let mut stream = StreamUrl { pasted: format!("http://127.0.0.1:7340/v1/visualizer?token={token}&width=500&height=190&scale=4&audio=1"), ..StreamUrl::default() };
+        stream.load(&apps).unwrap();
+        assert_eq!((stream.scale, stream.audio), (4, true));
+        assert_eq!((stream.width, stream.height), (Some(500), Some(190)));
+        assert_eq!(stream.editing, Some(("OBS stream".to_string(), token, Vec::new())));
+        stream.pasted = "http://127.0.0.1:7340/v1/visualizer?token=st_nope".into();
+        assert!(stream.load(&apps).is_err());
+    }
 }

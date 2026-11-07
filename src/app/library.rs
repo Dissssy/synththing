@@ -424,6 +424,7 @@ impl App {
 
     /// Which scripts in the scripts folder came from (or went to) the server.
     fn refresh_installed(&mut self) {
+        let _timing = crate::frame_timing::scope("refresh_installed");
         let all: Vec<(PathBuf, Installed)> =
             self.available_scripts.iter().filter_map(|p| Installed::read(p).map(|i| (p.clone(), i))).collect();
         self.library.installed =
@@ -632,7 +633,7 @@ impl App {
     pub(super) fn document_ui(&mut self, ctx: &egui::Context) {
         let Some(mut open) = self.library.document.take() else { return };
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("library_document")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("library_document")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 640.0));
             ui.heading(&open.title);
             ui.separator();
@@ -1582,7 +1583,7 @@ impl App {
         let mut apply = false;
         let mut keep = false;
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("library_update")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("library_update")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 560.0));
             ui.heading(format!("Update \"{}\"", draft.summary.name));
             ui.label(format!("Version {} is out; you have version {}.", draft.summary.version, draft.installed.version));
@@ -1706,7 +1707,7 @@ impl App {
             .filter(|_| !draft.anonymous && !draft.as_new);
         if let Some((id, said)) = draft.done.clone() {
             let mut show = false;
-            let response = egui::Modal::new(egui::Id::new("library_publish")).show(ctx, |ui| {
+            let response = egui::Modal::new(egui::Id::unique("library_publish")).show(ctx, |ui| {
                 ui.set_width(super::fit_width(ui, 480.0));
                 ui.heading("Published");
                 ui.label(said.as_str());
@@ -1727,7 +1728,7 @@ impl App {
             }
             return;
         }
-        let response = egui::Modal::new(egui::Id::new("library_publish")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("library_publish")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 480.0));
             ui.heading(match (&updating, &draft.remix) {
                 (Some(_), _) => "Publish a new version",
@@ -1995,6 +1996,11 @@ impl App {
         PUBLISHING || self.library.identity.is_some()
     }
 
+    /// Whether this device has an identity (is signed in), without making one.
+    pub(super) fn signed_in(&self) -> bool {
+        self.library.identity.is_some()
+    }
+
     /// The identity (a fresh copy for a request's thread), made and saved
     /// first if there isn't one.
     pub(super) fn ensure_identity(&mut self) -> Result<Identity, String> {
@@ -2068,69 +2074,66 @@ impl App {
     /// recovery, deleting) in its menu.
     fn identity_card_ui(&mut self, ui: &mut egui::Ui) {
         let current = self.library.identity.clone();
-        let visuals = ui.visuals().clone();
         let (mut make, mut export, mut import) = (false, false, false);
-        egui::Frame::new()
-            .fill(visuals.faint_bg_color)
-            .stroke(visuals.widgets.noninteractive.bg_stroke)
-            .corner_radius(10)
-            .inner_margin(14)
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    let id = current.as_ref().map(|i| i.id());
-                    badge_ui(ui, id.as_deref());
-                    ui.add_space(8.0);
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 6.0;
-                        ui.horizontal(|ui| {
-                            match &id {
-                                Some(id) => {
-                                    ui.label(egui::RichText::new(format!("#{id}")).size(20.0).strong());
-                                    if ui.add(super::row_icon_button(ui, "copy")).on_hover_text("Copy your ID").clicked() {
-                                        ui.ctx().copy_text(format!("#{id}"));
-                                    }
-                                }
-                                None => {
-                                    ui.label(egui::RichText::new("Not signed in").size(20.0).strong());
+        super::card(ui, |ui| {
+            ui.horizontal(|ui| {
+                let id = current.as_ref().map(|i| i.id());
+                badge_ui(ui, id.as_deref());
+                ui.add_space(8.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    ui.horizontal(|ui| {
+                        match &id {
+                            Some(id) => {
+                                ui.label(egui::RichText::new(format!("#{id}")).size(20.0).strong());
+                                if ui.add(super::row_icon_button(ui, "copy")).on_hover_text("Copy your ID").clicked() {
+                                    ui.ctx().copy_text(format!("#{id}"));
                                 }
                             }
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let menu = egui::containers::menu::MenuButton::from_button(super::row_icon_button(ui, "dots-three"))
-                                    .config(crate::menu::config(ui.ctx()));
-                                let (response, _) = menu.ui(ui, |ui| {
-                                    (make, export, import) = self.identity_menu_ui(ui);
-                                    self.recovery_menu_ui(ui, current.as_ref());
-                                });
-                                response.on_hover_text("Back up, restore, a new key, recovery");
+                            None => {
+                                ui.label(egui::RichText::new("Not signed in").size(20.0).strong());
+                            }
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let menu = egui::containers::menu::MenuButton::from_button(super::row_icon_button(ui, "dots-three"))
+                                .config(crate::menu::config(ui.ctx()));
+                            let (response, _) = menu.ui(ui, |ui| {
+                                (make, export, import) = self.identity_menu_ui(ui);
+                                self.recovery_menu_ui(ui, current.as_ref());
                             });
+                            response.on_hover_text("Back up, restore, a new key, recovery");
                         });
-                        let about = match &id {
-                            Some(_) => {
-                                "Your identity: a key made by this app and shared by your devices. It signs what you \
-                                 publish and syncs your settings. No account, no email needed. Back it up with \
-                                 Export (in the menu): lost, it can't be replaced."
-                            }
-                            None if !PUBLISHING => "Sign in with the link a signed-in device of yours shows.",
-                            None => "One's made the first time you publish signed, or with Make one now (in the menu).",
-                        };
-                        ui.add(egui::Label::new(egui::RichText::new(about).weak()).wrap());
-                        ui.horizontal(|ui| {
-                            ui.label(super::icon("device-mobile-camera"));
-                            self.device_name_ui(ui);
-                            let syncing = self.sync_on();
-                            status_pill(ui, if syncing { "Syncing" } else { "Sync off" }, syncing);
-                        });
-                        if current.is_some() {
-                            ui.horizontal_wrapped(|ui| self.recovery_email_ui(ui, current.as_ref()));
-                        }
-                        ui.horizontal_wrapped(|ui| self.pairing_ui(ui));
-                        if let Some(message) = &self.library.identity_message {
-                            ui.add(egui::Label::new(egui::RichText::new(message.as_str()).weak()).wrap());
-                        }
                     });
+                    let about = match &id {
+                        Some(_) => {
+                            "Your identity: a key made by this app and shared by your devices. It signs what you \
+                             publish and syncs your settings. No account, no email needed. Back it up with \
+                             Export (in the menu): lost, it can't be replaced."
+                        }
+                        None if !PUBLISHING => "Sign in with the link a signed-in device of yours shows.",
+                        None => "One's made the first time you publish signed, or with Make one now (in the menu).",
+                    };
+                    ui.add(egui::Label::new(egui::RichText::new(about).weak()).wrap());
+                    ui.horizontal(|ui| {
+                        ui.label(super::icon("device-mobile-camera"));
+                        self.device_name_ui(ui);
+                        let syncing = self.sync_on();
+                        super::status_pill(
+                            ui,
+                            if syncing { "Syncing" } else { "Sync off" },
+                            if syncing { crate::theme::playing_color(ui.ctx()) } else { ui.visuals().weak_text_color() },
+                        );
+                    });
+                    if current.is_some() {
+                        ui.horizontal_wrapped(|ui| self.recovery_email_ui(ui, current.as_ref()));
+                    }
+                    ui.horizontal_wrapped(|ui| self.pairing_ui(ui));
+                    if let Some(message) = &self.library.identity_message {
+                        ui.add(egui::Label::new(egui::RichText::new(message.as_str()).weak()).wrap());
+                    }
                 });
             });
+        });
         self.identity_actions(make, export, import);
     }
 
@@ -2166,6 +2169,7 @@ impl App {
     }
 
     /// Carry out what the identity menu asked for.
+    #[cfg_attr(target_os = "android", expect(unused_variables, reason = "exporting and importing an identity file is desktop only"))]
     fn identity_actions(&mut self, make: bool, export: bool, import: bool) {
         if make {
             self.library.identity_message = match self.ensure_identity() {
@@ -2228,8 +2232,6 @@ const OFFLINE_HINT: &str = "The Online Library is off in branch builds: turn it 
 /// The identity card's badge: a circle in a color of the identity's own
 /// (from its ID), with a person in it; grey with none.
 fn badge_ui(ui: &mut egui::Ui, id: Option<&str>) {
-    let size = 56.0;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let fill = match id {
         Some(id) => {
             let hue = id.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b))) % 360;
@@ -2237,19 +2239,6 @@ fn badge_ui(ui: &mut egui::Ui, id: Option<&str>) {
         }
         None => ui.visuals().widgets.inactive.bg_fill,
     };
-    let painter = ui.painter();
-    painter.circle_filled(rect.center(), size / 2.0, fill);
-    painter.text(rect.center(), egui::Align2::CENTER_CENTER, super::icon("user"), egui::FontId::proportional(30.0), egui::Color32::WHITE);
+    super::card_badge(ui, fill, "user", egui::Color32::WHITE);
 }
 
-/// A small rounded label saying how something stands: in the playing
-/// color when it's `good`, weak otherwise.
-fn status_pill(ui: &mut egui::Ui, text: &str, good: bool) {
-    let color = if good { crate::theme::playing_color(ui.ctx()) } else { ui.visuals().weak_text_color() };
-    egui::Frame::new()
-        .fill(color.gamma_multiply(0.12))
-        .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.6)))
-        .corner_radius(10)
-        .inner_margin(egui::Margin::symmetric(8, 1))
-        .show(ui, |ui| ui.label(egui::RichText::new(text).color(color)));
-}

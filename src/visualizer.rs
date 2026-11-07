@@ -205,9 +205,13 @@ pub enum DisplayMode {
     Window,
     /// The dedicated visualizer fullscreen: nothing else on screen.
     Dedicated,
-    /// Small, in the mini player.
+    /// Small, in the mini player (Windows only, like the tray).
+    #[cfg(windows)]
     Mini,
     /// Android picture-in-picture: a small floating window over other apps.
+    // Only Android shows one; the tests run the bundled scripts in it
+    // everywhere, since scripts are the same on every platform.
+    #[cfg_attr(not(any(target_os = "android", test)), expect(dead_code, reason = "only Android has picture-in-picture"))]
     Pip,
 }
 
@@ -216,6 +220,7 @@ impl DisplayMode {
         match self {
             Self::Window => "window",
             Self::Dedicated => "dedicated",
+            #[cfg(windows)]
             Self::Mini => "mini",
             Self::Pip => "pip",
         }
@@ -306,8 +311,8 @@ pub struct CursorRequest {
 pub struct ShowOutput {
     pub focused: bool,
     pub cursor: CursorRequest,
-    /// The script drew a new frame this time (not frozen, not a frame
-    /// skipped at a reduced frame rate).
+    /// The script drew a new frame this time (not a frame skipped at a
+    /// reduced frame rate).
     pub rendered: bool,
     /// Where the picture is on screen (smaller than the panel when a fixed
     /// size is letterboxed into it).
@@ -462,13 +467,6 @@ impl VisualizerPanel {
         }
     }
 
-    /// The last picture, as a texture, and its size in pixels.
-    pub fn picture(&self) -> Option<(egui::TextureId, egui::Vec2)> {
-        self.texture.as_ref().map(|t| (t.id(), t.size_vec2()))
-    }
-
-
-
     /// This frame's controller input, for the next `show`.
     pub fn set_pads(&mut self, pads: PadFrame) {
         self.pads = pads;
@@ -507,7 +505,7 @@ impl VisualizerPanel {
     /// Follow this frame's touch events: fingers that touch down on the
     /// picture at `rect`, until they lift. `scale` turns points into
     /// buffer pixels. Fingers still down when the visualizer wasn't shown
-    /// last pass (frozen, or another page) are let go, since their end may
+    /// last pass (another page) are let go, since their end may
     /// have gone by unseen.
     fn track_touches(&mut self, ctx: &egui::Context, rect: egui::Rect, scale: (f32, f32)) {
         let pass = ctx.cumulative_pass_nr();
@@ -572,7 +570,6 @@ impl VisualizerPanel {
         notes: &NotesSnapshot,
         playback: &EngineView,
         transport: Transport,
-        frozen: bool,
         mode: DisplayMode,
         fixed_size: Option<(usize, usize)>,
         hold: bool,
@@ -610,15 +607,6 @@ impl VisualizerPanel {
         }
 
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        // Frozen: show the last frame as-is, without running the script.
-        if frozen && let Some(texture) = &self.texture {
-            if !self.see_through {
-                ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
-            }
-            ui.painter().image(texture.id(), rect, uv, egui::Color32::WHITE);
-            return ShowOutput { focused, cursor: CursorRequest::default(), rendered: false, image_rect: rect };
-        }
-
         let (buf_w, buf_h) = fixed_size
             .unwrap_or_else(|| logical_buffer_size(available, ctx.pixels_per_point(), self.pixel_scale));
         let mut input = gather_input(&ctx, &response, rect, (buf_w, buf_h), focused, mode);

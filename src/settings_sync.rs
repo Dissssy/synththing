@@ -35,7 +35,7 @@ pub const NAME: &str = "settings";
 /// The config's leaves that are this device's own, and every leaf under
 /// them: its folders, layouts and window, audio buffer, what it last
 /// played, its updates, whether it sends usage data and how it looks on
-/// its screen (UI and visualizer pixel scale).
+/// its screen (UI and visualizer pixel scale, redraw rate while playing).
 const LOCAL: &[&str] = &[
     "soundfonts",
     "record_dir",
@@ -59,6 +59,7 @@ const LOCAL: &[&str] = &[
     "fullscreen_over_cutout",
     "ui_scale",
     "visualizer_scale",
+    "playing_fps",
     "sync_debug",
     "local_keymap",
     "api",
@@ -112,6 +113,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("heavy_midi", "Warning before a very large MIDI file", &["warn_heavy_midi"]),
             setting("channel_chips", "Channel chips", &["channel_chips"]),
             setting("controls_bar", "Controls bar layout", &["controls_bar"]),
+            setting("mini_controls", "Mini player buttons", &["mini_controls"]),
             setting("even_volume", "Even out volume", &["even_volume", "volume_target", "album_volume"]),
             Setting { key: "volume", name: "Last volume (taken at the next launch)", paths: &["session/volume"], on: false },
             Setting { key: "speed", name: "Last speed (taken at the next launch)", paths: &["session/speed"], on: false },

@@ -1,7 +1,7 @@
 //! The app-wide log. Release builds have no console, so everything worth
 //! knowing about (status messages, failed loads, update checks, warnings
 //! from egui/wgpu/winit, panics on any thread) goes here instead: kept in
-//! memory for the Log viewer (Help > Log...) and written to
+//! memory for the Log viewer (Help > Log) and written to
 //! `<config dir>/synththing.log`. The previous run's file is kept as
 //! `synththing.prev.log`, so a crash's log survives the restart after it.
 //!
@@ -43,6 +43,9 @@ struct Logger {
     path: Option<PathBuf>,
     /// Print each entry to stderr too (`--console`).
     echo: bool,
+    /// Everything (every crate) from this level up instead, for chasing a
+    /// problem: `SYNTHTHING_LOG=debug` or `trace` in the environment.
+    verbose: Option<LevelFilter>,
 }
 
 static LOGGER: OnceLock<Logger> = OnceLock::new();
@@ -56,6 +59,8 @@ impl Log for Logger {
     fn enabled(&self, metadata: &Metadata) -> bool {
         if metadata.target().starts_with("symphonia") {
             false
+        } else if let Some(verbose) = self.verbose {
+            metadata.level() <= verbose
         } else if metadata.target().starts_with("synththing") {
             metadata.level() <= Level::Info
         } else {
@@ -123,9 +128,10 @@ pub fn init(echo: bool) {
         file: Mutex::new(file),
         path,
         echo,
+        verbose: std::env::var("SYNTHTHING_LOG").ok().and_then(|level| level.parse().ok()),
     });
     if log::set_logger(logger).is_ok() {
-        log::set_max_level(LevelFilter::Info);
+        log::set_max_level(logger.verbose.unwrap_or(LevelFilter::Info).max(LevelFilter::Info));
     }
 
     // Panics anywhere (the audio thread included) would otherwise vanish

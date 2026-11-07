@@ -1522,7 +1522,7 @@ pub struct ScriptOptions {
     /// before each song, and for it to say the take is over
     /// (`recording_done`).
     pub record_prepare: bool,
-    /// It can play itself, for recording (the Record window offers Auto).
+    /// It can play itself, for recording (the Record page offers Auto).
     pub record_auto: bool,
     /// Its frames have see-through parts: each starts transparent instead
     /// of the clear color (whose alpha still fades the last frame), and

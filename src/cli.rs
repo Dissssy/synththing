@@ -22,7 +22,7 @@ pub struct Cli {
     #[arg(long, visible_alias = "viz")]
     pub visualizer: bool,
 
-    /// Also print the app's log (Help > Log...) to the terminal as it
+    /// Also print the app's log (Help > Log) to the terminal as it
     /// happens: script errors, warnings, panics. For watching a release
     /// build run.
     #[arg(long)]

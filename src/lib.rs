@@ -23,6 +23,7 @@ mod app;
 mod android_id;
 mod applog;
 mod audio;
+mod audio_output;
 mod audio_stream;
 mod art_fill;
 mod background;
@@ -58,6 +59,7 @@ mod import;
 #[cfg(windows)]
 mod install;
 mod instance;
+mod latest;
 mod layout;
 mod library;
 mod lookup;
@@ -113,6 +115,7 @@ mod startup;
 mod storage;
 mod theme;
 mod together;
+#[cfg(windows)]
 mod tray;
 mod typing;
 mod updater;
