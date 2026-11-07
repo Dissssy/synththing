@@ -30,17 +30,38 @@ pub(super) struct LyricsState {
     /// How much taller than its tab line mode wants the dock's Lyrics
     /// (`App::fit_lyrics`).
     pub(super) size_error: Option<f32>,
+    /// What the visualizer was last sent, for `lyrics()`.
+    sent: (Option<Arc<Lyrics>>, f64),
 }
 
 impl Default for LyricsState {
     fn default() -> Self {
-        Self { reader: Latest::new("lyrics", lyrics::read), song: None, read: false, lyrics: None, shown: None, size_error: None }
+        Self { reader: Latest::new("lyrics", lyrics::read), song: None, read: false, lyrics: None, shown: None, size_error: None, sent: (None, 0.0) }
     }
 }
 
 impl App {
-    /// The playing song's lyrics, asked for when the song changes.
-    fn playing_lyrics(&mut self, ctx: &egui::Context) -> Option<Arc<Lyrics>> {
+    /// Read the playing song's lyrics when it changes (the panel shows
+    /// them, the visualizer has them), and hand the visualizer them, with
+    /// the song's offset, when either changes. Once a frame.
+    pub(super) fn lyrics_tick(&mut self, ctx: &egui::Context) {
+        self.read_lyrics(ctx);
+        let offset = self.playing_facts().and_then(|f| f.number(Field::LyricsOffset)).unwrap_or(0.0);
+        let state = &mut self.lyrics;
+        let same = match (&state.lyrics, &state.sent.0) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same || offset != state.sent.1 {
+            state.sent = (state.lyrics.clone(), offset);
+            self.script.set_lyrics(state.lyrics.clone().map(|l| (l, offset)));
+        }
+    }
+
+    /// Take in the lyrics read, and ask for the playing song's when it
+    /// changes.
+    fn read_lyrics(&mut self, ctx: &egui::Context) {
         let state = &mut self.lyrics;
         for (_, lyrics) in state.reader.take() {
             state.read = true;
@@ -59,13 +80,12 @@ impl App {
                 state.reader.ask((), lyrics::Job { path: path.clone(), lrclib: *lrclib, online }, ctx);
             }
         }
-        state.lyrics.clone()
     }
 
     /// The panel, filling `ui`. In line mode, how much taller than it is
     /// it wants to be (points; negative for shorter), for the dock to fit.
     pub(super) fn lyrics_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) -> Option<f32> {
-        let lyrics = self.playing_lyrics(ui.ctx());
+        let lyrics = self.lyrics.lyrics.clone();
         let lines = self.config.lyrics_lines.map(|n| n.clamp(1, MAX_LINES));
         let line_height = line_height(ui);
         let size_error = lines.map(|n| f32::from(n) * line_height + BAR_ROOM - ui.available_height());

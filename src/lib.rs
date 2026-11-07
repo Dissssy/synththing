@@ -96,6 +96,7 @@ mod script_clock;
 mod script_host;
 mod script_math;
 mod script_queue;
+mod script_lyrics;
 mod script_song;
 mod script_theme;
 mod search;

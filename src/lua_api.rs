@@ -208,6 +208,7 @@ pub const ITEMS: &[Item] = &[
     f("unix_time", CLOCK, "next", &[], &[p("seconds", "number")], "seconds since 1970 (UTC), fractional; recording time in a recording"),
     f("format_time", CLOCK, "next", &[d("format", "string", "strftime-style: %Y-%m-%d %H:%M:%S, %A, %B, %I %p..."), od("time", "number|Date", "a unix_time() or now() result, now if not given")], &[p("text", "string")], "a date as text"),
     f("song_details", PLAYBACK, "next", &[], &[p("details", "SongDetails|nil")], "what the library knows of the playing song (edits, tags, plays...), or nil for a song not in it"),
+    f("lyrics", PLAYBACK, "next", &[], &[p("lyrics", "Lyrics|nil")], "the playing song's lyrics, as the Lyrics panel shows them, or nil for a song without; the same table each call until they change, so don't change it"),
     // Recording
     f("recording", RECORDING, "0.4.0", &[], &[p("recording", "Recording|nil")], "the recording the visualizer is part of, or nil"),
     f("recording_ready", RECORDING, "0.4.0", &[], &[], "with record_prepare: done preparing; the video starts with the next frame"),
@@ -377,6 +378,29 @@ pub const CLASSES: &[Class] = &[
             od("length", "number", "seconds"),
             d("queued", "boolean", "in the queue, rather than what plays after it"),
         ],
+    },
+    Class {
+        name: "Lyrics",
+        summary: "a song's lyrics (lyrics()); times are song seconds with the song's lyrics offset in, to compare with playback().position",
+        fields: &[
+            d("source", "\"file\"|\"midi\"|\"tags\"|\"lrclib\"", "an .lrc file beside the song, a MIDI file's lyrics, its tags, or LRCLIB"),
+            d("timed", "boolean", "the lines have times; without, they're plain text"),
+            p("lines", "LyricsLine[]"),
+        ],
+    },
+    Class {
+        name: "LyricsLine",
+        summary: "a line of lyrics (lyrics().lines)",
+        fields: &[
+            p("text", "string"),
+            od("start", "number", "when it's sung; nil in untimed lyrics"),
+            d("words", "LyricsWord[]", "its words (or syllables) with their times, where the source times them (enhanced LRC, MIDI); else empty"),
+        ],
+    },
+    Class {
+        name: "LyricsWord",
+        summary: "a word or syllable of a line (LyricsLine.words); together they make up its text",
+        fields: &[p("start", "number"), d("text", "string", "with any space after it")],
     },
     Class {
         name: "SongDetails",
@@ -953,7 +977,7 @@ mod tests {
         "mix", "approach", "sprite_register", "sprite", "sprite_size", "blit", "album_art", "fft_left", "fft_right", "fft_bin", "fft_freq",
         "fft_band", "level_left", "level_right", "peak_left", "peak_right", "onset", "history_left", "history_right", "note_name", "note_freq",
         "freq_note", "SAMPLE_RATE", "active_notes", "upcoming_notes", "notes_between", "midi_channels", "channel_enabled", "set_channel_enabled",
-        "channel_program", "channel_name", "channel_colors", "NOTE_LOOKAHEAD", "playback", "set_paused", "seek", "set_speed", "script_options",
+        "channel_program", "channel_name", "channel_colors", "NOTE_LOOKAHEAD", "set_paused", "seek", "set_speed", "script_options",
         "display_mode", "is_mobile", "DT", "FRAME", "recording_ready", "recording_done", "playlist", "play_track", "next_track", "previous_track",
         "set_loop", "set_shuffle", "beat", "time_at_beat", "bar", "tempo", "time_signature", "has_focus", "mouse", "mouse_delta", "scroll",
         "mouse_down", "mouse_pressed", "mouse_released", "touches", "set_cursor_visible", "set_cursor_locked", "input_register", "input",

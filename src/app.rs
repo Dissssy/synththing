@@ -1082,6 +1082,7 @@ impl App {
             self.show_window(ctx);
         }
         frame_timing::time("sync_script_song", || self.sync_script_song(&view));
+        frame_timing::time("lyrics_tick", || self.lyrics_tick(ctx));
         frame_timing::time("poll_loads", || self.poll_loads());
         frame_timing::time("audio_output", || self.output.tick());
         frame_timing::time("poll_imports", || self.poll_imports(ctx));

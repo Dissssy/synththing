@@ -475,10 +475,11 @@ text(4, 4, note_name(key) .. string.format(" %+d cents", math.floor((key - math.
 
 ## Playback & timing
 
-<!-- api: playback song_details set_paused seek set_speed script_options DT TIME FRAME SAMPLE_RATE -->
+<!-- api: playback song_details lyrics set_paused seek set_speed script_options DT TIME FRAME SAMPLE_RATE -->
 ```lua
 playback() -> playback      -- what's playing and where, times in song seconds (since 0.1.1)
 song_details() -> details   -- what the library knows of the playing song (edits, tags, plays...), or nil for a song not in it (since next)
+lyrics() -> lyrics          -- the playing song's lyrics, as the Lyrics panel shows them, or nil for a song without; the same table each call until they change, so don't change it (since next)
 set_paused(paused)          -- pause or resume playback (applied after this frame) (since 0.1.4)
 seek(seconds)               -- jump to a song position, seek(0) restarts (applied after this frame) (since 0.1.4)
 set_speed(speed)            -- playback speed (applied after this frame) (since 0.2.0)
@@ -557,6 +558,17 @@ end
 ```lua
 local d = song_details()
 if d and d.starred then text(4, 4, "* " .. (d.title or ""), theme().star) end
+```
+
+`lyrics()` is the playing song's lyrics, as the Lyrics panel shows them (from an `.lrc` file beside the song, a MIDI file's lyrics, its tags or LRCLIB; `source` says which), or nil for a song without. Each of its `lines` has its `text` and, in timed lyrics, its `start`: song seconds with the song's lyrics offset already in, so they compare with `playback().position` as they are. Where the source times each word (enhanced LRC, a MIDI file's syllables), the line's `words` have their own `start` and `text`, and together make up the line. It's the same table each call until the lyrics change, so calling it every frame costs nothing, but don't change it.
+
+```lua
+local l, at = lyrics(), playback().position
+local sung
+for _, line in ipairs(l and l.timed and l.lines or {}) do
+    if line.start <= at then sung = line.text end
+end
+if sung then text(4, 4, sung, theme().text) end
 ```
 
 `script_options` only takes the options it knows (`start_paused`, `app_log`, `record_prepare`, `record_auto`, `transparent` and `assets`, each true or false; see Logging for `app_log`, Recording for `record_prepare` and `record_auto`, the clear color for `transparent`, and Assets for `assets`), and an unknown one is an error that says so, so a typo can't go unnoticed. Several can go in one call: `script_options({ start_paused = true, app_log = true })`.
@@ -1265,6 +1277,20 @@ UpNextSong            -- a song coming up (up_next())
     album?: string
     length?: number   -- seconds
     queued: boolean   -- in the queue, rather than what plays after it
+
+Lyrics                                      -- a song's lyrics (lyrics()); times are song seconds with the song's lyrics offset in, to compare with playback().position
+    source: "file"|"midi"|"tags"|"lrclib"   -- an .lrc file beside the song, a MIDI file's lyrics, its tags, or LRCLIB
+    timed: boolean                          -- the lines have times; without, they're plain text
+    lines: LyricsLine[]
+
+LyricsLine                -- a line of lyrics (lyrics().lines)
+    text: string
+    start?: number        -- when it's sung; nil in untimed lyrics
+    words: LyricsWord[]   -- its words (or syllables) with their times, where the source times them (enhanced LRC, MIDI); else empty
+
+LyricsWord          -- a word or syllable of a line (LyricsLine.words); together they make up its text
+    start: number
+    text: string    -- with any space after it
 
 SongDetails                        -- what the library knows of a song (song_details()), with the user's edits; a field it doesn't know is nil. Keys are the ones song name patterns use
     title?: string
