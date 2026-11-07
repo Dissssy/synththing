@@ -6,7 +6,7 @@ use eframe::egui;
 use crate::lua_docs;
 use crate::lua_visualizer;
 
-use super::{ICON_BUTTON_WIDTH, mobile};
+use super::{ICON_SIZE, mobile};
 
 /// How tall a window's `categories_body` is.
 pub(super) const CATEGORIES_HEIGHT: f32 = 340.0;
@@ -476,7 +476,7 @@ pub(super) fn washed_out(color: egui::Color32, dark: bool) -> egui::Color32 {
 /// A toolbar button: just its icon (Phosphor), a little larger than text.
 /// Give it a hover text saying what it does.
 pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(icon(name)).size(16.0)).min_size(egui::vec2(ICON_BUTTON_WIDTH, 24.0))
+    egui::Button::new(egui::RichText::new(icon(name)).size(ICON_SIZE)).min_size(egui::vec2(0.0, 24.0))
 }
 
 /// The toolbar toggle for the song list `key` (its `select_list` key)

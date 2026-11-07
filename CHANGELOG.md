@@ -20,6 +20,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Fixed
 - Recordings on Linux and macOS are named with the local time instead of UTC.
+- The controls bar shows every button in its middle again: the last one (Loop, unless moved) went missing because the bar worked its buttons out narrower than they draw.
 
 ## 2.7.0 (2026-11-07)
 
