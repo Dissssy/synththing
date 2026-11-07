@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Preferences > App > Window > Redraws while playing (desktop): how many times a second the window redraws while a song plays, so the seek bar and time can move smoothly without the mouse over the window. 5 a second unless changed, as before.
 - Follow playback (the crosshair button atop Songs and a playlist): the list keeps the playing song in view, scrolling to each song as it starts. Scrolling the list yourself turns it off. It never switches to another list or view.
 - Windows: the window is drawn with Vulkan again, which no longer flickers other monitors the way DirectX 12 could. Preferences > App > Window > Graphics switches back to DirectX 12 (from the next launch).
 - An offered update shows what it brings: its changelog back to your version, and for a nightly the pull requests merged since the last release, newest first, each linking to its page.
