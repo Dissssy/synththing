@@ -263,7 +263,7 @@ pub const ITEMS: &[Item] = &[
     f("sequence_stop", SEQUENCES, "0.1.8", &[p("handle", "integer")], &[], "stop one sequence_play"),
     // Logging and debugging
     f("log", LOGGING, "0.1.1", &[p("message", "any")], &[], "append to this script's log (identical repeats collapse)"),
-    f("log_app", LOGGING, "0.2.2", &[p("message", "any")], &[], "like log(), and also copied to the app's log (Help > Log...)"),
+    f("log_app", LOGGING, "0.2.2", &[p("message", "any")], &[], "like log(), and also copied to the app's log (Help > Log)"),
     f("debug_locals", DEBUGGING, "0.1.1", &[opt("label", "string")], &[], "snapshot the locals in scope right here, shown in the Debug window"),
     // Settings
     f("setting_bool", SETTINGS, "0.1.1", &[p("key", "string"), p("default", "boolean"), LABELS], &[p("value", "boolean")], "a checkbox in the Settings window"),
@@ -476,7 +476,7 @@ pub const CLASSES: &[Class] = &[
             od("start_paused", "boolean", "songs load paused, for the script to start them"),
             od("app_log", "boolean", "log() also goes to the app's log"),
             od("record_prepare", "boolean", "recordings wait for recording_ready() and recording_done()"),
-            od("record_auto", "boolean", "it can play itself: the Record window offers Auto"),
+            od("record_auto", "boolean", "it can play itself: the Record page offers Auto"),
             od("transparent", "boolean", "its frames can be see-through"),
             od("assets", "boolean", "it reads data files: its assets folder is made, with a button to open it"),
         ],

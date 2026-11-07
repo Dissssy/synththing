@@ -92,10 +92,18 @@ impl Fit {
 }
 
 impl App {
+    /// The graphics API to draw the window with, picked in Preferences
+    /// (Windows only; taken at launch).
+    #[cfg(windows)]
+    pub fn graphics_backend(&self) -> crate::config::GraphicsBackend {
+        self.config.graphics_backend
+    }
+
     /// Whether the window has the system's frame: when asked for in
-    /// Preferences, and in the layouts without the title bar.
+    /// Preferences, and in the layouts without the title bar; never as the
+    /// mini player.
     pub fn wants_native_frame(&self) -> bool {
-        self.config.native_frame || self.mobile() || self.dedicated.is_some()
+        (self.config.native_frame || self.mobile() || self.dedicated.is_some()) && !self.mini_open()
     }
 
     /// Give the window the system's frame or take it away, as
@@ -131,7 +139,7 @@ impl App {
                 });
                 // (What's left between the wordmark and the buttons.)
                 let rest = ui.available_rect_before_wrap();
-                let grip = ui.interact(rest, ui.id().with("title_drag"), egui::Sense::click_and_drag());
+                let grip = ui.interact(rest, ui.scope_id().with("title_drag"), egui::Sense::click_and_drag());
                 if !self.wants_native_frame() {
                     if grip.double_clicked() {
                         let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
@@ -155,10 +163,10 @@ impl App {
         match item {
             // (Not while Preferences has the panels' room.)
             Item::View => {
-                ui.add_enabled_ui(!self.preferences_open, |ui| menu(button).ui(ui, |ui| self.view_menu_ui(ui)));
+                ui.add_enabled_ui(!self.page_open(), |ui| menu(button).ui(ui, |ui| self.view_menu_ui(ui)));
             }
             Item::Layout => {
-                ui.add_enabled_ui(!self.preferences_open, |ui| menu(button).ui(ui, |ui| self.layout_menu_ui(ui)));
+                ui.add_enabled_ui(!self.page_open(), |ui| menu(button).ui(ui, |ui| self.layout_menu_ui(ui)));
             }
             Item::Help => {
                 menu(button).ui(ui, |ui| self.help_menu_ui(ui));
@@ -185,10 +193,10 @@ impl App {
                 let text = format!("{}  {}", icon(item.icon()), item.label());
                 match item {
                     Item::View => {
-                        ui.add_enabled_ui(!self.preferences_open, |ui| ui.menu_button(text, |ui| self.view_menu_ui(ui)));
+                        ui.add_enabled_ui(!self.page_open(), |ui| ui.menu_button(text, |ui| self.view_menu_ui(ui)));
                     }
                     Item::Layout => {
-                        ui.add_enabled_ui(!self.preferences_open, |ui| ui.menu_button(text, |ui| self.layout_menu_ui(ui)));
+                        ui.add_enabled_ui(!self.page_open(), |ui| ui.menu_button(text, |ui| self.layout_menu_ui(ui)));
                     }
                     Item::Help => {
                         ui.menu_button(text, |ui| self.help_menu_ui(ui));
@@ -266,8 +274,8 @@ impl App {
         if ui.button("Changelog...").clicked() {
             self.flow.show(super::flow::Step::Changelog(None));
         }
-        if ui.button("Log...").clicked() {
-            self.log_open = true;
+        if ui.button("Log").clicked() {
+            self.open_help(super::help::HelpTab::Log);
         }
         let mut profiler = profiler::is_open();
         if ui
@@ -277,8 +285,8 @@ impl App {
         {
             profiler::set_open(profiler);
         }
-        if ui.button("Credits & licenses...").clicked() {
-            self.credits_open = true;
+        if ui.button("Credits & licenses").clicked() {
+            self.open_help(super::help::HelpTab::Credits);
         }
         ui.separator();
         ui.weak(format!("synththing v{}", crate::build_info::describe()));
@@ -315,10 +323,15 @@ impl App {
 
 impl App {
     /// The wordmark's hop sound, at the volume slider's volume.
-    fn play_hop(&self) {
+    fn play_hop(&mut self) {
         use rodio::Source as _;
+        let volume = self.volume;
         match rodio::Decoder::new(std::io::Cursor::new(HOP_SOUND)) {
-            Ok(sound) => self.mixer.add(sound.amplify(self.volume)),
+            Ok(sound) => {
+                if let Some(mixer) = self.output.mixer() {
+                    mixer.add(sound.amplify(volume));
+                }
+            }
             Err(e) => log::warn!("the hop sound: {e}"),
         }
     }

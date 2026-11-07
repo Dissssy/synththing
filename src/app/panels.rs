@@ -66,7 +66,7 @@ pub(super) struct PanelsState {
 
 /// A textbox's widget ID, to tell whether it's being typed in.
 fn textbox_id(place: &Place, element: &str) -> egui::Id {
-    egui::Id::new(("api panel textbox", place, element))
+    egui::Id::unique(("api panel textbox", place, element))
 }
 
 /// What a click on a linked item (or its menu) asks of the app.
@@ -401,7 +401,7 @@ impl Drawing<'_> {
         let linked = items.iter().any(|item| item.link.is_some());
         let (art, songs, wishes) = (&mut *self.art, self.songs, self.wishes);
         let (mut picked, mut acts) = (None, Vec::new());
-        let list_id = egui::Id::new(("api panel list", self.place, id));
+        let list_id = egui::Id::unique(("api panel list", self.place, id));
         let output = select_list::show_tall(ui, list_id, items, selection, None, if linked { LINKED_ROW } else { 0.0 }, |ui, row, item| {
             if let Some(link) = &item.link {
                 crate::menu::context(&row.response, |ui| match link {

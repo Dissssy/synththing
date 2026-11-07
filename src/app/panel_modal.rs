@@ -57,7 +57,7 @@ impl App {
     pub(super) fn panel_modal_ui(&mut self, ctx: &egui::Context, shared: &PlaybackShared) {
         let Some(mut view) = self.panel_modal.take() else { return };
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("panel_modal")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("panel_modal")).show(ctx, |ui| {
             let width = fit_width(ui, WIDTH);
             let height = HEIGHT.min(ctx.content_rect().height() - 160.0).max(160.0);
             ui.set_width(width);

@@ -119,11 +119,11 @@ Rendered by the server on each upload and each new version, through a queue (one
 
 ## Feedback
 
-- **Feedback** (`server/feedback.rs`, Help > Send feedback... and the speech bubble in the app's menu bar) is a note about the app for the admins: unsigned, so it needs no identity, with the build it came from (version, channel, OS) and, if the sender ticks them, the end of the app's log and how long its frames took over the last minute (`performance`, on unless they untick it). The app sends it to the official server. Branch builds can send it although their other online features are off: trying a feature and saying how it went is what they're for.
+- **Feedback** (`server/feedback.rs`, Help > Send feedback... and the speech bubble in the app's menu bar) is a note about the app for the admins: unsigned, so it needs no identity (unless the sender, signed in, asks to hear what comes of it: then it's signed, and their key is kept with it until they're told), with the build it came from (version, channel, OS) and, if the sender ticks them, the end of the app's log and how long its frames took over the last minute (`performance`, on unless they untick it). The app sends it to the official server. Branch builds can send it although their other online features are off: trying a feature and saying how it went is what they're for.
 - Limits per address: 10 a day. Banned addresses can't send it. The admins get a `new_feedback` notification.
 - Read it in Moderation's Feedback tab or with `synththing admin feedback`, and mark it done (with a note, like the issue it became) with `synththing admin feedback-done <number>`.
-- **Intake** (`server/intake.rs`, `"intake": true` in `server.json`, docs/DEPLOY.md): an hourly Claude run collects the feedback waiting (`GET /api/v1/intake`, up to 20, oldest first: each note, its build, its performance stats and the last 8 KB of its log, not the address), files it as GitHub issues (docs/feedback-intake.md), and marks it taken (`POST /api/v1/intake/taken`). Both need the intake token (`intake.token` in the data folder, made on first run). Until a note is taken, the next run gets it again; one run takes a whole batch, so notes about the same thing are filed together.
-- Kept until it's done, then 90 days; addresses 30 days, as for reports. A branch build's feedback is deleted once that branch's test build is gone from GitHub's releases (`branch-cleanup.yml` removes it when the branch is deleted), checked daily; if GitHub can't be reached, nothing is deleted.
+- **Intake** (`server/intake.rs`, `"intake": true` in `server.json`, docs/DEPLOY.md): an hourly Claude run collects the feedback waiting (`GET /api/v1/intake`, up to 20, oldest first: each note, its build, its performance stats and the last 8 KB of its log, not the address), files it as GitHub issues (docs/feedback-intake.md), and marks it taken (`POST /api/v1/intake/taken`). Both need the intake token (`intake.token` in the data folder, made on first run). Until a note is taken, the next run gets it again; one run takes a whole batch, so notes about the same thing are filed together. What came of notes goes back with `POST /api/v1/intake/resolved` (`{"feedback": [ids], "outcome": "fixed" | "added" | "not_planned", "version"}`, a version for fixed and added): the release workflow sends fixed and added once a release is out, and intake sends not planned. Those whose sender asked get a `feedback_fixed`, `feedback_added` or `feedback_not_planned` notification, once; then the key is forgotten.
+- Kept until it's done, then 90 days (longer while its sender is still waiting to hear); addresses 30 days, as for reports. A branch build's feedback is deleted once that branch's test build is gone from GitHub's releases (`branch-cleanup.yml` removes it when the branch is deleted), checked daily; if GitHub can't be reached, nothing is deleted.
 - **Usage data** (`server/usage.rs`, docs/USAGE.md): anonymous counts of log lines and panics from apps that opted in, added up by version, platform, level, target and signature, kept until an admin clears them. The server's rules say which lines it keeps.
 
 ## Moderation
@@ -202,13 +202,14 @@ POST /api/v1/scripts                      upload (signed with a slug its author 
 DELETE /api/v1/scripts/{id}               owner or admin
 POST /api/v1/scripts/{id}/encore          (and DELETE to take it back)
 POST /api/v1/scripts/{id}/report
-POST /api/v1/feedback                     feedback for the admins (unsigned)
+POST /api/v1/feedback                     feedback for the admins (signed if the sender wants to hear back)
 GET  /api/v1/intake                       feedback waiting to be filed (the intake token)
 POST /api/v1/usage                        an anonymous usage report (docs/USAGE.md)
 GET  /api/v1/usage/rules                  which log lines usage reports should carry
 GET  /api/v1/intake/usage                 usage data new since intake last took it (the intake token)
 POST /api/v1/intake/usage/taken           intake took it, and which issues lines were filed as
 POST /api/v1/intake/taken                 mark it filed (the intake token)
+POST /api/v1/intake/resolved              tell senders what came of their feedback (the intake token)
 POST /api/v1/admin                        an admin action (signed by an admin)
 GET  /api/v1/users/{id}                   names, uploads, total encores
 GET  /api/v1/users/{id}/scripts/{slug}    a script by its author and slug

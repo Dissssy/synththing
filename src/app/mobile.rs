@@ -114,8 +114,6 @@ pub(super) struct Mobile {
     drawer_open: bool,
     /// The Now playing page's controls folded away.
     collapsed: bool,
-    /// The art shown instead of the visualizer (`now_playing_art_ui`).
-    art: crate::album_art::AlbumArt,
     /// What the media session was last told, and when.
     #[cfg(target_os = "android")]
     told: Option<(crate::android::Playback, std::time::Instant)>,
@@ -209,7 +207,7 @@ impl App {
         if crate::android::picture_in_picture() {
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                 if self.config.now_playing_art {
-                    self.now_playing_art_ui(ui, 0.0);
+                    self.now_playing_art_ui(ui, ui.max_rect());
                 } else {
                     self.show_visualizer(ui, &shared.notes, view, DisplayMode::Pip);
                 }
@@ -227,7 +225,7 @@ impl App {
             }
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                 if self.config.now_playing_art {
-                    self.now_playing_art_ui(ui, 24.0);
+                    self.now_playing_art_ui(ui, ui.max_rect().shrink(24.0));
                     return;
                 }
                 self.script_error_ui(ui, false);
@@ -254,7 +252,7 @@ impl App {
                 Page::Preferences => self.mobile_preferences_ui(ui),
                 Page::Updates => {
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                        if self.updates_body_ui(ui, true) {
+                        if self.updates_body_ui(ui) {
                             self.updates_message = None;
                             self.mobile_state.page = Page::NowPlaying;
                         }
@@ -266,10 +264,8 @@ impl App {
                         super::changelog_body_ui(ui, None);
                     });
                 }
-                Page::Log => {
-                    self.log_body_ui(ui, true);
-                }
-                Page::Credits => self.credits_body_ui(ui, true),
+                Page::Log => self.log_body_ui(ui),
+                Page::Credits => self.credits_body_ui(ui),
             });
         }
         if self.mobile_state.drawer_open {
@@ -281,12 +277,10 @@ impl App {
     /// log, the credits) opens its page here instead.
     pub(super) fn open_mobile_pages(&mut self, ctx: &egui::Context) {
         let state = &mut self.mobile_state;
-        let page = if std::mem::take(&mut self.log_open) {
-            Page::Log
-        } else if std::mem::take(&mut self.credits_open) {
-            Page::Credits
-        } else {
-            return;
+        let page = match self.help.take() {
+            Some(super::help::HelpTab::Log) => Page::Log,
+            Some(super::help::HelpTab::Credits) => Page::Credits,
+            None => return,
         };
         state.page = page;
         state.drawer_open = false;
@@ -445,7 +439,7 @@ impl App {
             }
             state.seen_status = Some(self.status.clone());
         }
-        if let Some(info) = ctx.data_mut(|d| d.remove_temp::<String>(egui::Id::new(INFO_TOAST))) {
+        if let Some(info) = ctx.data_mut(|d| d.remove_temp::<String>(egui::Id::unique(INFO_TOAST))) {
             state.toast = Some((info, Instant::now()));
         }
         let Some((text, since)) = &state.toast else { return };
@@ -580,33 +574,6 @@ impl App {
         ui.add_space(6.0);
     }
 
-    /// The song playing's art in place of the visualizer, as big as fits
-    /// inside `margin`: its own (its file's, else its album's), else its
-    /// artist's picture, else a tile in its album's (or its name's) color.
-    fn now_playing_art_ui(&mut self, ui: &mut egui::Ui, margin: f32) {
-        let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
-        let title = self.current_title();
-        let art = &mut self.mobile_state.art;
-        art.frame(ui.ctx(), online);
-        let rect = ui.max_rect().shrink(margin);
-        let square = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(rect.width().min(rect.height()).max(0.0)));
-        let Some(path) = self.current_song.clone() else { return };
-        let song = self.songs.get(&path);
-        if art.picture(ui, square, &crate::album_art::Source::of_song(Some(path.clone()), song)) {
-            return;
-        }
-        let facts = song.map(crate::fields::Facts::of);
-        let text = |field| facts.as_ref().and_then(|f| f.text(field)).map(|t| t.into_owned());
-        let artist = text(crate::fields::Field::Artist).and_then(|a| a.split(';').next().map(|a| crate::fields::group_key(a.trim(), &self.config.group_ignore)));
-        if let Some(key) = artist.and_then(|a| self.songs.artist_images().get(&a))
-            && art.picture(ui, square, &crate::album_art::Source::image(key))
-        {
-            return;
-        }
-        let name = text(crate::fields::Field::Album).or(title).unwrap_or_default();
-        art.tile(ui, square, &crate::album_art::Source::default(), &name);
-    }
-
     /// On the other pages: what's playing, with play/pause; tapping the
     /// name goes to Now playing.
     fn mobile_now_playing_bar_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
@@ -629,7 +596,7 @@ impl App {
 
     /// With the controls folded away: the way back, in a corner.
     fn mobile_expand_handle_ui(&mut self, ctx: &egui::Context) {
-        egui::Area::new(egui::Id::new("mobile_expand_handle"))
+        egui::Area::new(egui::Id::unique("mobile_expand_handle"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0))
             .show(ctx, |ui| {
@@ -654,7 +621,9 @@ impl App {
     /// On the Visualizers page, in the running script's card: its
     /// Settings, Controls and Debug, finger-sized.
     pub(super) fn mobile_script_window_buttons_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        // (Not in the mini player, too small for the windows they open.)
+        let enabled = !self.mini_open();
+        ui.add_enabled_ui(enabled, |ui| ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0;
             self.script_window_buttons_ui(ui, |name, color| {
                 let mut text = egui::RichText::new(icon(name)).size(20.0);
@@ -663,14 +632,16 @@ impl App {
                 }
                 egui::Button::new(text.atom_grow(true)).min_size(egui::Vec2::splat(40.0))
             });
-        });
+        }))
+        .response
+        .on_disabled_hover_text("Show synththing for the script's settings, controls and debug view");
     }
 
     /// The menu: the pages, then what the desktop's menus open, over
     /// everything else (a tap outside it closes it).
     fn mobile_drawer_ui(&mut self, ctx: &egui::Context) {
         let screen = ctx.content_rect();
-        let backdrop = egui::Area::new(egui::Id::new("mobile_drawer_backdrop"))
+        let backdrop = egui::Area::new(egui::Id::unique("mobile_drawer_backdrop"))
             .order(egui::Order::Foreground)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
@@ -684,7 +655,7 @@ impl App {
         }
 
         let width = (screen.width() * 0.8).min(320.0);
-        let drawer = egui::Area::new(egui::Id::new("mobile_drawer"))
+        let drawer = egui::Area::new(egui::Id::unique("mobile_drawer"))
             .order(egui::Order::Foreground)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {

@@ -16,6 +16,11 @@ use crate::playlist::LoopMode;
 /// The beat pulse's strength and length (`Config::beat_pulse`,
 /// `beat_pulse_length`) unless they're changed.
 pub const DEFAULT_BEAT_PULSE: f32 = 0.3;
+/// How many times a second the window redraws while a song plays, unless
+/// changed (desktop: `Config::playing_fps`).
+pub const DEFAULT_PLAYING_FPS: u32 = 5;
+/// The choices for `Config::playing_fps`.
+pub const PLAYING_FPS_RANGE: std::ops::RangeInclusive<u32> = 5..=144;
 pub const DEFAULT_BEAT_PULSE_LENGTH: f32 = 0.35;
 /// The visualizer pixel scale when `visualizer_scale` isn't set: 4x on
 /// phones, whose screens are dense and hardware slow, 1x elsewhere.
@@ -123,6 +128,10 @@ pub struct Config {
     /// The controls bar's buttons and sliders, left to right.
     #[serde(default)]
     pub controls_bar: ControlsBar,
+    /// The mini player's buttons and sliders, left to right (Windows' tray
+    /// mini player), on as many rows as they take.
+    #[serde(default)]
+    pub mini_controls: MiniControls,
     /// The Songs list's columns, sorting and grouping.
     #[serde(default)]
     pub songs_view: crate::song_list::View,
@@ -201,6 +210,15 @@ pub struct Config {
     /// borders) rather than drawing its own (`app/title_bar.rs`).
     #[serde(default)]
     pub native_frame: bool,
+    /// Preference (desktop): how many times a second the window redraws
+    /// while a song plays and nothing else moves, so the seek bar and time
+    /// run smoothly (`None`: `DEFAULT_PLAYING_FPS`).
+    #[serde(default)]
+    pub playing_fps: Option<u32>,
+    /// Preference, on Windows: the graphics API that draws the window,
+    /// taken at the next launch (`desktop.rs`; WGPU_BACKEND overrides it).
+    #[serde(default)]
+    pub graphics_backend: GraphicsBackend,
     /// On Android: the visualizer filling the screen draws under a notch
     /// or camera hole too (off: that strip is black).
     #[serde(default)]
@@ -333,6 +351,28 @@ impl MiniPlayerShape {
     }
 }
 
+/// The graphics API that draws the window on Windows. Vulkan by default;
+/// it once froze the window for good on fast resizes, which frame latency
+/// 2 and mailbox presenting (`desktop.rs`) put right. DirectX 12 is the
+/// fallback where Vulkan misbehaves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GraphicsBackend {
+    #[default]
+    Vulkan,
+    Dx12,
+}
+
+impl GraphicsBackend {
+    pub const ALL: [Self; 2] = [Self::Vulkan, Self::Dx12];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Dx12 => "DirectX 12",
+            Self::Vulkan => "Vulkan",
+        }
+    }
+}
+
 /// The buttons Android's media controls (the notification, the lock
 /// screen, the mini player) show beside play/pause, by priority: previous,
 /// next, the song's star and tags of the user's choosing (each toggled
@@ -410,8 +450,25 @@ impl ControlsBar {
     }
 }
 
-/// One of `ControlsBar`'s items.
+/// The mini player's buttons and sliders, left to right
+/// (`Config::mini_controls`): one line, no sections.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MiniControls(pub Vec<BarItem>);
+
+impl MiniControls {
+    pub const USUAL: [BarItem; 7] =
+        [BarItem::Shuffle, BarItem::Previous, BarItem::PlayPause, BarItem::Next, BarItem::Loop, BarItem::Star, BarItem::Volume];
+}
+
+impl Default for MiniControls {
+    fn default() -> Self {
+        Self(Self::USUAL.to_vec())
+    }
+}
+
+/// One of `ControlsBar`'s or `MiniControls`' items.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BarItem {
     /// Where the middle section starts (not drawn).
     Middle,
@@ -451,6 +508,8 @@ pub enum StartupOpens {
     Window,
 }
 
+// Only Windows starts with the system (app/install.rs).
+#[cfg(windows)]
 impl StartupOpens {
     pub const ALL: [Self; 3] = [Self::Tray, Self::MiniPlayer, Self::Window];
 

@@ -115,7 +115,7 @@ impl App {
         };
         if self.queue_rows.as_ref().is_none_or(|(seen, _)| *seen != revision) {
             let naming = super::naming(&self.config, &self.songs);
-            let mut describe = |path: &PathBuf| (path.clone(), super::describe_song(&mut self.song_info, &naming, &self.songs, path, &keys));
+            let mut describe = |path: &PathBuf| (path.clone(), super::describe_song(self.song_info.get(path).as_deref(), &naming, &self.songs, path, &keys));
             let playing = self.current_song.as_ref().map(&mut describe);
             let rows = self.queue.iter().chain(&planned[..after]).map(&mut describe).collect();
             self.queue_rows = Some((revision, QueueRows { playing, rows }));

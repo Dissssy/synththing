@@ -95,12 +95,6 @@ pub struct Effects {
     pub playback_requests: Vec<PlaybackRequest>,
 }
 
-impl Effects {
-    pub fn is_empty(&self) -> bool {
-        self.channel_requests.is_empty() && self.live_commands.is_empty() && self.playback_requests.is_empty()
-    }
-}
-
 /// What the app shows of the running script, as of the last thing it did.
 #[derive(Clone, Default)]
 pub struct ScriptStatus {

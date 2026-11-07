@@ -1,6 +1,6 @@
 [package]
 name = "synththing"
-version = "2.5.0"
+version = "2.7.0"
 edition = "2024"
 publish = false
 license = "WTFPL"
@@ -23,7 +23,10 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }  # float_roundtrip: synced numbers read back exactly as written
 rustfft = "6.4.1"
 mlua = { version = "0.12.1", features = ["lua54", "vendored"] }
-egui_dock = { version = "0.21.1", features = ["serde"] }      # dockable, rearrangeable tab layout
+# egui_dock and egui-phosphor are pinned to the commits of their open upstream
+# egui 0.37 PRs (anhosh/egui_dock#354, amPerl/egui-phosphor#49); back to
+# crates.io once those release.
+egui_dock = { git = "https://github.com/crumblingstatue/egui_dock", rev = "4bd1dcd90c7a71ed3bf38159f49a2992fa653c2c", features = ["serde"] }      # dockable, rearrangeable tab layout
 ureq = { version = "3.4", features = ["json"] }            # HTTPS for update checks/downloads
 semver = "1.0"                                            # comparing release versions
 self-replace = "1.5"                                      # swapping the running exe on update
@@ -48,18 +51,21 @@ argon2 = "0.6.0"
 chacha20poly1305 = "0.11.0"
 png = "0.18"                                              # script previews (preview.rs)
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] } # album art embedded in songs (album_art.rs)
-egui_commonmark = "0.25"                                  # library servers' documents (EULA, privacy policy), as Markdown
-egui-phosphor = { version = "0.14", features = ["regular", "fill"] } # icons; the filled set for starred songs (select_list::star)
+egui = { version = "0.37", default-features = false }      # eframe re-exports this egui
+# Installed fonts for characters the bundled ones lack (app/fonts.rs), found
+# when first drawn; the same one eframe would add on the desktop.
+egui_system_font_provider = "0.37"
+egui_commonmark = "0.26"                                  # library servers' documents (EULA, privacy policy), as Markdown
+egui-phosphor = { git = "https://github.com/xangelix/egui-phosphor", rev = "01e8c1144cac3f551ceb834b6d26ddf36ba502cd", features = ["regular", "fill"] } # icons; the filled set for starred songs (select_list::star)
 base64 = "0.23"                                           # sealed sync blobs (library/sync.rs)
 flate2 = "1.1.10"                                         # deflating sync blobs before they're sealed (library/sync.rs)
 resvg = { version = "0.45", default-features = false }      # the wordmark in the menu bar (app/branding.rs)                                    # icons (the Phosphor set, as a font)
-fontdb = "0.24"                                           # finding installed fonts to fall back on (app/fonts.rs)
-skrifa = "0.44"                                           # reading which characters a font has; the same copy egui renders with
+skrifa = "0.44"                                           # reading fonts: pixel_font, and app/fonts.rs refusing colour ones; the same copy egui renders with
 ab_glyph_rasterizer = "0.1"                               # drawing the bundled CJK fonts into script text (pixel_font)
 # The profiler overlay (app/profiler.rs). Pinned to a commit: the release on
 # crates.io is still on egui 0.33.
-puffin = { git = "https://github.com/EmbarkStudios/puffin", rev = "c81e9bb5e3839f516f3e56fe2d9e9649b5bdea86" }
-puffin_egui = { git = "https://github.com/EmbarkStudios/puffin", rev = "c81e9bb5e3839f516f3e56fe2d9e9649b5bdea86" }
+puffin = { git = "https://github.com/EmbarkStudios/puffin", rev = "39c8970abd6a95871bcaf0d3581c494885f2edd5" }
+puffin_egui = { git = "https://github.com/EmbarkStudios/puffin", rev = "39c8970abd6a95871bcaf0d3581c494885f2edd5" }
 musicbrainz_rs = { version = "0.14", default-features = false, features = ["sync", "rustls"] }
 strsim = "0.11"
 fs4 = "1.1"                                               # free space on the hub's disk (hub_server.rs)
@@ -72,7 +78,7 @@ percent-encoding = "2"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] } # local time for scripts (script_clock.rs) and recording names
 noise = { version = "0.9", default-features = false }                      # noise() for scripts (script_math.rs)
 [target.'cfg(not(target_os = "android"))'.dependencies]
-eframe = "0.36.1"
+eframe = "0.37"
 rfd = "0.15"                                              # native file and folder dialogs
 opener = { version = "0.9", features = ["reveal"] }       # "Show in folder": the system file manager, file selected (file_manager.rs)
 gethostname = "1.1"                                       # the default name of this device, for sign-ins (device.rs)
@@ -80,7 +86,7 @@ souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"
 discord-rich-presence = "1.1"                                # what's playing, shown on Discord (discord.rs)
 
 [target.'cfg(target_os = "android")'.dependencies]
-eframe = { version = "0.36.1", default-features = false, features = ["android-native-activity", "default_fonts", "links", "wgpu"] }
+eframe = { version = "0.37", default-features = false, features = ["android-native-activity", "default_fonts", "links", "wgpu"] }
 android-activity = "0.6"                                  # the AndroidApp eframe runs in (android.rs)
 jni = "0.21"                                              # calling the app's Java side (android.rs)
 
@@ -93,5 +99,6 @@ winresource = "0.1"                                         # the icon, embedded
 tray-icon = { version = "0.24", default-features = false }  # the notification-area icon (tray.rs)
 raw-window-handle = "0.6"                                   # the window's HWND, which the media controls need (media_controls.rs)
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }  # re-attach to the terminal for CLI use
-windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Shell"] }  # the Start menu shortcut (install.rs)
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }  # the Start menu shortcut (install.rs); the mini player out of the taskbar and the cursor (app/mini_player.rs)
 windows-registry = "0.6"                                    # the uninstall entry and starting with Windows (install.rs)
+

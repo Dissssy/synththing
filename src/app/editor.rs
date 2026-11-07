@@ -434,7 +434,7 @@ impl App {
     /// The script source editor: toolbar, find bar, and the text itself
     /// with its line numbers.
     pub(super) fn visualizer_editor_ui(&mut self, ui: &mut egui::Ui) {
-        let editor_id = egui::Id::new(SCRIPT_EDITOR_ID);
+        let editor_id = egui::Id::unique(SCRIPT_EDITOR_ID);
         let ctx = ui.ctx().clone();
 
         if let Some((word, detail)) = self.editor_hover_info.clone() {
@@ -720,7 +720,7 @@ impl App {
         let mut changed = false;
         let mut done = false;
         let alpha_mode = if edit.has_alpha { egui::color_picker::Alpha::OnlyBlend } else { egui::color_picker::Alpha::Opaque };
-        let area = egui::Area::new(egui::Id::new("editor_color_picker"))
+        let area = egui::Area::new(egui::Id::unique("editor_color_picker"))
             .order(egui::Order::Foreground)
             .fixed_pos(edit.at)
             .show(&ctx, |ui| {
@@ -1113,7 +1113,7 @@ impl App {
         }
         let mut close = false;
         let mut restore = None;
-        let response = egui::Modal::new(egui::Id::new("script_history")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("script_history")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 760.0));
             ui.heading("Script history");
             ui.weak(
@@ -1281,7 +1281,7 @@ fn describe_name(analysis: &Analysis, byte: usize, word: &str) -> Option<String>
 fn completion_popup(ui: &egui::Ui, popup: &mut Popup, at: egui::Rect, font_size: f32) -> Option<String> {
     let mut accepted = None;
     let font = egui::FontId::monospace(font_size);
-    egui::Area::new(egui::Id::new("editor_completions"))
+    egui::Area::new(egui::Id::unique("editor_completions"))
         .order(egui::Order::Tooltip)
         .fixed_pos(at.left_bottom() + egui::vec2(0.0, 2.0))
         .show(ui.ctx(), |ui| {
@@ -1336,7 +1336,7 @@ fn signature_help(ui: &egui::Ui, signature: &lua_analysis::Signature, at: egui::
     }
     let galley = ui.fonts_mut(|f| f.layout_job(job));
     let height = galley.size().y + 12.0;
-    egui::Area::new(egui::Id::new("editor_signature"))
+    egui::Area::new(egui::Id::unique("editor_signature"))
         .order(egui::Order::Tooltip)
         .fixed_pos(at.left_top() - egui::vec2(0.0, height + 2.0))
         .interactable(false)

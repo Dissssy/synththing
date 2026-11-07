@@ -1820,8 +1820,22 @@ fn page(title: &str, raw_query: &str, video: bool, audio: bool) -> Reply {
          button{{position:fixed;inset:0;margin:auto;width:max-content;height:max-content;padding:.6em 1.2em;font:16px sans-serif;cursor:pointer}}</style>"
     );
     if video {
-        let png = if raw_query.split('&').any(|p| p.starts_with("format=")) { "" } else { "&amp;format=png" };
-        page += &format!("<img src=\"/v1/visualizer/stream?{query}{png}\" alt=\"\">");
+        let has = |name: &str| raw_query.split('&').any(|p| p.split('=').next() == Some(name));
+        let png = if has("format") { "" } else { "&format=png" };
+        if has("width") && has("height") {
+            page += &format!("<img src=\"/v1/visualizer/stream?{query}{}\" alt=\"\">", png.replace('&', "&amp;"));
+        } else {
+            // A side not given is the page's own, so resizing OBS's Browser
+            // Source and refreshing it is all a new size takes.
+            let stream = serde_json::to_string(&format!("/v1/visualizer/stream?{raw_query}{png}")).unwrap_or_default().replace('<', "\\u003c");
+            let side = |name: &str, js: &str| if has(name) { String::new() } else { format!(" + \"&{name}=\" + Math.round({js} * ratio)") };
+            page += &format!(
+                "<img alt=\"\"><script>const ratio = window.devicePixelRatio || 1;\n\
+                 document.querySelector(\"img\").src = {stream}{}{};</script>",
+                side("width", "innerWidth"),
+                side("height", "innerHeight")
+            );
+        }
     }
     if audio {
         // (A JSON string, as script text isn't HTML: `&amp;` would stay
@@ -1912,12 +1926,21 @@ fn listen(request: Request, chunks: Receiver<crate::audio_stream::Chunk>) {
     }
 }
 
-/// `?width=&height=&fps=` for the visualizer's pictures: the size to draw
-/// them at (both or neither), and how many a second at most.
+/// `?width=&height=&scale=&fps=` for the visualizer's pictures: the size to
+/// draw them at (both or neither), divided by the pixel scale (as the
+/// Visualizer scale preference does), and how many a second at most.
 fn watch_options(query: &HashMap<String, String>) -> Result<(Option<(usize, usize)>, u32, Format), Reply> {
     let side = |name: &str| query.get(name).map(|v| v.parse::<u32>().map_err(|_| error(400, format!("?{name}= is a number of pixels"))));
+    let scale = match query.get("scale") {
+        None => 1,
+        Some(scale) => scale
+            .parse::<u32>()
+            .ok()
+            .filter(|s| crate::config::VISUALIZER_SCALES.contains(s))
+            .ok_or_else(|| error(400, "?scale= is 1, 2, 4, 8 ... 1024"))?,
+    };
     let size = match (side("width").transpose()?, side("height").transpose()?) {
-        (Some(w), Some(h)) => Some(crate::recorder::Resolution::custom(w, h).size()),
+        (Some(w), Some(h)) => Some(crate::recorder::Resolution::custom(w / scale, h / scale).size()),
         (None, None) => None,
         _ => return Err(error(400, "give both ?width= and ?height=, or neither")),
     };
@@ -2257,7 +2280,12 @@ mod tests {
         assert_eq!(status, 200);
         assert!(page.contains("/v1/visualizer/stream?width=640&amp;height=360&amp;token=x&amp;format=png\""), "{page}");
         let (_, page) = get(&server, "/v1/visualizer?format=jpeg&token=x", &read_token);
-        assert!(page.contains("/v1/visualizer/stream?format=jpeg&amp;token=x\""), "{page}");
+        assert!(page.contains(r#""/v1/visualizer/stream?format=jpeg&token=x" + "&width=""#), "{page}");
+        let (_, page) = get(&server, "/v1/visualizer?token=x", &read_token);
+        assert!(page.contains(r#""/v1/visualizer/stream?token=x&format=png" + "&width=""#), "{page}");
+        assert_eq!(get(&server, "/v1/visualizer/stream?width=640&height=360&scale=3", &read_token).0, 400);
+        let (_, page) = get(&server, "/v1/visualizer?width=500&token=x", &read_token);
+        assert!(page.contains(r#""/v1/visualizer/stream?width=500&token=x&format=png" + "&height=""#), "{page}");
         assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &read_token)), 403);
         assert_eq!(answering(&server, empty, set("queue/move?from=2&to=0", &control_token)), 204);
         assert_eq!(answering(&server, empty, set("queue/move?from=2", &control_token)), 400);

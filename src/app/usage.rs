@@ -54,7 +54,7 @@ impl App {
             }
             if let Some(preview) = crate::usage::preview() {
                 egui::CollapsingHeader::new("See what's sent").id_salt("usage_preview").show(ui, |ui| {
-                    ui.weak("The next report so far. The server may want fewer of these lines; it gets only those.");
+                    ui.weak("The next reports so far (one per version, if an update left counts unsent). The server may want fewer of these lines; it gets only those.");
                     egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
                         ui.add(egui::Label::new(egui::RichText::new(preview).monospace()).wrap());
                     });

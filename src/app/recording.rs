@@ -13,7 +13,7 @@
 //! `recording_ready()` when the video should start, and `recording_done()`
 //! when the song's take is over (after its own outro, say), or the take
 //! ends `TAKE_TAIL` after the song does. A playlist moves on only then.
-//! The Record window picks what to record, the script, the video format,
+//! The Record page picks what to record, the script, the video format,
 //! and for a script with `record_auto`, whether it plays itself; and Live
 //! (recorded as it plays) or Render: made in the background, frame by
 //! frame, by its own copy of the script and the synth (`offline::Render`),
@@ -58,7 +58,7 @@ pub struct Recording {
     start_after_download: Option<RecordDraft>,
     /// The session the recorder belongs to.
     session: Option<Session>,
-    /// The Record window is up, with what's picked in it.
+    /// The Record page is up, with what's picked in it.
     pub window: Option<RecordDraft>,
     /// A background render, while one is running.
     pub render: Option<Render>,
@@ -75,7 +75,7 @@ enum Lag {
     Encoder,
 }
 
-/// What to record, as picked in the Record window.
+/// What to record, as picked in the Record page.
 #[derive(Clone, Debug)]
 pub struct RecordDraft {
     kind: RecordKind,
@@ -272,7 +272,7 @@ impl App {
         self.script.options().record_auto && self.script_record_key().is_none_or(|key| !self.config.record_manual.contains(&key))
     }
 
-    /// The running script, as the Record window remembers its mode.
+    /// The running script, as the Record page remembers its mode.
     fn script_record_key(&self) -> Option<String> {
         self.script.path().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned())
     }
@@ -765,9 +765,10 @@ impl App {
         }
     }
 
-    /// Open the Record window.
-    pub(super) fn open_record_window(&mut self) {
+    /// Open the Record page, in the panels' place.
+    pub(super) fn open_record(&mut self) {
         if self.recording.window.is_none() {
+            self.close_pages();
             let kind = if self.current_song.is_some() { RecordKind::Song } else { RecordKind::Free };
             let auto = self.record_auto();
             let soundfont = self.loaded_sf.clone().or_else(|| self.selected_soundfont());
@@ -815,7 +816,7 @@ impl App {
                 ))
                 .clicked()
             {
-                self.open_record_window();
+                self.open_record();
             }
         }
         self.recording_controls_ui(ui);
@@ -844,7 +845,7 @@ impl App {
         }
         let state = self.recording.download.state();
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("ffmpeg_prompt")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::unique("ffmpeg_prompt")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 420.0));
             ui.heading("Recording needs ffmpeg");
             ui.add_space(6.0);
@@ -962,7 +963,7 @@ impl App {
         });
     }
 
-    /// Size, frame rate and quality (Preferences, and the Record window),
+    /// Size, frame rate and quality (Preferences, and the Record page),
     /// a row each.
     fn record_format_ui(&mut self, ui: &mut egui::Ui) {
         let mut resolution = self.config.record_resolution;
@@ -1078,13 +1079,12 @@ impl App {
         }
     }
 
-    /// The Record window: what to record, with which script, the video's
+    /// The Record page: what to record, with which script, the video's
     /// format, and (for a script that can) whether it plays itself.
-    pub(super) fn record_window_ui(&mut self, ctx: &egui::Context, view: &EngineView) {
+    pub(super) fn record_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let Some(mut draft) = self.recording.window.clone() else { return };
         let song_name = draft.song.clone().map(|song| self.song_title(&song));
         let mut start = false;
-        let mut close = false;
         let mut picked_script = None;
         let options = self.script.options();
         let script_error = self.script.error().is_some();
@@ -1095,10 +1095,7 @@ impl App {
             .map(|np| np.list)
             .or(self.viewed_playlist)
             .is_some_and(|l| self.playlists.lists.get(l).is_some_and(|l| !l.playlist.entries.is_empty()));
-        let response = egui::Modal::new(egui::Id::new("record_window")).show(ctx, |ui| {
-            ui.set_width(super::fit_width(ui, 540.0));
-            ui.heading("Record");
-            ui.add_space(6.0);
+        let close = super::page_ui(ui, "Record", &[] as &[&str], &mut 0, true, |_| true, |ui, _| {
             ui.spacing_mut().item_spacing.y = 8.0;
             super::settings_group("What").icon("music-notes").show(ui, |ui| {
                 super::setting_row(ui, |ui| {
@@ -1199,9 +1196,6 @@ impl App {
             });
             ui.add_space(10.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                if ui.button("Cancel").clicked() {
-                    close = true;
-                }
                 let ok = match draft.kind {
                     RecordKind::Song => draft.song.is_some(),
                     RecordKind::Playlist => has_playlist,
@@ -1247,7 +1241,7 @@ impl App {
         if start {
             self.recording.window = None;
             self.start_session(draft, view);
-        } else if close || response.should_close() {
+        } else if close {
             self.recording.window = None;
         }
     }
