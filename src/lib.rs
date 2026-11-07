@@ -91,6 +91,7 @@ mod preview;
 mod recorder;
 mod script_clock;
 mod script_host;
+mod script_math;
 mod search;
 mod search_box;
 mod wishlist_search;

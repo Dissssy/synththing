@@ -108,6 +108,7 @@ const AUDIO: &str = "Audio data";
 const MIDI: &str = "MIDI data";
 const PLAYBACK: &str = "Playback & timing";
 const CLOCK: &str = "Date & time";
+const MATHS: &str = "Noise & easing";
 const RECORDING: &str = "Recording";
 const PLAYLIST: &str = "Playlist";
 const MUSICAL: &str = "Musical timing";
@@ -148,6 +149,8 @@ pub const ITEMS: &[Item] = &[
     f("pop_view", DRAWING, "0.6.0", &[], &[], "go back to the translate and clip push_view saved"),
     f("hsv", DRAWING, "0.6.0", &[d("hue", "number", "degrees, wraps"), d("saturation", "number", "0 to 1"), d("value", "number", "0 to 1"), od("a", "number", "0 to 1")], &[p("color", COLOR)], "a color from hue, saturation and value"),
     f("mix", DRAWING, "0.6.0", &[p("color1", COLOR), p("color2", COLOR), d("t", "number", "0 is color1, 1 is color2")], &[p("color", COLOR)], "a color between two, alpha included"),
+    f("noise", MATHS, "next", &[p("x", "number"), opt("y", "number"), opt("z", "number")], &[d("value", "number", "-1 to 1")], "smooth simplex noise in 1, 2 or 3 dimensions; the same inputs always give the same value"),
+    f("ease", MATHS, "next", &[d("curve", "string", "\"linear\", or in_, out_ or in_out_ then sine, quad, cubic, quart, quint, expo, circ, back, elastic or bounce"), d("t", "number", "0 to 1, clamped")], &[p("value", "number")], "t along an easing curve (back and elastic overshoot past 0 and 1)"),
     f("approach", PLAYBACK, "0.6.0", &[p("current", "number"), p("target", "number"), d("rate", "number", "per second"), od("rate_down", "number", "per second, going down")], &[p("value", "number")], "smoothing by the second, the same at any frame rate"),
     // Text
     f("text", TEXT, "0.1.5", &[p("x", "number"), p("y", "number"), p("text", "string"), p("color", COLOR), od("height", "number", "line height in pixels, FONT_HEIGHT if not given")], SIZE, "draw pixel text (Monogram; Japanese, Korean and Chinese from Noto), and get the size drawn"),

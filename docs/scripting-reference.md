@@ -545,6 +545,32 @@ Check `playback().paused` before writing into a scrolling history buffer, otherw
 
 `render()` only runs while the visualizer is on screen: not while its tab is closed or hidden behind another tab, and not while Preferences is open (the visualizer freezes on its last frame, and playback pauses). `DT` is capped at 0.25 so the first frame back after a gap like that doesn't make animations jump.
 
+## Noise & easing
+
+<!-- api: noise ease -->
+```lua
+noise(x, [y], [z]) -> value   -- smooth simplex noise in 1, 2 or 3 dimensions; the same inputs always give the same value (since next)
+ease(curve, t) -> value       -- t along an easing curve (back and elastic overshoot past 0 and 1) (since next)
+                              -- curve: "linear", or in_, out_ or in_out_ then sine, quad, cubic, quart, quint, expo, circ, back, elastic or bounce; t: 0 to 1, clamped
+```
+<!-- /api -->
+
+```lua
+-- a wandering line: each point's height drifts smoothly over time
+for x = 0, width - 1, 4 do
+    local y = height / 2 + noise(x * 0.01, TIME * 0.5) * height / 3
+    pixel(x, math.floor(y), {r=120, g=200, b=255})
+end
+
+-- a dot that slides across in one second and settles in, then starts over
+local t = TIME % 1.5
+circle(ease("out_back", t) * (width - 40) + 20, 20, 8, {r=255, g=180, b=60})
+```
+
+`noise` is simplex noise: nearby inputs give nearby values, so stepping one input slowly (time, or a position times a small scale) gives smooth drift. It's the same field for every script and every run, recordings included; offset the inputs (`noise(x + 100, y)`) for a different-looking one. Adding a few layers at doubling scales and halving strengths (`noise(x) + noise(x * 2) / 2 + noise(x * 4) / 4`) gives rougher, more natural shapes.
+
+`ease` bends a 0-to-1 progress into a curve: `in_` curves start slow, `out_` ones end slow, `in_out_` both. `back` overshoots a little and comes back, `elastic` springs and `bounce` lands like a ball, so those go past 0 or 1 on the way.
+
 ## Date & time
 
 <!-- api: now unix_time format_time -->

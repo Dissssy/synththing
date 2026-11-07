@@ -6,6 +6,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Added
 - Visualizer scripts can tell the time: `now()` gives today's date and the time of day (local, or UTC), `unix_time()` the seconds since 1970, and `format_time("%H:%M")` turns either into text. In a recording the clock is recording time, so a clock drawn into the video reads as it would have live.
+- Visualizer scripts get `noise(x, y, z)`, smooth simplex noise, and `ease("out_cubic", t)`, the common easing curves (sine, quad, cubic, quart, quint, expo, circ, back, elastic, bounce, each in, out or in-out).
 
 ### Changed
 - The star button in album, artist and playlist headers is gone: one click starred or unstarred every song on the page with no way back. To star several songs, select them (Ctrl+A for all) and right-click > Star, which says Unstar when every selected song is already starred.

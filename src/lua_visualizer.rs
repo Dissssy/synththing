@@ -73,6 +73,7 @@
 //!   it started, wall clock, uncapped).
 //! * `now()`, `unix_time()`, `format_time()`: the date and time of day,
 //!   recording time in a recording (`script_clock.rs`).
+//! * `noise()` and `ease()`: smooth noise and easing curves (`script_math.rs`).
 //! * Cursor: `set_cursor_visible(visible)` (applies over the visualizer) and
 //!   `set_cursor_locked(locked)` (keeps it on screen, dedicated fullscreen
 //!   only).
@@ -2609,6 +2610,7 @@ fn compile(
     register_assets(&lua, &assets).map_err(|e| e.to_string())?;
     let clock = Rc::default();
     crate::script_clock::register(&lua, &clock).map_err(|e| e.to_string())?;
+    crate::script_math::register(&lua).map_err(|e| e.to_string())?;
 
     let host_globals: HashSet<String> = lua
         .globals()

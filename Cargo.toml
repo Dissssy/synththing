@@ -70,6 +70,7 @@ ebur128 = "0.1.11"                                        # songs' loudness, to 
 # accesskit, which needs the game-activity one).
 percent-encoding = "2"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] } # local time for scripts (script_clock.rs) and recording names
+noise = { version = "0.9", default-features = false }                      # noise() for scripts (script_math.rs)
 [target.'cfg(not(target_os = "android"))'.dependencies]
 eframe = "0.36.1"
 rfd = "0.15"                                              # native file and folder dialogs
