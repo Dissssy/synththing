@@ -163,7 +163,7 @@ pub const ITEMS: &[Item] = &[
     f("sprite", SPRITES, "0.1.8", &[p("id", "integer"), p("x", "number"), p("y", "number"), od("options", "number|SpriteOptions", "a scale, or options")], SIZE, "draw a sprite, or part of one, optionally recolored; the size drawn"),
     f("sprite_size", SPRITES, "0.1.8", &[p("id", "integer")], SIZE, "a sprite's size in its own pixels"),
     f("blit", DRAWING, "1.6.0", &[d("pixels", "string|integer[]", "palette indices 0-255, a string of bytes or a list"), p("width", "integer"), p("height", "integer"), p("palette", "Color[]"), opt("x", "number"), opt("y", "number"), opt("w", "number"), opt("h", "number")], &[], "a palette-indexed image in one call, stretched to w x h"),
-    f("album_art", SPRITES, "1.5.0", &[od("size", "integer", "at most this many pixels across")], &[p("art", "AlbumArt|nil")], "the playing song's art as a sprite, and the color it's mostly made of"),
+    f("album_art", SPRITES, "1.5.0", &[od("size", "integer", "at most this many pixels across")], &[p("art", "Picture|nil")], "the playing song's art as a sprite, and the color it's mostly made of"),
     // Audio data
     f("fft_left", AUDIO, "0.1.1", &[p("samples", "number[]")], &[p("spectrum", "number[]")], "the left channel's magnitude spectrum (512 entries)"),
     f("fft_right", AUDIO, "0.1.1", &[p("samples", "number[]")], &[p("spectrum", "number[]")], "the right channel's magnitude spectrum"),
@@ -283,6 +283,7 @@ pub const ITEMS: &[Item] = &[
     f("shared_get", SHARED, "2.0.0", &[p("key", "string")], &[p("value", "any")], "a value shared with Local API programs, nil if none"),
     f("shared_set", SHARED, "2.0.0", &[p("key", "string"), d("value", "any", "nil deletes")], &[], "share a value with Local API programs, until the app closes"),
     f("read_asset", ASSETS, "1.6.0", &[d("name", "string", "a plain file name")], &[p("contents", "string|nil")], "a file's bytes from the script's <name>.lua.assets folder"),
+    f("image_load", ASSETS, "next", &[d("name", "string", "a plain file name, as for read_asset"), od("size", "integer", "at most this many pixels across, scaled smoothly; its own pixels if not given")], &[p("picture", "Picture|nil"), d("error", "string|nil", "why it couldn't be read")], "a PNG or JPEG from the assets folder as a sprite; nil until it's loaded, so call it every frame"),
     f("list_assets", ASSETS, "1.6.0", &[], &[p("names", "string[]")], "the files in the script's assets folder, sorted"),
     // What the script defines
     Item {
@@ -479,8 +480,8 @@ pub const CLASSES: &[Class] = &[
         ],
     },
     Class {
-        name: "AlbumArt",
-        summary: "the playing song's art (album_art())",
+        name: "Picture",
+        summary: "a picture as a sprite (album_art(), image_load())",
         fields: &[p("sprite", "integer"), p("width", "integer"), p("height", "integer"), d("color", "Color", "the color it's mostly made of")],
     },
     Class {
@@ -950,10 +951,10 @@ mod tests {
     fn everything_example_calls_the_api() {
         const NOT_YET: &[&str] = &[
         "circle_outline", "triangle", "polygon", "pixel", "set_clear_color", "shift_frame", "translate", "clip", "push_view", "pop_view", "hsv",
-        "mix", "approach", "sprite_register", "sprite", "sprite_size", "blit", "album_art", "fft_left", "fft_right", "fft_bin", "fft_freq",
+        "mix", "approach", "sprite_register", "sprite_size", "blit", "album_art", "fft_left", "fft_right", "fft_bin", "fft_freq",
         "fft_band", "level_left", "level_right", "peak_left", "peak_right", "onset", "history_left", "history_right", "note_name", "note_freq",
         "freq_note", "SAMPLE_RATE", "active_notes", "upcoming_notes", "notes_between", "midi_channels", "channel_enabled", "set_channel_enabled",
-        "channel_program", "channel_name", "channel_colors", "NOTE_LOOKAHEAD", "playback", "set_paused", "seek", "set_speed", "script_options",
+        "channel_program", "channel_name", "channel_colors", "NOTE_LOOKAHEAD", "playback", "set_paused", "seek", "set_speed",
         "display_mode", "is_mobile", "DT", "FRAME", "recording_ready", "recording_done", "playlist", "play_track", "next_track", "previous_track",
         "set_loop", "set_shuffle", "beat", "time_at_beat", "bar", "tempo", "time_signature", "has_focus", "mouse", "mouse_delta", "scroll",
         "mouse_down", "mouse_pressed", "mouse_released", "touches", "set_cursor_visible", "set_cursor_locked", "input_register", "input",
@@ -961,7 +962,7 @@ mod tests {
         "typing_end", "play_note", "note_on", "note_off", "stop_notes", "notes_playable", "midi_send", "sound_register", "sound_play",
         "sequence_register", "sequence_play", "sequence_stop", "log", "log_app", "debug_locals", "setting_bool", "setting_int", "setting_float",
         "setting_color", "setting_string", "setting_selection", "settings_preset", "store_get", "store_set", "shared_get", "shared_set",
-        "read_asset", "list_assets",
+        "read_asset",
         ];
         let source = include_str!("../assets/visualizers/examples/everything.lua");
         let words: HashSet<&str> = source.split(|c: char| !(c.is_alphanumeric() || c == '_')).collect();

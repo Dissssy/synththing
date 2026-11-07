@@ -12,6 +12,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 - Visualizer scripts can read what the library knows of the playing song with `song_details()`: your edits, tags, whether it's starred, its plays and skips, when it was last played and every other song field, kept up to date as they change.
 - Visualizer scripts can read the app theme's colors with `theme()` (background, text, accent, the playing song's color and the rest), to match the look you picked.
 - Visualizer scripts can make seeded random generators with `random(seed)`, which give the same numbers for the same seed. In a recording `math.random` is seeded from the song as well, so recording the same song twice gives the same video.
+- Visualizer scripts can load PNG and JPEG pictures from their assets folder with `image_load(name)`, as sprites: photos for backgrounds, or pixel art and sprite sheets drawn in any image editor. Pictures load in the background, so a big one never holds up a frame.
+- New visualizer, Radial Art: a ring of spectrum bars over the song's album art, or over your own pictures (pick one, or shuffle them song by song), with the time signature or the time in the song in the middle.
 
 ### Fixed
 - Recordings on Linux and macOS are named with the local time instead of UTC.

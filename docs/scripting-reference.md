@@ -327,7 +327,7 @@ album_art([size]) -> art   -- the playing song's art as a sprite, and the color 
 ```
 <!-- /api -->
 
-`album_art` gives the playing song's art (its own picture, else its album's cover, as the app shows it) as a sprite to draw with `sprite`, at most `size` pixels across (its own size, up to 512, when left out), and `color`, the color it's mostly made of, bright enough to draw with on a dark background: a script can take on the colors of what's playing. It's nil while there's no song, while the art's still being read (a moment after a song starts), and for a song without any. Each size is scaled smoothly once per picture, so ask for the size you'll draw at, every frame; the ids stay the same from one song to the next. The art can be drawn with `scale`, `src` and flips, but not recolored (`palette`, `tint`). Since 1.5.0.
+`album_art` gives the playing song's art (its own picture, else its album's cover, as the app shows it) as a sprite to draw with `sprite`, at most `size` pixels across (its own size, up to 512, when left out), and `color`, the color it's mostly made of, bright enough to draw with on a dark background: a script can take on the colors of what's playing. It's nil while there's no song, while the art's still being read (a moment after a song starts), and for a song without any. Each size is scaled smoothly once per picture, so ask for the size you'll draw at, every frame; the ids stay the same from one song to the next. The art can be drawn with `scale`, `src` and flips, but not recolored (`palette`, `tint`). Pictures from the script's own assets folder come the same way, from `image_load` (see Assets). Since 1.5.0.
 
 ```lua
 function render(width, height)
@@ -1129,11 +1129,13 @@ shared_set("visualizer.peak", peak_left())
 
 ## Assets
 
-<!-- api: read_asset list_assets -->
+<!-- api: read_asset image_load list_assets -->
 ```lua
-read_asset(name) -> contents   -- a file's bytes from the script's <name>.lua.assets folder (since 1.6.0)
-                               -- name: a plain file name
-list_assets() -> names         -- the files in the script's assets folder, sorted (since 1.6.0)
+read_asset(name) -> contents                 -- a file's bytes from the script's <name>.lua.assets folder (since 1.6.0)
+                                             -- name: a plain file name
+image_load(name, [size]) -> picture, error   -- a PNG or JPEG from the assets folder as a sprite; nil until it's loaded, so call it every frame (since next)
+                                             -- name: a plain file name, as for read_asset; size: at most this many pixels across, scaled smoothly; its own pixels if not given
+list_assets() -> names                       -- the files in the script's assets folder, sorted (since 1.6.0)
 ```
 <!-- /api -->
 
@@ -1144,6 +1146,24 @@ script_options({ assets = true })  -- once, at the top
 ```
 
 A script that reads assets says so with `script_options`: its assets folder is made if it isn't there yet, and the bar above the visualizer gets a button that opens it, so it's easy to put the files in. Since 1.5.0.
+
+`image_load` turns a PNG or JPEG in the assets folder into a sprite, the same way `album_art` hands over the song's art: a table with `sprite` (to draw with `sprite`), `width`, `height` and `color`, the color it's mostly made of. Without `size` it's the picture's own pixels, so pixel art and sprite sheets drawn in any image editor can be loaded instead of written out with `sprite_register` (pick a frame with `src`); with `size`, it's scaled smoothly to at most that many pixels across, for a photo behind everything. Like album art, it can be drawn with `scale`, `src` and flips, but not recolored (`palette`, `tint`).
+
+Pictures are decoded on a thread of their own, so a big photo never holds up a frame: the first call starts loading it and returns nil, and so does every call until it's ready, from then on the same sprite. So call it every frame and draw it once it's there; asking again for a name and size already asked for never starts a second load. In recordings, previews and `run-script`, it waits for the picture instead, so every run draws the same frames. A file that isn't there is nil (put it in and it loads); one that can't be read as a picture is nil and why, as a second value, until the script is restarted. Pictures go up to 8192 pixels a side. Since next.
+
+```lua
+script_options({ assets = true })
+
+function render(width, height)
+    local bg, why = image_load("background.png", math.max(width, height))
+    if bg then
+        local scale = math.max(width / bg.width, height / bg.height)  -- cover the window
+        sprite(bg.sprite, (width - bg.width * scale) / 2, (height - bg.height * scale) / 2, scale)
+    elseif why then
+        text(4, 4, why, theme().error)
+    end
+end
+```
 
 ## Testing scripts from the command line
 
@@ -1352,7 +1372,7 @@ Date                      -- a date and time of day (now())
     utc_offset: integer   -- seconds ahead of UTC
     unix: number          -- the same moment as unix_time()
 
-AlbumArt              -- the playing song's art (album_art())
+Picture               -- a picture as a sprite (album_art(), image_load())
     sprite: integer
     width: integer
     height: integer
@@ -1609,6 +1629,7 @@ Visualizers:
 - `letters.lua`, one glyph per channel, colored by pitch; a from-scratch bitmap font
 - `dashboard.lua`, four panels (a scope, a spectrum, a piano roll with an instrument legend from `channel_program`, and level meters), each drawn in its own coordinates with `translate` and kept inside its box with `clip`, and a shake on every onset
 - `pulse.lua`, a ring that beats with the song: the time signature's beats around a circle, a polygon turning with the beat and swelling with loudness, eighth-note sprites bursting out on onsets, and a tempo/bar readout
+- `radial_art.lua`, a ring of spectrum bars over a picture: the song's album art, or PNG and JPEG pictures from its assets folder (`image_load`, `list_assets`), one picked or shuffled per song; the time signature in the middle (`time_signature`), else the time in the song
 - `now_playing.lua`, a pixel-art card for a stream overlay: the song's title and artist (`playback()`'s tags), its time and a progress bar, and its album art (`album_art`), in the album's colors; see-through (`script_options` transparent), with long titles scrolling and fading out at the edges (`clip`, then slices of the background over the text's ends)
 - `disco.lua`, a spinning mirror ball firing a laser per note, colored by channel and aimed by pitch, anticipated with `upcoming_notes()`
 

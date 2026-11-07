@@ -97,7 +97,7 @@ pub fn for_script(source: &Source, online: bool) -> Option<ScriptArt> {
 /// greys: the average of the hue (in twelve slices) that has the most
 /// color, brightened so it shows on a dark background. (An average of the
 /// whole picture would mix its colors to grey.)
-fn accent(image: &image::RgbaImage) -> u32 {
+pub fn accent(image: &image::RgbaImage) -> u32 {
     const SLICES: usize = 12;
     let mut slices = [([0.0f64; 3], 0.0f64); SLICES];
     for pixel in image.pixels().step_by(3) {

@@ -1469,6 +1469,10 @@ struct SongIdentity {
     streaming: bool,
     /// The recording the script is part of (`recording()`).
     take: Option<RecordingTake>,
+    /// Frames come a fixed time apart (recordings, previews, `run-script`),
+    /// not by the wall clock: `image_load` then waits for its pictures, so
+    /// every run draws the same frames.
+    fixed_timestep: bool,
 }
 
 /// What a recording asks of the script (`recording()`).
@@ -2049,6 +2053,7 @@ impl LuaVisualizer {
     /// by the wall clock; `None` for real time.
     pub fn set_fixed_timestep(&mut self, step: Option<f64>) {
         self.fixed_timestep = step;
+        self.song.borrow_mut().fixed_timestep = step.is_some();
     }
 
     /// Keep the running script's store in memory only: it still reads
@@ -2657,7 +2662,7 @@ fn compile(
     register_timing_audio_shapes(&lua, note_list, playback, features, &commands).map_err(|e| e.to_string())?;
     register_color_helpers(&lua).map_err(|e| e.to_string())?;
     register_live_notes(&lua, notes, playback, note_list, live).map_err(|e| e.to_string())?;
-    register_assets(&lua, &assets).map_err(|e| e.to_string())?;
+    register_assets(&lua, &assets, &sprites, song).map_err(|e| e.to_string())?;
     let clock = Rc::default();
     crate::script_clock::register(&lua, &clock).map_err(|e| e.to_string())?;
     crate::script_math::register(&lua).map_err(|e| e.to_string())?;
@@ -3309,31 +3314,22 @@ fn register_song_and_state(
 /// assets folder (`assets_path`), by plain file name (no folders, nothing
 /// hidden), so a script gets the data it ships with (a game's levels, say)
 /// and nothing else on the computer.
-fn register_assets(lua: &Lua, folder: &Rc<RefCell<Option<PathBuf>>>) -> mlua::Result<()> {
+fn register_assets(
+    lua: &Lua,
+    folder: &Rc<RefCell<Option<PathBuf>>>,
+    sprites: &Rc<RefCell<Vec<Sprite>>>,
+    song: &Rc<RefCell<SongIdentity>>,
+) -> mlua::Result<()> {
     let reads = Rc::clone(folder);
     lua.globals().set(
         "read_asset",
         lua.create_function(move |lua, name: String| {
-            let plain = !name.is_empty()
-                && !name.starts_with('.')
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ' '));
-            if !plain {
-                return Err(mlua::Error::runtime(format!(
-                    "read_asset: `{name}` isn't a plain file name (letters, digits, . _ - and spaces)"
-                )));
-            }
-            let Some(path) = reads.borrow().as_ref().map(|dir| dir.join(&name)) else { return Ok(None) };
-            match fs::metadata(&path) {
-                Ok(meta) if meta.is_file() && meta.len() <= MAX_ASSET_BYTES => {}
-                Ok(meta) if meta.is_file() => {
-                    return Err(mlua::Error::runtime(format!("read_asset: {name} is over {} MB", MAX_ASSET_BYTES >> 20)));
-                }
-                _ => return Ok(None),
-            }
+            let Some(path) = asset_file(&reads, "read_asset", &name)? else { return Ok(None) };
             let bytes = fs::read(&path).map_err(|e| mlua::Error::runtime(format!("read_asset: {name}: {e}")))?;
             lua.create_string(bytes).map(Some)
         })?,
     )?;
+    register_image_load(lua, folder, sprites, song)?;
     let folder = Rc::clone(folder);
     lua.globals().set(
         "list_assets",
@@ -3351,6 +3347,143 @@ fn register_assets(lua: &Lua, folder: &Rc<RefCell<Option<PathBuf>>>) -> mlua::Re
                 .collect();
             names.sort_by_key(|name| name.to_lowercase());
             Ok(names)
+        })?,
+    )
+}
+
+/// The path of the asset `name` (for `function`'s errors): only a plain
+/// file name (no folders, nothing hidden) in the script's assets folder, or
+/// `None` when there's no such file (or no folder, for an unsaved script).
+fn asset_file(folder: &Rc<RefCell<Option<PathBuf>>>, function: &str, name: &str) -> mlua::Result<Option<PathBuf>> {
+    let plain = !name.is_empty()
+        && !name.starts_with('.')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ' '));
+    if !plain {
+        return Err(mlua::Error::runtime(format!(
+            "{function}: `{name}` isn't a plain file name (letters, digits, . _ - and spaces)"
+        )));
+    }
+    let Some(path) = folder.borrow().as_ref().map(|dir| dir.join(name)) else { return Ok(None) };
+    match fs::metadata(&path) {
+        Ok(meta) if meta.is_file() && meta.len() <= MAX_ASSET_BYTES => Ok(Some(path)),
+        Ok(meta) if meta.is_file() => {
+            Err(mlua::Error::runtime(format!("{function}: {name} is over {} MB", MAX_ASSET_BYTES >> 20)))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// The largest side `image_load` decodes, so one picture can't take
+/// gigabytes as a sprite.
+const MAX_IMAGE_SIDE: u32 = 8192;
+
+/// A picture `image_load` was asked for.
+enum Picture {
+    /// Being decoded on a thread of its own.
+    Loading(std::sync::mpsc::Receiver<Result<(image::RgbaImage, u32), String>>),
+    /// Its sprite id, size and color (`0xFFRRGGBB`).
+    Loaded(usize, u32, u32, u32),
+    /// Why it couldn't be read.
+    Failed(String),
+}
+
+/// Decodes the picture at `path`, scaled smoothly to at most `size`
+/// across, and the color it's mostly made of.
+fn decode_picture(path: &Path, size: Option<u32>) -> Result<(image::RgbaImage, u32), String> {
+    let mut reader = image::ImageReader::open(path).map_err(|e| e.to_string())?.with_guessed_format().map_err(|e| e.to_string())?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_SIDE);
+    limits.max_image_height = Some(MAX_IMAGE_SIDE);
+    reader.limits(limits);
+    let mut image = reader.decode().map_err(|e| e.to_string())?.into_rgba8();
+    let full = image.width().max(image.height());
+    if let Some(size) = size.filter(|&size| size < full) {
+        let (w, h) = ((image.width() * size / full).max(1), (image.height() * size / full).max(1));
+        image = image::imageops::thumbnail(&image, w, h);
+    }
+    let color = crate::album_art::accent(&image);
+    Ok((image, color))
+}
+
+/// `image_load(name, [size])`: a PNG or JPEG from the script's assets
+/// folder as a sprite (its own pixels, or scaled smoothly to at most `size`
+/// across), with the color it's mostly made of, like `album_art`. The first
+/// call starts decoding it on a thread of its own and returns nil; later
+/// calls return nil until it's ready, then the same sprite every time. A
+/// missing file is nil, and one that can't be read as a picture is nil and
+/// why. With a fixed timestep (recordings, `run-script`) it waits instead,
+/// so every run draws the same frames.
+fn register_image_load(
+    lua: &Lua,
+    folder: &Rc<RefCell<Option<PathBuf>>>,
+    sprites: &Rc<RefCell<Vec<Sprite>>>,
+    song: &Rc<RefCell<SongIdentity>>,
+) -> mlua::Result<()> {
+    /// Each picture asked for, by file name and size.
+    type Pictures = HashMap<(String, Option<u32>), Picture>;
+    let pictures: Rc<RefCell<Pictures>> = Rc::default();
+    let (folder, sprites, song) = (Rc::clone(folder), Rc::clone(sprites), Rc::clone(song));
+    lua.globals().set(
+        "image_load",
+        lua.create_function(move |lua, (name, size): (String, Option<f64>)| {
+            let size = match size {
+                None => None,
+                Some(size) if size.is_finite() && size >= 1.0 => Some(size.round() as u32),
+                Some(_) => return Err(mlua::Error::runtime("image_load: size is a number of pixels, 1 or more")),
+            };
+            let mut pictures = pictures.borrow_mut();
+            let key = (name, size);
+            if !pictures.contains_key(&key) {
+                let Some(path) = asset_file(&folder, "image_load", &key.0)? else { return Ok((Value::Nil, None)) };
+                let (send, receive) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = send.send(decode_picture(&path, size));
+                });
+                pictures.insert(key.clone(), Picture::Loading(receive));
+            }
+            let picture = pictures.get_mut(&key).expect("just added");
+            if let Picture::Loading(receive) = picture {
+                let decoded = if song.borrow().fixed_timestep {
+                    receive.recv().ok()
+                } else {
+                    match receive.try_recv() {
+                        Ok(decoded) => Some(decoded),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => return Ok((Value::Nil, None)),
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+                    }
+                };
+                *picture = match decoded {
+                    Some(Ok((image, color))) => {
+                        let mut sprites = sprites.borrow_mut();
+                        if sprites.len() >= MAX_SPRITES {
+                            return Err(mlua::Error::runtime(format!("image_load: at most {MAX_SPRITES} sprites per script")));
+                        }
+                        let (width, height) = image.dimensions();
+                        sprites.push(Sprite {
+                            width: width as usize,
+                            height: height as usize,
+                            pixels: image.pixels().map(|p| u32::from_be_bytes([p[3], p[0], p[1], p[2]])).collect(),
+                            indices: Vec::new(),
+                            palette: Vec::new(),
+                        });
+                        Picture::Loaded(sprites.len(), width, height, color)
+                    }
+                    Some(Err(e)) => Picture::Failed(format!("{}: {e}", key.0)),
+                    None => Picture::Failed(format!("{}: couldn't be read", key.0)),
+                };
+            }
+            match *picture {
+                Picture::Loaded(id, width, height, color) => {
+                    let t = lua.create_table_with_capacity(0, 4)?;
+                    t.raw_set("sprite", id)?;
+                    t.raw_set("width", width)?;
+                    t.raw_set("height", height)?;
+                    t.raw_set("color", rgb_to_table(lua, [(color >> 16) as u8, (color >> 8) as u8, color as u8])?)?;
+                    Ok((Value::Table(t), None))
+                }
+                Picture::Failed(ref why) => Ok((Value::Nil, Some(why.clone()))),
+                Picture::Loading(_) => unreachable!("settled above"),
+            }
         })?,
     )
 }
@@ -3560,7 +3693,7 @@ fn sprite_colors(options: &Table, sprite: &Sprite) -> mlua::Result<Option<Rc<[u3
         return Ok(None);
     }
     if sprite.palette.is_empty() {
-        return Err(mlua::Error::runtime("sprite: album art has no palette to recolor or tint"));
+        return Err(mlua::Error::runtime("sprite: pictures (album_art, image_load) have no palette to recolor or tint"));
     }
     let mut colors = sprite.palette.clone();
     if let Some(swaps) = swaps {
@@ -6202,7 +6335,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(".seeded"), "").unwrap();
         seed_bundled(&dir).unwrap();
-        assert_eq!(added(&dir), ["dashboard", "doom", "highway", "note_runner", "now_playing"]);
+        assert_eq!(added(&dir), ["dashboard", "doom", "highway", "note_runner", "now_playing", "radial_art"]);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -6780,6 +6913,51 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         assert_eq!(frames[2], "0 0 0 3c 0 0 0 1e 28 0 0 0");
     }
 
+    /// `image_load`: nil while loading (in real time), then a sprite at its
+    /// own size or scaled down, loaded once per (name, size); nil for a
+    /// missing file, nil and why for one that isn't a picture.
+    #[test]
+    fn image_load_gives_pictures_from_the_assets_folder() {
+        let dir = std::env::temp_dir().join(format!("synththing-image-{}", std::process::id()));
+        let assets = dir.join("pics.lua.assets");
+        fs::create_dir_all(&assets).unwrap();
+        image::RgbaImage::from_pixel(8, 4, image::Rgba([250, 0, 0, 255])).save(assets.join("red.png")).unwrap();
+        fs::write(assets.join("junk.png"), b"not a picture").unwrap();
+        let script = "function render()
+            local full = image_load('red.png')
+            local small = image_load('red.png', 2)
+            local _, why = image_load('junk.png')
+            if full and small then
+                log(full.width .. 'x' .. full.height .. ' ' .. small.width .. 'x' .. small.height .. ' ' .. full.color.r .. ' ' .. tostring(image_load('missing.png')) .. ' ' .. tostring(why ~= nil))
+                sprite(full.sprite, 0, 0)
+            else
+                log('loading')
+            end
+        end";
+        let path = dir.join("pics.lua");
+        fs::write(&path, script).unwrap();
+        let mut visualizer = LuaVisualizer::new(script.to_string(), Some(path.clone()), 44_100);
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "loading", "the first call starts the load");
+        let started = Instant::now();
+        while last_log(&visualizer) == "loading" && started.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(10));
+            frame(&mut visualizer, &sample_playback());
+        }
+        assert_eq!(last_log(&visualizer), "8x4 2x1 250 nil true");
+        assert!(visualizer.error().is_none(), "{:?}", visualizer.error());
+        let mut buffer = vec![0u32; 4];
+        visualizer.render(&mut buffer, 2, 2, &[], &NotesSnapshot::default(), &sample_playback(), &VisualizerInput::default());
+        assert_eq!(buffer[0] & 0x00FF_FFFF, 0x00FA_0000, "drawn as a sprite");
+
+        // With a fixed timestep (recordings, run-script), it's there at once.
+        let mut visualizer = LuaVisualizer::new(script.to_string(), Some(path), 44_100);
+        visualizer.set_fixed_timestep(Some(1.0 / 60.0));
+        frame(&mut visualizer, &sample_playback());
+        assert_eq!(last_log(&visualizer), "8x4 2x1 250 nil true");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// `rect_outline` is four bands inside the rectangle; `circle_outline`
     /// a ring inside the radius; width 1 unless given.
     #[test]
@@ -6904,7 +7082,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
         assert_eq!(frame(&mut visualizer).0, "nil|nil|nil|none", "the next song's art isn't read yet");
         visualizer.set_source("function render() sprite(album_art().sprite, 0, 0, { tint = { r = 1, g = 1, b = 1 } }) end".to_string());
         visualizer.set_art(Path::new("next.mid"), Some(Arc::new(crate::album_art::ScriptArt { image: image::RgbaImage::new(1, 1), color: 0 })));
-        frame_with_error(&mut visualizer, "album art has no palette");
+        frame_with_error(&mut visualizer, "have no palette to recolor");
     }
 
     /// Frames are opaque, unless the script opts into see-through ones:
