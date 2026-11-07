@@ -51,7 +51,7 @@ struct Ask {
 }
 
 enum Found {
-    /// It has lyrics of its own.
+    /// It has timed lyrics of its own.
     Own,
     Record(i64),
     NotFound,
@@ -77,7 +77,8 @@ fn tried_path() -> Option<PathBuf> {
 
 /// Look `ask`'s song up (on the lookup's thread).
 fn work(ask: Ask) -> (String, Found) {
-    let found = if crate::lyrics::local(&ask.path).is_some() {
+    // (Untimed lyrics of its own are still looked up, for timed ones.)
+    let found = if crate::lyrics::local(&ask.path).is_some_and(|l| l.timed) {
         Found::Own
     } else {
         log::info!("looking up the lyrics of {:?} by {:?}", ask.song.title, ask.song.artist);

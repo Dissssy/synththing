@@ -153,6 +153,16 @@ impl Lyrics {
         self.lines.partition_point(|l| l.at.is_some_and(|at| at <= position)).checked_sub(1)
     }
 
+    /// For lyrics without times, a guess at the line `position` is at:
+    /// the lines spread evenly over the song's `length`.
+    pub fn estimate(&self, position: f64, length: f64) -> Option<usize> {
+        if self.timed || self.lines.is_empty() || length <= 0.0 {
+            return None;
+        }
+        let at = (position / length).clamp(0.0, 1.0) * self.lines.len() as f64;
+        Some((at as usize).min(self.lines.len() - 1))
+    }
+
     /// How far through line `index` `position` is (0 to 1): up to the
     /// next line's start, or the song's `length` after the last.
     pub fn progress(&self, index: usize, position: f64, length: f64) -> f32 {
@@ -193,10 +203,17 @@ fn word_times(line: &str, shift: i64) -> (String, Vec<(f64, usize)>) {
 
 /// The song at `path`'s lyrics, if it has any (on the lyrics thread).
 pub fn read(job: Job) -> Option<Lyrics> {
-    local(&job.path).or_else(|| {
-        let record = crate::lookup::lrclib::record(job.lrclib?, job.online)?;
-        Lyrics::parse(record.text()?, Source::Lrclib)
-    })
+    let own = local(&job.path);
+    if own.as_ref().is_some_and(|l| l.timed) {
+        return own;
+    }
+    // (LRCLIB's timed lyrics over the song's own untimed ones.)
+    let fetched = job.lrclib.and_then(|id| crate::lookup::lrclib::record(id, job.online)).and_then(|r| Lyrics::parse(r.text()?, Source::Lrclib));
+    match (own, fetched) {
+        (_, Some(fetched)) if fetched.timed => Some(fetched),
+        (Some(own), _) => Some(own),
+        (None, fetched) => fetched,
+    }
 }
 
 /// What [`read`] reads.
@@ -319,6 +336,7 @@ mod tests {
         let lines: Vec<_> = lyrics.lines.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(lines, ["First line", "", "Second [not a tag]"]);
         assert_eq!(lyrics.current(5.0), None);
+        assert_eq!((lyrics.estimate(0.0, 30.0), lyrics.estimate(15.0, 30.0), lyrics.estimate(30.0, 30.0)), (Some(0), Some(1), Some(2)));
         assert!(Lyrics::parse("  \n ", Source::Tags).is_none());
     }
 
