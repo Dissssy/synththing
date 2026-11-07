@@ -4,11 +4,15 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Visualizer scripts can tell the time: `now()` gives today's date and the time of day (local, or UTC), `unix_time()` the seconds since 1970, and `format_time("%H:%M")` turns either into text. In a recording the clock is recording time, so a clock drawn into the video reads as it would have live.
+
 ### Changed
 - The star button in album, artist and playlist headers is gone: one click starred or unstarred every song on the page with no way back. To star several songs, select them (Ctrl+A for all) and right-click > Star, which says Unstar when every selected song is already starred.
 - Buttons that can't be taken back now ask first: the first click turns them into a red "Really delete?" (or remove, or clear), and a second click on it does it; a click anywhere else or Esc backs out. That's deleting a tag, a grouping ruleset, a theme or a playlist, removing a song from all devices, clearing songs on none of your devices from your library, and removing a branch build.
 
 ### Fixed
+- Recordings on Linux and macOS are named with the local time instead of UTC.
 - Help > Credits & licenses no longer slows every frame while it's open: only the libraries in sight are drawn, instead of all of them (8 to 11 ms a frame on a phone).
 - Song sync no longer stalls the app for tens of milliseconds at a time while songs come in (most of all right after starting): working out which songs this device still wants now happens in the background.
 - Help > Log no longer slows every frame while it's open: only the lines in sight are drawn, instead of the whole log.

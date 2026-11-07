@@ -89,6 +89,7 @@ mod playlist;
 mod playlist_sync;
 mod preview;
 mod recorder;
+mod script_clock;
 mod script_host;
 mod search;
 mod search_box;

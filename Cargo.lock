@@ -5970,6 +5970,7 @@ dependencies = [
  "argon2",
  "base64 0.23.1",
  "chacha20poly1305",
+ "chrono",
  "clap 4.6.7",
  "directories",
  "discord-rich-presence",

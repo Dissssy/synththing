@@ -71,6 +71,8 @@
 //!   Local API programs (`shared_data.rs`).
 //! * `FRAME` (frames since the script started) and `TIME` (seconds since
 //!   it started, wall clock, uncapped).
+//! * `now()`, `unix_time()`, `format_time()`: the date and time of day,
+//!   recording time in a recording (`script_clock.rs`).
 //! * Cursor: `set_cursor_visible(visible)` (applies over the visualizer) and
 //!   `set_cursor_locked(locked)` (keeps it on screen, dedicated fullscreen
 //!   only).
@@ -108,6 +110,7 @@ use crate::config::{config_dir, nice_name};
 use crate::engine::{EngineView, NOTE_LOOKAHEAD_SECS};
 use crate::midi_notes::NoteList;
 use crate::pixel_font;
+use crate::script_clock::ScriptClock;
 use crate::spectrum::{self, OnsetDetector, SpectrumAnalyzer};
 use crate::gamepad::{AXIS_NAMES, PadInput};
 use crate::live::{LiveCommand, LiveNote, Sound};
@@ -1843,6 +1846,8 @@ struct Compiled {
     frame: Cell<u64>,
     /// `TIME`: seconds since its first frame, as of the last render.
     time: Cell<f64>,
+    /// What `now()` and friends read: wall time, or recording time.
+    clock: Rc<RefCell<ScriptClock>>,
     /// What each frame starts from (`set_clear_color`).
     canvas: Canvas,
     /// `translate` / `clip` this frame, and what `push_view` saved.
@@ -2361,6 +2366,7 @@ impl Visualizer for LuaVisualizer {
         compiled.time.set(time);
         let _ = compiled.lua.globals().set("FRAME", compiled.frame.get());
         let _ = compiled.lua.globals().set("TIME", time);
+        compiled.clock.borrow_mut().frame(time, self.song.borrow().recording);
 
         let left: Vec<f32> = samples.iter().map(|&(l, _)| l).collect();
         let right: Vec<f32> = samples.iter().map(|&(_, r)| r).collect();
@@ -2601,6 +2607,8 @@ fn compile(
     register_color_helpers(&lua).map_err(|e| e.to_string())?;
     register_live_notes(&lua, notes, playback, note_list, live).map_err(|e| e.to_string())?;
     register_assets(&lua, &assets).map_err(|e| e.to_string())?;
+    let clock = Rc::default();
+    crate::script_clock::register(&lua, &clock).map_err(|e| e.to_string())?;
 
     let host_globals: HashSet<String> = lua
         .globals()
@@ -2643,6 +2651,7 @@ fn compile(
         typing,
         frame: Cell::new(0),
         time: Cell::new(0.0),
+        clock,
         canvas,
         view,
         host_globals,

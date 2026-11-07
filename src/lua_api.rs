@@ -107,6 +107,7 @@ const SPRITES: &str = "Sprites";
 const AUDIO: &str = "Audio data";
 const MIDI: &str = "MIDI data";
 const PLAYBACK: &str = "Playback & timing";
+const CLOCK: &str = "Date & time";
 const RECORDING: &str = "Recording";
 const PLAYLIST: &str = "Playlist";
 const MUSICAL: &str = "Musical timing";
@@ -197,6 +198,10 @@ pub const ITEMS: &[Item] = &[
     c("DT", PLAYBACK, "0.1.1", "number", "seconds since the previous render() call (0.0 on the first, at most 0.25)"),
     c("TIME", PLAYBACK, "0.1.4", "number", "seconds since this script started, wall clock, uncapped"),
     c("FRAME", PLAYBACK, "0.1.4", "integer", "frames rendered since this script started (1 on the first)"),
+    // Date & time
+    f("now", CLOCK, "next", &[od("utc", "boolean", "true for UTC, local time if not given")], &[p("date", "Date")], "today's date and the time of day; recording time in a recording"),
+    f("unix_time", CLOCK, "next", &[], &[p("seconds", "number")], "seconds since 1970 (UTC), fractional; recording time in a recording"),
+    f("format_time", CLOCK, "next", &[d("format", "string", "strftime-style: %Y-%m-%d %H:%M:%S, %A, %B, %I %p..."), od("time", "number|Date", "a unix_time() or now() result, now if not given")], &[p("text", "string")], "a date as text"),
     // Recording
     f("recording", RECORDING, "0.4.0", &[], &[p("recording", "Recording|nil")], "the recording the visualizer is part of, or nil"),
     f("recording_ready", RECORDING, "0.4.0", &[], &[], "with record_prepare: done preparing; the video starts with the next frame"),
@@ -353,6 +358,23 @@ pub const CLASSES: &[Class] = &[
         name: "SongNote",
         summary: "a whole note of the song (notes_between()), times in song seconds",
         fields: &[p("id", "integer"), p("channel", "integer"), p("key", "integer"), p("velocity", "integer"), p("start", "number"), p("stop", "number")],
+    },
+    Class {
+        name: "Date",
+        summary: "a date and time of day (now())",
+        fields: &[
+            p("year", "integer"),
+            d("month", "integer", "1 to 12"),
+            d("day", "integer", "1 to 31"),
+            d("hour", "integer", "0 to 23"),
+            d("minute", "integer", "0 to 59"),
+            d("second", "integer", "0 to 59"),
+            d("ms", "integer", "0 to 999"),
+            d("weekday", "integer", "1 is Monday, 7 is Sunday"),
+            d("yearday", "integer", "1 is 1 January"),
+            d("utc_offset", "integer", "seconds ahead of UTC"),
+            d("unix", "number", "the same moment as unix_time()"),
+        ],
     },
     Class {
         name: "AlbumArt",

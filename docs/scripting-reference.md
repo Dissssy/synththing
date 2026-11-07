@@ -545,6 +545,28 @@ Check `playback().paused` before writing into a scrolling history buffer, otherw
 
 `render()` only runs while the visualizer is on screen: not while its tab is closed or hidden behind another tab, and not while Preferences is open (the visualizer freezes on its last frame, and playback pauses). `DT` is capped at 0.25 so the first frame back after a gap like that doesn't make animations jump.
 
+## Date & time
+
+<!-- api: now unix_time format_time -->
+```lua
+now([utc]) -> date                    -- today's date and the time of day; recording time in a recording (since next)
+                                      -- utc: true for UTC, local time if not given
+unix_time() -> seconds                -- seconds since 1970 (UTC), fractional; recording time in a recording (since next)
+format_time(format, [time]) -> text   -- a date as text (since next)
+                                      -- format: strftime-style: %Y-%m-%d %H:%M:%S, %A, %B, %I %p...; time: a unix_time() or now() result, now if not given
+```
+<!-- /api -->
+
+```lua
+local t = now()                                   -- t.hour, t.minute, t.weekday...
+text(4, 4, format_time("%H:%M:%S"), {r=255, g=255, b=255})
+text(4, 18, format_time("%A %e %B %Y", t), {r=180, g=180, b=180})
+```
+
+Scripts can't reach Lua's `os` library, so these are how they tell the time. `now()` gives a `Date` table in local time (`now(true)` for UTC), `unix_time()` the seconds since 1970, and `format_time` turns either into text with strftime codes (`%H:%M`, `%I:%M %p`, `%a %d %b`...); a code it doesn't know is an error.
+
+In a recording (and so in previews) the clock is recording time: it reads the moment the recording began and moves on with the recorded frames, so a clock drawn into the video shows what it would have shown played live, however fast the video renders.
+
 ## Recording
 
 <!-- api: recording recording_ready recording_done -->
@@ -1169,6 +1191,19 @@ SongNote                -- a whole note of the song (notes_between()), times in 
     velocity: integer
     start: number
     stop: number
+
+Date                      -- a date and time of day (now())
+    year: integer
+    month: integer        -- 1 to 12
+    day: integer          -- 1 to 31
+    hour: integer         -- 0 to 23
+    minute: integer       -- 0 to 59
+    second: integer       -- 0 to 59
+    ms: integer           -- 0 to 999
+    weekday: integer      -- 1 is Monday, 7 is Sunday
+    yearday: integer      -- 1 is 1 January
+    utc_offset: integer   -- seconds ahead of UTC
+    unix: number          -- the same moment as unix_time()
 
 AlbumArt              -- the playing song's art (album_art())
     sprite: integer
