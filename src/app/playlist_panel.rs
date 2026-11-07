@@ -22,6 +22,9 @@ use crate::select_list;
 use crate::album_art::Source as AlbumArtSource;
 use crate::song_info::format_length;
 
+/// The playlist's song list's `select_list` key.
+pub(super) const PLAYLIST_ROWS: &str = "playlist_rows";
+
 /// Drag-and-drop payload for playlist rows being dragged to reorder them:
 /// the selection if the dragged row is part of it, else just that row.
 pub(super) struct DraggedEntry {
@@ -690,6 +693,7 @@ impl App {
                 {
                     press = Some(Press::Continue(*entry));
                 }
+                super::follow_button_ui(ui, PLAYLIST_ROWS);
                 if smart {
                     if ui.add(super::icon_button(rules.0)).on_hover_text(rules.1).clicked() {
                         press = Some(Press::Rules);
@@ -808,7 +812,7 @@ impl App {
         let fixed = smart || finding;
         let playing = playing.and_then(|p| shown.iter().position(|&e| e == p));
 
-        let output = select_list::show(ui, "playlist_rows", &shown, selection, playing, |ui, row, &idx| {
+        let output = select_list::show(ui, PLAYLIST_ROWS, &shown, selection, playing, |ui, row, &idx| {
             let entry = &entries[idx];
             let rows_of = |row: &select_list::Row| row.rows().into_iter().map(|r| shown[r]).collect::<Vec<usize>>();
             if !fixed && row.response.drag_started() {

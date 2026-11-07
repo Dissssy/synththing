@@ -22,6 +22,10 @@
 //! A list can be in groups ([`show_grouped`]): the header of the group at
 //! the top stays pinned there as its rows scroll by, until the next
 //! header pushes it out.
+//!
+//! A list can follow playback ([`set_following`]): it scrolls to its
+//! playing row whenever that moves, until it's scrolled by hand. A list
+//! the song playing isn't in has no playing row to go to.
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
@@ -164,6 +168,29 @@ fn keyboard_id() -> egui::Id {
 
 fn steers_id() -> egui::Id {
     egui::Id::unique("select_list_steers")
+}
+
+/// Where a list keeps whether it follows playback (kept across restarts).
+fn follow_id(key: impl egui::AsIdSalt) -> egui::Id {
+    egui::Id::unique(key).with("follow")
+}
+
+/// Whether the list shown by `key` follows playback: keeps its playing row
+/// in view, scrolling to it whenever it moves (the next song, a re-sort).
+pub fn following(ctx: &egui::Context, key: impl egui::AsIdSalt) -> bool {
+    ctx.data_mut(|d| d.get_persisted::<bool>(follow_id(key))).unwrap_or(false)
+}
+
+/// Turn following playback on or off for the list shown by `key`. Turned
+/// on, it goes to the playing row straight away. Scrolling the list by
+/// hand (the wheel, the scroll bar, a drag, the keys) turns it off again.
+pub fn set_following(ctx: &egui::Context, key: impl egui::AsIdSalt, on: bool) {
+    let id = follow_id(key);
+    ctx.data_mut(|d| {
+        d.insert_persisted(id, on);
+        // (So the row it's at is gone to as if it just moved there.)
+        d.remove_temp::<Option<usize>>(id);
+    });
 }
 
 /// Which list the keys steer this frame, by the `key` it's shown with
@@ -337,7 +364,15 @@ fn show_list<T>(
     if footer {
         area = area.max_height(ui.available_height() - row_height - ui.spacing().item_spacing.y);
     }
+    // Following playback: to the playing row, when it's moved since last
+    // frame (or following was just turned on).
+    let follow_id = id.with("follow");
+    let following = ui.ctx().data_mut(|d| d.get_persisted::<bool>(follow_id)).unwrap_or(false);
+    let followed = ui.ctx().data(|d| d.get_temp::<Option<usize>>(follow_id));
+    let mut follow_to = playing.filter(|_| following && followed != Some(playing));
     if let Some(row) = apply(selection, &steers, items.len(), page, playing, &mut output) {
+        // (The keys win over playback.)
+        follow_to = None;
         let top = row as f32 * pitch;
         let shown = if top < offset {
             top
@@ -401,6 +436,14 @@ fn show_list<T>(
         // Where row 0 would be, scrolled as the list is.
         let origin = ui.max_rect().top() - range.start as f32 * pitch;
         let x_range = ui.max_rect().x_range();
+        if let Some(idx) = follow_to {
+            // Room above it for a pinned group header, in a list with one
+            // above it.
+            let pinned = is_header.is_some_and(|is_header| (0..idx).rev().any(|i| is_header(&items[i])));
+            let top = origin + idx as f32 * pitch - if pinned { pitch } else { 0.0 };
+            let rect = egui::Rect::from_x_y_ranges(x_range, top..=origin + idx as f32 * pitch + row_height);
+            ui.scroll_to_rect(rect, None);
+        }
         for idx in range {
             let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), row_height));
             one_row(ui, idx, rect, 0.0, id.with(idx), &mut output);
@@ -416,7 +459,24 @@ fn show_list<T>(
         }
     });
 
-    ui.ctx().data_mut(|d| d.insert_temp(view_id, (scroll.state.clamped_offset().y, scroll.inner_rect.height())));
+    let view = (scroll.state.clamped_offset().y, scroll.inner_rect.height());
+    // Scrolled by hand: moved, with the wheel or a drag over the list (or
+    // its scroll bar) or by the keys. Not dragging rows somewhere.
+    if following && view.0 != offset {
+        let area = scroll.inner_rect.with_max_x(ui.max_rect().right());
+        let by_hand = ui.input(|i| {
+            let over = i.pointer.hover_pos().is_some_and(|p| area.contains(p));
+            let dragged = i.pointer.is_decidedly_dragging() && i.pointer.press_origin().is_some_and(|p| area.contains(p));
+            (over && i.is_scrolling()) || dragged
+        });
+        if (by_hand && !egui::DragAndDrop::has_any_payload(ui.ctx())) || !steers.is_empty() {
+            ui.ctx().data_mut(|d| d.insert_persisted(follow_id, false));
+        }
+    }
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(view_id, view);
+        d.insert_temp(follow_id, playing);
+    });
 
     if footer {
         ui.horizontal(|ui| {

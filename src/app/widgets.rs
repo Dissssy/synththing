@@ -479,6 +479,17 @@ pub(crate) fn icon_button(name: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(icon(name)).size(16.0)).min_size(egui::vec2(ICON_BUTTON_WIDTH, 24.0))
 }
 
+/// The toolbar toggle for the song list `key` (its `select_list` key)
+/// following playback: keeping the playing song in view.
+pub(super) fn follow_button_ui(ui: &mut egui::Ui, key: &'static str) {
+    let on = crate::select_list::following(ui.ctx(), key);
+    let hover = "Follow playback: keep the playing song in view here. Scrolling the list turns it off";
+    if ui.add(icon_button("crosshair-simple").selected(on)).on_hover_text(hover).clicked() {
+        crate::select_list::set_following(ui.ctx(), key, !on);
+        super::toast::show(ui.ctx(), if on { "Follow playback: off" } else { "Follow playback: on" });
+    }
+}
+
 /// A button for something that can't be taken back (`button`, with
 /// `hover`): its first click turns it into a red `confirm` ("Really
 /// delete?"), and only a click on that says yes. A click anywhere else,
